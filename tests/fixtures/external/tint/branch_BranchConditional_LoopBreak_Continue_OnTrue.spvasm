@@ -1,0 +1,42 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+       %void = OpTypeVoid
+        %i32 = OpTypeInt 32 1
+       %bool = OpTypeBool
+        %one = OpConstant %i32 1
+        %two = OpConstant %i32 2
+      %three = OpConstant %i32 3
+       %true = OpConstantTrue %bool
+      %false = OpConstantFalse %bool
+    %ep_type = OpTypeFunction %void
+       %main = OpFunction %void None %ep_type
+         %10 = OpLabel
+         %34 = OpIAdd %i32 %one %one
+               OpBranch %20
+         %20 = OpLabel
+         %35 = OpIAdd %i32 %two %two
+               OpLoopMerge %99 %80 None
+               OpBranch %25
+         ; Need this extra selection to make another block between
+         ; %30 and the continue target, so we actually induce a Continue
+         ; statement to exist.
+         %25 = OpLabel
+               OpSelectionMerge %40 None
+               OpBranchConditional %false %30 %40
+         %30 = OpLabel
+         %36 = OpIAdd %i32 %three %three
+               ; break; continue on true
+               OpBranchConditional %false %80 %99
+         %40 = OpLabel
+         %37 = OpIAdd %i32 %one %two
+               OpBranch %80
+         %80 = OpLabel ; continue target
+         %38 = OpIAdd %i32 %one %three
+               OpBranch %20
+         %99 = OpLabel
+         %39 = OpIAdd %i32 %two %three
+               OpReturn
+               OpFunctionEnd

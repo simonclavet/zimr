@@ -1,0 +1,58 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+       %void = OpTypeVoid
+        %i32 = OpTypeInt 32 1
+       %bool = OpTypeBool
+        %one = OpConstant %i32 1
+        %two = OpConstant %i32 2
+      %three = OpConstant %i32 3
+       %four = OpConstant %i32 4
+       %five = OpConstant %i32 5
+        %six = OpConstant %i32 6
+      %seven = OpConstant %i32 7
+      %eight = OpConstant %i32 8
+       %nine = OpConstant %i32 9
+        %ten = OpConstant %i32 10
+       %true = OpConstantTrue %bool
+    %ep_type = OpTypeFunction %void
+       %main = OpFunction %void None %ep_type
+         %10 = OpLabel
+               OpSelectionMerge %99 None
+               OpSwitch %two %98 20 %20 30 %30 40 %40 50 %50 60 %60 70 %70 80 %80 90 %90 100 %100
+         %20 = OpLabel
+         %21 = OpIAdd %i32 %one %two
+               OpBranch %99
+         %30 = OpLabel
+         %31 = OpIAdd %i32 %one %three
+               OpBranch %99
+         %40 = OpLabel
+         %41 = OpIAdd %i32 %one %four
+               OpBranch %99
+         %50 = OpLabel
+         %51 = OpIAdd %i32 %one %five
+               OpBranch %99
+         %60 = OpLabel
+         %61 = OpIAdd %i32 %one %six
+               OpBranch %99
+         %70 = OpLabel
+         %71 = OpIAdd %i32 %one %seven
+               OpBranch %99
+         %80 = OpLabel
+         %81 = OpIAdd %i32 %one %eight
+               OpBranch %99
+         %90 = OpLabel
+         %91 = OpIAdd %i32 %one %nine
+               OpBranch %99
+        %100 = OpLabel
+        %101 = OpIAdd %i32 %one %ten
+               OpBranch %99
+         %98 = OpLabel
+         %22 = OpIAdd %i32 %two %two
+               OpBranch %99
+         %99 = OpLabel
+         %23 = OpIAdd %i32 %ten %two
+               OpReturn
+               OpFunctionEnd

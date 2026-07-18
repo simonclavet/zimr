@@ -1,0 +1,1693 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>zimr — webgpu ports tutorial</title>
+<style>
+:root{
+  --main-font:"Courier New",Courier,monospace;
+  --header-font:"Georgia","Times New Roman",serif;
+  --bg-page:#1f140e; --bg-paper:#332218; --bg-block:#261912;
+  --text-color:#f0e6d2; --text-muted:#a89684; --accent-color:#d35f33;
+  --border-color:#090604; --shadow-color:#000000;
+}
+*{box-sizing:border-box;}
+body{
+  background-color:var(--bg-page);
+  background-image:radial-gradient(var(--border-color) 2px,transparent 2px);
+  background-size:16px 16px;
+  color:var(--text-color); font-family:var(--main-font); line-height:1.6;
+  margin:0; padding:40px 20px; display:flex; justify-content:center;
+}
+.blog-container{
+  background-color:var(--bg-paper); max-width:860px; width:100%; padding:40px;
+  border:4px solid var(--border-color); box-shadow:12px 12px 0px var(--shadow-color);
+}
+h1.title{
+  font-family:var(--header-font); font-size:2.8rem; line-height:1.1;
+  text-transform:lowercase; border-bottom:6px double var(--border-color);
+  padding-bottom:10px; margin:0 0 10px 0; letter-spacing:-1px;
+}
+h2.subtitle{
+  font-family:var(--main-font); font-size:1.05rem; font-style:italic;
+  font-weight:normal; margin:0 0 20px 0; color:var(--accent-color); line-height:1.4;
+}
+nav.toc{
+  margin:0 0 30px 0; padding:14px 18px; border:2px solid var(--border-color);
+  background-color:var(--bg-block); box-shadow:4px 4px 0 var(--shadow-color);
+}
+nav.toc strong{
+  font-family:var(--header-font); color:var(--accent-color);
+  text-transform:uppercase; letter-spacing:1px; display:block; margin-bottom:8px;
+}
+nav.toc ol{margin:0; padding-left:22px;}
+nav.toc li{margin:3px 0;}
+h3{
+  font-family:var(--header-font); font-size:1.45rem; background-color:var(--border-color);
+  color:var(--text-color); display:inline-block; padding:4px 12px; margin:46px 0 15px 0;
+  border:2px solid var(--text-color); scroll-margin-top:20px;
+}
+h4{
+  font-family:var(--header-font); font-size:1.12rem; text-decoration:underline;
+  text-decoration-color:var(--accent-color); text-underline-offset:4px;
+  text-transform:lowercase; margin:25px 0 10px 0;
+}
+p{font-size:1rem; margin-bottom:18px;}
+a{color:var(--accent-color); text-decoration:underline; font-weight:bold;}
+a:hover{background-color:var(--accent-color); color:var(--bg-paper); text-decoration:none;}
+code{
+  background-color:var(--bg-block); border:1px solid var(--border-color);
+  padding:1px 5px; font-size:0.92em; color:var(--text-color);
+}
+pre{
+  background-color:var(--bg-block); border:2px solid var(--border-color);
+  border-left:6px solid var(--accent-color); padding:15px 18px; margin:18px 0;
+  overflow-x:auto; box-shadow:4px 4px 0px var(--shadow-color);
+  font-size:0.86rem; line-height:1.5;
+}
+pre code{background:none; border:none; padding:0; font-size:inherit; white-space:pre;}
+blockquote{
+  border-left:6px solid var(--accent-color); margin:24px 0; padding:14px 20px;
+  background-color:var(--bg-block); box-shadow:4px 4px 0px var(--shadow-color);
+}
+.bug{border-color:#e0a060; border-left-color:#e0a060;}
+.bug strong{color:#e0a060; font-family:var(--header-font); text-transform:uppercase; letter-spacing:1px;}
+ul{border:2px dashed var(--accent-color); padding:16px 20px 16px 40px;}
+li{margin:5px 0;}
+/* zig syntax highlight tokens */
+code.zig .c{color:var(--text-muted); font-style:italic;}
+code.zig .s{color:#9cb380;}
+code.zig .k{color:var(--accent-color); font-weight:bold;}
+code.zig .b{color:#e0a060;}
+code.zig .t{color:#8fb0c0;}
+code.zig .n{color:#cf8f6f;}
+</style>
+</head>
+<body>
+<div class="blog-container">
+<h1 class="title">zimr — webgpu ports</h1>
+<h2 class="subtitle">a code tour of ten examples ported to the pure-Zig wasm32-wasi + WebGPU backend, on the road to retiring WebGL.</h2>
+
+<nav class="toc">
+<strong>contents</strong>
+<ol>
+<li><a href="#patterns">shared patterns</a></li>
+<li><a href="#compute-smoke">wgpu_compute_smoke — CPU/GPU compute</a></li>
+<li><a href="#compute-particles">wgpu_compute_particles — compute toggle + zero-copy</a></li>
+<li><a href="#double-pendulum">wgpu_double_pendulum — chaos + CPU trail</a></li>
+<li><a href="#starfield">wgpu_starfield — perspective streaks</a></li>
+<li><a href="#kaleidoscope">wgpu_kaleidoscope — symmetry + 2D camera</a></li>
+<li><a href="#particles">wgpu_simple_particles — 3-type emitter</a></li>
+<li><a href="#sine-cosine">wgpu_math_sine_cosine — new line primitives</a></li>
+<li><a href="#bezier">wgpu_lines_bezier — cubic bezier</a></li>
+<li><a href="#camera2d">wgpu_camera2d — pan / zoom / rotate</a></li>
+<li><a href="#boids">wgpu_ecs_boids — ECS flocking (has a bug!)</a></li>
+</ol>
+</nav>
+
+<h3 id="patterns">Shared patterns</h3>
+<p>Every example lives in <code>examples/wgpu_&lt;name&gt;/</code> as <code>wgpu_&lt;name&gt;.zig</code> + an <code>index.html</code>, and is registered with a single helper call in <code>build.zig</code> — one of the system improvements made during this batch, collapsing ~55 lines of per-example boilerplate (module, reactor exe, JS bundle, index install, build step, and the self-contained standalone) into one line:</p>
+<pre><code class="zig">_ = addWgpuExample(
+    b, wasm_target, optimize,
+    zimr_mod, zimrmath_mod, shader_interface_mod, buildaux_exe,
+    "double_pendulum",            // dir: examples/wgpu_double_pendulum/
+    "zimr - WebGPU - double pendulum",
+);</code></pre>
+<p>The app shape is the same everywhere: a global <code>zimr_app</code>, a <code>main</code> that hands the runtime a <code>State</code> type plus <code>initState</code> / <code>update</code> callbacks. <code>initState</code> builds and returns the state; <code>update</code> runs once per frame between <code>beginDrawing</code> and <code>endDrawing</code>.</p>
+<pre><code class="zig">pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{ .title = "...", .width = 800, .height = 450, .scale_mode = .responsive },
+    }, State, initState, update);
+}</code></pre>
+<p><strong>Scale mode <code>.responsive</code></strong> means the 2D ortho tracks the live canvas size 1:1 with CSS pixels (no non-uniform stretch). The rule: lay out against the live viewport — <code>f.window.widthf()</code> / <code>f.window.heightf()</code> — never a hardcoded design size. One sharp edge: <code>f.window</code> reads <strong>0 at <code>initState</code></strong> (the canvas isn't sized yet), so anything that spawns/positions relative to the viewport must defer to the first real frame.</p>
+<p>To view an example, <code>zig build wgpu-&lt;name&gt;-standalone</code> produces a single self-contained <code>.html</code> (wasm base64-inlined, JS inlined) via a native build step — no Python, works offline.</p>
+<p>Two of these examples lean on <strong>line primitives</strong> added to the wgpu renderer during this batch — <code>drawSplineLinear</code>, <code>drawLineDashed</code>, and <code>drawCircleSectorLines</code> — each implemented over the existing <code>drawLineEx</code>. They unblocked the whole math/lines cluster at once.</p>
+<h3 id="compute-smoke">1 · wgpu_compute_smoke</h3>
+<p>The simplest <code>z.Compute</code> demo: one kernel, written once, that runs on either the CPU or the GPU. The kernel is authored in the <strong>kompute</strong> DSL — plain Zig that doubles as a WGSL compute shader. <code>z.Compute(M)</code> wraps it: <code>initGpu</code> builds the storage buffer + pipeline; <code>upload</code> / <code>run</code> / <code>readLatest</code> drive it; the same kernel also runs as a CPU loop. This demo doubles <code>[1,2,3,4,5]</code> on the GPU and verifies the result.</p>
+<h4>double_it.zig — the kernel (kompute DSL)</h4>
+<pre><code class="zig">
+//! double_it.zig — the simplest compute kernel: out[i] = in[i] * 2, written in
+//! the kompute DSL form. The author writes only config + Buffers + Params + the
+//! kernel fn; `kompute` generates the g-namespace (extern storage/uniform on GPU,
+//! plain var on CPU), the Ctx type, and the spirv_kernel entry.
+const k = @import("kompute");
+
+pub const config = k.Config{ .max = 1024, .workgroup = 64 };
+
+pub const Buffers = extern struct {
+    data: [config.max]f32,
+};
+// Params is a uniform: keep it 16-byte sized with scalar pads (an array pad like
+// [3]u32 would emit array&lt;u32,3&gt; with stride 4, which WGSL rejects in `uniform`).
+pub const Params = extern struct {
+    count: u32,
+    _pad0: u32 = 0,
+    _pad1: u32 = 0,
+    _pad2: u32 = 0,
+};
+
+pub const g = k.Globals(@This());
+const b = &amp;g.B;
+
+/// The kernel. Identical on CPU and GPU; buffers reached via module-level `b`.
+pub fn double(c: k.Ctx(@This())) void {
+    if (c.id &gt;= c.params.count) {
+        return;
+    }
+    b.data[c.id] = b.data[c.id] * 2.0;
+}
+
+comptime {
+    k.installKernel(@This(), "double");
+}
+</code></pre>
+<h4>wgpu_compute_smoke.zig — the host</h4>
+<pre><code class="zig">
+//! wgpu_compute_smoke — the GPU compute round-trip, now driven by `z.Compute(M)`
+//! instead of hand-wired wgpu calls. Uploads [0,1,2,...,N-1], runs the `double_it`
+//! kernel (out[i] = in[i]*2) on the GPU, reads it back, draws it as bars (a correct
+//! run = a doubled ascending staircase). Also runs a CPU-backend self-check at
+//! startup over the SAME kernel, demonstrating the runtime CPU/GPU toggle.
+const std = @import("std");
+const z = @import("zimr");
+const double_it = @import("double_it.zig");
+
+pub const std_options = z.std_options;
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+// The compiled WGSL of double_it.zig (built by addComputeImport + spv2wgsl).
+const DOUBLE_WGSL = @embedFile("double_it_wgsl");
+
+const N: u32 = 64; // particles processed (the dispatch count)
+
+const State = struct {
+    font: z.Font,
+    pipe: z.Compute(double_it),
+    cpu_ok: bool = false,
+    dispatched: bool = false,
+    result: [N]f32 = @splat(0),
+    have_result: bool = false,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - compute smoke (z.Compute)",
+            .width = 640,
+            .height = 360,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    const font: z.Font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24);
+
+    // CPU-backend self-check: run the SAME kernel on the CPU and verify doubling.
+    var cpu: z.Compute(double_it) = z.Compute(double_it).initCpu();
+    cpu.count = 5;
+    cpu.params = .{ .count = 5 };
+    const probe = [_]f32{ 1, 2, 3, 4, 5 };
+    cpu.upload(.data, &amp;probe);
+    cpu.run("double");
+    const cpu_out: []const f32 = cpu.readLatest(.data).?;
+    const cpu_ok: bool = cpu_out.len == 5 and cpu_out[0] == 2.0 and cpu_out[1] == 4.0 and cpu_out[4] == 10.0;
+
+    // GPU-backend round-trip via z.Compute (storage/uniform/staging/pipeline derived
+    // from the kernel's schema; the minBindingSize footgun cannot recur).
+    var pipe: z.Compute(double_it) = try z.Compute(double_it).initGpu(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        DOUBLE_WGSL,
+        "double",
+    );
+    pipe.count = N;
+    pipe.params = .{ .count = N };
+    var input: [N]f32 = undefined;
+    var i: u32 = 0;
+    while (i &lt; N) : (i += 1) {
+        input[i] = @floatFromInt(i);
+    }
+    pipe.upload(.data, input[0..]);
+
+    return .{ .font = font, .pipe = pipe, .cpu_ok = cpu_ok };
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    // One-shot dispatch (the kernel doubles in place, so running it once is enough).
+    if (!s.dispatched) {
+        s.dispatched = true;
+        s.pipe.run("double");
+    }
+    // Frame-delayed readback: returns last frame's mapped data, never stalls.
+    if (s.pipe.readLatest(.data)) |out| {
+        var i: u32 = 0;
+        while (i &lt; N and i &lt; out.len) : (i += 1) {
+            s.result[i] = out[i];
+        }
+        s.have_result = true;
+    }
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, z.colors.slate_900);
+
+    const sw: f32 = f.window.widthf();
+    const sh: f32 = f.window.heightf();
+    const bar_w: f32 = sw / @as(f32, @floatFromInt(N));
+    const max_val: f32 = @as(f32, @floatFromInt((N - 1) * 2));
+    var i: u32 = 0;
+    while (i &lt; N) : (i += 1) {
+        const v: f32 = s.result[i];
+        const h: f32 = (v / max_val) * (sh * 0.8);
+        const x: f32 = @as(f32, @floatFromInt(i)) * bar_w;
+        const hue: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(N)) * 300.0;
+        const col: z.colors.Color = z.colorFromHSV(hue, 0.7, 0.95);
+        z.drawRectangle(f.gl, x, sh - h, bar_w - 1, h, col);
+    }
+
+    const status: []const u8 = if (s.have_result)
+        "GPU via z.Compute: out[i] = i*2 (doubled staircase)"
+    else
+        "dispatching...";
+    z.drawText(f.gl, s.font, status, 10, 10, 18, z.colors.slate_100);
+    const cpu_msg: []const u8 = if (s.cpu_ok)
+        "CPU backend self-check: OK (1,2,3,4,5 -&gt; 2,4,6,8,10)"
+    else
+        "CPU backend self-check: FAIL";
+    const cpu_col: z.colors.Color = z.colorFromHSV(if (s.cpu_ok) 120.0 else 0.0, 0.7, 0.95);
+    z.drawText(f.gl, s.font, cpu_msg, 10, 32, 14, cpu_col);
+
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="compute-particles">2 · wgpu_compute_particles</h3>
+<p>A particle sim that flips its <em>compute</em> backend live — GPU dispatch vs. CPU loop — every few seconds, carrying the full sim state across the flip. The GPU path is <strong>zero-copy</strong>: <code>z.DrawPoints</code> reads each particle's position straight from the storage buffer the kernel wrote (a vertex shader indexing <code>positions[instance_index]</code>), so nothing reads back to the CPU. The CPU path computes in host memory, then uploads its result into that same buffer and draws it the same way. (Currently capped at 8192 particles — a larger count tripped the wasm stack via a 1&nbsp;MB inline readback mirror inside <code>Compute</code>; the fix is to heap-allocate that mirror.)</p>
+<h4>particle_step.zig — the kernel (gravity + unit-box bounce)</h4>
+<pre><code class="zig">
+//! particle_step.zig — one compute kernel: advance a particle under gravity and
+//! bounce it off the unit-box walls. Pure GATHER (each id writes only its own
+//! pos/vel), so it's identical on CPU and GPU and trivially parallel. Positions
+//! live in [0,1]^2; the host maps them to the screen. Written once in the kompute
+//! DSL; `z.Compute(@This())` runs it on either backend.
+const k = @import("kompute");
+const zm = k.math;
+
+pub const config = k.Config{ .max = 8192, .workgroup = 64 };
+
+pub const Buffers = extern struct {
+    pos: [config.max]zm.Vec2,
+    vel: [config.max]zm.Vec2,
+};
+
+// 16-byte uniform: u32 + 3×f32 (scalar fields — an array pad would break the
+// uniform layout; see the gpu-compute tutorial).
+pub const Params = extern struct {
+    count: u32,
+    dt: f32,
+    gravity: f32,
+    damping: f32,
+};
+
+pub const g = k.Globals(@This());
+const b = &amp;g.B;
+
+pub fn step(c: k.Ctx(@This())) void {
+    if (c.id &gt;= c.params.count) {
+        return;
+    }
+    const id: u32 = c.id;
+    var v: zm.Vec2 = b.vel[id];
+    v[1] = v[1] + c.params.gravity * c.params.dt; // gravity pulls +y (down on screen)
+    var p: zm.Vec2 = b.pos[id] + v * zm.splat2(c.params.dt);
+
+    // Bounce off the unit box, losing energy by `damping`.
+    if (p[0] &lt; 0.0) {
+        p[0] = 0.0;
+        v[0] = -v[0] * c.params.damping;
+    }
+    if (p[0] &gt; 1.0) {
+        p[0] = 1.0;
+        v[0] = -v[0] * c.params.damping;
+    }
+    if (p[1] &lt; 0.0) {
+        p[1] = 0.0;
+        v[1] = -v[1] * c.params.damping;
+    }
+    if (p[1] &gt; 1.0) {
+        p[1] = 1.0;
+        v[1] = -v[1] * c.params.damping;
+    }
+
+    b.pos[id] = p;
+    b.vel[id] = v;
+}
+
+comptime {
+    k.installKernel(@This(), "step");
+}
+</code></pre>
+<h4>wgpu_compute_particles.zig — the host (CPU/GPU toggle)</h4>
+<pre><code class="zig">
+//! wgpu_compute_particles — 65536 particles driven by `z.Compute`, demonstrating the
+//! CPU/GPU compute toggle on the zero-copy render path. The SAME kernel auto-flips
+//! between a GPU dispatch and a CPU loop every few seconds, with the live state carried
+//! across the flip so the sim never resets. Both backends render through `z.DrawPoints`:
+//! the GPU path is zero-copy (the kernel writes the very buffer the vertex shader reads)
+//! and the CPU path copies its result into that buffer, then draws the same way.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+const particle_step = @import("particle_step.zig");
+
+pub const std_options = z.std_options;
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const STEP_WGSL = @embedFile("particle_step_wgsl");
+
+const N: u32 = 8192;
+const SCREEN_W: f32 = 720.0;
+const SCREEN_H: f32 = 720.0;
+const FLIP_FRAMES: u32 = 300; // auto-toggle the compute backend on this cadence
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - compute particles",
+            .width = 720,
+            .height = 720,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+const State = struct {
+    font: z.Font,
+    pipe: z.Compute(particle_step),
+    dp: z.DrawPoints,
+    transfer_pos: []zm.Vec2,
+    transfer_vel: []zm.Vec2,
+    cpu_ok: bool = false,
+    frame: u32 = 0,
+};
+
+fn spawn(
+    pipe: *z.Compute(particle_step),
+    scratch: []zm.Vec2,
+    rng: std.Random,
+) void {
+    var i: u32 = 0;
+    while (i &lt; N) : (i += 1) {
+        scratch[i] = .{ 0.1 + rng.float(f32) * 0.8, rng.float(f32) * 0.4 };
+    }
+    pipe.upload(.pos, scratch[0..N]);
+    i = 0;
+    while (i &lt; N) : (i += 1) {
+        scratch[i] = .{ (rng.float(f32) - 0.5) * 0.2, (rng.float(f32) - 0.5) * 0.1 };
+    }
+    pipe.upload(.vel, scratch[0..N]);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    const font: z.Font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24);
+
+    // CPU-backend self-check: a particle at rest must fall after one step.
+    var cpu: z.Compute(particle_step) = z.Compute(particle_step).initCpu();
+    cpu.count = 1;
+    cpu.params = .{ .count = 1, .dt = 0.1, .gravity = 10.0, .damping = 0.5 };
+    const one_pos = [_]zm.Vec2{.{ 0.5, 0.5 }};
+    const one_vel = [_]zm.Vec2{.{ 0.0, 0.0 }};
+    cpu.upload(.pos, &amp;one_pos);
+    cpu.upload(.vel, &amp;one_vel);
+    cpu.run("step");
+    const cpu_pos: []const zm.Vec2 = cpu.readLatest(.pos).?;
+    const cpu_ok: bool = cpu_pos[0][1] &gt; 0.5;
+
+    // GPU backend: a single pipe whose `.backend` we flip live. initGpu also wires the
+    // CPU path (the kernel's module globals always exist), so one pipe runs both.
+    var pipe: z.Compute(particle_step) = try z.Compute(particle_step).initGpu(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        STEP_WGSL,
+        "step",
+    );
+    pipe.count = N;
+    pipe.params = .{ .count = N, .dt = 1.0 / 60.0, .gravity = 1.5, .damping = 0.6 };
+
+    const transfer_pos: []zm.Vec2 = try gpa.alloc(zm.Vec2, N);
+    const transfer_vel: []zm.Vec2 = try gpa.alloc(zm.Vec2, N);
+    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x5eed);
+    spawn(&amp;pipe, transfer_pos, prng.random()); // reuse transfer_pos as spawn scratch
+
+    const dp: z.DrawPoints = try z.DrawPoints.init(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        f.gpu.backbuffer_format,
+        pipe.storageBuffer().?,
+        @sizeOf(particle_step.Buffers),
+    );
+
+    return .{
+        .font = font,
+        .pipe = pipe,
+        .dp = dp,
+        .transfer_pos = transfer_pos,
+        .transfer_vel = transfer_vel,
+        .cpu_ok = cpu_ok,
+    };
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame += 1;
+
+    // Auto-flip the compute backend, carrying the live state across so the sim
+    // continues seamlessly (one GPU readback per flip, not per frame).
+    if (s.frame % FLIP_FRAMES == 0) {
+        if (s.pipe.readLatest(.pos)) |pos| {
+            @memcpy(s.transfer_pos[0..pos.len], pos);
+        }
+        if (s.pipe.readLatest(.vel)) |vel| {
+            @memcpy(s.transfer_vel[0..vel.len], vel);
+        }
+        s.pipe.backend = if (s.pipe.backend == .gpu) .cpu else .gpu;
+        s.pipe.upload(.pos, s.transfer_pos[0..N]);
+        s.pipe.upload(.vel, s.transfer_vel[0..N]);
+    }
+
+    s.pipe.run("step"); // GPU dispatch or CPU loop, per s.pipe.backend
+
+    // CPU result lives in host memory — copy it into the buffer DrawPoints renders.
+    // (The GPU path skips this: the kernel already wrote that buffer in place.)
+    if (s.pipe.backend == .cpu) {
+        if (s.pipe.readLatest(.pos)) |pos| {
+            s.dp.uploadPositions(std.mem.sliceAsBytes(pos[0..N]));
+        }
+    }
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, z.colors.slate_900);
+    s.dp.draw(f.gl, N, SCREEN_W, SCREEN_H, .{ .size_px = 2.0 });
+
+    const is_gpu: bool = s.pipe.backend == .gpu;
+    const backend_name: []const u8 = if (is_gpu) "GPU compute" else "CPU compute";
+    const render_note: []const u8 = if (is_gpu) "zero-copy" else "host upload";
+    var buf: [112]u8 = undefined;
+    const hud: []const u8 = std.fmt.bufPrint(
+        &amp;buf,
+        "backend: {s} | {d} particles | {s} render (auto-toggle)",
+        .{ backend_name, N, render_note },
+    ) catch "particles";
+    z.drawText(f.gl, s.font, hud, 10, 10, 18, z.colors.slate_100);
+    const cpu_msg: []const u8 = if (s.cpu_ok)
+        "same kernel runs on both backends (CPU self-check: OK)"
+    else
+        "CPU backend self-check: FAIL";
+    const cpu_col: z.colors.Color = z.colorFromHSV(if (s.cpu_ok) 120.0 else 0.0, 0.7, 0.95);
+    z.drawText(f.gl, s.font, cpu_msg, 10, 32, 14, cpu_col);
+
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="double-pendulum">3 · wgpu_double_pendulum</h3>
+<p>The classic chaotic double pendulum. Two pendulums start 1e-3&nbsp;rad apart in θ₂ and diverge into completely different paths — sensitive dependence on initial conditions. The physics is the standard Lagrangian solution (both rods as point masses) integrated with velocity-Verlet substeps. Each leaves a fading trail held in a <strong>CPU ring buffer</strong> of recent tip positions (the GL original used a render texture, which the wgpu backend doesn't expose yet). Note the layout is derived from the live viewport every frame, and the render scale is decoupled from the physics units.</p>
+<pre><code class="zig">
+//! wgpu_double_pendulum — the classic chaotic double pendulum, ported to WebGPU.
+//! Two pendulums start 1e-3 rad apart in θ₂; identical at first, they diverge into
+//! completely different trajectories — the canonical demo of sensitive dependence on
+//! initial conditions. Each leaves a fading trail: a CPU ring buffer of recent rod-2
+//! tip positions drawn as alpha-graded segments. (The GL original used a render
+//! texture; the wgpu backend doesn't expose render textures yet, so the ring buffer
+//! stands in.)
+//!
+//! Scale mode is `.responsive` (fill the canvas the host gives us, any aspect), so the
+//! layout is derived from the LIVE viewport (`f.window.widthf()/heightf()`) every
+//! frame — never a hardcoded design size. The render scale is decoupled from the
+//! physics units, so the dynamics are identical regardless of canvas size.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+
+const simulation_steps: i32 = 30;
+const length_scaler: f32 = 0.1;
+const trail_len: usize = 360;
+
+// Physics parameters (dynamics units — render scale is separate, see Layout).
+const l1: f32 = 15.0;
+const l2: f32 = 15.0;
+const m1: f32 = 0.2;
+const m2: f32 = 0.1;
+const gravity: f32 = 9.81;
+
+const Pendulum = struct {
+    theta1: f32,
+    theta2: f32,
+    w1: f32 = 0,
+    w2: f32 = 0,
+    color: z.colors.Color,
+    trail: [trail_len]z.Vec2 = @splat(z.Vec2{ 0, 0 }),
+    trail_n: usize = 0,
+    head: usize = 0,
+};
+
+const State = struct {
+    font: z.Font,
+    a: Pendulum,
+    b: Pendulum,
+    frame_count: usize = 0,
+};
+
+// Render layout derived from the live viewport. `min(w,h)` sizes the rods so the
+// full circular swing always fits on-screen, whatever the canvas aspect.
+const Layout = struct {
+    ox: f32,
+    oy: f32,
+    rod_px: f32,
+    bob1: f32,
+    bob2: f32,
+    rod_thick: f32,
+    trail_thick: f32,
+};
+
+fn computeLayout(f: *z.Frame) Layout {
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+    const m: f32 = @min(w, h);
+    return .{
+        .ox = w * 0.5,
+        .oy = h * 0.42,
+        .rod_px = m * 0.19,
+        .bob1 = m * 0.020 + 3.0,
+        .bob2 = m * 0.014 + 3.0,
+        .rod_thick = m * 0.016 + 1.0,
+        .trail_thick = @max(1.5, m * 0.004),
+    };
+}
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            // 800x450 is the preferred-size hint (used as the design size on native /
+            // .fit); under .responsive we fill whatever rectangle the host gives.
+            .title = "zimr - WebGPU - double pendulum",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    const font: z.Font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24);
+    const theta1_0: f32 = zm.radFromDeg(170.0);
+    return .{
+        .font = font,
+        .a = .{ .theta1 = theta1_0, .theta2 = 0.0, .color = c.init(90, 210, 235, 255) },
+        .b = .{ .theta1 = theta1_0, .theta2 = 1.0e-3, .color = c.init(230, 110, 210, 255) },
+    };
+}
+
+/// Advance one pendulum by `dt` using `simulation_steps` velocity-Verlet substeps.
+fn stepPendulum(p: *Pendulum, dt: f32) void {
+    const step: f32 = dt / @as(f32, @floatFromInt(simulation_steps));
+    const step2: f32 = step * step;
+    const big_l1: f32 = l1 * length_scaler;
+    const big_l2: f32 = l2 * length_scaler;
+    const total_m: f32 = m1 + m2;
+    var i: i32 = 0;
+    while (i &lt; simulation_steps) : (i += 1) {
+        const delta: f32 = p.theta1 - p.theta2;
+        const sin_d: f32 = @sin(delta);
+        const cos_d: f32 = @cos(delta);
+        const cos_2d: f32 = @cos(2.0 * delta);
+        const ww1: f32 = p.w1 * p.w1;
+        const ww2: f32 = p.w2 * p.w2;
+        const a1_num: f32 = -gravity * (2.0 * m1 + m2) * @sin(p.theta1) -
+            m2 * gravity * @sin(p.theta1 - 2.0 * p.theta2) -
+            2.0 * sin_d * m2 * (ww2 * big_l2 + ww1 * big_l1 * cos_d);
+        const denom: f32 = 2.0 * m1 + m2 - m2 * cos_2d;
+        const a1: f32 = a1_num / (big_l1 * denom);
+        const a2_num: f32 = 2.0 * sin_d * (ww1 * big_l1 * total_m +
+            gravity * total_m * @cos(p.theta1) +
+            ww2 * big_l2 * m2 * cos_d);
+        const a2: f32 = a2_num / (big_l2 * denom);
+        p.theta1 += p.w1 * step + 0.5 * a1 * step2;
+        p.theta2 += p.w2 * step + 0.5 * a2 * step2;
+        p.w1 += a1 * step;
+        p.w2 += a2 * step;
+    }
+}
+
+/// Push the current rod-2 tip into the pendulum's ring-buffer trail.
+fn pushTrail(p: *Pendulum, tip: z.Vec2) void {
+    p.trail[p.head] = tip;
+    p.head = (p.head + 1) % trail_len;
+    if (p.trail_n &lt; trail_len) {
+        p.trail_n += 1;
+    }
+}
+
+/// Rod-2 tip in screen space for pendulum `p` under layout `lay`.
+fn tipOf(lay: Layout, p: *const Pendulum) z.Vec2 {
+    const jx: f32 = lay.ox + lay.rod_px * @sin(p.theta1);
+    const jy: f32 = lay.oy + lay.rod_px * @cos(p.theta1);
+    return .{ jx + lay.rod_px * @sin(p.theta2), jy + lay.rod_px * @cos(p.theta2) };
+}
+
+fn drawPendulum(
+    gl: anytype,
+    lay: Layout,
+    p: *const Pendulum,
+) void {
+    const o: z.Vec2 = .{ lay.ox, lay.oy };
+    const jx: f32 = lay.ox + lay.rod_px * @sin(p.theta1);
+    const jy: f32 = lay.oy + lay.rod_px * @cos(p.theta1);
+    const joint: z.Vec2 = .{ jx, jy };
+    const tip: z.Vec2 = .{ jx + lay.rod_px * @sin(p.theta2), jy + lay.rod_px * @cos(p.theta2) };
+
+    // Trail: oldest -&gt; newest, alpha graded so newer segments are brighter.
+    if (p.trail_n &gt; 1) {
+        const start: usize = (p.head + trail_len - p.trail_n) % trail_len;
+        var k: usize = 0;
+        while (k + 1 &lt; p.trail_n) : (k += 1) {
+            const idx_a: usize = (start + k) % trail_len;
+            const idx_b: usize = (start + k + 1) % trail_len;
+            const num: f32 = @floatFromInt(k + 1);
+            const den: f32 = @floatFromInt(p.trail_n);
+            z.drawLineThick(gl, p.trail[idx_a], p.trail[idx_b], lay.trail_thick, p.color.fade(num / den));
+        }
+    }
+
+    // Rods + bobs.
+    z.drawLineThick(gl, o, joint, lay.rod_thick, p.color.fade(0.85));
+    z.drawLineThick(gl, joint, tip, lay.rod_thick, p.color.fade(0.85));
+    z.drawCircleV(gl, joint, lay.bob1, p.color);
+    z.drawCircleV(gl, tip, lay.bob2, p.color);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    const dt: f32 = f.time.delta_time;
+
+    stepPendulum(&amp;s.a, dt);
+    stepPendulum(&amp;s.b, dt);
+
+    const lay: Layout = computeLayout(f);
+    pushTrail(&amp;s.a, tipOf(lay, &amp;s.a));
+    pushTrail(&amp;s.b, tipOf(lay, &amp;s.b));
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(10, 12, 20, 255));
+    drawPendulum(f.gl, lay, &amp;s.a);
+    drawPendulum(f.gl, lay, &amp;s.b);
+    z.drawText(f.gl, s.font, "double pendulum: two starts 1e-3 rad apart", 12, 12, 18, c.init(228, 232, 240, 255));
+    z.drawText(f.gl, s.font, "identical, then chaos", 12, 34, 14, c.init(138, 147, 168, 255));
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="starfield">4 · wgpu_starfield</h3>
+<p>A fly-through-space starfield. Each star is a point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a short streak (<code>drawLineEx</code>) from where it was a moment ago to where it is now — the warp-speed look. Closer stars are brighter and thicker; stars that pass the camera respawn at the back.</p>
+<pre><code class="zig">
+//! wgpu_starfield — a fly-through-space starfield ported to WebGPU. Stars stream
+//! outward from the screen centre as motion streaks (the "warp speed" look): each is a
+//! point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a
+//! short line from where it was a moment ago to where it is now. Closer stars are
+//! brighter and thicker. Self-running (no input), viewport-relative under `.responsive`
+//! so it fills the canvas at any aspect.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+
+const num_stars: usize = 700;
+const speed: f32 = 0.55;
+const trail_age: f32 = 0.06; // bigger = longer streaks
+
+const Star = struct { x: f32, y: f32, z: f32 };
+
+const State = struct {
+    font: z.Font,
+    stars: [num_stars]Star = undefined,
+    rng: std.Random.DefaultPrng,
+    frame_count: usize = 0,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - starfield",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn randf(
+    rand: std.Random,
+    low: f32,
+    high: f32,
+) f32 {
+    return low + rand.float(f32) * (high - low);
+}
+
+fn respawn(
+    star: *Star,
+    rand: std.Random,
+    hw: f32,
+    hh: f32,
+) void {
+    star.x = randf(rand, -hw, hw);
+    star.y = randf(rand, -hh, hh);
+    star.z = 1.0;
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    const font: z.Font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24);
+    var s: State = .{ .font = font, .rng = std.Random.DefaultPrng.init(0x57a4f00d) };
+    const rand: std.Random = s.rng.random();
+    const hw: f32 = @max(1.0, f.window.widthf() * 0.5);
+    const hh: f32 = @max(1.0, f.window.heightf() * 0.5);
+    for (&amp;s.stars) |*star| {
+        respawn(star, rand, hw, hh);
+        star.z = randf(rand, 0.1, 1.0); // spread the initial depths
+    }
+    return s;
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    const dt: f32 = f.time.delta_time;
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+    const hw: f32 = w * 0.5;
+    const hh: f32 = h * 0.5;
+    const rand: std.Random = s.rng.random();
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(6, 8, 16, 255));
+
+    for (&amp;s.stars) |*star| {
+        star.z -= dt * speed;
+        if (star.z &lt; 0.02) {
+            respawn(star, rand, hw, hh);
+        }
+        const sx: f32 = hw + star.x / star.z;
+        const sy: f32 = hh + star.y / star.z;
+        if (sx &lt; 0 or sy &lt; 0 or sx &gt; w or sy &gt; h) {
+            respawn(star, rand, hw, hh);
+            continue;
+        }
+        const t: f32 = zm.clamp(star.z + trail_age, 0.02, 1.0);
+        const px: f32 = hw + star.x / t;
+        const py: f32 = hh + star.y / t;
+        const bright: f32 = zm.clamp(1.0 - star.z, 0.0, 1.0);
+        const cr: u8 = @intFromFloat(180.0 + 75.0 * bright);
+        const cg: u8 = @intFromFloat(200.0 + 55.0 * bright);
+        const col: z.colors.Color = c.init(cr, cg, 255, 255);
+        z.drawLineEx(f.gl, .{ px, py }, .{ sx, sy }, 1.0 + bright * 2.0, col);
+    }
+
+    var buf: [32]u8 = undefined;
+    const fps: i32 = if (dt &gt; 0.0) @intFromFloat(1.0 / dt) else 0;
+    const label: []const u8 = std.fmt.bufPrint(&amp;buf, "{d} FPS", .{fps}) catch "?";
+    z.drawText(f.gl, s.font, label, 12, 12, 18, c.init(140, 230, 140, 255));
+
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="kaleidoscope">5 · wgpu_kaleidoscope</h3>
+<p>Symmetric trail art. An auto-driven brush follows a Lissajous path; each new segment is mirrored across N rotational axes (plus an X reflection) about the screen centre, wrapping the stroke into a kaleidoscope. The centring uses <code>beginMode2D</code> — the 2D camera — so this doubles as a camera-on-wgpu check. A short ring buffer of brush points gives the flowing, fading rainbow trail.</p>
+<pre><code class="zig">
+//! wgpu_kaleidoscope — symmetric trail art ported to WebGPU. A brush follows an
+//! auto-driven Lissajous path; every frame the new segment is mirrored across N
+//! rotational axes (plus an X-axis reflection) about the screen centre, so the stroke
+//! wraps a full 360° into a kaleidoscope. A short ring buffer of recent brush points
+//! gives a flowing, fading rainbow trail. The GL original was mouse-painted; this runs
+//! itself so it's alive in a screenshot. Exercises `beginMode2D` (the 2D camera) to
+//! centre the pattern, and is viewport-relative under `.responsive`.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+
+const trail_len: usize = 150;
+const symmetry: usize = 6;
+
+const State = struct {
+    font: z.Font,
+    trail: [trail_len]z.Vec2 = @splat(z.Vec2{ 0, 0 }),
+    count: usize = 0,
+    head: usize = 0,
+    frame_count: usize = 0,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - kaleidoscope",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    const font: z.Font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24);
+    return .{ .font = font };
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+    const m: f32 = @min(w, h);
+    const t: f32 = f.time.time;
+
+    // Auto-driven brush in centre-relative coords (a Lissajous figure).
+    const radius: f32 = m * 0.30;
+    const brush: z.Vec2 = .{ radius * @cos(t * 0.7), radius * @sin(t * 1.1) };
+    s.trail[s.head] = brush;
+    s.head = (s.head + 1) % trail_len;
+    if (s.count &lt; trail_len) {
+        s.count += 1;
+    }
+
+    const thick: f32 = m * 0.006 + 1.0;
+    const angle_step: f32 = (2.0 * zm.pi) / @as(f32, @floatFromInt(symmetry));
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(8, 8, 14, 255));
+
+    const cam: z.Camera2D = .{
+        .target = .{ 0, 0 },
+        .offset = .{ w * 0.5, h * 0.5 },
+        .rotation = 0,
+        .zoom = 1,
+    };
+    z.beginMode2D(f.gl, cam);
+    if (s.count &gt; 1) {
+        const start: usize = (s.head + trail_len - s.count) % trail_len;
+        var k: usize = 0;
+        while (k + 1 &lt; s.count) : (k += 1) {
+            const p0: z.Vec2 = s.trail[(start + k) % trail_len];
+            const p1: z.Vec2 = s.trail[(start + k + 1) % trail_len];
+            const num: f32 = @floatFromInt(k + 1);
+            const den: f32 = @floatFromInt(s.count);
+            const alpha: f32 = num / den;
+            const hue: f32 = @mod(t * 40.0 + num * 1.2, 360.0);
+            const col: z.colors.Color = z.colorFromHSV(hue, 0.7, 0.95);
+            var a_idx: usize = 0;
+            while (a_idx &lt; symmetry) : (a_idx += 1) {
+                const ang: f32 = angle_step * @as(f32, @floatFromInt(a_idx));
+                const r0: z.Vec2 = zm.rotate2(p0, ang);
+                const r1: z.Vec2 = zm.rotate2(p1, ang);
+                z.drawLineThick(f.gl, r0, r1, thick, col.fade(alpha));
+                const m0: z.Vec2 = .{ r0[0], -r0[1] };
+                const m1: z.Vec2 = .{ r1[0], -r1[1] };
+                z.drawLineThick(f.gl, m0, m1, thick, col.fade(alpha));
+            }
+        }
+    }
+    z.endMode2D(f.gl);
+
+    z.drawText(f.gl, s.font, "kaleidoscope: auto-driven symmetric trail", 12, 12, 16, c.init(210, 214, 224, 220));
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="particles">6 · wgpu_simple_particles</h3>
+<p>A three-type particle emitter over a ring buffer: water (blue, falls under gravity), smoke (grey, rises + grows + fades), and fire (yellow→red, rises with a flicker wobble + shrinks). The active type cycles every few seconds. The ring buffer's head/tail indices are the emit/retire cursors.</p>
+<pre><code class="zig">
+//! wgpu_simple_particles — a three-type particle emitter ported to WebGPU. A ring
+//! buffer of particles is emitted from a centre emitter; the active type cycles every
+//! few seconds: water (blue, falls under gravity), smoke (grey, rises, grows, fades),
+//! and fire (yellow→red, rises with a flicker wobble, shrinks). The GL original let you
+//! drag the emitter with the mouse; this runs itself. Viewport-relative under
+//! `.responsive`.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+
+const max_particles: usize = 1600;
+const emit_per_frame: usize = 5;
+const cycle_frames: usize = 200; // switch active type on this cadence
+
+const ParticleType = enum(u8) { water, smoke, fire };
+
+const Particle = struct {
+    ptype: ParticleType = .water,
+    pos: z.Vec2 = .{ 0, 0 },
+    vel: z.Vec2 = .{ 0, 0 },
+    radius: f32 = 0,
+    color: z.colors.Color = c.white,
+    alive: bool = false,
+};
+
+const State = struct {
+    font: z.Font,
+    particles: []Particle,
+    head: usize = 0,
+    tail: usize = 0,
+    rng: std.Random.DefaultPrng,
+    frame_count: usize = 0,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - particles",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    const font: z.Font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24);
+    const particles: []Particle = try gpa.alloc(Particle, max_particles);
+    for (particles) |*p| {
+        p.* = .{};
+    }
+    return .{
+        .font = font,
+        .particles = particles,
+        .rng = std.Random.DefaultPrng.init(0x9a7d_1c3e),
+    };
+}
+
+fn emit(
+    s: *State,
+    ptype: ParticleType,
+    emitter: z.Vec2,
+) void {
+    const next: usize = (s.head + 1) % max_particles;
+    if (next == s.tail) {
+        return; // buffer full
+    }
+    const rand: std.Random = s.rng.random();
+    const speed: f32 = rand.float(f32) * 1.8;
+    const dir: f32 = rand.float(f32) * 2.0 * zm.pi;
+    const eff: f32 = if (ptype == .fire) speed / 10.0 else speed;
+    var p: Particle = .{ .ptype = ptype, .pos = emitter, .alive = true };
+    p.vel = .{ eff * @cos(dir), eff * @sin(dir) };
+    switch (ptype) {
+        .water =&gt; {
+            p.radius = 5.0;
+            p.color = c.init(60, 130, 235, 255);
+        },
+        .smoke =&gt; {
+            p.radius = 7.0;
+            p.color = c.init(150, 150, 150, 255);
+        },
+        .fire =&gt; {
+            p.radius = 10.0;
+            p.color = c.init(255, 230, 60, 255);
+        },
+    }
+    s.particles[s.head] = p;
+    s.head = next;
+}
+
+fn tickParticles(
+    s: *State,
+    w: f32,
+    h: f32,
+) void {
+    var i: usize = s.tail;
+    while (i != s.head) : (i = (i + 1) % max_particles) {
+        const p: *Particle = &amp;s.particles[i];
+        if (!p.alive) {
+            continue;
+        }
+        switch (p.ptype) {
+            .water =&gt; {
+                p.vel[1] += 0.2;
+                p.pos += p.vel;
+            },
+            .smoke =&gt; {
+                p.vel[1] -= 0.05;
+                p.pos += p.vel;
+                p.radius += 0.5;
+                p.color.a = if (p.color.a &gt;= 4) p.color.a - 4 else 0;
+                if (p.color.a &lt; 4) {
+                    p.alive = false;
+                }
+            },
+            .fire =&gt; {
+                p.pos[0] += p.vel[0] + @cos(@as(f32, @floatFromInt(s.frame_count)) * 0.21);
+                p.vel[1] -= 0.05;
+                p.pos[1] += p.vel[1];
+                p.radius -= 0.15;
+                p.color.g = if (p.color.g &gt;= 3) p.color.g - 3 else 0;
+                if (p.radius &lt;= 0.02) {
+                    p.alive = false;
+                }
+            },
+        }
+        if (p.pos[0] &lt; -p.radius or p.pos[0] &gt; w + p.radius or
+            p.pos[1] &lt; -p.radius or p.pos[1] &gt; h + p.radius)
+        {
+            p.alive = false;
+        }
+    }
+    // Retire leading dead slots so alive particles stay contiguous.
+    while (s.tail != s.head and !s.particles[s.tail].alive) {
+        s.tail = (s.tail + 1) % max_particles;
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+    const ptype: ParticleType = @enumFromInt(@as(u8, @intCast((s.frame_count / cycle_frames) % 3)));
+    const emitter: z.Vec2 = .{ w * 0.5, h * 0.5 };
+
+    var e: usize = 0;
+    while (e &lt; emit_per_frame) : (e += 1) {
+        emit(s, ptype, emitter);
+    }
+    tickParticles(s, w, h);
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(8, 9, 14, 255));
+    var i: usize = s.tail;
+    while (i != s.head) : (i = (i + 1) % max_particles) {
+        const p: Particle = s.particles[i];
+        if (p.alive and p.radius &gt; 0.1) {
+            z.drawCircleV(f.gl, p.pos, p.radius, p.color);
+        }
+    }
+    const label: []const u8 = switch (ptype) {
+        .water =&gt; "particles: water (gravity)",
+        .smoke =&gt; "particles: smoke (rises + fades)",
+        .fire =&gt; "particles: fire (flicker)",
+    };
+    z.drawText(f.gl, s.font, label, 12, 12, 16, c.init(210, 214, 224, 220));
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="sine-cosine">7 · wgpu_math_sine_cosine</h3>
+<p>A unit-circle visualisation of sine &amp; cosine — and the showcase for the three new line primitives. A point sweeps the circle; the right triangle's legs are cos (blue) and sin (red). The swept angle is a <code>drawCircleSectorLines</code> arc, the axes are <code>drawLineDashed</code>, and the two wave traces below are <code>drawSplineLinear</code> polylines with moving markers. All three primitives are just <code>drawLineEx</code> loops under the hood.</p>
+<pre><code class="zig">
+//! wgpu_math_sine_cosine — unit-circle visualisation of sine &amp; cosine, ported to WebGPU.
+//! A point sweeps the unit circle (auto-advancing angle); the right triangle's legs ARE
+//! cos (horizontal, blue) and sin (vertical, red). A sector arc marks the swept angle,
+//! dashed lines mark the axes, and two wave traces below plot sin/cos over 0–360° with a
+//! moving marker. Exercises the new drawSplineLinear / drawLineDashed /
+//! drawCircleSectorLines primitives. Self-running, viewport-relative under `.responsive`.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+const deg2rad: f32 = zm.pi / 180.0;
+const wave_points: usize = 64;
+
+const State = struct {
+    font: z.Font,
+    angle: f32 = 0,
+    frame_count: usize = 0,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - sine &amp; cosine",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    return .{ .font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24) };
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    s.angle = @mod(s.angle + 0.8, 360.0);
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+    const m: f32 = @min(w, h);
+
+    const cx: f32 = w * 0.42;
+    const cy: f32 = h * 0.40;
+    const r: f32 = m * 0.26;
+    const ar: f32 = s.angle * deg2rad;
+    const px: f32 = cx + r * @cos(ar);
+    const py: f32 = cy - r * @sin(ar); // y-up
+
+    const gray: z.colors.Color = c.init(120, 126, 140, 200);
+    const red: z.colors.Color = c.init(235, 90, 90, 255);
+    const blue: z.colors.Color = c.init(90, 150, 235, 255);
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(10, 12, 18, 255));
+
+    // Dashed axes through the circle centre.
+    z.drawLineDashed(f.gl, .{ cx - r - 20, cy }, .{ cx + r + 20, cy }, 1.0, 6, 5, gray);
+    z.drawLineDashed(f.gl, .{ cx, cy - r - 20 }, .{ cx, cy + r + 20 }, 1.0, 6, 5, gray);
+
+    // Unit circle + swept-angle sector (negative end-angle so it sweeps y-up).
+    z.drawCircleLinesV(f.gl, .{ cx, cy }, r, c.init(150, 156, 170, 255));
+    z.drawCircleSectorLines(f.gl, .{ cx, cy }, r * 0.38, 0, -s.angle, 40, c.init(235, 200, 90, 255));
+
+    // cos leg (horizontal), sin leg (vertical), radius, and the point.
+    z.drawLineThick(f.gl, .{ cx, cy }, .{ px, cy }, 3.0, blue);
+    z.drawLineThick(f.gl, .{ px, cy }, .{ px, py }, 3.0, red);
+    z.drawLineThick(f.gl, .{ cx, cy }, .{ px, py }, 2.0, c.init(220, 224, 232, 255));
+    z.drawCircleV(f.gl, .{ px, py }, 6.0, c.init(245, 248, 252, 255));
+
+    // Wave traces below: sin (red) and cos (blue) over 0..360, computed for this size.
+    const wx: f32 = w * 0.06;
+    const ww: f32 = w * 0.42;
+    const wy: f32 = h * 0.82;
+    const wh: f32 = m * 0.16;
+    var sine_pts: [wave_points]z.Vec2 = undefined;
+    var cos_pts: [wave_points]z.Vec2 = undefined;
+    for (0..wave_points) |i| {
+        const t: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(wave_points - 1));
+        const a: f32 = t * 360.0 * deg2rad;
+        sine_pts[i] = .{ wx + t * ww, wy - @sin(a) * wh };
+        cos_pts[i] = .{ wx + t * ww, wy - @cos(a) * wh };
+    }
+    z.drawLineDashed(f.gl, .{ wx, wy }, .{ wx + ww, wy }, 1.0, 5, 4, gray);
+    z.drawSplineLinear(f.gl, &amp;sine_pts, 2.0, red);
+    z.drawSplineLinear(f.gl, &amp;cos_pts, 2.0, blue);
+    const tt: f32 = s.angle / 360.0;
+    const msx: f32 = wx + tt * ww;
+    z.drawCircleV(f.gl, .{ msx, wy - @sin(ar) * wh }, 4.0, red);
+    z.drawCircleV(f.gl, .{ msx, wy - @cos(ar) * wh }, 4.0, blue);
+
+    // Labels.
+    z.drawText(f.gl, s.font, "sin", px + 6, (cy + py) * 0.5 - 8, 16, red);
+    z.drawText(f.gl, s.font, "cos", (cx + px) * 0.5 - 10, cy + 6, 16, blue);
+    var buf: [40]u8 = undefined;
+    const lbl: []const u8 = std.fmt.bufPrint(&amp;buf, "angle: {d:.0} deg", .{s.angle}) catch "?";
+    z.drawText(f.gl, s.font, lbl, 12, 12, 16, c.init(210, 214, 224, 230));
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="bezier">8 · wgpu_lines_bezier</h3>
+<p>An animated cubic Bézier. Four control points drift along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn with <code>drawSplineLinear</code>, the control polygon is a dashed line, and the control points are dots.</p>
+<pre><code class="zig">
+//! wgpu_lines_bezier — a cubic Bézier curve ported to WebGPU. Four control points drift
+//! along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn
+//! via `drawSplineLinear`, with the control polygon as a dashed line and the control
+//! points as dots. The GL original let you drag the endpoints; this animates itself.
+//! Viewport-relative under `.responsive`.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+const samples: usize = 48;
+
+const State = struct {
+    font: z.Font,
+    frame_count: usize = 0,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - bezier",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    return .{ .font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24) };
+}
+
+/// A control point drifting on a Lissajous path centred at (cxf*w, cyf*h).
+fn ctrl(
+    w: f32,
+    h: f32,
+    t: f32,
+    cxf: f32,
+    cyf: f32,
+    fx: f32,
+    fy: f32,
+    amp: f32,
+) z.Vec2 {
+    const m: f32 = @min(w, h);
+    return .{ w * cxf + @cos(t * fx) * m * amp, h * cyf + @sin(t * fy) * m * amp };
+}
+
+fn cubic(
+    p0: z.Vec2,
+    c0: z.Vec2,
+    c1: z.Vec2,
+    p1: z.Vec2,
+    t: f32,
+) z.Vec2 {
+    const u: f32 = 1.0 - t;
+    const a: f32 = u * u * u;
+    const b: f32 = 3.0 * u * u * t;
+    const cc: f32 = 3.0 * u * t * t;
+    const d: f32 = t * t * t;
+    return .{
+        a * p0[0] + b * c0[0] + cc * c1[0] + d * p1[0],
+        a * p0[1] + b * c0[1] + cc * c1[1] + d * p1[1],
+    };
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+    const t: f32 = f.time.time;
+
+    const p0: z.Vec2 = ctrl(w, h, t, 0.18, 0.50, 0.5, 0.7, 0.10);
+    const c0: z.Vec2 = ctrl(w, h, t, 0.40, 0.25, 0.8, 1.1, 0.16);
+    const c1: z.Vec2 = ctrl(w, h, t, 0.62, 0.75, 1.1, 0.9, 0.16);
+    const p1: z.Vec2 = ctrl(w, h, t, 0.84, 0.50, 0.7, 0.6, 0.10);
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(10, 12, 18, 255));
+
+    // Control polygon (dashed) + control points.
+    const ctl: z.colors.Color = c.init(120, 126, 140, 200);
+    z.drawLineDashed(f.gl, p0, c0, 1.0, 6, 5, ctl);
+    z.drawLineDashed(f.gl, c0, c1, 1.0, 6, 5, ctl);
+    z.drawLineDashed(f.gl, c1, p1, 1.0, 6, 5, ctl);
+    z.drawCircleV(f.gl, c0, 5.0, c.init(235, 200, 90, 255));
+    z.drawCircleV(f.gl, c1, 5.0, c.init(235, 200, 90, 255));
+    z.drawCircleV(f.gl, p0, 6.0, c.init(90, 200, 130, 255));
+    z.drawCircleV(f.gl, p1, 6.0, c.init(90, 200, 130, 255));
+
+    // Sample + draw the cubic.
+    var pts: [samples]z.Vec2 = undefined;
+    for (0..samples) |i| {
+        const tt: f32 = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(samples - 1));
+        pts[i] = cubic(p0, c0, c1, p1, tt);
+    }
+    z.drawSplineLinear(f.gl, &amp;pts, 3.0, c.init(120, 170, 245, 255));
+
+    z.drawText(f.gl, s.font, "cubic bezier (animated control points)", 12, 12, 16, c.init(210, 214, 224, 220));
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="camera2d">9 · wgpu_camera2d</h3>
+<p>The full Camera2D transform. A fixed world scene (grid + landmark shapes + origin marker) is viewed through a camera whose target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising offset / target / zoom / rotation via <code>beginMode2D</code>. The world is drawn in world coordinates; the camera does the rest.</p>
+<pre><code class="zig">
+//! wgpu_camera2d — the Camera2D pan / zoom / rotate transform, ported to WebGPU. A world
+//! scene (grid + landmark shapes + origin marker) is viewed through a Camera2D whose
+//! target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising
+//! the full 2D camera (offset / target / zoom / rotation) via `beginMode2D`. The GL
+//! original was mouse-driven; this animates itself. Viewport-relative under `.responsive`.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+
+const State = struct {
+    font: z.Font,
+    frame_count: usize = 0,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - camera2d",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    return .{ .font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24) };
+}
+
+/// Draw the fixed world scene (world coordinates; the camera transforms it).
+fn drawWorld(gl: anytype) void {
+    const grid: z.colors.Color = c.init(40, 44, 54, 255);
+    var g: i32 = -400;
+    while (g &lt;= 400) : (g += 50) {
+        const v: f32 = @floatFromInt(g);
+        z.drawLine(gl, v, -400.0, v, 400.0, grid);
+        z.drawLine(gl, -400.0, v, 400.0, v, grid);
+    }
+    const axis: z.colors.Color = c.init(80, 86, 100, 255);
+    z.drawLine(gl, -400.0, 0.0, 400.0, 0.0, axis);
+    z.drawLine(gl, 0.0, -400.0, 0.0, 400.0, axis);
+
+    z.drawRectangleRec(gl, .{ .x = -170, .y = -130, .width = 80, .height = 80 }, c.init(235, 90, 90, 255));
+    z.drawRectangleRec(gl, .{ .x = 100, .y = -150, .width = 64, .height = 64 }, c.init(90, 200, 130, 255));
+    z.drawCircleV(gl, .{ 165, 120 }, 42.0, c.init(90, 150, 235, 255));
+    z.drawCircleV(gl, .{ -150, 140 }, 32.0, c.init(235, 200, 90, 255));
+    z.drawCircleV(gl, .{ 0, 0 }, 8.0, c.init(245, 248, 252, 255));
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    const t: f32 = f.time.time;
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+
+    const cam: z.Camera2D = .{
+        .target = .{ @cos(t * 0.3) * 120.0, @sin(t * 0.4) * 120.0 },
+        .offset = .{ w * 0.5, h * 0.5 },
+        .rotation = t * 10.0,
+        .zoom = 1.0 + @sin(t * 0.5) * 0.35,
+    };
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(12, 14, 20, 255));
+    z.beginMode2D(f.gl, cam);
+    drawWorld(f.gl);
+    z.endMode2D(f.gl);
+
+    var buf: [56]u8 = undefined;
+    const lbl: []const u8 = std.fmt.bufPrint(
+        &amp;buf,
+        "Camera2D  zoom {d:.2}  rot {d:.0}",
+        .{ cam.zoom, @mod(cam.rotation, 360.0) },
+    ) catch "?";
+    z.drawText(f.gl, s.font, lbl, 12, 12, 16, c.init(210, 214, 224, 230));
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3 id="boids">10 · wgpu_ecs_boids</h3>
+<p>Reynolds flocking on the zimr ECS — the example that proves the whole ECS subsystem (<code>Registry</code>, archetypes, <code>iterator</code>, <code>forEach</code>) runs on the wgpu backend. ~160 boids live in an archetype of Pos + Vel components. Each frame: a snapshot via <code>iterator</code> feeds a steering <code>forEach</code> (separation / alignment / cohesion), then an integrate-and-wrap <code>forEach</code>, then a render <code>iterator</code>.</p>
+<blockquote class="bug">
+<strong>known bug — help wanted</strong>
+<p>The boids clump into an arc in the <em>top-left corner</em> instead of spreading out and flocking. Confirmed working: the viewport is valid (the HUD reads e.g. <code>343x261</code>, not <code>0x0</code>), GPU validation is clean, 60–120&nbsp;fps. Already tried: the original's tuned params (<code>separation_factor = 1.4</code>); a one-time <code>redistribute</code> of positions across the viewport on the first valid frame; viewport-relative toroidal wrap.</p>
+<p>Leading suspects: <strong>(a)</strong> the <code>redistribute</code> writes through an <code>iterator</code> view (<code>view.p.* = ...</code>) — if an iterator view isn't a writable pointer into chunk storage the way a <code>forEach</code> component pointer is, the redistribute is a silent no-op and the boids stay where they spawned. <strong>(b)</strong> <code>initState</code> spawns with <code>@max(64, f.window.widthf())</code>; since <code>f.window</code> is 0 at init, that's a 64×64 top-left box — exactly where they're stuck. <strong>(c)</strong> Pos and Vel are both <code>z.Vec2</code>, so the matcher distinguishes them by archetype field order — worth checking p/v aren't swapped in some query. The full code is below.</p>
+</blockquote>
+<pre><code class="zig">
+//! wgpu_ecs_boids — Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live
+//! in an archetype with Pos + Vel components; each frame three passes run the classic
+//! rules — a snapshot (via `iterator`) feeds a steering `forEach`
+//! (separation/alignment/cohesion), then an integrate-and-wrap `forEach`, then a render
+//! `iterator`. Proves the ECS subsystem (Registry, archetypes, iterator, forEach) on the
+//! wgpu backend. The GL original was mouse-driven; this flocks on its own.
+//! Viewport-relative under `.responsive`.
+const std = @import("std");
+const z = @import("zimr");
+const zm = z.math;
+const ecs = z.ecs;
+
+const ROBOTO_MONO_TTF = @embedFile("roboto_mono_ttf");
+const c = z.colors.Color;
+
+const NUM_BOIDS: usize = 160;
+const MAX_SPEED: f32 = 140;
+const MIN_SPEED: f32 = 60;
+
+// Pos and Vel are both Vec2; the ECS matcher distinguishes them by archetype field order
+// (pos first, vel second) — mirror that order in every query.
+const Pos = z.Vec2;
+const Vel = z.Vec2;
+const Snap = struct { p: Pos, v: Vel };
+
+const Params = struct {
+    neighbor_radius: f32 = 60,
+    separation_radius: f32 = 18,
+    alignment_factor: f32 = 0.06,
+    cohesion_factor: f32 = 0.0009,
+    separation_factor: f32 = 1.4,
+};
+const params: Params = .{};
+
+const SteerCtx = struct {
+    snap: []const Snap,
+};
+
+const IntegrateCtx = struct {
+    dt: f32,
+    w: f32,
+    h: f32,
+};
+
+const State = struct {
+    font: z.Font,
+    es: ecs.Registry,
+    rng: std.Random.DefaultPrng,
+    snap: [NUM_BOIDS]Snap = undefined,
+    distributed: bool = false,
+    frame_count: usize = 0,
+};
+
+pub var zimr_app: z.App = .{};
+
+pub fn main() !void {
+    try zimr_app.run(.{
+        .window = .{
+            .title = "zimr - WebGPU - ECS boids",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    const font: z.Font = try z.loadFont(f, gpa, ROBOTO_MONO_TTF, 24);
+    var es: ecs.Registry = try .init(.{
+        .gpa = gpa,
+        .cap = .{ .entities = NUM_BOIDS + 16, .arches = 4, .chunks = 8, .chunk = 4096 },
+    });
+    errdefer es.deinit(gpa);
+    var rng: std.Random.DefaultPrng = .init(0xB01D5);
+    const r: std.Random = rng.random();
+    const w: f32 = @max(64.0, f.window.widthf());
+    const h: f32 = @max(64.0, f.window.heightf());
+    for (0..NUM_BOIDS) |_| {
+        const e: ecs.Entity = try ecs.Entity.reserveImmediateOrErr(&amp;es);
+        const angle: f32 = r.float(f32) * zm.tau;
+        const speed: f32 = MIN_SPEED + r.float(f32) * (MAX_SPEED - MIN_SPEED);
+        _ = try e.changeArchImmediateOrErr(&amp;es, gpa, struct {
+            pos: Pos,
+            vel: Vel,
+        }, .{
+            .add = .{
+                .pos = .{ r.float(f32) * w, r.float(f32) * h },
+                .vel = .{ @cos(angle) * speed, @sin(angle) * speed },
+            },
+        });
+    }
+    return .{ .font = font, .es = es, .rng = rng };
+}
+
+/// Three Reynolds rules from the immutable snapshot, then a speed clamp.
+fn steerBoid(
+    ctx: SteerCtx,
+    p: *const Pos,
+    v: *Vel,
+) void {
+    var sep_x: f32 = 0;
+    var sep_y: f32 = 0;
+    var ali_x: f32 = 0;
+    var ali_y: f32 = 0;
+    var coh_x: f32 = 0;
+    var coh_y: f32 = 0;
+    var neighbor_count: usize = 0;
+
+    for (ctx.snap) |other| {
+        if (other.p[0] == p[0] and other.p[1] == p[1] and other.v[0] == v[0] and other.v[1] == v[1]) {
+            continue;
+        }
+        const dx: f32 = other.p[0] - p[0];
+        const dy: f32 = other.p[1] - p[1];
+        const d: f32 = @sqrt(dx * dx + dy * dy);
+        if (d &gt; params.neighbor_radius) {
+            continue;
+        }
+        coh_x += other.p[0];
+        coh_y += other.p[1];
+        ali_x += other.v[0];
+        ali_y += other.v[1];
+        neighbor_count += 1;
+        if (d &lt; params.separation_radius and d &gt; 0.001) {
+            const inv: f32 = 1.0 / d;
+            sep_x += -dx * inv;
+            sep_y += -dy * inv;
+        }
+    }
+
+    if (neighbor_count &gt; 0) {
+        const inv_count: f32 = 1.0 / @as(f32, @floatFromInt(neighbor_count));
+        v[0] += (ali_x * inv_count - v[0]) * params.alignment_factor;
+        v[1] += (ali_y * inv_count - v[1]) * params.alignment_factor;
+        v[0] += (coh_x * inv_count - p[0]) * params.cohesion_factor;
+        v[1] += (coh_y * inv_count - p[1]) * params.cohesion_factor;
+        v[0] += sep_x * params.separation_factor;
+        v[1] += sep_y * params.separation_factor;
+    }
+
+    const speed: f32 = @sqrt(v[0] * v[0] + v[1] * v[1]);
+    if (speed &gt; MAX_SPEED) {
+        const scale: f32 = MAX_SPEED / speed;
+        v[0] *= scale;
+        v[1] *= scale;
+    } else if (speed &lt; MIN_SPEED and speed &gt; 0.001) {
+        const scale: f32 = MIN_SPEED / speed;
+        v[0] *= scale;
+        v[1] *= scale;
+    }
+}
+
+/// Move by velocity; toroidal wrap against the live viewport.
+fn integrateAndWrap(
+    ctx: IntegrateCtx,
+    p: *Pos,
+    v: *const Vel,
+) void {
+    p[0] += v[0] * ctx.dt;
+    p[1] += v[1] * ctx.dt;
+    if (p[0] &lt; 0) {
+        p[0] += ctx.w;
+    } else if (p[0] &gt;= ctx.w) {
+        p[0] -= ctx.w;
+    }
+    if (p[1] &lt; 0) {
+        p[1] += ctx.h;
+    } else if (p[1] &gt;= ctx.h) {
+        p[1] -= ctx.h;
+    }
+}
+
+/// A small triangle pointing along the boid's velocity.
+fn drawBoid(
+    gl: anytype,
+    pos: z.Vec2,
+    vel: z.Vec2,
+) void {
+    const sp: f32 = @sqrt(vel[0] * vel[0] + vel[1] * vel[1]);
+    const dx: f32 = if (sp &gt; 0.001) vel[0] / sp else 1.0;
+    const dy: f32 = if (sp &gt; 0.001) vel[1] / sp else 0.0;
+    const size: f32 = 6.0;
+    const tip: z.Vec2 = .{ pos[0] + dx * size, pos[1] + dy * size };
+    const back: z.Vec2 = .{ pos[0] - dx * size * 0.6, pos[1] - dy * size * 0.6 };
+    const lft: z.Vec2 = .{ back[0] - dy * size * 0.5, back[1] + dx * size * 0.5 };
+    const rgt: z.Vec2 = .{ back[0] + dy * size * 0.5, back[1] - dx * size * 0.5 };
+    const col: z.colors.Color = c.init(120, 190, 245, 255);
+    z.drawLineEx(gl, tip, lft, 1.5, col);
+    z.drawLineEx(gl, tip, rgt, 1.5, col);
+    z.drawLineEx(gl, lft, rgt, 1.5, col);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    s.frame_count += 1;
+    const dt: f32 = f.time.delta_time;
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+
+    // initState ran before the canvas was sized (f.window was 0), so the boids spawned
+    // into a tiny corner. The first frame with a valid viewport, spread them out.
+    if (!s.distributed and w &gt; 1 and h &gt; 1) {
+        const r: std.Random = s.rng.random();
+        var dist_it = s.es.iterator(struct {
+            p: *Pos,
+            v: *const Vel,
+        });
+        while (dist_it.next(&amp;s.es)) |view| {
+            view.p.* = .{ r.float(f32) * w, r.float(f32) * h };
+        }
+        s.distributed = true;
+    }
+
+    // 1. Snapshot every boid's (pos, vel) so steering reads a stable world.
+    var n: usize = 0;
+    var snap_it = s.es.iterator(struct {
+        p: *const Pos,
+        v: *const Vel,
+    });
+    while (snap_it.next(&amp;s.es)) |view| {
+        if (n &gt;= s.snap.len) {
+            break;
+        }
+        s.snap[n] = .{ .p = view.p.*, .v = view.v.* };
+        n += 1;
+    }
+
+    // 2. Steer, 3. integrate + wrap.
+    s.es.forEach(steerBoid, SteerCtx{ .snap = s.snap[0..n] });
+    s.es.forEach(integrateAndWrap, IntegrateCtx{ .dt = dt, .w = w, .h = h });
+
+    // 4. Render.
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, c.init(8, 10, 16, 255));
+    var draw_it = s.es.iterator(struct {
+        p: *const Pos,
+        v: *const Vel,
+    });
+    while (draw_it.next(&amp;s.es)) |view| {
+        drawBoid(f.gl, view.p.*, view.v.*);
+    }
+    var buf: [56]u8 = undefined;
+    const lbl: []const u8 = std.fmt.bufPrint(&amp;buf, "ECS boids: {d} | {d:.0}x{d:.0}", .{ n, w, h }) catch "?";
+    z.drawText(f.gl, s.font, lbl, 12, 12, 16, c.init(210, 214, 224, 220));
+    z.endDrawing(f.gl);
+}
+</code></pre>
+<h3>highlighter</h3>
+<p>This page colours Zig client-side with a tiny single-pass tokeniser (comments, strings, keywords, <code>@builtins</code>, primitive types, numbers) — no external dependency, so it renders the same offline.</p>
+<script>
+function highlightZig(s){
+  return s.replace(/(\/\/[^\n]*)|("(?:\\.|[^"\\])*")|('(?:\\.|[^'\\])*')|\b(pub|const|var|fn|return|if|else|while|for|switch|struct|enum|union|try|catch|defer|errdefer|comptime|inline|and|or|orelse|break|continue|unreachable|undefined|null|true|false|error|test|extern|export|align|callconv|usingnamespace)\b|(@[A-Za-z_][A-Za-z0-9_]*)|\b(f16|f32|f64|i8|i16|i32|i64|u8|u16|u32|u64|usize|isize|bool|void|anytype|type|anyopaque|comptime_int|comptime_float)\b|\b(0x[0-9a-fA-F_]+|[0-9][0-9_]*\.?[0-9_]*(?:[eE][+-]?[0-9]+)?)\b/g,
+  function(m,c,st,ch,k,b,t,n){
+    if(c)return '<span class="c">'+c+'</span>';
+    if(st)return '<span class="s">'+st+'</span>';
+    if(ch)return '<span class="s">'+ch+'</span>';
+    if(k)return '<span class="k">'+k+'</span>';
+    if(b)return '<span class="b">'+b+'</span>';
+    if(t)return '<span class="t">'+t+'</span>';
+    if(n)return '<span class="n">'+n+'</span>';
+    return m;
+  });
+}
+document.addEventListener('DOMContentLoaded',function(){
+  document.querySelectorAll('pre code.zig').forEach(function(el){
+    el.innerHTML = highlightZig(el.innerHTML);
+  });
+});
+</script>
+</div>
+</body>
+</html>

@@ -1,0 +1,27 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+       %void = OpTypeVoid
+       %bool = OpTypeBool
+        %int = OpTypeInt 32 1
+       %true = OpConstantTrue %bool
+    %ep_type = OpTypeFunction %void
+       %main = OpFunction %void None %ep_type
+ %main_start = OpLabel
+               OpBranch %1
+          %1 = OpLabel
+               OpSelectionMerge %5 None
+               OpBranchConditional %true %3 %4
+          %3 = OpLabel
+          %6 = OpUndef %int
+               OpBranch %5
+          %4 = OpLabel
+          %7 = OpUndef %int
+               OpBranch %5
+          %5 = OpLabel
+          %8 = OpPhi %int %6 %3 %7 %4
+          %9 = OpIAdd %int %8 %8
+               OpReturn
+               OpFunctionEnd

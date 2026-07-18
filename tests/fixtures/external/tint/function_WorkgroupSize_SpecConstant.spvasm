@@ -1,0 +1,17 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+       %void = OpTypeVoid
+       %uint = OpTypeInt 32 0
+     %v3uint = OpTypeVector %uint 3
+     %uint_3 = OpSpecConstant %uint 3
+     %uint_5 = OpSpecConstant %uint 5
+     %uint_7 = OpSpecConstant %uint 7
+%gl_WorkGroupSize = OpSpecConstantComposite %v3uint %uint_3 %uint_5 %uint_7
+    %ep_type = OpTypeFunction %void
+       %main = OpFunction %void None %ep_type
+ %main_start = OpLabel
+               OpReturn
+               OpFunctionEnd

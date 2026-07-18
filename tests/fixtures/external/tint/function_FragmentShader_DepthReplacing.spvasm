@@ -1,0 +1,18 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %depth
+               OpExecutionMode %main OriginUpperLeft
+               OpExecutionMode %main DepthReplacing
+               OpDecorate %depth BuiltIn FragDepth
+       %void = OpTypeVoid
+        %f32 = OpTypeFloat 32
+     %f32_42 = OpConstant %f32 42.0
+%_ptr_Output_f32 = OpTypePointer Output %f32
+      %depth = OpVariable %_ptr_Output_f32 Output
+    %ep_type = OpTypeFunction %void
+       %main = OpFunction %void None %ep_type
+ %main_start = OpLabel
+               OpStore %depth %f32_42
+               OpReturn
+               OpFunctionEnd

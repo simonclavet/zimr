@@ -1,0 +1,28 @@
+{
+    // Recommendations VS Code will surface in the Extensions panel
+    // when this workspace is opened.  Together they enable
+    // F5-to-debug-a-zig-example:
+    //
+    //   ms-vscode.js-debug                    JavaScript debugger
+    //                                         (built-in for VS Code,
+    //                                         listed for completeness
+    //                                         on Codium / forks).
+    //   ms-vscode.wasm-dwarf-debugging        Decodes DWARF embedded
+    //                                         in our debug-mode wasm
+    //                                         so VS Code can map
+    //                                         wasm offsets to .zig
+    //                                         source lines for
+    //                                         breakpoints, step,
+    //                                         and locals inspection.
+    //   ziglang.vscode-zig                    Official Zig language
+    //                                         support — syntax,
+    //                                         formatter, ZLS
+    //                                         integration.
+    //
+    // See docs/vscode-debugging.md for the full setup walkthrough.
+    "recommendations": [
+        "ms-vscode.js-debug",
+        "ms-vscode.wasm-dwarf-debugging",
+        "ziglang.vscode-zig"
+    ]
+}

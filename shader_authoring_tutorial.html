@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>zimr · Two ways to write a shader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0d1117;          /* deep slate ground */
+    --ink-2:#141b24;        /* raised panel */
+    --ink-3:#1b232e;        /* code well */
+    --line:#26313d;         /* hairline */
+    --line-soft:#1f2833;
+    --fg:#d6dee7;           /* primary text */
+    --fg-dim:#8896a5;       /* secondary text */
+    --fg-faint:#5b6b7a;     /* captions */
+    --old:#c98a3a;          /* OLD path — muted amber */
+    --old-soft:#3a2c17;
+    --new:#3fd0c9;          /* NEW path — phosphor cyan */
+    --new-soft:#123330;
+    --danger:#e0555f;       /* the hand-counted-integer hazard */
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Space Grotesk',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto;} *{animation:none!important;transition:none!important;}}
+  body{
+    margin:0;background:var(--ink);color:var(--fg);
+    font-family:var(--disp);line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(63,208,201,.06), transparent 60%),
+      linear-gradient(var(--line-soft) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+    background-size:auto, 48px 48px, 48px 48px;
+    background-position:0 0, -1px -1px, -1px -1px;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px;}
+
+  /* ---- hero ---- */
+  header.hero{padding:88px 0 56px;border-bottom:1px solid var(--line);}
+  .kicker{
+    font-family:var(--mono);font-size:12px;letter-spacing:.28em;text-transform:uppercase;
+    color:var(--fg-faint);margin:0 0 22px;
+  }
+  h1.title{
+    font-family:var(--disp);font-weight:700;font-size:clamp(38px,7vw,76px);
+    line-height:.98;letter-spacing:-.03em;margin:0 0 26px;color:#f2f6fa;
+  }
+  h1.title .amber{color:var(--old);}
+  h1.title .cyan{color:var(--new);}
+  .lede{font-size:clamp(17px,2.2vw,21px);color:var(--fg-dim);max-width:60ch;margin:0;font-weight:400;}
+  .lede strong{color:var(--fg);font-weight:600;}
+
+  /* the pipeline strip in the hero — the subject's real world */
+  .pipe{
+    margin-top:44px;display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+    font-family:var(--mono);font-size:13px;color:var(--fg-dim);
+  }
+  .pipe .node{
+    padding:7px 13px;border:1px solid var(--line);border-radius:6px;background:var(--ink-2);
+    white-space:nowrap;
+  }
+  .pipe .arrow{color:var(--fg-faint);}
+  .pipe .node.zig{border-color:#3a4657;color:#c7d2de;}
+  .pipe .node.spv{border-color:#3a4657;}
+  .pipe .node.wgsl{border-color:var(--new-soft);color:var(--new);}
+
+  /* ---- section scaffold ---- */
+  section{padding:64px 0;border-bottom:1px solid var(--line);}
+  .eyebrow{
+    font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--new);margin:0 0 14px;display:flex;align-items:center;gap:12px;
+  }
+  .eyebrow .num{color:var(--fg-faint);}
+  .eyebrow .rule{flex:1;height:1px;background:var(--line);}
+  h2{font-family:var(--disp);font-weight:600;font-size:clamp(26px,4vw,38px);letter-spacing:-.02em;margin:0 0 18px;color:#eef3f8;}
+  p.body{font-size:16.5px;color:var(--fg-dim);max-width:72ch;margin:0 0 18px;}
+  p.body code, li code{
+    font-family:var(--mono);font-size:.86em;background:var(--ink-3);
+    padding:1px 6px;border-radius:4px;color:#c7d2de;border:1px solid var(--line);
+  }
+  p.body strong{color:var(--fg);font-weight:600;}
+
+  /* ---- the two-column diff, the signature device ---- */
+  .diff{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:28px 0 8px;}
+  @media (max-width:860px){.diff{grid-template-columns:1fr;}}
+  .pane{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--ink-2);display:flex;flex-direction:column;}
+  .pane.old{border-color:var(--old-soft);}
+  .pane.new{border-color:var(--new-soft);}
+  .pane-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:12px 16px;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:12.5px;letter-spacing:.02em;
+  }
+  .pane.old .pane-head{background:linear-gradient(180deg,rgba(201,138,58,.08),transparent);}
+  .pane.new .pane-head{background:linear-gradient(180deg,rgba(63,208,201,.08),transparent);}
+  .tag{font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:11px;padding:3px 8px;border-radius:5px;}
+  .tag.old{color:var(--old);background:var(--old-soft);}
+  .tag.new{color:var(--new);background:var(--new-soft);}
+  .pane-head .file{color:var(--fg-faint);}
+  pre{margin:0;padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.72;color:#c3cfdb;flex:1;}
+  pre::-webkit-scrollbar{height:8px;}
+  pre::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;}
+  code .kw{color:#7aa2f7;} /* keyword */
+  code .fn{color:#7dcfff;} /* function/type */
+  code .str{color:#9ece6a;} /* string */
+  code .num{color:#ff9e64;} /* number */
+  code .cm{color:var(--fg-faint);font-style:italic;} /* comment */
+  code .hl-old{color:var(--old);font-weight:500;}
+  code .hl-new{color:var(--new);font-weight:500;}
+  code .hazard{color:var(--danger);font-weight:600;background:rgba(224,85,95,.10);border-radius:3px;padding:0 2px;}
+
+  /* ---- callouts ---- */
+  .note{
+    display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start;
+    border:1px solid var(--line);border-left:3px solid var(--new);border-radius:10px;
+    padding:18px 20px;margin:26px 0;background:var(--ink-2);
+  }
+  .note.warn{border-left-color:var(--danger);}
+  .note.amber{border-left-color:var(--old);}
+  .note .mark{font-family:var(--mono);font-weight:700;font-size:13px;color:var(--new);padding-top:2px;}
+  .note.warn .mark{color:var(--danger);}
+  .note.amber .mark{color:var(--old);}
+  .note p{margin:0;font-size:15px;color:var(--fg-dim);}
+  .note p strong{color:var(--fg);}
+  .note p + p{margin-top:8px;}
+
+  /* ---- binding flow diagram (signature) ---- */
+  .flow{border:1px solid var(--line);border-radius:14px;background:var(--ink-2);padding:30px;margin:30px 0;}
+  .flow-title{font-family:var(--mono);font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-faint);margin:0 0 22px;text-align:center;}
+  .flow-rows{display:flex;flex-direction:column;gap:14px;}
+  .flow-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;}
+  @media (max-width:720px){.flow-row{grid-template-columns:1fr;text-align:center;}.flow-row .conn{transform:rotate(90deg);}}
+  .chip{font-family:var(--mono);font-size:13px;padding:10px 14px;border-radius:8px;border:1px solid var(--line);background:var(--ink-3);}
+  .chip.schema{border-color:var(--new-soft);color:#d6dee7;}
+  .chip.schema b{color:var(--new);}
+  .chip.wgsl{border-color:var(--line);color:#c3cfdb;text-align:right;}
+  .chip.wgsl b{color:#7dcfff;}
+  @media (max-width:720px){.chip.wgsl{text-align:center;}}
+  .conn{font-family:var(--mono);color:var(--new);font-size:18px;justify-self:center;}
+  .flow-foot{margin:22px 0 0;font-size:14px;color:var(--fg-dim);text-align:center;}
+  .flow-foot b{color:var(--fg);}
+
+  /* ---- scoreboard ---- */
+  .score{display:grid;grid-template-columns:1.4fr 1fr 1fr;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:28px 0;font-size:14.5px;}
+  .score>div{padding:14px 18px;border-bottom:1px solid var(--line-soft);}
+  .score .h{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-faint);background:var(--ink-2);}
+  .score .h.old{color:var(--old);}
+  .score .h.new{color:var(--new);}
+  .score .crit{color:var(--fg-dim);}
+  .score .cell{color:var(--fg);font-family:var(--mono);font-size:13px;}
+  .score .cell.win{color:var(--new);}
+  .score .cell.meh{color:var(--old);}
+  .score>div:nth-last-child(-n+3){border-bottom:none;}
+  @media (max-width:720px){.score{font-size:13px;}.score>div{padding:11px 12px;}}
+
+  /* ---- decision / when-to-use ---- */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:24px 0;}
+  @media (max-width:760px){.cols{grid-template-columns:1fr;}}
+  .card{border:1px solid var(--line);border-radius:12px;padding:22px 22px 8px;background:var(--ink-2);}
+  .card.old-card{border-top:3px solid var(--old);}
+  .card.new-card{border-top:3px solid var(--new);}
+  .card h3{font-family:var(--mono);font-size:14px;letter-spacing:.04em;margin:0 0 4px;}
+  .card.old-card h3{color:var(--old);}
+  .card.new-card h3{color:var(--new);}
+  .card .sub{font-size:12.5px;color:var(--fg-faint);font-family:var(--mono);margin:0 0 14px;}
+  .card ul{margin:0 0 14px;padding-left:18px;}
+  .card li{font-size:14.5px;color:var(--fg-dim);margin-bottom:8px;}
+  .card li b{color:var(--fg);font-weight:600;}
+
+  /* ---- footer ---- */
+  footer{padding:56px 0 80px;color:var(--fg-faint);font-family:var(--mono);font-size:12.5px;}
+  footer .r{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;}
+  footer a{color:var(--new);text-decoration:none;}
+
+  .pull{font-family:var(--disp);font-weight:500;font-size:clamp(20px,3vw,27px);line-height:1.35;color:#e6edf4;letter-spacing:-.01em;max-width:26ch;margin:8px 0 4px;}
+  .pull .cyan{color:var(--new);}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">zimr · shader authoring · internal note</p>
+    <h1 class="title">Two ways to<br>write a <span class="cyan">shader</span>.<br><span class="amber">One is going away.</span></h1>
+    <p class="lede">Every zimr shader is Zig that compiles to SPIR-V and transpiles to WGSL. Until now there were two ways to write one: the <strong>direct</strong> way, where you hand-wire every binding, and the <strong>typed IoT</strong> way, where a schema does it for you. This is the case for collapsing to one.</p>
+    <div class="pipe">
+      <span class="node zig">shaderMain.zig</span>
+      <span class="arrow">→</span>
+      <span class="node spv">build-obj · spirv32</span>
+      <span class="arrow">→</span>
+      <span class="node spv">zspv rewrite</span>
+      <span class="arrow">→</span>
+      <span class="node wgsl">spv2wgsl</span>
+      <span class="arrow">→</span>
+      <span class="node wgsl">@embedFile(.wgsl)</span>
+    </div>
+  </div>
+</header>
+
+<!-- 1. THE TWO SHAPES -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="num">01</span> The two shapes <span class="rule"></span></p>
+    <h2>Same shader, two source shapes</h2>
+    <p class="body">Here is the instanced-points vertex shader written both ways. It reads a particle position from a storage buffer indexed by the instance, expands a quad, and colors by height. Read the two side by side — the logic is identical; only the <em>boundary</em> differs.</p>
+
+    <div class="diff">
+      <div class="pane old">
+        <div class="pane-head"><span class="tag old">Old · direct</span><span class="file">points_vs.zig</span></div>
+<pre><code><span class="kw">const</span> u = <span class="fn">@extern</span>(*<span class="kw">addrspace</span>(.uniform) <span class="kw">const</span> Uniforms, .{
+    .name = <span class="str">"u"</span>,
+    .decoration = .{ .descriptor = .{
+        .set = <span class="hazard">0</span>, .binding = <span class="hazard">0</span> } },
+});
+<span class="kw">const</span> positions = <span class="fn">storageBuffer</span>(Vec2,
+    <span class="str">"positions"</span>, <span class="hazard">0</span>, <span class="hazard">1</span>);
+<span class="kw">const</span> col_out = <span class="fn">@extern</span>(*<span class="kw">addrspace</span>(.output) Vec, .{
+    .name = <span class="str">"col"</span>, .decoration = .{ .location = <span class="num">0</span> },
+});
+
+<span class="kw">export fn</span> <span class="fn">entry</span>() <span class="kw">callconv</span>(.spirv_vertex) <span class="kw">void</span> {
+    <span class="kw">const</span> vi: u32 = spirv.<span class="hl-old">vertex_index</span>;
+    <span class="kw">const</span> ii: u32 = spirv.<span class="hl-old">instance_index</span>;
+    <span class="kw">const</span> p = <span class="fn">ssboLoad</span>(Vec2, <span class="hl-old">positions</span>, ii);
+    <span class="kw">const</span> uu = u.*;
+    <span class="cm">// ... quad expand, color ...</span>
+    spirv.position_out.* = .{ x, y, <span class="num">0</span>, <span class="num">1</span> };
+    col_out.* = color;
+}</code></pre>
+      </div>
+
+      <div class="pane new">
+        <div class="pane-head"><span class="tag new">New · IoT</span><span class="file">points_vs.zig + _io.zig</span></div>
+<pre><code><span class="cm">// points_vs_io.zig — the schema</span>
+<span class="kw">pub const</span> Ubo = <span class="kw">extern struct</span> { <span class="cm">/* … */</span> };
+<span class="kw">pub const</span> Storage = <span class="kw">struct</span> {
+    positions: shader.<span class="hl-new">StorageBuf</span>(Vec2, .read),
+};
+<span class="kw">pub const</span> Builtins = <span class="kw">struct</span> {
+    vertex_index:   shader.<span class="hl-new">Builtin</span>(.vertex_index),
+    instance_index: shader.<span class="hl-new">Builtin</span>(.instance_index),
+};
+<span class="kw">pub const</span> Outputs = common.Interp;
+
+<span class="cm">// points_vs.zig — the body</span>
+<span class="kw">pub fn</span> <span class="fn">shaderMain</span>(io_in: Io) Out {
+    <span class="kw">var</span> out: Out = <span class="kw">undefined</span>;
+    <span class="kw">const</span> vi = io_in.<span class="hl-new">vertex_index</span>();
+    <span class="kw">const</span> ii = io_in.<span class="hl-new">instance_index</span>();
+    <span class="kw">const</span> p = io_in.<span class="hl-new">positions</span>(ii);
+    <span class="kw">const</span> uu = io_in.<span class="hl-new">u</span>;
+    <span class="cm">// ... quad expand, color ...</span>
+    out.position = .{ x, y, <span class="num">0</span>, <span class="num">1</span> };
+    out.col = color;
+    <span class="kw">return</span> out;
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="note warn">
+      <div class="mark">▲ risk</div>
+      <div>
+        <p>The four <strong style="color:var(--danger)">red integers</strong> on the left are descriptor <code>set</code>/<code>binding</code> numbers, typed by hand. Get one wrong and nothing errors at compile time — the pipeline is simply invalid at creation, or worse, silently reads the wrong buffer on the GPU. This is the exact failure class that cost real debugging time on the decals work.</p>
+        <p>On the right there are <strong>no binding integers at all</strong>. The schema names each resource once; the codegen assigns groups and bindings by a fixed, documented rule.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 2. WHERE THE NUMBERS COME FROM -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="num">02</span> The signature move <span class="rule"></span></p>
+    <h2>The schema field <em>is</em> the binding</h2>
+    <p class="body">In the IoT world you never write a <code>@group(N) @binding(M)</code>. You declare a field in a schema section, and the codegen derives the WGSL decoration from <em>which section it's in</em> and <em>its position</em>. Uniforms land at binding&nbsp;0; storage buffers follow in the same group; samplers get their own group. Here is the actual derivation for the points shader:</p>
+
+    <div class="flow">
+      <p class="flow-title">schema  →  generated WGSL</p>
+      <div class="flow-rows">
+        <div class="flow-row">
+          <div class="chip schema"><b>Ubo</b> &nbsp;→&nbsp; VS uniform block</div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@group(0) @binding(0)</b> var&lt;uniform&gt; u</div>
+        </div>
+        <div class="flow-row">
+          <div class="chip schema"><b>Storage.positions</b> &nbsp;→&nbsp; StorageBuf(.read)</div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@group(0) @binding(1)</b> var&lt;storage, read&gt;</div>
+        </div>
+        <div class="flow-row">
+          <div class="chip schema"><b>Builtins.vertex_index</b></div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@builtin(vertex_index)</b> vertex_index</div>
+        </div>
+        <div class="flow-row">
+          <div class="chip schema"><b>Builtins.instance_index</b></div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@builtin(instance_index)</b> instance_index</div>
+        </div>
+      </div>
+      <p class="flow-foot">Verified byte-for-byte: this is the <b>exact</b> WGSL the direct shader emitted — so the host bind-group code, which hand-wires the same layout, still works unchanged. The port is a drop-in.</p>
+    </div>
+
+    <div class="note">
+      <div class="mark">◆ why</div>
+      <div>
+        <p>Because the same rule feeds <strong>both</strong> the WGSL decorations and the host-side bind-group layout, the two can never disagree. In the direct pattern they're two hand-written lists that have to be kept in sync manually — and when they drift, the GPU rejects the pipeline.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3. SAMPLERS + VARYINGS -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="num">03</span> Two more wins <span class="rule"></span></p>
+    <h2>Sampling, and the varying contract</h2>
+    <p class="body">Beyond bindings, the typed boundary changes two everyday things: how you sample a texture, and how a vertex shader's outputs stay matched to a fragment shader's inputs.</p>
+
+    <div class="diff">
+      <div class="pane old">
+        <div class="pane-head"><span class="tag old">Old · direct sample</span><span class="file">*_fs.zig</span></div>
+<pre><code><span class="cm">// declare the sampler by hand…</span>
+<span class="kw">extern const</span> decal_sampler2d: u32
+    <span class="kw">addrspace</span>(.constant);
+<span class="cm">// …bind it by hand at the top of main…</span>
+<span class="fn">binding</span>(&decal_sampler2d, <span class="hazard">2</span>, <span class="hazard">0</span>);
+<span class="cm">// …then call the raw op:</span>
+<span class="kw">const</span> t = <span class="fn">zsample2d</span>(decal_sampler2d, uv);</code></pre>
+      </div>
+      <div class="pane new">
+        <div class="pane-head"><span class="tag new">New · typed sample</span><span class="file">lambert_fs_io.zig + _fs.zig</span></div>
+<pre><code><span class="cm">// declare it once, named, in the schema:</span>
+<span class="kw">pub const</span> Samplers = <span class="kw">struct</span> {
+    texture0: shader.<span class="hl-new">Sampler2D</span>(.albedo, .{}),
+};
+<span class="cm">// call it as a method — no binding, no raw op:</span>
+<span class="kw">const</span> tex = io_in.<span class="hl-new">texture0</span>(io_in.frag_tex_coord);</code></pre>
+      </div>
+    </div>
+
+    <p class="body" style="margin-top:26px;">The varyings between stages are the other quiet hazard. In the direct pattern the VS <code>@extern(.output)</code> list and the FS <code>@extern(.input)</code> list are written separately and must match by <code>location</code> index. In IoT they alias one shared struct, so they match <em>by construction</em>:</p>
+
+    <div class="diff">
+      <div class="pane new" style="grid-column:1 / -1;">
+        <div class="pane-head"><span class="tag new">New · one source of truth</span><span class="file">points_common_io.zig</span></div>
+<pre><code><span class="cm">// points_common_io.zig — declared ONCE</span>
+<span class="kw">pub const</span> <span class="hl-new">Interp</span> = <span class="kw">struct</span> { col: Vec };
+
+<span class="cm">// points_vs_io.zig             points_fs_io.zig</span>
+<span class="kw">pub const</span> Outputs = common.<span class="hl-new">Interp</span>;   <span class="kw">pub const</span> Inputs = common.<span class="hl-new">Interp</span>;
+<span class="cm">// VS output === FS input. They cannot drift; renaming a field</span>
+<span class="cm">// breaks both stages at compile time until you fix it.</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4. THE SCOREBOARD -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="num">04</span> Honest accounting <span class="rule"></span></p>
+    <h2>What it costs, what it buys</h2>
+    <p class="body">IoT is not free — it adds schema files. But it removes the per-binding <code>@extern</code> blocks from the body and the host-side bind-group code. On line count it's close to a wash; the real dividend is type-safety. Measured on real shaders:</p>
+
+    <div class="score">
+      <div class="h crit">Concern</div>
+      <div class="h old">Direct</div>
+      <div class="h new">IoT</div>
+
+      <div class="crit">Binding numbers</div>
+      <div class="cell meh">hand-typed ints</div>
+      <div class="cell win">derived, none</div>
+
+      <div class="crit">Texture sampling</div>
+      <div class="cell meh">raw op + manual bind</div>
+      <div class="cell win">io.name(uv)</div>
+
+      <div class="crit">VS-out / FS-in match</div>
+      <div class="cell meh">two lists, by hand</div>
+      <div class="cell win">shared struct</div>
+
+      <div class="crit">Host bind-group layout</div>
+      <div class="cell meh">~35 hand-written lines</div>
+      <div class="cell win">Resources auto</div>
+
+      <div class="crit">Failure mode</div>
+      <div class="cell meh">silent GPU / runtime</div>
+      <div class="cell win">compile error</div>
+
+      <div class="crit">Schema tax</div>
+      <div class="cell win">none</div>
+      <div class="cell meh">~20–30 lines</div>
+    </div>
+
+    <p class="pull">The schema tax is real. The bug surface it removes is <span class="cyan">realer</span>.</p>
+  </div>
+</section>
+
+<!-- 5. WHEN TO USE WHICH -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="num">05</span> The decision <span class="rule"></span></p>
+    <h2>Which pattern, when</h2>
+    <p class="body">The goal is one pattern. The interface now expresses everything — storage buffers, builtins, samplers — so the direct pattern is no longer a capability, only a habit. Until the last shaders are ported, here's the rule:</p>
+
+    <div class="cols">
+      <div class="card new-card">
+        <h3>Reach for IoT</h3>
+        <p class="sub">the default — 40+ of our shaders</p>
+        <ul>
+          <li><b>Any shader with bindings.</b> Uniforms, samplers, storage buffers — all named in a schema, zero hand-counted integers.</li>
+          <li><b>Anything with a VS/FS pair.</b> The shared <code>Interp</code> keeps the varyings honest.</li>
+          <li><b>Anything using builtins.</b> <code>vertex_index</code> and <code>instance_index</code> are schema members now.</li>
+        </ul>
+      </div>
+      <div class="card old-card">
+        <h3>Direct — shrinking</h3>
+        <p class="sub">an exception, not a parallel path</p>
+        <ul>
+          <li><b>Bespoke bind-group topologies</b> the fixed group scheme can't name yet — e.g. the decal projector-UBO ring with its 64 pre-built groups.</li>
+          <li>Everything else — points, fluid, billboard, skybox — <b>has already moved over</b>. The decal ring is the only shader left on the direct path.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="note amber">
+      <div class="mark">● status</div>
+      <div>
+        <p><strong>points</strong>, <strong>fluid_discs</strong>, <strong>billboard</strong>, and <strong>skybox</strong> are all ported and shipping — every standard shader is now IoT. Their hosts bind storage buffers through <code>Resources</code>, validated on device. Only the decal ring stays direct, and that's a host-side resource concern (its 64-slot projector-UBO ring), not a limit of the interface.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap r">
+    <span>zimr · pure-Zig WebGPU · shader authoring note</span>
+    <span>Zig → SPIR-V → WGSL · <a href="#top">back to top</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

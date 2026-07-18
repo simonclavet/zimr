@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where.exe bun *)",
+      "Bash(bun --version)",
+      "Bash(cmd.exe /c \"echo %PATH%\")",
+      "Bash(cmd.exe /c \"where bun\")",
+      "PowerShell(Test-Path *)",
+      "PowerShell(bun *)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :8000)",
+      "Bash(tasklist *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-ChildItem -Recurse \"C:\\\\dev\\\\Zimr\\\\zig-out\\\\web\" -File | Sort-Object Length -Descending | Select-Object -First 12 | ForEach-Object { \"{0,8:N2} KB  {1}\" -f \\($_.Length/1KB\\), $_.FullName.Substring\\(\"C:\\\\dev\\\\Zimr\\\\zig-out\\\\web\\\\\".Length\\) })",
+      "Bash(zig build *)"
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+
+                 OpCapability Shader
+                 OpMemoryModel Logical GLSL450
+                 OpEntryPoint Fragment %fn "main"
+                 OpExecutionMode %fn OriginUpperLeft
+         %void = OpTypeVoid
+         %bool = OpTypeBool
+        %false = OpConstantFalse %bool
+      %void_fn = OpTypeFunction %void
+
+           %fn = OpFunction %void None %void_fn
+        %entry = OpLabel
+                 OpBranch %loop1
+        %loop1 = OpLabel
+
+                 OpLoopMerge %loop1_merge %loop2 None
+                 OpBranch %loop1_body
+   %loop1_body = OpLabel
+                 OpBranchConditional %false %loop1_merge %loop2
+        %loop2 = OpLabel
+
+                 OpLoopMerge %loop2_merge %loop2 None
+                 OpBranchConditional %false %loop2_merge %loop2
+  %loop2_merge = OpLabel
+                 OpBranch %loop1
+
+  %loop1_merge = OpLabel
+                 OpReturn
+                 OpFunctionEnd

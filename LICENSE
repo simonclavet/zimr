@@ -1,0 +1,495 @@
+
+The license is ZLIB, But assume I have no personal preference between MIT and ZLIB. 
+But I use some libraries that are ZLIB, and it might be viral, so ZLIB it is.
+So if you use zimr, 
+thank raysan5 and ocornut and all others who participated somehow.
+
+zimr — pure-Zig raylib, imgui port for wasm32-wasi + WebGL2
+
+Copyright (c) zimr contributors
+
+This software is provided "as-is", without any express or implied warranty.
+In no event will the authors be held liable for any damages arising from
+the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+  1. The origin of this software must not be misrepresented; you must not
+     claim that you wrote the original software. If you use this software
+     in a product, an acknowledgment in the product documentation would be
+     appreciated but is not required.
+
+  2. Altered source versions must be plainly marked as such, and must not
+     be misrepresented as being the original software.
+
+  3. This notice may not be removed or altered from any source distribution.
+
+----------------------------------------------------------------------
+zimr is overwhelmingly a pure-Zig port of raylib 6.0 by Ramon Santamaria
+(@raysan5).  The license above is the same zlib/libpng license raylib
+itself uses, in line with the spirit of clauses 1-3.  Files derived from
+raylib are individually marked as such in their headers.
+
+zimr also incorporates code adapted from other open-source projects
+under their own licenses.
+
+
+
+# Third-party licenses and attribution
+
+zimr is licensed under the zlib/libpng license (see `LICENSE`).
+This file documents the external projects whose code, designs, or
+data have been adapted into zimr's source tree, with each
+upstream's license, author(s), and the specific zimr files derived
+from each upstream.
+
+When the upstream license requires that the original notice be
+preserved in source-form distributions, that notice is reproduced
+verbatim below.  zimr aims to be over-attributive rather than
+under-attributive — if you contributed to any of the upstreams
+listed and your name should appear here, please open an issue or
+PR.
+
+---
+
+## raylib — Ramon Santamaria (`@raysan5`) and contributors
+
+- **Upstream:** https://github.com/raysan5/raylib
+- **License:** zlib/libpng
+- **Author:** Ramon Santamaria and the raylib contributors
+
+zimr is broadly a pure-Zig port of raylib 6.0 for the
+wasm32-wasi + WebGL2 target.  raylib is the upstream from which
+the bulk of zimr's API, data layouts, and algorithms derive.  Our
+zlib/libpng license was chosen specifically to honor raylib's
+license, so the same restrictions you've signed up for under
+raylib carry through to anyone using zimr.
+
+The following zimr files are direct ports (in whole or in part)
+of named raylib source files:
+
+| zimr file              | raylib source                              |
+| ---------------------- | ------------------------------------------ |
+| `src/rlgl.zig`         | `rlgl.h` (CPU + GPU paths, WebGL 2 only)   |
+| `src/rlsw.zig`         | `rlsw.h` (experimental software renderer)  |
+| `src/rlsw_pixel.zig`   | `rlsw.h` (pixel-format codecs subset)      |
+| `src/drawing.zig`      | `rshapes.c`, `rtextures.c`, `rtext.c`, `rmodels.c`, rlgl shader-management |
+| `src/runtime.zig`      | `rcore.c` (core + input subsets, no GLFW)  |
+| `src/codecs.zig`       | `rtextures.c` (PNG decoder); `rtext.c` (TTF + glyph baking); gltf, rectpack |
+| `src/sound.zig`        | `raudio.c` (Wave/Sound/Music, Web Audio backend) |
+| `src/types.zig`        | data type definitions + the named-color palette |
+| `src/enums.zig`        | enum definitions                       |
+
+Files that are zimr-original (not raylib-derived) and so are NOT
+in the table above:
+`src/zimr.zig` (App / Frame runtime), `src/loader.zig`,
+`src/clock.zig`, `src/rng.zig`, `src/logger.zig`,
+`src/allocator.zig` (the freeMany helper), `src/png.zig` (we wrote
+this from scratch — pure-Zig, no stb_image lineage),
+`src/leak_test.zig`, `src/multiapp_test.zig`,
+`src/web/{dom,gl,fetch,audio}.zig`, `examples/*.zig`,
+`tests/smoke.ts`, `build.zig`.
+
+raylib's full notice is reproduced here for clauses-2-and-3
+compliance:
+
+    Copyright (c) 2013-2024 Ramon Santamaria (@raysan5)
+
+    This software is provided "as-is", without any express or implied warranty.
+    In no event will the authors be held liable for any damages arising from
+    the use of this software.
+
+    Permission is granted to anyone to use this software for any purpose,
+    including commercial applications, and to alter it and redistribute it
+    freely, subject to the following restrictions:
+
+      1. The origin of this software must not be misrepresented; you must not
+         claim that you wrote the original software. If you use this software
+         in a product, an acknowledgment in the product documentation would be
+         appreciated but is not required.
+
+      2. Altered source versions must be plainly marked as such, and must not
+         be misrepresented as being the original software.
+
+      3. This notice may not be removed or altered from any source distribution.
+
+---
+
+## andrewrk/TrueType — Andrew Kelley and contributors
+
+- **Upstream:** https://codeberg.org/andrewrk/TrueType
+- **License:** MIT (Expat)
+- **Author:** Andrew Kelley and TrueType contributors
+
+zimr's `src/truetype.zig` is adapted from `andrewrk/TrueType`,
+itself a pure-Zig port of Sean Barrett's `stb_truetype.h`.  The
+full MIT license text is reproduced **inline at the top of
+`src/truetype.zig`** per the upstream license's notice-preservation
+clause; the modifications applied at import are enumerated in the
+same file's header.
+
+For convenience (and so this file is a complete attribution
+record), the MIT license text is also reproduced here:
+
+    The MIT License (Expat)
+
+    Copyright (c) Andrew Kelley and contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+---
+
+## stb_truetype — Sean Barrett (`nothings`)
+
+- **Upstream:** https://github.com/nothings/stb
+- **License:** MIT / public domain (dual; pick either)
+- **Author:** Sean Barrett
+
+`andrewrk/TrueType` (and so transitively `src/truetype.zig`) is a
+port of Sean Barrett's single-header `stb_truetype.h`.  Almost all
+the algorithm-level work for parsing TTF tables and rasterizing
+glyphs traces back to Sean.  Acknowledged by transitive lineage.
+
+---
+
+## zg — Sam Atman and contributors
+
+- **Upstream:** https://codeberg.org/atman/zg
+- **License:** MIT (per upstream README and predecessor lineage)
+- **Author:** Sam Atman (and zg / ziglyph contributors)
+
+zimr vendors `code_point.zig` from zg at
+`src/_vendor/zg/code_point.zig` for UTF-8 decoding with
+Maximal-Subparts error recovery.  zg descends from `ziglyph` by
+José Colón (`jecolon`), which is MIT-licensed.
+
+The DFA tables and decode loop in `code_point.zig` themselves are
+adapted from Björn Höhrmann's UTF-8 decoder — see next entry.
+
+---
+
+## UTF-8 DFA decoder — Björn Höhrmann
+
+- **Upstream:** https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
+- **License:** MIT
+- **Author:** Björn Höhrmann
+
+The decision-graph tables inside `src/_vendor/zg/code_point.zig`
+implement Björn Höhrmann's UTF-8 DFA, a beautifully compact and
+fast UTF-8 validator/decoder.  Acknowledged by zg's source as
+"Credit for the algorithm goes to Björn Höhrmann".
+
+---
+
+## ziglyph — José Colón (`jecolon`) — predecessor of zg
+
+- **Upstream:** https://codeberg.org/dude_the_builder/ziglyph
+- **License:** MIT
+- **Author:** José Colón
+
+`zg` was forked from `ziglyph`, so the MIT lineage of code_point.zig
+is anchored here.  Acknowledged for completeness.
+
+---
+
+## Roboto Mono — Christian Robertson (Google)
+
+- **Upstream:** https://fonts.google.com/specimen/Roboto+Mono
+- **License:** Apache 2.0
+- **Author:** Christian Robertson and the Google Fonts team
+
+`assets/RobotoMono-Regular.ttf` is shipped in the repository and
+embedded at compile time into the `text_layout` example via
+`@embedFile`.  Used to demonstrate the TTF loading path
+(`text.loadFontFromTtfData`) end-to-end.  Apache 2.0 is
+permissive and compatible with zlib for redistribution; the
+Apache notice does not need to be reproduced in source-form
+distributions of the font itself, but we acknowledge the
+authorship here for completeness.
+
+---
+
+## Tailwind CSS — Tailwind Labs
+
+- **Upstream:** https://tailwindcss.com/docs/colors
+- **License:** MIT
+- **Author:** Tailwind Labs
+
+`src/types.zig` includes a subset of Tailwind's named color
+palette (`slate_*`, `sky_*`, `amber_*`, `pink_*`, `emerald_*`,
+`violet_*`, `rose_*`, `green_*`, `red_*`, `gold`, `white`,
+`black`).  These are color values, not code, but included here for
+attribution completeness.
+
+---
+
+## mr_ecs — Mason Remaley and contributors (Games-by-Mason)
+
+- **Upstream:** https://codeberg.org/Games-by-Mason/mr_ecs
+- **License:** MIT
+- **Author:** Mason Remaley and mr_ecs contributors
+
+zimr's `src/entities.zig` is adapted from `mr_ecs`, an
+archetype-based ECS for Zig.  zimr's port strips the upstream
+features that don't make sense for a single-threaded WASM target:
+no Tracy profiling hooks, no `mr_geom` math (zimr uses `math.zig`
+instead), no threading primitives (`CmdPool`, `forEachAsync`,
+`forEachChunkAsync`), no `Transform` integration.  The single-file
+result is hosted at `src/entities.zig`.
+
+The MIT license text is reproduced inline at the top of
+`src/entities.zig` per the upstream license's notice-preservation
+clause.  For convenience (and so this file is a complete
+attribution record), it's also reproduced here:
+
+    The MIT License (Expat)
+
+    Copyright (c) mr_ecs contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+---
+
+## zmath — Michal Ziulek (zig-gamedev)
+
+- **Upstream:** https://github.com/zig-gamedev/zmath
+- **License:** MIT
+- **Author:** Michal Ziulek and zig-gamedev contributors
+
+zimr's `src/math.zig` is a hard fork of `zmath` at version
+0.11.0-dev (fingerprint `0xfd23d422bd223cc2` in the `build.zig.zon`
+of the upstream at vendor time).  Hard fork: there is no
+upstream-merge story — `math.zig` is edited freely like any
+other zimr source file.  Only Zig-version-drift fixes have been
+applied on top of the verbatim vendor; each such fix is marked
+with a `// [zimr Z0]` comment so the diff from upstream stays
+auditable.  zimr-specific additions (Vector2 support, the
+quat/vec/scalar helpers zimr needs that zmath lacks) sit below
+the verbatim section.
+
+zmath provides the row-major SIMD `Vec` / `Mat` / `Quat` types,
+matrix builders, quaternion operations, and scalar helpers that
+the rest of zimr is built on.  Convention is unchanged from the
+upstream: row-major matrices, row vectors, `mul(v, m)` treats
+`v` as a row, `mul(A, B)` composes "apply A then B."
+
+The MIT license text reproduced verbatim:
+
+    The MIT License (Expat)
+
+    Copyright (c) 2022 Michal Ziulek
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+---
+
+## zphys — Axel Mathieu-Mahias
+
+- **Upstream:** https://github.com/AxelMathieuMahias/zphys
+- **License:** MIT
+- **Author:** Axel Mathieu-Mahias and zphys contributors
+
+zimr's `src/physics.zig` is a direct port of `zphys`, a 3D
+rigid-body physics engine for Zig.  The algorithms ported include:
+GJK / EPA collision detection between convex shapes (sphere-sphere,
+sphere-box, box-box), Sutherland-Hodgman contact-manifold
+clipping, the sequential-impulse constraint solver, Baumgarte
+position correction, and the warm-start cache that carries impulses
+across frames for stable stacking.
+
+The port adapts the algorithms to zimr's ECS layout (`Transform`
+and `RigidBody` live as components in `entities.World`), zimr's
+math API (everything goes through `math.zig`'s `Vec` / `Quat`
+types via small bridge helpers), and zimr's style guide.  Per-
+section translation notes live in the changelog.
+
+The MIT license text reproduced verbatim:
+
+    The MIT License (Expat)
+
+    Copyright (c) Axel Mathieu-Mahias and zphys contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+---
+
+## Dear ImGui — Omar Cornut (`@ocornut`)
+
+- **Upstream:** https://github.com/ocornut/imgui
+- **License:** MIT
+- **Author:** Omar Cornut and Dear ImGui contributors
+
+zimr's `src/ui.zig` is an immediate-mode UI module shaped by Dear
+ImGui's API and behavioural conventions: the begin/end pair
+pattern, ID hashing for widget identity, the `WantCaptureMouse`
+/ `WantCaptureKeyboard` convention, columns and tables, child
+windows, tab bars, drag-drop, plot widgets, the slider / drag /
+input-text family.  Zig idioms diverge where C++ default
+arguments are awkward (zimr uses option structs with defaults)
+and where overloading would clutter (separate `slider`,
+`sliderInt`, `sliderFloat3` instead of overloaded `Slider`).
+
+No Dear ImGui C++ source is included in zimr; the influence is
+at the design level — public function signatures, widget
+semantics, the docs that explain why a widget behaves the way it
+does.  Algorithmic equivalence to upstream is the goal in the
+common cases; the upstream is the reference manual for what
+"correct" means.
+
+The MIT license text reproduced verbatim:
+
+    The MIT License (MIT)
+
+    Copyright (c) 2014-2024 Omar Cornut
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+
+## BoundedArray — Jacob Young (`jedisct1`) and Zig contributors
+
+- **Upstream:** Zig standard library (was `std.BoundedArray`)
+- **License:** MIT
+- **Author:** Jacob Young (`jedisct1`) and the Zig contributors
+
+`BoundedArray` and `BoundedArrayAligned` in `src/utils.zig` are
+vendored from upstream Zig's standard library.  BoundedArray
+moved out of `std` during the 0.16 development cycle; zimr needs
+a fixed-capacity inline array with no allocator (used at minimum
+by `UiContext.debug_log: BoundedArray(DebugEvent, 256)`), so the
+implementation is reinstated here.  The code is largely verbatim;
+only line-length wrapping was adjusted to fit zimr's 120-column
+convention.
+
+The MIT license text is reproduced at the top of `src/utils.zig`
+in the section comment that introduces the BoundedArray block,
+per the upstream license's notice-preservation clause.  For
+completeness it is also reproduced here:
+
+    The MIT License (Expat)
+
+    Copyright (c) Jacob Young and Zig contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+
+## Conventions for zimr contributors
+
+When adapting code from another project, add the project to this
+file with: upstream URL, license, author(s), and the zimr files
+affected.  If the upstream license requires a notice in derivative
+source distributions (zlib does, MIT does, BSD does, Apache 2.0
+does), reproduce that notice here once — and add a short
+attribution line in the affected file's header pointing back to
+this document.
+
+For zimr files that are clear ports of an upstream file, the
+header should say something like:
+
+    // Adapted from raylib's <file> by Ramon Santamaria (zlib).
+    // See THIRD_PARTY_LICENSES.md for full attribution.
+
+For files that incorporate snippets or design ideas without being
+direct ports, mention the source briefly in a comment near the
+relevant code rather than at the file header.
+
+When in doubt: more attribution is better than less.  Naming the
+people who built the upstream is the cheapest, most respectful
+thing we can do.

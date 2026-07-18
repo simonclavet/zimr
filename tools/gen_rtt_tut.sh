@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Generates src/notes/tutorials/rtt-tutorial.html — a tour of the render-to-texture
+# API, its implementation (mid-frame pass switch), and the design alternatives.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+PREV="src/notes/tutorials/wgpu-ports-tutorial.html"
+OUT="src/notes/tutorials/rtt-tutorial.html"
+APP="src/wgpu_app.zig"
+TEX="src/wgpu_texture.zig"
+EX="examples/wgpu_render_texture/wgpu_render_texture.zig"
+
+emit() { # file start end
+  echo '<pre><code class="zig">' >> "$OUT"
+  sed -n "${2},${3}p" "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' >> "$OUT"
+  echo '</code></pre>' >> "$OUT"
+}
+emitfile() { # file
+  echo '<pre><code class="zig">' >> "$OUT"
+  sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' "$1" >> "$OUT"
+  echo '</code></pre>' >> "$OUT"
+}
+
+# --- head: our title, reuse the previous tutorial's <style> block (lines 7-85) ---
+cat > "$OUT" <<'EOF'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>zimr — render to texture</title>
+EOF
+sed -n '7,85p' "$PREV" >> "$OUT"
+
+# --- body open + intro + toc ---
+cat >> "$OUT" <<'EOF'
+<body>
+<div class="blog-container">
+<h1 class="title">zimr — render to texture</h1>
+<h2 class="subtitle">offscreen rendering on the pure-Zig WebGPU backend: the API, the mid-frame pass switch that powers it, and the six ways we could have wired it.</h2>
+
+<nav class="toc">
+<strong>contents</strong>
+<ol>
+<li><a href="#idea">The idea</a></li>
+<li><a href="#why">Why you want it</a></li>
+<li><a href="#api">The API</a></li>
+<li><a href="#how">How it works — the pass switch</a></li>
+<li><a href="#design">The design space: six ways to wire it</a></li>
+<li><a href="#gotchas">Gotchas</a></li>
+<li><a href="#example">The full example</a></li>
+</ol>
+</nav>
+
+<h3 id="idea">The idea</h3>
+<p>Normally a frame draws straight to the screen — the swap-chain <em>backbuffer</em>. Render-to-texture (RTT, also "render textures" or "framebuffer objects") inserts a detour: you draw into an offscreen image instead, and then that image becomes an ordinary texture you can sample, scale, tint, feed to a shader, or read back to the CPU.</p>
+<p>It's a two-phase move. <strong>Phase one:</strong> point your draw calls at the offscreen target and render a scene into it. <strong>Phase two:</strong> go back to drawing on the screen, and use the thing you just rendered as input. The six-panel demo this tutorial accompanies is the clearest possible illustration — one animated scene is rendered once into a 256×256 texture, then that single texture is stamped onto the screen six times at different tints. Render once, reuse many.</p>
+
+<h3 id="why">Why you want it</h3>
+<p>RTT is the substrate under a surprising amount of graphics work:</p>
+<ul>
+<li><strong>Accumulation / trails.</strong> Keep a texture between frames, fade it slightly, draw the new frame on top — motion trails, light painting, decay effects.</li>
+<li><strong>Compositing.</strong> Render a HUD or a minimap into its own texture, then place it as a unit — scaled, faded, in a corner.</li>
+<li><strong>Post-processing.</strong> Render the scene to a texture, then draw a full-screen quad with a shader that reads it: blur, bloom, color grading, CRT warp.</li>
+<li><strong>Reuse.</strong> Render an expensive thing once and stamp it many times (the demo) instead of re-rendering it per instance.</li>
+<li><strong>Readback.</strong> The texture is <code>copy_src</code>, so its pixels can be pulled back to the CPU for screenshots, hit-testing, or image export.</li>
+</ul>
+
+<h3 id="api">The API</h3>
+<p>Five calls, shaped to mirror raylib:</p>
+<ul>
+<li><code>z.loadRenderTexture(gl, w, h)</code> → a <code>RenderTexture</code> (color texture + view + sampler, optional depth).</li>
+<li><code>z.beginTextureMode(gl, rt)</code> — redirect drawing into <code>rt</code>.</li>
+<li><code>z.endTextureMode(gl)</code> — stop, return to the screen.</li>
+<li><code>rt.asTexture()</code> — view the result as a <code>WgpuTexture</code> for <code>drawTextureRec</code>.</li>
+<li><code>z.unloadRenderTexture(gl, &rt)</code> — free the GPU resources.</li>
+</ul>
+<p>The usage rhythm — note that the whole thing happens <em>inside</em> a normal <code>beginDrawing</code>/<code>endDrawing</code> frame:</p>
+<pre><code class="zig">z.beginDrawing(f.gl);
+z.clearBackground(f.gl, dark);
+
+z.beginTextureMode(f.gl, rt, dark);  // phase one: draw into the texture (dark clears; null accumulates)
+z.drawCircleV(f.gl, center, r, white);
+z.endTextureMode(f.gl);
+
+z.drawTextureRec(                  // phase two: use it on the screen
+    f.gl, rt.asTexture(),
+    0, 0, 1, 1,                    // source UVs (normalized, whole texture)
+    dx, dy, dw, dh,                // destination rect (screen px)
+    tint,
+);
+z.endDrawing(f.gl);</code></pre>
+EOF
+
+# --- how it works ---
+cat >> "$OUT" <<'EOF'
+<h3 id="how">How it works — the pass switch</h3>
+<p>Inside one frame there is a single command <em>encoder</em> and, normally, a single render <em>pass</em> writing to the backbuffer. <code>beginTextureMode</code> performs a <strong>mid-frame pass switch</strong>: it flushes the pending 2D batch, ends the current pass, and opens a new pass on the <em>same encoder</em> aimed at the render texture's view — with the 2D ortho reprogrammed to the texture's pixel size, so your coordinates map to the texture rather than the window.</p>
+<p><code>endTextureMode</code> reverses it: flush, end the texture pass, reopen the backbuffer pass with a <strong>load</strong> (not a clear — so whatever you drew to the screen before the bracket survives), and restore the viewport ortho. Because both passes share the frame's one encoder, the GPU executes them in recorded order at submit time: the texture pass first, the screen pass second. That ordering is exactly the dependency we need — the texture is finished before the screen samples it.</p>
+EOF
+emit "$APP" 1017 1084
+cat >> "$OUT" <<'EOF'
+<p>The display side needs the result as something <code>drawTextureRec</code> can bind, so the render texture carries its own sampler and views itself as a <code>WgpuTexture</code>:</p>
+EOF
+emit "$TEX" 219 228
+
+# --- design space (the centerpiece) ---
+cat >> "$OUT" <<'EOF'
+<h3 id="design">The design space: six ways to wire it</h3>
+<p>The API we shipped is one point on a spectrum running from <em>implicit and stateful</em> to <em>explicit and threaded</em>. Here is the whole spectrum, roughly most-magical to least, with what each buys and what it costs.</p>
+
+<p><strong>1. Implicit mode — what we chose.</strong> A hidden "current target" lives in the app; bracketing with begin/end redirects every subsequent <code>draw…(gl, …)</code> call to the texture, then back. This is raylib's <code>BeginTextureMode</code>/<code>EndTextureMode</code>, verbatim.</p>
+<pre><code class="zig">z.beginTextureMode(f.gl, rt, clear);
+z.drawCircle(f.gl, ...);                       // goes to the texture
+z.endTextureMode(f.gl);
+z.drawTextureRec(f.gl, rt.asTexture(), ...);   // goes to the screen</code></pre>
+<p><em>Buys:</em> raylib examples port one-to-one — the call shape is identical, so a port is mechanical. And the "magic" is not something we invented: raylib hides exactly this, binding an OpenGL framebuffer object inside <code>BeginTextureMode</code>. We are faithful to the very thing we're porting. <em>Costs:</em> it is stateful — an unbalanced begin/end corrupts the frame — and the pass switch is invisible at the call site.</p>
+
+<p><strong>2. Target-in-handle.</strong> Instead of a global, <code>beginRenderTexture</code> returns a second <code>*WgpuGl</code> bound to the texture; you draw through that handle.</p>
+<pre><code class="zig">const rt_gl = z.beginRenderTexture(f.gl, rt);
+z.drawCircle(rt_gl, ...);     // the target lives in the handle, not a global
+z.endRenderTexture(rt_gl);</code></pre>
+<p><em>Buys:</em> the target is visible in the code — which handle you pass — and there is no hidden global. Still immediate-mode. <em>Costs:</em> two handles to keep straight, ending order still matters, and it no longer matches raylib, so every port needs a small rewrite.</p>
+
+<p><strong>3. Scoped callback.</strong> You hand the engine a draw function; it brackets begin/end around it for you.</p>
+<pre><code class="zig">z.withRenderTexture(f.gl, rt, &ctx, drawSceneFn);</code></pre>
+<p><em>Buys:</em> you cannot forget to end — the scope is enforced. <em>Costs:</em> Zig has no closures, so you thread a <code>ctx</code> struct plus a function pointer by hand, which is clunky for the common case, and it diverges from raylib's call shape.</p>
+
+<p><strong>4. Explicit pass objects — the WebGPU shape.</strong> A render pass is a first-class value; draws are methods on it.</p>
+<pre><code class="zig">var p = z.beginRenderPass(.{ .target = rt, .clear = black });
+p.drawCircle(...);
+p.end();</code></pre>
+<p><em>Buys:</em> no hidden state at all; multiple passes compose naturally; this is closest to how wgpu actually works underneath. <em>Costs:</em> every draw becomes <code>p.draw…()</code> rather than <code>draw…(gl)</code>, which breaks not just raylib parity but the immediate-mode feel of the entire rest of zimr; it is more verbose; and batching has to be tracked per-pass.</p>
+
+<p><strong>5. Per-call target — no modes at all.</strong> Each draw names its destination; there is nothing to enter or leave.</p>
+<pre><code class="zig">z.drawCircleTo(rt, ...);   // to the texture
+z.drawCircle(...);          // to the screen</code></pre>
+<p><em>Buys:</em> maximally explicit and stateless — there is no "current target" to get wrong. <em>Costs:</em> it doubles the draw surface (a <code>…To</code> variant per primitive), batching must key on the target, and it is the furthest thing from raylib.</p>
+
+<p><strong>6. Render graph.</strong> Record draw commands into lists, declare which textures each pass reads and writes, and let a scheduler order the passes and insert the dependencies.</p>
+<p><em>Buys:</em> this is how large engines manage many interdependent passes — shadow maps feeding lighting feeding post-processing. <em>Costs:</em> a completely different programming model, overkill for an immediate-mode 2D library, and a poor fit for "port the raylib examples."</p>
+
+<h3>The verdict</h3>
+<p>The mission decides it. zimr exists to run raylib's example corpus on WebGPU, and raylib's render-texture API <em>is</em> the implicit mode. Matching it means every example that uses a render texture ports with zero adaptation; choosing any of #2–#5 would tax each of those ports with a rewrite, in exchange for a safety-and-clarity win that raylib itself declined to take. So #1 is the right call <em>for a port</em> — even though #4 would likely be the better choice for an engine designed from a blank page.</p>
+<p>The part that makes this comfortable to commit: <strong>we did not give up the explicit option, we just declined to put it on top.</strong> <code>beginTextureMode</code> is a thin wrapper over primitives that already exist and are already explicit — <code>WgpuBackend.beginRenderPass(encoder, .{ .color_view, .clear, .depth_view })</code> hands back a real pass object, and <code>render_pass.setPipeline</code> / <code>draw</code> / <code>end</code> drive it directly. The implicit, raylib-facing surface sits <em>on top of</em> the explicit pass layer. The day we want #4 — multi-target output, custom load/store ops, a pass that feeds another pass — the machinery is already there to expose. Shipping #1 does not lock it out; it just keeps it off the path the examples walk.</p>
+
+<h3 id="gotchas">Gotchas</h3>
+<ul>
+<li><strong>Balance begin/end.</strong> Like raylib, an unmatched <code>beginTextureMode</code> leaves the frame pointed at the wrong target and corrupts output. Treat the bracket as inseparable.</li>
+<li><strong>Stay inside the frame.</strong> The bracket goes between <code>beginDrawing</code> and <code>endDrawing</code> — it manipulates the live pass and encoder, which only exist during a frame.</li>
+<li><strong>Orientation just works.</strong> The texture is rendered with the same top-left ortho the screen uses, and <code>drawTextureRec</code> samples v=0 at the top — so the result is upright, with no negative-height flip of the kind raylib needs for its bottom-up FBOs. The six-panel demo confirms it: the scene is right-side-up.</li>
+<li><strong>Clearing is an explicit argument.</strong> <code>beginTextureMode</code> takes a <code>clear: ?Color</code> — pass a color to clear the texture on entry (the "redraw every frame" pattern), or pass <code>null</code> to LOAD, preserving last frame's pixels so you can fade and accumulate. A motion trail is then just: enter with <code>null</code>, draw a faint translucent-black rectangle over the whole texture to decay the old image, draw the new dots, exit. (See the companion trails demo.)</li>
+<li><strong>First frame.</strong> A freshly created texture is undefined until first rendered; clearing on entry (as we do) sidesteps ever sampling garbage.</li>
+</ul>
+
+<h3 id="example">The full example</h3>
+<p>The complete source behind the six tinted panels — render the scene into the texture once per frame, then composite it across a viewport-relative grid:</p>
+EOF
+emitfile "$EX"
+
+# --- close: reuse highlighter (1671-1690), close containers ---
+sed -n '1671,1690p' "$PREV" >> "$OUT"
+cat >> "$OUT" <<'EOF'
+</div>
+</body>
+</html>
+EOF
+
+echo "wrote $OUT ($(wc -l < "$OUT") lines)"

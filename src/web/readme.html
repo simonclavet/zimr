@@ -1,0 +1,1951 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>zimr</title>
+        <meta
+            name="description"
+            content="A zig port of raylib, imgui, implot, and box2d / jolt physics for wasm/webgpu.
+            Includes transpilers from zig to wgsl (gpu) and javascript (web) so we can live in a pure zig world."
+        />
+        <style>
+            :root {
+                --main-font: "Courier New", Courier, monospace;
+                --header-font: "Georgia", "Times New Roman", serif;
+                --bg-page: #1f140e;
+                --bg-paper: #332218;
+                --bg-block: #261912;
+                --text-color: #f0e6d2;
+                --text-muted: #a89684;
+                --accent-color: #d35f33;
+                --border-color: #090604;
+                --shadow-color: #000000;
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                background-color: var(--bg-page);
+                background-image: radial-gradient(
+                    var(--border-color) 2px,
+                    transparent 2px
+                );
+                background-size: 16px 16px;
+                color: var(--text-color);
+                font-family: var(--main-font);
+                line-height: 1.6;
+                margin: 0;
+                padding: 40px 20px;
+                display: flex;
+                justify-content: center;
+            }
+
+            .blog-container {
+                background-color: var(--bg-paper);
+                max-width: 820px;
+                width: 100%;
+                padding: 40px;
+                border: 4px solid var(--border-color);
+                box-shadow: 12px 12px 0px var(--shadow-color);
+            }
+
+            h1.title {
+                font-family: var(--header-font);
+                font-size: 2.8rem;
+                line-height: 1.1;
+                text-transform: lowercase;
+                border-bottom: 6px double var(--border-color);
+                padding-bottom: 10px;
+                margin-top: 0;
+                margin-bottom: 10px;
+                letter-spacing: -1px;
+                color: var(--text-color);
+            }
+
+            h2.subtitle {
+                font-family: var(--main-font);
+                font-size: 1.05rem;
+                font-style: italic;
+                font-weight: normal;
+                margin-top: 0;
+                margin-bottom: 20px;
+                color: var(--accent-color);
+                line-height: 1.4;
+            }
+
+            nav.toplinks {
+                margin: 0 0 30px 0;
+                padding: 12px 0;
+                border-top: 2px solid var(--border-color);
+                border-bottom: 2px solid var(--border-color);
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px 20px;
+                font-size: 0.95rem;
+            }
+
+            nav.toplinks a {
+                text-decoration: none;
+                border: 2px solid var(--accent-color);
+                padding: 4px 10px;
+                background-color: var(--bg-block);
+            }
+
+            nav.toplinks a:hover {
+                background-color: var(--accent-color);
+                color: var(--bg-paper);
+            }
+
+            .wip-warning {
+                border: 4px solid var(--accent-color);
+                background-color: var(--bg-block);
+                padding: 14px 18px;
+                margin: 25px 0 30px 0;
+                box-shadow: 6px 6px 0px var(--shadow-color);
+                font-size: 1rem;
+                line-height: 1.5;
+            }
+
+            .wip-warning strong {
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                color: var(--accent-color);
+                display: block;
+                font-family: var(--header-font);
+                font-size: 1.15rem;
+                margin-bottom: 6px;
+            }
+
+            h3 {
+                font-family: var(--header-font);
+                font-size: 1.4rem;
+                background-color: var(--border-color);
+                color: var(--text-color);
+                display: inline-block;
+                padding: 4px 10px;
+                margin-top: 40px;
+                margin-bottom: 15px;
+                border: 2px solid var(--text-color);
+            }
+
+            h4 {
+                font-family: var(--header-font);
+                font-size: 1.15rem;
+                text-decoration: underline;
+                text-decoration-color: var(--accent-color);
+                text-underline-offset: 4px;
+                text-transform: lowercase;
+                margin-top: 25px;
+                margin-bottom: 10px;
+            }
+
+            p {
+                font-size: 1rem;
+                margin-bottom: 20px;
+                text-align: left;
+            }
+
+            a {
+                color: var(--accent-color);
+                text-decoration: underline;
+                font-weight: bold;
+            }
+
+            a:hover {
+                background-color: var(--accent-color);
+                color: var(--bg-paper);
+                text-decoration: none;
+            }
+
+            code {
+                background-color: var(--bg-block);
+                border: 1px solid var(--border-color);
+                padding: 1px 5px;
+                font-size: 0.92em;
+                color: var(--text-color);
+            }
+
+            pre {
+                background-color: var(--bg-block);
+                border: 2px solid var(--border-color);
+                border-left: 6px solid var(--accent-color);
+                padding: 15px 18px;
+                margin: 20px 0;
+                overflow-x: auto;
+                box-shadow: 4px 4px 0px var(--shadow-color);
+                font-size: 0.9rem;
+                line-height: 1.45;
+            }
+
+            pre code {
+                background: none;
+                border: none;
+                padding: 0;
+                font-size: inherit;
+            }
+
+            blockquote {
+                border-left: 6px solid var(--accent-color);
+                margin: 30px 0;
+                padding: 15px 20px;
+                background-color: var(--bg-block);
+                font-style: italic;
+                box-shadow: 4px 4px 0px var(--shadow-color);
+            }
+
+            ul {
+                border: 2px dashed var(--accent-color);
+                padding: 18px 20px 18px 40px;
+                background-color: var(--bg-block);
+                list-style-type: square;
+                margin-bottom: 25px;
+            }
+
+            ul li {
+                margin-bottom: 8px;
+            }
+
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 20px 0;
+                font-size: 0.88rem;
+                background-color: var(--bg-block);
+                box-shadow: 4px 4px 0px var(--shadow-color);
+            }
+
+            table th,
+            table td {
+                border: 2px solid var(--border-color);
+                padding: 8px 10px;
+                text-align: left;
+                vertical-align: top;
+            }
+
+            table th {
+                background-color: var(--border-color);
+                color: var(--text-color);
+                font-family: var(--header-font);
+                font-weight: bold;
+            }
+
+            hr {
+                border: none;
+                border-top: 4px double var(--border-color);
+                margin: 50px 0;
+            }
+
+            .disclaimer {
+                margin-top: 50px;
+                padding: 25px;
+                border: 2px solid var(--accent-color);
+                background-color: var(--bg-block);
+                box-shadow: 6px 6px 0px var(--shadow-color);
+            }
+
+            .disclaimer h3 {
+                margin-top: 0;
+            }
+
+            @media (max-width: 600px) {
+                body {
+                    padding: 15px;
+                    background-image: none;
+                }
+                .blog-container {
+                    border-width: 2px;
+                    box-shadow: 6px 6px 0px var(--shadow-color);
+                    padding: 25px 18px;
+                }
+                h1.title {
+                    font-size: 2.1rem;
+                }
+                pre {
+                    font-size: 0.82rem;
+                    padding: 12px;
+                }
+                table {
+                    font-size: 0.82rem;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="blog-container">
+            <h1 class="title">zimr</h1>
+            <h2 class="subtitle">
+                A zig port of raylib, imgui, implot2d/3d, and box2d / jolt
+                physics for wasm/webgpu. Includes transpilers from zig to wgsl
+                (gpu shaders/compute) and javascript &mdash; the browser host and
+                the web workers are Zig too &mdash; so we can live in a pure zig
+                world.
+            </h2>
+
+            <nav class="toplinks">
+                <a href="#what">what this is</a>
+                <a href="#pure">one language</a>
+                <a href="#app">app model</a>
+                <a href="#twod">2d</a>
+                <a href="#inputmath">input &amp; math</a>
+                <a href="#shaders">zig shaders</a>
+                <a href="#demos">building the demos</a>
+                <a href="#compute">gpu compute</a>
+                <a href="#jobs">web workers</a>
+                <a href="#threed">3d &amp; assets</a>
+                <a href="#imgui">imgui</a>
+                <a href="#plot">plots</a>
+                <a href="#physics">physics</a>
+                <a href="#instruments">profiler &amp; friends</a>
+                <a href="#machinery">under the hood</a>
+                <a href="#layout">source layout</a>
+                <a href="#build">building</a>
+                <a href="#walkthroughs">walkthroughs</a>
+                <a href="#examples">examples</a>
+                <a href="#limits">status</a>
+            </nav>
+
+            <div class="wip-warning">
+                <strong>Work in progress</strong>
+                The API surface, build steps, and example list change often.
+                This page describes the current state of the repository. It is
+                not a stable contract and not a recommendation.
+            </div>
+
+            <div class="wip-warning" style="border-left-color: var(--accent-color)">
+                <strong>New to graphics?</strong>
+                This page is a reference. If shaders, WebGPU, and the GPU are new
+                to you, start with the
+                <a href="tutorial.html">from-scratch tutorial</a> instead — it
+                teaches the whole stack through zimr, from drawing a circle to
+                reading a raymarched-metaball shader, one idea at a time.
+            </div>
+
+            <h3 id="what">What this is</h3>
+
+            <p>
+                zimr is a port of
+                <a href="https://www.raylib.com/">raylib</a>,
+                <a href="https://github.com/ocornut/imgui">Dear&nbsp;ImGui</a>,
+                <a href="https://github.com/epezent/implot">ImPlot</a> /
+                <a href="https://github.com/brenocq/implot3d">ImPlot3D</a>, and
+                <a href="https://github.com/jrouwe/JoltPhysics">Jolt</a>
+                to <a href="https://ziglang.org/">Zig</a>, compiled to
+                <code>wasm32-wasi</code> and rendered through WebGPU in a
+                browser. There are no third-party libraries. The renderer, the
+                math, the UI, the 2D and 3D plotting, the physics, the glTF
+                loader, the TTF font loader, the shader toolchain, the GPU
+                compute layer, the software rasterizer, the
+                <a href="#jobs">web workers</a>, and the browser host are all in
+                this repository, all in Zig. There is no hand-written JavaScript
+                anywhere in the engine &mdash; not in the host, and not in the
+                worker.
+            </p>
+
+            <p>
+                The only dependency is the Zig compiler. The build shells out
+                to nothing else: the steps that matter &mdash; Zig to SPIR-V to
+                WGSL for shaders and compute, and the host's Zig to C to
+                JavaScript &mdash; are done by tools written in Zig and living
+                in <code>tools/</code>. The dev server is also a Zig program.
+            </p>
+
+            <p>
+                Size, for calibration: about 206,000 lines of Zig under
+                <code>src/</code> (66 top-level files plus a
+                <code>src/shaders/</code> directory of 106), 265 example
+                programs, ~1,900 unit tests, and a locked SPIR-V&rarr;WGSL
+                fixture corpus of 91 shaders run via
+                <code>zig build corpus</code>. The transpilers are themselves
+                large: <code>src/spv2wgsl.zig</code> is ~11,500 lines and
+                <code>tools/c2js.zig</code> is ~9,400. The toolchain is pinned
+                to a specific <strong>Zig 0.17 dev</strong> build; other
+                versions are not expected to work.
+            </p>
+
+            <p>
+                What is ported is the <em>behaviour</em>, not the API. The
+                algorithms, the numerical choices and the visual results are
+                faithful &mdash; that is what "port" means here &mdash; but the
+                surface has diverged, deliberately and substantially, and code
+                does not carry across.
+            </p>
+
+            <p>
+                The clearest break is that raylib's global state is gone. There is
+                no <code>DrawCircleV(center, radius, color)</code> reaching for a
+                hidden context: 2D primitives are methods on an explicit
+                <a href="#twod">sink</a> (<code>circle</code>, <code>rect</code>,
+                <code>text</code>&hellip;), which is what lets the same drawing
+                routine run unchanged on four different backends. Dear&nbsp;ImGui
+                keeps its immediate-mode rhythm and its ID rules, but calls take
+                Zig format strings rather than printf ones &mdash;
+                <code>u.text("{d} spp", .{samples})</code> &mdash; and errors come
+                back as error unions instead of out-params. Colors, vectors and
+                matrices belong to <code>zimrmath</code> rather than to any one
+                library. Options arrive as designated struct literals; buffers are
+                slices, not pointer-plus-count.
+            </p>
+
+            <p>
+                So upstream <em>knowledge</em> transfers &mdash; if you know how an
+                ImGui ID stack behaves, or what raylib's fog fold does, you already
+                know how this behaves &mdash; but upstream <em>code</em> does not.
+                What did survive wholesale is the example set: the shader demos on
+                this page (fog, cel shading, deferred rendering, the texture-effect
+                gallery) are raylib's own examples rebuilt on this stack, usually
+                with the keyboard toggles turned into touch UI, and
+                <code>zimrphysics2d-demo</code> carries Box2D's 137 sample scenes.
+            </p>
+
+            <h3 id="pure">One language, several outputs</h3>
+
+            <p>
+                Everything starts as Zig. Different parts of the program take
+                different paths to the browser, but no part is hand-written in
+                GLSL, WGSL, C, or JavaScript &mdash; there is
+                <em>no inline WGSL anywhere in the tree</em>. Shaders are Zig
+                functions; the WGSL that reaches the GPU is an invisible build
+                artifact. The paths are:
+            </p>
+
+            <pre><code>engine + app + UI + math      zig  --(zig build-obj, wasm32-wasi)--&gt;  .wasm
+shaders + compute kernels     zig  --(zig build-obj, spirv)--&gt; SPIR-V --(spv2wgsl)--&gt;  WGSL
+browser host / bridge         zig  --(zig build-obj, -ofmt=c)--&gt;  C --(c2js)--&gt;  JavaScript</code></pre>
+
+            <p>
+                The same Zig source also feeds a fourth and a fifth path: a
+                shader function compiled to SPIR-V for the GPU is the very same
+                function the software rasterizer runs per-pixel on the CPU, and
+                a few shaders are additionally evaluated at Zig
+                <em>comptime</em>, baked into the binary by the compiler
+                itself. There is one definition; the build decides where it
+                executes. The shadow-mapping flagship below runs one shader
+                body all three ways on one screen.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>output</th>
+                        <th>tool</th>
+                        <th>source</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>wasm module</td>
+                        <td>Zig compiler (self-hosted)</td>
+                        <td>all of <code>src/</code></td>
+                    </tr>
+                    <tr>
+                        <td>WGSL shaders</td>
+                        <td><code>spv2wgsl</code> (Zig)</td>
+                        <td><code>src/spv2wgsl.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>JavaScript host</td>
+                        <td><code>c2js</code> (Zig)</td>
+                        <td><code>tools/c2js.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>CPU pixels / CPU compute / comptime bakes</td>
+                        <td>software rasterizer</td>
+                        <td><code>src/raster.zig</code>, <code>src/raster_shader.zig</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p>
+                The SPIR-V&rarr;WGSL translation is more than a syntax swap.
+                SPIR-V control flow is an arbitrary basic-block graph; WGSL
+                requires structured <code>if</code>/<code>loop</code>/<code
+                    >switch</code
+                >, so the transpiler reconstructs structured control flow and
+                lowers <code>OpPhi</code> nodes into ordinary assignments.
+                WGSL demands <code>textureSample</code> under uniform control
+                flow, so a pass hoists sampling out of non-uniform branches.
+                Distinct function-local variables that share a SPIR-V name are
+                uniquified so they don't collide as WGSL declarations. Each of
+                these passes exists because its absence once produced a blank
+                canvas or a validation error, which is why every shader in the
+                tree is translated and checked against locked fixtures on
+                every gate run (<code>zig build corpus</code>).
+            </p>
+
+            <p>
+                A few invariants hold across all of it. There are no
+                module-level mutable globals: every subsystem threads its
+                state through explicit pointers, so two instances never share
+                hidden state. The source is one Zig module with an enforced
+                acyclic dependency graph. And the discipline is mechanical: a
+                per-change test gate, a custom AST linter
+                (<code>tools/lint_zimr</code>) that repairs mechanical style
+                violations in place, and the transpiler-corpus and headless
+                smoke checks that keep the GPU and CPU paths honest. The point
+                of one language is that one set of tools &mdash; one compiler,
+                one test runner, one debugger &mdash; covers the entire stack.
+            </p>
+
+            <h3 id="app">The application model</h3>
+
+            <p>
+                An example is a struct of state plus a few functions, described
+                by a <code>z.AppSpec</code> value named <code>app</code>. The
+                host owns the browser frame loop and calls
+                <code>update</code> once per frame with a
+                <code>*z.Frame</code> carrying input, timing, and the draw
+                context. There is no main loop to write and no callback
+                registration beyond this declaration:
+            </p>
+
+            <pre><code>const z = @import("zimr");
+const zm = @import("zm");
+
+const State = struct { pos: zm.Vec2, vel: zm.Vec2, paused: bool = false };
+
+pub const app: z.AppSpec(State) = .{
+    .config = .{ .window = .{ .title = "ball", .width = 800, .height = 450 } },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+};
+
+fn update(f: *z.Frame, s: *State) void {
+    if (z.isKeyPressed(f.input, .space)) s.paused = !s.paused;
+    const dt: f32 = @floatCast(f.time.delta_time);
+    if (!s.paused) s.pos += s.vel * zm.splat2(dt * 60.0);
+
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, zm.Color.raywhite);
+    f.gl.circle(s.pos, 20.0, .{ .color = zm.Color.maroon });
+    f.gl.text(.{ 10, 10 }, "SPACE to pause", .{ .size = 20, .color = zm.Color.gray });
+    z.endDrawing(f.gl);
+}</code></pre>
+
+            <p>
+                The lifecycle is three functions and no more.
+                <code>init(gpa, f) !State</code> runs once &mdash; load fonts,
+                build meshes, create render textures, do one-time GPU uploads
+                &mdash; and returns the initial state by value.
+                <code>update(f, s)</code> runs every frame and is where all
+                input, simulation, and drawing live.
+                <code>deinit(gpa, s)</code> frees what init allocated. State is
+                an ordinary struct returned by value: no globals, no hidden
+                singletons; two instances of the same app would not share a
+                byte.
+            </p>
+
+            <p>
+                The <code>*z.Frame</code> is the one argument threaded
+                everywhere, and its fields are the engine's whole runtime
+                surface: <code>f.gl</code> is the immediate-mode draw context
+                (every <code>z.draw*</code> call takes it),
+                <code>f.gpu</code> is the lower-level WebGPU frame for
+                renderers that manage their own pipelines (the graphics demos
+                below, the PBR renderer, compute), <code>f.input</code> holds
+                keyboard / mouse / touch / gesture state, and
+                <code>f.time</code> carries <code>delta_time</code> and the
+                total clock.
+            </p>
+
+            <h3 id="twod">2D drawing</h3>
+
+            <p>
+                2D drawing goes through one small surface. A scene calls
+                primitives &mdash; <code>rect</code>, <code>circle</code>,
+                <code>triangle</code>, <code>line</code>, <code>text</code>,
+                <code>image</code>, <code>texture</code>, and the rest of a
+                roughly thirty-strong vocabulary (rounded rects, gradients, rings,
+                arcs and sectors, polygons, ellipses, dashed lines, and linear /
+                B-spline / Catmull-Rom / B&eacute;zier splines) &mdash; as methods on
+                a <em>sink</em>. There is no separate free-function drawing API for
+                2D: every 2D primitive is a sink method, and the only draws that
+                remain plain <code>z.</code> functions are the 3D ones.
+            </p>
+
+            <p>
+                The sink is duck-typed (<code>sink: anytype</code>), so one routine
+                written against it runs unchanged on any of four backends:
+            </p>
+
+            <ul>
+                <li><b><code>WgpuGl</code></b> &mdash; the immediate-mode
+                    <b>GPU</b> sink (<code>f.gl</code>). Primitives accumulate as
+                    vertices between <code>beginDrawing</code> and
+                    <code>endDrawing</code> and flush through one WebGPU render pass,
+                    so adding draw calls costs vertices, not passes.</li>
+                <li><b><code>SwAdapter</code></b> (<code>z.SwGl</code>) &mdash; an
+                    immediate-mode <b>CPU</b> software rasterizer. The same scene
+                    drawn on the CPU &mdash; which is how an example renders one frame
+                    on GPU and CPU at once (the engine's northstar: a single SPH fluid
+                    identical on either, toggled at runtime).</li>
+                <li><b><code>DrawList</code></b> &mdash; a <b>retained</b>,
+                    command-recording sink. This is what the Dear ImGui / UI layer
+                    draws into (<code>getWindowDrawList()</code>); the recorded
+                    commands replay into the GPU pass, so widgets and hand-written
+                    drawing share the exact same primitive vocabulary.</li>
+                <li><b><code>Canvas</code></b> &mdash; a <b>headless</b> retained CPU
+                    sink that renders straight to a PNG, for offline image generation
+                    and tests where no GPU is present.</li>
+            </ul>
+
+            <pre><code>// One primitive vocabulary, here on the immediate GPU sink f.gl. The exact
+// same calls run on z.SwGl (CPU), a retained DrawList, or a Canvas (-> PNG).
+z.beginDrawing(f.gl);
+z.clearBackground(f.gl, zm.Color.raywhite);
+
+z.beginMode2D(f.gl, s.camera);                 // pan/zoom in world space
+f.gl.rect(.{ .x = 100, .y = 100, .width = 60, .height = 40 }, .{ .color = zm.Color.skyblue });
+f.gl.line(.{ 0, 0 }, s.pos, .{ .color = zm.Color.red, .thickness = 3 });
+f.gl.circle(s.pos, 20, .{ .color = zm.Color.maroon, .outline = 2 });
+f.gl.text(.{ 10, 10 }, "hello", .{ .size = 20, .color = zm.Color.gray, .font = &s.font });
+z.endMode2D(f.gl);
+z.endDrawing(f.gl);</code></pre>
+
+            <p>
+                The same routine, factored against a sink, is what lets it run on
+                more than one backend:
+            </p>
+
+            <pre><code>fn drawScene(sink: anytype, s: *State) void {
+    sink.circle(s.pos, 20, .{ .color = zm.Color.maroon });
+    sink.text(.{ 10, 10 }, "any backend", .{ .size = 20, .color = zm.Color.gray, .font = &s.font });
+}
+
+drawScene(f.gl, s);                 // GPU
+var sw = z.SwGl.init(&s.sw_ctx);    // CPU software rasterizer, side by side
+drawScene(&sw, s);</code></pre>
+
+
+
+            <p>
+                Images and textures follow the raylib split: an
+                <code>z.Image</code> is CPU-side pixels
+                (<code>src/image.zig</code> is a GL-free port of raylib's image
+                module &mdash; procedural generators like
+                <code>genImagePerlinNoise</code> and
+                <code>genImageCellular</code>, PNG decode, blur / invert /
+                rotate edits); a <code>z.WgpuTexture</code> is the GPU upload.
+                <code>updateTexture</code> re-uploads an edited buffer
+                <em>in place</em>, the right move for pixels that change every
+                frame. Render-to-texture is
+                <code>loadRenderTexture(w, h)</code> once, then a normal draw
+                sequence bracketed by
+                <code>beginTextureMode(f.gl, rt, clear)</code> /
+                <code>endTextureMode(f.gl)</code>; afterwards
+                <code>rt.asTexture()</code> is a sampleable texture to draw back
+                to the screen with <code>f.gl.texture</code>, map onto 3D
+                geometry, or feed a shader &mdash; that last one is the spine
+                of the effects gallery below.
+            </p>
+            <p>
+                A render-texture pass is a full pass, so
+                <code>beginMode3D</code> works inside one: an app can render 3D
+                into several framebuffers in a single frame and composite them
+                (a split screen, a minimap, a security camera). Each 3D pass
+                takes its own slot in the engine's view-projection ring, so the
+                pass keeps the camera it was recorded with &mdash; a frame's
+                <code>writeBuffer</code> calls all land before its one submit, so
+                a single-slot camera uniform would hand every pass the LAST
+                camera. When you draw a framebuffer back,
+                <code>opts.source</code> selects a sub-rectangle <em>in
+                pixels</em>, and a negative width or height flips that axis, the
+                same rule as <code>gl.image</code> and raylib's
+                <code>DrawTexturePro</code>. The
+                textures-framebuffer-rendering example is the whole story in one
+                screen: two cameras, two framebuffers, one of them cropped and
+                magnified back over the other.
+            </p>
+
+            <h3 id="inputmath">Input, time, and the math vocabulary (zm)</h3>
+
+            <p>
+                Input is polled, not delivered by events: the frame carries a
+                snapshot and you ask it questions.
+                <code>isKeyPressed</code> fires once on the down edge,
+                <code>isKeyDown</code> stays true while held; the mouse and
+                wheel work the same way, multitouch reports
+                <code>getTouchPointCount</code> and per-point positions, and a
+                gesture layer recognizes taps, holds, swipes, and pinches. The
+                graphics demos below all share one phone-first idiom built on
+                this: one-finger drag orbits, two-finger pinch zooms, and the
+                drag is gated on <code>ui.wantCaptureMouse()</code> so grabbing
+                a slider never spins the camera.
+            </p>
+
+            <p>
+                <code>src/zimrmath.zig</code> (imported as <code>zm</code>) is
+                the shared vocabulary used by CPU code and shaders alike.
+                Vectors are native Zig vector types &mdash; <code>Vec</code> is
+                <code>@Vector(4, f32)</code>, with <code>Vec2</code> and
+                <code>Vec3</code> alongside &mdash; so arithmetic is just
+                operators. On top sit a 4&times;4 <code>Mat</code>, camera
+                helpers (<code>lookAtRh</code>,
+                <code>perspectiveFovRh</code>, rotations), and
+                <code>dot</code> / <code>cross</code> / <code>normalize</code>
+                / <code>clamp</code>. <code>zm.Color</code> is <em>the</em>
+                color type, engine-wide &mdash; the raylib named palette plus
+                <code>colorFromHSV</code>. Because a shader's
+                <code>shaderMain</code> is written against this same module,
+                the vector math in a fragment shader and in a CPU simulation is
+                literally the same code.
+            </p>
+
+            <h3 id="shaders">Shaders in Zig</h3>
+
+            <p>
+                A shader is an ordinary Zig function over a typed input/output
+                schema. There is no GLSL and no WGSL anywhere in example or
+                engine code; the build compiles the function with
+                <code>zig&nbsp;build-obj -target spirv32-vulkan</code> and
+                translates the SPIR-V to WGSL with <code>spv2wgsl</code>. Each
+                shader is two small files: the body
+                (<code>foo_fs.zig</code>, whose entry point is
+                <code>shaderMain</code>) and a sibling schema
+                (<code>foo_fs_io.zig</code>) declaring the attribute inputs,
+                the varyings, the uniform block, and any samplers as plain Zig
+                structs. Here is the shape of a real fragment material from the
+                tree &mdash; the distance-fog shader, condensed (the full
+                version is <code>src/shaders/fog_fs.zig</code> and its io
+                file, about 120 commented lines between them):
+            </p>
+
+            <pre><code>// src/shaders/fog_fs_io.zig — the schema
+const common = @import("gbuffer_common_io.zig");
+pub const Inputs = common.Interp;          // world pos + normal, SHARED (see below)
+pub const Ubo = struct {                    // plain struct (Zig 1245 bans
+    base_color: zm.Vec,                     // @Vector fields in extern structs
+    view_pos:   zm.Vec,                     // on CPU); GPU bytes come from the
+    light_dir:  zm.Vec,                     // shader_interface wire serializer,
+    fog_color:  zm.Vec,                     // NOT @sizeOf/asBytes on the struct.
+    params:     zm.Vec,                     // {fog_density, 0, 0, 0}
+};
+pub const Outputs = struct { final_color: @Vector(4, f32) };
+
+// src/shaders/fog_fs.zig — the body
+pub fn shaderMain(io_in: Io) Out {
+    var out: Out = undefined;
+    const normal: Vec3 = normalize(io_in.frag_world_normal);
+    const n_dot_l: f32 = @max(dot(normal, light_dir(io_in)), 0.0);
+    const lit: Vec3 = shade(io_in, n_dot_l);            // lambert + blinn
+    const dist: f32 = length(toEye(io_in));
+    const dd: f32 = dist * io_in.u.params[0];
+    const visibility: f32 = clamp01(1.0 / @exp(dd * dd)); // raylib's exp² curve
+    const fog: Vec3 = rgb(io_in.u.fog_color);
+    const final: Vec3 = fog + (lit - fog) * @as(Vec3, @splat(visibility));
+    out.final_color = .{ final[0], final[1], final[2], 1.0 };
+    return out;
+}
+comptime { _ = shader_externs.installSpirvEntry(shaderMain); }</code></pre>
+
+            <p>
+                The typed schema is what makes everything else fall out. The
+                <code>Ubo</code> struct becomes the WGSL uniform buffer and its
+                bind-group layout, generated from the Zig types so the host and
+                shader cannot disagree about the layout; on the host you take
+                the same type back with
+                <code>@FieldType(fog_fs.Io, "u")</code>, fill it, serialize it
+                with <code>z.shader.wireOf</code> (the plain-struct schema's
+                std140 bytes), and <code>queueWriteBuffer</code> it &mdash; one
+                definition of the
+                uniform block, used by both sides. Samplers are declared the
+                same way (<code>texture0: shader.Sampler2D(...)</code>) and
+                sampled as a call: <code>io_in.texture0(uv)</code>. And because
+                <code>shaderMain</code> is plain Zig over <code>zm</code>, the
+                identical function runs per-pixel in the software rasterizer,
+                which is how every stylized demo below is verified before a
+                GPU ever sees it.
+            </p>
+
+            <p>
+                The schemas also enable deliberate <em>sharing</em>, which is
+                the design idea the whole shader tree is organized around: a
+                vertex stage's varyings are a named struct in a
+                <code>*_common_io.zig</code> file, and any fragment shader that
+                wants those varyings just aliases them
+                (<code>pub const Inputs = common.Interp;</code>). Varying
+                compatibility between stages is compatibility by
+                <em>construction</em>, not by matching magic
+                <code>@location</code> numbers by hand. Two vertex shaders have
+                grown into universal fixtures this way:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>shared stage</th>
+                        <th>emits</th>
+                        <th>consumers</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>gbuffer_vs</code></td>
+                        <td>clip pos + world pos + world normal</td>
+                        <td>
+                            every world-space-lit forward material: the
+                            G-buffer writer, fog, cel &mdash; a new material is
+                            one fragment file
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>deferred_shading_vs</code></td>
+                        <td>a fullscreen NDC quad + its UV</td>
+                        <td>
+                            the deferred lighting pass and every 2D screen
+                            effect in the gallery &mdash; a new effect is one
+                            fragment file
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3 id="shaders-internals">Under the hood: how a schema becomes bindings</h3>
+
+            <p>
+                Nothing about the schema is interpreted at runtime. A build step
+                (<code>tools/gen_shader_externs.zig</code>) reads each
+                <code>*_io.zig</code> at comptime and generates a companion
+                <code>*_externs</code> module: for every schema field it emits the
+                exact <code>@extern</code> declaration SPIR-V needs &mdash; an
+                <code>addrspace(.input)</code> for an attribute, an
+                <code>addrspace(.uniform)</code> block for the <code>Ubo</code>, a
+                sampler placeholder, a storage-buffer handle &mdash; each already
+                decorated with its <code>@group</code> and <code>@binding</code>.
+                It also emits the typed <code>io_in</code> wrapper your
+                <code>shaderMain</code> receives, the <code>Out</code> struct, and
+                the entry trampoline. The body file never writes an
+                <code>@extern</code> or a decoration by hand.
+            </p>
+
+            <p>
+                That generated Zig is compiled to SPIR-V, lightly rewritten by
+                <code>zspv</code> (sampler bindings, and a few things Tint is
+                strict about), and translated to WGSL by <code>spv2wgsl</code>.
+                The host <code>@embedFile</code>s the WGSL and builds the pipeline.
+                So one struct field &mdash; say
+                <code>positions: StorageBuf(Vec2, .read)</code> &mdash; becomes a
+                decorated SPIR-V global, a
+                <code>@group(0)&nbsp;@binding(1)&nbsp;var&lt;storage,&nbsp;read&gt;</code>
+                line of WGSL, a bind-group-layout entry, and a typed
+                <code>io_in.positions(i)</code> accessor, all from the one
+                declaration.
+            </p>
+
+            <p>
+                Which <code>@group</code> each resource lands in is decided by a
+                single function, <code>shader_interface.uniformGroupForSchema</code>
+                &mdash; and that is the invariant the whole system rests on. The
+                codegen, the pipeline-layout builder, and the bind-group builder
+                all ask the same function rather than each re-deriving the answer,
+                so a group number cannot disagree with itself across three
+                unrelated files. Vertex uniforms are group&nbsp;0, samplers
+                group&nbsp;1, fragment uniforms group&nbsp;2; when a stage does not
+                use a slot, an empty bind-group layout fills the positional hole
+                honestly.
+            </p>
+
+            <div class="disclaimer">
+                <h3>Known edges</h3>
+                <p>
+                    Two soft spots, named honestly, because they are the shapes a
+                    future bug is most likely to take.
+                </p>
+                <p>
+                    <strong>The software-rasterizer path for
+                    <code>Storage</code> and <code>Builtins</code> is written but
+                    barely exercised.</strong> The CPU rasterizer runs
+                    <em>fragment</em> shaders per pixel, and the decal
+                    side-by-side drives a real typed fragment shader (with a
+                    sampler) through it. But every storage-fed or builtin-using
+                    shader today is a <em>vertex</em> shader, which only runs on
+                    the GPU &mdash; so those CPU accessors compile but have never
+                    driven a frame. The first shader that needs a storage buffer
+                    on the CPU path will likely find the dispatcher does not
+                    populate those slices yet.
+                </p>
+                <p>
+                    <strong><code>ubo_group</code> is a blunt instrument.</strong>
+                    It pins the schema&rsquo;s single UBO to a group; it has no
+                    answer for a stage that genuinely needs two uniform blocks in
+                    two groups. The split-file design means no shader needs that
+                    today, but if one ever does, the name and the mechanism both
+                    have to change &mdash; the honest fix is a per-block config
+                    that can place several uniform blocks independently.
+                </p>
+            </div>
+
+
+            <h3 id="demos">Building the graphics demos</h3>
+
+            <p>
+                The showpiece examples share one recipe, and each adds exactly one
+                idea to it. The recipe: write the shader pair as Zig (previous
+                section), build a pipeline around the generated WGSL, render into
+                an offscreen target with a raw pass, and composite with the
+                ordinary 2D renderer &mdash; which is also how the touch UI ends
+                up on top for free. Every demo below uses these two helpers
+                verbatim:
+            </p>
+
+            <pre><code>// a bind-group layout holding one uniform buffer
+const entries = [_]z.shader_introspect.BindGroupLayoutEntry{
+    .{ .binding = 0, .visibility = .{ .vertex = true },
+       .resource = .{ .uniform_buffer = .{ .min_size = z.shader.wireSizeOf(VsUbo) } } },
+};
+const blob = try z.gpu.encodeBindGroupLayoutEntries(gpa, &entries);
+const bgl  = z.wgpu.createBindGroupLayout(device, blob, "g0");
+
+// the pipeline: generated WGSL modules + one state literal
+const combo = z.gpu.StateCombo.fromParts(
+    .triangle_list, .none, .less, .back, .rgba8_unorm, .depth24_plus, 1);
+const pipe_blob = try z.gpu.encodeRenderPipelineDescriptor(gpa, .{
+    .vertex_buffer_layouts = &.{pos_normal_layout},
+    .vs_entry_point = "entry", .fs_entry_point = "entry",
+    .state = combo,
+});
+const pipeline = z.wgpu.createRenderPipeline(device, layout, vs_mod, fs_mod,
+                                             pipe_blob, "demo");</code></pre>
+
+            <p>
+                Group numbers come from the shader codegen with one fixed scheme
+                &mdash; vertex uniforms group&nbsp;0, samplers group&nbsp;1,
+                fragment uniforms group&nbsp;2 &mdash; so a pipeline layout is
+                always the same positional array, with an empty bind-group layout
+                filling any hole. Per frame, uniforms are filled through the
+                shader's own types and every pass follows the same shape:
+            </p>
+
+            <pre><code>var vs_io: fog_vs.Io = undefined;
+vs_io.u = .{ .mvp = mvp, .model = model, .normal_matrix = spin };
+// Plain-struct Ubo -&gt; std140/wire bytes via the shader_interface serializer
+// (Zig 1245 forbids asBytes on a struct with @Vector fields; wireOf is the
+// authoritative host-side layout, byte-matching the generated WGSL block).
+const bytes = z.shader.wireOf(fog_vs.Ubo, &amp;vs_io.u);
+z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, &amp;bytes);
+
+z.beginTextureModeRaw(f.gl, s.rt, clear_color);       // raw pass into the RTT
+const pa: *z.PassState = f.gl.pass;
+Backend.setPipeline(pa, .{ .gpu_handle = s.pipeline });
+Backend.setBindGroup(pa, 0, obj.g0_bg);
+// ... setVertexBuffer / setIndexBuffer / drawIndexed per object ...
+z.endTextureModeRaw(f.gl);
+
+f.gl.texture(.{ .x = 0, .y = 0, .width = vw, .height = vh }, s.rt.asTexture(), .{});
+s.ui_host.render(f);                                   // sliders on top</code></pre>
+
+            <p>
+                <strong><code>fog-rendering</code> &mdash; a forward material is
+                one fragment file.</strong> It ships no vertex shader of its own:
+                the vertex stage is <code>gbuffer_vs</code>, reused, because "clip
+                position + world position + world normal" is what every
+                world-space-lit material wants. <code>fog_fs</code> aliases the
+                shared varyings and adds Lambert, Blinn, and the
+                exponential-squared fog fold. The scene is a 21-torus row marching
+                into the murk with a density slider. The fog color equals the pass
+                clear color, so distant geometry dissolves seamlessly &mdash;
+                raylib ships a mismatch and every silhouette wears a halo.
+            </p>
+
+            <p>
+                <strong><code>cel-shading</code> &mdash; two draws, opposite cull
+                faces.</strong> The toon pass is one fragment file on
+                <code>gbuffer_vs</code>, quantizing the diffuse with raylib's
+                formula. The silhouette ink is the classic inverted hull: draw the
+                mesh again, inflated along its normals, front faces culled, so only
+                the shell peeking past the silhouette survives the depth test. Both
+                draws share one pass and one vertex buffer; the pipelines differ
+                only in fragment module and cull face. Two details are load-bearing
+                &mdash; divide the band snap by <code>bands - 1</code> or nothing
+                ever reaches full brightness, and extrude the hull in model space
+                <em>before</em> the model matrix, or a mesh normalized by ~14&times;
+                (the Stanford bunny) turns an unconverted thickness into a blob.
+            </p>
+
+            <p>
+                <strong><code>deferred-render</code> &mdash; multiple render
+                targets and a fullscreen lighting pass.</strong> Pass A fills a
+                three-texture G-buffer in one walk of the scene:
+                <code>gbuffer_fs</code> is the engine's first multi-output fragment
+                shader (world position and normal into
+                <code>rgba16_float</code>, albedo+specular into
+                <code>rgba8_unorm</code>). Pass B never touches geometry again: a
+                fullscreen quad samples the three maps and runs Blinn-Phong for
+                four orbiting lights once per screen pixel, however many cubes
+                overdrew it. Sample the G-buffer with a <em>nearest</em> sampler
+                &mdash; it is data, not a picture, and bilinearly mixing two world
+                positions across a silhouette invents a third position on neither
+                surface.
+            </p>
+
+            <p>
+                <strong><code>shadowmap-sw</code> &mdash; one shader body, three
+                executors.</strong> The flagship. Shadow mapping is the usual two
+                passes, and the four shaders are standard Zig pairs. What the
+                example exists to show is that the same <code>shaderMain</code>
+                bodies run three ways on one screen: a GPU panel through the WGSL
+                pipeline, a CPU panel through the software rasterizer calling the
+                literal functions per pixel, and a comptime corner baked into the
+                binary by the compiler evaluating the same code at build time. The
+                three images agree, and that agreement is the whole argument for
+                writing shaders in Zig.
+            </p>
+
+            <p>
+                <strong><code>shader-effects</code> &mdash; one fragment file per
+                raylib example.</strong> Four of raylib's texture-shader demos in
+                one gallery. Every effect has the same shape &mdash; sample
+                <code>texture0</code> at (or near) the quad UV, do math, emit
+                &mdash; so the family shares a schema and the fullscreen vertex
+                stage, and each raylib demo became exactly one fragment file: color
+                grading (at saturation &minus;1 it is their grayscale example, two
+                ports for one shader), a sinusoidal UV warp, a four-tap outline,
+                and a posterize into a swappable palette (done as a branchless
+                masked walk, because dynamic indexing into a uniform array upsets
+                some drivers). Where raylib filters a static PNG, the gallery
+                filters a live animated scene, which makes it the stress test:
+                offscreen 2D, raw passes, and UI in one frame.
+            </p>
+
+            <p>
+                <strong><code>helmet-sw</code> &mdash; PBR, and the CPU as
+                referee.</strong> Textured PBR goes through <code>z.pbr3d</code>, a
+                renderer that owns its pipeline: build it once,
+                <code>loadGltf</code> a model (the pure-Zig parser resolves the five
+                PBR maps and synthesizes flat normals when missing), then
+                <code>beginFrame</code> and <code>draw</code> per frame.
+                <code>helmet-sw</code> renders the damaged-helmet glTF twice &mdash;
+                GPU pipeline on one half, software rasterizer running the identical
+                PBR <code>shaderMain</code> on the other, draggable split. The older
+                side-by-sides (<code>mandel-sidebyside</code>,
+                <code>rt-sidebyside</code>, <code>cube-sidebyside</code>) are the
+                same idea at smaller scale, with a pixel-diff overlay.
+            </p>
+
+            <p>
+                <strong>Verify before the device sees it.</strong> Every example
+                runs headless in the smoke harness, which drives real frames
+                through the WebGPU layer without a GPU: it validates
+                attachment state, catches a uniform written twice at the same
+                (buffer,&nbsp;offset) in one frame, and diffs the WGSL a change
+                produces against the WGSL it replaced. A phone-only workflow needs
+                the build to be the thing that says no.
+            </p>
+
+            <p>
+                <strong>Lower-level pipeline studies.</strong> The
+                <code>pipeline-*</code> examples each isolate one WebGPU mechanism
+                against the raw API rather than the raylib-shaped one: instancing,
+                storage buffers, MSAA, mipmaps, render targets, post-processing,
+                bloom, samplers, constants, arrays, uniforms, and per-pipeline
+                settings.
+            </p>
+
+            <h3 id="compute">GPU compute (kompute)</h3>
+
+            <p>
+                Compute kernels are also Zig. A kernel file declares a
+                <code>Buffers</code> struct (the storage arrays), a
+                <code>Params</code> struct (the uniform), and one or more
+                kernel functions. The same source compiles two ways: to SPIR-V
+                for a GPU dispatch (translated to WGSL), and natively for a CPU
+                loop that executes the literal kernel functions over heap
+                arrays. The complete file for a working example:
+            </p>
+
+            <pre><code>const k = @import("kompute");
+
+pub const config = k.Config{ .max = 4096, .workgroup = 64 };
+pub const Buffers = extern struct { data: [config.max]f32 };
+pub const Params  = extern struct { count: u32, pad: [3]u32 = .{ 0, 0, 0 } };
+
+pub const g = k.Globals(@This());
+const b_data = g.bind(.data);          // one alias per Buffers field
+
+pub fn double(c: k.Ctx(@This())) void {
+    if (c.id >= c.params.count) return;
+    b_data[c.id] = b_data[c.id] * 2.0;
+}
+
+comptime { k.installKernel(@This(), "double"); }</code></pre>
+
+            <p>The host side, with either backend chosen at init:</p>
+
+            <pre><code>var pipe = try z.Compute(dk).initGpu(gpa, dev, queue, &.{
+    .{ .name = "double", .wgsl = double_wgsl },   // WGSL generated by the build
+});
+pipe.params = .{ .count = n };
+pipe.upload(.data, input[0..n]);
+pipe.count = n;
+pipe.run("double");
+if (pipe.readLatest(.data)) |out| { ... }          // frame-delayed readback
+
+// a renderer can bind a field's storage buffer directly, with no CPU copy:
+const pos_buf = pipe.fieldBuffer(.pos).?;</code></pre>
+
+            <p>
+                Each <code>Buffers</code> field becomes its own storage buffer
+                and its own binding in the generated WGSL. It was not always
+                so: the original design bound one struct containing all arrays
+                through a single binding, which corrupted on a Qualcomm
+                Adreno&nbsp;7xx phone above ~1,000 invocations &mdash; writes
+                landed in the wrong field. Per-field bindings run 20,000
+                particles on the same device. GPU&rarr;CPU readback is
+                poll-based: a staging copy plus an async map, surfaced to Zig
+                as "the latest completed snapshot", typically one frame old.
+            </p>
+
+            <p>
+                The flagship compute example is a 2D SPH fluid
+                (<code>fluid-gpu</code>): 20,000 particles entirely on the GPU
+                with Clavet double-density relaxation, a handful of kernels per
+                step, drawn with no CPU round-trip &mdash; the
+                <code>FluidDiscs</code> renderer binds the position and density
+                buffers directly and SDF-shades a disc per particle. The
+                transpiler does not lower atomics yet, so the neighbour grid is
+                built without them: the baseline scans, and
+                <code>fluid-sort</code> replaces the scan with a GPU spatial
+                counting sort (clear, count, prefix-sum, scatter) that reorders
+                the particle arrays into cell order every frame &mdash; the
+                classic spatial-hashing win, atomic-free. Because the kernels
+                are ordinary Zig, the same files run on the CPU backend, which
+                is how the simulation is debugged without a GPU in the loop.
+            </p>
+
+            <h3 id="jobs">Web workers, written in Zig</h3>
+
+            <p>
+                A browser runs your page on one thread. Anything slow you do on
+                it &mdash; encoding a PNG, tracing a ray, chewing through a mesh
+                &mdash; freezes the entire interface for as long as it runs. The
+                escape hatch is a
+                <a
+                    href="https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API"
+                    >Web&nbsp;Worker</a
+                >: a second OS thread with its own memory, which cannot touch the
+                page and talks only in messages.
+            </p>
+
+            <p>
+                In zimr the work you send it is an ordinary Zig function, the
+                worker's own program is Zig, and the plumbing between them is
+                Zig. The complete kernel from the
+                <code>worker-png</code> example:
+            </p>
+
+            <pre><code>const jobs = @import("zimr").jobs;
+
+/// `extern`, not a plain struct. These bytes are memcpy'd out of the app's wasm and
+/// into the kernel's — two separate compilations — and Zig's auto layout is free to
+/// reorder fields across them.
+pub const Size = extern struct { w: u32, h: u32 };
+
+/// An ordinary Zig function. Allocator first, as everywhere in std; a plain
+/// `std.Io.Writer` for output. Nothing about it announces that it will run on another
+/// thread, which is the point.
+///
+/// `gpa` is an ARENA: whatever the kernel allocates is released when the job ends, so
+/// there is no `defer free` here and no way to leak.
+pub fn encodePng(gpa: Allocator, hdr: Size, pixels: []const u8, out: *std.Io.Writer) !void {
+    try codecs.png.encode(gpa, pixels, hdr.w, hdr.h, out);
+}
+
+/// The header type is DERIVED from the function signature. There is nothing to keep in
+/// sync — change `Size` and every call site fails to compile.
+pub const registry = jobs.Registry(.{
+    .{ "encodePng", encodePng },
+}, .{ .max_input = 16 &lt;&lt; 20, .max_output = 8 &lt;&lt; 20 });</code></pre>
+
+            <p>And the app side is two calls, neither of which blocks:</p>
+
+            <pre><code>// submit: returns immediately, whatever the kernel costs.
+s.job = try kernels.registry.submit(gpa, kernels.encodePng, .{ .w = 1024, .h = 1024 }, pixels);
+
+// poll: once a frame, in update(). Null means "not yet"; the app just draws again.
+if (try s.job.pollInto(s.result_buf)) |png_bytes| {
+    // ...it landed. `result_buf` was allocated ONCE, at init.
+}</code></pre>
+
+            <p>
+                1024&times;1024 takes about 240&nbsp;ms in wasm on a phone. On
+                the main thread that is a 233&nbsp;ms frozen frame &mdash;
+                fourteen dropped frames, plainly visible. Off-thread the measured
+                worst frame gap is 18&nbsp;ms, and a dot spinning in the corner
+                does not stutter.
+            </p>
+
+            <h4>the kernel wasm has no imports, and the build proves it</h4>
+
+            <p>
+                A job kernel compiles into its own wasm module with its own linear
+                memory, so it cannot see the app's globals even if it wanted to
+                &mdash; and it has <em>zero imports</em>, so the worker
+                instantiates it with a bare <code>{}</code>. That is not a
+                convention: the build reads the wasm's import section and refuses
+                to embed it if it is non-empty, so a kernel that reaches for the
+                DOM fails to build rather than failing on someone's phone.
+            </p>
+
+            <p>
+                Each kernel is its own export, named
+                <code>zimr_job_&lt;name&gt;</code> &mdash; no id, no hash, no
+                dispatch table, so a job cannot reach the wrong kernel. It also
+                means kernel wasms <em>compose</em>: the launcher page bundles
+                many examples into one wasm exporting a superset of the names, and
+                every example's <code>submit</code> still finds its own with
+                nobody renumbering anything.
+            </p>
+
+            <h4>the worker's program is Zig too</h4>
+
+            <p>
+                A worker's entry point must be JavaScript &mdash; the browser will
+                only start one from a script, and something has to call
+                <code>WebAssembly.Instance</code> before any wasm exists. So the
+                file cannot be eliminated. It does not have to be
+                <em>written</em>. <code>src/jobs_worker.zig</code> is a Zig
+                program compiled to JavaScript by the same
+                <code>build-obj -ofmt=c</code> &rarr; <code>c2js</code> path that
+                produces the browser host:
+            </p>
+
+            <pre><code>export fn start() void {
+    globalScope().setProperty("onmessage", asJsFunction(&amp;handleMessageFromHost));
+}
+
+fn instantiateKernelWasm(kernel_wasm_bytes: JsValue) void {
+    const web_assembly: JsValue = globalScope().getProperty("WebAssembly");
+
+    const compiled: JsValue = web_assembly.getProperty("Module").construct(.{kernel_wasm_bytes});
+    const instance: JsValue = web_assembly.getProperty("Instance")
+        .construct(.{ compiled, newEmptyJsObject() });   // {} is a COMPLETE import object
+
+    kernel_wasm_exports_handle = instance.getProperty("exports").handle;
+    ...
+}</code></pre>
+
+            <p>
+                <code>JsValue</code> wraps a handle into a table the runtime keeps
+                on the JavaScript side: read
+                <code>v.getProperty("data")</code> as <code>v.data</code>, and
+                <code>v.callMethod("f", .{x})</code> as <code>v.f(x)</code>. It is
+                JavaScript's semantics in Zig's syntax, with Zig's type checker on
+                top.
+            </p>
+
+            <p>
+                Which buys two things a JavaScript file could not. Every protocol
+                name lives once, in <code>src/jobs_abi.zig</code>, read by all
+                three sides that never link against one another: the kernel wasm
+                exports them, the worker calls them, the build tool verifies them.
+                And the instantiation above <em>blocks</em> &mdash;
+                <code>Module</code> and <code>Instance</code> are constructors, not
+                promises &mdash; so a job cannot arrive mid-compile and re-enter
+                the handler with the exports unset. In Zig there is no
+                <code>await</code> to reach for by mistake.
+            </p>
+
+            <h4>fanning out: one job per tile</h4>
+
+            <p>
+                The pool has always been parallel, but a single job can only
+                occupy one worker. <code>Group</code> submits a batch and hands
+                results back as they land &mdash; <em>out of order</em>, because
+                whichever worker finishes first gets there first:
+            </p>
+
+            <pre><code>const Group = kernels.registry.Group(kernels.traceTile);
+
+// One job per horizontal band of the image.
+var tiles = try Group.submitAll(gpa, headers, scene_bytes);
+
+// ...then, once a frame:
+while (try tiles.next(tile_buf)) |landed| {
+    blitTile(s, landed.index, landed.bytes);   // `index` is which band — they arrive shuffled
+}</code></pre>
+
+            <p>
+                <code>rt-workers</code> is the demo: a path tracer, one job per
+                band, tiles popping in as they finish. Because
+                <code>Group.deinit</code> cancels whatever is still in flight, the
+                camera can drive the render &mdash; drag it and a cheap preview
+                starts; let go and a full-quality pass replaces it, stale tiles
+                from the drag discarded rather than drawn.
+            </p>
+
+            <h4>what it is, and what it is not</h4>
+
+            <p>
+                A <em>latency</em> device, not a throughput one. It gives the frame
+                back. It will not make a phone four times faster: the pool is half
+                of <code>hardwareConcurrency</code> capped at four, and eight busy
+                workers measured about 3.4&times; before thermal throttling began
+                eating the GPU's budget instead. For raw parallel arithmetic the
+                answer is <a href="#compute">kompute</a> and the GPU.
+            </p>
+
+            <p>
+                Where workers are unavailable &mdash; a sandboxed iframe forbids
+                blob-URL workers, which is what an embedded preview usually is
+                &mdash; the kernel runs inline on the main thread. The app is none
+                the wiser; it just hitches, exactly as it would have if it had
+                never used jobs. Failures arrive in one place too: inline or
+                remote, the error surfaces at <code>poll</code> carrying the
+                kernel's own error name (<code>"ShortPayload"</code>, not
+                <code>"KernelFailed"</code>), so a phone with no console to read
+                still tells you what broke.
+            </p>
+
+            <p>
+                <code>four-ways</code> makes the point whole: one seven-line Zig
+                function &mdash; a Mandelbrot escape iteration &mdash; running on
+                four machines at once, in four panels. Evaluated at
+                <em>comptime</em> into a baked table; on the <em>CPU</em> on the
+                main thread; on a <em>worker</em>, through the jobs system; and on
+                the <em>GPU</em> as a compute shader translated
+                Zig&nbsp;&rarr;&nbsp;SPIR-V&nbsp;&rarr;&nbsp;WGSL. Same source,
+                four backends, no duplication.
+            </p>
+
+            <h3 id="threed">3D and assets</h3>
+
+            <p>
+                The 3D path covers retained meshes, glTF loading (pure-Zig
+                parser, textured and skinned variants), Lambert and PBR
+                materials, instancing, billboards, a skybox,
+                render-to-texture, first-person and orbit cameras, and
+                wireframe. A pass is bracketed by
+                <code>z.beginMode3D(f.gl, cam)</code> /
+                <code>endMode3D</code>; inside it the immediate helpers are
+                raylib's (<code>drawCube</code>, <code>drawGrid</code>,
+                <code>drawSphere</code>, <code>drawLine3D</code>,
+                <code>drawBillboard</code>) plus the retained
+                <code>drawModel</code> family. Two storage-buffer renderers
+                (<code>DrawPoints</code>, <code>FluidDiscs</code>) draw
+                compute-produced data straight from GPU buffers.
+            </p>
+
+            <pre><code>// minimal retained-mesh draw
+s.cube = z.genMeshCube(1, 1, 1);
+s.model = z.loadModelFromMesh(s.cube);
+// ... per frame, inside begin/endMode3D:
+z.drawModel(f.gl, s.model, .{ 0, 0, 0 }, 1.0, zm.Color.white);
+z.drawModelWires(f.gl, s.model, .{ 0, 0, 0 }, 1.0, zm.Color.darkgray);</code></pre>
+
+            <p>
+                Assets ride <em>inside</em> the wasm with
+                <code>@embedFile</code>: the build registers named imports (a
+                font as <code>roboto_mono_ttf</code>, a model as a
+                <code>.glb</code> blob, an engine shader's generated WGSL by
+                its file name) and the example embeds them at compile time,
+                which is why a standalone HTML needs no network. Each asset
+                kind has a loader called once in <code>init</code>: fonts
+                through a pure-Zig TTF rasterizer
+                (<code>z.loadFont</code>), images through
+                <code>loadImageFromMemory</code> +
+                <code>loadTextureFromImage</code>, models through
+                <code>loadGltf</code> or the procedural
+                <code>genMesh*</code> generators.
+            </p>
+
+            <h3 id="imgui">The Dear ImGui port</h3>
+
+            <p>
+                <code>src/ui.zig</code> is an implementation, not a binding:
+                windows, the ID stack, layout, hit-testing, widgets (buttons,
+                sliders, checkboxes, combos, trees, tables, tabs, color
+                pickers, text fields with editing), drag-and-drop, docking,
+                tooltips, menus, and window-state persistence, drawing through
+                the same renderer trait as everything else. The model is
+                immediate: every frame the whole UI is rebuilt between
+                <code>s.ui_host.begin(f)</code> and
+                <code>s.ui_host.render(f)</code>. A button is a function
+                returning <code>true</code> on the frame it was clicked; a
+                slider takes a pointer to <em>your</em> float. The durable
+                state lives in your <code>State</code> struct &mdash; the UI is
+                just this frame's view of it. Identity comes from the label
+                hashed against the ID stack, with the
+                <code>label###id</code> escape for changing captions.
+            </p>
+
+            <pre><code>if (u.window("inspector", .{ .initial_size = .{ 360, 520 } })) |w| {
+    defer w.close();
+    if (u.beginTabBar("tabs", .{})) {
+        defer u.endTabBar();
+        if (u.beginTabItem("entity", null, .{})) {
+            defer u.endTabItem();
+            _ = u.inputText("name", &s.name, &s.name_len, .{});
+            _ = u.combo("kind", &s.kind, &kinds, .{});       // packed labels
+            _ = u.colorEdit("tint", &s.tint, .{});           // [4]f32 RGBA
+            if (u.treeNode("transform", .{})) {
+                defer u.treePop();
+                _ = u.slider("x", &s.pos[0], .{ .min = -8, .max = 8 });
+                _ = u.slider("y", &s.pos[1], .{ .min = -8, .max = 8 });
+            }
+        }
+    }
+}</code></pre>
+
+            <p>
+                Tables are full ImGui tables &mdash; per-column sizing,
+                borders, headers, click-to-sort with per-column flags &mdash;
+                and the clipper virtualizes long lists to O(visible) (the
+                100,000-row walkthrough below). Windows dock into splittable
+                nodes and the layout serializes. Touch is first-class:
+                multitouch, gestures, and a set of phone-oriented example UIs
+                exist specifically to exercise hit-target sizes and drag
+                behavior on small screens, which is also why every graphics
+                demo's control panel is this UI rather than key bindings.
+            </p>
+
+            <h3 id="plot">Plotting: ImPlot and ImPlot3D</h3>
+
+            <p>
+                <strong>2D (<code>src/plot.zig</code> +
+                <code>src/plot_ui.zig</code>).</strong> The core is a
+                deliberate departure from ImPlot, which welds rendering to a
+                single draw list: here the <code>Plot</code> / <code
+                    >Axis</code
+                >
+                / <code>Ticker</code> core depends only on <code>zm</code> and
+                emits primitives to a duck-typed sink &mdash; one sink renders
+                to SVG for host snapshot tests, another wraps the UI draw list.
+                Data coordinates are <code>f64</code>, and the axis transform
+                encodes direction and inversion in its pixel endpoints, so
+                inverted and log axes fall out for free. The stateful shell
+                takes a slice of <code>Series</code> literals (seventeen kinds,
+                from <code>line</code> and <code>heatmap</code> to
+                <code>candlestick</code> and <code>pie</code>) plus a
+                persistent <code>PlotState</code> for zoom/pan and legend
+                toggles:
+            </p>
+
+            <pre><code>const series = [_]z.plot_ui.Series{
+    .{ .kind = .line,    .ys = &ys, .spec = .{ .thickness = 2 } }, // implicit x = index
+    .{ .kind = .scatter, .xs = &xs2, .ys = &ys2 },
+    .{ .kind = .bars,    .ys = &ys, .bars = .{ .width = 0.5 } },
+};
+z.plot_ui.show(u, &s.plot, .{ 520, 320 }, &series, .{
+    .title = "signals", .show_legend = true,
+});</code></pre>
+
+            <p>
+                <strong>3D (<code>src/plot3d.zig</code>).</strong> A closer
+                port of ImPlot3D threaded through an explicit context with zero
+                module globals. It projects on the CPU and draws a
+                depth-sorted triangle batch into the same 2D draw list; the box
+                is drag-to-orbit and the legend toggles series. Plot types
+                cover <code>plotLine / plotScatter / plotSurface / plotMesh /
+                plotTriangle / plotQuad / plotText / plotImage</code>, generic
+                over <code>f32</code>/<code>f64</code> samples, with colormaps
+                and the style stack shared with the 2D side.
+            </p>
+
+            <h3 id="physics">The physics engines</h3>
+
+            <p>
+                Two of them, both pure Zig, both with no GPU dependency &mdash;
+                so the whole simulation runs and is unit-tested natively, and
+                only drawing it needs a browser.
+            </p>
+
+            <p>
+                <strong>3D: <code>src/zimrphysics.zig</code></strong>, a
+                single-file rigid-body engine ported from
+                <a href="https://github.com/jrouwe/JoltPhysics">Jolt</a>. Convex
+                primitives (sphere, box, capsule, cylinder, tapered capsule,
+                convex hulls) collide through GJK and EPA; compounds, triangle
+                meshes with a BVH, heightfields, and an infinite plane cover
+                static geometry. A frame is broadphase &rarr; narrow phase &rarr;
+                an island-based sequential-impulse solver, advanced by
+                <code>step(&amp;world, scratch, dt)</code>. On top of contacts
+                sits a full constraint set &mdash; point, fixed, distance, hinge,
+                slider, swing-twist (the ragdoll joint), gear, rack-and-pinion,
+                pulley, six-DOF, and path &mdash; with motors and limits on the
+                hinges and sliders. <code>zimrphysics-demo</code> is the
+                playground: stacks, ragdolls, vehicles-of-constraints, profiler
+                attached.
+            </p>
+
+            <p>
+                <strong>2D: <code>src/zimrphysics2d.zig</code></strong>, a
+                faithful port of
+                <a href="https://box2d.org/">Box2D&nbsp;v3.1</a> &mdash; Erin
+                Catto's data-oriented rewrite, with the TGS&nbsp;Soft solver. The
+                <em>algorithm</em> is reproduced term for term, including the
+                single-threaded performance architecture that makes v3 fast:
+                graph coloring, and a 4-wide SIMD contact solver. Soft contacts,
+                substepping, speculative contacts, restitution, warm starting and
+                stored impulses all behave as they do upstream. Five shapes
+                (circle, capsule, segment, polygon, chain segment) and all seven
+                joints (distance, motor, prismatic, revolute, weld, wheel,
+                filter). What is <em>not</em> ported is the task scheduler and the
+                cache machinery &mdash; those are replaced by zimr's own storage
+                model, ECS-backed through <code>entities.zig</code>, with no
+                globals, no vtables and no OOP.
+            </p>
+
+            <p>
+                <code>zimrphysics2d-demo</code> carries Box2D's own samples:
+                <strong>137 scenes</strong> across stacking, joints, character
+                movement, continuous collision, determinism, events, geometry,
+                robustness, and the upstream benchmark set. Scenes never write
+                rendering code &mdash; a shared debug renderer draws every shape,
+                joint and contact the engine emits, so a scene is purely a
+                description of a world.
+            </p>
+
+            <h3 id="instruments">The profiler, entities, and audio</h3>
+
+            <p>
+                <strong>Profiler.</strong> <code>src/profiler.zig</code> +
+                <code>profiler_ui.zig</code> are an in-engine frame profiler
+                with zone macros, ring-buffered history, a flame view, a
+                sortable per-call-site statistics table, and a find-zone
+                histogram. Two features make it usable on a phone:
+                auto-freeze-on-spike captures a transient hitch without racing
+                to tap a button, and GPU timing (where
+                <code>timestamp-query</code> is supported) wraps each render
+                pass in timestamp writes so the panel can show CPU versus GPU
+                time &mdash; the answer to whether a slow frame is the
+                engine's fault or the driver's.
+            </p>
+
+            <p>
+                <strong>Entities.</strong> <code>src/entities.zig</code> is a
+                single-module archetype store: <code>spawn</code> takes
+                component values, and a "system" is a plain function
+                <code>forEach</code> runs over every matching entity. The boids
+                example is three passes over one store; the solar system
+                parents bodies so a moon inherits its planet's transform.
+                <strong>Audio.</strong> <code>src/sound.zig</code> drives
+                WebAudio from the Zig host: play decoded clips or stream
+                synthesized samples (the drum machine and live synth make sound
+                with no JavaScript of their own).
+            </p>
+
+            <h3 id="machinery">Under the hood: host, WebGPU layer, rasterizer</h3>
+
+            <p>
+                The entire browser side is one Zig file,
+                <code>src/bridge.zig</code> (~6,200 lines): page boot, the
+                WebGPU async setup, the imported GPU functions, DOM glue,
+                input, and WebAudio. It is turned into JavaScript by
+                <code>tools/c2js.zig</code>, a C&rarr;JS transpiler that
+                targets exactly the narrow SSA-like C Zig's C backend emits
+                (<code>bridge.zig &rarr; bridge.c &rarr; zimr.js</code>). The
+                JavaScript is meant to run, not to read; a JS&rarr;C source map
+                exists for debugging, and
+                <code>zig build c2js-diff</code> checks the output against a
+                reference.
+            </p>
+
+            <p>
+                Wasm-side GPU handles are integers into per-type tables held by
+                the host. Pipeline and bind-group descriptors are built and
+                serialized in Zig (<code>src/gpu.zig</code>) and decoded on the
+                JavaScript side, so descriptor construction is unit-testable
+                without a browser; on native targets every host call compiles
+                to a no-op, which is what lets the descriptor encoder, the CPU
+                compute path, and the physics run under
+                <code>zig build test</code> with no GPU anywhere.
+                <code>src/raster.zig</code> is the software rasterizer behind
+                the CPU halves of the side-by-side demos and the pixel-verify
+                targets: it implements the same renderer trait as the WebGPU
+                backend and dispatches real <code>shaderMain</code> functions
+                per pixel, at runtime or at comptime.
+            </p>
+
+            <p>
+                One war story from this layer is worth recording because it
+                shaped an engine rule. WebGPU executes every
+                <code>queue.writeBuffer</code> <em>before</em> the frame's
+                encoder submit &mdash; so writing one uniform buffer twice in a
+                frame means only the last value reaches <em>any</em> pass
+                segment, including segments recorded before the second write.
+                So per-segment uniforms live in small <em>ring buffers</em> &mdash;
+                the 2D projection and the batch vertices both ride rings &mdash;
+                and the headless smoke harness fails any example that writes the
+                same (buffer,&nbsp;offset) twice in one frame. The whole class is
+                a red build rather than a device-only glitch.
+            </p>
+
+            <h3 id="layout">Source layout</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>area</th>
+                        <th>files</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>umbrella module examples import</td>
+                        <td><code>src/zimr.zig</code> (as <code>@import("zimr")</code>)</td>
+                    </tr>
+                    <tr>
+                        <td>math + shader vocabulary</td>
+                        <td><code>src/zimrmath.zig</code> (as <code>@import("zm")</code>)</td>
+                    </tr>
+                    <tr>
+                        <td>app loop, frame, raylib surface</td>
+                        <td><code>src/wgpu_app.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>engine shaders (Zig, one pair per stage)</td>
+                        <td><code>src/shaders/*.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>2D batching</td>
+                        <td><code>src/renderer_2d.zig</code> + <code>src/gpu_iface.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>3D</td>
+                        <td><code>src/draw3d.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>Zig&rarr;WGSL transpiler</td>
+                        <td><code>src/spv2wgsl.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>descriptor serialization + pipeline cache</td>
+                        <td><code>src/gpu.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>GPU compute</td>
+                        <td><code>src/kompute.zig</code> + <code>src/compute_host.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>physics</td>
+                        <td><code>src/zimrphysics.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>profiler</td>
+                        <td><code>src/profiler.zig</code> + <code>src/profiler_ui.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>browser host (Zig)</td>
+                        <td><code>src/bridge.zig</code>; transpiler <code>tools/c2js.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>Dear ImGui / plots</td>
+                        <td><code>src/ui.zig</code>, <code>src/plot*.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>software rasterizer</td>
+                        <td><code>src/raster.zig</code>, <code>src/raster_shader.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>style linter</td>
+                        <td><code>tools/lint_zimr.zig</code></td>
+                    </tr>
+                    <tr>
+                        <td>examples</td>
+                        <td>one directory each under <code>examples/</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3 id="build">Building</h3>
+
+            <p>
+                Every example has two build steps: <code>&lt;name&gt;</code>
+                builds a wasm plus an HTML page plus the JavaScript host into
+                <code>zig-out/</code>, and
+                <code>&lt;name&gt;-standalone</code> inlines all of that into
+                one self-contained <code>.html</code> file &mdash; the fastest
+                way to try anything, including on a phone. Step names are
+                kebab-case; the same name in <code>-Dfocus</code> is the
+                snake_case directory name. There is also a
+                <code>launcher</code> example that bundles the flagship demos
+                behind a fullscreen menu in a single standalone HTML.
+            </p>
+
+            <pre><code># build one example (wasm + page + JS host) under zig-out/
+zig build shapes-showcase
+
+# the same example as one self-contained .html file
+zig build shader-effects-standalone
+
+# release build: ReleaseSmall with zimr asserts + the profiler kept on
+zig build fluid-gpu-standalone -Dmode=release
+# ship build: ReleaseSmall, asserts off, profiler stripped
+zig build fluid-gpu-standalone -Dmode=ship
+
+# native pixel-verify targets (render the demo's look on the CPU, no browser)
+zig build cel-shading-verify
+zig build shader-effects-verify
+zig build shadowmap-sw-verify</code></pre>
+
+            <p>Project tooling and gates:</p>
+
+            <pre><code># unit tests + example typecheck (~1,900 tests); filter by name or glob
+zig build test
+zig build test -Dfocus=ui_*
+
+# transpiler gates: SPIR-V->WGSL fixture corpus, and Zig->JS vs a reference
+zig build corpus
+zig build c2js-diff
+
+# headless wasm smoke of one example (boots it, runs frames, profiles the
+# host calls, and fails on same-buffer-same-offset double writes in a frame)
+zig build smoke-test -Dfocus=shader_effects
+
+# style gate (zig fmt --check + the AST linter), module graph, docs, server
+zig build lint-check
+zig build dag-check
+zig build docs
+zig build serve</code></pre>
+
+            <p>
+                The inner loop stays fast because most checks need no browser:
+                a single example typechecks in well under a second, and the
+                CPU pixel-verify targets answer "does it look right" before any
+                device round-trip. Headless smoke cannot see GPU validation
+                errors, so anything visual is finally confirmed by opening a
+                <code>-standalone</code> &mdash; on a phone when touch or the
+                tile-based-GPU paths are involved, since those are exactly what
+                a desktop never exercises. <code>-Dmode=</code> selects
+                <code>debug</code> / <code>release</code> /
+                <code>ship</code> as in the block above;
+                <code>-Dfocus=</code> filters build, typecheck, and smoke.
+            </p>
+
+            <h3 id="walkthroughs">More walkthroughs: the 2D and UI side</h3>
+
+            <p>
+                The graphics demos above are one slice; these five show the 2D,
+                image, and UI range. Each is a single self-contained file in
+                <code>examples/&lt;name&gt;/</code>, small enough to read in a
+                sitting.
+            </p>
+
+            <p>
+                <strong
+                    ><code>fractal-tree</code> &mdash; recursion into the 2D
+                    batch.</strong
+                >
+                A recursive function draws a branch with
+                <code>drawLineEx</code>, then calls itself twice at a smaller
+                length and thickness; a per-depth sinusoidal term added to each
+                branch angle makes a sway ripple travel up the tree. There is
+                no scene graph &mdash; the call stack <em>is</em> the tree.
+            </p>
+
+            <p>
+                <strong
+                    ><code>procgen-noise</code> &mdash; CPU image generators
+                    and in-place upload.</strong
+                >
+                Three noise fields are made on the processor
+                (<code>genImageWhiteNoise</code> / <code>PerlinNoise</code> /
+                <code>Cellular</code>), uploaded once, and shown as panels. A
+                fourth panel scrolls: it regenerates a Perlin field at a moving
+                offset each frame and pushes it through
+                <code>updateTexture</code>, which rewrites the existing GPU
+                texture instead of allocating a new one &mdash; the difference
+                between a steady frame time and per-frame texture churn.
+            </p>
+
+            <p>
+                <strong
+                    ><code>recursive-hud</code> &mdash; render once, composite
+                    many.</strong
+                >
+                An animated HUD is rendered a single time into a render
+                texture, then drawn back as a stack of concentric, ever smaller
+                and dimmer copies &mdash; a screen-inside-screen tunnel.
+                Because the scene is rasterized exactly once and only
+                re-sampled, it sidesteps the per-frame swapchain-pass switch a
+                dynamic offscreen target would need: the right pattern whenever
+                the offscreen content is the same across all its uses in a
+                frame.
+            </p>
+
+            <p>
+                <strong
+                    ><code>text-on-texture</code> &mdash; render-to-texture
+                    meets the 3D pipeline.</strong
+                >
+                A 2D "sign" is drawn into an offscreen texture, then mapped
+                onto a rotating cube with <code>drawCubeTexture</code> in the
+                3D pass. It is the smallest program that touches both
+                subsystems at once, and a good template for in-world labels,
+                mirrors, or security-camera views.
+            </p>
+
+            <p>
+                <strong
+                    ><code>ui-clipper</code> &mdash; a 100,000-row list at
+                    O(visible).</strong
+                >
+                A naive list submits one widget per row every frame, even
+                off-screen. The clipper submits only the visible window (about
+                thirty rows) and advances the layout cursor over the rest
+                arithmetically, so the scrollbar still reflects the full range;
+                row text is computed from the index, so the rows cost no
+                per-row memory. A toggle turns the clipper off so you can watch
+                the frame time climb.
+            </p>
+
+            <h3 id="examples">Examples</h3>
+
+            <p>
+                There are 265 examples, each a single file at
+                <code>examples/&lt;name&gt;/&lt;name&gt;.zig</code> with no
+                shared state, so any one reads top to bottom as a complete
+                program. Categories and representative steps:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>category</th>
+                        <th>representative steps</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>graphics flagships (this page's tour)</td>
+                        <td>
+                            <code>shadowmap-sw</code>,
+                            <code>deferred-render</code>,
+                            <code>cel-shading</code>,
+                            <code>fog-rendering</code>,
+                            <code>shader-effects</code>,
+                            <code>helmet-sw</code>,
+                            <code>launcher</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>core 2D / raylib ports</td>
+                        <td>
+                            <code>hello-world</code>,
+                            <code>shapes-showcase</code>, <code>life</code>,
+                            <code>camera2d</code>, <code>trails</code>,
+                            <code>easings-testbed</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>procedural / generative</td>
+                        <td>
+                            <code>fractal-tree</code>,
+                            <code>hilbert-curve</code>,
+                            <code>procgen-noise</code>,
+                            <code>recursive-hud</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>images / textures</td>
+                        <td>
+                            <code>image-editor</code>,
+                            <code>text-on-texture</code>,
+                            <code>png-demo</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>input &amp; touch</td>
+                        <td>
+                            <code>input-multitouch</code>,
+                            <code>gestures-testbed</code>,
+                            <code>touch-paint</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>imgui</td>
+                        <td>
+                            <code>ui-full-showcase</code>,
+                            <code>ui-tables-demo</code>,
+                            <code>ui-clipper</code>,
+                            <code>ui-kanban-board</code>,
+                            <code>ui-dock-persistence</code>,
+                            <code>imgui-phone-demo</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>plotting (implot / implot3d)</td>
+                        <td>
+                            <code>plot-demo</code>, <code>ui-plot</code>,
+                            <code>plot3d-demo</code>,
+                            <code>native-plot-png</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>zig shaders</td>
+                        <td>
+                            <code>julia</code>, <code>mandel-julia</code>,
+                            <code>rt-shader</code>,
+                            <code>kaleidoscope</code>,
+                            <code>comptime-julia</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>custom pipelines</td>
+                        <td>
+                            <code>pipeline-basic</code>,
+                            <code>pipeline-instancing</code>,
+                            <code>pipeline-postprocess</code>,
+                            <code>pipeline-bloom</code>,
+                            <code>pipeline-msaa</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>CPU | GPU side-by-side + native proofs</td>
+                        <td>
+                            <code>mandel-sidebyside</code>,
+                            <code>cube-sidebyside</code>,
+                            <code>sw-mandelbrot</code>,
+                            <code>sw-engine-shader</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>3D</td>
+                        <td>
+                            <code>cube3d</code>, <code>models3d</code>,
+                            <code>gltf-textured</code>,
+                            <code>damaged-helmet</code>,
+                            <code>skinned-mesh</code>,
+                            <code>instancing</code>, <code>skybox</code>,
+                            <code>billboards</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>gpu compute</td>
+                        <td>
+                            <code>compute-particles</code>,
+                            <code>fluid-gpu</code>, <code>fluid-sort</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>physics / ecs / audio / cpu sims</td>
+                        <td>
+                            <code>zimrphysics-demo</code>,
+                            <code>ecs-boids</code>,
+                            <code>composer-drum</code>,
+                            <code>sph-fluid-2d</code>,
+                            <code>double-pendulum</code>,
+                            <code>raytracer</code>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="disclaimer" id="limits">
+                <h3>Status</h3>
+                <p>
+                    zimr is exploratory. It exists to find out how far a
+                    single-language Zig stack &mdash; engine, shaders, compute
+                    kernels, the SPIR-V&rarr;WGSL transpiler, the C&rarr;JS
+                    host transpiler, and the UI &mdash; can go on WebGPU, and
+                    to record what breaks along the way. Read the source and
+                    the example list before deciding whether any of it is
+                    useful to you.
+                </p>
+            </div>
+        </div>
+    </body>
+</html>

@@ -1,0 +1,46 @@
+
+================================================================================
+t1178 — THE ZIG BRIDGE ARC (phases 1-3e): zero-TypeScript runtime
+================================================================================
+The wz intake became src/bridge.zig: a host monolith (kernel + boot + every
+import namespace) compiled wasm32-freestanding -> C -> JS by our restyled
+c2js, producing single-file HTML pages whose entire runtime was born as Zig.
+
+Landed across the arc:
+- House style: 308 -> 0 lint issues over the intake, zero skips; the whole
+  repo now passes (0 issues in 265 files). One consolidated `var g`.
+- Two c2js miscompiles found by the consolidation, fixed + suite-cased:
+  nested global-struct array members (last-resort lvalue walker) and cast
+  pointer-arithmetic stride.
+- Phase 2 device-proven: app-owns-the-page slice (two canvases, click ring).
+- Phase 3: the COMPLETE classic wgpu verb surface (~45 verbs) on a raw
+  numeric ABI (js_fn_num: BigInt->Number, no handle churn); ONE cross-type
+  handle table; WASI shim; dual-contract boot by export detection
+  (zimr_page_main/zimr_frame vs _initialize/update); binary descriptor
+  decoders (Cursor over module memory) for BGL/BG/pipeline-layout/render-
+  pipeline/compute; closure-free async readback on the promise kernel;
+  push-based input wiring (ZimrInput) mirroring the shipped pages' exact
+  conventions; cursor + pointer-lock dom verbs.
+- Probes that SELF-REPORT: breathing clear + banner + a gold triangle drawn
+  through a Zig-encoded descriptor blob, gate-asserted field-by-field, all
+  device-proven on the Pixel.
+- 3e: real engine examples (wgpu_basic, wgpu_input_mouse — 2.25MB each)
+  boot + render + take input under jsdom gates, zero errors. One-command
+  promotion: `zig build wgpu-smoke-install -Dfocus=<name>` now also emits
+  zig-out/bridge-pages/<name>.html.
+Once device-proven, deletable: zimr_wgpu.ts (1284 ln), overlay_input.ts
+(393 ln), 143 index.html boot scripts.
+Phase 4 (TS retirement) COMPLETE: addWgpuStandalone + finishWgpuApp +
+the 7 bespoke 3D blocks all emit the bridge page (served index.html AND
+standalone); then the sweep deleted zimr_wgpu.ts (1284), overlay_input.ts
+(393), 143 index.htmls (22,594 ln), buildaux's wgpu-standalone (buildaux
+644->119 ln). Bridge gained persistence verbs (localStorage). Cold build
+post-deletion clean; full gates + smoke GREEN. The zimr WebGPU runtime is
+now 100% Zig-born JS — no .ts, no hand-written .html, anywhere.
+Device-proven on the Pixel across the arc: 2D basic (text atlas), input
+(finger-tracked ball + cursor toggle), and a depth-tested 3D textured cube.
+
+LESSONS: pages only after rebuilding c2js (kernel+binary move together);
+reactor exports need explicit --export; probes must succeed VISIBLY;
+/root/.cache/zig dies whole or not at all.
+

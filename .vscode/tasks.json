@@ -1,0 +1,6449 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "zig: serve-only (background)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "serve-only"
+            ],
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "zig-serve",
+                "pattern": [
+                    {
+                        "regexp": "^(.*)$",
+                        "file": 1,
+                        "location": 1,
+                        "message": 1
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".",
+                    "endsPattern": "Ctrl\\+C to stop"
+                }
+            },
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "showReuseMessage": false
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            "label": "zig: build 3d-probe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "3d-probe"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone 3d-probe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "3d-probe-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-basic"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone audio-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-basic-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build audio-stream-synth",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-stream-synth"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone audio-stream-synth",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "audio-stream-synth-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ball-physics",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ball-physics"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ball-physics",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ball-physics-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "basic"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "basic-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build billboards",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "billboards"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone billboards",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "billboards-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build bouncing-ball",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bouncing-ball"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone bouncing-ball",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bouncing-ball-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build bridge-classic-probe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bridge-classic-probe"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone bridge-classic-probe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bridge-classic-probe-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build bridge-slice",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bridge-slice"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone bridge-slice",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bridge-slice-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build camera2d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "camera2d"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone camera2d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "camera2d-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build circle-sector-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "circle-sector-drawing"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone circle-sector-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "circle-sector-drawing-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build clock-of-clocks",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "clock-of-clocks"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone clock-of-clocks",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "clock-of-clocks-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build collision-area",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "collision-area"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone collision-area",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "collision-area-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build color-wheel",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "color-wheel"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone color-wheel",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "color-wheel-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build colors-palette",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "colors-palette"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone colors-palette",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "colors-palette-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build composer-drum",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "composer-drum"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone composer-drum",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "composer-drum-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build comptime-julia",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "comptime-julia"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone comptime-julia",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "comptime-julia-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build comptime-mandelbrot",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "comptime-mandelbrot"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone comptime-mandelbrot",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "comptime-mandelbrot-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build compute-particles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "compute-particles"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone compute-particles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "compute-particles-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build compute-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "compute-smoke"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone compute-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "compute-smoke-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cube-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone cube-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cube-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube-sidebyside"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone cube-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube-sidebyside-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build cube3d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube3d"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone cube3d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cube3d-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build damaged-helmet",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "damaged-helmet"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone damaged-helmet",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "damaged-helmet-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build dashed-line",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dashed-line"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone dashed-line",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dashed-line-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build digital-clock",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "digital-clock"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone digital-clock",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "digital-clock-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build double-pendulum",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "double-pendulum"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone double-pendulum",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "double-pendulum-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build dynamic-mesh",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dynamic-mesh"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone dynamic-mesh",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dynamic-mesh-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-ball",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-ball"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone easings-ball",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-ball-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-box",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-box"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone easings-box",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-box-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-rectangles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-rectangles"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone easings-rectangles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-rectangles-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build easings-testbed",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-testbed"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone easings-testbed",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "easings-testbed-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ecs-boids",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ecs-boids"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ecs-boids",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ecs-boids-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ecs-solar-system",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ecs-solar-system"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ecs-solar-system",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ecs-solar-system-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ellipse-collision",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ellipse-collision"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ellipse-collision",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ellipse-collision-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build first-person-camera",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "first-person-camera"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone first-person-camera",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "first-person-camera-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build fluid-gpu",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fluid-gpu"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone fluid-gpu",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fluid-gpu-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build fluid-sort",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fluid-sort"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone fluid-sort",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fluid-sort-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build following-eyes",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "following-eyes"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone following-eyes",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "following-eyes-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build forward-kinematics",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "forward-kinematics"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone forward-kinematics",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "forward-kinematics-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build fractal-tree",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fractal-tree"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone fractal-tree",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fractal-tree-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gallery"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gallery-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gallery-all",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gallery-all"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone gallery-all",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gallery-all-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gestures-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gestures-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone gestures-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gestures-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gestures-testbed",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gestures-testbed"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone gestures-testbed",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gestures-testbed-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gltf-simple",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gltf-simple"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone gltf-simple",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gltf-simple-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build gltf-textured",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gltf-textured"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone gltf-textured",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "gltf-textured-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build hello-world",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hello-world"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone hello-world",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hello-world-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build helmet-sw",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "helmet-sw"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone helmet-sw",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "helmet-sw-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build hilbert-curve",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hilbert-curve"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone hilbert-curve",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hilbert-curve-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build image-editor",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "image-editor"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone image-editor",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "image-editor-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build imgui-phone-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "imgui-phone-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone imgui-phone-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "imgui-phone-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-keys",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-keys"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone input-keys",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-keys-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-mouse",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-mouse"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone input-mouse",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-mouse-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-mouse-wheel",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-mouse-wheel"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone input-mouse-wheel",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-mouse-wheel-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-multitouch",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-multitouch"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone input-multitouch",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-multitouch-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build input-virtual-controls",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-virtual-controls"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone input-virtual-controls",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "input-virtual-controls-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build instancing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "instancing"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone instancing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "instancing-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build julia",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "julia"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone julia",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "julia-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build julia-gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "julia-gallery"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone julia-gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "julia-gallery-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build kaleidoscope",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "kaleidoscope"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone kaleidoscope",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "kaleidoscope-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build keys",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "keys"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone keys",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "keys-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build lambert-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lambert-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone lambert-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lambert-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build launcher",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "launcher"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone launcher",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "launcher-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build life",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "life"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone life",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "life-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build lines-bezier",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lines-bezier"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone lines-bezier",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lines-bezier-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build lines-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lines-drawing"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone lines-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "lines-drawing-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build logo-raylib",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "logo-raylib"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone logo-raylib",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "logo-raylib-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build logo-raylib-anim",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "logo-raylib-anim"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone logo-raylib-anim",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "logo-raylib-anim-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mandel-julia",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandel-julia"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone mandel-julia",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandel-julia-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mandel-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandel-sidebyside"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone mandel-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandel-sidebyside-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build mandelbrot-split",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandelbrot-split"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone mandelbrot-split",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "mandelbrot-split-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build math-angle-rotation",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "math-angle-rotation"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone math-angle-rotation",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "math-angle-rotation-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build math-sine-cosine",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "math-sine-cosine"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone math-sine-cosine",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "math-sine-cosine-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build models3d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "models3d"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone models3d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "models3d-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build music-streaming",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "music-streaming"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone music-streaming",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "music-streaming-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build obj-bunny",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "obj-bunny"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone obj-bunny",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "obj-bunny-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build obj-simple",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "obj-simple"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone obj-simple",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "obj-simple-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build particles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "particles"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone particles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "particles-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pbr-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pbr-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pbr-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pbr-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build penrose-tile",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "penrose-tile"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone penrose-tile",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "penrose-tile-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build physics-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "physics-sidebyside"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone physics-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "physics-sidebyside-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pie-chart",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pie-chart"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pie-chart",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pie-chart-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-array",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-array"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-array",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-array-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-basic"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-basic-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-bloom",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-bloom"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-bloom",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-bloom-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-constants",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-constants"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-constants",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-constants-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-instancing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-instancing"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-instancing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-instancing-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-mipmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-mipmap"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-mipmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-mipmap-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-msaa",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-msaa"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-msaa",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-msaa-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-postprocess",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-postprocess"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-postprocess",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-postprocess-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-rendertarget",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-rendertarget"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-rendertarget",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-rendertarget-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-sampler",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-sampler"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-sampler",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-sampler-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-settings",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-settings"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-settings",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-settings-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-storage",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-storage"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-storage",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-storage-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build pipeline-uniforms",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-uniforms"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone pipeline-uniforms",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "pipeline-uniforms-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build plot-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone plot-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build plot3d-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot3d-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone plot3d-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot3d-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build plot3d-gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot3d-gallery"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone plot3d-gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "plot3d-gallery-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build png-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "png-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone png-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "png-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build procgen-noise",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "procgen-noise"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone procgen-noise",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "procgen-noise-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build raytracer",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "raytracer"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone raytracer",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "raytracer-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rectangle-advanced",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rectangle-advanced"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone rectangle-advanced",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rectangle-advanced-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rectangle-scaling",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rectangle-scaling"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone rectangle-scaling",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rectangle-scaling-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build recursive-hud",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "recursive-hud"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone recursive-hud",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "recursive-hud-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build render-texture",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "render-texture"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone render-texture",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "render-texture-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ring-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ring-drawing"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ring-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ring-drawing-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rounded-rectangle",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rounded-rectangle"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone rounded-rectangle",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rounded-rectangle-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rt-shader",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rt-shader"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone rt-shader",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rt-shader-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build rt-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rt-sidebyside"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone rt-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "rt-sidebyside-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shader-inspection",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shader-inspection"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone shader-inspection",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shader-inspection-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shapes-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone shapes-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shapes-showcase",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-showcase"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone shapes-showcase",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shapes-showcase-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shared-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shared-smoke"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone shared-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shared-smoke-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "sidebyside"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "sidebyside-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build simple-particles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "simple-particles"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone simple-particles",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "simple-particles-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build skinned-mesh",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "skinned-mesh"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone skinned-mesh",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "skinned-mesh-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build skybox",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "skybox"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone skybox",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "skybox-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build sph-fluid-2d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "sph-fluid-2d"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone sph-fluid-2d",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "sph-fluid-2d-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build splines-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "splines-drawing"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone splines-drawing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "splines-drawing-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build split-screen",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "split-screen"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone split-screen",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "split-screen-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build starfield",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "starfield"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone starfield",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "starfield-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build starfield-effect",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "starfield-effect"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone starfield-effect",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "starfield-effect-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-field",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-field"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone text-field",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-field-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-layout",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-layout"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone text-layout",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-layout-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build text-on-texture",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-on-texture"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone text-on-texture",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "text-on-texture-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build texture-readback",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "texture-readback"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone texture-readback",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "texture-readback-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textured-cube",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textured-cube"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone textured-cube",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textured-cube-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build tile-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tile-smoke"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone tile-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tile-smoke-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build touch-paint",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "touch-paint"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone touch-paint",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "touch-paint-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build trails",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "trails"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone trails",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "trails-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build triangle-gradient",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "triangle-gradient"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone triangle-gradient",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "triangle-gradient-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build triangle-strip",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "triangle-strip"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone triangle-strip",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "triangle-strip-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-animation-gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-animation-gallery"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-animation-gallery",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-animation-gallery-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-canvas-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-canvas-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-canvas-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-canvas-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-clipper",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-clipper"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-clipper",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-clipper-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-code-editor",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-code-editor"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-code-editor",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-code-editor-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-color-picker",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-color-picker"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-color-picker",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-color-picker-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-combo-custom",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-combo-custom"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-combo-custom",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-combo-custom-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-custom-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-custom-rendering"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-custom-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-custom-rendering-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-custom-widget",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-custom-widget"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-custom-widget",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-custom-widget-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-data-grid-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-data-grid-phone"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-data-grid-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-data-grid-phone-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dev-tools",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dev-tools"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-dev-tools",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dev-tools-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dock-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-basic"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-dock-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-basic-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dock-persistence",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-persistence"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-dock-persistence",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-persistence-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-dock-simple",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-simple"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-dock-simple",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-dock-simple-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drag-drop-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-drag-drop-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drag-drop-flags-tour",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-flags-tour"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-drag-drop-flags-tour",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-flags-tour-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drag-drop-source",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-source"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-drag-drop-source",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drag-drop-source-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-drawlists",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drawlists"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-drawlists",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-drawlists-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-full-showcase",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-full-showcase"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-full-showcase",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-full-showcase-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-imgui-extras",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-imgui-extras"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-imgui-extras",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-imgui-extras-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-input-callbacks",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-callbacks"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-input-callbacks",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-callbacks-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-input-flags-zoo-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-flags-zoo-phone"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-input-flags-zoo-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-flags-zoo-phone-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-input-query-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-query-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-input-query-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-input-query-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-kanban-board",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-kanban-board"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-kanban-board",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-kanban-board-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-log-skeleton",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-log-skeleton"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-log-skeleton",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-log-skeleton-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-log-viewer",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-log-viewer"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-log-viewer",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-log-viewer-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-mini-plot-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-mini-plot-smoke"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-mini-plot-smoke",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-mini-plot-smoke-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-minimal-button",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-minimal-button"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-minimal-button",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-minimal-button-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-minimal-one-context",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-minimal-one-context"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-minimal-one-context",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-minimal-one-context-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-mouse-drag",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-mouse-drag"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-mouse-drag",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-mouse-drag-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-multiselect-finder",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-multiselect-finder"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-multiselect-finder",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-multiselect-finder-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-notes-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-notes-phone"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-notes-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-notes-phone-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-panes",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-panes"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-panes",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-panes-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-persistence",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-persistence"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-persistence",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-persistence-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-phone-gestures",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-phone-gestures"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-phone-gestures",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-phone-gestures-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-plot",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-plot"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-plot",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-plot-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-plotting-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-plotting-basic"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-plotting-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-plotting-basic-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-polish",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-polish"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-polish",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-polish-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-pomodoro-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-pomodoro-phone"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-pomodoro-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-pomodoro-phone-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-primitives-zoo-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-primitives-zoo-phone"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-primitives-zoo-phone",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-primitives-zoo-phone-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-shortcuts",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-shortcuts"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-shortcuts",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-shortcuts-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-smoke-button",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-smoke-button"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-smoke-button",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-smoke-button-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tabbar-tour",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tabbar-tour"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-tabbar-tour",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tabbar-tour-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tables-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-basic"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-tables-basic",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-basic-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tables-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-tables-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-tables-scroll",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-scroll"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-tables-scroll",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-tables-scroll-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-widgets-data-types",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-widgets-data-types"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-widgets-data-types",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-widgets-data-types-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build ui-window-menubar",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-window-menubar"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone ui-window-menubar",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "ui-window-menubar-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build vao-multibuffer",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "vao-multibuffer"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone vao-multibuffer",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "vao-multibuffer-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build vector-angle",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "vector-angle"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone vector-angle",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "vector-angle-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build wireframe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "wireframe"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone wireframe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "wireframe-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build writing-anim",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "writing-anim"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone writing-anim",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "writing-anim-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build zimrphysics-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrphysics-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone zimrphysics-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrphysics-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build zimrphysics2d-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrphysics2d-demo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone zimrphysics2d-demo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "zimrphysics2d-demo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build (release)",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "-Dmode=release"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: test",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "test",
+                "--summary",
+                "all"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: smoke-test",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "-Dmode=debug",
+                "smoke-test"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

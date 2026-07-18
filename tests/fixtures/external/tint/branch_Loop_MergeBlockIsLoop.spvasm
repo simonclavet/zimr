@@ -1,0 +1,27 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+       %void = OpTypeVoid
+        %i32 = OpTypeInt 32 1
+       %bool = OpTypeBool
+        %one = OpConstant %i32 1
+        %two = OpConstant %i32 2
+      %three = OpConstant %i32 3
+       %true = OpConstantTrue %bool
+    %ep_type = OpTypeFunction %void
+       %main = OpFunction %void None %ep_type
+         %10 = OpLabel
+               OpSelectionMerge %50 None
+               OpBranchConditional %true %20 %50
+         %20 = OpLabel
+               OpBranch %50
+         ; %50 is the merge block for the selection starting at 10,
+         ; and its own continue target.
+         %50 = OpLabel
+               OpLoopMerge %99 %50 None
+               OpBranchConditional %true %50 %99
+         %99 = OpLabel
+               OpReturn
+               OpFunctionEnd

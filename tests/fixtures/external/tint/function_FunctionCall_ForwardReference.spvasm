@@ -1,0 +1,18 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+       %void = OpTypeVoid
+  %func_type = OpTypeFunction %void
+
+       %main = OpFunction %void None %func_type
+ %main_start = OpLabel
+          %1 = OpFunctionCall %void %foo
+               OpReturn
+               OpFunctionEnd
+
+        %foo = OpFunction %void None %func_type
+  %foo_start = OpLabel
+               OpReturn
+               OpFunctionEnd

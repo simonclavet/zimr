@@ -1,0 +1,42 @@
+# Zig build outputs — regenerable.  Run `zig build` to rebuild.
+zig-out/
+.zig-cache/
+
+# Scratch outputs from manually invoking the shader pipeline
+# (`zig build-obj ...`, `spirv-opt`, `spirv-cross`) for debugging
+# / investigation.  Production shader compiles go through the
+# build cache; this dir is just for ad-hoc inspection.
+shadertemp/
+
+# Pre-built distribution (`prebuilt/`, ~1.1 GB of demo wasm) is NOT tracked:
+# it exceeds Codeberg's repo-size budget and is regenerable via `release.bat`
+# (or `zig build -Drelease=true dist`). Codeberg Pages is updated by a separate
+# deploy script, so the repo carries source only.
+prebuilt/
+
+
+# Editor / OS detritus
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+
+# Local temp / scratch
+/tmp/
+/scratch/
+
+# Claude Code's per-clone settings dir (local-only).
+.claude/
+
+# Per-clone compile-time log written by scripts/timed-build.sh.
+# Each dev gets their own local trend file.  See claude.md "Audit gate".
+build_timings.tsv
+reference/
+
+# c2js writes "<basename>.js.map" next to its output; bridge.js.map had been
+# sitting in the repo root (1.4 MB) and shipping inside every snapshot zip.
+*.js.map

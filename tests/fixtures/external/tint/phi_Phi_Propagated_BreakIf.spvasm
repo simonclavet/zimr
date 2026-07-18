@@ -1,0 +1,40 @@
+
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main"
+               OpExecutionMode %main OriginUpperLeft
+               OpName %main "main"
+       %void = OpTypeVoid
+          %9 = OpTypeFunction %void
+       %bool = OpTypeBool
+       %true = OpConstantTrue %bool
+       %main = OpFunction %void None %9
+         %35 = OpLabel
+               OpBranch %39
+         %39 = OpLabel
+         %40 = OpPhi %bool %true %35 %40 %41
+               OpLoopMerge %44 %41 None
+               OpBranch %45
+         %45 = OpLabel
+               OpSelectionMerge %49 None
+               OpBranchConditional %true %50 %49
+         %50 = OpLabel
+               OpBranch %49
+         %49 = OpLabel
+               OpBranch %41
+         %41 = OpLabel
+               OpBranchConditional %true %39 %44
+         %44 = OpLabel
+               OpBranch %55
+         %55 = OpLabel
+         %56 = OpPhi %bool %40 %44 %true %57
+               OpLoopMerge %59 %57 None
+               OpBranch %60
+         %60 = OpLabel
+               OpBranch %57
+         %57 = OpLabel
+               OpBranch %55
+         %59 = OpLabel
+               OpReturn
+               OpFunctionEnd

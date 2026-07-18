@@ -1,0 +1,32 @@
+
+               OpCapability Shader
+               OpMemoryModel Logical Simple
+               OpEntryPoint Fragment %100 "main"
+               OpExecutionMode %100 OriginUpperLeft
+       %void = OpTypeVoid
+          %2 = OpTypeFunction %void
+       %bool = OpTypeBool
+       %uint = OpTypeInt 32 0
+      %float = OpTypeFloat 32
+       %true = OpConstantTrue %bool
+   %float_50 = OpConstant %float 50
+        %100 = OpFunction %void None %2
+         %10 = OpLabel
+               OpBranch %30
+         %30 = OpLabel
+               OpLoopMerge %90 %80 None
+               OpBranchConditional %true %90 %40
+         %40 = OpLabel
+               OpSelectionMerge %50 None
+               OpBranchConditional %true %45 %50
+         %45 = OpLabel
+        %600 = OpCopyObject %float %float_50
+               OpBranch %50
+         %50 = OpLabel
+               OpBranch %90
+         %80 = OpLabel
+         %82 = OpConvertFToU %uint %600
+               OpBranch %30
+         %90 = OpLabel
+               OpReturn
+               OpFunctionEnd

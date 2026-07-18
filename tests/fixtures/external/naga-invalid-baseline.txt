@@ -1,0 +1,43 @@
+# naga-invalid-baseline.txt — Tint fixtures that spv2wgsl's IR walker
+# currently TRANSLATES but whose WGSL the naga validator REJECTS.
+#
+# These are PRE-EXISTING feature gaps (not regressions): the IR builder
+# produces structurally-plausible WGSL that our own corpus checker
+# (`zig build wgpu-diff`) accepts, but full naga validation (the real
+# Chrome/Firefox-grade oracle) rejects.  Tracked here so the corpus-naga
+# gate (`scripts/naga-validate-tint.sh`) can:
+#   - FAIL if a NEW invalid appears (a real regression), and
+#   - FAIL if a listed fixture becomes VALID (so we shrink this list
+#     instead of letting it rot).
+#
+# The burn-down families (remove lines as each is fixed):
+#   [DONE turn 813] function calls — fixed: void-returning calls now emit
+#                             a bare statement, not `let x: = f()`.
+#   [DONE turn 813] hoisting into nested — fixed by markHoistedResults:
+#                             results used outside their defining block are
+#                             hoisted to a function-scope var (assigned at
+#                             the def site).  Cleared the whole *Hoisting*
+#                             family, switch-hoist, Loop_ContinueUseBodyValue,
+#                             and DuplicateTrue_Premerge.
+#   [DONE turn 855] vertex-shader struct I/O — direct struct-output cases
+#                             fixed turn 813; *_Transitive (output written in a
+#                             called helper) fixed turn 855 by emitting SPIR-V
+#                             Input/Output as module-scope var<private> (entry
+#                             copies inputs->private and private->outputs), so
+#                             I/O resolves from any function.
+#   [DONE turn 813] switch sint values — fixed: signed (i32) selector case
+#                             literals are reinterpreted from their raw word
+#                             (4000000000 → -294967296), matching Tint.
+#   switch hoist             — branch_Switch_HoistFrom{Case,Default}
+#   [DONE turn 813] hoisted-var loop header + phi-cross-block — markHoistedResults
+#                             now also scans OpPhi operands (a phi value is used at
+#                             its predecessor block); cleared PhiInLoopHeader_*,
+#                             Phi_Bug_435621075, Propagated_PropagatedPhiValue_BlockParam.
+#   misc                     — branch_BranchConditional_DuplicateTrue_Premerge,
+#                             branch_Loop_ContinueUseBodyValue,
+#                             phi_Phi_Bug_435621075,
+#                             phi_Phi_Propagated_PropagatedPhiValue_BlockParam
+#
+# One fixture per line, bare name (no .spv).  Comments (#) and blank
+# lines ignored.
+
