@@ -108,6 +108,19 @@
                 color: var(--bg-paper);
             }
 
+            /* The one link that LEAVES the page (every other entry is an
+               in-page anchor), so it reads as the primary call to action. */
+            nav.toplinks a.offsite {
+                background-color: var(--accent-color);
+                color: var(--bg-paper);
+                font-weight: bold;
+            }
+
+            nav.toplinks a.offsite:hover {
+                background-color: var(--bg-block);
+                color: var(--text-color);
+            }
+
             .wip-warning {
                 border: 4px solid var(--accent-color);
                 background-color: var(--bg-block);
@@ -357,6 +370,7 @@
             </h2>
 
             <nav class="toplinks">
+                <a class="offsite" href="index.html">example gallery &rarr;</a>
                 <a href="#what">what this is</a>
                 <a href="#pure">one language</a>
                 <a href="#app">app model</a>
@@ -432,7 +446,8 @@
                     the pill (&#9666;&nbsp;&#9656;) to switch between the flagship
                     apps. Its wasm is a separate file, fetched only when this frame
                     scrolls into view, so the page itself stays small &mdash;
-                    nothing is inlined.
+                    nothing is inlined. These are a handful of the demos &mdash;
+                    the rest are in the <a href="index.html">example gallery</a>.
                 </figcaption>
             </figure>
 
