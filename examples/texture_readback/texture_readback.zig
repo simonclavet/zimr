@@ -29,7 +29,7 @@ const pi = zm.pi;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const rt_size: u32 = 256;
 const rt_bytes: u32 = rt_size * rt_size * 4;
@@ -61,7 +61,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const pixels: []u8 = try gpa.alloc(u8, rt_bytes);
     @memset(pixels, 0);
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 22),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .staging = z.wgpu.createBuffer(f.gpu.device, .{
             .size = rt_bytes,
             .usage = .{ .copy_dst = true, .map_read = true },

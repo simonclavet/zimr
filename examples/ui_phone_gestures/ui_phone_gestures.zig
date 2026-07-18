@@ -17,7 +17,7 @@ const clamp = zm.clamp;
 const float = zm.float;
 const Color = zm.Color;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const bg: Color = .{ .r = 15, .g = 23, .b = 42, .a = 255 };
 const panel: Color = .{ .r = 30, .g = 41, .b = 59, .a = 255 };
@@ -51,7 +51,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .scratch = std.heap.ArenaAllocator.init(gpa),
     };
 }

@@ -13,7 +13,7 @@ const Color = zm.Color;
 const c = Color;
 
 const fudesumi_png = @embedFile("fudesumi.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const im_w: i32 = 960;
 const im_h: i32 = 480;
 
@@ -67,7 +67,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .checked = try buildChecked(gpa, f.gl),
         .fudesumi = try uploadPng(gpa, f.gl, fudesumi_png),
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 18),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 18),
     };
 }
 

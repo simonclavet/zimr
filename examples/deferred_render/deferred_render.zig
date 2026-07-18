@@ -50,7 +50,7 @@ const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
 const gbuffer_fs_wgsl = @embedFile("gbuffer_fs.wgsl");
 const shading_vs_wgsl = @embedFile("deferred_shading_vs.wgsl");
 const shading_fs_wgsl = @embedFile("deferred_shading_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Uniform block types come FROM the shader Io schemas — the GPU buffers
 // and any future software run of these shaderMains cannot drift apart.
@@ -587,7 +587,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.destroyShaderModule(shade_vs_mod);
     z.wgpu.destroyShaderModule(shade_fs_mod);
 
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .gbuffer_pipeline = gbuffer_pipeline,

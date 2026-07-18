@@ -21,7 +21,7 @@ const zm = @import("zm");
 const Vec = zm.Vec;
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Bespoke VS + the shared pass-through FS, build-generated from Zig.
 const vs_wgsl = @embedFile("pipeline_settings_vs.wgsl");
@@ -95,7 +95,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&cluster));
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .vbo = vbo,
         .alpha_shader = try blendShader(gpa, f, .alpha, "blend_alpha"),
         .add_shader = try blendShader(gpa, f, .additive, "blend_additive"),

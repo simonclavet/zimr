@@ -17,7 +17,7 @@ const vec = zm.vec;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const rt_size: f32 = 256;
 
@@ -33,7 +33,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 48) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 48) };
 }
 
 fn update(f: *z.Frame, s: *State) void {

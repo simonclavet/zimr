@@ -287,6 +287,7 @@ extern "wgpu" fn js_queue_write_texture(
     bytes_per_row: u32,
     data_ptr: [*]const u8,
     data_len: usize,
+    mip_level: u32,
 ) void;
 
 // --- Sampler ---
@@ -1132,6 +1133,20 @@ pub fn queueWriteTexture(
     bytes_per_row: u32,
     data: []const u8,
 ) void {
+    queueWriteTextureLevel(queue, texture, width, height, bytes_per_row, data, 0);
+}
+
+/// Like `queueWriteTexture` but targets an explicit `mip_level` of the texture
+/// (level 0 is the base image). Used to upload a CPU-generated mip chain.
+pub fn queueWriteTextureLevel(
+    queue: QueueHandle,
+    texture: TextureHandle,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+    data: []const u8,
+    mip_level: u32,
+) void {
     if (comptime !is_wasm) {
         return;
     }
@@ -1143,6 +1158,7 @@ pub fn queueWriteTexture(
         bytes_per_row,
         data.ptr,
         data.len,
+        mip_level,
     );
 }
 

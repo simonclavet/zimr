@@ -1933,7 +1933,9 @@ pub const OrbitCamera = struct {
         // so it simply follows the pointer: the pane under the cursor zooms.
         const wheel: f32 = getMouseWheelMove(f.input);
         if (wheel != 0 and !ui_blocked and regionHolds(opts.region, getMousePosition(f.input))) {
-            self.applyZoom(-wheel * opts.zoom_sensitivity * 4.0, opts);
+            // `wheel` is per-notch (bridge.zig normalizes it), so this is
+            // exactly what zoom_sensitivity documents: a fraction per notch.
+            self.applyZoom(-wheel * opts.zoom_sensitivity, opts);
         }
 
         self.clampAll(opts);
@@ -3660,13 +3662,30 @@ pub fn loadFontEx(
     // size×DPR makes the atlas ~1:1 with the backing → sharp. baseSize tracks the bake
     // size, so drawText/measureText still produce LOGICAL sizes (the scale divides it
     // back out) — transparent to callers, just crisper. DPR = backing/CSS surface size.
+    //
+    // OVERSAMPLE headroom: the atlas is frozen at load-time DPR and never re-baked, so
+    // any later MAGNIFICATION (entering browser fullscreen — a `.fit`-mode app scales its
+    // fixed design surface up to the whole monitor, ~2.4–3× on 1080p, more on 1440p/4K —
+    // moving to a denser monitor, or drawing text bigger than `size`) samples a too-small
+    // atlas → blur. Baking 3× the currently-needed density gives that magnification
+    // headroom. This is only affordable because the atlas is MIPMAPPED (see
+    // createMipmappedFromPixels): without mips, a 3× atlas would badly alias small text on
+    // minification; with a mip chain the GPU picks a level near the on-screen size, so the
+    // same atlas stays crisp whether the text is tiny (UI labels) or fullscreen-huge. The
+    // multiplier is capped so a high-DPR phone doesn't blow the atlas up (memory is
+    // width×height + a ~33% mip tail, so it grows with the square of the multiplier).
+    const oversample: f32 = 3.0;
     const css_sz: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(app.gpu_frame.surface);
     const back_sz: wgpu.SurfaceSize = wgpu.getSurfaceSize(app.gpu_frame.surface);
     const dpr: f32 = if (css_sz.width > 0)
-        clamp(float(back_sz.width) / float(css_sz.width), 1.0, 4.0)
+        float(back_sz.width) / float(css_sz.width)
     else
         1.0;
-    const bake_size: i32 = @round(float(size) * dpr);
+    // clamp the TOTAL bake density (dpr × oversample) to [1, 4]: 3× headroom on a DPR-1
+    // desktop (where fullscreen magnification bites hardest), still bounded on a DPR-3
+    // phone. baseSize carries the real bake height, so the logical scale stays exact.
+    const bake_mult: f32 = clamp(dpr * oversample, 1.0, 4.0);
+    const bake_size: i32 = @round(float(size) * bake_mult);
     const atlas: drawing_text.FontAtlas = try drawing_text.bakeFontAtlas(gpa, &tt, bake_size, codepoints, 1);
     // The atlas image (RGBA8) is uploaded to the GPU; free the CPU copy after.
     defer @import("image.zig").unloadImage(gpa, atlas.image);
@@ -3674,12 +3693,24 @@ pub fn loadFontEx(
     const aw: u32 = @intCast(atlas.image.width);
     const ah: u32 = @intCast(atlas.image.height);
     const pixels: []const u8 = @as([*]const u8, @ptrCast(atlas.image.data.?))[0 .. aw * ah * 4];
-    const tex: WgpuTexture = WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
-        .pixels = pixels,
-        .width = aw,
-        .height = ah,
-        .format = .rgba8_unorm,
-    });
+    // Mipmapped, trilinear-sampled glyph atlas. The atlas is baked OVERSAMPLED
+    // (see `oversample` above), so at draw time it is almost always MINIFIED —
+    // and plain bilinear undersamples past ~2× reduction, which is what left the
+    // small on-screen/UI text aliased ("pixelated") even after switching off
+    // NEAREST. A precomputed mip chain lets the GPU pick a level near the
+    // on-screen size, so both tiny UI labels and large fullscreen text stay
+    // crisp. createFromPixels defaults to NEAREST (blocky at any non-1:1 scale).
+    const tex: WgpuTexture = try WgpuTexture.createMipmappedFromPixels(
+        gpa,
+        app.gpu_frame.device,
+        app.gpu_frame.queue,
+        .{
+            .pixels = pixels,
+            .width = aw,
+            .height = ah,
+            .format = .rgba8_unorm,
+        },
+    );
     const tex_id: u32 = r.registerOwnedTexture(tex);
 
     return .{

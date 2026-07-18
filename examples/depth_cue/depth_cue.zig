@@ -19,7 +19,7 @@ const pointVec = zm.pointVec;
 const vec = zm.vec;
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const grid_n: i32 = 9; // 9x9 field of cubes
 const spacing: f32 = 1.7;
@@ -36,7 +36,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// Grayscale colour for a world point, dark with distance from `cam`.

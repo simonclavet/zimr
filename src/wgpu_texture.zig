@@ -90,6 +90,122 @@ pub const WgpuTexture = struct {
         };
     }
 
+    /// Like `createFromPixels`, but builds a full CPU mip chain (2×2 box
+    /// downsample per level) and uploads every level. WebGPU has no
+    /// `generateMipmap`, so we precompute the chain here. This keeps a glyph
+    /// atlas crisp when MINIFIED (small on-screen text drawn from an oversampled
+    /// atlas): plain bilinear undersamples past 2× reduction and aliases; mip
+    /// selection picks a level close to the on-screen size.
+    ///
+    /// Filtering is BILINEAR within a level but NEAREST across levels
+    /// (`mipmap_filter_linear = false`): trilinear blends two mip levels on every
+    /// texel, which visibly SOFTENS text even near 1:1 (it always mixes in the
+    /// half-resolution level). Hard mip selection snaps to the single level
+    /// closest to the on-screen size, so glyphs stay sharp; there's no animated
+    /// scale here to make level transitions "pop". RGBA8 only.
+    pub fn createMipmappedFromPixels(
+        gpa: Allocator,
+        device: wgpu.DeviceHandle,
+        queue: wgpu.QueueHandle,
+        desc: CreateFromPixelsDesc,
+    ) !WgpuTexture {
+        assert(desc.pixels.len == desc.width * desc.height * 4, @src());
+
+        const mip_count: u32 = mipLevelCount(desc.width, desc.height);
+        const tex: wgpu.TextureHandle = wgpu.createTexture(device, .{
+            .width = desc.width,
+            .height = desc.height,
+            .format = desc.format,
+            .usage = .{ .texture_binding = true, .copy_dst = true },
+            .mip_level_count = mip_count,
+            .label = desc.label,
+        });
+
+        // Level 0 is the source pixels; each subsequent level is the previous
+        // level box-downsampled by 2. `cur` owns the level being uploaded (level
+        // 0 borrows the caller's buffer; levels ≥1 are freshly allocated).
+        wgpu.queueWriteTextureLevel(queue, tex, desc.width, desc.height, desc.width * 4, desc.pixels, 0);
+        var cur: []const u8 = desc.pixels;
+        var cur_owned: ?[]u8 = null;
+        defer if (cur_owned) |b| gpa.free(b);
+        var w: u32 = desc.width;
+        var h: u32 = desc.height;
+        var level: u32 = 1;
+        while (level < mip_count) : (level += 1) {
+            const nw: u32 = @max(w >> 1, 1);
+            const nh: u32 = @max(h >> 1, 1);
+            const next: []u8 = try gpa.alloc(u8, nw * nh * 4);
+            boxDownsampleRgba8(cur, w, h, next, nw, nh);
+            wgpu.queueWriteTextureLevel(queue, tex, nw, nh, nw * 4, next, level);
+            if (cur_owned) |b| gpa.free(b);
+            cur_owned = next;
+            cur = next;
+            w = nw;
+            h = nh;
+        }
+
+        const view: wgpu.TextureViewHandle = wgpu.createTextureView(tex);
+        const sampler: wgpu.SamplerHandle = wgpu.createSampler(device, .{
+            .mag_filter_linear = true,
+            .min_filter_linear = true,
+            .mipmap_filter_linear = false,
+            .address_mode = desc.address_mode,
+        });
+        return .{
+            .handle = tex,
+            .view = view,
+            .sampler = sampler,
+            .width = desc.width,
+            .height = desc.height,
+            .format = desc.format,
+        };
+    }
+
+    /// Full mip chain length for a `w`×`h` texture: floor(log2(max))+1.
+    fn mipLevelCount(w: u32, h: u32) u32 {
+        var m: u32 = @max(w, h);
+        var levels: u32 = 1;
+        while (m > 1) : (m >>= 1) {
+            levels += 1;
+        }
+        return levels;
+    }
+
+    /// 2×2 box-average `src` (sw×sh, RGBA8) into `dst` (dw×dh, RGBA8). When a
+    /// dimension is odd the extra edge row/column is dropped (dw=sw/2 etc.),
+    /// which is the standard mip reduction and imperceptible for a glyph atlas.
+    fn boxDownsampleRgba8(
+        src: []const u8,
+        sw: u32,
+        sh: u32,
+        dst: []u8,
+        dw: u32,
+        dh: u32,
+    ) void {
+        var y: u32 = 0;
+        while (y < dh) : (y += 1) {
+            const sy0: u32 = @min(y * 2, sh - 1);
+            const sy1: u32 = @min(sy0 + 1, sh - 1);
+            var x: u32 = 0;
+            while (x < dw) : (x += 1) {
+                const sx0: u32 = @min(x * 2, sw - 1);
+                const sx1: u32 = @min(sx0 + 1, sw - 1);
+                const p00: usize = (sy0 * sw + sx0) * 4;
+                const p01: usize = (sy0 * sw + sx1) * 4;
+                const p10: usize = (sy1 * sw + sx0) * 4;
+                const p11: usize = (sy1 * sw + sx1) * 4;
+                const o: usize = (y * dw + x) * 4;
+                inline for (0..4) |ch| {
+                    const sum: u32 = @as(u32, src[p00 + ch]) +
+                        @as(u32, src[p01 + ch]) +
+                        @as(u32, src[p10 + ch]) +
+                        @as(u32, src[p11 + ch]);
+                    dst[o + ch] = @intCast((sum + 2) / 4);
+                }
+            }
+        }
+    }
+
     /// Re-upload RGBA8 pixels into this texture IN PLACE — no new GPU texture/
     /// view/sampler, so it's cheap to call every frame (animated/streamed
     /// content). The buffer must match width×height×4. raylib `UpdateTexture`.

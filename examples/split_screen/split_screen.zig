@@ -35,7 +35,7 @@ const vec = zm.vec;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // The two atmosphere zones: a blue one on the left of the world, an amber
 // one on the right.  Each camera orbits INSIDE its zone, so by construction
@@ -59,7 +59,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// Keep each half's render texture at half the surface BACKING width ×

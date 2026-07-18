@@ -24,7 +24,7 @@ const Vec2 = zm.Vec2;
 const clamp = zm.clamp;
 const fk = @import("fluid_kernels.zig");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const buildGrid_wgsl = @embedFile("buildGrid_wgsl");
 const clearGrid_wgsl = @embedFile("clearGrid_wgsl");
 const gravityMouse_wgsl = @embedFile("gravityMouse_wgsl");
@@ -371,7 +371,7 @@ fn spawnDamBreak(
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     var pipe: z.Compute(fk) = try z.Compute(fk).initGpu(
         gpa,

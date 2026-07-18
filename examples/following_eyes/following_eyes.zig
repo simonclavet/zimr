@@ -13,7 +13,7 @@ const cos = zm.cos;
 const atan2 = zm.atan2;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const sclera_col: Color = .{ .r = 228, .g = 231, .b = 238, .a = 255 };
 const iris_left_col: Color = .{ .r = 138, .g = 102, .b = 66, .a = 255 }; // brown
@@ -31,7 +31,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// Iris centre for a sclera at `c`: the pointer, clamped to within (sclera - iris) of the centre.

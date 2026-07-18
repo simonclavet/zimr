@@ -45,7 +45,7 @@ const rad_per_deg = zm.rad_per_deg;
 const bufPrint = std.fmt.bufPrint;
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const bunny_obj = @embedFile("bunny.obj");
 
 pub var zimr_app: z.App = .{};
@@ -140,7 +140,7 @@ fn loadBunny(gpa: Allocator) !z.Mesh {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     const mesh: z.Mesh = try z.genMeshSphere(gpa, sphere_radius, 24, 32);
     const sphere_model: z.Model = try z.loadModelFromMesh(f.gl, gpa, mesh);
     const bunny: z.Mesh = try loadBunny(gpa);

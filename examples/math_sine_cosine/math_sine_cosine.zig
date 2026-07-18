@@ -15,7 +15,7 @@ const Color = zm.Color;
 const float = zm.float;
 const tau = zm.tau;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 const wave_points: usize = 64;
 
@@ -30,7 +30,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 fn update(f: *z.Frame, s: *State) void {

@@ -49,7 +49,7 @@ const depth_fs_wgsl = @embedFile("depth_fs.wgsl");
 const lit_vs_wgsl = @embedFile("lit_shadow_vs.wgsl");
 const lit_fs_wgsl = @embedFile("lit_shadow_fs.wgsl");
 const bunny_obj = @embedFile("bunny.obj");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // ---- Uniform block types: taken FROM the shader Io schemas, so the GPU
 //      buffers and the software `shaderMain` calls cannot drift. ----
@@ -518,7 +518,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .sm_ctx = sm_ctx,
         .sw = sw,
         .sw_fb = sw_fb,
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 22),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .corner_fb = z.CpuFramebuffer.init(device, queue, corner_w, corner_h, &corner.image, "smsw_corner"),
     };
 }

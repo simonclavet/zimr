@@ -27,7 +27,7 @@ const zm = @import("zm");
 const float = zm.float;
 const Color = zm.Color;
 const Vec2 = zm.Vec2;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const screen_w: i32 = 800;
 const screen_h: i32 = 450;
@@ -71,7 +71,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 32);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32);
     s.* = .{ .font = font };
 }
 

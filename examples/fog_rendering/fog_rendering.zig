@@ -43,7 +43,7 @@ pub var zimr_app: z.App = .{};
 
 const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
 const fog_fs_wgsl = @embedFile("fog_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const FogVsUbo = @FieldType(fog_vs.Io, "u");
 const FogFsUbo = @FieldType(fog_fs.Io, "u");
@@ -346,7 +346,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.destroyShaderModule(vs_mod);
     z.wgpu.destroyShaderModule(fs_mod);
 
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .pipeline = pipeline,

@@ -15,7 +15,7 @@ const z = @import("zimr");
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const smiley_png = @embedFile("smiley.png");
 
 const panel_size: f32 = 128;
@@ -64,7 +64,7 @@ fn editNone(gpa: Allocator, img: *z.Image) anyerror!void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     const source: z.Image = try z.loadImageFromMemory(gpa, smiley_png);
     defer z.unloadImage(gpa, source);
 

@@ -15,7 +15,7 @@ const Color = zm.Color;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const sample_rate: u32 = 44100;
 const step_ms: usize = 125;
@@ -84,7 +84,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     const loop_snd: z.Sound = try z.sounds.loadFromWave(&audio.sounds, f.audio_device, gpa, loop_wave);
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 28),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28),
         .scratch = std.heap.ArenaAllocator.init(gpa),
         .audio = audio,
         .loop = loop_snd,

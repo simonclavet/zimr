@@ -19,7 +19,7 @@ const float = zm.float;
 const Color = zm.Color;
 const ui = z.ui_real;
 const p3 = z.plot3d;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // File-scope binds (lint: no qualified zm.* in bodies).
 const Vec2 = zm.Vec2;
@@ -161,7 +161,7 @@ fn genTorus(
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 28);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
     s.* = .{
         .font = font,
         .ui_host = z.UiHost.init(gpa, font),

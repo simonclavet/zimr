@@ -19,7 +19,7 @@ const pointVec = zm.pointVec;
 const float = zm.float;
 const co = @import("example_common");
 
-const roboto = @embedFile("roboto_mono_ttf");
+const atkinson = @embedFile("atkinson_mono_ttf");
 
 /// Each primitive: a label for the HUD and a hue so it stays visually distinct.
 const Shape = struct { name: []const u8, hue: f32 };
@@ -78,7 +78,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson, 22);
     s.* = .{
         .font = font,
         .ui_host = z.UiHost.init(gpa, font),

@@ -12,7 +12,7 @@ const float = zm.float;
 const Color = zm.Color;
 const Camera2D = zm.Camera2D;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 
 const State = struct {
@@ -25,7 +25,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// Draw the fixed world scene (world coordinates; the camera transforms it).

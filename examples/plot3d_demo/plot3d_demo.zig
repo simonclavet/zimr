@@ -24,7 +24,7 @@ const float = zm.float;
 const ui = z.ui_real;
 const p3 = z.plot3d;
 const pi = zm.pi;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const screen_w: i32 = 980;
 const screen_h: i32 = 820;
@@ -92,7 +92,7 @@ fn rebuildSurface(s: *State, phase: f32) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 28);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
     s.* = .{
         .font = font,
         .ui_host = z.UiHost.init(gpa, font),

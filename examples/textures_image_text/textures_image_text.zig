@@ -13,7 +13,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
@@ -40,7 +40,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .{ .r = 40, .g = 52, .b = 92, .a = 255 },
     );
 
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 30);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 30);
     // Rasterize the caption onto the CPU image (before it becomes a texture).
     z.imageDrawTextWithFont(&img, font, "[ text baked into", .{ 22, 40 }, 30, 1, c.gold);
     z.imageDrawTextWithFont(&img, font, "  the image ]", .{ 22, 78 }, 30, 1, c.gold);

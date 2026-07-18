@@ -16,7 +16,7 @@ const c = Color;
 const Rect = z.Rectangle;
 
 const patterns_png = @embedFile("patterns.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const patterns = [_]Rect{
     .{ .x = 3, .y = 3, .width = 66, .height = 66 },
@@ -55,7 +55,7 @@ fn uploadPng(gpa: Allocator, gl: *z.WgpuGl, png: []const u8) !z.WgpuTexture {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 18);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 18);
     s.* = .{
         .tex = try uploadPng(gpa, f.gl, patterns_png),
         .font = ui_font,

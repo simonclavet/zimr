@@ -1660,6 +1660,7 @@ const ZimrWgpu = struct {
         bytes_per_row: f64,
         data_ptr: f64,
         data_len: f64,
+        mip_level: f64,
     ) void {
         const tex: Value = tblGet(texture);
         if (tex.isNull()) {
@@ -1667,6 +1668,9 @@ const ZimrWgpu = struct {
         }
         const dst: Value = global().get("Object").new(.{});
         dst.set("texture", tex);
+        if (mip_level != 0) {
+            dst.set("mipLevel", Value{ .h = js_num(mip_level) });
+        }
         const layout: Value = global().get("Object").new(.{});
         layout.set("bytesPerRow", Value{ .h = js_num(bytes_per_row) });
         const extent: Value = global().get("Object").new(.{});
@@ -2375,9 +2379,24 @@ const ZimrInput = struct {
     }
     fn onWheel(ev: Handle) void {
         const e: Value = .{ .h = ev };
+        // Normalize to raylib's contract: ~1.0 per wheel notch. The browser
+        // reports deltas in whatever unit `deltaMode` says -- pixels (~100 per
+        // notch on Chrome), lines (~3 per notch), or pages (1 per notch) -- and
+        // forwarding those raw made one notch read as ~100. Every consumer here
+        // is written for per-notch units (ui.zig scrolls `5 * font_size` PER
+        // UNIT, plot_ui's zoom_rate is "fraction per wheel notch"), so raw px
+        // sent scroll and camera zoom straight to their limits in one notch.
+        // Trackpads keep their fine-grained feel: small pixel deltas stay
+        // small fractions of a notch.
+        const delta_mode: u32 = @trunc(js_to_num(e.get("deltaMode").h));
+        const per_notch: f64 = switch (delta_mode) {
+            1 => 3.0, // DOM_DELTA_LINE: ~3 lines per notch
+            2 => 1.0, // DOM_DELTA_PAGE: already one notch
+            else => 100.0, // DOM_DELTA_PIXEL: ~100 px per notch
+        };
         callIfPresent("input_push_mouse_wheel", .{
-            numArg(js_to_num(e.get("deltaX").h)),
-            numArg(-js_to_num(e.get("deltaY").h)),
+            numArg(js_to_num(e.get("deltaX").h) / per_notch),
+            numArg(-js_to_num(e.get("deltaY").h) / per_notch),
         });
         _ = e.call("preventDefault", .{});
     }

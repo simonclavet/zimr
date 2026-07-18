@@ -1,5 +1,5 @@
 //! text_layout — text rendering + measurement showcase on the wgpu
-//! backend. A baked TTF atlas (Roboto Mono) drives: a per-letter rainbow
+//! backend. A baked TTF atlas (Atkinson Mono) drives: a per-letter rainbow
 //! heading (each glyph advanced by its measured width), a word-wrapped
 //! paragraph (wrap point chosen with `measureText` per trial line), the same
 //! sample drawn at several sizes from the one atlas, and a `measureText` demo
@@ -18,7 +18,7 @@ const co = @import("example_common");
 const c = z.colors;
 const int = zm.int;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const paragraph =
     "The quick brown fox jumps over the lazy dog. " ++
@@ -42,7 +42,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 32),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32),
         .scratch = std.heap.ArenaAllocator.init(gpa),
     };
 }

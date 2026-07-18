@@ -41,7 +41,7 @@ pub var zimr_app: z.App = .{};
 const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
 const depth_write_fs_wgsl = @embedFile("depth_write_fs.wgsl");
 const fog_fs_wgsl = @embedFile("fog_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const VsUbo = @FieldType(mat_vs.Io, "u");
 const LieUbo = @FieldType(lie_fs.Io, "u");
@@ -300,7 +300,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         };
     }
 
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .lie_pipeline = try makePipeline(gpa, device, lie_pl, vs_mod, lie_mod, "dw_lie"),

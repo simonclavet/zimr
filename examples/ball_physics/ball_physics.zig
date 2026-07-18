@@ -26,7 +26,7 @@ const zm = @import("zm");
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const float = zm.float;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 
 const screen_w: i32 = 800;
@@ -83,7 +83,7 @@ fn initState(
     f: *z.Frame,
     s: *State,
 ) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 28);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
     s.* = .{
         .scratch = std.heap.ArenaAllocator.init(gpa),
         .rng = std.Random.DefaultPrng.init(0xBA11_C0DE),

@@ -17,7 +17,7 @@ const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // seven-segment patterns, bit A=0 .. G=6 (matches the raylib byte table)
 const seg_patterns = [10]u8{ 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F };
@@ -48,7 +48,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// One hexagonal seven-segment bar (a 6-vertex strip), horizontal or vertical.

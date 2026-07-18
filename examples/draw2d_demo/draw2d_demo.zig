@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
@@ -34,7 +34,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     );
     const sprite: z.Sprite = try z.Sprite.fromImage(gpa, img);
     z.unloadImage(gpa, img); // Sprite owns its own copy
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     s.* = .{ .sprite = sprite, .font = font };
 }
 

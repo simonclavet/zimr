@@ -27,7 +27,7 @@ const kernel_wgsls: [sm.kernels.len]Pipe.KernelWgsl = blk: {
     }
     break :blk arr;
 };
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Allocator = std.mem.Allocator;
 const Vec2 = zm.Vec2;
@@ -399,7 +399,7 @@ fn checkStages(
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 
     var input: [sm.n_particles]Vec2 = undefined;
     makeInput(&input);

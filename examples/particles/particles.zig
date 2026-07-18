@@ -18,7 +18,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const pi = zm.pi;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const width: u32 = 900;
 const height: u32 = 600;
@@ -51,7 +51,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 28);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
     s.* = .{
         .font = font,
         .ui_host = z.UiHost.init(gpa, font),

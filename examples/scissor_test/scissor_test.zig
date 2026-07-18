@@ -32,7 +32,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
@@ -47,8 +47,8 @@ const State = struct {
 };
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 20);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
     s.* = .{ .ui_host = z.UiHost.init(gpa, ui_font), .font = font, .ui_font = ui_font };
 }
 

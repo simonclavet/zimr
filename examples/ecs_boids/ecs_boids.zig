@@ -18,7 +18,7 @@ const float = zm.float;
 const tau = zm.tau;
 const ecs = z.ecs;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 
 const num_boids: usize = 160;
@@ -62,7 +62,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     var es: ecs.Registry = try .init(.{
         .gpa = gpa,
         .cap = .{ .entities = num_boids + 16, .arches = 4, .chunks = 8, .chunk = 4096 },

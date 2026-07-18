@@ -26,7 +26,7 @@ const co = @import("example_common");
 const vs_io = @import("instancing_vs_io.zig");
 const fs_io = @import("pipeline_uniforms_fs_io.zig");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Build-generated WGSL (Zig shader -> SPIR-V -> spv2wgsl). The fragment stage
 // is shared with pipeline_uniforms (pure colour pass-through), so we reuse its
@@ -147,7 +147,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .shader = shader,
         .vbo = vbo,
         .offset_vbo = offset_vbo,

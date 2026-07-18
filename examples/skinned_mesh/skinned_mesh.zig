@@ -44,7 +44,7 @@ const co = @import("example_common");
 const c = z.colors;
 const skin_data = @import("skinned_mesh_data.zig");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const max_joints: usize = 8;
 
@@ -176,7 +176,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 22),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .model = try z.loadModelFromMesh(f.gl, gpa, mesh),
         .base_positions = base,
         .skinned = skinned,

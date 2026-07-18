@@ -17,7 +17,7 @@ const atan2 = zm.atan2;
 const radFromDeg = zm.radFromDeg;
 const degFromRad = zm.degFromRad;
 const bufPrint = std.fmt.bufPrint;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const n_slices: usize = 7;
 const base_values = [n_slices]f32{ 300, 100, 450, 350, 600, 380, 750 };
@@ -33,7 +33,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 fn update(f: *z.Frame, s: *State) void {

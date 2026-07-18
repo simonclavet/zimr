@@ -20,7 +20,7 @@ const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const zm = @import("zm");
 const Color = zm.Color;
 const clamp = zm.clamp;
@@ -68,7 +68,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 32);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32);
     s.* = .{ .font = font };
 }
 

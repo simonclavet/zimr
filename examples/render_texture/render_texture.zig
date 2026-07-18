@@ -11,7 +11,7 @@ const radFromDeg = zm.radFromDeg;
 const Color = zm.Color;
 const float = zm.float;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 const rt_size: f32 = 256;
 const cols: usize = 3;
@@ -29,7 +29,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// Draw the animated scene into the render texture (rt_size-pixel coordinates).

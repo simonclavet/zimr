@@ -12,7 +12,7 @@ const co = @import("example_common");
 
 const Color = zm.Color;
 const bufPrint = std.fmt.bufPrint;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const mode_count: usize = 3;
 const mode_names = [mode_count][]const u8{ "filled rounded", "rounded outline", "plain rect" };
@@ -29,7 +29,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 fn update(f: *z.Frame, s: *State) void {

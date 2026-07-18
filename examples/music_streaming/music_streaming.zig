@@ -16,7 +16,7 @@ const clamp = zm.clamp;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const sample_ogg = @embedFile("sample_ogg");
 
 const State = struct {
@@ -40,7 +40,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.music.setLooping(&audio.music, m, true);
     z.music.setVolume(&audio.music, m, 0.5);
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 28),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28),
         .scratch = std.heap.ArenaAllocator.init(gpa),
         .audio = audio,
         .track = m,

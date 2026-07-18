@@ -12,7 +12,7 @@ const zm = @import("zm");
 const Color = zm.Color;
 const tg = @import("tile_gather.zig");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const clear_wgsl = @embedFile("tileClearGrid_wgsl");
 const build_wgsl = @embedFile("tileBuildGrid_wgsl");
 const gather_wgsl = @embedFile("gatherTiled_wgsl");
@@ -110,7 +110,7 @@ fn probeDbg(dbg: []const u32) Probe {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     var pos: [n_part][2]f32 = undefined;
     genPositions(&pos);

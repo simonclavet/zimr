@@ -16,7 +16,7 @@ const float = zm.float;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const history_len: usize = 12;
 
@@ -38,7 +38,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 32),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32),
         .scratch = std.heap.ArenaAllocator.init(gpa),
     };
 }

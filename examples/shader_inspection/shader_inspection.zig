@@ -17,7 +17,7 @@ const zm = @import("zm");
 const co = @import("example_common");
 
 const bufPrint = std.fmt.bufPrint;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // A representative custom-pipeline shader: bindings across three groups and one
 // of every kind the reflector understands. (Entry points are stubs — only the
@@ -60,7 +60,7 @@ fn kindColor(kind: z.material.WgslBinding.Kind) zm.Color {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const bindings: []z.material.WgslBinding = try z.material.reflectWgslBindings(gpa, demo_wgsl);
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 22),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .bindings = bindings,
     };
 }

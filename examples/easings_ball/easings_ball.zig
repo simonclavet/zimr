@@ -33,7 +33,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const clamp = zm.clamp;
 const float = zm.float;
 
@@ -69,7 +69,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 32);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32);
     s.* = .{ .font = font, .ui_host = z.UiHost.init(gpa, font) };
 }
 

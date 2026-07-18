@@ -23,7 +23,7 @@ const zm = @import("zm");
 const float = zm.float;
 const rotationZ = zm.rotationZ;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const rt_size: i32 = 480;
 const grid_cols: usize = 3;
@@ -93,7 +93,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .rt = z.loadRenderTexture(f.gl, rt_size, rt_size),
         .shader = shader,
         .vbo = vbo,

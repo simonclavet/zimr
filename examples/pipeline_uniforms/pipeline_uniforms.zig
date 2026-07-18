@@ -26,7 +26,7 @@ const scaling = zm.scaling;
 const rotationZ = zm.rotationZ;
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Build-generated WGSL artifacts + their typed schemas. The app never writes
 // WGSL — these are machine output of the Zig shader pipeline.
@@ -89,7 +89,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .shader = shader,
         .vbo = vbo,
     };

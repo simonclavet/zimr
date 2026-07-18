@@ -44,7 +44,7 @@ const Color = zm.Color;
 
 const decal = z.decal_shaders;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // The CPU half renders a constant pixel budget shaped to the live canvas
 // aspect, so rotating the phone never stretches and never changes the per-frame
@@ -272,7 +272,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         sw.colorBufferBytes(),
         "decal_sw",
     );
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
 
     s.* = .{
         .gpa = gpa,

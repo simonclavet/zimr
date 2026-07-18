@@ -17,7 +17,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Build-time-transpiled WGSL of the Zig shaders (wired via the example's
 // `.shaders` list in build.zig). The app embeds the artifact but never authors
@@ -76,7 +76,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .shader = shader,
         .vbo = vbo,
     };

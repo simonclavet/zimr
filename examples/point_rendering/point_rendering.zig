@@ -49,7 +49,7 @@ pub var zimr_app: z.App = .{};
 
 const points3d_vs_wgsl = @embedFile("points3d_vs.wgsl");
 const cube3d_fs_wgsl = @embedFile("cube3d_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const VsUbo = @FieldType(pts_vs.Io, "u");
 
@@ -220,7 +220,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .scratch = scratch,
         .rng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15),
         .rt = .{},
-        .ui_host = z.UiHost.init(gpa, try z.loadFont(f, gpa, roboto_mono_ttf, 22)),
+        .ui_host = z.UiHost.init(gpa, try z.loadFont(f, gpa, atkinson_mono_ttf, 22)),
     };
     regenPoints(s, f);
 

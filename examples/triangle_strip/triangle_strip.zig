@@ -18,7 +18,7 @@ const distance = zm.distance;
 const float = zm.float;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const max_seg = 60; // points[2*max_seg + 2] = points[122], matching the raylib sample
 
@@ -38,7 +38,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 fn update(f: *z.Frame, s: *State) void {

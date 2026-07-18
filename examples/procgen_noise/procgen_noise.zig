@@ -17,7 +17,7 @@ const Color = zm.Color;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const noise_w: i32 = 256;
 const noise_h: i32 = 256;
@@ -50,7 +50,7 @@ fn upload(f: *z.Frame, img: z.Image, gpa: Allocator) z.WgpuTexture {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     var rng_state: z.rng.Seeded = z.rng.Seeded.init(0xCAFE_F00D);
 
     const white_img: z.Image = try z.genImageWhiteNoise(gpa, rng_state.rng(), noise_w, noise_h, 0.5);

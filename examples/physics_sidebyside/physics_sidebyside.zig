@@ -75,7 +75,7 @@ const State = struct {
     boxes3d: [box_count]p3.BodyHandle = undefined,
 };
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// A little horizontal scatter per box so the column topples into a natural pile.
 fn dropX(i: usize) f32 {
@@ -163,7 +163,7 @@ fn corner2d(
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .font = font,

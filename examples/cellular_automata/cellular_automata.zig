@@ -14,7 +14,7 @@ const distance = zm.distance;
 const float = zm.float;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const bufPrint = std.fmt.bufPrint;
 const sliceAsBytes = std.mem.sliceAsBytes;
 
@@ -66,7 +66,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         "cellular_automata_fb",
     );
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .pixels = pixels,
         .fb = fb,
         .gpa = gpa,

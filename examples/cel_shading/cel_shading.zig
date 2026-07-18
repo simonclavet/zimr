@@ -48,7 +48,7 @@ const cel_fs_wgsl = @embedFile("cel_fs.wgsl");
 const outline_hull_vs_wgsl = @embedFile("outline_hull_vs.wgsl");
 const depth_fs_wgsl = @embedFile("depth_fs.wgsl");
 const bunny_obj = @embedFile("bunny.obj");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const ToonVsUbo = @FieldType(toon_vs.Io, "u");
 const ToonFsUbo = @FieldType(toon_fs.Io, "u");
@@ -323,7 +323,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.destroyShaderModule(hull_vs_mod);
     z.wgpu.destroyShaderModule(ink_fs_mod);
 
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .toon_pipeline = toon_pipeline,

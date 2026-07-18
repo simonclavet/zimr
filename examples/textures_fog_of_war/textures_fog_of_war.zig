@@ -18,7 +18,7 @@ const tiles_y: usize = 15;
 const tile_size: f32 = 32;
 const player_size: f32 = 16;
 const visibility: i32 = 2;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const State = struct {
     tile_ids: []u8,
@@ -77,7 +77,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .fog_pixels = fog_pixels,
         .fog_tex = fog_tex,
         .prng = prng,
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 20),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
     };
 }
 

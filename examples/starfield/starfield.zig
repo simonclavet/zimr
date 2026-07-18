@@ -12,7 +12,7 @@ const zm = @import("zm");
 const Color = zm.Color;
 const clamp = zm.clamp;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 
 const num_stars: usize = 700;
@@ -52,7 +52,7 @@ fn respawn(
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     s.* = .{ .font = font, .rng = std.Random.DefaultPrng.init(0x57a4f00d) };
     const rand: std.Random = s.rng.random();
     const hw: f32 = @max(1.0, f.window.widthf() * 0.5);

@@ -39,7 +39,7 @@ pub var zimr_app: z.App = .{};
 
 const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
 const terrain_fs_wgsl = @embedFile("terrain_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const VsUbo = @FieldType(mat_vs.Io, "u");
 const FsUbo = @FieldType(mat_fs.Io, "u");
@@ -246,7 +246,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const pipeline: z.wgpu.RenderPipelineHandle =
         z.wgpu.createRenderPipeline(device, pl, vs_mod, fs_mod, pipe_blob, "hm_pipe");
 
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .pipeline = pipeline,

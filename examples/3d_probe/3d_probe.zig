@@ -17,7 +17,7 @@ const pointVec = zm.pointVec;
 const vec = zm.vec;
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const Color = zm.Color;
 
 const State = struct {
@@ -31,7 +31,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .cam = .{
             .position = .{ 7.0, 5.5, 7.0, 0 },
             .target = .{ 0, 0.7, 0, 0 },

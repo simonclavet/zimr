@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const tex_dim: u32 = 512;
 
@@ -133,7 +133,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.destroyBindGroupLayout(render_bgl);
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .st = st,
         .sampler = sampler,
         .render_pipe = render_pipe,

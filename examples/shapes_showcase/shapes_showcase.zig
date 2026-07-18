@@ -12,7 +12,7 @@ const float = zm.float;
 const co = @import("example_common");
 
 const Vec2 = zm.Vec2;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const cols: usize = 4;
 const rows: usize = 3;
 
@@ -25,7 +25,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// Centre of grid cell `i` (row-major), below the top caption strip.

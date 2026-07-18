@@ -16,7 +16,7 @@ const float = zm.float;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const smiley_png = @embedFile("smiley.png");
 
 const State = struct {
@@ -33,7 +33,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     // Decode → upload → free the CPU pixels (RGBA8, w*h*4); the texture is GPU-resident.
     const img: z.Image = try z.loadImageFromMemory(gpa, smiley_png);
     const tex: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);

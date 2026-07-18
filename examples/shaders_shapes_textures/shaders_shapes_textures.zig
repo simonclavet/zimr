@@ -48,7 +48,7 @@ const Allocator = std.mem.Allocator;
 const filter_wgsl = @embedFile("shapes_filter_fs.wgsl");
 
 const fudesumi_png = @embedFile("fudesumi.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const State = struct {
     gpa: Allocator,
@@ -73,7 +73,7 @@ const State = struct {
 };
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 18);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 18);
 
     const image: z.Image = try z.loadImageFromMemory(gpa, fudesumi_png);
     defer z.unloadImage(gpa, image);

@@ -32,7 +32,7 @@ const Vec = zm.Vec;
 const float = zm.float;
 const clamp = zm.clamp;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // The scene is a field of glowing orbs drawn straight into rt_scene with the
 // immediate 2D path (drawCircleGradient — a bright core fading to black, which
@@ -177,7 +177,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .rt_scene = rt_scene,
         .rt_a = rt_a,
         .rt_b = rt_b,

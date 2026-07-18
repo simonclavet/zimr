@@ -16,7 +16,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const float = zm.float;
 const pow = zm.pow;
 
@@ -71,7 +71,7 @@ fn initState(
     f: *z.Frame,
     s: *State,
 ) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 32);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32);
     s.* = .{ .scratch = std.heap.ArenaAllocator.init(gpa), .font = font, .ui_host = z.UiHost.init(gpa, font) };
     seedGlider(&s.cur, 5, 5);
 }

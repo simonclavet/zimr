@@ -22,7 +22,7 @@ const zm = @import("zm");
 const scaling = zm.scaling;
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Reused, build-generated from the pipeline_uniforms Zig shaders.
 const vs_wgsl = @embedFile("pipeline_uniforms_vs.wgsl");
@@ -119,7 +119,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .shader = shader,
         .pos_vbo = pos_vbo,
         .col_a_vbo = col_a_vbo,

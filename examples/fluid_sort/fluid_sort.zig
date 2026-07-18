@@ -28,7 +28,7 @@ const length = zm.length;
 const splat2 = zm.splat2;
 const fk = @import("sort_kernels.zig");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// The per-kernel WGSL table, built straight from the kernel manifest
 /// (`fk.kernels`) — one `@embedFile` per entry, no hand-kept list to drift out
@@ -249,7 +249,7 @@ fn spawnDamBreak(pipe: *z.Compute(fk), scratch: []Vec2) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     var pipe: z.Compute(fk) = try z.Compute(fk).initGpu(
         gpa,

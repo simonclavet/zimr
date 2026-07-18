@@ -17,7 +17,7 @@ const vec = zm.vec;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const State = struct {
     tex: z.WgpuTexture,
@@ -34,7 +34,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const img: z.Image = try z.genImageChecked(gpa, 64, 64, 8, 8, c.sky_400, c.slate_800);
     const tex: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);
     z.unloadImage(gpa, img);
-    s.* = .{ .tex = tex, .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .tex = tex, .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 fn update(f: *z.Frame, s: *State) void {

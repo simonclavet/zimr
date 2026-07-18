@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
@@ -46,7 +46,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // nearest_filter = true: point sampling keeps the low-res target CRISP when
     // scaled up (the whole point of pixel-perfect).
     const rt: z.RenderTexture = z.loadRenderTextureEx(f.gl, rt_w, rt_h, true);
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 20);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
     s.* = .{ .rt = rt, .font = font };
 }
 

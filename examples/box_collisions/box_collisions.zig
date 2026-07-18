@@ -39,7 +39,7 @@ pub var zimr_app: z.App = .{};
 
 const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
 const fog_fs_wgsl = @embedFile("fog_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const VsUbo = @FieldType(mat_vs.Io, "u");
 const FsUbo = @FieldType(mat_fs.Io, "u");
@@ -372,7 +372,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .meshes = .{ ground, cube, sphere }, // 3 unique; obj mesh fields alias these
 
         .rt = .{},
-        .ui_host = z.UiHost.init(gpa, try z.loadFont(f, gpa, roboto_mono_ttf, 22)),
+        .ui_host = z.UiHost.init(gpa, try z.loadFont(f, gpa, atkinson_mono_ttf, 22)),
     };
 }
 

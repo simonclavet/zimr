@@ -12,7 +12,7 @@ const radFromDeg = zm.radFromDeg;
 const c = z.colors;
 
 const logo_png = @embedFile("raylib_logo.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const num_textures: u32 = 3;
 const angles_deg = [num_textures]f32{ 45.0, 90.0, -90.0 };
 
@@ -50,7 +50,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
     s.* = .{
         .textures = textures,
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 20),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
     };
 }
 

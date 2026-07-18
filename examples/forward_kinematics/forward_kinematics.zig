@@ -34,7 +34,7 @@ const lookAtRh = zm.lookAtRh;
 const perspectiveFovRh = zm.perspectiveFovRh;
 const vec = zm.vec;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const joint_count: usize = 8;
 const seg_len: f32 = 0.55;
@@ -208,7 +208,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.destroyBindGroupLayout(bgl);
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .pipeline = pipeline,
         .vbo = vbo,
         .instances = instances,

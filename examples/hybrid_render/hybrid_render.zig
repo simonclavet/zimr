@@ -49,7 +49,7 @@ const shading_vs_wgsl = @embedFile("deferred_shading_vs.wgsl");
 const hybrid_raymarch_fs_wgsl = @embedFile("hybrid_raymarch_fs.wgsl");
 const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
 const fog_fs_wgsl = @embedFile("fog_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const MarchUbo = @FieldType(march_fs.Io, "u");
 const VsUbo = @FieldType(mat_vs.Io, "u");
@@ -369,7 +369,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.destroyShaderModule(cube_vs_mod);
     z.wgpu.destroyShaderModule(cube_fs_mod);
 
-    const ui_font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .march_pipeline = march_pipeline,

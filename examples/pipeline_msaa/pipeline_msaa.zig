@@ -24,7 +24,7 @@ const co = @import("example_common");
 const zm = @import("zm");
 const rotationZ = zm.rotationZ;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const rt_size: i32 = 220; // small targets so magnified jaggies are visible
 const samples: u4 = 4;
@@ -108,7 +108,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const msaa_view: z.wgpu.TextureViewHandle = z.wgpu.createTextureView(msaa_tex);
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 22),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .aliased_rt = aliased_rt,
         .resolve_rt = resolve_rt,
         .msaa_view = msaa_view,

@@ -34,7 +34,7 @@ const trivial_vs_io = @import("trivial_vs_io.zig");
 
 const fs_wgsl = @embedFile("mandelbrot_fs.wgsl");
 const trivial_vs_wgsl = @embedFile("trivial_vs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const width: u32 = 960;
 const height: u32 = 600;
@@ -152,7 +152,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .fs_wgsl_source = fs_wgsl,
         .label = "mandel_sbs_gpu",
     });
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 28);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
     var sw: z.raster.Context = try z.raster.Context.init(gpa, @intCast(sw_w), @intCast(sw_h));
     const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
         f.gpu.device,

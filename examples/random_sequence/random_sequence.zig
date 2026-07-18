@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
@@ -54,7 +54,7 @@ fn fillSequence(rand: std.Random, seq: []i32) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 20);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
     s.* = .{ .font = font, .rng = std.Random.DefaultPrng.init(0x5E9_ABCD) };
     fillSequence(s.rng.random(), s.sequence[0..]);
 }

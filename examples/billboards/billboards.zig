@@ -22,7 +22,7 @@ const vec = zm.vec;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const State = struct {
     sprite: z.WgpuTexture,
@@ -62,7 +62,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const img: z.Image = try makeSprite(gpa);
     const tex: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);
     z.unloadImage(gpa, img);
-    s.* = .{ .sprite = tex, .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .sprite = tex, .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 fn cross3arr(a: [3]f32, b: [3]f32) [3]f32 {

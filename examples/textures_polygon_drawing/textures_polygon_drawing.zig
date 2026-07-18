@@ -14,7 +14,7 @@ const pointVec = zm.pointVec;
 const vec = zm.vec;
 
 const cat_png = @embedFile("cat.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // UV coords of the polygon rim (last == first to close it).
 const texcoords = [_][2]f32{
@@ -43,7 +43,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     defer z.unloadImage(gpa, img);
     s.* = .{
         .tex = z.loadTextureFromImage(f.gl, img),
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 20),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
     };
 }
 

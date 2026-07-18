@@ -16,7 +16,7 @@ const Vec2 = zm.Vec2;
 
 const parrots_png = @embedFile("parrots.png");
 const bunny_png = @embedFile("raybunny.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const glass: f32 = 256; // magnifier size
 
 const State = struct {
@@ -76,7 +76,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .bunny = try uploadPng(gpa, f.gl, bunny_png),
         .mask = try buildCircleMask(gpa, f.gl),
         .rt = z.loadRenderTexture(f.gl, @intFromFloat(glass), @intFromFloat(glass)),
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 20),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
     };
 }
 

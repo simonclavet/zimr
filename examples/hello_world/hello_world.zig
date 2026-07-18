@@ -20,14 +20,14 @@ const State = struct {
 /// User-owned framework integration point.  See `examples/basic.zig`
 /// for the canonical comment block; this declaration is the
 /// AppBridge pattern's required convention.
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 32);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32);
     s.* = .{ .font = font };
 }
 

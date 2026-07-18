@@ -29,7 +29,7 @@ const mulMat = zm.mulMat;
 const scaling = zm.scaling;
 const rotationZ = zm.rotationZ;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Scene pass: reuse the pipeline_uniforms shaders (VS-stage mat4 transform).
 const scene_vs_wgsl = @embedFile("pipeline_uniforms_vs.wgsl");
@@ -118,7 +118,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .rt = rt,
         .vbo = vbo,
         .scene = scene,

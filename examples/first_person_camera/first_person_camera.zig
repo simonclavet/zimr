@@ -24,7 +24,7 @@ const vec = zm.vec;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const heightmap_size: i32 = 32;
 
@@ -62,7 +62,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const terrain_mesh: z.Mesh = try z.genMeshHeightmap(gpa, heightmap, vec(32, 4, 32));
     const terrain: z.Model = try z.loadModelFromMesh(f.gl, gpa, terrain_mesh);
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 22),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .terrain = terrain,
     };
 }

@@ -16,7 +16,7 @@ const float = zm.float;
 const pi = zm.pi;
 const rotate2 = zm.rotate2;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 
 const trail_len: usize = 150;
@@ -35,7 +35,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     s.* = .{ .font = font };
 }
 

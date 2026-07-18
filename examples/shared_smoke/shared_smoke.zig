@@ -14,7 +14,7 @@ const shared_rotate = @import("shared_rotate.zig");
 const zm = @import("zm");
 const Color = zm.Color;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const diag_wgsl = @embedFile("shared_rotate_wgsl");
 
 const count: u32 = 1024; // 4 full workgroups of 256 (must be a multiple of wg_size)
@@ -60,7 +60,7 @@ fn countMismatch(out: []const f32, comptime expect: fn (u32) f32) u32 {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     // CPU-backend oracle.
     var cpu: z.Compute(shared_rotate) = z.Compute(shared_rotate).initCpu();

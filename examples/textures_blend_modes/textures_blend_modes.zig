@@ -12,7 +12,7 @@ const c = Color;
 
 const bg_png = @embedFile("bg.png");
 const fg_png = @embedFile("fg.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const modes = [_]z.BlendMode{ .alpha, .additive, .multiply, .premultiplied };
 const mode_names = [_][]const u8{ "ALPHA", "ADDITIVE", "MULTIPLY", "PREMULTIPLIED" };
@@ -41,7 +41,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .bg = try uploadPng(gpa, f.gl, bg_png),
         .fg = try uploadPng(gpa, f.gl, fg_png),
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 20),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
     };
 }
 

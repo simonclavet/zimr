@@ -14,7 +14,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
@@ -84,7 +84,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // texture lazily on first draw and binds it by id for the 9-patch.
     const sprite: z.Sprite = try z.Sprite.fromImage(gpa, img);
     z.unloadImage(gpa, img);
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 20);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
     s.* = .{ .sprite = sprite, .font = font };
 }
 

@@ -23,7 +23,7 @@ const vs_wgsl = @embedFile("shaders_vertex_displacement_vs.wgsl");
 const fs_wgsl = @embedFile("shaders_vertex_displacement_fs.wgsl");
 const vs_io = @import("shaders_vertex_displacement_vs_io.zig");
 const fs_io = @import("shaders_vertex_displacement_fs_io.zig");
-const roboto = @embedFile("roboto_mono_ttf");
+const atkinson = @embedFile("atkinson_mono_ttf");
 
 const grid_n: usize = 96; // cells per side
 const verts_side: usize = grid_n + 1;
@@ -148,7 +148,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto, 22),
+        .font = try z.loadFont(f, gpa, atkinson, 22),
         .cam = z.OrbitCamera.init(pointVec(0, 0, 0), 19.0),
         .shader = shader,
         .vbo = vbo,

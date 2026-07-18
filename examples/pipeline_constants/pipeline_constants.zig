@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// `override`s with defaults; each pipeline supplies its own values. `scl` and
 /// `ox` move/size the shape; `tint_*` recolour it.
@@ -139,7 +139,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .vbo = vbo,
         .pipes = .{ pipe_red, pipe_green, pipe_blue },
     };

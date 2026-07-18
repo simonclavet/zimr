@@ -29,7 +29,7 @@ const vec = zm.vec;
 
 pub var zimr_app: z.App = .{};
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const world: usize = 8; // 8×8×8 voxel field
 const beige: Color = .{ .r = 211, .g = 176, .b = 131, .a = 255 };
@@ -77,7 +77,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .ui_host = z.UiHost.init(gpa, font),

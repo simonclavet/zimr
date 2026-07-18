@@ -33,7 +33,7 @@ const float = zm.float;
 const clamp = zm.clamp;
 const bufPrint = std.fmt.bufPrint;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Pipe = z.Compute(fk);
 
@@ -200,7 +200,7 @@ fn poll(s: *State, m: Machine) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 20);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
 
     s.* = .{
         .gpa = gpa,

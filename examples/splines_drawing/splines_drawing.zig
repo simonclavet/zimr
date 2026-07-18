@@ -13,7 +13,7 @@ const sin = zm.sin;
 const distance = zm.distance;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const bufPrint = std.fmt.bufPrint;
 
 const point_count = 5;
@@ -45,7 +45,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     for (base, 0..) |b, i| {
         pts[i] = .{ b[0] * sx, b[1] * sy };
     }
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24), .points = pts };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24), .points = pts };
 }
 
 fn nearestPoint(pts: []const Vec2, m: Vec2) i32 {

@@ -13,7 +13,7 @@ const Color = zm.Color;
 const Vec2 = zm.Vec2;
 const particle_step = @import("particle_step.zig");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const step_wgsl = @embedFile("particle_step_wgsl");
 
 const particle_count: u32 = 8192;
@@ -57,7 +57,7 @@ fn spawn(
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     // CPU-backend self-check: a particle at rest must fall after one step.
     var cpu: z.Compute(particle_step) = z.Compute(particle_step).initCpu();

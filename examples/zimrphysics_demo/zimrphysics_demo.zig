@@ -37,7 +37,7 @@ const radFromDeg = zm.radFromDeg;
 const c = z.colors;
 const zp = z.zimrphysics;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const demo_palette = [_]Color{
     c.amber_400,
@@ -281,7 +281,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const world: zp.World = try zp.World.init(gpa, 1024);
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     s.* = .{
         .font = font,
         .gpa = gpa,

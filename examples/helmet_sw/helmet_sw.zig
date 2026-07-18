@@ -40,7 +40,7 @@ const vec = zm.vec;
 const pbr = z.pbr_shaders;
 
 const helmet_glb = @embedFile("DamagedHelmet.glb");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const pbr_vs_wgsl = @embedFile("pbr_vs.wgsl");
 const pbr_fs_wgsl = @embedFile("pbr_fs.wgsl");
 
@@ -409,7 +409,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         sw.colorBufferBytes(),
         "helmet_sw",
     );
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .renderer = renderer,

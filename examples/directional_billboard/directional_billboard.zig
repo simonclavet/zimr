@@ -27,7 +27,7 @@ const float = zm.float;
 const clamp = zm.clamp;
 const co = @import("example_common");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 pub var zimr_app: z.App = .{};
 
@@ -51,7 +51,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     const img: z.Image = try makeAtlas(gpa);
     const atlas: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);
     defer z.unloadImage(gpa, img);

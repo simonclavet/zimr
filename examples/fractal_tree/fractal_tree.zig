@@ -9,7 +9,7 @@ const zm = @import("zm");
 const Color = zm.Color;
 const float = zm.float;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 const max_depth: usize = 9;
 
@@ -22,7 +22,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// Draw one branch from (x,y) at `angle` (0 = straight up), then recurse into two children.

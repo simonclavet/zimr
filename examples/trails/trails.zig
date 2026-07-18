@@ -11,7 +11,7 @@ const Color = zm.Color;
 const Vec2 = zm.Vec2;
 const float = zm.float;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 const rt_w: f32 = 800;
 const rt_h: f32 = 450;
@@ -29,7 +29,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24) };
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
 /// One emitter's position at time t, tracing a Lissajous figure scaled to the texture.

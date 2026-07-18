@@ -11,7 +11,7 @@ const Color = zm.Color;
 const float = zm.float;
 const double_it = @import("double_it.zig");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 // The compiled WGSL of double_it.zig (built by addComputeImport + spv2wgsl).
 const double_wgsl = @embedFile("double_it_wgsl");
 
@@ -32,7 +32,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     // CPU-backend self-check: run the SAME kernel on the CPU and verify doubling.
     var cpu: z.Compute(double_it) = z.Compute(double_it).initCpu();

@@ -15,7 +15,7 @@ const vs_wgsl = @embedFile("vertex_texture_test_vs.wgsl");
 const fs_wgsl = @embedFile("vertex_texture_test_fs.wgsl");
 const vs_io = @import("vertex_texture_test_vs_io.zig");
 const fs_io = @import("vertex_texture_test_fs_io.zig");
-const roboto = @embedFile("roboto_mono_ttf");
+const atkinson = @embedFile("atkinson_mono_ttf");
 
 const grid: usize = 24;
 const span: f32 = 1.7;
@@ -106,7 +106,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto, 22),
+        .font = try z.loadFont(f, gpa, atkinson, 22),
         .shader = shader,
         .vbo = vbo,
         .warp = warp,

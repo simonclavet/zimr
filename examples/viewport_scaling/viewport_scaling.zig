@@ -26,7 +26,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
 const c = Color;
@@ -76,7 +76,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // nearest: the virtual viewport is scaled by an arbitrary (often fractional)
     // factor, and point sampling keeps the edges honest rather than mushy.
     const rt: z.RenderTexture = z.loadRenderTextureEx(f.gl, virt_w, virt_h, true);
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 20);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
     s.* = .{ .rt = rt, .font = font };
 }
 

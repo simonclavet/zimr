@@ -13,7 +13,7 @@ const Color = zm.Color;
 const float = zm.float;
 const pi = zm.pi;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const c = Color;
 
 const max_particles: usize = 1600;
@@ -46,7 +46,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     const particles: []Particle = try gpa.alloc(Particle, max_particles);
     for (particles) |*p| {
         p.* = .{};

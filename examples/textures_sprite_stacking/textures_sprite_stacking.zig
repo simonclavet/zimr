@@ -17,7 +17,7 @@ const vec = zm.vec;
 const Camera3D = zm.Camera3D;
 
 const booth_png = @embedFile("booth.png");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const stack_count: u32 = 122;
 const slice_width: f32 = 2.0; // world-space width of a slice quad
 
@@ -62,7 +62,7 @@ fn loadStackSheet(gpa: Allocator, gl: *z.WgpuGl, png: []const u8) !z.WgpuTexture
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 18);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 18);
     s.* = .{
         .tex = try loadStackSheet(gpa, f.gl, booth_png),
         .cam = .{ .target = vec(0, 0, 0), .distance = 9.0, .pitch = 1.0, .yaw = -0.6 + std.math.pi },

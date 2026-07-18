@@ -47,7 +47,7 @@ const vec3 = zm.vec3;
 const assert = zm.assert;
 const z = @import("zimr");
 const Color = zm.Color;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // --- Constants -----------------------------------------------------
 //
@@ -208,7 +208,7 @@ fn initState(
     f: *z.Frame,
     s: *State,
 ) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     const n: u32 = num_particles;
     s.* = .{
         .positions = try gpa.alloc(Vec2, n),

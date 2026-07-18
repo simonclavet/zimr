@@ -19,7 +19,7 @@ const clamp = zm.clamp;
 const float = zm.float;
 const int = zm.int;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // lint:off module-var: the app-bridge instance, the one sanctioned wasm entry-point handle
 
@@ -48,7 +48,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         8,
     );
     // Bake + upload a font (N5f).
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 32);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32);
     s.* = .{ .t = 0, .checker = checker, .font = font };
 }
 

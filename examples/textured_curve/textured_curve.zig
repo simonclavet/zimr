@@ -22,7 +22,7 @@ const clamp = zm.clamp;
 const length = zm.length;
 const distance = zm.distance;
 const bufPrint = std.fmt.bufPrint;
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Procedural road texture. U spans the road width; V tiles down its length.
 const tex_w: i32 = 64;
@@ -126,7 +126,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 20),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
         .road = road,
         // raylib's fixed points, expressed as fractions of an 800x450 frame so
         // the layout adapts to a phone canvas.

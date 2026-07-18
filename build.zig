@@ -4835,11 +4835,17 @@ fn diskSpace() ?DiskSpace {
 /// disks and its remedy — `rm -rf .zig-cache` — costs a ~16-minute cold rebuild.
 /// We were paying full rebuilds to avoid a problem we did not have.
 ///
-/// So: measure the hazard. Fail only when the filesystem is ≥ 90% full, which is
+/// So: measure the hazard. Fail only when the filesystem is ≥ 97% full, which is
 /// a single O(1) syscall — cheap enough to run on EVERY build, so the periodic
 /// walk (and its counter file) is gone too.
+///
+/// 97 (not 90): keeping the dev `serve` (Debug) and the `dist` (ReleaseSmall)
+/// artifacts warm side-by-side ~doubles the example cache, which alone pushed a
+/// healthy disk past a 90% gate and forced a `rm -rf .zig-cache` cold rebuild —
+/// the very cost this guard exists to avoid. 97% still leaves room before an
+/// actual mid-link "No space left on device".
 fn checkDiskSpace(b: *std.Build) void {
-    const fail_at_pct: f64 = 90.0;
+    const fail_at_pct: f64 = 97.0;
 
     const space: DiskSpace = diskSpace() orelse return; // cannot measure => do not block
     if (space.used_pct < fail_at_pct) {

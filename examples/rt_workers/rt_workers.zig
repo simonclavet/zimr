@@ -35,7 +35,7 @@ const cos = zm.cos;
 const sin = zm.sin;
 const bufPrint = std.fmt.bufPrint;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// Small on purpose: a phone, a CPU, and a path tracer. The image is stretched to the canvas.
 const rt_w: u32 = 320;
@@ -276,7 +276,7 @@ fn startRender(s: *State, use_workers: bool, spp: u32) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 20);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
     const pixels: []u8 = try gpa.alloc(u8, rt_w * rt_h * 4);
     @memset(pixels, 0);
 

@@ -42,7 +42,7 @@ const tiling_fs_wgsl = @embedFile("effect_tiling_fs.wgsl");
 const sieve_fs_wgsl = @embedFile("effect_sieve_fs.wgsl");
 const ascii_fs_wgsl = @embedFile("effect_ascii_fs.wgsl");
 const cubes_fs_wgsl = @embedFile("effect_cubes_fs.wgsl");
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const GradeUbo = @FieldType(fx.grade_fs.Io, "u");
 const WaveUbo = @FieldType(fx.wave_fs.Io, "u");
@@ -214,7 +214,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         };
     }
 
-    const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     s.* = .{
         .gpa = gpa,
         .fx = fx_table,

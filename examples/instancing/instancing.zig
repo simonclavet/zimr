@@ -25,7 +25,7 @@ const vec = zm.vec;
 const co = @import("example_common");
 const c = z.colors;
 
-const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const grid: usize = 10;
 const instance_count: usize = grid * grid * grid;
@@ -75,7 +75,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
 
     s.* = .{
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 24),
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
         .gpa = gpa,
         .cube = try z.genMeshCube(gpa, 0.4, 0.4, 0.4),
         .base_positions = positions,
