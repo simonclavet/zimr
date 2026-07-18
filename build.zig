@@ -580,6 +580,7 @@ pub fn build(b: *std.Build) void {
     const cheatsheet_exe: *Compile = tools.cheatsheet;
     const buildaux_exe: *Compile = tools.buildaux;
     const mesh_bake_exe: *Compile = tools.mesh_bake;
+    const highlight_exe: *Compile = tools.highlight;
 
     // native_plot_png: a small, native, pure-Zig program that renders a
     // publication-quality plot straight to `plot.png` via `zimr.Canvas`
@@ -956,9 +957,9 @@ pub fn build(b: *std.Build) void {
         // module filter + name/function search, cards link to the streamed
         // per-example page at web/<name>/). Served at the root of zig-out/web.
         .{ "src/web/index.html", "index.html" },
-        // readme.html is the project landing page (README content in
-        // dark-brutalist style); README.md just links here.
-        .{ "src/web/readme.html", "readme.html" },
+        // readme.html is NOT here — it's piped through the `highlight` tool
+        // just below (build-time Zig syntax highlighting) rather than copied
+        // verbatim.
         // cheatsheet.html is regenerated at repo root by the pure-Zig
         // `zig build cheatsheet` step (tools/cheatsheet.zig, wired just
         // below). Pulled into the install pipeline so `zig build dist`
@@ -974,6 +975,27 @@ pub fn build(b: *std.Build) void {
         // Smoke needs the same static assets.
         const inst_smoke: *InstallFile = b.addInstallFileWithDir(b.path(pair[0]), smoke_install, pair[1]);
         smoke_install_step.dependOn(&inst_smoke.step);
+    }
+
+    // readme.html: the project landing page (README content in dark-brutalist
+    // style; README.md just links here).  Piped through the `highlight` tool
+    // (tools/highlight.zig) instead of copied verbatim, so every
+    // <pre><code class="language-zig"> block is syntax-highlighted at build
+    // time with std.zig.Tokenizer — the served page stays pure HTML+CSS, no
+    // runtime JS.
+    {
+        const hl: *Run = b.addRunArtifact(highlight_exe);
+        hl.setStdIn(.{ .lazy_path = b.path("src/web/readme.html") });
+        const readme_out: LazyPath = hl.captureStdOut(.{});
+        const readme_inst: *InstallFile = b.addInstallFileWithDir(readme_out, web_install, "readme.html");
+        b.getInstallStep().dependOn(&readme_inst.step);
+        const readme_smoke: *InstallFile = b.addInstallFileWithDir(readme_out, smoke_install, "readme.html");
+        smoke_install_step.dependOn(&readme_smoke.step);
+        // Standalone step so you can regenerate just the highlighted page
+        // (zig build readme -> zig-out/web/readme.html) without triggering the
+        // full install graph (shader pipeline, lint, every example).
+        const readme_step: *Step = b.step("readme", "Generate zig-out/web/readme.html with Zig syntax highlighting");
+        readme_step.dependOn(&readme_inst.step);
     }
 
     // Shared runtime JS: ONE web/zimr.js (the transpiled bridge) that every
@@ -2836,8 +2858,21 @@ pub fn build(b: *std.Build) void {
             "src/test_font_render.zig",
             "src/canvas_render_test.zig",
         };
-        inline for (.{ "src", "examples", "tools", "webtests", "scripts" }) |root| {
-            var dir: std.Io.Dir = cwd.openDir(io, root, .{ .iterate = true }) catch @panic("cannot open scan dir");
+        // Runtime `for` (not `inline for`) so an absent root can `continue`
+        // out of the error switch below — `continue` targeting an inline loop
+        // from inside a runtime switch is a comptime-control-flow error. `root`
+        // is only ever used at runtime here (eql / b.fmt), so nothing needs the
+        // unroll.
+        const scan_roots = [_][]const u8{ "src", "examples", "tools", "webtests", "scripts" };
+        for (scan_roots) |root| {
+            var dir: std.Io.Dir = cwd.openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
+                // A scan root that isn't present in this checkout (e.g.
+                // `scripts/`, whose Python helpers were ported to `tools/`)
+                // simply has nothing to lint — skip it rather than aborting
+                // the whole configure.
+                error.FileNotFound => continue,
+                else => @panic("cannot open scan dir"),
+            };
             defer dir.close(io);
             var walker: std.Io.Dir.Walker = dir.walk(b.allocator) catch @panic("walk init");
             defer walker.deinit();
@@ -3131,6 +3166,7 @@ const Tools = struct {
     dag: *Compile,
     gen_vscode: *Compile,
     gen_files_md: *Compile,
+    highlight: *Compile,
 };
 
 fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module) Tools {
@@ -3283,6 +3319,17 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
             .optimize = .ReleaseSafe,
         }),
     });
+    // highlight: build-time Zig syntax highlighter for readme.html.  stdin ->
+    // stdout filter; wraps <pre><code class="language-zig"> tokens in spans via
+    // std.zig.Tokenizer so the served page needs no runtime JS.  std-only.
+    const highlight_exe: *Compile = b.addExecutable(.{
+        .name = "highlight",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/highlight.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
     return .{
         .spv2wgsl = spv2wgsl_tool_exe,
         .spv2wgsl_check = spv2wgsl_check_exe,
@@ -3296,6 +3343,7 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         .dag = dag_check_exe,
         .gen_vscode = gen_vscode_exe,
         .gen_files_md = gen_files_md_exe,
+        .highlight = highlight_exe,
     };
 }
 

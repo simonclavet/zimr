@@ -25,6 +25,7 @@ pub fn main() !void {
     defer args.deinit();
     _ = args.next(); // exe
     const out_path: []const u8 = args.next() orelse {
+        // lint:off debug-print: host-only CLI repro tool, prints to real stderr
         std.debug.print("usage: ui_screenshot_repro <out.png>\n", .{});
         return error.MissingArg;
     };
@@ -69,5 +70,6 @@ pub fn main() !void {
     }
 
     try z.ui_screenshot.renderToPng(gpa, &ctx, w, h, out_path);
+    // lint:off debug-print: host-only CLI repro tool, prints to real stderr
     std.debug.print("wrote {s}\n", .{out_path});
 }

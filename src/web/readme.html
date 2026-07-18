@@ -6,7 +6,7 @@
         <title>zimr</title>
         <meta
             name="description"
-            content="A zig port of raylib, imgui, implot, and box2d / jolt physics for wasm/webgpu.
+            content="A zig port of raylib, imgui, implot, box2d, jolt for wasm/webgpu.
             Includes transpilers from zig to wgsl (gpu) and javascript (web) so we can live in a pure zig world."
         />
         <style>
@@ -187,6 +187,27 @@
                 font-size: inherit;
             }
 
+            /* Zig syntax highlighting. Spans are emitted at BUILD TIME by
+               tools/highlight.zig (std.zig.Tokenizer) when readme.html is
+               installed — no runtime JS. Colors stay within the earthy
+               palette so code reads as part of the page, not against it. */
+            .tok-kw {
+                color: #e0794a;
+            }
+            .tok-builtin {
+                color: #c9a15f;
+            }
+            .tok-str {
+                color: #9bad6a;
+            }
+            .tok-num {
+                color: #cf8e6d;
+            }
+            .tok-comment {
+                color: #857260;
+                font-style: italic;
+            }
+
             blockquote {
                 border-left: 6px solid var(--accent-color);
                 margin: 30px 0;
@@ -271,6 +292,26 @@
                     font-size: 0.82rem;
                 }
             }
+
+            .demo-embed {
+                margin: 26px 0;
+                border: 4px solid var(--border-color);
+                box-shadow: 8px 8px 0px var(--shadow-color);
+                background-color: var(--bg-block);
+            }
+            .demo-embed iframe {
+                display: block;
+                width: 100%;
+                aspect-ratio: 3 / 2;
+                border: 0;
+            }
+            .demo-embed figcaption {
+                padding: 9px 13px;
+                border-top: 2px solid var(--border-color);
+                color: var(--text-muted);
+                font-size: 0.85rem;
+                line-height: 1.5;
+            }
         </style>
     </head>
     <body>
@@ -330,11 +371,15 @@
                 <a href="https://www.raylib.com/">raylib</a>,
                 <a href="https://github.com/ocornut/imgui">Dear&nbsp;ImGui</a>,
                 <a href="https://github.com/epezent/implot">ImPlot</a> /
-                <a href="https://github.com/brenocq/implot3d">ImPlot3D</a>, and
-                <a href="https://github.com/jrouwe/JoltPhysics">Jolt</a>
+                <a href="https://github.com/brenocq/implot3d">ImPlot3D</a>,
+                <a href="https://github.com/jrouwe/JoltPhysics">Jolt</a>, and
+                <a href="https://github.com/erincatto/box2d">Box2D</a>
                 to <a href="https://ziglang.org/">Zig</a>, compiled to
                 <code>wasm32-wasi</code> and rendered through WebGPU in a
-                browser. There are no third-party libraries. The renderer, the
+                browser. Zig moves fast so it is difficult to get dependencies to 
+                agree on which zig version of zig to use, so I prefer a giant monorepo
+                where everything moves to new zig versions at the same time.
+                There are no third-party libraries. The renderer, the
                 math, the UI, the 2D and 3D plotting, the physics, the glTF
                 loader, the TTF font loader, the shader toolchain, the GPU
                 compute layer, the software rasterizer, the
@@ -343,6 +388,22 @@
                 anywhere in the engine &mdash; not in the host, and not in the
                 worker.
             </p>
+
+            <figure class="demo-embed">
+                <iframe
+                    src="launcher/index.html"
+                    title="zimr launcher &mdash; live demo"
+                    loading="lazy"
+                    allow="autoplay; fullscreen"
+                ></iframe>
+                <figcaption>
+                    Live &mdash; the launcher, running here in your browser. Tap
+                    the pill (&#9666;&nbsp;&#9656;) to switch between the flagship
+                    apps. Its wasm is a separate file, fetched only when this frame
+                    scrolls into view, so the page itself stays small &mdash;
+                    nothing is inlined.
+                </figcaption>
+            </figure>
 
             <p>
                 The only dependency is the Zig compiler. The build shells out
@@ -501,7 +562,7 @@ browser host / bridge         zig  --(zig build-obj, -ofmt=c)--&gt;  C --(c2js)-
                 registration beyond this declaration:
             </p>
 
-            <pre><code>const z = @import("zimr");
+            <pre><code class="language-zig">const z = @import("zimr");
 const zm = @import("zm");
 
 const State = struct { pos: zm.Vec2, vel: zm.Vec2, paused: bool = false };
@@ -592,7 +653,7 @@ fn update(f: *z.Frame, s: *State) void {
                     and tests where no GPU is present.</li>
             </ul>
 
-            <pre><code>// One primitive vocabulary, here on the immediate GPU sink f.gl. The exact
+            <pre><code class="language-zig">// One primitive vocabulary, here on the immediate GPU sink f.gl. The exact
 // same calls run on z.SwGl (CPU), a retained DrawList, or a Canvas (-> PNG).
 z.beginDrawing(f.gl);
 z.clearBackground(f.gl, zm.Color.raywhite);
@@ -610,7 +671,7 @@ z.endDrawing(f.gl);</code></pre>
                 more than one backend:
             </p>
 
-            <pre><code>fn drawScene(sink: anytype, s: *State) void {
+            <pre><code class="language-zig">fn drawScene(sink: anytype, s: *State) void {
     sink.circle(s.pos, 20, .{ .color = zm.Color.maroon });
     sink.text(.{ 10, 10 }, "any backend", .{ .size = 20, .color = zm.Color.gray, .font = &s.font });
 }
@@ -713,7 +774,7 @@ drawScene(&sw, s);</code></pre>
                 file, about 120 commented lines between them):
             </p>
 
-            <pre><code>// src/shaders/fog_fs_io.zig — the schema
+            <pre><code class="language-zig">// src/shaders/fog_fs_io.zig — the schema
 const common = @import("gbuffer_common_io.zig");
 pub const Inputs = common.Interp;          // world pos + normal, SHARED (see below)
 pub const Ubo = struct {                    // plain struct (Zig 1245 bans
@@ -891,7 +952,7 @@ comptime { _ = shader_externs.installSpirvEntry(shaderMain); }</code></pre>
                 verbatim:
             </p>
 
-            <pre><code>// a bind-group layout holding one uniform buffer
+            <pre><code class="language-zig">// a bind-group layout holding one uniform buffer
 const entries = [_]z.shader_introspect.BindGroupLayoutEntry{
     .{ .binding = 0, .visibility = .{ .vertex = true },
        .resource = .{ .uniform_buffer = .{ .min_size = z.shader.wireSizeOf(VsUbo) } } },
@@ -919,7 +980,7 @@ const pipeline = z.wgpu.createRenderPipeline(device, layout, vs_mod, fs_mod,
                 shader's own types and every pass follows the same shape:
             </p>
 
-            <pre><code>var vs_io: fog_vs.Io = undefined;
+            <pre><code class="language-zig">var vs_io: fog_vs.Io = undefined;
 vs_io.u = .{ .mvp = mvp, .model = model, .normal_matrix = spin };
 // Plain-struct Ubo -&gt; std140/wire bytes via the shader_interface serializer
 // (Zig 1245 forbids asBytes on a struct with @Vector fields; wireOf is the
@@ -1026,6 +1087,30 @@ s.ui_host.render(f);                                   // sliders on top</code><
             </p>
 
             <p>
+                <strong><code>launcher</code> &mdash; every demo above, one
+                wasm.</strong> The capstone hosts the whole flagship roster
+                &mdash; the six shaders here plus physics, plots, GPU fluids, and
+                the fractal explorer &mdash; behind a fullscreen switch pill
+                (&#9666; prev, a dot per app, &#9656; next), showing one
+                full-screen at a time. Children are registered with
+                <code>addDeferred</code>, so a child is <em>lazy</em>: it is
+                initialized on the frame it is first switched to, which is why
+                bundling a 6&nbsp;MB PBR helmet next to two dozen others still
+                boots light. Each app is hosted <em>fullscreen</em> rather than in
+                a placement rect on purpose &mdash; <code>pushViewport</code>
+                remaps rendering but not input, so an offset child's own touch UI
+                (physics orbit, showcase tabs) would mis-hit; fullscreen keeps
+                every child's input space identical to running it standalone. The
+                compose contract is uniform: a child draws its scene and its own
+                UI and <em>never</em> calls <code>endDrawing</code> &mdash; the
+                runner owns frame begin/end and the launcher paints the pill on
+                top in the same frame, with <code>App.endDrawing</code> asserting
+                if a child breaks the rule. It is the readable proof of the "kernel
+                wasms compose" idea from the compute section: one wasm exporting a
+                superset of the hosted apps' names.
+            </p>
+
+            <p>
                 <strong>Verify before the device sees it.</strong> Every example
                 runs headless in the smoke harness, which drives real frames
                 through the WebGPU layer without a GPU: it validates
@@ -1056,7 +1141,7 @@ s.ui_host.render(f);                                   // sliders on top</code><
                 arrays. The complete file for a working example:
             </p>
 
-            <pre><code>const k = @import("kompute");
+            <pre><code class="language-zig">const k = @import("kompute");
 
 pub const config = k.Config{ .max = 4096, .workgroup = 64 };
 pub const Buffers = extern struct { data: [config.max]f32 };
@@ -1074,7 +1159,7 @@ comptime { k.installKernel(@This(), "double"); }</code></pre>
 
             <p>The host side, with either backend chosen at init:</p>
 
-            <pre><code>var pipe = try z.Compute(dk).initGpu(gpa, dev, queue, &.{
+            <pre><code class="language-zig">var pipe = try z.Compute(dk).initGpu(gpa, dev, queue, &.{
     .{ .name = "double", .wgsl = double_wgsl },   // WGSL generated by the build
 });
 pipe.params = .{ .count = n };
@@ -1136,7 +1221,7 @@ const pos_buf = pipe.fieldBuffer(.pos).?;</code></pre>
                 <code>worker-png</code> example:
             </p>
 
-            <pre><code>const jobs = @import("zimr").jobs;
+            <pre><code class="language-zig">const jobs = @import("zimr").jobs;
 
 /// `extern`, not a plain struct. These bytes are memcpy'd out of the app's wasm and
 /// into the kernel's — two separate compilations — and Zig's auto layout is free to
@@ -1161,7 +1246,7 @@ pub const registry = jobs.Registry(.{
 
             <p>And the app side is two calls, neither of which blocks:</p>
 
-            <pre><code>// submit: returns immediately, whatever the kernel costs.
+            <pre><code class="language-zig">// submit: returns immediately, whatever the kernel costs.
 s.job = try kernels.registry.submit(gpa, kernels.encodePng, .{ .w = 1024, .h = 1024 }, pixels);
 
 // poll: once a frame, in update(). Null means "not yet"; the app just draws again.
@@ -1212,7 +1297,7 @@ if (try s.job.pollInto(s.result_buf)) |png_bytes| {
                 produces the browser host:
             </p>
 
-            <pre><code>export fn start() void {
+            <pre><code class="language-zig">export fn start() void {
     globalScope().setProperty("onmessage", asJsFunction(&amp;handleMessageFromHost));
 }
 
@@ -1257,7 +1342,7 @@ fn instantiateKernelWasm(kernel_wasm_bytes: JsValue) void {
                 whichever worker finishes first gets there first:
             </p>
 
-            <pre><code>const Group = kernels.registry.Group(kernels.traceTile);
+            <pre><code class="language-zig">const Group = kernels.registry.Group(kernels.traceTile);
 
 // One job per horizontal band of the image.
 var tiles = try Group.submitAll(gpa, headers, scene_bytes);
@@ -1328,7 +1413,7 @@ while (try tiles.next(tile_buf)) |landed| {
                 compute-produced data straight from GPU buffers.
             </p>
 
-            <pre><code>// minimal retained-mesh draw
+            <pre><code class="language-zig">// minimal retained-mesh draw
 s.cube = z.genMeshCube(1, 1, 1);
 s.model = z.loadModelFromMesh(s.cube);
 // ... per frame, inside begin/endMode3D:
@@ -1371,7 +1456,7 @@ z.drawModelWires(f.gl, s.model, .{ 0, 0, 0 }, 1.0, zm.Color.darkgray);</code></p
                 <code>label###id</code> escape for changing captions.
             </p>
 
-            <pre><code>if (u.window("inspector", .{ .initial_size = .{ 360, 520 } })) |w| {
+            <pre><code class="language-zig">if (u.window("inspector", .{ .initial_size = .{ 360, 520 } })) |w| {
     defer w.close();
     if (u.beginTabBar("tabs", .{})) {
         defer u.endTabBar();
@@ -1423,7 +1508,7 @@ z.drawModelWires(f.gl, s.model, .{ 0, 0, 0 }, 1.0, zm.Color.darkgray);</code></p
                 toggles:
             </p>
 
-            <pre><code>const series = [_]z.plot_ui.Series{
+            <pre><code class="language-zig">const series = [_]z.plot_ui.Series{
     .{ .kind = .line,    .ys = &ys, .spec = .{ .thickness = 2 } }, // implicit x = index
     .{ .kind = .scatter, .xs = &xs2, .ys = &ys2 },
     .{ .kind = .bars,    .ys = &ys, .bars = .{ .width = 0.5 } },

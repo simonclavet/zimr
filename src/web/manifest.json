@@ -885,14 +885,6 @@
       "functions": []
     },
     {
-      "name": "mandelbrot_split",
-      "module": "shaders",
-      "stars": 3,
-      "title": "zimr - WebGPU - Mandelbrot (split)",
-      "description": "Mandelbrot (split)",
-      "functions": []
-    },
-    {
       "name": "rt_shader",
       "module": "shaders",
       "stars": 3,
@@ -1959,6 +1951,782 @@
       "stars": 2,
       "title": "zimr - WebGPU - srcrec dstrec",
       "description": "maps one frame's source sub-rect of a sprite sheet onto a scaled destination rectangle",
+      "functions": []
+    },
+    {
+      "name": "scissor_test",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - core - scissor test",
+      "description": "clips a red fill and text to a finger-dragged box using the gpu hardware scissor rectangle",
+      "functions": []
+    },
+    {
+      "name": "random_values",
+      "module": "core",
+      "stars": 1,
+      "title": "zimr - core - generate random values",
+      "description": "generates a fresh ranged pseudo-random integer every two seconds from a state-owned prng",
+      "functions": []
+    },
+    {
+      "name": "random_sequence",
+      "module": "core",
+      "stars": 1,
+      "title": "zimr - core - random sequence",
+      "description": "fisher-yates shuffles a non-repeating integer sequence drawn as a rainbow bar chart, space reshuffles",
+      "functions": []
+    },
+    {
+      "name": "delta_time",
+      "module": "core",
+      "stars": 1,
+      "title": "zimr - core - delta time",
+      "description": "moves a ball at constant real-world speed by scaling motion with frame delta time",
+      "functions": []
+    },
+    {
+      "name": "text_font_loading",
+      "module": "text",
+      "stars": 1,
+      "title": "zimr - text - font loading",
+      "description": "loads a ttf font and draws a sample string at several sizes off one baked atlas",
+      "functions": []
+    },
+    {
+      "name": "undo_redo",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - core - undo / redo",
+      "description": "snapshot-based undo and redo over an edited string driven by buttons or keyboard",
+      "functions": []
+    },
+    {
+      "name": "smooth_pixelperfect",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - core - smooth pixel-perfect",
+      "description": "renders pixel-art at low-res into a render texture and scales up with smooth sub-pixel scrolling",
+      "functions": []
+    },
+    {
+      "name": "viewport_scaling",
+      "module": "core",
+      "stars": 2,
+      "title": "zimr - core - viewport scaling (letterbox)",
+      "description": "renders at a fixed virtual resolution then letterboxes it into any window preserving aspect ratio",
+      "functions": []
+    },
+    {
+      "name": "text_codepoints_loading",
+      "module": "text",
+      "stars": 2,
+      "title": "zimr - text - codepoints loading",
+      "description": "bakes an explicit unicode codepoint set into a font atlas, ascii-only versus extended side by side",
+      "functions": []
+    },
+    {
+      "name": "text_font_filters",
+      "module": "text",
+      "stars": 2,
+      "title": "zimr - text - font filters",
+      "description": "compares point and bilinear sampling on a font atlas baked small then drawn large",
+      "functions": []
+    },
+    {
+      "name": "text_inline_styling",
+      "module": "text",
+      "stars": 2,
+      "title": "zimr - text - inline styling",
+      "description": "parses inline color tags inside a string to change foreground and background per styled run",
+      "functions": []
+    },
+    {
+      "name": "text_unicode_ranges",
+      "module": "text",
+      "stars": 2,
+      "title": "zimr - text - unicode ranges",
+      "description": "toggles unicode ranges to re-bake the font atlas at runtime and watch the glyph count grow",
+      "functions": []
+    },
+    {
+      "name": "text_strings_management",
+      "module": "text",
+      "stars": 2,
+      "title": "zimr - text - strings management",
+      "description": "drag word chips to glue them and tap to shatter into characters, a live string split/join playground",
+      "functions": []
+    },
+    {
+      "name": "shapes_procedural",
+      "module": "shapes",
+      "stars": 2,
+      "title": "zimr - shapes - procedural (trail + tree)",
+      "description": "two procedural drawing modes: a fading pointer trail and an iteratively grown branching tree with live sliders",
+      "functions": []
+    },
+    {
+      "name": "shapes_top_down_lights",
+      "module": "shapes",
+      "stars": 3,
+      "title": "zimr - shapes - top-down lights",
+      "description": "2d top-down lighting with hard shadow volumes accumulated per light into a multiplied lightmap",
+      "functions": []
+    },
+    {
+      "name": "audio_sound_lab",
+      "module": "audio",
+      "stars": 2,
+      "title": "zimr - audio - sound lab",
+      "description": "loads a wav then demos polyphony via aliases and stereo positioning across three modes",
+      "functions": []
+    },
+    {
+      "name": "audio_spectrum_visualizer",
+      "module": "audio",
+      "stars": 2,
+      "title": "zimr - audio - spectrum visualizer",
+      "description": "live fft of the master bus via a webaudio analyser tap drawn as a frequency spectrum",
+      "functions": []
+    },
+    {
+      "name": "audio_amp_envelope",
+      "module": "audio",
+      "stars": 2,
+      "title": "zimr - audio - amp envelope",
+      "description": "shapes a tone's amplitude with adsr sliders that regenerate the pcm you see and hear",
+      "functions": []
+    },
+    {
+      "name": "shadow_sidebyside",
+      "module": "shaders",
+      "stars": 3,
+      "title": "zimr - WebGPU - ray shadows CPU|GPU|comptime",
+      "description": "the same zig ray-shadow shader run three ways: cpu raster, gpu fullscreen pass, and comptime-baked",
+      "functions": []
+    },
+    {
+      "name": "voxel",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - basic voxel (tap to break)",
+      "description": "an 8x8x8 cube field where a tap casts a ray to break the closest voxel minecraft-style",
+      "functions": []
+    },
+    {
+      "name": "waving_cubes",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - waving cubes",
+      "description": "a 15x15x15 grid of rainbow cubes rippling on sine waves, orbited by the phone camera",
+      "functions": []
+    },
+    {
+      "name": "orthographic_projection",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - orthographic projection",
+      "description": "draws one primitive scene twice, toggling the camera between perspective and orthographic projection",
+      "functions": []
+    },
+    {
+      "name": "camera_controls",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - camera controls",
+      "description": "demos the shared orbit camera doing orbit, pan and zoom on mouse and touch over a cube scene",
+      "functions": []
+    },
+    {
+      "name": "tesseract_view",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - tesseract view",
+      "description": "a 4d hypercube spinning through the xw plane, projected from 4d to 3d as vertices and edges",
+      "functions": []
+    },
+    {
+      "name": "directional_billboard",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - directional billboard",
+      "description": "an 8-direction sprite billboard picking its atlas frame from the camera angle, doom-style, plus a walk cycle",
+      "functions": []
+    },
+    {
+      "name": "yaw_pitch_roll",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - yaw pitch roll",
+      "description": "the aircraft-orientation demo composing pitch, yaw and roll into one matrix applied to a plane",
+      "functions": []
+    },
+    {
+      "name": "decals",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - decals",
+      "description": "click a surface to shader-project a textured decal that wraps around curvature with no mesh clipping",
+      "functions": []
+    },
+    {
+      "name": "depth_cue",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - depth cue",
+      "description": "shades a field of cubes grayscale by per-object camera distance under a slowly orbiting camera",
+      "functions": []
+    },
+    {
+      "name": "models_geometric_shapes",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - models - geometric shapes",
+      "description": "a spinnable 3d gallery of procedurally generated primitives with solid, wireframe and both toggles",
+      "functions": []
+    },
+    {
+      "name": "vertex_texture_test",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - shaders - vertex texture fetch",
+      "description": "warps a triangle grid by sampling a checkerboard texture in the vertex stage, proving vertex texture fetch",
+      "functions": []
+    },
+    {
+      "name": "shaders_vertex_displacement",
+      "module": "shaders",
+      "stars": 3,
+      "title": "zimr - shaders - vertex displacement",
+      "description": "displacement-maps a flat grid into lit moving swells by sampling a perlin heightfield in the vertex shader",
+      "functions": []
+    },
+    {
+      "name": "worker_png",
+      "module": "compute",
+      "stars": 2,
+      "title": "zimr - jobs - PNG encode on a worker",
+      "description": "offloads a slow png encode to a worker so the frame never freezes while a dot keeps spinning",
+      "functions": []
+    },
+    {
+      "name": "rt_workers",
+      "module": "compute",
+      "stars": 3,
+      "title": "zimr - jobs - a path tracer across the worker pool",
+      "description": "runs a path tracer across the worker pool with tiles popping in out of order as workers finish",
+      "functions": []
+    },
+    {
+      "name": "four_ways",
+      "module": "compute",
+      "stars": 3,
+      "title": "zimr - one function, four machines",
+      "description": "runs one zig escape-fractal function four ways: comptime, cpu, worker and gpu, side by side",
+      "functions": []
+    },
+    {
+      "name": "textured_curve",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textured curve",
+      "description": "sweeps a road texture along a draggable cubic bezier as a uv-mapped ribbon of quads",
+      "functions": []
+    },
+    {
+      "name": "textures_background_scrolling",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures background scrolling",
+      "description": "three parallax cyberpunk layers scrolling at different speeds, each drawn twice for a seamless loop",
+      "functions": []
+    },
+    {
+      "name": "textures_sprite_animation",
+      "module": "textures",
+      "stars": 1,
+      "title": "zimr - WebGPU - textures sprite animation",
+      "description": "cycles a six-frame scarfy sprite sheet at a fixed speed over normalized-uv sub-rects",
+      "functions": []
+    },
+    {
+      "name": "textures_image_rotate",
+      "module": "textures",
+      "stars": 1,
+      "title": "zimr - WebGPU - textures image rotate",
+      "description": "rotates the logo on the cpu by several angles at init, then cycles between the uploaded textures",
+      "functions": []
+    },
+    {
+      "name": "textures_image_channel",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures image channel",
+      "description": "splits a png into its r, g, b and a channels on the cpu and lays them out tinted over a checkerboard",
+      "functions": []
+    },
+    {
+      "name": "textures_sprite_stacking",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures sprite stacking",
+      "description": "stacks 122 horizontal cross-section slices in world y to fake a 3d model, viewed with the orbit camera",
+      "functions": []
+    },
+    {
+      "name": "textures_tiled_drawing",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures tiled drawing",
+      "description": "tiles a chosen sub-rect of a pattern sheet across an area with slider-driven scale, rotation and tint",
+      "functions": []
+    },
+    {
+      "name": "textures_raw_data",
+      "module": "textures",
+      "stars": 1,
+      "title": "zimr - WebGPU - textures raw data",
+      "description": "builds a gpu texture from a hand-filled rgba checkerboard buffer alongside a decoded png",
+      "functions": []
+    },
+    {
+      "name": "textures_polygon_drawing",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures polygon drawing",
+      "description": "maps a texture onto a spinning irregular ten-sided polygon viewed through an orthographic camera",
+      "functions": []
+    },
+    {
+      "name": "textures_screen_buffer",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures screen buffer",
+      "description": "a cpu palette-cycling fire effect propagated up an index buffer, mapped through an hsv palette and uploaded",
+      "functions": []
+    },
+    {
+      "name": "textures_fog_of_war",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures fog of war",
+      "description": "a tile map with fog stored in a tiny per-tile texture, bilinear-filtered into smooth soft edges as you move",
+      "functions": []
+    },
+    {
+      "name": "textures_blend_modes",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures blend modes",
+      "description": "composites a foreground over a background cycling through alpha, additive, multiply and premultiplied blends",
+      "functions": []
+    },
+    {
+      "name": "textures_magnifying_glass",
+      "module": "textures",
+      "stars": 3,
+      "title": "zimr - WebGPU - textures magnifying glass",
+      "description": "a circular 2x magnifier following the pointer that reveals multiply-blended hidden bunnies in a render texture",
+      "functions": []
+    },
+    {
+      "name": "textures_sprite_explosion",
+      "module": "textures",
+      "stars": 1,
+      "title": "zimr - WebGPU - textures sprite explosion",
+      "description": "auto-loops a 5x5 explosion sprite sheet over normalized-uv sub-rects",
+      "functions": []
+    },
+    {
+      "name": "textures_bunnymark",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures bunnymark",
+      "description": "hold to spawn thousands of drifting bouncing bunnies, a draw-call stress test",
+      "functions": []
+    },
+    {
+      "name": "textures_sprite_button",
+      "module": "textures",
+      "stars": 1,
+      "title": "zimr - WebGPU - textures sprite button",
+      "description": "a three-frame button sheet picking normal, hover or pressed by mouse state",
+      "functions": []
+    },
+    {
+      "name": "textures_mouse_painting",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures mouse painting",
+      "description": "paints onto a persistent render-texture canvas that accumulates strokes, with a color palette",
+      "functions": []
+    },
+    {
+      "name": "textures_npatch_drawing",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures N-patch drawing",
+      "description": "nine-slice panel drawing where fixed corners stay put while edges and center stretch to the mouse",
+      "functions": []
+    },
+    {
+      "name": "textures_framebuffer_rendering",
+      "module": "textures",
+      "stars": 3,
+      "title": "zimr - WebGPU - textures framebuffer rendering",
+      "description": "one world drawn into two framebuffers composited side by side, plus a magnified zoom sampled back out",
+      "functions": []
+    },
+    {
+      "name": "textures_image_text",
+      "module": "textures",
+      "stars": 2,
+      "title": "zimr - WebGPU - textures image text",
+      "description": "rasterizes text into a cpu image so the caption is baked into the texels before uploading as a texture",
+      "functions": []
+    },
+    {
+      "name": "draw2d_demo",
+      "module": "shapes",
+      "stars": 1,
+      "title": "zimr - draw2d immediate surface",
+      "description": "exercises the unified immediate draw2d surface with rects, circles and a cached sprite image",
+      "functions": []
+    },
+    {
+      "name": "pipeline_basic",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - pipeline basic",
+      "description": "the first custom render pipeline: a vertex buffer and one draw of a gradient triangle from zig-authored shaders",
+      "functions": []
+    },
+    {
+      "name": "pipeline_uniforms",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - pipeline uniforms",
+      "description": "a custom pipeline driven by a vertex-stage uniform buffer holding a per-frame transform matrix",
+      "functions": []
+    },
+    {
+      "name": "vao_multibuffer",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - vao multibuffer",
+      "description": "splits a vertex layout across separate per-attribute buffers and swaps the color buffer between palettes",
+      "functions": []
+    },
+    {
+      "name": "pipeline_instancing",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - pipeline instancing",
+      "description": "one draw call paints a grid of triangles, each fed its own offset and color from instance-rate buffers",
+      "functions": []
+    },
+    {
+      "name": "pipeline_rendertarget",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - pipeline render target",
+      "description": "renders a custom pipeline once into an offscreen render texture then composites it to the screen many times",
+      "functions": []
+    },
+    {
+      "name": "pipeline_postprocess",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - pipeline postprocess",
+      "description": "renders a triangle into a texture then a fullscreen pass samples it for chromatic aberration and vignette",
+      "functions": []
+    },
+    {
+      "name": "pipeline_settings",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - pipeline settings",
+      "description": "draws the same translucent geometry twice with alpha versus additive blend from two pipeline states",
+      "functions": []
+    },
+    {
+      "name": "pipeline_msaa",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - WebGPU - pipeline MSAA",
+      "description": "renders the same triangle at 1 versus 4 samples magnified side by side to show msaa resolving jagged edges",
+      "functions": []
+    },
+    {
+      "name": "decal_sw",
+      "module": "shaders",
+      "stars": 3,
+      "title": "zimr - WebGPU - one decal shader: CPU | GPU",
+      "description": "runs one zig decal shader on both the gpu pipeline and the software rasterizer side by side, bit-identically",
+      "functions": []
+    },
+    {
+      "name": "cube_demo",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr \u00b7 WebGPU \u00b7 3D depth-tested cube",
+      "description": "a textured spinning cube, depth-tested, the first 3d demo through the webgpu backend",
+      "functions": []
+    },
+    {
+      "name": "lambert_demo",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr \u00b7 WebGPU \u00b7 Lambert-lit cube",
+      "description": "a lambert-lit textured cube binding vertex uniforms, a sampler and a fragment uniform across three groups",
+      "functions": []
+    },
+    {
+      "name": "depth_rendering",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - depth rendering",
+      "description": "renders a depth-tested scene writing each fragment's normalized device depth straight into the color buffer",
+      "functions": []
+    },
+    {
+      "name": "shadowmap",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - shadow map",
+      "description": "full two-pass shadow mapping: a directional light casts real shadows on a floor, boxes and a bunny",
+      "functions": []
+    },
+    {
+      "name": "cel_shading",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - cel shading + inverted-hull ink",
+      "description": "toon-shades a bunny with lambert snapped to flat bands plus an inverted-hull silhouette ink outline",
+      "functions": []
+    },
+    {
+      "name": "depth_writing",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - fragment depth writing",
+      "description": "a material lies to the depth buffer so cubes pop in front or sink behind against their real positions",
+      "functions": []
+    },
+    {
+      "name": "box_collisions",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - box collisions (drag the player)",
+      "description": "drag a player box that flashes red when its aabb overlaps an enemy cube or sphere",
+      "functions": []
+    },
+    {
+      "name": "cubicmap",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - cubicmap maze",
+      "description": "turns a pixel map into a hollow cube-walled maze mesh, face-shaded so the layout reads without textures",
+      "functions": []
+    },
+    {
+      "name": "first_person_maze",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - first person maze",
+      "description": "walk a cubicmap maze in first person, sliding along walls via collision-circle checks against wall cells",
+      "functions": []
+    },
+    {
+      "name": "heightmap",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - heightmap terrain",
+      "description": "turns a perlin-noise image into a height-banded terrain mesh that colors itself water to snow, regen button",
+      "functions": []
+    },
+    {
+      "name": "point_rendering",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - point rendering (1k to 1M points)",
+      "description": "renders a random spherical point cloud of rainbow-shelled points as a single point-list draw",
+      "functions": []
+    },
+    {
+      "name": "mesh_picking",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - mesh picking (tap to pick)",
+      "description": "tap to cast a world ray tested against a quad, box, sphere and a live rotating torus mesh, closest hit wins",
+      "functions": []
+    },
+    {
+      "name": "fog_rendering",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - distance fog (shared gbuffer_vs)",
+      "description": "a row of toruses dissolving into exponential-squared distance fog with a slider, reusing the gbuffer vertex stage",
+      "functions": []
+    },
+    {
+      "name": "deferred_render",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - deferred rendering (MRT G-buffer)",
+      "description": "deferred shading: an mrt pass fills position, normal and albedo maps, then a fullscreen pass lights four point lights",
+      "functions": []
+    },
+    {
+      "name": "shader_effects",
+      "module": "shaders",
+      "stars": 3,
+      "title": "zimr - WebGPU - 2D shader effects gallery",
+      "description": "a live gallery of 2d fragment effects: color grade, waves, outline and palette switch over a live scene",
+      "functions": []
+    },
+    {
+      "name": "shaders_shapes_textures",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - shaders - shapes + textures (BeginShaderMode)",
+      "description": "wraps ordinary shape and texture draws in a grayscale shader mode toggled several times per frame",
+      "functions": []
+    },
+    {
+      "name": "shaders_multi_texture",
+      "module": "shaders",
+      "stars": 2,
+      "title": "zimr - shaders - multi-texture (mask + divider)",
+      "description": "one shader mixes two textures by a blend factor: a finger-following mask spotlight or a draggable wipe divider",
+      "functions": []
+    },
+    {
+      "name": "hybrid_render",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - hybrid raster + raymarch (shared depth)",
+      "description": "a raymarched sdf metaball scene and rasterized cubes sharing one depth buffer via fragment depth writes",
+      "functions": []
+    },
+    {
+      "name": "shadowmap_sw",
+      "module": "shaders",
+      "stars": 3,
+      "title": "zimr - WebGPU - one shadow shader: CPU | GPU | comptime",
+      "description": "one shadow-map shader source run three ways: cpu rasterizer, gpu two-pass and comptime-baked, live",
+      "functions": []
+    },
+    {
+      "name": "pbr_demo",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr \u00b7 WebGPU \u00b7 PBR-lit cube",
+      "description": "the damaged helmet rendered with full pbr materials through the reusable pbr3d renderer",
+      "functions": []
+    },
+    {
+      "name": "gltf_textured",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - textured glTF quad",
+      "description": "a textured gltf quad rotating in 3d, exercising the png and flat-normal-synthesis material paths",
+      "functions": []
+    },
+    {
+      "name": "gltf_simple",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - glTF simple",
+      "description": "parses an embedded binary gltf cube with positions only and draws it lit and auto-rotating",
+      "functions": []
+    },
+    {
+      "name": "obj_simple",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - OBJ simple",
+      "description": "loads a wavefront obj cube through the obj codec, exercising quad triangulation and normal indices, lit and rotating",
+      "functions": []
+    },
+    {
+      "name": "obj_bunny",
+      "module": "models",
+      "stars": 2,
+      "title": "zimr - WebGPU - OBJ bunny",
+      "description": "loads the 69k-triangle stanford bunny obj, stress-testing smooth-normal synthesis and de-indexing, lit and turning",
+      "functions": []
+    },
+    {
+      "name": "damaged_helmet",
+      "module": "models",
+      "stars": 3,
+      "title": "zimr - WebGPU - damaged helmet",
+      "description": "the khronos damaged helmet gltf rendered with real base-color, metallic-roughness, normal, occlusion and emissive maps",
+      "functions": []
+    },
+    {
+      "name": "compute_smoke",
+      "module": "compute",
+      "stars": 1,
+      "title": "zimr - WebGPU - compute smoke",
+      "description": "a gpu compute round-trip doubling an ascending array and drawing the result as bars, with a cpu self-check",
+      "functions": []
+    },
+    {
+      "name": "shared_smoke",
+      "module": "compute",
+      "stars": 2,
+      "title": "zimr - WebGPU - shared memory smoke",
+      "description": "diagnoses workgroup shared memory and barriers on device with three independent pass/fail checks",
+      "functions": []
+    },
+    {
+      "name": "sort_smoke",
+      "module": "compute",
+      "stars": 2,
+      "title": "zimr - WebGPU - counting sort smoke",
+      "description": "runs the fluid's five counting-sort kernels over 64 hand-checkable particles on both cpu and gpu and verifies each stage",
+      "functions": []
+    },
+    {
+      "name": "tile_smoke",
+      "module": "compute",
+      "stars": 2,
+      "title": "zimr - WebGPU - tiling smoke",
+      "description": "de-risks shared-memory neighbour tiling by checking each particle's neighbour count against brute-force ground truth",
+      "functions": []
+    },
+    {
+      "name": "compute_particles",
+      "module": "compute",
+      "stars": 3,
+      "title": "zimr - WebGPU - compute particles",
+      "description": "65536 particles whose kernel auto-flips between gpu dispatch and cpu loop with state carried across, rendered zero-copy",
+      "functions": []
+    },
+    {
+      "name": "fluid_gpu",
+      "module": "compute",
+      "stars": 3,
+      "title": "zimr - WebGPU - 20k GPU fluid",
+      "description": "a 20000-particle clavet sph fluid running entirely on the gpu across seven kernels, rendered zero-copy",
+      "functions": []
+    },
+    {
+      "name": "fluid_sort",
+      "module": "compute",
+      "stars": 3,
+      "title": "zimr - WebGPU - 20k GPU fluid (sorted)",
+      "description": "a 20000-particle gpu clavet fluid using a counting-sort neighbour grid across eleven kernels, rendered zero-copy",
+      "functions": []
+    },
+    {
+      "name": "launcher",
+      "module": "core",
+      "stars": 3,
+      "title": "zimr - launcher",
+      "description": "the flagship multi-app switcher: 25 full examples lazily booted, one shown fullscreen, cycled by a tap pill",
       "functions": []
     }
   ]

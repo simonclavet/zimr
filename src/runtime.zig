@@ -6311,7 +6311,9 @@ pub const camera = struct {
             } else {
                 // Mouse look.
                 const mouse_delta: Vec2 = input_for_camera.getMouseDelta(input_state);
-                cameraYaw(cam, -mouse_delta[0] * CAMERA_MOUSE_MOVE_SENSITIVITY, rotate_around_target);
+                // First-person inverts horizontal look (drag right turns left).
+                const yaw_sign: f32 = if (mode == .first_person) 1.0 else -1.0;
+                cameraYaw(cam, yaw_sign * mouse_delta[0] * CAMERA_MOUSE_MOVE_SENSITIVITY, rotate_around_target);
                 cameraPitch(
                     cam,
                     -mouse_delta[1] * CAMERA_MOUSE_MOVE_SENSITIVITY,

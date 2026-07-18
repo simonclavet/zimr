@@ -1,12 +1,12 @@
 
-The license is ZLIB, But assume I have no personal preference between MIT and ZLIB. 
+The license is ZLIB. I have no personal preference between MIT and ZLIB. 
 But I use some libraries that are ZLIB, and it might be viral, so ZLIB it is.
-So if you use zimr, 
-thank raysan5 and ocornut and all others who participated somehow.
+So if you use zimr, thank raysan5, ocornut, jrouwe, erincatto, andrewrk, games-by-mason, and all 
+others who wrote the original code that was ported into zimr.
 
-zimr — pure-Zig raylib, imgui port for wasm32-wasi + WebGL2
+zimr — pure-Zig port of all c++ libraries I like.
 
-Copyright (c) zimr contributors
+Copyright (c) Simon Clavet and eventual other zimr contributors
 
 This software is provided "as-is", without any express or implied warranty.
 In no event will the authors be held liable for any damages arising from
@@ -358,6 +358,91 @@ The MIT license text reproduced verbatim:
     The MIT License (Expat)
 
     Copyright (c) Axel Mathieu-Mahias and zphys contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+---
+
+## Jolt Physics — Jorrit Rouwe (`@jrouwe`)
+
+- **Upstream:** https://github.com/jrouwe/JoltPhysics
+- **License:** MIT
+- **Author:** Jorrit Rouwe and Jolt Physics contributors
+
+zimr's `src/zimrphysics.zig` is a faithful Zig port of Jolt's 3D
+rigid-body engine, reconciled to match Jolt's algorithms term for
+term: the sequential-impulse constraint solver with a
+deterministic contact-pair sort before solving, the GJK/EPA
+collision pipeline, warm-started friction on a Jolt-faithful
+tangent basis, the gyroscopic (Dzhanibekov) angular-velocity
+update, swing/twist quaternion decomposition, and the 3-sphere
+sleep test.  The port is single-threaded and bakes in Jolt's
+shipped `PhysicsSettings` defaults; per-kernel parity notes live
+in the file.
+
+The MIT license text reproduced verbatim:
+
+    The MIT License (MIT)
+
+    Copyright (c) 2021 Jorrit Rouwe
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+---
+
+## Box2D — Erin Catto (`@erincatto`)
+
+- **Upstream:** https://github.com/erincatto/box2d
+- **License:** MIT
+- **Author:** Erin Catto and Box2D contributors
+
+zimr's `src/zimrphysics2d.zig` is a faithful Zig port of Box2D
+v3.1 — Erin Catto's data-oriented C rewrite with the "TGS Soft"
+solver — reproducing the algorithm term-for-term: the soft-step
+solver, contact-manifold generation, the median-split broad-phase
+rebuild, and shape-level surface materials (friction/restitution
+per Box2D v3).  The port is single-threaded and single-precision;
+its `Settings` are Box2D's meter-based defaults.  Every ported
+kernel carries a `// box2d: <symbol> <file>` parity tag so the Zig
+and C can be diffed side by side.
+
+The MIT license text reproduced verbatim:
+
+    The MIT License (MIT)
+
+    Copyright (c) 2019 Erin Catto
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to deal
