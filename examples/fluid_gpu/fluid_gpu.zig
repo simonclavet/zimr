@@ -498,7 +498,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.mouse_force_mag;
 
     // ---- Substeps: 8 dispatches each, all on-device ----
-    const live_count: u32 = @trunc(clamp(s.sim_count_f, 1, fk.num_particles));
+    const live_count: u32 = @trunc(clamp(s.sim_count_f, 1, float(fk.num_particles)));
     // Compute this frame's GPU sim params ONCE, before the batch: a batch writes
     // the uniform a single time at beginBatch, so params must be final by then
     // (endBatch asserts no mid-batch change). The simple SWEEP path and the full-

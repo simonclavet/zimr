@@ -13,7 +13,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 
 const clamp = zm.clamp;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -134,7 +134,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 32, .color = c.white, .font = &s.font },
     );
 
-    co.caption(f.gl, s.font, "music.loadFromMemory -> async decodeAudioData -> looping playback");
+    common.caption(f.gl, s.font, "music.loadFromMemory -> async decodeAudioData -> looping playback");
     z.endDrawing(f.gl);
 }
 

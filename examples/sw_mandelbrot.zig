@@ -35,7 +35,7 @@ const maxInt = zm.maxInt;
 const raster = sw.raster;
 const raster_shader = sw.raster_shader;
 const wgpu = sw.wgpu;
-const shader_runtime_wgpu = sw.shader_runtime_wgpu;
+const shader_runtime = sw.shader_runtime_wgpu;
 const gpu_iface = sw.gpu_iface;
 
 // ============================================================================
@@ -155,11 +155,11 @@ const MandelbrotPipeline = struct {
     gpu_handle: wgpu.RenderPipelineHandle = .invalid,
     pub const Vs = FullscreenVs;
     pub const Fs = MandelbrotFs;
-    pub const sw_dispatch: ?*const shader_runtime_wgpu.SwPipelineDispatch =
+    pub const sw_dispatch: ?*const shader_runtime.SwPipelineDispatch =
         &Dispatch.vtable;
 
     const Dispatch = struct {
-        const vtable = shader_runtime_wgpu.SwPipelineDispatch{
+        const vtable = shader_runtime.SwPipelineDispatch{
             .flush_batch = &flushBatch,
         };
 
@@ -191,7 +191,7 @@ const MandelbrotPipeline = struct {
             // matching field names at comptime — `frag_uv` is in both,
             // so it's copied; `position` is excluded (used by the
             // rasterizer for screen-space, not as a varying).
-            const connect = comptime shader_runtime_wgpu.autoConnect(
+            const connect = comptime shader_runtime.autoConnect(
                 FullscreenVs.Out,
                 MandelbrotFs.Io,
             );

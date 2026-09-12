@@ -17,7 +17,7 @@ pub const autoConnect = @import("shader_connect.zig").autoConnect;
 // julia_gallery) migrated here from the GL `zimr` umbrella — this is their
 // whole remaining surface.
 pub const gpu_iface = @import("gpu_iface.zig");
-pub const shader_runtime_wgpu = @import("shader_runtime_wgpu.zig");
+pub const shader_runtime = @import("shader_runtime_wgpu.zig");
 pub const wgpu = @import("wgpu.zig");
 /// Engine 2D shapes shader pair (vs+fs) for native consumers — the former
 /// default_shapes_bundle.zig, inlined here (structure-plan S2).  One
@@ -27,5 +27,5 @@ pub const default_shapes = struct {
     pub const fs = @import("shaders/default_shapes_fs.zig");
 };
 /// 2D renderer helpers (orthoTopLeft etc.) — already in this module's
-/// graph via shader_runtime_wgpu; re-exported for the native demos.
+/// graph via shader_runtime; re-exported for the native demos.
 pub const renderer_2d = @import("renderer_2d.zig");

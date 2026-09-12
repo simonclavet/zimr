@@ -62,10 +62,67 @@ const FIXED_RETURNS = {
 
 function makeShim(log, names, voidNames, unhandled, state) {
   const ns = {};
+  // ---- LOG SAFETY VALVE ---------------------------------------------------
+  // `sutCallLog` hands the test logic `log.slice()` — a FULL COPY — and
+  // wgpu_smoke.zig calls it six times. With a `-Dmode=debug` SUT that is fine:
+  // the first assert @panics and the run stops after a few thousand entries.
+  //
+  // With a `-Dmode=release` SUT it is not. Release lowers `assertf` to
+  // "log and keep running", so the SUT completes every frame, re-emits the SAME
+  // assert message each frame, and the log grows without bound — node dies with
+  // a 2 GB heap before the logic ever gets to read it. That made release, the
+  // ONLY mode that surfaces more than one assert per run, impossible to put
+  // through this runner at all.
+  //
+  // Two measures, both designed to be inert on a normal run so the gate's
+  // semantics are untouched:
+  //
+  //  1. A generous hard cap. Plain call records are counted, not truncated
+  //     early — debug smoke runs sit far below this, so verb counting and the
+  //     GPU-handle-balance check see exactly what they saw before. Past the cap
+  //     we stop appending and record how many were dropped, so the log never
+  //     silently lies about being complete.
+  //  2. Exact-duplicate `!ASSERT` suppression. wgpu_smoke fails on the FIRST
+  //     matching entry, so keeping one copy of each distinct message loses
+  //     nothing and removes the release-mode explosion at its source.
+  const MAX_LOG = state.maxLog || 500000;
+  const seenAsserts = new Map(); // message -> times seen
+  let dropped = 0;
+  const emit = (line) => {
+    if (line.charCodeAt(0) === 33 /* '!' */ && line.startsWith("!ASSERT ")) {
+      const n = (seenAsserts.get(line) || 0) + 1;
+      seenAsserts.set(line, n);
+      if (n > 1) return; // already recorded; the logic fails on the first
+      // wgpu_smoke's assertMsg reports only the FIRST !ASSERT, so a second,
+      // independent failure behind it stays invisible in the normal output.
+      // Under --trace-calls echo every distinct one.
+      if (state.traceCalls) process.stderr.write("[MARKER] " + line + "\n");
+    }
+    if (log.length >= MAX_LOG) { dropped += 1; return; }
+    log.push(line);
+    if (log.length === MAX_LOG) {
+      log.push(
+        "!LOGCAP reached " + MAX_LOG + " entries; further plain call records " +
+        "are dropped (pass --max-log=N to raise). Distinct !ASSERT lines were " +
+        "kept. This is a runaway-log guard, not a test failure.",
+      );
+    }
+  };
+  // Exposed so a caller can report suppression counts without reading the log.
+  state.logStats = () => ({ dropped, asserts: [...seenAsserts.entries()] });
   const record = (name, args) => {
+    // `--trace-calls` writes each host call to stderr UNBUFFERED, as it happens.
+    // Everything else this runner prints is buffered until the logic finishes,
+    // so a run that hangs or is killed produces a ZERO-BYTE log and no clue
+    // where it stopped — which is exactly the situation where you most need one.
+    // Args included: for a bind-group or pipeline bug the INDEX is the whole question, and a
+    // bare list of verb names cannot answer it.
+    if (state.traceCalls) {
+      process.stderr.write(name + "(" + args.map((a) => String(a)).join(", ") + ")\n");
+    }
     // Record the full call signature so the test logic can classify by name
     // and inspect args if it wants (it splits on "(" for the bare name).
-    log.push(name + "(" + args.map((a) => String(a)).join(", ") + ")");
+    emit(name + "(" + args.map((a) => String(a)).join(", ") + ")");
   };
   // Decode a (ptr, len) UTF-8 label out of the SUT's linear memory. Safe to
   // call lazily (state.mem is attached after instantiation). Empty on failure.
@@ -124,6 +181,157 @@ function makeShim(log, names, voidNames, unhandled, state) {
     }
   };
 
+  // ---- BIND-GROUP-LAYOUT COMPATIBILITY VALIDATION ------------------------
+  // Same trick as the attachment validator above, applied to the other rule
+  // that only ever fires on a real GPU: at draw time WebGPU requires that, for
+  // every group index the bound pipeline's layout declares WITH BINDINGS, a
+  // bind group is set there whose layout is group-equivalent. Violating it
+  // rejects the WHOLE command buffer at submit — so the symptom is a black
+  // canvas with no clear colour, and nothing in the JS console until you put it
+  // on a device.
+  //
+  // Every edge of the graph is visible from here, which is what makes this
+  // feasible at all:
+  //   create_bind_group_layout(device, entriesPtr, entriesLen, ...) -> bgl
+  //   create_bind_group(device, LAYOUT, ...)                        -> bg
+  //   create_pipeline_layout(device, BGL_ARRAY_PTR, count, ...)     -> pl
+  //   create_render_pipeline(device, LAYOUT, ...)                   -> pipeline
+  //   set_pipeline(pass, pipeline) / set_bind_group(pass, i, bg) / draw*
+  //
+  // Layout identity is the raw entries blob. `encodeBindGroupLayoutEntries`
+  // emits entries in a deterministic order for a given layout, so byte equality
+  // is a sound identity: identical bytes always mean identical layouts. It can
+  // in principle miss an equivalence (two orderings of the same entry set), and
+  // that direction is the safe one — this validator stays silent rather than
+  // crying wolf.
+  const bglSig = new Map();     // bgl handle      -> {sig, count, label}
+  const bgToBgl = new Map();    // bind group      -> bgl handle
+  const plGroups = new Map();   // pipeline layout -> [bgl handle]
+  const pipeToPl = new Map();   // pipeline        -> pipeline layout
+  const passBound = new Map();  // pass            -> Map(index -> bind group)
+  const passPipe = new Map();   // pass            -> pipeline
+
+  // Read a (ptr,len) byte blob as a hex string, plus its leading u32 (the entry
+  // count — 0 means an `empty_bgl`, which `loadShader` mints for every group
+  // below the highest group a schema actually uses).
+  const readBlob = (ptr, len) => {
+    if (!state.mem || !len) return null;
+    try {
+      const bytes = new Uint8Array(state.mem.buffer, ptr, len);
+      let sig = "";
+      for (let i = 0; i < bytes.length; i += 1) sig += bytes[i].toString(16).padStart(2, "0");
+      const count = len >= 4 ? new DataView(state.mem.buffer, ptr, 4).getUint32(0, true) : 0;
+      return { sig, count };
+    } catch {
+      return null;
+    }
+  };
+
+  const readHandleArray = (ptr, n) => {
+    if (!state.mem) return null;
+    try {
+      const dv = new DataView(state.mem.buffer, ptr, n * 4);
+      const out = [];
+      for (let i = 0; i < n; i += 1) out.push(dv.getUint32(i * 4, true));
+      return out;
+    } catch {
+      return null;
+    }
+  };
+
+  // WebGPU inherits bind groups across a setPipeline only while the two
+  // pipeline layouts agree index-by-index; from the first divergent index on,
+  // the bound groups are UNSET. Modelling this is what keeps the validator from
+  // flagging a stale group that the device would have discarded anyway.
+  const applyInheritance = (passH, oldPipe, newPipe) => {
+    const bound = passBound.get(passH);
+    if (!bound) return;
+    const oldPl = plGroups.get(pipeToPl.get(oldPipe));
+    const newPl = plGroups.get(pipeToPl.get(newPipe));
+    if (!newPl) return;
+    let divergeAt = 0;
+    if (oldPl) {
+      while (divergeAt < oldPl.length && divergeAt < newPl.length) {
+        const a = bglSig.get(oldPl[divergeAt]);
+        const b = bglSig.get(newPl[divergeAt]);
+        if (!a || !b || a.sig !== b.sig) break;
+        divergeAt += 1;
+      }
+    }
+    for (const idx of [...bound.keys()]) if (idx >= divergeAt) bound.delete(idx);
+  };
+
+  // THE CHECK, run at every draw.
+  const checkDraw = (passH, what) => {
+    const pipe = passPipe.get(passH);
+    if (pipe === undefined) return;
+    const pl = plGroups.get(pipeToPl.get(pipe));
+    if (!pl) return; // unknown pipeline layout — stay silent rather than guess
+    const bound = passBound.get(passH) || new Map();
+    const pipeLabel = (pipeAttach.get(pipe) || {}).label || ("pipeline#" + pipe);
+    for (let i = 0; i < pl.length; i += 1) {
+      const want = bglSig.get(pl[i]);
+      if (!want) continue;
+      if (want.count === 0) continue; // empty layout declares no bindings
+      const bg = bound.get(i);
+      if (bg === undefined) {
+        emit(
+          "!ASSERT gpu-validation: " + what + " with pipeline \"" + pipeLabel +
+          "\" needs a bind group at group " + i + " (its layout \"" +
+          (want.label || "?") + "\" declares " + want.count + " binding(s)) but none is set. " +
+          "WebGPU rejects the WHOLE command buffer at submit — the symptom is a " +
+          "black canvas, pass clear included.",
+        );
+        continue;
+      }
+      const got = bglSig.get(bgToBgl.get(bg));
+      if (got && got.sig !== want.sig) {
+        emit(
+          "!ASSERT gpu-validation: " + what + " with pipeline \"" + pipeLabel +
+          "\" has an INCOMPATIBLE bind group at group " + i + ": bound group's layout \"" +
+          (got.label || "?") + "\" (" + got.count + " binding(s)) does not match the " +
+          "pipeline layout's \"" + (want.label || "?") + "\" (" + want.count + " binding(s)). " +
+          "Most often this is a 2D shapes-batch flush running under a foreign " +
+          "pipeline: the flush binds the atlas at gpu_iface.batch_reserved_group (1). " +
+          "Draw through the shader's own pipeline instead — see wgpu_app.drawFullscreenShader.",
+        );
+      }
+    }
+  };
+
+  // ---- WASI fd_write ------------------------------------------------------
+  // MUST be implemented, not stubbed. A `-Dmode=release` SUT lowers `assertf`
+  // to `std.log.err` + keep running, and on a wasi target that lands in
+  // fd_write. The generic stub returns a value without ever writing `nwritten`
+  // into memory, so Zig's writer — which loops until every byte is reported
+  // written — spins FOREVER. That is not a hypothetical: it is why a known-bad
+  // release bringup hung this runner indefinitely while `panic_probe.mjs`, which
+  // implements fd_write for real, completed the same frame instantly.
+  //
+  // Decoding it also surfaces release-mode assert text to the smoke gate, which
+  // is the only way the gate can see a SECOND assert — in debug the first one
+  // @panics and everything behind it stays invisible.
+  const fdWrite = (fd, iovsPtr, iovsLen, nwrittenPtr) => {
+    if (!state.mem) return 0;
+    try {
+      const dv = new DataView(state.mem.buffer);
+      let total = 0;
+      let text = "";
+      for (let i = 0; i < iovsLen; i += 1) {
+        const base = dv.getUint32(iovsPtr + i * 8, true);
+        const len = dv.getUint32(iovsPtr + i * 8 + 4, true);
+        text += new TextDecoder().decode(new Uint8Array(state.mem.buffer, base, len));
+        total += len;
+      }
+      if (nwrittenPtr) dv.setUint32(nwrittenPtr, total, true);
+      state.wasiText = (state.wasiText || "") + text;
+      if (text.indexOf("assert failed") !== -1) emit("!ASSERT " + text.trim());
+      return 0;
+    } catch {
+      return 0;
+    }
+  };
+
   for (const name of names) {
     if (name === "js_device_create_render_pipeline") {
       // (device, layout, vs, fs, descPtr, descLen, labelPtr, labelLen)
@@ -133,6 +341,7 @@ function makeShim(log, names, voidNames, unhandled, state) {
         const desc = parsePipelineDesc(args[4] | 0, args[5] | 0);
         const label = readLabel(args[6] | 0, args[7] | 0) || ("pipeline#" + h);
         if (desc) pipeAttach.set(h, { ...desc, label });
+        pipeToPl.set(h, args[1] | 0);
         return h;
       };
     } else if (name === "js_encoder_begin_render_pass") {
@@ -156,12 +365,16 @@ function makeShim(log, names, voidNames, unhandled, state) {
       // THE CHECK. This is the exact call the browser rejects.
       ns[name] = (...args) => {
         record(name, args);
+        const passH = args[0] | 0;
+        const pipeH = args[1] | 0;
+        applyInheritance(passH, passPipe.get(passH), pipeH);
+        passPipe.set(passH, pipeH);
         const pass = passAttach.get(args[0] | 0);
         const pipe = pipeAttach.get(args[1] | 0);
         if (!pass || !pipe || pass.hasDepth === undefined) return;
         const pipeWantsDepth = pipe.depthFormat !== 0;
         if (pipeWantsDepth !== pass.hasDepth) {
-          log.push(
+          emit(
             "!ASSERT gpu-validation: pipeline \"" + pipe.label + "\" has " +
             (pipeWantsDepth ? "a depth attachment" : "NO depth attachment") +
             " but the open render pass has " +
@@ -188,7 +401,40 @@ function makeShim(log, names, voidNames, unhandled, state) {
         const len = args[args.length - 1] | 0;
         const ptr = args[args.length - 2] | 0;
         const msg = readLabel(ptr, len);
-        if (msg.indexOf("assert failed") !== -1) log.push("!ASSERT " + msg);
+        if (msg.indexOf("assert failed") !== -1) emit("!ASSERT " + msg);
+      };
+    } else if (name === "js_device_create_bind_group_layout") {
+      // (device, entriesPtr, entriesLen, labelPtr, labelLen)
+      ns[name] = (...args) => {
+        record(name, args);
+        const h = state.nextHandle++;
+        const label = readLabel(args[3] | 0, args[4] | 0);
+        const blob = readBlob(args[1] | 0, args[2] | 0);
+        if (blob) bglSig.set(h, { ...blob, label });
+        if (label) emit("LABEL_MAP(" + h + ", " + label + ")");
+        return h;
+      };
+    } else if (name === "js_device_create_pipeline_layout") {
+      // (device, bglsPtr, bglsLen, labelPtr, labelLen)
+      ns[name] = (...args) => {
+        record(name, args);
+        const h = state.nextHandle++;
+        const groups = readHandleArray(args[1] | 0, args[2] | 0);
+        if (groups) plGroups.set(h, groups);
+        return h;
+      };
+    } else if (name === "js_render_pass_set_bind_group") {
+      // (pass, groupIndex, bindGroup)
+      ns[name] = (...args) => {
+        record(name, args);
+        const passH = args[0] | 0;
+        if (!passBound.has(passH)) passBound.set(passH, new Map());
+        passBound.get(passH).set(args[1] | 0, args[2] | 0);
+      };
+    } else if (name === "js_render_pass_draw" || name === "js_render_pass_draw_indexed") {
+      ns[name] = (...args) => {
+        record(name, args);
+        checkDraw(args[0] | 0, name === "js_render_pass_draw" ? "draw" : "drawIndexed");
       };
     } else if (name in FIXED_RETURNS) {
       const v = FIXED_RETURNS[name];
@@ -209,7 +455,11 @@ function makeShim(log, names, voidNames, unhandled, state) {
         const len = args[args.length - 1] | 0;
         const ptr = args[args.length - 2] | 0;
         const label = readLabel(ptr, len);
-        if (label) log.push("LABEL_MAP(" + h + ", " + label + ")");
+        // (device, LAYOUT, entriesPtr, entriesLen, labelPtr, labelLen) — the
+        // layout handle is what lets a draw compare this group against the
+        // bound pipeline's layout.
+        if (name === "js_device_create_bind_group") bgToBgl.set(h, args[1] | 0);
+        if (label) emit("LABEL_MAP(" + h + ", " + label + ")");
         return h;
       };
     } else {
@@ -223,9 +473,15 @@ function makeShim(log, names, voidNames, unhandled, state) {
     get(target, prop) {
       if (prop in target) return target[prop];
       if (typeof prop !== "string") return undefined;
+      // fd_write must be REAL even when unlisted — see fdWrite above. It is not
+      // marked unhandled, because it is handled; treating it as a missing import
+      // would fail the gate for every release SUT that logs.
+      if (prop === "fd_write") return fdWrite;
+      // proc_exit likewise: returning 0 lets the SUT keep running past an exit
+      // it expected to be terminal, which corrupts the rest of the run.
       return (...args) => {
         unhandled.add(prop);
-        log.push("!UNHANDLED " + prop + "(" + args.length + " args)");
+        emit("!UNHANDLED " + prop + "(" + args.length + " args)");
         return 0;
       };
     },
@@ -273,7 +529,18 @@ const host = {
     const log = [];
     const voidNames = new Set(importSpec.voidNames || []);
     const unhandled = new Set();
-    const state = { nextHandle: 1, nowMs: 0, mem: null };
+    // `--max-log=N` raises the runaway-log guard (see `emit` in makeShim).
+    // Default 500k entries: far above any debug smoke run, so it is inert
+    // there, and low enough that a release SUT logging an assert every frame
+    // cannot exhaust node's heap before the logic reads the log.
+    const maxLogArg = process.argv.find((a) => a.startsWith("--max-log="));
+    const state = {
+      nextHandle: 1,
+      nowMs: 0,
+      mem: null,
+      maxLog: maxLogArg ? Number(maxLogArg.slice("--max-log=".length)) : 500000,
+      traceCalls: process.argv.includes("--trace-calls"),
+    };
     const imports = {};
     for (const nsName of Object.keys(importSpec.namespaces || {})) {
       imports[nsName] = makeShim(log, importSpec.namespaces[nsName], voidNames, unhandled, state);

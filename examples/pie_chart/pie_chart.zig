@@ -9,11 +9,11 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
-const atan2 = zm.atan2;
+const atan2Rad = zm.atan2Rad;
 const radFromDeg = zm.radFromDeg;
 const degFromRad = zm.degFromRad;
 const bufPrint = std.fmt.bufPrint;
@@ -42,8 +42,8 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     if (z.isMouseButtonPressed(f.input, .left)) {
         s.donut = !s.donut;
@@ -71,7 +71,7 @@ fn update(f: *z.Frame, s: *State) void {
     const dist: f32 = @sqrt(dx * dx + dy * dy);
     var hovered: i32 = -1;
     if (dist <= radius and total > 0) {
-        var ang: f32 = degFromRad(atan2(dy, dx));
+        var ang: f32 = degFromRad(atan2Rad(dy, dx));
         if (ang < 0) {
             ang += 360.0;
         }
@@ -109,14 +109,14 @@ fn update(f: *z.Frame, s: *State) void {
             const lr: f32 = radius * 0.68;
             const lx: f32 = center[0] + @cos(radFromDeg(mid)) * lr - ts[0] * 0.5;
             const ly: f32 = center[1] + @sin(radFromDeg(mid)) * lr - ts[1] * 0.5;
-            f.gl.text(.{ lx, ly }, label, .{ .size = 16, .color = co.palette.ink, .font = &s.font });
+            f.gl.text(.{ lx, ly }, label, .{ .size = 16, .color = common.palette.ink, .font = &s.font });
         }
         start_angle += sweep;
     }
 
     // Donut hole (raylib punches a background circle over the centre).
     if (s.donut) {
-        f.gl.circle(center, radius * 0.42, .{ .color = co.palette.bg, .segments = 16 });
+        f.gl.circle(center, radius * 0.42, .{ .color = common.palette.bg, .segments = 16 });
     }
 
     // Read-out panel.
@@ -127,21 +127,21 @@ fn update(f: *z.Frame, s: *State) void {
 
     var buf: [48]u8 = undefined;
     const slc: []const u8 = bufPrint(&buf, "slices: {d}   total: {d:.0}", .{ n_slices, total }) catch "slices: ?";
-    f.gl.text(.{ 22, 52 }, slc, .{ .size = 13, .color = co.palette.ink, .font = &s.font });
+    f.gl.text(.{ 22, 52 }, slc, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
 
     var buf2: [48]u8 = undefined;
     const hov: []const u8 = if (hovered >= 0)
         (bufPrint(&buf2, "hover: slice {d:0>2}", .{hovered + 1}) catch "hover: --")
     else
         "hover: --";
-    f.gl.text(.{ 22, 74 }, hov, .{ .size = 13, .color = co.palette.accent2, .font = &s.font });
+    f.gl.text(.{ 22, 74 }, hov, .{ .size = 13, .color = common.palette.accent2, .font = &s.font });
     f.gl.text(
         .{ 22, 96 },
         if (s.donut) "tap: pie" else "tap: donut",
-        .{ .size = 13, .color = co.palette.ink_dim, .font = &s.font },
+        .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font },
     );
 
-    co.caption(f.gl, s.font, "pie chart");
+    common.caption(f.gl, s.font, "pie chart");
     z.endDrawing(f.gl);
 }
 

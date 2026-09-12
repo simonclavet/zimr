@@ -10,14 +10,32 @@ const MAXI: i64 = 0x7FFFFFFFFFFFFFFF;
 const MINI: i64 = -0x8000000000000000;
 
 var su: u64 = 0;
-fn ru(x: u64) u64 { su +%= x; return x; }
+fn ru(x: u64) u64 {
+    su +%= x;
+    return x;
+}
 var si: i64 = 0;
-fn ri(x: i64) i64 { si +%= x; return x; }
+fn ri(x: i64) i64 {
+    si +%= x;
+    return x;
+}
 
-fn refAddU(a: u64, b: u64) u64 { const r = @addWithOverflow(a, b); return if (r[1] == 1) MAXU else r[0]; }
-fn refSubU(a: u64, b: u64) u64 { const r = @subWithOverflow(a, b); return if (r[1] == 1) 0 else r[0]; }
-fn refMulU(a: u64, b: u64) u64 { const r = @mulWithOverflow(a, b); return if (r[1] == 1) MAXU else r[0]; }
-fn refShlU(a: u64, b: u6) u64 { const r = @shlWithOverflow(a, b); return if (r[1] == 1) MAXU else r[0]; }
+fn refAddU(a: u64, b: u64) u64 {
+    const r = @addWithOverflow(a, b);
+    return if (r[1] == 1) MAXU else r[0];
+}
+fn refSubU(a: u64, b: u64) u64 {
+    const r = @subWithOverflow(a, b);
+    return if (r[1] == 1) 0 else r[0];
+}
+fn refMulU(a: u64, b: u64) u64 {
+    const r = @mulWithOverflow(a, b);
+    return if (r[1] == 1) MAXU else r[0];
+}
+fn refShlU(a: u64, b: u6) u64 {
+    const r = @shlWithOverflow(a, b);
+    return if (r[1] == 1) MAXU else r[0];
+}
 
 fn refAddI(a: i64, b: i64) i64 {
     const r = @addWithOverflow(a, b);
@@ -35,7 +53,8 @@ export fn run_test() i32 {
     const ua = [_]u64{ 0xFFFFFFFFFFFFFF00, 5, 0x100000000, 0xDEADBEEF, MAXU };
     const ub = [_]u64{ 0x1000, 99, 0x100000000, 0x10, 1 };
     for (ua, ub) |a0, b0| {
-        const a = ru(a0); const b = ru(b0);
+        const a = ru(a0);
+        const b = ru(b0);
         if ((a +| b) != refAddU(a, b)) return code;
         if ((a -| b) != refSubU(a, b)) return code + 20;
         if ((a *| b) != refMulU(a, b)) return code + 40;

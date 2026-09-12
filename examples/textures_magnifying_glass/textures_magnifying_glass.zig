@@ -65,7 +65,7 @@ fn buildCircleMask(gpa: Allocator, gl: *z.WgpuGl) !z.WgpuTexture {
         .width = @intCast(sz),
         .height = @intCast(sz),
         .mipmaps = 1,
-        .format = @intFromEnum(z.PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(z.PixelFormat.uncompressed_r8g8b8a8),
     };
     return z.loadTextureFromImage(gl, img);
 }

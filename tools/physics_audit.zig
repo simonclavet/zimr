@@ -1784,7 +1784,7 @@ fn stirrerScenario(rep: *Report, gpa: std.mem.Allocator) !void {
         const phi: f32 = float(seg) * (2.0 * zm.pi / float(seg_count));
         _ = try world.addBody(gpa, .{
             .shape = seg_shape,
-            .position = vec(r_wall * zm.cos(phi), 1.5, r_wall * zm.sin(phi)),
+            .position = vec(r_wall * zm.cosRad(phi), 1.5, r_wall * zm.sinRad(phi)),
             .rotation = quatFromAxisAngle(vec(0, 1, 0), -(phi + zm.pi / 2.0)),
             .motion_type = .static,
         });

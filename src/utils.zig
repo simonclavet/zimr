@@ -1,3 +1,4 @@
+//! lint:alias utils
 // src/utils.zig - small dependency-free utilities consolidated.
 // Policy: this file is the home for snippet-sized facilities that
 // (a) only depend on `std` and (b) don't have a natural home in any

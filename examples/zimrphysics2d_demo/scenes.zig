@@ -8,6 +8,7 @@
 
 const z = @import("zimr");
 const zm = @import("zm");
+const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
 const std = @import("std");
 const render = @import("render.zig");
@@ -924,7 +925,7 @@ fn continuousBounceHumans(world: *phys.World, st: *SceneState) !void {
 fn continuousBounceHumansUpdate(world: *phys.World, st: *SceneState) void {
     const dt: f32 = 1.0 / 60.0;
     if (st.u[0] < 5 and st.f[0] <= 0) {
-        makeRagdoll(world, 0, 5, 1) catch {};
+        makeRagdoll(world, 0, 5, 1) catch assertUnreachable(@src(), "OOM", .{});
         st.u[0] += 1;
         st.f[0] = 2.0;
     }
@@ -1308,7 +1309,7 @@ fn benchmarkRainUpdate(world: *phys.World, st: *SceneState) void {
         st.f[0] = 0;
         const col: f32 = float(st.u[0]);
         const x: f32 = -14.0 + col * 4.0;
-        makeRagdoll(world, x, 18, 0.9) catch {};
+        makeRagdoll(world, x, 18, 0.9) catch assertUnreachable(@src(), "OOM", .{});
         st.u[0] += 1;
     }
 }
@@ -2022,7 +2023,7 @@ fn issuesDisableUpdate(world: *phys.World, st: *SceneState) void {
         phys.disableBody(world, attach);
         st.u[1] = 1;
     } else {
-        phys.enableBody(world, attach) catch {};
+        phys.enableBody(world, attach) catch assertUnreachable(@src(), "OOM", .{});
         st.u[1] = 0;
     }
 }
@@ -2301,7 +2302,7 @@ fn drawTreeNode(
 }
 
 fn collisionDynamicTreeLab(ctx: *render.LabCtx) void {
-    const di: usize = @intFromEnum(phys.MotionType.dynamic);
+    const di: usize = @backingInt(phys.MotionType.dynamic);
     const tree: *const phys.DynamicTree = &ctx.world.broadphase.trees[di];
     drawTreeNode(ctx, tree, tree.root);
 }
@@ -2356,7 +2357,8 @@ fn benchmarkSensorUpdate(world: *phys.World, st: *SceneState) void {
     while (b < 4) : (b += 1) {
         const p: Vec2 = phys.getPosition(world, st.body[b]);
         if (p[1] < 1.5) {
-            phys.setTransform(world, st.body[b], .{ p[0], 13.0 }, Rot2.identity) catch {};
+            phys.setTransform(world, st.body[b], .{ p[0], 13.0 }, Rot2.identity) catch
+                assertUnreachable(@src(), "OOM", .{});
         }
     }
 }
@@ -2638,7 +2640,7 @@ fn continuousPinballControl(
     phys.revoluteSetMotorSpeed(world, st.joint[1], rspeed);
     const bp: Vec2 = phys.getPosition(world, st.body[0]);
     if (bp[1] < -6.0) {
-        phys.setTransform(world, st.body[0], .{ 1, 15 }, Rot2.identity) catch {};
+        phys.setTransform(world, st.body[0], .{ 1, 15 }, Rot2.identity) catch assertUnreachable(@src(), "OOM", .{});
         phys.setLinearVelocity(world, st.body[0], .{ 0, 0 });
     }
 }
@@ -3692,7 +3694,7 @@ fn shapesModifyGeometryUpdate(world: *phys.World, st: *SceneState) void {
         2 => .{ .polygon = phys.makeBox(0.8, 0.8) },
         else => .{ .segment = .{ .point1 = .{ -1.0, 0 }, .point2 = .{ 1.0, 0 } } },
     };
-    phys.setShapeGeometry(world, sh, geom) catch {};
+    phys.setShapeGeometry(world, sh, geom) catch assertUnreachable(@src(), "OOM", .{});
 }
 
 fn customFilterShouldCollide(
@@ -5223,7 +5225,8 @@ fn eventBodyMoveUpdate(world: *phys.World) void {
         }
         const idx: usize = mv.body;
         const seed: f32 = float((idx * 37) % 20) - 10.0;
-        phys.setTransform(world, bodyHandleOf(idx), .{ seed, 14.0 }, Rot2.identity) catch {};
+        phys.setTransform(world, bodyHandleOf(idx), .{ seed, 14.0 }, Rot2.identity) catch
+            assertUnreachable(@src(), "OOM", .{});
         phys.setLinearVelocity(world, bodyHandleOf(idx), .{ 0, 0 });
     }
 }

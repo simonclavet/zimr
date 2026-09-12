@@ -7,10 +7,10 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const radFromDeg = zm.radFromDeg;
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
-const cos = zm.cos;
+const sinRad = zm.sinRad;
+const cosRad = zm.cosRad;
 const clamp = zm.clamp;
 const distance = zm.distance;
 const float = zm.float;
@@ -78,7 +78,7 @@ fn spawnRing(s: *State, center: Vec2, scale: f32) void {
         const rad: f32 = (s.base_dir + deg_per_row * float(row)) * rad_per_deg;
         s.bullets[s.head] = .{
             .pos = center,
-            .vel = .{ cos(rad) * p.speed * scale, sin(rad) * p.speed * scale },
+            .vel = .{ cosRad(rad) * p.speed * scale, sinRad(rad) * p.speed * scale },
             .color = if (@mod(row, 2) == 0) red else blue,
             .active = true,
         };
@@ -97,7 +97,7 @@ fn update(f: *z.Frame, s: *State) void {
     const scale: f32 = @min(w, h) / 450.0;
     const radius: f32 = 9.0 * scale;
     const step: f32 = clamp(f.time.delta_time * 60.0, 0.0, 3.0); // 60fps-equivalent frames
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // --- input: tap cycles the spiral preset (edge-triggered; no was_down bookkeeping) ---
     const m: Vec2 = z.getMousePosition(f.input);
@@ -135,7 +135,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     drawScene(f, s, center, scale, radius);
-    co.caption(f.gl, s.font, "bullet hell - tap to change the spiral pattern");
+    common.caption(f.gl, s.font, "bullet hell - tap to change the spiral pattern");
     z.endDrawing(f.gl);
 }
 
@@ -154,9 +154,9 @@ fn drawScene(
     const rec: z.Rectangle = .{ .x = center[0], .y = center[1], .width = sq, .height = sq };
     gl.rectRotated(rec, .{ half, half }, radFromDeg(s.magic_rot), .{ .color = purple });
     gl.rectRotated(rec, .{ half, half }, radFromDeg(s.magic_rot + 45.0), .{ .color = purple });
-    gl.circle(center, 70.0 * scale, .{ .color = co.palette.ink_dim, .outline = 1 });
-    gl.circle(center, 50.0 * scale, .{ .color = co.palette.ink_dim, .outline = 1 });
-    gl.circle(center, 30.0 * scale, .{ .color = co.palette.ink_dim, .outline = 1 });
+    gl.circle(center, 70.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
+    gl.circle(center, 50.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
+    gl.circle(center, 30.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
 
     // bullets
     var i: usize = 0;

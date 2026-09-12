@@ -265,11 +265,32 @@ pub fn Globals(comptime Module: type) type {
             // compiler. Declare the extern symbol AS the view type directly — same
             // symbol, same bytes — so no cast is needed. Scalar fields have
             // BoundView == FieldT, so this is unchanged for them.
-            return @extern(
-                *addrspace(.storage_buffer) BoundView(FieldT),
+            //
+            // The BINDING must be a single-item pointer to a STRUCT — that is the
+            // SPIR-V block shape a storage buffer takes, and the compiler rejects a
+            // pointer straight at the array. Wrap the view in a one-field block and
+            // hand back a pointer to that field: same symbol, same bytes, and a
+            // kernel still writes `pos[i]` with no `.items` in sight.
+            const Block = extern struct { items: BoundView(FieldT) };
+            const block: *addrspace(.storage_buffer) Block = @extern(
+                *addrspace(.storage_buffer) Block,
                 .{ .name = "kbuf_" ++ @tagName(field) },
             );
+            return &block.items;
         }
+
+        // ===== ZNUM-UPSTREAM(lean-path): read the Params uniform via a module alias =====
+        // The mirror of `bind`, but for the single `Params` uniform instead of a storage buffer.
+        // A lean kernel file aliases it once at module scope:
+        //     const P = g.uniform();
+        //     ... if (id >= P.count) return; ...   // reads lower to uniform loads
+        // Returning the uniform POINTER (instead of copying Params into a per-dispatch `Ctx`, as
+        // `installKernel` does) is what lets `installKernelLean` emit half-size, dead-branch-free
+        // WGSL. Same symbol `P` the stock path uses.
+        pub fn uniform() Uniform(Module) {
+            return @extern(*addrspace(.uniform) Module.Params, .{ .name = "P" });
+        }
+        // ===== END ZNUM-UPSTREAM(lean-path) =====
     } else struct {
         pub var B: Module.Buffers = undefined;
         pub var P: Module.Params = undefined;
@@ -288,8 +309,86 @@ pub fn Globals(comptime Module: type) type {
             }
             return ptr;
         }
+
+        // ===== ZNUM-UPSTREAM(lean-path): CPU twin of uniform() =====
+        // On the CPU build there is no uniform address space; the host fills the module's plain
+        // `P` before running the kernel loop, and the kernel reads it through this pointer. One
+        // source, both backends — the same trick `bind` plays for the buffers.
+        pub fn uniform() Uniform(Module) {
+            return &P;
+        }
+        // ===== END ZNUM-UPSTREAM(lean-path) =====
     };
 }
+
+// ===== ZNUM-UPSTREAM(lean-path): the "lean" kernel form =====
+// Merged from znum's delta ledger (`shaders/vendor/zimr/PROVENANCE.md`, recorded `offered`).
+// Kept under its original markers so a re-sync can grep for it.
+//
+// WHY THIS EXISTS. The stock `installKernel` below builds a `Ctx` and copies `Params`
+// field-by-field out of the uniform on every dispatch. That copy is CORRECT — see the long note
+// in `installKernel` for the `OpCopyLogical` bug it avoids — but Zig's SPIR-V backend wraps it in
+// a merge ladder of comptime-dead guard branches (`if (31u == 31u) { ... }`), so the emitted WGSL
+// comes out about twice the size the kernel body warrants.
+//
+// The LEAN form reads the uniform DIRECTLY through a module-level alias (`const P = g.uniform();`),
+// exactly the way buffers are read via `g.bind`. No Ctx, no field-by-field copy, no dead ladder.
+// A lean kernel therefore takes a plain `id: u32` rather than a `Ctx`.
+//
+// PURELY ADDITIVE: `installKernel` and `Ctx` are untouched, so every existing zimr kernel is
+// unaffected and can migrate one at a time.
+
+/// The type `g.uniform()` returns: a pointer to the kernel's `Params`.
+///   - GPU build: a pointer into the `uniform` address space — the shader's
+///     `@group(0) @binding(0) var<uniform> P`. Reads become uniform loads.
+///   - CPU build: a plain pointer into the module's `Globals.P`, which the host fills before
+///     running the kernel loop. Reads become normal field reads.
+/// One declaration, both backends — the essence of kompute's one-source model.
+pub fn Uniform(comptime Module: type) type {
+    return if (is_gpu)
+        *addrspace(.uniform) Module.Params
+    else
+        *Module.Params;
+}
+
+/// The lean twin of `installKernel`: generate the SPIR-V compute entry for kernel `name`, but
+/// invoke it as `Module.<name>(id)` with the raw thread index instead of constructing and passing
+/// a `Ctx`. The kernel reads its parameters through the module-level `g.uniform()` alias, so NO
+/// per-dispatch param copy is emitted — that is the whole point (see the block above).
+///
+/// A no-op on the CPU target: there a kernel is just a Zig function the host calls in a loop, so
+/// there is nothing to export. Call once per kernel from the file's `comptime {}` block.
+pub fn installKernelLean(comptime Module: type, comptime name: []const u8) void {
+    // Off the GPU target there is no compute entry point to export; the host drives the CPU loop
+    // itself. So compiling for the native/wasm host, this function does nothing.
+    if (!is_gpu) {
+        return;
+    }
+
+    // The workgroup size is fixed per kernel file by `config.workgroup`, and it is the single
+    // source of truth: it is baked into the SPIR-V `LocalSize`, and spv2wgsl reads that back to
+    // emit `@workgroup_size(N, 1, 1)`. Neither the build script nor the host repeats the number.
+    const workgroup_x: u32 = Module.config.workgroup;
+
+    // The exported entry point. WebGPU dispatches this once per thread; it reads the built-in
+    // global invocation id, takes lane 0's component (the flat 1-D thread index), and hands it to
+    // the kernel body. One `Entry` is generated per kernel `name`.
+    const Entry = struct {
+        fn run() callconv(.{ .spirv_kernel = .{ .x = workgroup_x, .y = 1, .z = 1 } }) void {
+            // Compute kernels do not want implicit bounds-check traps; the kernel body guards its
+            // own index (`if (id >= P.count) return;`).
+            @setRuntimeSafety(false);
+
+            const thread_id: u32 = gpu.global_invocation_id[0];
+            @field(Module, name)(thread_id);
+        }
+    };
+
+    // Export under exactly `name`, so the host selects this entry with
+    // `createComputePipeline(module, name)` and spv2wgsl picks it via `--entry=<name>`.
+    @export(&Entry.run, .{ .name = name });
+}
+// ===== END ZNUM-UPSTREAM(lean-path) =====
 
 /// Generate the SPIR-V compute entry point for kernel `name` in `Module`. Reads
 /// `global_invocation_id`, builds a `Ctx` (params by value from the uniform), and

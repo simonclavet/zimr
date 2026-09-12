@@ -1,3 +1,4 @@
+//! lint:alias common
 //! example_common — shared scaffold for the wgpu example set. A cohesive palette, one caption
 //! style, a subtle backdrop, and viewport-relative layout helpers, so every example reads
 //! as part of the same family instead of ad-hoc per file. Import as `@import("example_common")`.

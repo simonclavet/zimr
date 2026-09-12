@@ -12,7 +12,7 @@ const float = zm.float;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -150,8 +150,8 @@ fn update(f: *z.Frame, state: *State) void {
         z.updateTexture(f.gl, state.live_tex, state.live_image);
     }
 
-    z.clearViewport(f, co.palette.bg);
-    co.caption(f.gl, state.font, "image* CPU edits (blur/invert/rotate) + a live updateTexture pulse");
+    z.clearViewport(f, common.palette.bg);
+    common.caption(f.gl, state.font, "image* CPU edits (blur/invert/rotate) + a live updateTexture pulse");
 
     // 2x2 grid of static variants.
     const x0: f32 = 32;

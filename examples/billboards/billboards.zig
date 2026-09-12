@@ -19,7 +19,7 @@ const pi = zm.pi;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -144,7 +144,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "drawBillboard - alpha sprites always facing the camera; cubes show 3D faces");
+    common.caption(f.gl, s.font, "drawBillboard - alpha sprites always facing the camera; cubes show 3D faces");
     z.endDrawing(f.gl);
 }
 

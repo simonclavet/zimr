@@ -25,7 +25,7 @@ var arena_storage: std.heap.ArenaAllocator = undefined;
 // lint:off module-var: wasm-export one-time-init guard
 var initialized: bool = false;
 
-pub fn main() !void {
+pub fn main() void {
     // wasi-reactor init.  Allocator backing for the arena.
     arena_storage = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     initialized = true;

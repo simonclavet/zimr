@@ -3020,7 +3020,7 @@ NEXT: S2 compute round-trip (StorageBuffer upload->dispatch->readback->assert).
   prints the PATH export). claude.md bootstrap section rewritten for 0.17 + pure-Zig.
 - C++ SPIR-V TOOLS GATED OFF: tools/build.zig builds spirv-opt/val/cross only under
   -Dspirv-tools=true (default false). `zig build`/lint (which depend on tools_subbuild for
-  lint_zimr) no longer trigger the ~12-min libspirv compile. Cold bootstrap = zig+bun only.
+  zimrlint) no longer trigger the ~12-min libspirv compile. Cold bootstrap = zig+bun only.
 - LINT FIXED + ROBUST: build.zig tools_skip_prefix "zig-x86_64-linux-0.16.0/" -> "zig-x86_64-"
   so the linter stops walking the (now-0.17) bundled toolchain stdlib (~hundreds of false hits).
   Fixed the one real pre-existing issue: src/spv2wgsl/sccp.zig:702 untyped local t_ops.

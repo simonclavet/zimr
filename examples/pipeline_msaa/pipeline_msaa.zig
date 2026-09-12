@@ -20,7 +20,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 const zm = @import("zm");
 const rotationZ = zm.rotationZ;
 
@@ -169,13 +169,17 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .tint = white },
     );
 
-    f.gl.text(.{ x0, y0 + cell + 10 }, "1x (aliased)", .{ .size = 22, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ x0, y0 + cell + 10 }, "1x (aliased)", .{
+        .size = 22,
+        .color = common.palette.ink_dim,
+        .font = &s.font,
+    });
     f.gl.text(
         .{ x0 + cell + gap, y0 + cell + 10 },
         "4x MSAA",
-        .{ .size = 22, .color = co.palette.ink_dim, .font = &s.font },
+        .{ .size = 22, .color = common.palette.ink_dim, .font = &s.font },
     );
-    co.caption(f.gl, s.font, "pipeline_msaa: 1x vs 4x multisampling - compare the diagonal edges");
+    common.caption(f.gl, s.font, "pipeline_msaa: 1x vs 4x multisampling - compare the diagonal edges");
     z.endDrawing(f.gl);
 }
 

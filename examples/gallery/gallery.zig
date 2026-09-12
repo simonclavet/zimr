@@ -14,6 +14,7 @@ const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const float = zm.float;
@@ -41,7 +42,8 @@ fn updatePulse(s: *PulseState, f: *z.Frame, font: z.Font) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
     const t: f32 = f.time.time;
-    const phase: f32 = 0.5 + 0.5 * @sin(t * pi);
+    // A HALF turn across the cycle, so the phase rises and falls once.
+    const phase: f32 = 0.5 + 0.5 * sinTurns(t * 0.5);
     const a: Color = z.colors.violet_500;
     const b: Color = z.colors.pink_500;
     const bg: Color = .{

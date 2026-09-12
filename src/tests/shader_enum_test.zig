@@ -26,21 +26,21 @@ const Sut = types.ShaderUniformDataType;
 // it; if their notion of "which slot is colDiffuse" differs by even
 // one, a matrix lands in the color slot.  Pin the layout.
 test "ShaderLocationIndex wire values match raylib ABI" {
-    try testing.expectEqual(@as(i32, 0), @intFromEnum(Sli.vertex_position));
-    try testing.expectEqual(@as(i32, 1), @intFromEnum(Sli.vertex_texcoord01));
-    try testing.expectEqual(@as(i32, 2), @intFromEnum(Sli.vertex_texcoord02));
+    try testing.expectEqual(@as(i32, 0), @backingInt(Sli.vertex_position));
+    try testing.expectEqual(@as(i32, 1), @backingInt(Sli.vertex_texcoord01));
+    try testing.expectEqual(@as(i32, 2), @backingInt(Sli.vertex_texcoord02));
     // vertex_normal at 3 (NOT 2) is the slot that historically drifted.
-    try testing.expectEqual(@as(i32, 3), @intFromEnum(Sli.vertex_normal));
-    try testing.expectEqual(@as(i32, 4), @intFromEnum(Sli.vertex_tangent));
-    try testing.expectEqual(@as(i32, 5), @intFromEnum(Sli.vertex_color));
-    try testing.expectEqual(@as(i32, 6), @intFromEnum(Sli.matrix_mvp));
-    try testing.expectEqual(@as(i32, 7), @intFromEnum(Sli.matrix_view));
-    try testing.expectEqual(@as(i32, 8), @intFromEnum(Sli.matrix_projection));
-    try testing.expectEqual(@as(i32, 9), @intFromEnum(Sli.matrix_model));
-    try testing.expectEqual(@as(i32, 10), @intFromEnum(Sli.matrix_normal));
-    try testing.expectEqual(@as(i32, 12), @intFromEnum(Sli.color_diffuse));
-    try testing.expectEqual(@as(i32, 15), @intFromEnum(Sli.map_albedo));
-    try testing.expectEqual(@as(i32, 29), @intFromEnum(Sli.vertex_instancetransform));
+    try testing.expectEqual(@as(i32, 3), @backingInt(Sli.vertex_normal));
+    try testing.expectEqual(@as(i32, 4), @backingInt(Sli.vertex_tangent));
+    try testing.expectEqual(@as(i32, 5), @backingInt(Sli.vertex_color));
+    try testing.expectEqual(@as(i32, 6), @backingInt(Sli.matrix_mvp));
+    try testing.expectEqual(@as(i32, 7), @backingInt(Sli.matrix_view));
+    try testing.expectEqual(@as(i32, 8), @backingInt(Sli.matrix_projection));
+    try testing.expectEqual(@as(i32, 9), @backingInt(Sli.matrix_model));
+    try testing.expectEqual(@as(i32, 10), @backingInt(Sli.matrix_normal));
+    try testing.expectEqual(@as(i32, 12), @backingInt(Sli.color_diffuse));
+    try testing.expectEqual(@as(i32, 15), @backingInt(Sli.map_albedo));
+    try testing.expectEqual(@as(i32, 29), @backingInt(Sli.vertex_instancetransform));
 }
 
 // ShaderUniformDataType - the integer tag `rlSetUniform` switches on
@@ -48,17 +48,17 @@ test "ShaderLocationIndex wire values match raylib ABI" {
 // as 4 (actually `int`) and INT as 6 (actually `ivec3`).  Pin every
 // value `rlSetUniform`'s switch arms depend on.
 test "ShaderUniformDataType wire values match rlSetUniform dispatch" {
-    try testing.expectEqual(@as(i32, 0), @intFromEnum(Sut.float));
-    try testing.expectEqual(@as(i32, 1), @intFromEnum(Sut.vec2));
-    try testing.expectEqual(@as(i32, 2), @intFromEnum(Sut.vec3));
+    try testing.expectEqual(@as(i32, 0), @backingInt(Sut.float));
+    try testing.expectEqual(@as(i32, 1), @backingInt(Sut.vec2));
+    try testing.expectEqual(@as(i32, 2), @backingInt(Sut.vec3));
     // vec4 == 3 and int == 4 are THE values that were swapped/wrong.
-    try testing.expectEqual(@as(i32, 3), @intFromEnum(Sut.vec4));
-    try testing.expectEqual(@as(i32, 4), @intFromEnum(Sut.int));
-    try testing.expectEqual(@as(i32, 5), @intFromEnum(Sut.ivec2));
-    try testing.expectEqual(@as(i32, 6), @intFromEnum(Sut.ivec3));
-    try testing.expectEqual(@as(i32, 7), @intFromEnum(Sut.ivec4));
-    try testing.expectEqual(@as(i32, 8), @intFromEnum(Sut.uint));
-    try testing.expectEqual(@as(i32, 12), @intFromEnum(Sut.sampler2d));
+    try testing.expectEqual(@as(i32, 3), @backingInt(Sut.vec4));
+    try testing.expectEqual(@as(i32, 4), @backingInt(Sut.int));
+    try testing.expectEqual(@as(i32, 5), @backingInt(Sut.ivec2));
+    try testing.expectEqual(@as(i32, 6), @backingInt(Sut.ivec3));
+    try testing.expectEqual(@as(i32, 7), @backingInt(Sut.ivec4));
+    try testing.expectEqual(@as(i32, 8), @backingInt(Sut.uint));
+    try testing.expectEqual(@as(i32, 12), @backingInt(Sut.sampler2d));
 }
 
 // The dispatch contract, stated as a test.  `rlSetUniform` (in

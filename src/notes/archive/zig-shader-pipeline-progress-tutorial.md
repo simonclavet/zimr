@@ -67,7 +67,7 @@ an `@embedFile`-able import on a module.
   `shader_zls:<path>` with `shadermath` in its imports.
   Go-to-def into `zm.X` lands in `src/shadermath.zig` from any
   `_vs.zig` / `_fs.zig` file.
-- **Lint integration**: `lint_zimr` (built via `tools/build.zig`)
+- **Lint integration**: `zimrlint` (built via `tools/build.zig`)
   has two shader-specific rules (`shader-inline-fn`, `shader-no-atan`)
   that auto-fire on `_vs.zig` / `_fs.zig` files.
 
@@ -185,7 +185,7 @@ Drop `examples/my_example.zig` + `examples/my_example_fs.zig` (and
 optionally a `_vs.zig`) into the repo.  Run `zig build`.  Done.
 Pipeline auto-wires it.  ZLS sees `@import("shadermath")` and
 gives you completion + go-to-def into `src/shadermath.zig`.
-`zig fmt` formats the file.  `lint_zimr` runs the shader rules
+`zig fmt` formats the file.  `zimrlint` runs the shader rules
 on it.  If you typo a uniform name, the Zig compiler tells you
 at edit time, not the GPU driver at runtime.
 

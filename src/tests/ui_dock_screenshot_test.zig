@@ -8,16 +8,18 @@ const Allocator = std.mem.Allocator;
 const ui = @import("../ui.zig");
 const shapes2d = @import("../shapes2d.zig");
 const text2d = @import("../text2d.zig");
-const ui_screenshot = @import("../ui.zig");
 
 const width: u32 = 720;
 const height: u32 = 480;
 
-test "ui_screenshot: dockspace with 3 docked windows -> PNG" {
+test "ui: dockspace with 3 docked windows -> PNG" {
     const gpa: Allocator = std.testing.allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
-        .frame_arena = std.heap.ArenaAllocator.init(gpa),
+        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // live-byte tripwire that catches a dropped per-frame reset). These four test
+        // files were imported by nothing, so they never compiled against the change.
+        .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),
         .canvas_w = width,
         .canvas_h = height,
     };
@@ -64,14 +66,14 @@ test "ui_screenshot: dockspace with 3 docked windows -> PNG" {
     var io_threaded: std.Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
     const io: std.Io = io_threaded.io();
-    ui_screenshot.renderToPng(
+    ui.renderToPng(
         gpa,
         io,
         &ctx,
         width,
         height,
         "/mnt/user-data/outputs/ui_dock_basic-turn328.png",
-    ) catch {};
+    ) catch {}; // lint:off catch-suppression: best-effort screenshot artifact
 }
 
 //.iii: same scene but with a simulated drag in
@@ -80,11 +82,14 @@ test "ui_screenshot: dockspace with 3 docked windows -> PNG" {
 // the right-edge zone hovered (brighter).  Produces a PNG that
 // captures the drop-target preview without needing a real input loop.
 
-test "ui_screenshot: dock drag overlay -> PNG" {
+test "ui: dock drag overlay -> PNG" {
     const gpa: Allocator = std.testing.allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
-        .frame_arena = std.heap.ArenaAllocator.init(gpa),
+        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // live-byte tripwire that catches a dropped per-frame reset). These four test
+        // files were imported by nothing, so they never compiled against the change.
+        .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),
         .canvas_w = width,
         .canvas_h = height,
     };
@@ -145,12 +150,12 @@ test "ui_screenshot: dock drag overlay -> PNG" {
     var io_threaded: std.Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
     const io: std.Io = io_threaded.io();
-    ui_screenshot.renderToPng(
+    ui.renderToPng(
         gpa,
         io,
         &ctx,
         width,
         height,
         "/mnt/user-data/outputs/ui_dock_overlay-turn325.png",
-    ) catch {};
+    ) catch {}; // lint:off catch-suppression: best-effort screenshot artifact
 }

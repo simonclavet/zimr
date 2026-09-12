@@ -51,7 +51,7 @@ fn buildChecked(gpa: Allocator, gl: *z.WgpuGl) !z.WgpuTexture {
         .width = im_w,
         .height = im_h,
         .mipmaps = 1,
-        .format = @intFromEnum(z.PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(z.PixelFormat.uncompressed_r8g8b8a8),
     };
     return z.loadTextureFromImage(gl, img);
 }

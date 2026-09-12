@@ -26,7 +26,7 @@ const zm = @import("zm");
 const float = zm.float;
 const Color = zm.Color;
 const pi = zm.pi;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -132,7 +132,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // SCREEN PASS: open once, clear, then draw the panels.
     z.beginDrawing(f.gl);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // ---- Two panels: live RTT (left) vs round-tripped pixels (right) ---------
     const pad: f32 = 14;
@@ -169,7 +169,7 @@ fn update(f: *z.Frame, s: *State) void {
         hud,
         .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font },
     );
-    co.caption(f.gl, s.font, "copyTextureToBuffer + poll-mapped staging - the panels match, one async step apart");
+    common.caption(f.gl, s.font, "copyTextureToBuffer + poll-mapped staging - the panels match, one async step apart");
     z.endDrawing(f.gl);
 }
 

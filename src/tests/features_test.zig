@@ -213,10 +213,18 @@ test "audio: composer ADSR shapes the tone (attack/sustain/release)" {
 // hand-rolled a duplicate. And `clamp` was invisible to `grep '^pub fn clamp'`
 // because it is declared `pub inline fn` — so even a careful grep lied.
 //
-// The dead spellings (`mix`, `saturate`, `stepEdge`) are NOT pub. They survive
-// as PRIVATE, empty decls in zimrmath.zig whose doc comment names the canonical
-// spelling, so `zm.mix` fails with "not marked pub" and Zig points you at that
-// comment — discoverable, but not a second public name for the same operation.
+// The dead spellings (`mix`, `saturate`, `stepEdge`, `sin`, `cos`, `sincos`) are
+// NOT pub. They survive as PRIVATE, empty decls in zimrmath.zig whose doc comment
+// names the canonical spelling, so `zm.mix` fails with "not marked pub" and Zig
+// points you at that comment — discoverable, but not a second public name for the
+// same operation.
+//
+// `sin`/`cos`/`sincos` joined that list for a DIFFERENT reason than the other
+// three. They were not badly spelled; they were UNDER-specified. Once `sinTurns`
+// existed alongside `sinRad`, a bare `sin` no longer names an operation — it names
+// two, and the caller cannot see which from the call site. So the canonical list
+// below pins `sinRad`/`cosRad`, and the bare spellings are pinned dead: a reader
+// who types `zm.sin` gets pointed at the pair and has to pick a unit.
 // (They used to be `pub const mix = @compileError(...)`. That took down the
 // whole test gate: `std.testing.refAllDecls(zm)` in src/tests.zig REFERENCES
 // every pub decl, and referencing a @compileError decl is, of course, an error.
@@ -229,8 +237,8 @@ test "zm: the GPU math vocabulary is reachable by its standard names" {
         // the rest of the shader-author vocabulary
         "clamp",  "smoothstep", "fract",
         "dot",    "cross",      "normalize",
-        "length", "distance",   "sin",
-        "cos",    "floor",      "round",
+        "length", "distance",   "sinRad",
+        "cosRad", "floor",      "round",
         "trunc",  "remap",
     };
     inline for (canonical) |n| {
@@ -243,7 +251,7 @@ test "zm: the GPU math vocabulary is reachable by its standard names" {
 
     // ONE public spelling per operation. A dead spelling that becomes pub again
     // is a second name for the same op — exactly the drift this file prevents.
-    const dead = [_][]const u8{ "mix", "saturate", "stepEdge" };
+    const dead = [_][]const u8{ "mix", "saturate", "stepEdge", "sin", "cos", "sincos" };
     inline for (dead) |n| {
         if (@hasDecl(zm, n)) {
             @compileError("zimrmath exposes the dead spelling '" ++ n ++

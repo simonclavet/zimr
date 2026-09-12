@@ -18,7 +18,7 @@ const Camera3D = zm.Camera3D;
 const Color = zm.Color;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -50,7 +50,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // ---- UI first (so wantCaptureMouse reflects this frame) ----
     const u: z.ui_real.Ui = s.ui_host.begin(f);
@@ -89,8 +89,8 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- HUD ----
     const hint: []const u8 = "drag = orbit   2-finger/right = pan   pinch/wheel = zoom";
-    f.gl.text(.{ 14, 42 }, hint, .{ .size = 18, .color = co.palette.ink_dim, .font = &s.font });
-    co.caption(f.gl, s.font, "WebGPU 3D - orbit / pan / zoom camera controller");
+    f.gl.text(.{ 14, 42 }, hint, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+    common.caption(f.gl, s.font, "WebGPU 3D - orbit / pan / zoom camera controller");
     s.ui_host.render(f);
 }
 

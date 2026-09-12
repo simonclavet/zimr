@@ -970,27 +970,6 @@ pub fn synthesizeTypesWgsl(
     };
 }
 
-/// Scan all `OpDecorate <varid> Binding <N>` and return N for the
-/// given variable, or null if no Binding decoration exists.
-fn findBinding(mod: zspv.Module, var_id: u32) ?u32 {
-    for (mod.instructions) |instr| {
-        if (instr.opcode != Op.op_decorate) {
-            continue;
-        }
-        if (instr.operands.len < 3) {
-            continue;
-        }
-        if (instr.operands[0] != var_id) {
-            continue;
-        }
-        if (instr.operands[1] != Decoration.binding) {
-            continue;
-        }
-        return instr.operands[2];
-    }
-    return null;
-}
-
 /// Pack a Zig string into SPIR-V's wire format (u32 words, little-
 /// endian within each, null-terminated, zero-padded to word boundary).
 /// Caller owns the returned slice.
@@ -1115,7 +1094,7 @@ pub fn rewriteSamplersWgsl(
         // place the sampler at `texture_binding + 1` — the SAME convention the
         // host uses when it expands a `.sampler_2d` ResolvedField into a
         // texture at @binding(N) + a sampler at @binding(N+1)
-        // (`shader_runtime_wgpu.zig`). Both sides now derive the sampler slot
+        // (`shader_runtime.zig`). Both sides now derive the sampler slot
         // from the one texture binding, so the emitted WGSL and the host
         // bind-group layout can never disagree. (The schema's binding solver
         // already spaces pinned textures 2 apart — e.g. scene@1, bloom@3 — so

@@ -347,7 +347,7 @@ fn update(f: *z.Frame, s: *State) void {
     // writes the uniform a single time at beginBatch, so params must be final by
     // then (endBatch asserts they don't change mid-batch). The same values drive
     // the one-time priming sort and every substep below.
-    const live_count: u32 = @trunc(clamp(s.sim_count_f, 1, fk.num_particles));
+    const live_count: u32 = @trunc(clamp(s.sim_count_f, 1, float(fk.num_particles)));
 
     const sim_params: fk.Params = .{
         // THE LIVE COUNT, not the buffer capacity. This used to be `fk.num_particles`, so
@@ -882,13 +882,15 @@ fn update(f: *z.Frame, s: *State) void {
                 // fault explains every symptom at once: positions reading back as density
                 // values (5..11), grid_counts reading back as a prefix-sum ramp, and the
                 // discs drawing density-as-position into the corner.
+                // The handle a missing field reports as; 0 is the invalid-buffer value.
+                const no_buf: z.wgpu.BufferHandle = @fromBackingInt(@intCast(0));
                 u.text("h pos={d} den={d}", .{
-                    @intFromEnum(s.pipe.fieldBuffer(.pos) orelse @as(z.wgpu.BufferHandle, @enumFromInt(0))),
-                    @intFromEnum(s.pipe.fieldBuffer(.density) orelse @as(z.wgpu.BufferHandle, @enumFromInt(0))),
+                    @backingInt(s.pipe.fieldBuffer(.pos) orelse no_buf),
+                    @backingInt(s.pipe.fieldBuffer(.density) orelse no_buf),
                 });
                 u.text("h gc={d} cs={d}", .{
-                    @intFromEnum(s.pipe.fieldBuffer(.grid_counts) orelse @as(z.wgpu.BufferHandle, @enumFromInt(0))),
-                    @intFromEnum(s.pipe.fieldBuffer(.cell_start) orelse @as(z.wgpu.BufferHandle, @enumFromInt(0))),
+                    @backingInt(s.pipe.fieldBuffer(.grid_counts) orelse no_buf),
+                    @backingInt(s.pipe.fieldBuffer(.cell_start) orelse no_buf),
                 });
                 u.text("gc  {d} {d} {d} {d}", .{ s.probe_gc[0], s.probe_gc[1], s.probe_gc[2], s.probe_gc[3] });
                 // The one link never measured: what the HOST holds at write time. Every

@@ -151,7 +151,7 @@ authority is the lint below.
 - Sampling a map that's unused (or when a feature like shadows is off)
   is harmless: the value is simply discarded downstream.
 
-This is enforced mechanically by `tools/lint_zimr.zig` (tags
+This is enforced mechanically by `tools/zimrlint.zig` (tags
 `sampler-in-branch` / `sampler-in-helper`).  Two detection paths:
 
 - **IoT shaders**: samplers are the only *callable* members of an `Io`

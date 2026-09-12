@@ -14,7 +14,7 @@ const pi = zm.pi;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -73,7 +73,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawCube(f.gl, pointVec(-3, 0.4, 0), .{ .size = vec(0.8, 0.8, 0.8), .color = c.slate_600 });
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "text rendered into a RenderTexture, mapped onto a 3D cube via drawCubeTexture");
+    common.caption(f.gl, s.font, "text rendered into a RenderTexture, mapped onto a 3D cube via drawCubeTexture");
     z.endDrawing(f.gl);
 }
 

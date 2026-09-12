@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
@@ -37,14 +37,14 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     if (z.isMouseButtonPressed(f.input, .left)) {
         s.show_verts = !s.show_verts;
     }
 
-    const center: Vec2 = co.center(w, h);
+    const center: Vec2 = common.center(w, h);
     const radius: f32 = @min(w, h) * (0.34 + 0.03 * @sin(s.time * 0.8));
     const start_angle: f32 = @mod(s.time * 18.0, 360.0);
     const span: f32 = 150.0 + 120.0 * @sin(s.time * 0.5);
@@ -99,7 +99,7 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.text(
         .{ 22, 52 },
         seg_line,
-        .{ .size = 14, .color = if (manual) co.palette.accent2 else co.palette.ink_dim, .font = &s.font },
+        .{ .size = 14, .color = if (manual) common.palette.accent2 else common.palette.ink_dim, .font = &s.font },
     );
 
     var buf2: [80]u8 = undefined;
@@ -108,11 +108,11 @@ fn update(f: *z.Frame, s: *State) void {
         "span: {d:.0} deg  radius: {d:.0}",
         .{ span, radius },
     ) catch "span: --";
-    f.gl.text(.{ 22, 74 }, ang_line, .{ .size = 13, .color = co.palette.ink, .font = &s.font });
+    f.gl.text(.{ 22, 74 }, ang_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
     const hint: []const u8 = if (s.show_verts) "tap: hide vertices" else "tap: show vertices";
-    f.gl.text(.{ 22, 96 }, hint, .{ .size = 13, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ 22, 96 }, hint, .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 
-    co.caption(f.gl, s.font, "circle sector drawing");
+    common.caption(f.gl, s.font, "circle sector drawing");
     z.endDrawing(f.gl);
 }
 

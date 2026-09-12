@@ -1,0 +1,209 @@
+//! Which way does the gait actually drive the robot, and how far?
+//!
+//! ★ THE STANCE BRANCH RETURNS `stride * (t - 0.5)` with t going 0 to 1 — the foot travels
+//! **+x relative to the body**. A planted foot moving +x pushes the body -x. The comment three
+//! lines above says the opposite ("travels BACKWARD relative to the body"), so one of them is
+//! wrong and the robot is the tie-breaker.
+//!
+//! ★★ AND THE CONTACT STIFFENING FROM THE CREEP WORK CHANGES THE STAKES. Feet that slip cannot
+//! push; the gait was measured as "drifts backwards whichever way the stance direction is set",
+//! which is the signature of slipping rather than of a sign error. With 5.2x less slip, the sign
+//! may now matter where before it did not.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+/// ★★★ THE PROBE NOW CARRIES THE ARM. The last gait sweep measured a bare Go1, recommended a
+/// 2.7x stride from it, and tipped the real demo over — because the demo splices 2 kg high on
+/// the trunk and the probe did not. **Measure the robot that ships.**
+const arm_bodies =
+    \\      <body name="arm_base" pos="0.02 0 0.06">
+    \\        <joint name="arm_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="1.2" armature="0.02"/>
+    \\        <geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.030" density="700"/>
+    \\        <body name="arm_upper" pos="0 0 0.10">
+    \\          <joint name="arm_shoulder" type="hinge" axis="0 1 0" range="-2.4 2.4" damping="1.2" armature="0.02"/>
+    \\          <geom type="capsule" fromto="0 0 0 0 0 0.26" size="0.026" density="700"/>
+    \\          <body name="arm_fore" pos="0 0 0.26">
+    \\            <joint name="arm_elbow" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="1.0" armature="0.015"/>
+    \\            <geom type="capsule" fromto="0 0 0 0 0 0.22" size="0.022" density="700"/>
+    \\            <body name="arm_wrist" pos="0 0 0.22">
+    \\              <joint name="arm_wrist" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.8" armature="0.01"/>
+    \\              <geom type="capsule" fromto="0 0 0 0 0 0.08" size="0.019" density="700"/>
+    \\              <body name="gripper" pos="0 0 0.08">
+    \\                <geom name="gripper_g" type="sphere" size="0.060" density="1100"/>
+    \\              </body>
+    \\            </body>
+    \\          </body>
+    \\        </body>
+    \\      </body>
+    \\
+;
+
+const sim_dt: f32 = 1.0 / 250.0;
+
+fn cycle(phase: f32, stride: f32, lift: f32, duty: f32, flip: bool) zm.Vec {
+    const wrapped: f32 = phase - @floor(phase);
+    const sign: f32 = if (flip) -1.0 else 1.0;
+    if (wrapped < duty) {
+        const t: f32 = wrapped / duty;
+        return vec(sign * stride * (t - 0.5), 0, 0);
+    }
+    const t: f32 = (wrapped - duty) / (1.0 - duty);
+    return vec(sign * stride * (0.5 - t), 0, lift * @sin(t * zm.pi));
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    p("10 s of gait. +x is forward. stiff contacts (the creep fix) are in.\n\n", .{});
+    p("  stance dir   hz   stride   duty    travelled x    height   verdict\n", .{});
+
+    for ([_]bool{ false, true }) |flip| {
+        for ([_][3]f32{
+            .{ 1.4, 0.10, 0.65 },
+            .{ 1.4, 0.16, 0.65 },
+            .{ 2.0, 0.16, 0.60 },
+            .{ 2.4, 0.20, 0.55 },
+        }) |cfg| {
+            const hz: f32 = cfg[0];
+            const stride: f32 = cfg[1];
+            const duty: f32 = cfg[2];
+
+            const tail: []const u8 = "    </body>\n  </worldbody>";
+            const at: usize = std.mem.indexOf(u8, go1_xml, tail) orelse return error.NoTail;
+            var text: std.ArrayList(u8) = .empty;
+            defer text.deinit(gpa);
+            try text.appendSlice(gpa, go1_xml[0..at]);
+            try text.appendSlice(gpa, arm_bodies);
+            try text.appendSlice(gpa, go1_xml[at..]);
+            var doc: codecs.xml.Document = try codecs.xml.parse(gpa, text.items, null);
+            defer doc.deinit();
+            var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+            defer robot.deinit();
+            var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+                .max_contacts = 64,
+                .timestep = sim_dt,
+                .gravity = vec(0, 0, -9.81),
+            });
+            defer imp.deinit();
+            var m: rbt.Model = imp.model;
+            var d: rbt.Data = try rbt.Data.init(gpa, &m);
+            defer d.deinit();
+            for (robot.keyframes) |key| {
+                if (std.mem.eql(u8, key.name, "home")) _ = rmj.applyKeyframe(&m, &d, key);
+            }
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+
+            var world: zp.World = try .init(gpa, 256);
+            defer world.deinit(gpa);
+            world.gravity = vec(0, 0, -9.81);
+            const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+                .box = .{ .half_extent = vec(10, 10, 0.5), .convex_radius = 0.01 },
+            });
+            _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+            var bridge: rphys.Bridge = try .init(gpa, &world, &m, &d, 256);
+            defer bridge.deinit(&world);
+            bridge.listen(&world);
+            // ★ THE SAME STIFFENING THE DEMO NOW SHIPS.
+            bridge.flesh.thickness_m = 0.0001;
+            bridge.flesh.soft_min = 0.99;
+
+            var act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+            defer act.deinit();
+            const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+            defer gpa.free(ik_scratch);
+
+            var foot_body: [4]u32 = undefined;
+            var foot_offset: [4]zm.Vec = undefined;
+            var foot_rest: [4]zm.Vec = undefined;
+            var legs: [4]ctl.Actuation = undefined;
+            for ([_][]const u8{ "FR_calf", "FL_calf", "RR_calf", "RL_calf" }, 0..) |name, i| {
+                const b: u32 = imp.bodyIndex(name) orelse return error.NoFoot;
+                foot_body[i] = b;
+                legs[i] = try ctl.limbActuation(gpa, &m, b);
+                var off: zm.Vec = vec(0, 0, 0);
+                for (0..m.ngeom) |g| {
+                    if (m.geom_body[g] != b) continue;
+                    switch (m.geom_shape[g]) {
+                        .sphere => off = m.geom_pos[g],
+                        else => {},
+                    }
+                }
+                foot_offset[i] = off;
+                const world_foot: zm.Vec = d.body_xpos[b] + zm.rotate(d.body_xrot[b], off);
+                foot_rest[i] = zm.rotate(zm.conjugate(d.body_xrot[1]), world_foot - d.body_xpos[1]);
+            }
+            defer for (0..4) |i| legs[i].deinit();
+
+            const home: []f32 = try gpa.dupe(f32, d.pos[0..m.nq]);
+            defer gpa.free(home);
+            const saved: []f32 = try gpa.alloc(f32, m.nq);
+            defer gpa.free(saved);
+            const rest_rot: zm.Quat = d.body_xrot[1];
+            const rest_h: f32 = d.pos[2];
+            const start_x: f32 = d.body_xpos[1][0];
+            // Trot: diagonal pairs together.
+            const offsets = [_]f32{ 0.0, 0.5, 0.5, 0.0 };
+
+            var phase: f32 = 0;
+            var tick: u32 = 0;
+            while (tick < 2500) : (tick += 1) {
+                phase += sim_dt * hz;
+                phase -= @floor(phase);
+
+                @memcpy(saved, d.pos[0..m.nq]);
+                for (0..m.njnt) |j| {
+                    if (m.jnt_type[j] != .hinge) continue;
+                    d.pos[m.jnt_qpos_adr[j]] = home[m.jnt_qpos_adr[j]];
+                }
+                d.pos[2] = rest_h;
+                d.pos[3] = rest_rot[0];
+                d.pos[4] = rest_rot[1];
+                d.pos[5] = rest_rot[2];
+                d.pos[6] = rest_rot[3];
+                d.stage = .stale;
+                const torso_pos: zm.Vec = d.body_xpos[1];
+                const torso_rot: zm.Quat = d.body_xrot[1];
+                for (0..4) |i| {
+                    const off: zm.Vec = cycle(phase + offsets[i], stride, 0.06, duty, flip);
+                    const goal: zm.Vec = torso_pos + zm.rotate(torso_rot, foot_rest[i] + off);
+                    _ = (ctl.Ik{ .max_iterations = 12, .max_step = 0.5 }).solve(&m, &d, legs[i], .{ .body = foot_body[i], .offset = foot_offset[i], .goal = goal }, ik_scratch);
+                }
+                for (0..m.njnt) |j| {
+                    if (m.jnt_type[j] != .hinge) continue;
+                    home[m.jnt_qpos_adr[j]] = d.pos[m.jnt_qpos_adr[j]];
+                }
+                @memcpy(d.pos[0..m.nq], saved);
+                d.stage = .stale;
+                rbt.forward(&m, &d);
+
+                (ctl.PoseHold{ .target = home, .kp = 100, .kv = 6, .max_torque = 35 }).apply(&m, &d, act);
+                rbt.forward(&m, &d);
+                try bridge.sync(&world, &m, &d);
+                try zp.step(&world, sim_dt);
+                bridge.harvest(&d);
+                rbt.step(&m, &d);
+            }
+            rbt.forward(&m, &d);
+            const moved: f32 = d.body_xpos[1][0] - start_x;
+            const up: bool = d.body_xpos[1][2] > 0.20;
+            p("  {s:<10} {d:>4.1} {d:>7.2} {d:>6.2}   {d:>12.4}  {d:>7.4}   {s}\n", .{
+                if (flip) "flipped" else "as-is",                                                                 hz, stride, duty, moved, d.body_xpos[1][2],
+                if (!up) "FELL" else if (moved > 0.05) "FORWARD" else if (moved < -0.05) "backward" else "stuck",
+            });
+        }
+    }
+}

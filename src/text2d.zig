@@ -1,3 +1,4 @@
+//! lint:alias text2d
 //! src/text2d.zig — the backend-generic 2D text stack, MOVED VERBATIM out
 //! of drawing.zig (GL retirement P1, t1173): FontCache, TTF atlas bake
 //! (`bakeFontAtlas`), `drawWithFont`/`measureWithFont` over `gl: anytype`.
@@ -13,8 +14,6 @@ const expectEqualStrings = std.testing.expectEqualStrings;
 const expectError = std.testing.expectError;
 const builtin = @import("builtin");
 const zm = @import("zm");
-const degFromRad = zm.degFromRad;
-const radFromDeg = zm.radFromDeg;
 const float = zm.float;
 const ceilPowerOfTwo = zm.ceilPowerOfTwo;
 // GL-retirement P5d: the GL texture bridge is gone.  Font GPU residency
@@ -188,13 +187,11 @@ pub const LoadFontError = error{
     TtfParseFailed,
 } || Allocator.Error;
 
-const textures_module = @import("image.zig");
-
 fn unloadImage(
     gpa: Allocator,
     image: z.Image,
 ) void {
-    textures_module.unloadImage(gpa, image);
+    image_mod.unloadImage(gpa, image);
 }
 
 pub const FontAtlas = struct {
@@ -428,7 +425,7 @@ pub fn bakeFontAtlas(
             .width = @intCast(atlas_w),
             .height = @intCast(atlas_h),
             .mipmaps = 1,
-            .format = @intFromEnum(@import("types.zig").PixelFormat.uncompressed_r8g8b8a8),
+            .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
         },
         .glyphs = out_glyphs,
         .recs = out_recs,
@@ -440,7 +437,7 @@ pub fn bakeFontAtlas(
 /// Load a custom font from in-memory TTF/OTF bytes.  Combines:
 ///   1. `truetype.loadFontFromTtf` - parse the table directory.
 ///   2. `bakeFontAtlas` - rasterize requested codepoints + pack
-///      into a CPU atlas image.
+///      into a CPU atlas image_mod.
 ///   3. GPU upload via `rlgl.fwd.rlLoadTexture`.
 ///   4. Free the CPU atlas image; the GPU keeps the only copy.
 /// Returns a `Font` shaped like raylib's, which means the
@@ -1030,7 +1027,6 @@ pub fn unloadFontRaylibBitmap(gpa: Allocator, state: *FontCache) void {
         unloadFontRaylibBitmapImpl(gpa, state);
     }
 }
-const textures_local = @import("image.zig");
 fn rlPushMatrix(gl: anytype) void {
     gl.pushMatrix();
 }
@@ -1045,17 +1041,9 @@ fn rlTranslatef(
 ) void {
     gl.translate(x, y, zc);
 }
-/// raylib `rlRotatef` compat: takes DEGREES (raylib convention), converts to the
-/// radians the gl `rotate` trait now expects.
-fn rlRotatef(
-    gl: anytype,
-    angle_deg: f32,
-    x: f32,
-    y: f32,
-    zc: f32,
-) void {
-    gl.rotate(radFromDeg(angle_deg), x, y, zc);
-}
+// `rlRotatef` used to sit here: a raylib-named shim taking DEGREES and converting to radians.
+// Its only caller already held radians and converted TO degrees to reach it - a full round trip,
+// radians to degrees to radians, for nothing. `gl.rotate` takes turns now and the shim is gone.
 
 // ===========================================================================
 //                        Z I G - N A T I V E   A P I
@@ -1457,8 +1445,10 @@ pub fn drawCodepoint(
         .height = font.recs[idx].height + 2.0 * pad,
     };
     const origin: Vec2 = .{ 0, 0 };
+    // The image path was not converted, so this crossing is radians. Zero either way, but the
+    // name has to say which side it is on.
     const rotation_rad: f32 = 0.0;
-    textures_local.drawTexturePro(gl, font.texture, src, dst, origin, rotation_rad, tint);
+    image_mod.drawTexturePro(gl, font.texture, src, dst, origin, rotation_rad, tint);
 }
 
 /// Draw a UTF-8 string at `position` with explicit font, size,
@@ -1576,7 +1566,7 @@ pub fn draw(
     );
 }
 
-/// Draw `s` rotated `rotation_rad` radians around `origin` (relative
+/// Draw `s` rotated `rotation_turns` turns around `origin` (relative
 /// to `position`).
 /// **Caller must pass a loaded `Font`** - no fallback to default.
 /// Reads: `line_spacing` (forwarded to drawWithFont).
@@ -1590,14 +1580,14 @@ pub fn drawPro(
     s: []const u8,
     position: Vec2,
     origin: Vec2,
-    rotation_rad: f32,
+    rotation_turns: f32,
     font_size: f32,
     spacing: f32,
     tint: Color,
 ) void {
     rlPushMatrix(gl);
     rlTranslatef(gl, position[0], position[1], 0);
-    rlRotatef(gl, degFromRad(rotation_rad), 0, 0, 1);
+    gl.rotate(rotation_turns, 0, 0, 1);
     rlTranslatef(gl, -origin[0], -origin[1], 0);
     const text_pos: Vec2 = .{ 0, 0 };
     drawWithFont(gl, line_spacing, font, s, text_pos, font_size, spacing, tint);
@@ -2046,7 +2036,7 @@ pub fn imageDrawTextWithFont(
                     .width = rec.width * scale,
                     .height = rec.height * scale,
                 };
-                textures_local.imageDraw(dst, glyph.image, src_rec, dst_rec, tint);
+                image_mod.imageDraw(dst, glyph.image, src_rec, dst_rec, tint);
             }
         }
 
@@ -2906,12 +2896,13 @@ test "unloadFont: signature takes allocator + font_cache + font (regression)" {
 }
 
 // ===========================================================================
-// Text → Image rasterization (moved from image.zig, structure-plan S0):
+// Text → Image rasterization (moved from image_mod.zig, structure-plan S0):
 // these are the image↔text cycle's image-side fns — they need FontCache,
-// so they live with the fonts.  `img` is the CPU image library.
+// so they live with the fonts.  `image` is the CPU image library.
 // ===========================================================================
-const img = @import("image.zig");
+const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
 const errors = @import("errors.zig");
+const text2d = @This(); // the file's own container, for self-referring decls
 
 /// Allocate a new RGBA8 `Image` sized to fit `s` rendered with
 /// `font`, then composite the text onto it via `imageDrawTextWithFont`.
@@ -2929,10 +2920,10 @@ pub fn imageTextWithFont(
     spacing: f32,
     tint: Color,
 ) errors.ImageGenError!Image {
-    const text_mod = @import("text2d.zig");
+    const text_mod = text2d;
 
     if (s.len == 0 or font.glyphCount == 0) {
-        return img.genImageColor(gpa, 1, 1, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+        return image_mod.genImageColor(gpa, 1, 1, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
     }
 
     // Measure at the requested size to get the destination dims.
@@ -2940,7 +2931,7 @@ pub fn imageTextWithFont(
     const w: i32 = @trunc(@max(1.0, @ceil(size[0])));
     const h: i32 = @trunc(@max(1.0, @ceil(size[1])));
 
-    var canvas: Image = try img.genImageColor(gpa, w, h, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    var canvas: Image = try image_mod.genImageColor(gpa, w, h, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
     errdefer unloadImage(gpa, canvas);
 
     text_mod.imageDrawTextWithFont(
@@ -2971,13 +2962,13 @@ pub fn imageTextWithFont(
 /// always valid for `imageDraw` etc.).
 pub fn imageText(
     gpa: Allocator,
-    font_cache: *const @import("text2d.zig").FontCache,
+    font_cache: *const text2d.FontCache,
     line_spacing: i32,
     s: []const u8,
     font_size: i32,
     color: Color,
 ) errors.ImageGenError!Image {
-    const text_mod = @import("text2d.zig");
+    const text_mod = text2d;
     const font: Font = text_mod.getFontDefault(font_cache);
     const default_size: i32 = 10;
     var size: i32 = font_size;
@@ -3003,7 +2994,7 @@ test "imageText: empty string returns 1x1 transparent" {
     defer unloadImage(ta, out);
     try expectEqual(@as(i32, 1), out.width);
     try expectEqual(@as(i32, 1), out.height);
-    try expectEqual(@intFromEnum(types.PixelFormat.uncompressed_r8g8b8a8), out.format);
+    try expectEqual(@backingInt(types.PixelFormat.uncompressed_r8g8b8a8), out.format);
     const px: [*]const u8 = @ptrCast(out.data.?);
     try expectEqual(@as(u8, 0), px[3]);
 }

@@ -151,7 +151,7 @@ fn update(f: *z.Frame, state: *State) void {
             const dist_x: f32 = @abs(bp[0] - input_pos[0]);
             const dist_y: f32 = @abs(bp[1] - input_pos[1]);
             if ((dist_x + dist_y) < button_radius) {
-                pressed = @enumFromInt(@as(u8, @intCast(i)));
+                pressed = @fromBackingInt(@intCast(@as(u8, @intCast(i))));
                 break;
             }
         }
@@ -179,12 +179,13 @@ fn update(f: *z.Frame, state: *State) void {
     // fill so the user can see which one they're pressing.
     for (button_positions, 0..) |bp, i| {
         const i_btn: u8 = @intCast(i);
-        const is_pressed: bool = (pressed != null) and (@intFromEnum(pressed.?) == i_btn);
+        const is_pressed: bool = (pressed != null) and (@backingInt(pressed.?) == i_btn);
         const fill: Color = if (is_pressed) c.darkgray else c.black;
         f.gl.circle(bp, button_radius, .{ .color = fill, .segments = 16 });
 
-        const tris = arrowTriangle(bp, @as(PadButton, @enumFromInt(i_btn)));
-        f.gl.triangle(tris[0], tris[1], tris[2], .{ .color = arrowColor(@as(PadButton, @enumFromInt(i_btn))) });
+        const btn: PadButton = @fromBackingInt(@intCast(i_btn));
+        const tris: [3]Vec2 = arrowTriangle(bp, btn);
+        f.gl.triangle(tris[0], tris[1], tris[2], .{ .color = arrowColor(btn) });
     }
 
     f.gl.text(

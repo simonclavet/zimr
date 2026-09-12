@@ -21,9 +21,9 @@ export fn run_test() i32 {
     // Operands exceed 2^32 so the lowering must use the 64-bit (BigInt) path,
     // across every sign combination.
     const combos = [_][2]i64{
-        .{ 0x100000001, 7 },     .{ -0x100000001, 7 },
-        .{ 0x100000001, -7 },    .{ -0x100000001, -7 },
-        .{ 0xDEADBEEFCAFE, 13 }, .{ -0xDEADBEEFCAFE, 1000003 },
+        .{ 0x100000001, 7 },        .{ -0x100000001, 7 },
+        .{ 0x100000001, -7 },       .{ -0x100000001, -7 },
+        .{ 0xDEADBEEFCAFE, 13 },    .{ -0xDEADBEEFCAFE, 1000003 },
         .{ 0x7FFFFFFFFFFFFFFF, 3 }, .{ -0x7FFFFFFFFFFFFFFF, 3 },
     };
     var code: i32 = 1;

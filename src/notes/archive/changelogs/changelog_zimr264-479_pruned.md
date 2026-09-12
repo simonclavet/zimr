@@ -1664,7 +1664,7 @@ zimr431: Determinism|SnapShot authored (zimr 136 -> 137). COMPLETES box2d parity
          Scene registered Determinism|SnapShot: build=determinismFallingHinges (REUSED the existing
          Falling Hinges build), auto_snapshot=true, cam {0,5}@24. SnapShot interaction is purely host-
          driven (no control/input) -> no control pad.
-       GOTCHA HIT: `zig fmt --check src examples build.zig tools/lint_zimr.zig` is a wgpu-check gate STEP.
+       GOTCHA HIT: `zig fmt --check src examples build.zig tools/zimrlint.zig` is a wgpu-check gate STEP.
          The python-inserted snapshot block tripped it (fmt deviation) -> whole build cascaded as "transitive
          failure" with NO error line, masquerading as zspv/spv2wgsl/c2js tool-compile failures (red herring;
          those tools compile fine standalone). FIX: `$ZIG fmt <file>`. LESSON: after any python/manual code
@@ -2183,7 +2183,7 @@ zimr485: ARC RADIANS — finished the geometric-angle radians conversion across 
 
 
 <!-- dup first-copy zimr494 -->
-zimr494: lint rule — App-type module-var EXCEPTION (Simon ask). tools/lint_zimr.zig: added isAppTypedVar()
+zimr494: lint rule — App-type module-var EXCEPTION (Simon ask). tools/zimrlint.zig: added isAppTypedVar()
          (module-level `var` whose type node's final identifier is `App` -> exempt from rule 9 module-var; matches
          bare `App` and qualified `z.App`, not MyApp/SubApp). Wired into checkVarDecl's container branch alongside
          isAllowlistedModuleVar. Rebuilt lint (zig build lint clean), verified: `pub var zimr_app: z.App` passes
@@ -2446,7 +2446,7 @@ and the 14-turn decal saga (condensed into one entry in claude.md).
   matrix moves them). Explicit flow: describe layout -> create UBO + bind group -> hand
   layout to z.Pipeline -> per frame write UBO, bind pipeline + group, draw. Column-major
   transform built as [16]f32 (no Mat-layout dependency). Registered in build.zig.
-- GOTCHA: the build gates on `zig fmt --check src examples build.zig tools/lint_zimr.zig`.
+- GOTCHA: the build gates on `zig fmt --check src examples build.zig tools/zimrlint.zig`.
   Hand-aligned matrix literals fail it (fmt strips alignment) -> "maker exited code 1"
   with the real cause buried. FIX: run `zig fmt <files>` before building. ADD TO VERIFY
   ROUTINE: lint 0 AND `zig fmt --check` AND dag-check before every build/ship.
@@ -2929,7 +2929,7 @@ the .spv AFTER the compiler, it is IMMUNE to the compiler's opaque-type limitati
   - Verify a shader fast WITHOUT a full build: `zig build-obj -target spirv32-vulkan -mcpu vulkan_v1_2
     -fno-llvm -fno-lld -O ReleaseFast -ofmt=spirv -femit-bin=/tmp/x.spv --dep zm -Mroot=src/shaders/
     <name>.zig -Mzm=src/zimrmath.zig` then run spv2wgsl on it (mirrors the build exactly).
-- ⚠ LINT/FMT GOTCHA (cost a build cycle): the build's `zig fmt --check src` + `lint_zimr` scan ALL of
+- ⚠ LINT/FMT GOTCHA (cost a build cycle): the build's `zig fmt --check src` + `zimrlint` scan ALL of
   src INCLUDING `src/notes/spikes/*.zig`. Shaders/spikes must obey zimr style: every local TYPED
   (rule 2), no qualified `zm.x` in bodies (bind `const x = zm.x;` at file scope, rule no-qualified-zm),
   ≤120 cols. Run `zig fmt --check src` AND lint over new spike/shader files BEFORE a full build. (The
@@ -3048,7 +3048,7 @@ the .spv AFTER the compiler, it is IMMUNE to the compiler's opaque-type limitati
   2. mulMat doc-comment: added APPLICATION ORDER note + ⚠ PORTING FROM RAYLIB block with the decals example.
   3. src/notes/math.md: new "compose — build transforms in application order" + "⚠ Porting matrix code from raylib" subsections with the raylib→zm translation TABLE (MatrixMultiply(A,B) → compose(A,B) OR mulMat(B,A), never mulMat(A,B)).
   4. claude.md standing rule 15 (matrix compose order + raylib porting), next to the float→int rule 14.
-- FUTURE (noted, not done this turn): a mechanical lint rule flagging mulMat(_, lookAt*/perspective*/orthographic*) as right-operand (a view/proj matrix as the second operand is almost always the wrong order). Verified ZERO current sites match → zero false positives today, catches the exact future mistake. Good next-turn addition to lint_zimr.zig.
+- FUTURE (noted, not done this turn): a mechanical lint rule flagging mulMat(_, lookAt*/perspective*/orthographic*) as right-operand (a view/proj matrix as the second operand is almost always the wrong order). Verified ZERO current sites match → zero false positives today, catches the exact future mistake. Good next-turn addition to zimrlint.zig.
 - Verified: lint 0, decals builds + smoke PASS, host unit tests (incl. new compose tests) exit 0, gate NO REGRESSIONS.
 - TAKEAWAY: when a lib has a subtle convention, the fix for footguns is an intent-named helper (compose) whose signature IS the mental model + a porting table, NOT a convention change. raylib is the #1 convention-bug source; every future raylib matrix port routes through compose.
 
@@ -3109,7 +3109,7 @@ the .spv AFTER the compiler, it is IMMUNE to the compiler's opaque-type limitati
   2. `Buffer "draw3d_decal_receiver" usage doesn't include CopyDst` — created the receiver vbo with only .vertex; createBufferInit writes via queueWriteBuffer → needs .copy_dst. FIXED: `.{ .vertex = true, .copy_dst = true }`.
   3. `Invalid ShaderModule "decal_fs"` — cascade from #1.
 - FIX #1 (the real one): rewrote decal_fs to sample UNCONDITIONALLY at the top of `entry()`, then MASK. Was: `if(!inside){out=0;return;} uv=...; t=zsample2d(...)`. Now: always compute clamped uv + `zsample2d`, compute box membership as an arithmetic mask `axisMask(x,half)*axisMask*axisMask` (each axisMask is a value-select `if(...)1 else 0`, compiles to OpSelect, NOT control flow around the sample), multiply into alpha. VERIFIED the emitted WGSL: `entry()` body is FLAT — textureSample at top-level, no `if` wraps it. Tint-safe.
-- FIX (durable, Simon's ask): the sampler-in-branch LINT only detected `io.<method>()` calls (IoT pattern) — it SKIPS functions with no Io param, so DIRECT @SpirvType shaders (billboard/skybox/points/decal, which call `zsample2d(...)`) were NEVER scanned. That's why this recurs. EXTENDED tools/lint_zimr.zig: new `isBareSamplerCall` matches `zsample2d(...)` / `zm.zsample2d(...)` by callee name; runSamplerDiscipline now also scans the `entry` fn of direct shaders (scanMainBody with empty io_name → only bare calls match). VERIFIED: flags a broken test shader (`zsample2d` in `if`) at the exact line; the fixed decal_fs + all existing direct shaders (billboard/skybox/points/fluid_discs) pass clean (no false positives). `sampleLod`/explicit-LOD exempt (no derivatives). Documented in shader-style.md.
+- FIX (durable, Simon's ask): the sampler-in-branch LINT only detected `io.<method>()` calls (IoT pattern) — it SKIPS functions with no Io param, so DIRECT @SpirvType shaders (billboard/skybox/points/decal, which call `zsample2d(...)`) were NEVER scanned. That's why this recurs. EXTENDED tools/zimrlint.zig: new `isBareSamplerCall` matches `zsample2d(...)` / `zm.zsample2d(...)` by callee name; runSamplerDiscipline now also scans the `entry` fn of direct shaders (scanMainBody with empty io_name → only bare calls match). VERIFIED: flags a broken test shader (`zsample2d` in `if`) at the exact line; the fixed decal_fs + all existing direct shaders (billboard/skybox/points/fluid_discs) pass clean (no false positives). `sampleLod`/explicit-LOD exempt (no derivatives). Documented in shader-style.md.
 - LESSON: when a runtime-only failure class recurs, the fix is to extend the MECHANICAL guard to the code path it was missing — here, direct shaders were an unscanned blind spot in an otherwise-good lint.
 - Verified: lint 0 (incl. new direct-shader scan), standalone builds, smoke PASS 107/frame, gate NO REGRESSIONS. Still need device re-test that decals now actually PAINT (the 3 errors were blocking all decal draws).
 
@@ -3284,13 +3284,13 @@ zimrphysics 90, plot 27, entities 15) are ALREADY flat (all types at file scope)
   `const Canvas = @import("Canvas.zig");` then use `Canvas` / `Canvas.init`. zimr.zig re-exports
   collapse to `pub const Canvas = @import("Canvas.zig");` (dropped the redundant `png_canvas`
   namespace export).
-- KEY GOTCHA + FIX: lint rule [dup-pub-fn] (tools/lint_zimr.zig ~3479) forbids duplicate COLUMN-0
+- KEY GOTCHA + FIX: lint rule [dup-pub-fn] (tools/zimrlint.zig ~3479) forbids duplicate COLUMN-0
   `pub fn <name>` across the whole roster (flat-C-symbol/convention). File-as-struct hoists
   init/deinit/etc. to col-0 -> instant collisions (Canvas.init vs BindGroupCache.init). FIX
   (committed): the rule now EXEMPTS file-structs — any file containing a col-0 `const X = @This();`
   is treated as a TYPE whose col-0 pub fns are methods, and is skipped by the uniqueness check. So
   future file-as-struct conversions are lint-safe out of the box. (Rebuild /tmp/lint after editing
-  lint_zimr.zig.)
+  zimrlint.zig.)
 - NOT file-struct candidates (multi-export namespaces, despite 1 dominant struct): pipeline_cache
   (exports StateCombo x24, CacheKey, hashSource...), gpu_frame (GpuFrame + accessors). These belong
   to a future "merge the GPU plumbing" pass (bind_group_cache now done + pipeline_cache +

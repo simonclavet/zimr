@@ -1,0 +1,140 @@
+//! THE ORACLE FOR THE WHOLE IDEA, written before the task cost existed:
+//!
+//!   "On a redundant arm, reach a task target that no fixed IK branch reaches from the same
+//!    start — i.e. the planner finds a configuration `Ik` did not pick."
+//!
+//! ★ THE JOINT-SPACE FORMULATION CANNOT PASS THIS BY CONSTRUCTION, so it cannot be faked by
+//! tuning. Either the planner is using the null space or it is not.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const keeper_xml = @embedFile("tests/fixtures/robot/keeper.xml");
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, keeper_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 8,
+        .timestep = 1.0 / 250.0,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+    rbt.forward(&m, &d);
+    const hand: u32 = imp.bodyIndex("hand") orelse return error.NoHand;
+    const rest: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(rest);
+
+    const horizon: u32 = 150;
+    const nstate: u32 = m.nq + m.nv;
+    var plan: mpc.Plan = try mpc.Plan.init(gpa, &m, horizon);
+    defer plan.deinit();
+    const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * nstate);
+    defer gpa.free(reference);
+    const state_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(state_w);
+    const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(term_w);
+    const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+    defer gpa.free(ctrl_w);
+    const target_pos: []f32 = try gpa.alloc(f32, 3 * (horizon + 1));
+    defer gpa.free(target_pos);
+
+    const targets = [_]zm.Vec{
+        vec(0.55, 0.30, 1.05),
+        vec(-0.40, 0.55, 0.85),
+        vec(0.20, -0.62, 1.25),
+        vec(0.70, -0.15, 0.70),
+    };
+
+    p("reach a point, two ways. task cost vs a joint reference from Ik.\n\n", .{});
+    p("  target                     joint-space   task-space\n", .{});
+    var joint_wins: u32 = 0;
+    var task_wins: u32 = 0;
+
+    for (targets) |goal| {
+        var result: [2]f32 = .{ 0, 0 };
+        for ([_]bool{ false, true }) |use_task| {
+            @memcpy(d.pos, rest);
+            @memset(d.vel, 0);
+            @memset(d.ctrl, 0);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            @memset(plan.ctrl, 0);
+
+            // Weights: identical between the two runs except for WHERE the objective lives.
+            for (0..m.nv) |i| {
+                state_w[i] = if (use_task) 0.0 else 1.0;
+                state_w[m.nv + i] = 0.05;
+                term_w[i] = if (use_task) 0.0 else 120.0;
+                term_w[m.nv + i] = 2.0;
+            }
+            @memset(ctrl_w, 1.0e-4);
+
+            // The joint-space reference: whatever Ik picks, held at every knot.
+            const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+            defer gpa.free(ik_scratch);
+            var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, hand);
+            defer arm_act.deinit();
+            _ = (ctl.Ik{ .max_iterations = 120 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = goal }, ik_scratch);
+            const branch: []f32 = try gpa.dupe(f32, d.pos[0..m.nq]);
+            defer gpa.free(branch);
+            @memcpy(d.pos, rest);
+            @memset(d.vel, 0);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            for (0..horizon + 1) |k| {
+                @memcpy(reference[k * nstate ..][0..m.nq], branch);
+                @memset(reference[k * nstate + m.nq ..][0..m.nv], 0);
+                target_pos[k * 3 + 0] = goal[0];
+                target_pos[k * 3 + 1] = goal[1];
+                target_pos[k * 3 + 2] = goal[2];
+            }
+
+            var tick: u32 = 0;
+            while (tick < 500) : (tick += 1) {
+                if (tick % 5 == 0) {
+                    _ = mpc.optimize(&m, &d, &plan, .{
+                        .state = state_w,
+                        .control = ctrl_w,
+                        .terminal = term_w,
+                        .reference = reference,
+                        // ★ THE ONLY DIFFERENCE BETWEEN THE TWO RUNS.
+                        .task = if (use_task) .{
+                            .body = hand,
+                            .position = target_pos,
+                            .w_position = 4.0,
+                            .w_position_terminal = 400.0,
+                        } else null,
+                    }, .{ .iterations = 8 });
+                }
+                @memcpy(d.ctrl, plan.ctrl[0..m.nu]);
+                mpc.shift(&plan);
+                rbt.step(&m, &d);
+            }
+            result[if (use_task) 1 else 0] = zm.length3(d.body_xpos[hand] - goal);
+        }
+        if (result[0] < result[1]) joint_wins += 1 else task_wins += 1;
+        p("  ({d:>5.2},{d:>5.2},{d:>5.2})        {d:>9.4}    {d:>9.4}  {s}\n", .{
+            goal[0],                                                      goal[1], goal[2], result[0], result[1],
+            if (result[1] < result[0]) "task better" else "joint better",
+        });
+    }
+    p("\n  task-space better on {d} of {d}\n", .{ task_wins, targets.len });
+}

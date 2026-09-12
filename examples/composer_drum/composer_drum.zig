@@ -12,7 +12,7 @@ const float = zm.float;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -191,7 +191,7 @@ fn update(f: *z.Frame, state: *State) void {
         .{ .size = 32, .color = c.white, .font = &state.font },
     );
 
-    co.caption(f.gl, state.font, "composer.tone + composer.Sequence baked into one looping Wave");
+    common.caption(f.gl, state.font, "composer.tone + composer.Sequence baked into one looping Wave");
     z.endDrawing(f.gl);
 }
 

@@ -7,10 +7,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
-const cos = zm.cos;
+const sinRad = zm.sinRad;
+const cosRad = zm.cosRad;
 const clamp = zm.clamp;
 const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
@@ -77,7 +77,7 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
     const dt_frame: f32 = f.time.delta_time;
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // tap toggles 12/24-hour mode
     if (z.isMouseButtonReleased(f.input, .left)) {
@@ -132,7 +132,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var buf: [48]u8 = undefined;
     const line: []const u8 = bufPrint(&buf, "{d}-hour mode - tap to switch", .{s.hour_mode}) catch "";
-    co.caption(f.gl, s.font, line);
+    common.caption(f.gl, s.font, line);
     z.endDrawing(f.gl);
 }
 
@@ -144,7 +144,7 @@ fn drawHand(
     thick: f32,
 ) void {
     const r: f32 = deg * rad_per_deg;
-    const tip: Vec2 = .{ center[0] + cos(r) * len, center[1] + sin(r) * len };
+    const tip: Vec2 = .{ center[0] + cosRad(r) * len, center[1] + sinRad(r) * len };
     gl.line(center, tip, .{ .color = hands_col, .thickness = thick });
 }
 

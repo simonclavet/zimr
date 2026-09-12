@@ -22,7 +22,7 @@ const pointVec = zm.pointVec;
 const rotationY = zm.rotationY;
 const translationV = zm.translationV;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -96,7 +96,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.transforms[i] = mulMat(translationV(p), rotationY(phase));
     }
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const orbit: f32 = s.angle * pi / 180.0;
     const dist: f32 = float(grid) * spacing * 1.6;
@@ -117,7 +117,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ instance_count, grid, grid, grid },
     ) catch "instancing";
     defer s.gpa.free(hud);
-    co.caption(f.gl, s.font, hud);
+    common.caption(f.gl, s.font, hud);
     z.endDrawing(f.gl);
 }
 

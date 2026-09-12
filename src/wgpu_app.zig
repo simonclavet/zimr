@@ -1,3 +1,4 @@
+//! lint:alias wgpu_app
 //! src/wgpu_app.zig — the WebGPU `App` + `Frame` run-loop.
 //!
 //! This is the WebGPU counterpart to `zimr.AppBridge` + `zimr.Frame` (the GL
@@ -50,8 +51,8 @@ const Camera2D = zm.Camera2D;
 const Camera3D = zm.Camera3D;
 const Mat = zm.Mat;
 const Vec = zm.Vec;
-const asin = zm.asin;
-const atan2 = zm.atan2;
+const asinRad = zm.asinRad;
+const atan2Rad = zm.atan2Rad;
 const clamp = zm.clamp;
 const float = zm.float;
 const identity = zm.identity;
@@ -73,21 +74,21 @@ const memwatch = @import("memwatch.zig");
 const gpu_iface = @import("gpu_iface.zig");
 const BindGroupCache = @import("BindGroupCache.zig");
 const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
 const renderer_2d = @import("renderer_2d.zig");
-const wgpu_gl = @import("WgpuGl.zig");
 const draw3d = @import("draw3d.zig");
 
 // S4: these were byte-identical reimplementations of draw3d's — now
 // re-exports (a re-export is not a redefinition under the dup-pub-fn rule).
 pub const genMeshCube = draw3d.genMeshCube;
-pub const genMeshSphere = draw3d.genMeshSphere;
-pub const genMeshTorus = draw3d.genMeshTorus;
+pub const genMeshTangents = draw3d.genMeshTangents;
 pub const updateMeshBuffer = draw3d.updateMeshBuffer;
 pub const uploadMesh = draw3d.uploadMesh;
 pub const getSphereBoundingBox = draw3d.getSphereBoundingBox;
 pub const getCylinderBoundingBox = draw3d.getCylinderBoundingBox;
 pub const getCapsuleBoundingBox = draw3d.getCapsuleBoundingBox;
 const types = @import("types.zig");
+const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a parameter name here
 
 pub const colorFromHSV = types.colorFromHSV;
 // The input state model is shared with the GL path (raylib-faithful: current/
@@ -99,7 +100,7 @@ const input = @import("runtime.zig").input;
 const GpuFrame = gpu.GpuFrame;
 const Backend = gpu_iface.WgpuBackend;
 const Renderer2D = renderer_2d.Renderer2D;
-pub const WgpuGl = wgpu_gl;
+pub const WgpuGl = @import("WgpuGl.zig");
 const PassState = gpu_iface.PassState;
 
 // ============================================================================
@@ -173,7 +174,7 @@ fn resolveRngSeed(explicit: ?u64) u64 {
     }
     if (comptime builtin.target.cpu.arch.isWasm()) {
         var b: [8]u8 = @bitCast(rng_fallback_seed);
-        @import("web.zig").dom.crypto_random_fill(&b, b.len);
+        web.dom.crypto_random_fill(&b, b.len);
         return std.mem.readInt(u64, &b, .little);
     }
     return rng_fallback_seed;
@@ -499,6 +500,12 @@ pub const App = struct {
     // pipeline + the per-frame primitive batch. The camera view-projection is
     // written straight into its UBO at beginMode3D — no view state on the App.
     cube3d: ?draw3d.Cube3D = null,
+    /// Camera for the current beginMode3D scope, in the form pbr3d needs
+    /// (view + proj + eye). Set by `beginMode3D` (from its Camera3D), cleared
+    /// by the raw `beginMode3DMatrix` (which has no eye). `drawModel3D` reads
+    /// it so a scene's camera is specified ONCE, at beginMode3D, for both the
+    /// immediate primitives and any pbr3d models.
+    mode3d_cam: ?draw3d.pbr3d.Camera = null,
 
     /// Logical size of the CURRENT render target — set between
     /// begin/endTextureMode, null when targeting the backbuffer.  3D mode
@@ -939,7 +946,7 @@ pub fn endDrawing(gl: *WgpuGl) void {
 
 // ---- immediate-mode primitives (thin wrappers over the gl_iface trait) ----
 
-pub fn rlBegin(gl: *WgpuGl, mode: @import("raster.zig").DrawMode) void {
+pub fn rlBegin(gl: *WgpuGl, mode: raster.DrawMode) void {
     gl.begin(mode);
 }
 pub fn rlEnd(gl: *WgpuGl) void {
@@ -1090,6 +1097,10 @@ pub fn beginMode3DMatrix(gl: *WgpuGl, view_proj: Mat) void {
     if (app.cube3d) |*c3d| {
         c3d.beginFrame3D(view_proj);
     }
+    // Raw-matrix entry has no eye/separate view+proj, so pbr3d models can't be
+    // drawn in this scope (drawModel3D asserts on the null). beginMode3D fills
+    // this in right after calling us.
+    app.mode3d_cam = null;
     app.frame_phase = .mode_3d;
 }
 
@@ -1111,13 +1122,30 @@ pub fn beginMode3D(gl: *WgpuGl, cam: Camera3D) void {
     };
     const z_near: f32 = 0.01;
     const z_far: f32 = 1000.0;
-    const fovy_rad: f32 = cam.fovy_deg * (pi / 180.0);
     const view: Mat = cam.viewMatrix();
-    const proj: Mat = perspectiveFovRh(fovy_rad, aspect, z_near, z_far);
+    // ★ `cam.projMatrix` HONOURS `cam.projection`; this used to build `perspectiveFovRh`
+    // unconditionally and silently ignore the field.
+    //
+    // That was an inconsistency rather than a missing feature: `Camera3D.projMatrix` and
+    // `getScreenToWorldRayWithViewport` both already respected `projection`, and only this
+    // entry point did not. An orthographic camera passed here became a PERSPECTIVE one whose
+    // `fovy_deg` was read as DEGREES — a shadow-map light with a half-extent of 4.0 turned into
+    // a 4-degree telephoto that saw a fraction of one surface. Nothing asserted, nothing
+    // logged: it simply rendered flat and looked like the pass had not run.
+    const proj: Mat = cam.projMatrix(aspect, z_near, z_far);
     const view_proj: Mat = mulMat(proj, view);
 
     // lint:off scope-balance: engine primitive (forwards to beginMode3DMatrix; closed by endMode3D)
     beginMode3DMatrix(gl, view_proj);
+    // Record the camera in the form pbr3d needs so `drawModel3D` can draw a
+    // model in THIS scope with the same camera the immediate primitives use —
+    // one camera, specified once. (beginMode3DMatrix just cleared it to null.)
+    const app3d: *App = appOf(gl);
+    app3d.mode3d_cam = .{
+        .view = view,
+        .proj = proj,
+        .eye = .{ cam.position[0], cam.position[1], cam.position[2] },
+    };
 }
 
 /// Append one flat-shaded triangle (world-space) to the current 3D batch.
@@ -1539,6 +1567,54 @@ pub fn drawModel(
     }
 }
 
+/// Ensure a mesh has GPU buffers, uploading it if this is the first time, and return them.
+///
+/// Use this when the mesh is drawn ONLY by a custom pipeline: the engine's upload is lazy and
+/// triggered by `drawMeshInstanced`, so a mesh the engine never draws would otherwise never be
+/// uploaded.
+pub fn uploadMeshGpu(gl: *WgpuGl, mesh: *types.Mesh) ?draw3d.MeshGpu {
+    const app: *App = appOf(gl);
+    // ★ `cube3d` IS CREATED LAZILY, normally on the first `beginMode3D`. This is called at
+    // INIT, before any 3D block has run, so without this it returns null, nothing uploads, and
+    // every later pass draws nothing — a black screen and an empty shadow map, with no error.
+    // `uploadDecalReceiver` guards the same way for the same reason.
+    if (app.cube3d == null) {
+        app.cube3d = draw3d.Cube3D.init(app.gpa, &app.gpu_frame) catch null;
+    }
+    if (app.cube3d) |*c3d| {
+        return c3d.uploadMeshGpu(mesh, app.gpu_frame.queue);
+    }
+    return null;
+}
+
+/// The vertex/index buffers backing an uploaded mesh, so a pass with its OWN pipeline can draw
+/// the same geometry the main pass draws — one upload, many passes.
+///
+/// See `draw3d.Cube3D.gpuBuffers` for the vertex layout and the null case.
+pub fn meshGpuBuffers(gl: *WgpuGl, mesh: types.Mesh) ?draw3d.MeshGpu {
+    const app: *App = appOf(gl);
+    if (app.cube3d) |*c3d| {
+        return c3d.gpuBuffers(mesh);
+    }
+    return null;
+}
+
+/// Push a mesh's current CPU positions and normals to its GPU buffer.
+///
+/// ★ FOR MESHES DRAWN THROUGH THE RETAINED PATH ONLY. `drawModel` re-reads the CPU arrays
+/// every frame, so a dynamic mesh drawn that way needs nothing but `updateMeshBuffer`. The
+/// retained path (`drawMeshInstanced`) uploads ONCE and caches by `mesh.vaoId` — without this
+/// call a CPU-skinned character would show its bind pose forever.
+///
+/// A no-op on a mesh that has never been uploaded, so calling it unconditionally after
+/// skinning is safe.
+pub fn updateMeshGpu(gl: *WgpuGl, mesh: types.Mesh) void {
+    const app: *App = appOf(gl);
+    if (app.cube3d) |*c3d| {
+        c3d.refreshMeshGpu(&mesh, app.gpu_frame.queue);
+    }
+}
+
 /// Draw a Model as wireframe (per-triangle edges). Raylib drawModelWires.
 pub fn drawModelWires(
     gl: *WgpuGl,
@@ -1588,12 +1664,12 @@ pub fn getMouseDelta(in: *const input.InputState) Vec2 {
 /// Keyboard: is `key` currently held? Mirrors raylib's IsKeyDown.
 pub fn isKeyDown(
     in: *const input.InputState,
-    key: @import("types.zig").KeyboardKey,
+    key: types.KeyboardKey,
 ) bool {
     return input.isKeyDown(in, key);
 }
 
-pub const MouseButton = @import("types.zig").MouseButton;
+pub const MouseButton = types.MouseButton;
 
 pub fn isMouseButtonDown(
     in: *const input.InputState,
@@ -1628,8 +1704,8 @@ pub fn updateCamera(
             const oy: f32 = camera.position[1] - camera.target[1];
             const oz: f32 = camera.position[2] - camera.target[2];
             var dist: f32 = @max(@sqrt(ox * ox + oy * oy + oz * oz), 0.001);
-            var yaw: f32 = atan2(ox, oz);
-            var pitch: f32 = asin(clamp(oy / dist, -1.0, 1.0));
+            var yaw: f32 = atan2Rad(ox, oz);
+            var pitch: f32 = asinRad(clamp(oy / dist, -1.0, 1.0));
             // Skip the delta on the press frame: getMouseDelta is current -
             // previous, and on a touch/click DOWN the previous position is
             // stale (from before the press), so the first frame's delta is a
@@ -1654,8 +1730,8 @@ pub fn updateCamera(
             fx /= flen;
             fy /= flen;
             fz /= flen;
-            var yaw: f32 = atan2(fx, fz);
-            var pitch: f32 = asin(clamp(fy, -1.0, 1.0));
+            var yaw: f32 = atan2Rad(fx, fz);
+            var pitch: f32 = asinRad(clamp(fy, -1.0, 1.0));
             if (isMouseButtonDown(in, .left) and !isMouseButtonPressed(in, .left)) {
                 const d: Vec2 = getMouseDelta(in);
                 yaw += d[0] * 0.006;
@@ -1733,6 +1809,46 @@ pub fn endMode3D(gl: *WgpuGl) void {
     // `restore2DState` step to automatic, so callers can't forget it.
     restore2DState(gl);
     app.enterFrame2D();
+}
+
+/// Draw a pbr3d model inside a `beginMode3D`/`endMode3D` scope — the one door
+/// for lit, textured models in the app's shared pass. The scope owns the
+/// 2D↔3D transition (beginMode3D flushed the 2D backdrop BEHIND the 3D;
+/// endMode3D restores 2D after), so this call is just "draw the model": no
+/// manual flush, no restore, no writeback bookkeeping. The camera comes from
+/// beginMode3D (specified once, shared with the immediate primitives); pass
+/// only the light + model + transform. Immediate primitives (drawSphere,
+/// drawCube) and models may be freely interleaved in one scope — each flush
+/// rebinds its own pipeline.
+pub fn drawModel3D(
+    gl: *WgpuGl,
+    renderer: *draw3d.pbr3d.Renderer,
+    light: draw3d.pbr3d.Light,
+    model: draw3d.pbr3d.Model,
+    model_matrix: Mat,
+) void {
+    const app: *App = appOf(gl);
+    assertf(
+        app.frame_phase == .mode_3d,
+        @src(),
+        "drawModel3D outside a beginMode3D/endMode3D scope (phase '{s}') — wrap it in beginMode3D(cam)…endMode3D",
+        .{@tagName(app.frame_phase)},
+    );
+    const cam: draw3d.pbr3d.Camera = app.mode3d_cam orelse {
+        assertUnreachable(
+            @src(),
+            "drawModel3D needs beginMode3D(Camera3D); the raw beginMode3DMatrix has no eye for lighting",
+            .{},
+        );
+        return;
+    };
+    // Commit any immediate primitives queued before this model so they land in
+    // submit order (drawStream rebinds cube3d on flush; the model rebinds pbr3d).
+    if (app.cube3d) |*c3d| {
+        c3d.flush(&app.pass);
+    }
+    const desc: draw3d.pbr3d.FrameDesc = .{ .camera = cam, .light = light };
+    renderer.drawIntoPass(&app.pass, &app.gpu_frame, desc, model, model_matrix);
 }
 
 // ---- OrbitCamera: reusable orbit / pan / zoom controller ------------------
@@ -2270,13 +2386,13 @@ pub fn drawSplineBasis(
         return;
     }
     const divs: usize = 24;
-    var prev: Vec2 = drawing_shapes.getSplinePointBasis(points[0], points[1], points[2], points[3], 0.0);
+    var prev: Vec2 = shapes2d.getSplinePointBasis(points[0], points[1], points[2], points[3], 0.0);
     var i: usize = 0;
     while (i + 3 < points.len) : (i += 1) {
         var j: usize = 1;
         while (j <= divs) : (j += 1) {
             const t: f32 = float(j) / float(divs);
-            const cur: Vec2 = drawing_shapes.getSplinePointBasis(
+            const cur: Vec2 = shapes2d.getSplinePointBasis(
                 points[i],
                 points[i + 1],
                 points[i + 2],
@@ -2306,7 +2422,7 @@ pub fn drawSplineCatmullRom(
         var j: usize = 1;
         while (j <= divs) : (j += 1) {
             const t: f32 = float(j) / float(divs);
-            const cur: Vec2 = drawing_shapes.getSplinePointCatmullRom(
+            const cur: Vec2 = shapes2d.getSplinePointCatmullRom(
                 points[i],
                 points[i + 1],
                 points[i + 2],
@@ -2337,7 +2453,7 @@ pub fn drawSplineBezierCubic(
         var j: usize = 1;
         while (j <= divs) : (j += 1) {
             const t: f32 = float(j) / float(divs);
-            const cur: Vec2 = drawing_shapes.getSplinePointBezierCubic(
+            const cur: Vec2 = shapes2d.getSplinePointBezierCubic(
                 points[i],
                 points[i + 1],
                 points[i + 2],
@@ -2718,10 +2834,10 @@ pub fn drawRectangleRounded(
     drawRectangle(gl, .{ x, y + r }, .{ w, h - 2.0 * r }, color); // middle band
     drawRectangle(gl, .{ x + r, y }, .{ w - 2.0 * r, r }, color); // top band
     drawRectangle(gl, .{ x + r, y + h - r }, .{ w - 2.0 * r, r }, color); // bottom band
-    drawCircleSector(gl, .{ x + r, y + r }, r, pi, pi * 1.5, seg, color); // top-left
-    drawCircleSector(gl, .{ x + w - r, y + r }, r, pi * 1.5, pi * 2.0, seg, color); // top-right
-    drawCircleSector(gl, .{ x + w - r, y + h - r }, r, 0.0, pi * 0.5, seg, color); // bottom-right
-    drawCircleSector(gl, .{ x + r, y + h - r }, r, pi * 0.5, pi, seg, color); // bottom-left
+    drawCircleSector(gl, .{ x + r, y + r }, r, 0.5, 0.75, seg, color); // top-left
+    drawCircleSector(gl, .{ x + w - r, y + r }, r, 0.75, 1.0, seg, color); // top-right
+    drawCircleSector(gl, .{ x + w - r, y + h - r }, r, 0.0, 0.25, seg, color); // bottom-right
+    drawCircleSector(gl, .{ x + r, y + h - r }, r, 0.25, 0.5, seg, color); // bottom-left
 }
 
 /// Outlined rounded rectangle with thickness (raylib DrawRectangleRoundedLinesEx): four straight
@@ -2828,12 +2944,11 @@ pub fn drawRectangleRotated(
 
 const WgpuRenderTexture = @import("wgpu_texture.zig").WgpuRenderTexture;
 const codecs = @import("codecs.zig");
-const types_img = @import("types.zig");
 
 /// Decode PNG bytes into a CPU Image (RGBA8). Agnostic (codecs.png.decode).
-pub fn loadImageFromMemory(gpa: Allocator, bytes: []const u8) !types_img.Image {
+pub fn loadImageFromMemory(gpa: Allocator, bytes: []const u8) !types.Image {
     const decoded: codecs.png.Image = try codecs.png.decode(gpa, bytes);
-    return types_img.Image{
+    return types.Image{
         .data = decoded.pixels.ptr,
         .width = @intCast(decoded.width),
         .height = @intCast(decoded.height),
@@ -2841,12 +2956,12 @@ pub fn loadImageFromMemory(gpa: Allocator, bytes: []const u8) !types_img.Image {
         // codecs.png decodes to RGBA8. Use the real PixelFormat value (not 0,
         // which isn't a valid enum member) so image* ops that read the format
         // via @enumFromInt work instead of tripping an illegal-enum panic.
-        .format = @intFromEnum(types_img.PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
     };
 }
 
 /// Upload a decoded RGBA8 Image to a GPU texture (wgpu loadTextureFromImage).
-pub fn loadTextureFromImage(gl: *WgpuGl, image: types_img.Image) WgpuTexture {
+pub fn loadTextureFromImage(gl: *WgpuGl, image: types.Image) WgpuTexture {
     const app: *App = appOf(gl);
     const w: u32 = @intCast(image.width);
     const h: u32 = @intCast(image.height);
@@ -2868,7 +2983,7 @@ pub fn rlSetTexture(gl: *WgpuGl, tex: WgpuTexture) void {
 /// `UpdateTexture`). The Image dims must match `tex`. Cheap per-frame — no new
 /// texture is created, so use this for animated/streamed content instead of
 /// re-running loadTextureFromImage (which churns GPU resources).
-pub fn updateTexture(gl: *WgpuGl, tex: WgpuTexture, image: types_img.Image) void {
+pub fn updateTexture(gl: *WgpuGl, tex: WgpuTexture, image: types.Image) void {
     const app: *App = appOf(gl);
     const w: u32 = @intCast(image.width);
     const h: u32 = @intCast(image.height);
@@ -3434,10 +3549,9 @@ pub const CpuFramebuffer = struct {
 // bake -> upload the atlas as a WgpuTexture -> register it for an id -> build a
 // types.Font carrying that id -> let the reusable drawWithFont render it.
 
-const drawing_text = @import("text2d.zig");
-const types_font = @import("types.zig");
+const text2d = @import("text2d.zig");
 
-pub const Font = types_font.Font;
+pub const Font = types.Font;
 
 // ---- UiHost: drive the REAL ui.zig (ImGui) on the WebGPU backend ------------
 // ui.zig is backend-agnostic at the draw layer (DrawList.render(gl: anytype) ->
@@ -3447,7 +3561,12 @@ pub const Font = types_font.Font;
 // input, and supplies a ShapesTextureState (id 0 = WgpuGl's white/untextured
 // bind group, so solid shapes sample white) + a FontCache wrapping the font.
 const ui = @import("ui.zig");
-const drawing_shapes = @import("shapes2d.zig");
+const shapes2d = @import("shapes2d.zig");
+const raster = @import("raster.zig");
+const shader_interface = @import("shader_interface");
+const shader_introspect = @import("shader_introspect.zig");
+const shader_runtime = @import("shader_runtime_wgpu.zig");
+const web = @import("web.zig");
 
 pub fn getMousePosition(in: *const input.InputState) Vec2 {
     return input.getMousePosition(in);
@@ -3472,14 +3591,14 @@ pub fn isMouseButtonReleased(
 
 pub const UiHost = struct {
     ctx: ui.UiContext,
-    shapes: drawing_shapes.ShapesTextureState,
-    font_cache: drawing_text.FontCache,
+    shapes: shapes2d.ShapesTextureState,
+    font_cache: text2d.FontCache,
     window: WindowStateUi,
 
     const WindowStateUi = @import("runtime.zig").core.WindowState;
 
     pub fn init(gpa: Allocator, font: Font) UiHost {
-        var shapes: drawing_shapes.ShapesTextureState = .{};
+        var shapes: shapes2d.ShapesTextureState = .{};
         // WgpuGl id 0 IS the white/untextured bind group; point the shapes
         // white pixel at it so solid-color UI shapes render (no extra texture).
         shapes.texture.id = 0;
@@ -3629,7 +3748,7 @@ pub fn releaseFont(gl: *WgpuGl, gpa: Allocator, font: Font) void {
         }
         r.releaseTextureById(font.texture.id);
     }
-    drawing_text.unloadFontOwned(gpa, font);
+    text2d.unloadFontOwned(gpa, font);
 }
 
 /// Like `loadFont`, but bakes an EXPLICIT codepoint set instead of ASCII 32..126
@@ -3655,7 +3774,7 @@ pub fn loadFontEx(
     }
     const r: *Renderer2D = &app.renderer_2d.?;
 
-    const tt = try @import("codecs.zig").truetype.loadFontFromTtf(gpa, ttf_bytes);
+    const tt: codecs.truetype.Font = try codecs.truetype.loadFontFromTtf(gpa, ttf_bytes);
     // Bake the atlas at DEVICE pixels (logical size × devicePixelRatio), not logical
     // size. The wgpu 2D path renders into the backing store (CSS × DPR); an atlas baked
     // at logical size gets UPSCALED on a high-DPR phone → blurry text. Baking at
@@ -3686,9 +3805,9 @@ pub fn loadFontEx(
     // phone. baseSize carries the real bake height, so the logical scale stays exact.
     const bake_mult: f32 = clamp(dpr * oversample, 1.0, 4.0);
     const bake_size: i32 = @round(float(size) * bake_mult);
-    const atlas: drawing_text.FontAtlas = try drawing_text.bakeFontAtlas(gpa, &tt, bake_size, codepoints, 1);
+    const atlas: text2d.FontAtlas = try text2d.bakeFontAtlas(gpa, &tt, bake_size, codepoints, 1);
     // The atlas image (RGBA8) is uploaded to the GPU; free the CPU copy after.
-    defer @import("image.zig").unloadImage(gpa, atlas.image);
+    defer image_mod.unloadImage(gpa, atlas.image);
 
     const aw: u32 = @intCast(atlas.image.width);
     const ah: u32 = @intCast(atlas.image.height);
@@ -3723,6 +3842,180 @@ pub fn loadFontEx(
     };
 }
 
+/// raylib's `LoadFontData(..., FONT_SDF, ...)` — bake a font as a SIGNED
+/// DISTANCE FIELD. Unlike the coverage atlas (`loadFont`/`loadFontEx`), an SDF
+/// atlas stays crisp when magnified far past its bake size, because a
+/// `smoothstep(0.5 ± w, alpha)` fragment shader reconstructs the edge from the
+/// distance instead of interpolating coverage (which blurs). Draw the returned
+/// font INSIDE `beginShaderMode(sdf_shader)` / `endShaderMode` — the shader
+/// (`src/shaders/text_sdf_fs.zig`) is the SDF twin of the shapes fragment stage.
+///
+/// `sdf_size` is the atlas bake height in px (raylib uses ~16–64; larger =
+/// smoother field, bigger atlas). The atlas is baked at that size (no oversample
+/// — the SDF carries the scale) then converted with `image_mod.coverageToSdf`, and
+/// uploaded LINEAR-filtered (bilinear interpolation of the distance is what
+/// makes the edge smooth). Free with `z.unloadFont` / `releaseFont` as usual.
+pub fn loadFontSdf(
+    f: *Frame,
+    gpa: Allocator,
+    ttf_bytes: []const u8,
+    sdf_size: i32,
+) !Font {
+    const app: *App = appOf(f.gl);
+    if (app.renderer_2d == null) {
+        app.renderer_2d = try Renderer2D.init(gpa, &app.gpu_frame);
+    }
+    const r: *Renderer2D = &app.renderer_2d.?;
+
+    var codepoints: [95]u21 = undefined;
+    for (&codepoints, 0..) |*cp, k| {
+        cp.* = @intCast(32 + k);
+    }
+
+    const tt: codecs.truetype.Font = try codecs.truetype.loadFontFromTtf(gpa, ttf_bytes);
+    // Bake the coverage atlas at the SDF size directly — no DPR/oversample: the
+    // distance field, not extra texels, is what buys magnification headroom.
+    const atlas: text2d.FontAtlas = try text2d.bakeFontAtlas(gpa, &tt, sdf_size, &codepoints, 1);
+    defer image_mod.unloadImage(gpa, atlas.image);
+
+    // Coverage → SDF, in place. Spread is the distance (px) mapped to the
+    // ±0.5 alpha range. It must stay near a glyph's stroke half-width (a few
+    // px) or the field compresses toward 0.5 and nothing renders solid — a
+    // spread of size/8 was the bug that made SDF text mottle. ~size/18 keeps a
+    // 64px bake's interior near ~0.8 and the background at 0, a clean split.
+    const spread: f32 = @max(3.0, float(sdf_size) / 18.0);
+    try image_mod.coverageToSdf(gpa, atlas.image, spread);
+
+    const aw: u32 = @intCast(atlas.image.width);
+    const ah: u32 = @intCast(atlas.image.height);
+    const pixels: []const u8 = @as([*]const u8, @ptrCast(atlas.image.data.?))[0 .. aw * ah * 4];
+    // LINEAR (bilinear) sampling: the shader reads a smoothly interpolated
+    // distance and thresholds it. NEAREST would step the field and re-alias.
+    const tex: WgpuTexture = WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
+        .pixels = pixels,
+        .width = aw,
+        .height = ah,
+        .format = .rgba8_unorm,
+        .mag_filter_linear = true,
+        .min_filter_linear = true,
+        .label = "sdf_font_atlas",
+    });
+    const tex_id: u32 = r.registerOwnedTexture(tex);
+
+    return .{
+        .baseSize = atlas.base_size,
+        .glyphCount = @intCast(atlas.glyphs.len),
+        .glyphPadding = atlas.glyph_padding,
+        .texture = .{ .id = tex_id, .width = @intCast(aw), .height = @intCast(ah) },
+        .recs = atlas.recs.ptr,
+        .glyphs = atlas.glyphs.ptr,
+    };
+}
+
+/// raylib's `LoadFontFromImage` — build a Font from a BITMAP-FONT image
+/// (XNA style), where glyphs sit on a `key`-coloured background separated by
+/// key-coloured borders. Segments the image (via `image_mod.segmentSpriteFont`, a
+/// pure/unit-tested port of raylib's scan), replaces the key colour with
+/// transparent, uploads the cleaned image as a NEAREST-filtered atlas, and
+/// returns a Font whose glyphs carry `advanceX = 0` — the draw path advances by
+/// the rec width for image fonts, exactly like raylib's `DrawTextEx`.
+///
+/// `first_char` is the codepoint of the FIRST glyph (raylib uses 32 = space);
+/// glyphs are numbered sequentially from there. `image` is NOT consumed — the
+/// caller still owns and frees it (only the cleaned COPY is uploaded). Free the
+/// returned Font with `z.unloadFont` / `releaseFont` like any TTF font.
+pub fn loadFontFromImage(
+    gl: *WgpuGl,
+    gpa: Allocator,
+    image: types.Image,
+    key: Color,
+    first_char: i32,
+) !Font {
+    const max_glyphs: usize = 256;
+    // These read the `image` ARGUMENT, not the `image_mod` module -- a rename
+    // that half-landed left four references pointing at the module, which has no
+    // such fields. Nothing caught it because Zig's lazy analysis never reached
+    // this fn: no example calls loadFontFromImage, so only `zig build test`
+    // (which does refAllDecls) ever tried to compile it, and that step was
+    // already failing for its own reasons.
+    if (image.width <= 0 or image.height <= 0 or image.data == null) {
+        return error.InvalidImage;
+    }
+    const w: usize = @intCast(image.width);
+    const h: usize = @intCast(image.height);
+    const src: [*]const u8 = @ptrCast(image.data.?);
+
+    // Segment glyphs (pure CPU, unit-tested against a reference in image_mod.zig).
+    var temp_recs: [max_glyphs]types.Rectangle = undefined;
+    var temp_vals: [max_glyphs]i32 = undefined;
+    const layout: image_mod.SpriteFontLayout =
+        try image_mod.segmentSpriteFont(image, key, first_char, &temp_recs, &temp_vals);
+    const count: usize = layout.count;
+
+    // Cleaned atlas: copy the pixels and turn every key pixel transparent, so
+    // the background doesn't show and bilinear edges don't bleed the key colour.
+    const n_bytes: usize = w * h * 4;
+    const cleaned: []u8 = try gpa.alloc(u8, n_bytes);
+    defer gpa.free(cleaned);
+    @memcpy(cleaned, src[0..n_bytes]);
+    {
+        var i: usize = 0;
+        while (i < w * h) : (i += 1) {
+            const b: usize = i * 4;
+            if (cleaned[b + 0] == key.r and cleaned[b + 1] == key.g and
+                cleaned[b + 2] == key.b and cleaned[b + 3] == key.a)
+            {
+                cleaned[b + 0] = 0;
+                cleaned[b + 1] = 0;
+                cleaned[b + 2] = 0;
+                cleaned[b + 3] = 0;
+            }
+        }
+    }
+
+    // Upload as a NEAREST atlas (pixel fonts stay crisp at integer scale) and
+    // register it engine-owned (freed with the renderer's registry at teardown).
+    const app: *App = appOf(gl);
+    if (app.renderer_2d == null) {
+        app.renderer_2d = try Renderer2D.init(gpa, &app.gpu_frame);
+    }
+    const r: *Renderer2D = &app.renderer_2d.?;
+    const tex: WgpuTexture = WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
+        .pixels = cleaned,
+        .width = @intCast(w),
+        .height = @intCast(h),
+        .label = "spritefont_atlas",
+    });
+    const tex_id: u32 = r.registerOwnedTexture(tex);
+
+    // Final glyph/rec arrays (freed by unloadFont/unloadFontOwned via freeMany).
+    const recs: []types.Rectangle = try gpa.alloc(types.Rectangle, count);
+    errdefer gpa.free(recs);
+    const glyphs: []types.GlyphInfo = try gpa.alloc(types.GlyphInfo, count);
+    errdefer gpa.free(glyphs);
+    for (0..count) |k| {
+        recs[k] = temp_recs[k];
+        glyphs[k] = .{
+            .value = temp_vals[k],
+            .offsetX = 0,
+            .offsetY = 0,
+            .advanceX = 0,
+            // XNA image fonts have no per-glyph CPU bitmap; a zeroed Image is
+            // null-data, so unloadImage no-ops on it (safe teardown).
+            .image = std.mem.zeroes(types.Image),
+        };
+    }
+
+    return .{
+        .baseSize = @intFromFloat(recs[0].height),
+        .glyphCount = @intCast(count),
+        .glyphPadding = 0,
+        .texture = .{ .id = tex_id, .width = @intCast(w), .height = @intCast(h) },
+        .recs = recs.ptr,
+        .glyphs = glyphs.ptr,
+    };
+}
+
 /// Draw `text` at (x, y) in `size` px, tinted `color`. Routes through the
 /// reusable, backend-agnostic `drawWithFont` (line spacing 0, glyph spacing 0).
 pub fn drawText(
@@ -3734,7 +4027,7 @@ pub fn drawText(
     size: f32,
     color: Color,
 ) void {
-    drawing_text.drawWithFont(gl, 0, font, text, .{ x, y }, size, 0, color);
+    text2d.drawWithFont(gl, 0, font, text, .{ x, y }, size, 0, color);
 }
 
 /// Measure `text` at `size` px → (width, height) in logical px.
@@ -3743,7 +4036,19 @@ pub fn measureText(
     text: []const u8,
     size: f32,
 ) Vec2 {
-    return drawing_text.measureWithFont(0, font, text, size, 0);
+    return text2d.measureWithFont(0, font, text, size, 0);
+}
+
+/// raylib's `MeasureTextEx` — measure with an explicit inter-glyph `spacing`
+/// (the drawing side is `gl.text(pos, s, .{ .spacing = ... })`). Needed to
+/// centre a spacing-adjusted string.
+pub fn measureTextEx(
+    font: Font,
+    text: []const u8,
+    size: f32,
+    spacing: f32,
+) Vec2 {
+    return text2d.measureWithFont(0, font, text, size, spacing);
 }
 
 // ---- scissor / clip (N5g) ----
@@ -3858,7 +4163,7 @@ pub fn pushViewport(f: *Frame, placement: Placement) void {
     // Clip to the on-screen rect (logical px -> backing px, via the scissor path).
     const rr: types.Rectangle = placement.rect;
     const r: [4]u32 = logicalToBacking(app, rr.x, rr.y, rr.width, rr.height);
-    @import("wgpu.zig").render_pass.setScissorRect(app.pass.pass, r[0], r[1], r[2], r[3]);
+    wgpu.render_pass.setScissorRect(app.pass.pass, r[0], r[1], r[2], r[3]);
     // The child sees its own logical size as the window.
     f.window = .{ .screen_width = @trunc(lw), .screen_height = @trunc(lh) };
 }
@@ -3877,7 +4182,7 @@ pub fn popViewport(f: *Frame) void {
     f.gl.modelview = save.modelview;
     f.window = save.window;
     const backing: wgpu.SurfaceSize = wgpu.getSurfaceSize(app.gpu_frame.surface);
-    @import("wgpu.zig").render_pass.setScissorRect(app.pass.pass, 0, 0, backing.width, backing.height);
+    wgpu.render_pass.setScissorRect(app.pass.pass, 0, 0, backing.width, backing.height);
 }
 
 /// Stable, sequential child id handed out by `Launcher.add`.
@@ -4072,7 +4377,7 @@ pub fn beginScissorMode(
     const app: *App = appOf(gl);
     gl.flushBeforeMaterialSwap(); // flush so prior geometry isn't clipped
     const rect: [4]u32 = logicalToBacking(app, x, y, w, h);
-    @import("wgpu.zig").render_pass.setScissorRect(app.pass.pass, rect[0], rect[1], rect[2], rect[3]);
+    wgpu.render_pass.setScissorRect(app.pass.pass, rect[0], rect[1], rect[2], rect[3]);
 }
 
 /// Remove the clip rect (reset scissor to the full surface).
@@ -4080,7 +4385,7 @@ pub fn endScissorMode(gl: *WgpuGl) void {
     const app: *App = appOf(gl);
     gl.flushBeforeMaterialSwap();
     const backing: wgpu.SurfaceSize = wgpu.getSurfaceSize(app.gpu_frame.surface);
-    @import("wgpu.zig").render_pass.setScissorRect(app.pass.pass, 0, 0, backing.width, backing.height);
+    wgpu.render_pass.setScissorRect(app.pass.pass, 0, 0, backing.width, backing.height);
 }
 // ---- fullscreen shader (N6: the GPU half of the side-by-side) ----
 //
@@ -4095,7 +4400,7 @@ pub fn endScissorMode(gl: *WgpuGl) void {
 pub fn bindFullscreenShader(
     gl: *WgpuGl,
     comptime SchemaT: type,
-    loaded: *@import("shader_runtime_wgpu.zig").LoadedShader(SchemaT),
+    loaded: *shader_runtime.LoadedShader(SchemaT),
 ) void {
     comptime assertFullscreenBatchSafe(SchemaT);
     const app: *App = appOf(gl);
@@ -4119,7 +4424,7 @@ pub fn bindFullscreenShader(
 // numbers at compile time so they can never diverge and quietly defeat the
 // guard (e.g. samplers move groups but the batch doesn't).
 comptime {
-    if (gpu_iface.batch_reserved_group != @import("shader_interface").sampler_group) {
+    if (gpu_iface.batch_reserved_group != shader_interface.sampler_group) {
         @compileError("gpu_iface.batch_reserved_group must equal shader_interface.sampler_group: " ++
             "the 2D shapes batch binds its atlas at the material-sampler group, and the " ++
             "fullscreen-batch-safety guard relies on that equality.");
@@ -4134,7 +4439,7 @@ comptime {
 /// turns that footgun into a compile error pointing at the safe path. Cost:
 /// zero at runtime; it fires before anything ships.
 fn assertFullscreenBatchSafe(comptime SchemaT: type) void {
-    const si = @import("shader_introspect.zig");
+    const si = shader_introspect;
     const layout: si.ResolvedLayout = si.solveLayout(SchemaT);
     const reserved: u32 = gpu_iface.batch_reserved_group;
     if (layout.groups_used & (@as(u8, 1) << @intCast(reserved)) != 0) {
@@ -4207,7 +4512,7 @@ fn ensureFullscreenVbo(app: *App) wgpu.BufferHandle {
 pub fn drawFullscreenShader(
     gl: *WgpuGl,
     comptime SchemaT: type,
-    loaded: *@import("shader_runtime_wgpu.zig").LoadedShader(SchemaT),
+    loaded: *shader_runtime.LoadedShader(SchemaT),
 ) void {
     const app: *App = appOf(gl);
     // Commit any pending 2D geometry under the shapes pipeline first.
@@ -4374,7 +4679,7 @@ pub fn getMouseY(in: *const input.InputState) i32 {
 /// Keyboard: was `key` pressed this frame (rising edge)? raylib's IsKeyPressed.
 pub fn isKeyPressed(
     in: *const input.InputState,
-    key: @import("types.zig").KeyboardKey,
+    key: types.KeyboardKey,
 ) bool {
     return input.isKeyPressed(in, key);
 }

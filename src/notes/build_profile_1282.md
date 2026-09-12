@@ -13,7 +13,7 @@ standalones green, launcher 332/332 steps, import gate PASS (96/96).
 | # | step | wall | cache after | Δ cache |
 |---|---|---|---|---|
 | S0 | **build runner** (`zig build -h`: compiling `build.zig` into an exe) | **104s** | 22 M | +22 M |
-| S1 | **lint** (compile `lint_zimr` 42s @ MaxRSS 682M + run over ~450 files 3s) | **47s** | 43 M | +21 M |
+| S1 | **lint** (compile `zimrlint` 42s @ MaxRSS 682M + run over ~450 files 3s) | **47s** | 43 M | +21 M |
 | S2 | **cold tool chain** — driven by one cheap example (`input-mouse-standalone`): spv2wgsl → zspv → gen_externs ×45 → c2js → 45 shader transpiles → engine wasm | **~850s** (4 rounds) | 509 M | +466 M |
 | S3 | **warm the launcher's 23 flagship modules** (each as its own debug standalone) | **281s** | ~1039 M | +530 M |
 | S4 | **`launcher-standalone -Dmode=debug`** | **48s** | 1127 M | +75 M |
@@ -30,7 +30,7 @@ S2 needed 4 rounds of a ~250s window. Each round made real forward progress
 | binary | mode | size |
 |---|---|---|
 | `configurer` (the compiled build runner) | — | **26.3 MB** |
-| `lint_zimr` | ReleaseSafe | 8.4 MB |
+| `zimrlint` | ReleaseSafe | 8.4 MB |
 | `c2js` | ReleaseFast | 6.1 MB |
 | `spv2wgsl` | ReleaseFast | 5.5 MB |
 | `zspv` | ReleaseFast | 4.1 MB |
@@ -166,7 +166,7 @@ Lint stamps (`tools/.zig-cache/lint-stamps/`) deleted before every lint run to f
 
 | tool | workload | ReleaseFast | ReleaseSafe | Δ |
 |---|---|---|---|---|
-| `lint_zimr` | 543 files + build.zig | **3138 ms** | **3650 ms** | **+16.3%** |
+| `zimrlint` | 543 files + build.zig | **3138 ms** | **3650 ms** | **+16.3%** |
 | `c2js` | bridge.c (1.3 MB) -> 710 KB js | **2138 ms** | **2345 ms** | **+9.7%** |
 | `spv2wgsl` | 45 shaders | 59 ms | 71 ms | +20.3% |
 | `zspv` | 45 shaders (`--check`) | 18 ms | 17 ms | -5.6% (I/O bound, free) |
@@ -180,7 +180,7 @@ Absolute cost is small, though: ~0.5s (lint) + ~0.2s (c2js) + 12ms (spv2wgsl) pe
 
 | tool | compile RFast | compile RSafe | binary RFast | binary RSafe |
 |---|---|---|---|---|
-| `lint_zimr` | 44s | **40s** | 9.9 MB | **8.4 MB** |
+| `zimrlint` | 44s | **40s** | 9.9 MB | **8.4 MB** |
 | `c2js` | 32s | **27s** | 6.1 MB | **5.3 MB** |
 | `spv2wgsl` | 26s | **24s** | 5.5 MB | **4.9 MB** |
 | `zspv` | 18s | 18s | 4.1 MB | 4.0 MB |
@@ -188,21 +188,21 @@ Absolute cost is small, though: ~0.5s (lint) + ~0.2s (c2js) + 12ms (spv2wgsl) pe
 ~11s faster cold tool-compile and ~13% smaller binaries. If the metric were *total* cold build
 time rather than tool run time, ReleaseSafe would come out AHEAD.
 
-## ★ THE REAL FINDING: the ReleaseFast miscompile of lint_zimr is FIXED in 1282
+## ★ THE REAL FINDING: the ReleaseFast miscompile of zimrlint is FIXED in 1282
 
-build.zig pins `lint_zimr` to ReleaseSafe with this note:
+build.zig pins `zimrlint` to ReleaseSafe with this note:
 
-> ReleaseSafe, NOT ReleaseFast: this dev Zig miscompiles lint_zimr under ReleaseFast
+> ReleaseSafe, NOT ReleaseFast: this dev Zig miscompiles zimrlint under ReleaseFast
 > (SIGILL on every input). Debug + ReleaseSafe both run clean; ReleaseSafe keeps it fast.
 > Revisit on Zig upgrade.
 
-**This is the Zig upgrade.** A ReleaseFast `lint_zimr` built with 1282:
+**This is the Zig upgrade.** A ReleaseFast `zimrlint` built with 1282:
 - ran **10/10 times clean** over the full roster — no SIGILL,
 - produced output **byte-identical** to the ReleaseSafe binary (46 lines, same 18 findings).
 
 lint gates EVERY compile, so moving it back to ReleaseFast saves **~510 ms on every single
 build** — more than the entire cost of the ReleaseSafe question in the other direction.
-Recommend flipping `lint_zimr` to ReleaseFast (one line, build.zig ~L709 region) and keeping
+Recommend flipping `zimrlint` to ReleaseFast (one line, build.zig ~L709 region) and keeping
 the other tools as they are.
 
 Caveat worth stating: 10 clean runs + identical output is strong evidence, not proof. The old
@@ -247,7 +247,7 @@ This also explains the cold-build mystery: S2 measured ~850s, and 45 x 17.6s = 7
 **The gen_externs compiles WERE the cold build.**
 
 **RULE: match a build tool's optimize mode to its actual RUNTIME, not to a blanket policy.**
-`lint_zimr` (3.1s/build) and `c2js` (2.1s/build) earn their optimization. A 1 ms reflection
+`zimrlint` (3.1s/build) and `c2js` (2.1s/build) earn their optimization. A 1 ms reflection
 script compiled 45 times does not.
 
 # ★ The ReleaseSafe flip caught a REAL double free in spv2wgsl

@@ -51,7 +51,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .width = @intCast(img_w),
         .height = @intCast(img_h),
         .mipmaps = 1,
-        .format = @intFromEnum(z.PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(z.PixelFormat.uncompressed_r8g8b8a8),
     };
     s.* = .{
         .tex = z.loadTextureFromImage(f.gl, img),
@@ -115,7 +115,7 @@ fn update(f: *z.Frame, s: *State) void {
         .width = @intCast(w),
         .height = @intCast(h),
         .mipmaps = 1,
-        .format = @intFromEnum(z.PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(z.PixelFormat.uncompressed_r8g8b8a8),
     };
     z.updateTexture(f.gl, s.tex, img);
 

@@ -1,3 +1,4 @@
+//! lint:alias plot_core
 //! plot_core.zig — machinery shared by implot.zig and implot3d.zig.
 //!
 //! Depends only on `zm` (zimrmath) and `ui`; knows nothing about either

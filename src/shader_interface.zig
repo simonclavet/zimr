@@ -247,7 +247,7 @@ pub fn Sampler2D(comptime tag: MaterialMapIndex, comptime config: SamplerConfig)
         );
     }
     return struct {
-        pub const slot: u32 = @intFromEnum(tag);
+        pub const slot: u32 = @backingInt(tag);
         pub const kind: SamplerKind = .material_map;
         pub const map_index: MaterialMapIndex = tag;
         pub const sampler_config: SamplerConfig = config;

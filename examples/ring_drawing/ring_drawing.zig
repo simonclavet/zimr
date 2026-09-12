@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const radFromDeg = zm.radFromDeg;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
@@ -40,8 +40,8 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     // Tap advances the render mode; it also auto-advances so an idle demo cycles.
     if (z.isMouseButtonPressed(f.input, .left)) {
@@ -53,7 +53,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.mode = (s.mode + 1) % mode_count;
     }
 
-    const center: Vec2 = co.center(w, h);
+    const center: Vec2 = common.center(w, h);
     const base: f32 = @min(w, h);
     const outer: f32 = base * (0.34 + 0.03 * @sin(s.time * 0.9));
     const inner: f32 = base * (0.15 + 0.03 * @sin(s.time * 1.3 + 1.0));
@@ -83,7 +83,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var buf: [64]u8 = undefined;
     const mode_line: []const u8 = bufPrint(&buf, "mode: {s}", .{mode_names[s.mode]}) catch "mode: ?";
-    f.gl.text(.{ 22, 52 }, mode_line, .{ .size = 14, .color = co.palette.accent, .font = &s.font });
+    f.gl.text(.{ 22, 52 }, mode_line, .{ .size = 14, .color = common.palette.accent, .font = &s.font });
 
     var buf2: [80]u8 = undefined;
     const ang_line: []const u8 = bufPrint(
@@ -91,7 +91,7 @@ fn update(f: *z.Frame, s: *State) void {
         "span: {d:.0} deg  segs: {d}",
         .{ span, segments },
     ) catch "span: --";
-    f.gl.text(.{ 22, 74 }, ang_line, .{ .size = 13, .color = co.palette.ink, .font = &s.font });
+    f.gl.text(.{ 22, 74 }, ang_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
 
     var buf3: [80]u8 = undefined;
     const rad_line: []const u8 = bufPrint(
@@ -99,10 +99,10 @@ fn update(f: *z.Frame, s: *State) void {
         "inner: {d:.0}  outer: {d:.0}",
         .{ inner, outer },
     ) catch "inner: --";
-    f.gl.text(.{ 22, 94 }, rad_line, .{ .size = 13, .color = co.palette.ink, .font = &s.font });
-    f.gl.text(.{ 22, 114 }, "tap: cycle mode", .{ .size = 13, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ 22, 94 }, rad_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+    f.gl.text(.{ 22, 114 }, "tap: cycle mode", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 
-    co.caption(f.gl, s.font, "ring drawing");
+    common.caption(f.gl, s.font, "ring drawing");
     z.endDrawing(f.gl);
 }
 

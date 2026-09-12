@@ -1,0 +1,18 @@
+<mujoco model="fourbar">
+  <compiler angle="radian"/>
+  <worldbody>
+    <body name="left" pos="-0.2 0 0">
+      <joint name="left_pivot" type="hinge" axis="0 0 1"/>
+      <geom type="capsule" fromto="0 0 0 0 -0.3 0" size="0.02" mass="0.5"/>
+      <site name="left_tip" pos="0 -0.3 0" size="0.01"/>
+    </body>
+    <body name="right" pos="0.2 0 0">
+      <joint name="right_pivot" type="hinge" axis="0 0 1"/>
+      <geom type="capsule" fromto="0 0 0 0 -0.3 0" size="0.02" mass="0.5"/>
+      <site name="right_tip" pos="0 -0.3 0" size="0.01"/>
+    </body>
+  </worldbody>
+  <equality>
+    <connect body1="left" body2="right" anchor="0.4 -0.3 0"/>
+  </equality>
+</mujoco>

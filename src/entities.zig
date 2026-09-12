@@ -1,3 +1,4 @@
+//! lint:alias entities
 // src/entities.zig - pool-anchored ECS world.
 // `Entities(T_primary)` is a wrapper around `pool.Pool(T_primary)`
 // and `Registry`.  Every entity carries the primary component
@@ -40,7 +41,7 @@ const math = zm;
 // =============================================================================
 
 const world_stamp = struct {
-    pub const enabled: bool = builtin.mode == .Debug;
+    pub const enabled: bool = builtin.mode == .debug;
 
     /// The stamp type - `u32` in debug, `void` (zero-sized) in release.
     /// u32 specifically because wasm32's atomic ops cap at 32 bits, and
@@ -277,11 +278,11 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
                 _,
 
                 fn next(self: Generation) Generation {
-                    return @enumFromInt(@intFromEnum(self) + 1);
+                    return @fromBackingInt(@intCast(@backingInt(self) + 1));
                 }
 
                 fn isMax(self: Generation) bool {
-                    return @intFromEnum(self) == maxInt(GenerationInt);
+                    return @backingInt(self) == maxInt(GenerationInt);
                 }
             };
 
@@ -324,7 +325,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
                     }
                     try writer.print(
                         "0x{X}:{X}",
-                        .{ self.index, @intFromEnum(self.generation) },
+                        .{ self.index, @backingInt(self.generation) },
                     );
                 }
             };
@@ -346,7 +347,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
             ) std.Io.Writer.Error!void {
                 try writer.print(
                     "0x{X}:{X}",
-                    .{ self.index, @intFromEnum(self.generation) },
+                    .{ self.index, @backingInt(self.generation) },
                 );
             }
         };
@@ -1097,7 +1098,7 @@ pub const Arches = struct {
 
         const offset: usize = @intFromPtr(self) - @intFromPtr(vals.ptr);
         const index: usize = offset / @sizeOf(ChunkList);
-        return @enumFromInt(index);
+        return @fromBackingInt(@intCast(index));
     }
 
     /// Filter for `iterator`.  An archetype is yielded iff it
@@ -1181,11 +1182,11 @@ pub const Chunk = opaque {
                 return null;
             }
             const byte_idx: u32 = @shlExact(
-                @intFromEnum(self),
-                @intCast(@intFromEnum(cpool.size_align)),
+                @backingInt(self),
+                @intCast(@backingInt(cpool.size_align)),
             );
             const result: *Chunk = @ptrCast(&cpool.buf[byte_idx]);
-            assert(@intFromEnum(self) < cpool.reserved, @src());
+            assert(@backingInt(self) < cpool.reserved, @src());
             assert(cpool.indexOf(result) == self, @src());
             return result;
         }
@@ -1237,7 +1238,7 @@ pub const Chunk = opaque {
 
         /// Unwrap to a non-zero offset, or null if `.none`.
         pub inline fn unwrap(self: @This()) ?u32 {
-            const result: u32 = @intFromEnum(self);
+            const result: u32 = @backingInt(self);
             if (result == 0) {
                 return null;
             }
@@ -1397,7 +1398,7 @@ pub const Chunk = opaque {
             } else {
                 // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
                 const offset: u32 = if (es.getCompFlag(typeId(As))) |flag|
-                    self.header().comp_buf_offsets.values[@intFromEnum(flag)]
+                    self.header().comp_buf_offsets.values[@backingInt(flag)]
                 else
                     0;
                 const is_missing_optional: bool =
@@ -1427,7 +1428,7 @@ pub const Chunk = opaque {
     ) ?[]u8 {
         const flag: CompFlag = es.getCompFlag(id) orelse return null;
         // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
-        const offset: u32 = self.header().comp_buf_offsets.values[@intFromEnum(flag)];
+        const offset: u32 = self.header().comp_buf_offsets.values[@backingInt(flag)];
         if (offset == 0) {
             return null;
         }
@@ -1464,9 +1465,9 @@ pub const Chunk = opaque {
 
         // Removing the LAST entity is the easy path - no swap,
         // just shrink, possibly free the chunk if empty.
-        if (@intFromEnum(index_in_chunk) == new_len) {
+        if (@backingInt(index_in_chunk) == new_len) {
             if (std.debug.runtime_safety) {
-                indices[@intFromEnum(index_in_chunk)] = undefined;
+                indices[@backingInt(index_in_chunk)] = undefined;
                 var it: CompFlag.Set.Iterator = self.header().arch(&es.arches).iterator();
                 while (it.next()) |flag| {
                     const id: TypeId = es.getCompType(flag);
@@ -1489,7 +1490,7 @@ pub const Chunk = opaque {
         // last entity's data, then shrink.
 
         // Index slot: just write the last entity's index.
-        indices[@intFromEnum(index_in_chunk)] = moved;
+        indices[@backingInt(index_in_chunk)] = moved;
 
         // Component slots: memcpy each comp from end → freed slot,
         // then poison the source slot under runtime_safety.
@@ -1499,7 +1500,7 @@ pub const Chunk = opaque {
                 const id: TypeId = es.getCompType(flag);
                 const comp_buffer: []u8 = self.compsFromId(es, id).?;
 
-                const new_comp_offset: usize = @intFromEnum(index_in_chunk) * id.size;
+                const new_comp_offset: usize = @backingInt(index_in_chunk) * id.size;
                 const new_comp: []u8 = comp_buffer[new_comp_offset..][0..id.size];
 
                 const prev_comp_offset: usize = new_len * id.size;
@@ -1513,7 +1514,7 @@ pub const Chunk = opaque {
         self.header().len = new_len;
 
         // The moved entity's stored location is stale - patch it.
-        const moved_loc: *Entity.Location = &es.handle_tab.slots[@intFromEnum(moved)].value;
+        const moved_loc: *Entity.Location = &es.handle_tab.slots[@backingInt(moved)].value;
         assert(moved_loc.chunk.get(&es.chunk_pool) == self, @src());
         moved_loc.index_in_chunk = index_in_chunk;
 
@@ -1545,7 +1546,7 @@ pub const Chunk = opaque {
     pub fn iterator(self: *@This(), es: *const Registry) Iterator {
         return .{
             .chunk = self,
-            .index_in_chunk = @enumFromInt(0),
+            .index_in_chunk = @fromBackingInt(@intCast(0)),
             .pointer_lock = es.pointer_generation.lock(),
         };
     }
@@ -1559,15 +1560,15 @@ pub const Chunk = opaque {
 
         pub fn next(self: *@This(), es: *const Registry) ?Entity {
             self.pointer_lock.check(es.pointer_generation);
-            if (@intFromEnum(self.index_in_chunk) >= self.chunk.header().len) {
+            if (@backingInt(self.index_in_chunk) >= self.chunk.header().len) {
                 @branchHint(.unlikely);
                 return null;
             }
             const indices = self.chunk.view(es, struct {
                 indices: []const Entity.Index,
             }).?.indices;
-            const entity_index: Entity.Index = indices[@intFromEnum(self.index_in_chunk)];
-            self.index_in_chunk = @enumFromInt(@intFromEnum(self.index_in_chunk) + 1);
+            const entity_index: Entity.Index = indices[@backingInt(self.index_in_chunk)];
+            self.index_in_chunk = @fromBackingInt(@intCast(@backingInt(self.index_in_chunk) + 1));
             return entity_index.toEntity(es);
         }
     };
@@ -1873,8 +1874,8 @@ pub const Entity = packed struct {
         /// asserts will trip if it isn't.
         pub fn toEntity(self: @This(), es: *const Registry) Entity {
             const result: Entity = .{ .key = .{
-                .index = @intFromEnum(self),
-                .generation = es.handle_tab.slots[@intFromEnum(self)].generation,
+                .index = @backingInt(self),
+                .generation = es.handle_tab.slots[@backingInt(self)].generation,
             } };
             assert(result.key.generation != .invalid, @src());
             assert(result.key.index < es.handle_tab.next_index, @src());
@@ -1894,7 +1895,7 @@ pub const Entity = packed struct {
         pub const reserved: @This() = .{
             .chunk = .none,
             .index_in_chunk = if (std.debug.runtime_safety)
-                @enumFromInt(maxInt(@typeInfo(IndexInChunk).@"enum".tag_type))
+                @fromBackingInt(@intCast(maxInt(@typeInfo(IndexInChunk).@"enum".tag_type)))
             else
                 undefined,
         };
@@ -2144,12 +2145,12 @@ pub const Entity = packed struct {
         const chunk: *Chunk = entity_loc.chunk.get(&es.chunk_pool) orelse return null;
         const flag: CompFlag = es.getCompFlag(typeId(T)) orelse return null;
         // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
-        const offset: u32 = chunk.header().comp_buf_offsets.values[@intFromEnum(flag)];
+        const offset: u32 = chunk.header().comp_buf_offsets.values[@backingInt(flag)];
         if (offset == 0) {
             return null;
         }
         const comps_addr: usize = @intFromPtr(chunk) + offset;
-        const comp_addr = comps_addr + @sizeOf(T) * @intFromEnum(entity_loc.index_in_chunk);
+        const comp_addr = comps_addr + @sizeOf(T) * @backingInt(entity_loc.index_in_chunk);
         return @ptrFromInt(comp_addr);
     }
 
@@ -2163,7 +2164,7 @@ pub const Entity = packed struct {
         const entity_loc: *Entity.Location = es.handle_tab.get(self.key) orelse return null;
         const chunk: *Chunk = entity_loc.chunk.get(&es.chunk_pool) orelse return null;
         const comps: []u8 = chunk.compsFromId(es, id) orelse return null;
-        return comps[@intFromEnum(entity_loc.index_in_chunk) * id.size ..][0..id.size];
+        return comps[@backingInt(entity_loc.index_in_chunk) * id.size ..][0..id.size];
     }
 
     /// Queue a component to be added the next time the buffer is
@@ -2392,11 +2393,11 @@ pub const Entity = packed struct {
                 const flag: CompFlag = es.getCompFlag(typeId(Comp)).?;
                 if (!changes.remove.contains(flag)) {
                     // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
-                    const offset: u32 = new_chunk.header().comp_buf_offsets.values[@intFromEnum(flag)];
+                    const offset: u32 = new_chunk.header().comp_buf_offsets.values[@backingInt(flag)];
                     assert(offset != 0, @src()); // present in arch by construction
                     const comp: *Comp = @ptrFromInt(@intFromPtr(new_chunk) +
                         offset +
-                        @intFromEnum(entity_loc.index_in_chunk) * @sizeOf(Comp));
+                        @backingInt(entity_loc.index_in_chunk) * @sizeOf(Comp));
                     comp.* = @as(?Comp, @field(changes.add, field_name)).?;
                 }
             }
@@ -2446,11 +2447,11 @@ pub const Entity = packed struct {
             const flag: CompFlag = es.getCompFlag(comp.id).?; // registered above
             if (!changes.remove.contains(flag)) {
                 // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
-                const offset: u32 = chunk.header().comp_buf_offsets.values[@intFromEnum(flag)];
+                const offset: u32 = chunk.header().comp_buf_offsets.values[@backingInt(flag)];
                 assert(offset != 0, @src());
                 const dest_unsized: [*]u8 = @ptrFromInt(@intFromPtr(chunk) +
                     offset +
-                    @intFromEnum(entity_loc.index_in_chunk) * comp.id.size);
+                    @backingInt(entity_loc.index_in_chunk) * comp.id.size);
                 const dest: []u8 = dest_unsized[0..comp.id.size];
                 @memcpy(dest, comp.bytes());
             }
@@ -2521,7 +2522,7 @@ pub const Entity = packed struct {
             while (added.next()) |flag| {
                 const id: TypeId = es.getCompType(flag);
                 const comp_buffer: []u8 = new_chunk.compsFromId(es, id).?;
-                const comp_offset: usize = @intFromEnum(new_loc.index_in_chunk) * id.size;
+                const comp_offset: usize = @backingInt(new_loc.index_in_chunk) * id.size;
                 const comp: []u8 = comp_buffer[comp_offset..][0..id.size];
                 @memset(comp, undefined);
             }
@@ -2536,11 +2537,11 @@ pub const Entity = packed struct {
                 const id: TypeId = es.getCompType(flag);
 
                 const new_comp_buffer: []u8 = new_chunk.compsFromId(es, id).?;
-                const new_comp_offset: usize = @intFromEnum(new_loc.index_in_chunk) * id.size;
+                const new_comp_offset: usize = @backingInt(new_loc.index_in_chunk) * id.size;
                 const new_comp: []u8 = new_comp_buffer[new_comp_offset..][0..id.size];
 
                 const prev_comp_buffer: []u8 = prev_chunk.compsFromId(es, id).?;
-                const prev_comp_offset: usize = @intFromEnum(entity_loc.index_in_chunk) * id.size;
+                const prev_comp_offset: usize = @backingInt(entity_loc.index_in_chunk) * id.size;
                 const prev_comp: []u8 = prev_comp_buffer[prev_comp_offset..][0..id.size];
 
                 @memcpy(new_comp, prev_comp);
@@ -2596,7 +2597,7 @@ pub const Entity = packed struct {
             } else {
                 // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
                 const offset: u32 = if (es.getCompFlag(typeId(Unwrapped))) |flag|
-                    chunk.header().comp_buf_offsets.values[@intFromEnum(flag)]
+                    chunk.header().comp_buf_offsets.values[@backingInt(flag)]
                 else
                     0;
                 const is_optional: bool = @typeInfo(field_type) == .optional;
@@ -2607,7 +2608,7 @@ pub const Entity = packed struct {
                     assert(offset != 0, @src());
                     const comps_addr: usize = @intFromPtr(chunk) + offset;
                     const comp_addr = comps_addr +
-                        @intFromEnum(entity_loc.index_in_chunk) * @sizeOf(Unwrapped);
+                        @backingInt(entity_loc.index_in_chunk) * @sizeOf(Unwrapped);
                     @field(result, field_name) = @ptrFromInt(comp_addr);
                 }
             }
@@ -2819,12 +2820,12 @@ pub const ChunkList = struct {
 
         /// Resolve to the actual `*ChunkList`.
         pub fn get(self: @This(), arches: *const Arches) *ChunkList {
-            return &arches.map.values()[@intFromEnum(self)];
+            return &arches.map.values()[@backingInt(self)];
         }
 
         /// Look up the archetype for this index.
         pub fn arch(self: Index, arches: *const Arches) CompFlag.Set {
-            return arches.map.keys()[@intFromEnum(self)];
+            return arches.map.keys()[@backingInt(self)];
         }
     };
 
@@ -2970,12 +2971,12 @@ pub const ChunkList = struct {
 
         // The const-cast is fine: chunks are originally mutable,
         // we just don't expose mutable index-buf access publicly.
-        const index_in_chunk: Entity.Location.IndexInChunk = @enumFromInt(header.len);
+        const index_in_chunk: Entity.Location.IndexInChunk = @fromBackingInt(@intCast(header.len));
         header.len += 1;
         const index_buf: []Entity.Index = @constCast(chunk.view(es, struct {
             indices: []const Entity.Index,
         }).?.indices);
-        index_buf[@intFromEnum(index_in_chunk)] = @enumFromInt(e.key.index);
+        index_buf[@backingInt(index_in_chunk)] = @fromBackingInt(@intCast(e.key.index));
 
         // Chunk filled up?  Drop it off the avail list.
         if (header.len == self.chunk_capacity) {
@@ -3260,7 +3261,7 @@ pub const ChunkPool = struct {
             break :b free;
         } else b: {
             // Bump the arena.
-            const byte_idx: u32 = @shlExact(self.reserved, @intCast(@intFromEnum(self.size_align)));
+            const byte_idx: u32 = @shlExact(self.reserved, @intCast(@backingInt(self.size_align)));
             if (byte_idx >= self.buf.len) {
                 return error.EcsChunkPoolOverflow;
             }
@@ -3289,7 +3290,7 @@ pub const ChunkPool = struct {
         assert(@intFromPtr(chunk) < @intFromPtr(self.buf.ptr) + self.buf.len, @src());
         const offset: usize = @intFromPtr(chunk) - @intFromPtr(self.buf.ptr);
         assert(offset < self.buf.len, @src());
-        return @enumFromInt(@shrExact(offset, @intFromEnum(self.size_align)));
+        return @fromBackingInt(@intCast(@shrExact(offset, @backingInt(self.size_align))));
     }
 };
 
@@ -3701,7 +3702,7 @@ pub const CmdBuf = struct {
             self: *@This(),
             cb: *CmdBuf,
             es: *Registry,
-        ) error{EcsEntityOverflow}!void {
+        ) error{EcsEntityOverflow}!void { // lint:off useless-error-return: hook contract, overrides error
             _ = self;
             cb.updateStats();
             cb.clear(es);
@@ -3835,13 +3836,13 @@ pub const CmdBuf = struct {
                             // skip if no longer mapped.
                             const flag: CompFlag = es.getCompFlag(comp.id) orelse continue;
                             const offset: u32 = chunk.header()
-                                .comp_buf_offsets.values[@intFromEnum(flag)];
+                                .comp_buf_offsets.values[@backingInt(flag)];
                             if (offset == 0) {
                                 continue;
                             }
                             const dest_unsized: [*]u8 = @ptrFromInt(@intFromPtr(chunk) +
                                 offset +
-                                @intFromEnum(entity_loc.index_in_chunk) * comp.id.size);
+                                @backingInt(entity_loc.index_in_chunk) * comp.id.size);
                             const dest: []u8 = dest_unsized[0..comp.id.size];
                             @memcpy(dest, comp.bytes());
                         },
@@ -4108,7 +4109,7 @@ pub const Registry = struct {
             return error.EcsCompTypeOverflow;
         }
 
-        const flag: CompFlag = @enumFromInt(self.reverse_len);
+        const flag: CompFlag = @fromBackingInt(@intCast(self.reverse_len));
         try self.flag_table.put(gpa, id, flag);
         self.reverse_table[self.reverse_len] = id;
         self.reverse_len += 1;
@@ -4125,7 +4126,7 @@ pub const Registry = struct {
     /// Asserts the flag is in-range - caller must have obtained it
     /// from this same world (flag layouts differ between worlds).
     pub fn getCompType(self: *const @This(), flag: CompFlag) TypeId {
-        const idx: usize = @intFromEnum(flag);
+        const idx: usize = @backingInt(flag);
         assert(idx < self.reverse_len, @src());
         return self.reverse_table[idx];
     }
@@ -4224,9 +4225,9 @@ pub const Registry = struct {
     pub fn getEntityFromAny(es: *const Registry, from_comp: Any) Entity {
         const loc: Loc = getLoc(es, from_comp);
         const indices: []const Entity.Index = loc.chunk.view(es, struct { indices: []const Entity.Index }).?.indices;
-        const entity_index: Entity.Index = indices[@intFromEnum(loc.index_in_chunk)];
+        const entity_index: Entity.Index = indices[@backingInt(loc.index_in_chunk)];
 
-        assert(@intFromEnum(entity_index) < es.handle_tab.next_index, @src());
+        assert(@backingInt(entity_index) < es.handle_tab.next_index, @src());
         const entity: Entity = entity_index.toEntity(es);
         assert(entity.committed(es), @src());
         return entity;
@@ -4264,13 +4265,13 @@ pub const Registry = struct {
         const flag: CompFlag = self.getCompFlag(get_comp_id) orelse return null;
         const loc: Loc = self.getLoc(from_comp);
         // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
-        const comp_buf_offset: u32 = loc.chunk.header().comp_buf_offsets.values[@intFromEnum(flag)];
+        const comp_buf_offset: u32 = loc.chunk.header().comp_buf_offsets.values[@backingInt(flag)];
         if (comp_buf_offset == 0) {
             return null;
         }
         const unsized: [*]u8 = @ptrFromInt(@intFromPtr(loc.chunk) +
             comp_buf_offset +
-            get_comp_id.size * @intFromEnum(loc.index_in_chunk));
+            get_comp_id.size * @backingInt(loc.index_in_chunk));
         return unsized[0..get_comp_id.size];
     }
 
@@ -4305,12 +4306,12 @@ pub const Registry = struct {
         const comp_offset: usize = @intFromPtr(from_comp.ptr) - @intFromPtr(chunk);
         assert(comp_offset != 0, @src()); // zero would mean "no such comp in this chunk"
         // https://codeberg.org/Games-by-Mason/mr_ecs/issues/24
-        const comp_buf_offset: u32 = chunk.header().comp_buf_offsets.values[@intFromEnum(flag)];
+        const comp_buf_offset: u32 = chunk.header().comp_buf_offsets.values[@backingInt(flag)];
         const index_in_chunk: usize = @divExact(comp_offset - comp_buf_offset, from_comp.id.size);
 
         return .{
             .chunk = chunk,
-            .index_in_chunk = @enumFromInt(index_in_chunk),
+            .index_in_chunk = @fromBackingInt(@intCast(index_in_chunk)),
         };
     }
 
@@ -4788,7 +4789,7 @@ pub fn Handle(comptime T_primary: type) type {
             // we can synthesize the ECS handle without a lookup.
             const ecs_e: Entity = .{ .key = .{
                 .index = self.index(),
-                .generation = @enumFromInt(self.cycle()),
+                .generation = @fromBackingInt(@intCast(self.cycle())),
             } };
             _ = ecs_e.destroyImmediate(&world.ecs);
 
@@ -4820,7 +4821,7 @@ pub fn Handle(comptime T_primary: type) type {
             }
             const ecs_e: Entity = .{ .key = .{
                 .index = self.index(),
-                .generation = @enumFromInt(self.cycle()),
+                .generation = @fromBackingInt(@intCast(self.cycle())),
             } };
             return ecs_e.get(&world.ecs, T);
         }
@@ -4839,7 +4840,7 @@ pub fn Handle(comptime T_primary: type) type {
             }
             const ecs_e: Entity = .{ .key = .{
                 .index = self.index(),
-                .generation = @enumFromInt(self.cycle()),
+                .generation = @fromBackingInt(@intCast(self.cycle())),
             } };
             const T: type = @TypeOf(secondary);
             return ecs_e.changeArchImmediateOrErr(&world.ecs, gpa, struct {
@@ -4863,7 +4864,7 @@ pub fn Handle(comptime T_primary: type) type {
             }
             const ecs_e: Entity = .{ .key = .{
                 .index = self.index(),
-                .generation = @enumFromInt(self.cycle()),
+                .generation = @fromBackingInt(@intCast(self.cycle())),
             } };
             return ecs_e.changeArchImmediateOrErr(
                 &world.ecs,
@@ -4887,7 +4888,7 @@ pub fn Handle(comptime T_primary: type) type {
             }
             const ecs_e: Entity = .{ .key = .{
                 .index = self.index(),
-                .generation = @enumFromInt(self.cycle()),
+                .generation = @fromBackingInt(@intCast(self.cycle())),
             } };
             return ecs_e.changeArchImmediateOrErr(&world.ecs, gpa, struct {
                 c: T,
@@ -5038,7 +5039,7 @@ pub fn Entities(comptime T_primary: type) type {
             // slot.
             const anchor: Entity = try Entity.reserveImmediateOrErr(&ecs_world);
             assert(anchor.key.index == 0, @src());
-            cycle[0] = @intFromEnum(anchor.key.generation);
+            cycle[0] = @backingInt(anchor.key.generation);
             assert(cycle[0] == 1, @src());
 
             return .{
@@ -5146,7 +5147,7 @@ pub fn Entities(comptime T_primary: type) type {
                 return .nil;
             };
             assert(@as(u32, @intCast(ecs_e.key.index)) == idx, @src());
-            assert(@intFromEnum(ecs_e.key.generation) == cyc, @src());
+            assert(@backingInt(ecs_e.key.generation) == cyc, @src());
 
             const idx_u24: u24 = @intCast(idx);
             return .{
@@ -5358,7 +5359,7 @@ pub fn Entities(comptime T_primary: type) type {
 
             const ecs_e: Entity = .{ .key = .{
                 .index = e.index(),
-                .generation = @enumFromInt(e.cycle()),
+                .generation = @fromBackingInt(@intCast(e.cycle())),
             } };
             _ = try ecs_e.changeArchImmediateOrErr(&self.ecs, gpa, Add, .{ .add = add });
             return e;
@@ -5476,7 +5477,7 @@ pub fn Entities(comptime T_primary: type) type {
                 while (i < self.watermark) : (i += 1) {
                     const key: HandleTab.Key = .{
                         .index = i,
-                        .generation = @enumFromInt(self.cycle[i]),
+                        .generation = @fromBackingInt(@intCast(self.cycle[i])),
                     };
                     if (!self.ecs.handle_tab.containsKey(key)) {
                         continue;

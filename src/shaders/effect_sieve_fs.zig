@@ -10,6 +10,7 @@
 //! an unused layout entry), so this slot is a pure fragment-compute demo.
 
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
 const Vec = zm.Vec;
 const shader_io = @import("effect_sieve_fs_io.zig");
 const shader_externs = @import("effect_sieve_fs_externs");
@@ -24,7 +25,10 @@ const smoothstep = zm.smoothstep;
 fn colorizer(counter: f32, max_size: f32) Vec {
     const norm: f32 = counter / max_size;
     const red: f32 = smoothstep(0.3, 0.7, norm);
-    const green: f32 = @sin(3.14159 * norm);
+    // A HALF turn across the range, so the green channel peaks in the middle. `sinTurns` takes
+    // the turn count, and `norm * 0.5` says "half a turn" where `3.14159 *` said it in radians.
+    const green_turns: f32 = norm * 0.5;
+    const green: f32 = sinTurns(green_turns);
     const blue: f32 = 1.0 - smoothstep(0.0, 0.4, norm);
     return .{ 0.8 * red, 0.8 * green, 0.8 * blue, 1.0 };
 }

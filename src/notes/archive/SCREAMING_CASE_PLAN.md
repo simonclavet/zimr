@@ -74,7 +74,7 @@ Notes:
 
 The rule can't be enabled while 188 violations exist. Order:
 
-1. **Stage the rule** — land `isScreaming` + `runScreamingConsts` in `lint_zimr.zig` but do
+1. **Stage the rule** — land `isScreaming` + `runScreamingConsts` in `zimrlint.zig` but do
    NOT call it from `runChecks` yet (no gate impact).
 2. **Convert live code in batches**, re-linting after each with the staged rule run manually
    (a one-off `runScreamingConsts`-only pass), so the gate stays green on the committed rules:

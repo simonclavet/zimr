@@ -70,9 +70,6 @@ fn n(x: f64) Handle {
 fn arr() Handle {
     return js_new0(js_get(g(), "Array", 5));
 }
-fn push(a: Handle, v: Handle) void {
-    _ = js_call1(a, "push", 4, v);
-}
 fn print(text: []const u8) void {
     js_call1v(host(), "print", 5, s(text));
 }
@@ -240,15 +237,6 @@ fn transpileOne(spv_path: []const u8, out_buf: []u8) ?[]const u8 {
         out_buf[i] = @trunc(js_to_num(js_get_index(wgsl_h, i)));
     }
     return out_buf[0..out_len];
-}
-
-fn statusLabel(status: Status) []const u8 {
-    return switch (status) {
-        .ok_clean => "\u{2713} clean",
-        .ok_gaps => "\u{26a0} gaps ",
-        .transpile_error => "\u{2717} transp",
-        .panicked => "\u{2717} panick",
-    };
 }
 
 export fn _start() void {

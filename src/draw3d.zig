@@ -1,3 +1,4 @@
+//! lint:alias draw3d
 //! draw3d — the 3D library: immediate-mode primitives + the retained-mesh
 //! API for the WebGPU backend, AND (since GL-retirement P5) the CPU
 //! model/mesh library merged in from drawing.models: mesh generators
@@ -16,6 +17,8 @@ const Allocator = std.mem.Allocator;
 /// default so release standalones don't print over the scene.
 const log_pbr3d: bool = false;
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
+const cosTurns = zm.cosTurns;
 const Quat = zm.Quat;
 const Mat = zm.Mat;
 const Vec3 = zm.Vec3;
@@ -33,6 +36,7 @@ const lerp = zm.lerp;
 const matFromQuat = zm.matFromQuat;
 const mulMat = zm.mulMat;
 const mulMatVec = zm.mulMatVec;
+const translationV = zm.translationV;
 const Vec2 = zm.Vec2;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
@@ -41,24 +45,26 @@ const perspectiveFovRh = zm.perspectiveFovRh;
 const lookAtRh = zm.lookAtRh;
 const inverse = zm.inverse;
 const normalize4 = zm.normalize4;
-const perpendicular3 = zm.perpendicular3;
 const pi = zm.pi;
 const tau = zm.tau;
 const pointFromArr3 = zm.pointFromArr3;
 const quat_identity = zm.quat_identity;
-const rotateByAxisAngle3 = zm.rotateByAxisAngle3;
 const safeNormalize3 = zm.safeNormalize3;
 const scaling = zm.scaling;
 const slerp = zm.slerp;
 const translation = zm.translation;
 const vec = zm.vec;
+const pointVec = zm.pointVec;
+const normalize3 = zm.normalize3;
 const vec4 = zm.vec4;
+const radFromDeg = zm.radFromDeg;
 const assert = zm.assert;
 const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
 const wgpu = @import("wgpu.zig");
-const shader = @import("shader_runtime_wgpu.zig");
+const shader_runtime = @import("shader_runtime_wgpu.zig");
 const shader_iface = @import("shader_interface");
-const render_pass = @import("wgpu.zig").render_pass;
+const render_pass = wgpu.render_pass;
 const shader_introspect = @import("shader_introspect.zig");
 const wgpu_texture = @import("wgpu_texture.zig");
 const WgpuTexture = wgpu_texture.WgpuTexture;
@@ -126,7 +132,7 @@ pub const cube_indices = blk: {
 };
 
 // ============================================================================
-// Batch vertex stream + shader schema
+// Batch vertex stream + shader_runtime schema
 // ============================================================================
 
 /// One vertex in the dynamic batch: world-space position + world-space normal
@@ -145,9 +151,9 @@ pub const BatchVertex = extern struct {
 /// rather than silently truncating bodies past the budget.
 const batch_capacity: u32 = 262144;
 
-/// Normal assigned to line vertices. It equals the shader's fixed light
+/// Normal assigned to line vertices. It equals the shader_runtime's fixed light
 /// direction (already unit-length), so n·l == 1 → full brightness: lines render
-/// flat/unlit through the same lit cube3d shader, no shader branch needed.
+/// flat/unlit through the same lit cube3d shader_runtime, no shader_runtime branch needed.
 const line_normal: [3]f32 = .{ 0.36, 0.80, 0.48 };
 
 // ---- Instancing (Step 4): a separate GPU pipeline. The mesh stays in LOCAL
@@ -177,14 +183,14 @@ pub const InstanceVertex = extern struct {
 /// GPU buffers for one uploaded mesh, indexed by `Mesh.vaoId − 1` in the
 /// `mesh_gpu` registry (vaoId 0 = not yet uploaded). Built lazily on the first
 /// `drawMeshInstanced` (uploadMesh's signature carries no device).
-const MeshGpu = struct {
+pub const MeshGpu = struct {
     vbo: wgpu.BufferHandle,
     ibo: wgpu.BufferHandle,
     index_count: u32,
 };
 
 /// WGSL for the instanced VS (emitted from `src/shaders/cube3d_instanced_vs.zig`
-/// by the shader pipeline). Reuses `cube3d_fs` for shading.
+/// by the shader_runtime pipeline). Reuses `cube3d_fs` for shading.
 const cube_instanced_vs_wgsl = @embedFile("cube3d_instanced_vs.wgsl");
 
 /// UBO (group 0): the camera view-projection, mirroring
@@ -200,9 +206,9 @@ pub const CubeSchema = struct {
     };
 };
 
-// WGSL emitted by the typed shader pipeline from `src/shaders/cube3d_vs.zig`
+// WGSL emitted by the typed shader_runtime pipeline from `src/shaders/cube3d_vs.zig`
 // and `cube3d_fs.zig` (Zig → SPIR-V → spv2wgsl), wired into the zimr
-// module by build.zig's engine-shader discovery loop.
+// module by build.zig's engine-shader_runtime discovery loop.
 const cube_vs_wgsl = @embedFile("cube3d_vs.wgsl");
 const cube_fs_wgsl = @embedFile("cube3d_fs.wgsl");
 
@@ -264,7 +270,7 @@ const vp_ubo_stride: u64 = 256;
 // one DecalUbo (96 B) fits comfortably.
 const decal_ubo_stride: u32 = 256;
 
-// WGSL emitted by the typed shader pipeline from `src/shaders/billboard_vs.zig`
+// WGSL emitted by the typed shader_runtime pipeline from `src/shaders/billboard_vs.zig`
 // and `billboard_fs.zig` (pure-Zig `@SpirvType` → SPIR-V → spv2wgsl). The FS goes
 // through the proven sampler path — `zsample2d` + `zm.binding(&tex_sampler2d,1,0)`
 // + `zspv --rewrite-samplers-wgsl` → real `@group(1)@binding(0) texture_2d<f32>`
@@ -291,9 +297,9 @@ const SkyboxSchema = struct {
     };
 };
 
-// WGSL emitted by the typed shader pipeline from `src/shaders/skybox_vs.zig`
+// WGSL emitted by the typed shader_runtime pipeline from `src/shaders/skybox_vs.zig`
 // and `skybox_fs.zig` (pure-Zig `@SpirvType` → SPIR-V → spv2wgsl), wired in as
-// anonymous imports by build.zig's shader auto-discovery loop. These shaders use
+// anonymous imports by build.zig's shader_runtime auto-discovery loop. These shaders use
 // only runtime-bits resources (uniform + vertex_index builtin), so no sampler
 // rewrite is involved. Entry point is `entry` for both (see `.vs_entry_point`).
 const skybox_vs_wgsl = @embedFile("skybox_vs.wgsl");
@@ -307,7 +313,7 @@ const decal_vs_wgsl = @embedFile("decal_vs.wgsl");
 const decal_fs_wgsl = @embedFile("decal_fs.wgsl");
 
 /// Build one render pipeline for the 3D batch: depth-tested, with the given
-/// topology + cull mode, sharing the cube3d shader modules, vertex layout, and
+/// topology + cull mode, sharing the cube3d shader_runtime modules, vertex layout, and
 /// UBO layout.
 fn makePipeline(
     gpa: Allocator,
@@ -441,71 +447,1411 @@ pub fn genMeshCube(
     return mesh;
 }
 
-/// Generate an indexed UV sphere: `rings` latitude bands × `slices` longitude
-/// segments, outward normals; (rings+1)·(slices+1) verts, rings·slices·2 tris.
-/// Mirrors raylib genMeshSphere.
-pub fn genMeshSphere(
+// ===========================================================================
+// PARAMETRIC SHAPE SPINE (par_shapes-derived; the unifying core of zimr's shape
+// library). Every smooth primitive is a uv->xyz callback fed through
+// `parametricMesh`, which triangulates the unit (slices×stacks) grid, converts
+// par_shapes' Z-up convention to zimr Y-up (a proper +X quarter-turn, so winding
+// and outward normals are preserved), and welds seam/pole normals so shared
+// edges shade without a crease. Output is a raylib-shaped `types.Mesh` (u16
+// indices). Author your own surface by calling `parametricMesh` with a custom
+// callback + context. These reclaim the names the old UV generators vacated
+// (now `genMesh*Legacy`).
+// ===========================================================================
+
+/// Maps the unit square (u,v in [0,1]) to a surface point in par_shapes' Z-up
+/// convention. `ctx` carries the shape's parameters.
+pub const ParametricFn = *const fn (u: f32, v: f32, ctx: ?*const anyopaque) [3]f32;
+
+fn parametricKey(x: f32, y: f32, zc: f32) [3]i32 {
+    const kx: i32 = @round(x * 10000.0);
+    const ky: i32 = @round(y * 10000.0);
+    const kz: i32 = @round(zc * 10000.0);
+    return .{ kx, ky, kz };
+}
+
+/// Area-weighted face normals accumulated per vertex, then welded across
+/// coincident positions so the uv seam and poles shade smoothly.
+fn parametricWeldNormals(
     gpa: Allocator,
-    radius: f32,
-    rings: i32,
+    verts: []const f32,
+    idx: []const u16,
+    norms: []f32,
+) Allocator.Error!void {
+    @memset(norms, 0);
+    var t: usize = 0;
+    while (t < idx.len) : (t += 3) {
+        const ia: usize = idx[t];
+        const ib: usize = idx[t + 1];
+        const ic: usize = idx[t + 2];
+        const e1x: f32 = verts[ib * 3 + 0] - verts[ia * 3 + 0];
+        const e1y: f32 = verts[ib * 3 + 1] - verts[ia * 3 + 1];
+        const e1z: f32 = verts[ib * 3 + 2] - verts[ia * 3 + 2];
+        const e2x: f32 = verts[ic * 3 + 0] - verts[ia * 3 + 0];
+        const e2y: f32 = verts[ic * 3 + 1] - verts[ia * 3 + 1];
+        const e2z: f32 = verts[ic * 3 + 2] - verts[ia * 3 + 2];
+        const nx: f32 = e1y * e2z - e1z * e2y;
+        const ny: f32 = e1z * e2x - e1x * e2z;
+        const nz: f32 = e1x * e2y - e1y * e2x;
+        for ([_]usize{ ia, ib, ic }) |vi| {
+            norms[vi * 3 + 0] += nx;
+            norms[vi * 3 + 1] += ny;
+            norms[vi * 3 + 2] += nz;
+        }
+    }
+    var map: std.AutoHashMap([3]i32, [3]f32) = std.AutoHashMap([3]i32, [3]f32).init(gpa);
+    defer map.deinit();
+    const vcount: usize = verts.len / 3;
+    var v: usize = 0;
+    while (v < vcount) : (v += 1) {
+        const key: [3]i32 = parametricKey(verts[v * 3], verts[v * 3 + 1], verts[v * 3 + 2]);
+        const gop = try map.getOrPut(key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{ 0, 0, 0 };
+        }
+        gop.value_ptr[0] += norms[v * 3 + 0];
+        gop.value_ptr[1] += norms[v * 3 + 1];
+        gop.value_ptr[2] += norms[v * 3 + 2];
+    }
+    v = 0;
+    while (v < vcount) : (v += 1) {
+        const key: [3]i32 = parametricKey(verts[v * 3], verts[v * 3 + 1], verts[v * 3 + 2]);
+        const acc: [3]f32 = map.get(key).?;
+        var len: f32 = @sqrt(acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]);
+        if (len < 1e-8) {
+            len = 1.0;
+        }
+        norms[v * 3 + 0] = acc[0] / len;
+        norms[v * 3 + 1] = acc[1] / len;
+        norms[v * 3 + 2] = acc[2] / len;
+    }
+}
+
+/// The parametric core: tessellate `uvFn` over a (slices×stacks) grid.
+/// `(slices+1)*(stacks+1)` must be < 65536 (u16 indices) — returns an empty mesh
+/// otherwise.
+pub fn parametricMesh(
+    gpa: Allocator,
+    uvFn: ParametricFn,
+    ctx: ?*const anyopaque,
     slices: i32,
+    stacks: i32,
 ) Allocator.Error!types.Mesh {
     var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
-    if (rings < 3 or slices < 3) {
+    if (slices < 1 or stacks < 1) {
         return mesh;
     }
-    const ru: usize = @intCast(rings);
-    const su: usize = @intCast(slices);
-    const rows: usize = ru + 1;
-    const cols: usize = su + 1;
+    const sl: usize = @intCast(slices);
+    const st: usize = @intCast(stacks);
+    const cols: usize = sl + 1;
+    const rows: usize = st + 1;
     const vcount: usize = rows * cols;
+    if (vcount >= 65536) {
+        return mesh;
+    }
     const verts: []f32 = try gpa.alloc(f32, vcount * 3);
     errdefer gpa.free(verts);
     const norms: []f32 = try gpa.alloc(f32, vcount * 3);
     errdefer gpa.free(norms);
-    const tris: usize = ru * su * 2;
-    const idx: []u16 = try gpa.alloc(u16, tris * 3);
+    const texs: []f32 = try gpa.alloc(f32, vcount * 2);
+    errdefer gpa.free(texs);
+    const tcount: usize = 2 * sl * st;
+    const idx: []u16 = try gpa.alloc(u16, tcount * 3);
     errdefer gpa.free(idx);
-    var r: usize = 0;
-    while (r < rows) : (r += 1) {
-        const theta: f32 = pi * float(r) / float(ru);
-        var s: usize = 0;
-        while (s < cols) : (s += 1) {
-            const phi_angle: f32 = 2.0 * pi * float(s) / float(su);
-            const dir: [3]f32 = sphereDir(theta, phi_angle);
-            const vi: usize = (r * cols + s) * 3;
-            verts[vi + 0] = radius * dir[0];
-            verts[vi + 1] = radius * dir[1];
-            verts[vi + 2] = radius * dir[2];
-            norms[vi + 0] = dir[0];
-            norms[vi + 1] = dir[1];
-            norms[vi + 2] = dir[2];
+
+    var stack: usize = 0;
+    while (stack < rows) : (stack += 1) {
+        const u: f32 = float(stack) / float(st);
+        var slice: usize = 0;
+        while (slice < cols) : (slice += 1) {
+            const vv: f32 = float(slice) / float(sl);
+            const p: [3]f32 = uvFn(u, vv, ctx);
+            const vi: usize = (stack * cols + slice) * 3;
+            verts[vi + 0] = p[0]; // par x -> zimr x
+            verts[vi + 1] = p[2]; // par z (up) -> zimr y (up)
+            verts[vi + 2] = -p[1]; // par y -> zimr -z (keeps handedness)
+            const ti: usize = (stack * cols + slice) * 2;
+            texs[ti + 0] = u;
+            texs[ti + 1] = vv;
         }
     }
+
     var ii: usize = 0;
-    r = 0;
-    while (r < ru) : (r += 1) {
-        var s: usize = 0;
-        while (s < su) : (s += 1) {
-            const a: u16 = @intCast(r * cols + s);
-            const b: u16 = @intCast((r + 1) * cols + s);
-            const c: u16 = @intCast(r * cols + s + 1);
-            const d: u16 = @intCast((r + 1) * cols + s + 1);
-            idx[ii + 0] = a;
-            idx[ii + 1] = b;
-            idx[ii + 2] = c;
-            idx[ii + 3] = c;
-            idx[ii + 4] = b;
-            idx[ii + 5] = d;
+    var vbase: usize = 0;
+    stack = 0;
+    while (stack < st) : (stack += 1) {
+        var slice: usize = 0;
+        while (slice < sl) : (slice += 1) {
+            const nxt: usize = slice + 1;
+            idx[ii + 0] = @intCast(vbase + slice + cols);
+            idx[ii + 1] = @intCast(vbase + nxt);
+            idx[ii + 2] = @intCast(vbase + slice);
+            idx[ii + 3] = @intCast(vbase + slice + cols);
+            idx[ii + 4] = @intCast(vbase + nxt + cols);
+            idx[ii + 5] = @intCast(vbase + nxt);
             ii += 6;
         }
+        vbase += cols;
     }
+
+    try parametricWeldNormals(gpa, verts, idx, norms);
+
     mesh.vertexCount = @intCast(vcount);
-    mesh.triangleCount = @intCast(tris);
+    mesh.triangleCount = @intCast(tcount);
     mesh.vertices = verts.ptr;
     mesh.normals = norms.ptr;
+    mesh.texcoords = texs.ptr;
     mesh.indices = idx.ptr;
     return mesh;
+}
+
+// ---- callbacks + wrappers (each reclaims a freed genMesh* name) ------------
+
+const SphereParams = struct { radius: f32 };
+fn sphereUv(u: f32, v: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const SphereParams = @ptrCast(@alignCast(ctx.?));
+    const ph: f32 = u * pi;
+    const theta: f32 = v * 2.0 * pi;
+    return .{
+        p.radius * @cos(theta) * @sin(ph),
+        p.radius * @sin(theta) * @sin(ph),
+        p.radius * @cos(ph),
+    };
+}
+pub fn genMeshSphere(
+    gpa: Allocator,
+    radius: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    var params: SphereParams = .{ .radius = radius };
+    return parametricMesh(gpa, sphereUv, @ptrCast(&params), slices, stacks);
+}
+
+fn hemisphereUv(u: f32, v: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const SphereParams = @ptrCast(@alignCast(ctx.?));
+    const ph: f32 = u * pi;
+    const theta: f32 = v * pi;
+    return .{
+        p.radius * @cos(theta) * @sin(ph),
+        p.radius * @sin(theta) * @sin(ph),
+        p.radius * @cos(ph),
+    };
+}
+pub fn genMeshHemiSphere(
+    gpa: Allocator,
+    radius: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    var params: SphereParams = .{ .radius = radius };
+    return parametricMesh(gpa, hemisphereUv, @ptrCast(&params), slices, stacks);
+}
+
+const TubeParams = struct { radius: f32, height: f32 };
+fn cylinderUv(u: f32, v: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const TubeParams = @ptrCast(@alignCast(ctx.?));
+    const theta: f32 = v * 2.0 * pi;
+    return .{ p.radius * @sin(theta), p.radius * @cos(theta), p.height * u };
+}
+pub fn genMeshCylinder(
+    gpa: Allocator,
+    radius: f32,
+    height: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    var params: TubeParams = .{ .radius = radius, .height = height };
+    return parametricMesh(gpa, cylinderUv, @ptrCast(&params), slices, stacks);
+}
+
+fn coneUv(u: f32, v: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const TubeParams = @ptrCast(@alignCast(ctx.?));
+    const r: f32 = (1.0 - u) * p.radius;
+    const theta: f32 = v * 2.0 * pi;
+    return .{ r * @sin(theta), r * @cos(theta), p.height * u };
+}
+pub fn genMeshCone(
+    gpa: Allocator,
+    radius: f32,
+    height: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    var params: TubeParams = .{ .radius = radius, .height = height };
+    return parametricMesh(gpa, coneUv, @ptrCast(&params), slices, stacks);
+}
+
+const TorusParams = struct { major: f32, minor: f32 };
+fn torusUv(u: f32, v: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const TorusParams = @ptrCast(@alignCast(ctx.?));
+    const theta: f32 = u * 2.0 * pi;
+    const ph: f32 = v * 2.0 * pi;
+    const beta: f32 = p.major + p.minor * @cos(ph);
+    return .{ @cos(theta) * beta, @sin(theta) * beta, @sin(ph) * p.minor };
+}
+pub fn genMeshTorus(
+    gpa: Allocator,
+    radius: f32,
+    thickness: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    var params: TorusParams = .{ .major = radius, .minor = thickness };
+    return parametricMesh(gpa, torusUv, @ptrCast(&params), slices, stacks);
+}
+
+fn normXyz(x: f32, y: f32, zc: f32) [3]f32 {
+    var len: f32 = @sqrt(x * x + y * y + zc * zc);
+    if (len < 1e-8) {
+        len = 1.0;
+    }
+    return .{ x / len, y / len, zc / len };
+}
+const KnotParams = struct { minor: f32 };
+fn knotUv(uu: f32, vv: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const KnotParams = @ptrCast(@alignCast(ctx.?));
+    const a: f32 = 0.5;
+    const b: f32 = 0.3;
+    const c: f32 = 0.5;
+    const d: f32 = p.minor * 0.1;
+    const u: f32 = (1.0 - uu) * 4.0 * pi;
+    const v: f32 = vv * 2.0 * pi;
+    const r: f32 = a + b * @cos(1.5 * u);
+    const x: f32 = r * @cos(u);
+    const y: f32 = r * @sin(u);
+    const zc: f32 = c * @sin(1.5 * u);
+    const q: [3]f32 = normXyz(
+        -1.5 * b * @sin(1.5 * u) * @cos(u) - (a + b * @cos(1.5 * u)) * @sin(u),
+        -1.5 * b * @sin(1.5 * u) * @sin(u) + (a + b * @cos(1.5 * u)) * @cos(u),
+        1.5 * c * @cos(1.5 * u),
+    );
+    const qvn: [3]f32 = normXyz(q[1], -q[0], 0);
+    const ww: [3]f32 = .{
+        q[1] * qvn[2] - q[2] * qvn[1],
+        q[2] * qvn[0] - q[0] * qvn[2],
+        q[0] * qvn[1] - q[1] * qvn[0],
+    };
+    return .{
+        x + d * (qvn[0] * @cos(v) + ww[0] * @sin(v)),
+        y + d * (qvn[1] * @cos(v) + ww[1] * @sin(v)),
+        zc + d * ww[2] * @sin(v),
+    };
+}
+pub fn genMeshKnot(
+    gpa: Allocator,
+    radius: f32,
+    thickness: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    _ = radius;
+    var params: KnotParams = .{ .minor = thickness };
+    return parametricMesh(gpa, knotUv, @ptrCast(&params), slices, stacks);
+}
+
+const PlaneParams = struct { width: f32, length: f32 };
+fn planeUv(u: f32, v: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const PlaneParams = @ptrCast(@alignCast(ctx.?));
+    return .{ p.width * (u - 0.5), p.length * (v - 0.5), 0 };
+}
+pub fn genMeshPlane(
+    gpa: Allocator,
+    width: f32,
+    length: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    var params: PlaneParams = .{ .width = width, .length = length };
+    return parametricMesh(gpa, planeUv, @ptrCast(&params), slices, stacks);
+}
+
+const KleinParams = struct { scale: f32 };
+/// The Klein bottle, parameterised in TURNS.
+///
+/// `uu` and `vv` arrive on [0, 1] - the surface's own parameters - and the old body multiplied
+/// both by tau on the first two lines so `@cos` would take them. Every branch threshold was a
+/// half turn spelled `pi`. Now the parameters stay as they arrive and the thresholds read as
+/// `0.5`, which is what they mean.
+fn kleinUv(uu_turns: f32, vv_turns: f32, ctx: ?*const anyopaque) [3]f32 {
+    const p: *const KleinParams = @ptrCast(@alignCast(ctx.?));
+    const u: f32 = uu_turns;
+    const v: f32 = vv_turns;
+    var x: f32 = 0;
+    var zc: f32 = 0;
+    if (u < 0.5) {
+        x = 3.0 * cosTurns(u) * (1.0 + sinTurns(u)) +
+            (2.0 * (1.0 - cosTurns(u) / 2.0)) * cosTurns(u) * cosTurns(v);
+        zc = -8.0 * sinTurns(u) - 2.0 * (1.0 - cosTurns(u) / 2.0) * sinTurns(u) * cosTurns(v);
+    } else {
+        x = 3.0 * cosTurns(u) * (1.0 + sinTurns(u)) +
+            (2.0 * (1.0 - cosTurns(u) / 2.0)) * cosTurns(v + 0.5);
+        zc = -8.0 * sinTurns(u);
+    }
+    const y: f32 = -2.0 * (1.0 - cosTurns(u) / 2.0) * sinTurns(v);
+    return .{ p.scale * x, p.scale * y, p.scale * zc };
+}
+pub fn genMeshKlein(
+    gpa: Allocator,
+    scale: f32,
+    slices: i32,
+    stacks: i32,
+) Allocator.Error!types.Mesh {
+    var params: KleinParams = .{ .scale = scale };
+    return parametricMesh(gpa, kleinUv, @ptrCast(&params), slices, stacks);
+}
+
+// ---- mesh-ops toolkit (par_shapes-derived): compose + edit any types.Mesh ----
+// These operate on the raylib-shaped Mesh, so they work on the parametric
+// shapes AND the raylib genMesh* meshes alike. v1 assumes verts/normals/
+// texcoords/indices are all present (true for every zimr generator).
+
+/// Combine two meshes into one; b's indices are offset past a's vertices. Caller
+/// owns the result; `a` and `b` are untouched (free them separately).
+pub fn meshMerge(
+    gpa: Allocator,
+    a: types.Mesh,
+    b: types.Mesh,
+) Allocator.Error!types.Mesh {
+    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    const avc: usize = @intCast(a.vertexCount);
+    const bvc: usize = @intCast(b.vertexCount);
+    const atc: usize = @intCast(a.triangleCount);
+    const btc: usize = @intCast(b.triangleCount);
+    const vc: usize = avc + bvc;
+    const tc: usize = atc + btc;
+    const verts: []f32 = try gpa.alloc(f32, vc * 3);
+    errdefer gpa.free(verts);
+    const norms: []f32 = try gpa.alloc(f32, vc * 3);
+    errdefer gpa.free(norms);
+    const texs: []f32 = try gpa.alloc(f32, vc * 2);
+    errdefer gpa.free(texs);
+    const idx: []u16 = try gpa.alloc(u16, tc * 3);
+    errdefer gpa.free(idx);
+    @memcpy(verts[0 .. avc * 3], a.vertices[0 .. avc * 3]);
+    @memcpy(verts[avc * 3 ..], b.vertices[0 .. bvc * 3]);
+    @memcpy(norms[0 .. avc * 3], a.normals[0 .. avc * 3]);
+    @memcpy(norms[avc * 3 ..], b.normals[0 .. bvc * 3]);
+    @memcpy(texs[0 .. avc * 2], a.texcoords[0 .. avc * 2]);
+    @memcpy(texs[avc * 2 ..], b.texcoords[0 .. bvc * 2]);
+    @memcpy(idx[0 .. atc * 3], a.indices[0 .. atc * 3]);
+    const off: u16 = @intCast(avc);
+    var i: usize = 0;
+    while (i < btc * 3) : (i += 1) {
+        idx[atc * 3 + i] = b.indices[i] + off;
+    }
+    mesh.vertexCount = @intCast(vc);
+    mesh.triangleCount = @intCast(tc);
+    mesh.vertices = verts.ptr;
+    mesh.normals = norms.ptr;
+    mesh.texcoords = texs.ptr;
+    mesh.indices = idx.ptr;
+    return mesh;
+}
+
+/// Shift every vertex in place.
+pub fn meshTranslate(mesh: *types.Mesh, dx: f32, dy: f32, dz: f32) void {
+    if (mesh.vertices == null) {
+        return;
+    }
+    const vc: usize = @intCast(mesh.vertexCount);
+    var i: usize = 0;
+    while (i < vc) : (i += 1) {
+        mesh.vertices[i * 3 + 0] += dx;
+        mesh.vertices[i * 3 + 1] += dy;
+        mesh.vertices[i * 3 + 2] += dz;
+    }
+}
+
+/// Scale every vertex in place; normals are rescaled by the inverse and
+/// renormalized so they stay correct under non-uniform scale.
+pub fn meshScale(mesh: *types.Mesh, sx: f32, sy: f32, sz: f32) void {
+    if (mesh.vertices == null) {
+        return;
+    }
+    const vc: usize = @intCast(mesh.vertexCount);
+    const has_n: bool = mesh.normals != null;
+    const ix: f32 = if (sx != 0) 1.0 / sx else 0;
+    const iy: f32 = if (sy != 0) 1.0 / sy else 0;
+    const iz: f32 = if (sz != 0) 1.0 / sz else 0;
+    var i: usize = 0;
+    while (i < vc) : (i += 1) {
+        mesh.vertices[i * 3 + 0] *= sx;
+        mesh.vertices[i * 3 + 1] *= sy;
+        mesh.vertices[i * 3 + 2] *= sz;
+        if (has_n) {
+            const nx: f32 = mesh.normals[i * 3 + 0] * ix;
+            const ny: f32 = mesh.normals[i * 3 + 1] * iy;
+            const nz: f32 = mesh.normals[i * 3 + 2] * iz;
+            var len: f32 = @sqrt(nx * nx + ny * ny + nz * nz);
+            if (len < 1e-8) {
+                len = 1.0;
+            }
+            mesh.normals[i * 3 + 0] = nx / len;
+            mesh.normals[i * 3 + 1] = ny / len;
+            mesh.normals[i * 3 + 2] = nz / len;
+        }
+    }
+}
+
+/// Flip winding (reverse each triangle) and negate normals — turns a mesh
+/// inside-out, e.g. to make an interior-facing shell.
+pub fn meshInvert(mesh: *types.Mesh) void {
+    if (mesh.indices != null) {
+        const tc: usize = @intCast(mesh.triangleCount);
+        var t: usize = 0;
+        while (t < tc) : (t += 1) {
+            const tmp: u16 = mesh.indices[t * 3 + 1];
+            mesh.indices[t * 3 + 1] = mesh.indices[t * 3 + 2];
+            mesh.indices[t * 3 + 2] = tmp;
+        }
+    }
+    if (mesh.normals != null) {
+        const vc: usize = @intCast(mesh.vertexCount);
+        var i: usize = 0;
+        while (i < vc * 3) : (i += 1) {
+            mesh.normals[i] = -mesh.normals[i];
+        }
+    }
+}
+
+/// Axis-aligned bounding box as {min_x, min_y, min_z, max_x, max_y, max_z}.
+pub fn meshComputeAabb(mesh: types.Mesh) [6]f32 {
+    if (mesh.vertices == null or mesh.vertexCount == 0) {
+        return .{ 0, 0, 0, 0, 0, 0 };
+    }
+    const vc: usize = @intCast(mesh.vertexCount);
+    var lo: [3]f32 = .{ mesh.vertices[0], mesh.vertices[1], mesh.vertices[2] };
+    var hi: [3]f32 = lo;
+    var i: usize = 1;
+    while (i < vc) : (i += 1) {
+        inline for (0..3) |k| {
+            const c: f32 = mesh.vertices[i * 3 + k];
+            if (c < lo[k]) {
+                lo[k] = c;
+            }
+            if (c > hi[k]) {
+                hi[k] = c;
+            }
+        }
+    }
+    return .{ lo[0], lo[1], lo[2], hi[0], hi[1], hi[2] };
+}
+
+/// Deep copy (verts/normals/texcoords/indices). Caller owns the result.
+pub fn meshClone(gpa: Allocator, src: types.Mesh) Allocator.Error!types.Mesh {
+    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    const vc: usize = @intCast(src.vertexCount);
+    const tc: usize = @intCast(src.triangleCount);
+    const verts: []f32 = try gpa.alloc(f32, vc * 3);
+    errdefer gpa.free(verts);
+    const norms: []f32 = try gpa.alloc(f32, vc * 3);
+    errdefer gpa.free(norms);
+    const texs: []f32 = try gpa.alloc(f32, vc * 2);
+    errdefer gpa.free(texs);
+    const idx: []u16 = try gpa.alloc(u16, tc * 3);
+    errdefer gpa.free(idx);
+    @memcpy(verts, src.vertices[0 .. vc * 3]);
+    @memcpy(norms, src.normals[0 .. vc * 3]);
+    @memcpy(texs, src.texcoords[0 .. vc * 2]);
+    @memcpy(idx, src.indices[0 .. tc * 3]);
+    mesh.vertexCount = @intCast(vc);
+    mesh.triangleCount = @intCast(tc);
+    mesh.vertices = verts.ptr;
+    mesh.normals = norms.ptr;
+    mesh.texcoords = texs.ptr;
+    mesh.indices = idx.ptr;
+    return mesh;
+}
+
+/// Bundles a rotation axis + angle so we can spin lots of vectors around it
+/// without recomputing the trig every time. Built once per `meshRotate` call.
+const AxisAngleRotation = struct {
+    // the axis we spin around, already normalized to unit length
+    unit_axis_x: f32,
+    unit_axis_y: f32,
+    unit_axis_z: f32,
+    // precomputed trig so we call @cos/@sin once, not once per vertex
+    cosine: f32,
+    sine: f32,
+    one_minus_cosine: f32,
+
+    /// Spin a single vector around the axis. This is Rodrigues' rotation
+    /// formula — it looks intimidating but it's just three terms added up:
+    ///   v' = v·cosθ  +  (axis × v)·sinθ  +  axis·(axis·v)·(1 − cosθ)
+    /// (the part of v along the axis stays put; the perpendicular part swings).
+    fn spin(self: AxisAngleRotation, vx: f32, vy: f32, vz: f32) [3]f32 {
+        // how much of v points along the axis (this component doesn't move)
+        const along_axis: f32 =
+            self.unit_axis_x * vx + self.unit_axis_y * vy + self.unit_axis_z * vz;
+        // axis × v — the direction the vector swings toward
+        const swing_x: f32 = self.unit_axis_y * vz - self.unit_axis_z * vy;
+        const swing_y: f32 = self.unit_axis_z * vx - self.unit_axis_x * vz;
+        const swing_z: f32 = self.unit_axis_x * vy - self.unit_axis_y * vx;
+        return .{
+            vx * self.cosine + swing_x * self.sine + self.unit_axis_x * along_axis * self.one_minus_cosine,
+            vy * self.cosine + swing_y * self.sine + self.unit_axis_y * along_axis * self.one_minus_cosine,
+            vz * self.cosine + swing_z * self.sine + self.unit_axis_z * along_axis * self.one_minus_cosine,
+        };
+    }
+};
+
+/// Rotate every vertex (and normal) in place around an arbitrary axis. The axis
+/// can be any length you like — we normalize it for you. `radians` is
+/// right-handed (counter-clockwise when you look down the axis toward the
+/// origin). Handy for orienting a part before merging: e.g. stand a Y-axis
+/// cylinder up along X by spinning it 90° around Z.
+pub fn meshRotate(
+    mesh: *types.Mesh,
+    axis_x: f32,
+    axis_y: f32,
+    axis_z: f32,
+    radians: f32,
+) void {
+    if (mesh.vertices == null) {
+        return;
+    }
+    // A zero-length axis has no direction to spin around, so there's nothing to
+    // do — bail before we divide by ~0.
+    const axis_length: f32 = @sqrt(axis_x * axis_x + axis_y * axis_y + axis_z * axis_z);
+    if (axis_length < 1e-8) {
+        return;
+    }
+    const rotation: AxisAngleRotation = .{
+        .unit_axis_x = axis_x / axis_length,
+        .unit_axis_y = axis_y / axis_length,
+        .unit_axis_z = axis_z / axis_length,
+        .cosine = @cos(radians),
+        .sine = @sin(radians),
+        .one_minus_cosine = 1.0 - @cos(radians),
+    };
+    const vertex_count: usize = @intCast(mesh.vertexCount);
+    const has_normals: bool = mesh.normals != null;
+    var vertex_index: usize = 0;
+    while (vertex_index < vertex_count) : (vertex_index += 1) {
+        const base: usize = vertex_index * 3;
+        // spin the position
+        const spun_position: [3]f32 = rotation.spin(
+            mesh.vertices[base + 0],
+            mesh.vertices[base + 1],
+            mesh.vertices[base + 2],
+        );
+        mesh.vertices[base + 0] = spun_position[0];
+        mesh.vertices[base + 1] = spun_position[1];
+        mesh.vertices[base + 2] = spun_position[2];
+        // spin the normal the same way. A pure rotation keeps it unit-length,
+        // so — unlike scaling — we don't need to renormalize afterward.
+        if (has_normals) {
+            const spun_normal: [3]f32 = rotation.spin(
+                mesh.normals[base + 0],
+                mesh.normals[base + 1],
+                mesh.normals[base + 2],
+            );
+            mesh.normals[base + 0] = spun_normal[0];
+            mesh.normals[base + 1] = spun_normal[1];
+            mesh.normals[base + 2] = spun_normal[2];
+        }
+    }
+}
+
+/// A flat, filled disk lying in the XZ plane (y = 0), facing straight up (+Y).
+/// It's a classic triangle fan: one vertex in the middle, then `slices` vertices
+/// marching around the rim, with a triangle stitched between the centre and each
+/// pair of neighbouring rim points. Perfect for capping the open end of a
+/// cylinder or cone — translate it up to the cap height, and flip it with
+/// `meshInvert` if it needs to face the other way.
+pub fn genMeshDisk(
+    gpa: Allocator,
+    radius: f32,
+    slices: i32,
+) Allocator.Error!types.Mesh {
+    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    if (slices < 3) {
+        return mesh; // fewer than 3 rim points can't even make one triangle
+    }
+    const rim_point_count: usize = @intCast(slices);
+    // one centre vertex + one vertex per rim point. We deliberately DON'T add a
+    // duplicate seam vertex — the last triangle just wraps back to rim point 0.
+    const vertex_count: usize = rim_point_count + 1;
+    const triangle_count: usize = rim_point_count;
+    const positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(positions);
+    const normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(normals);
+    const tex_coords: []f32 = try gpa.alloc(f32, vertex_count * 2);
+    errdefer gpa.free(tex_coords);
+    const indices: []u16 = try gpa.alloc(u16, triangle_count * 3);
+    errdefer gpa.free(indices);
+
+    // --- centre vertex (index 0): sits at the origin, uv in the middle ---
+    positions[0] = 0;
+    positions[1] = 0;
+    positions[2] = 0;
+    normals[0] = 0;
+    normals[1] = 1; // whole disk faces up
+    normals[2] = 0;
+    tex_coords[0] = 0.5;
+    tex_coords[1] = 0.5;
+
+    // --- rim vertices (indices 1 .. rim_point_count) march around the circle ---
+    var rim_index: usize = 0;
+    while (rim_index < rim_point_count) : (rim_index += 1) {
+        const angle: f32 = 2.0 * pi * float(rim_index) / float(rim_point_count);
+        const cos_angle: f32 = @cos(angle);
+        const sin_angle: f32 = @sin(angle);
+        const position_offset: usize = (rim_index + 1) * 3;
+        positions[position_offset + 0] = radius * cos_angle;
+        positions[position_offset + 1] = 0;
+        positions[position_offset + 2] = radius * sin_angle;
+        normals[position_offset + 0] = 0;
+        normals[position_offset + 1] = 1;
+        normals[position_offset + 2] = 0;
+        // map the circle into the unit uv square (centre at 0.5, 0.5)
+        const tex_offset: usize = (rim_index + 1) * 2;
+        tex_coords[tex_offset + 0] = 0.5 + 0.5 * cos_angle;
+        tex_coords[tex_offset + 1] = 0.5 + 0.5 * sin_angle;
+    }
+
+    // --- fan triangles: centre + two neighbouring rim points ---
+    var triangle_index: usize = 0;
+    while (triangle_index < rim_point_count) : (triangle_index += 1) {
+        const rim_a: usize = triangle_index + 1;
+        // the very last triangle wraps back around to rim point 0
+        const rim_b: usize = (triangle_index + 1) % rim_point_count + 1;
+        const index_offset: usize = triangle_index * 3;
+        indices[index_offset + 0] = 0; // the centre vertex
+        indices[index_offset + 1] = @intCast(rim_a);
+        indices[index_offset + 2] = @intCast(rim_b);
+    }
+
+    mesh.vertexCount = @intCast(vertex_count);
+    mesh.triangleCount = @intCast(triangle_count);
+    mesh.vertices = positions.ptr;
+    mesh.normals = normals.ptr;
+    mesh.texcoords = tex_coords.ptr;
+    mesh.indices = indices.ptr;
+    return mesh;
+}
+
+// ---- platonic solids (par_shapes tables, flat-shaded) ----------------------
+
+/// Build a FLAT-shaded (faceted) mesh from shared corner positions + triangle
+/// indices. The trick: instead of sharing vertices between triangles, every
+/// triangle gets its OWN three vertices, all carrying that triangle's single
+/// face normal. That's what keeps a solid's edges crisp — sharing + smoothing
+/// would round them off, which is the last thing you want on a cube or an
+/// icosahedron. Also flips par_shapes' Z-up corners into zimr's Y-up.
+fn flatShadedFromFaces(
+    gpa: Allocator,
+    corner_positions: []const f32,
+    triangle_indices: []const u16,
+) Allocator.Error!types.Mesh {
+    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    const triangle_count: usize = triangle_indices.len / 3;
+    // "unwelded": three unique vertices per triangle so they can share one normal
+    const vertex_count: usize = triangle_count * 3;
+    const positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(positions);
+    const normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(normals);
+    const tex_coords: []f32 = try gpa.alloc(f32, vertex_count * 2);
+    errdefer gpa.free(tex_coords);
+    const indices: []u16 = try gpa.alloc(u16, vertex_count);
+    errdefer gpa.free(indices);
+    // give each triangle's three corners some sane texture coords
+    const corner_uvs = [3][2]f32{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 } };
+
+    var triangle_index: usize = 0;
+    while (triangle_index < triangle_count) : (triangle_index += 1) {
+        // pull the three corners, flipping par_shapes Z-up into zimr Y-up
+        var corner: [3][3]f32 = undefined;
+        var which_corner: usize = 0;
+        while (which_corner < 3) : (which_corner += 1) {
+            const source_index: usize = triangle_indices[triangle_index * 3 + which_corner];
+            corner[which_corner] = .{
+                corner_positions[source_index * 3 + 0], // x stays x
+                corner_positions[source_index * 3 + 2], // par z (up) -> zimr y (up)
+                -corner_positions[source_index * 3 + 1], // par y -> zimr -z
+            };
+        }
+        // face normal = normalize((corner1 − corner0) × (corner2 − corner0))
+        const edge1: [3]f32 = .{
+            corner[1][0] - corner[0][0],
+            corner[1][1] - corner[0][1],
+            corner[1][2] - corner[0][2],
+        };
+        const edge2: [3]f32 = .{
+            corner[2][0] - corner[0][0],
+            corner[2][1] - corner[0][1],
+            corner[2][2] - corner[0][2],
+        };
+        const face_normal: [3]f32 = normXyz(
+            edge1[1] * edge2[2] - edge1[2] * edge2[1],
+            edge1[2] * edge2[0] - edge1[0] * edge2[2],
+            edge1[0] * edge2[1] - edge1[1] * edge2[0],
+        );
+        // emit the three vertices, all sharing the one flat face normal
+        which_corner = 0;
+        while (which_corner < 3) : (which_corner += 1) {
+            const out_vertex: usize = triangle_index * 3 + which_corner;
+            positions[out_vertex * 3 + 0] = corner[which_corner][0];
+            positions[out_vertex * 3 + 1] = corner[which_corner][1];
+            positions[out_vertex * 3 + 2] = corner[which_corner][2];
+            normals[out_vertex * 3 + 0] = face_normal[0];
+            normals[out_vertex * 3 + 1] = face_normal[1];
+            normals[out_vertex * 3 + 2] = face_normal[2];
+            tex_coords[out_vertex * 2 + 0] = corner_uvs[which_corner][0];
+            tex_coords[out_vertex * 2 + 1] = corner_uvs[which_corner][1];
+            indices[out_vertex] = @intCast(out_vertex); // sequential — nothing shared
+        }
+    }
+    mesh.vertexCount = @intCast(vertex_count);
+    mesh.triangleCount = @intCast(triangle_count);
+    mesh.vertices = positions.ptr;
+    mesh.normals = normals.ptr;
+    mesh.texcoords = tex_coords.ptr;
+    mesh.indices = indices.ptr;
+    return mesh;
+}
+
+/// A tetrahedron — 4 corners, 4 triangular faces. The simplest platonic solid.
+pub fn genMeshTetrahedron(gpa: Allocator) Allocator.Error!types.Mesh {
+    const corners = [_]f32{
+        0.000,  1.333, 0.000,
+        0.943,  0.000, 0.000,
+        -0.471, 0.000, 0.816,
+        -0.471, 0.000, -0.816,
+    };
+    const faces = [_]u16{ 2, 1, 0, 3, 2, 0, 1, 3, 0, 1, 2, 3 };
+    return flatShadedFromFaces(gpa, &corners, &faces);
+}
+
+/// An octahedron — 6 corners (the ±axis points), 8 triangular faces.
+pub fn genMeshOctahedron(gpa: Allocator) Allocator.Error!types.Mesh {
+    const corners = [_]f32{
+        0.0,  0.0,  1.0,
+        1.0,  0.0,  0.0,
+        0.0,  1.0,  0.0,
+        -1.0, 0.0,  0.0,
+        0.0,  -1.0, 0.0,
+        0.0,  0.0,  -1.0,
+    };
+    const faces = [_]u16{
+        0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1,
+        2, 1, 5, 3, 2, 5, 4, 3, 5, 1, 4, 5,
+    };
+    return flatShadedFromFaces(gpa, &corners, &faces);
+}
+
+/// An icosahedron — 12 corners, 20 triangular faces. Also the seed the
+/// icosphere subdivides (future work).
+pub fn genMeshIcosahedron(gpa: Allocator) Allocator.Error!types.Mesh {
+    const corners = [_]f32{
+        0.000,  0.000,  1.000,
+        0.894,  0.000,  0.447,
+        0.276,  0.851,  0.447,
+        -0.724, 0.526,  0.447,
+        -0.724, -0.526, 0.447,
+        0.276,  -0.851, 0.447,
+        0.724,  0.526,  -0.447,
+        -0.276, 0.851,  -0.447,
+        -0.894, 0.000,  -0.447,
+        -0.276, -0.851, -0.447,
+        0.724,  -0.526, -0.447,
+        0.000,  0.000,  -1.000,
+    };
+    const faces = [_]u16{
+        0, 1, 2,  0, 2, 3,  0, 3, 4,  0,  4,  5,  0,  5,  1,
+        7, 6, 11, 8, 7, 11, 9, 8, 11, 10, 9,  11, 6,  10, 11,
+        6, 2, 1,  7, 3, 2,  8, 4, 3,  9,  5,  4,  10, 1,  5,
+        6, 7, 2,  7, 8, 3,  8, 9, 4,  9,  10, 5,  10, 6,  1,
+    };
+    return flatShadedFromFaces(gpa, &corners, &faces);
+}
+
+/// A dodecahedron — 20 corners, 12 pentagonal faces. par_shapes stores the
+/// pentagons; we fan-triangulate each into 3 triangles here.
+pub fn genMeshDodecahedron(gpa: Allocator) Allocator.Error!types.Mesh {
+    const corners = [_]f32{
+        0.607,  0.000,  0.795,
+        0.188,  0.577,  0.795,
+        -0.491, 0.357,  0.795,
+        -0.491, -0.357, 0.795,
+        0.188,  -0.577, 0.795,
+        0.982,  0.000,  0.188,
+        0.304,  0.934,  0.188,
+        -0.795, 0.577,  0.188,
+        -0.795, -0.577, 0.188,
+        0.304,  -0.934, 0.188,
+        0.795,  0.577,  -0.188,
+        -0.304, 0.934,  -0.188,
+        -0.982, 0.000,  -0.188,
+        -0.304, -0.934, -0.188,
+        0.795,  -0.577, -0.188,
+        0.491,  0.357,  -0.795,
+        -0.188, 0.577,  -0.795,
+        -0.607, 0.000,  -0.795,
+        -0.188, -0.577, -0.795,
+        0.491,  -0.357, -0.795,
+    };
+    const pentagons = [_]u16{
+        0,  1,  2,  3,  4,
+        5,  10, 6,  1,  0,
+        6,  11, 7,  2,  1,
+        7,  12, 8,  3,  2,
+        8,  13, 9,  4,  3,
+        9,  14, 5,  0,  4,
+        15, 16, 11, 6,  10,
+        16, 17, 12, 7,  11,
+        17, 18, 13, 8,  12,
+        18, 19, 14, 9,  13,
+        19, 15, 10, 5,  14,
+        19, 18, 17, 16, 15,
+    };
+    // fan-triangulate each pentagon [a,b,c,d,e] into (a,b,c) (a,c,d) (a,d,e)
+    var faces: [12 * 9]u16 = undefined;
+    var out: usize = 0;
+    var pentagon_index: usize = 0;
+    while (pentagon_index < 12) : (pentagon_index += 1) {
+        const base: usize = pentagon_index * 5;
+        const a: u16 = pentagons[base + 0];
+        const b: u16 = pentagons[base + 1];
+        const c: u16 = pentagons[base + 2];
+        const d: u16 = pentagons[base + 3];
+        const e: u16 = pentagons[base + 4];
+        faces[out + 0] = a;
+        faces[out + 1] = b;
+        faces[out + 2] = c;
+        faces[out + 3] = a;
+        faces[out + 4] = c;
+        faces[out + 5] = d;
+        faces[out + 6] = a;
+        faces[out + 7] = d;
+        faces[out + 8] = e;
+        out += 9;
+    }
+    return flatShadedFromFaces(gpa, &corners, &faces);
+}
+
+// ---- icosphere (geodesic sphere: subdivide the icosahedron) ----------------
+
+/// Find (or create) the midpoint vertex between two existing vertices, projected
+/// out onto the unit sphere. The cache — keyed by the edge, order-independent —
+/// makes neighbouring triangles SHARE the midpoint they both introduce.
+/// Without it we'd get cracks between triangles and a pile of duplicate verts.
+fn icosphereMidpoint(
+    gpa: Allocator,
+    unit_positions: *std.ArrayList([3]f32),
+    edge_midpoint_cache: *std.AutoHashMap(u64, u32),
+    index_a: u32,
+    index_b: u32,
+) Allocator.Error!u32 {
+    // the same edge from either direction must map to the same midpoint, so we
+    // build an order-independent key out of (smaller index, larger index)
+    const lower: u64 = @min(index_a, index_b);
+    const higher: u64 = @max(index_a, index_b);
+    const edge_key: u64 = (lower << 32) | higher;
+    if (edge_midpoint_cache.get(edge_key)) |already_made| {
+        return already_made;
+    }
+    // average the two endpoints, then normXyz pushes the result back out to
+    // radius 1 (that projection is what turns a flat subdivision into a sphere)
+    const point_a: [3]f32 = unit_positions.items[index_a];
+    const point_b: [3]f32 = unit_positions.items[index_b];
+    const midpoint: [3]f32 = normXyz(
+        (point_a[0] + point_b[0]) * 0.5,
+        (point_a[1] + point_b[1]) * 0.5,
+        (point_a[2] + point_b[2]) * 0.5,
+    );
+    const new_index: u32 = @intCast(unit_positions.items.len);
+    try unit_positions.append(gpa, midpoint);
+    try edge_midpoint_cache.put(edge_key, new_index);
+    return new_index;
+}
+
+/// An icosphere — a sphere grown by repeatedly splitting an icosahedron's
+/// triangles into four and projecting every new vertex onto the sphere. Unlike
+/// the UV sphere it has nearly uniform triangles and no pinched poles, which
+/// makes it the better base for displacement (planets, rocks) and anything that
+/// subdivides further. `subdivisions` is clamped to 6 — past that we'd overflow
+/// the u16 index limit (level 6 is already ~41k vertices). Bonus: normals come
+/// for free, because on a unit sphere the outward normal at a point simply IS
+/// that point.
+pub fn genMeshIcosphere(
+    gpa: Allocator,
+    radius: f32,
+    subdivisions: i32,
+) Allocator.Error!types.Mesh {
+    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    const levels: usize = @intCast(clamp(subdivisions, 0, 6));
+
+    // working lists that grow as we subdivide
+    var unit_positions: std.ArrayList([3]f32) = .empty;
+    defer unit_positions.deinit(gpa);
+    var triangles: std.ArrayList([3]u32) = .empty;
+    defer triangles.deinit(gpa);
+
+    // seed with the icosahedron, each corner normalized straight onto the sphere
+    const seed_corners = [_]f32{
+        0.000,  0.000,  1.000,  0.894,  0.000,  0.447,  0.276,  0.851,  0.447,
+        -0.724, 0.526,  0.447,  -0.724, -0.526, 0.447,  0.276,  -0.851, 0.447,
+        0.724,  0.526,  -0.447, -0.276, 0.851,  -0.447, -0.894, 0.000,  -0.447,
+        -0.276, -0.851, -0.447, 0.724,  -0.526, -0.447, 0.000,  0.000,  -1.000,
+    };
+    var corner_index: usize = 0;
+    while (corner_index < 12) : (corner_index += 1) {
+        // normXyz's arg order does the par Z-up -> zimr Y-up flip (x, z, -y),
+        // and normXyz normalizes, so each seed corner lands on the unit sphere
+        const x: f32 = seed_corners[corner_index * 3 + 0];
+        const y: f32 = seed_corners[corner_index * 3 + 1];
+        const seed_z: f32 = seed_corners[corner_index * 3 + 2];
+        try unit_positions.append(gpa, normXyz(x, seed_z, -y));
+    }
+    const seed_faces = [_]u32{
+        0, 1, 2,  0, 2, 3,  0, 3, 4,  0,  4,  5,  0,  5,  1,
+        7, 6, 11, 8, 7, 11, 9, 8, 11, 10, 9,  11, 6,  10, 11,
+        6, 2, 1,  7, 3, 2,  8, 4, 3,  9,  5,  4,  10, 1,  5,
+        6, 7, 2,  7, 8, 3,  8, 9, 4,  9,  10, 5,  10, 6,  1,
+    };
+    var face_index: usize = 0;
+    while (face_index < seed_faces.len) : (face_index += 3) {
+        try triangles.append(gpa, .{
+            seed_faces[face_index + 0],
+            seed_faces[face_index + 1],
+            seed_faces[face_index + 2],
+        });
+    }
+
+    // subdivide: each triangle becomes four, sharing its edge midpoints
+    var level: usize = 0;
+    while (level < levels) : (level += 1) {
+        var edge_midpoint_cache: std.AutoHashMap(u64, u32) =
+            std.AutoHashMap(u64, u32).init(gpa);
+        defer edge_midpoint_cache.deinit();
+        var subdivided: std.ArrayList([3]u32) = .empty;
+        errdefer subdivided.deinit(gpa);
+        for (triangles.items) |tri| {
+            const a: u32 = tri[0];
+            const b: u32 = tri[1];
+            const c: u32 = tri[2];
+            const ab: u32 = try icosphereMidpoint(gpa, &unit_positions, &edge_midpoint_cache, a, b);
+            const bc: u32 = try icosphereMidpoint(gpa, &unit_positions, &edge_midpoint_cache, b, c);
+            const ca: u32 = try icosphereMidpoint(gpa, &unit_positions, &edge_midpoint_cache, c, a);
+            // the classic 1-into-4 split: three corner triangles + a centre one
+            try subdivided.append(gpa, .{ a, ab, ca });
+            try subdivided.append(gpa, .{ b, bc, ab });
+            try subdivided.append(gpa, .{ c, ca, bc });
+            try subdivided.append(gpa, .{ ab, bc, ca });
+        }
+        // hand the new triangle list over, freeing the old one
+        triangles.deinit(gpa);
+        triangles = subdivided;
+    }
+
+    // bake into a Mesh — normals = the unit positions, uv is a simple planar-ish
+    // projection (a proper spherical unwrap is future work)
+    const vertex_count: usize = unit_positions.items.len;
+    const triangle_count: usize = triangles.items.len;
+    const positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(positions);
+    const normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(normals);
+    const tex_coords: []f32 = try gpa.alloc(f32, vertex_count * 2);
+    errdefer gpa.free(tex_coords);
+    const indices: []u16 = try gpa.alloc(u16, triangle_count * 3);
+    errdefer gpa.free(indices);
+
+    var v: usize = 0;
+    while (v < vertex_count) : (v += 1) {
+        const unit: [3]f32 = unit_positions.items[v];
+        positions[v * 3 + 0] = unit[0] * radius;
+        positions[v * 3 + 1] = unit[1] * radius;
+        positions[v * 3 + 2] = unit[2] * radius;
+        normals[v * 3 + 0] = unit[0]; // already unit length → already the normal
+        normals[v * 3 + 1] = unit[1];
+        normals[v * 3 + 2] = unit[2];
+        tex_coords[v * 2 + 0] = 0.5 + 0.5 * unit[0];
+        tex_coords[v * 2 + 1] = 0.5 + 0.5 * unit[2];
+    }
+    var t: usize = 0;
+    while (t < triangle_count) : (t += 1) {
+        indices[t * 3 + 0] = @intCast(triangles.items[t][0]);
+        indices[t * 3 + 1] = @intCast(triangles.items[t][1]);
+        indices[t * 3 + 2] = @intCast(triangles.items[t][2]);
+    }
+    mesh.vertexCount = @intCast(vertex_count);
+    mesh.triangleCount = @intCast(triangle_count);
+    mesh.vertices = positions.ptr;
+    mesh.normals = normals.ptr;
+    mesh.texcoords = tex_coords.ptr;
+    mesh.indices = indices.ptr;
+    return mesh;
+}
+
+// ---- procedural rock (noise-displaced icosphere) ---------------------------
+
+// A small, cheap 3D value-noise — plenty good for lumpy rock displacement, and
+// far lighter than porting par_shapes' embedded OpenSimplex. The idea: hash each
+// integer lattice point to a pseudo-random value, then trilinearly blend the
+// eight corners of whatever cell a sample lands in.
+
+fn latticeHash3(ix: i32, iy: i32, iz: i32) f32 {
+    // fold the three integer coords into one scrambled 32-bit value
+    var h: u32 = @bitCast(ix *% 374761393 +% iy *% 668265263 +% iz *% 1440662683);
+    h = (h ^ (h >> 13)) *% 1274126177;
+    h = h ^ (h >> 16);
+    // squeeze the low 24 bits into [0, 1)
+    return float(h & 0x00FFFFFF) / float(0x01000000);
+}
+
+fn smoothFade(t: f32) f32 {
+    // smoothstep — eases the blend so neighbouring cells don't show hard seams
+    return t * t * (3.0 - 2.0 * t);
+}
+
+fn valueNoise3(px: f32, py: f32, pz: f32) f32 {
+    // which lattice cell (integer floor) and where we are inside it (0..1)
+    const cell_x: i32 = @floor(px);
+    const cell_y: i32 = @floor(py);
+    const cell_z: i32 = @floor(pz);
+    const frac_x: f32 = smoothFade(px - float(cell_x));
+    const frac_y: f32 = smoothFade(py - float(cell_y));
+    const frac_z: f32 = smoothFade(pz - float(cell_z));
+    // hash the eight corners of the cell
+    const c000: f32 = latticeHash3(cell_x, cell_y, cell_z);
+    const c100: f32 = latticeHash3(cell_x + 1, cell_y, cell_z);
+    const c010: f32 = latticeHash3(cell_x, cell_y + 1, cell_z);
+    const c110: f32 = latticeHash3(cell_x + 1, cell_y + 1, cell_z);
+    const c001: f32 = latticeHash3(cell_x, cell_y, cell_z + 1);
+    const c101: f32 = latticeHash3(cell_x + 1, cell_y, cell_z + 1);
+    const c011: f32 = latticeHash3(cell_x, cell_y + 1, cell_z + 1);
+    const c111: f32 = latticeHash3(cell_x + 1, cell_y + 1, cell_z + 1);
+    // trilinear blend: lerp along px, then py, then pz
+    const x00: f32 = c000 + (c100 - c000) * frac_x;
+    const x10: f32 = c010 + (c110 - c010) * frac_x;
+    const x01: f32 = c001 + (c101 - c001) * frac_x;
+    const x11: f32 = c011 + (c111 - c011) * frac_x;
+    const y0: f32 = x00 + (x10 - x00) * frac_y;
+    const y1: f32 = x01 + (x11 - x01) * frac_y;
+    return y0 + (y1 - y0) * frac_z;
+}
+
+fn fractalNoise3(px: f32, py: f32, pz: f32) f32 {
+    // stack a few octaves (fractal Brownian motion) so the rock has big bulges
+    // AND fine crags — each octave doubles frequency and halves amplitude
+    var total: f32 = 0;
+    var amplitude: f32 = 1.0;
+    var frequency: f32 = 1.0;
+    var amplitude_sum: f32 = 0;
+    var octave: usize = 0;
+    while (octave < 4) : (octave += 1) {
+        total += amplitude * valueNoise3(px * frequency, py * frequency, pz * frequency);
+        amplitude_sum += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.0;
+    }
+    return total / amplitude_sum; // renormalize back to [0, 1)
+}
+
+/// A procedural rock: take an icosphere and shove each vertex in/out along its
+/// own direction by a fractal-noise amount. THIS is why the icosphere's uniform
+/// triangles matter — displace a UV sphere and the crowded poles stretch into a
+/// mess. `seed` picks which rock you get (it just samples the noise field in a
+/// different spot). Normals are recomputed from the bumpy surface afterward.
+pub fn genMeshRock(
+    gpa: Allocator,
+    radius: f32,
+    subdivisions: i32,
+    seed: i32,
+) Allocator.Error!types.Mesh {
+    // start from a UNIT icosphere so each vertex is already a unit direction
+    var mesh: types.Mesh = try genMeshIcosphere(gpa, 1.0, subdivisions);
+    errdefer unloadMesh(gpa, mesh); // don't leak the sphere if anything below fails
+    const vertex_count: usize = @intCast(mesh.vertexCount);
+
+    // turn the seed into three decorrelated offsets so different seeds land in
+    // different, unrelated parts of the noise field (→ different rocks)
+    const seed_f: f32 = float(seed);
+    const offset_x: f32 = @sin(seed_f * 12.9898 + 1.0) * 43.0;
+    const offset_y: f32 = @sin(seed_f * 78.2330 + 2.0) * 57.0;
+    const offset_z: f32 = @sin(seed_f * 37.7190 + 3.0) * 71.0;
+
+    const noise_scale: f32 = 1.7; // higher = smaller, busier bumps
+    const bumpiness: f32 = 0.5; // how far the surface pushes in/out
+
+    var vertex_index: usize = 0;
+    while (vertex_index < vertex_count) : (vertex_index += 1) {
+        const dir_x: f32 = mesh.vertices[vertex_index * 3 + 0];
+        const dir_y: f32 = mesh.vertices[vertex_index * 3 + 1];
+        const dir_z: f32 = mesh.vertices[vertex_index * 3 + 2];
+        const bump: f32 = fractalNoise3(
+            dir_x * noise_scale + offset_x,
+            dir_y * noise_scale + offset_y,
+            dir_z * noise_scale + offset_z,
+        );
+        // noise is 0..1; centre it so the surface pushes both in and out
+        const displaced_radius: f32 = radius * (1.0 + bumpiness * (bump - 0.5));
+        mesh.vertices[vertex_index * 3 + 0] = dir_x * displaced_radius;
+        mesh.vertices[vertex_index * 3 + 1] = dir_y * displaced_radius;
+        mesh.vertices[vertex_index * 3 + 2] = dir_z * displaced_radius;
+    }
+
+    // the old sphere normals are wrong now — rebuild them from the bumpy surface
+    // (reusing the parametric weld, which gives a smooth boulder look)
+    const positions: []f32 = mesh.vertices[0 .. vertex_count * 3];
+    const triangle_count: usize = @intCast(mesh.triangleCount);
+    const indices: []u16 = mesh.indices[0 .. triangle_count * 3];
+    const normals: []f32 = mesh.normals[0 .. vertex_count * 3];
+    try parametricWeldNormals(gpa, positions, indices, normals);
+    return mesh;
+}
+
+// ---- vertex-level cleanup ops ----------------------------------------------
+
+/// "Unweld" a mesh: give every triangle its own three vertices (nothing shared)
+/// and compute one flat face normal for each. That's how you turn a smooth mesh
+/// faceted, or make a clean base for per-triangle edits. Result has
+/// 3×triangleCount vertices with sequential indices; source texcoords are kept.
+pub fn meshUnweld(gpa: Allocator, mesh: types.Mesh) Allocator.Error!types.Mesh {
+    var result: types.Mesh = std.mem.zeroes(types.Mesh);
+    if (mesh.vertices == null or mesh.indices == null) {
+        return result;
+    }
+    const triangle_count: usize = @intCast(mesh.triangleCount);
+    const vertex_count: usize = triangle_count * 3; // three fresh verts per triangle
+    const positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(positions);
+    const normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(normals);
+    const tex_coords: []f32 = try gpa.alloc(f32, vertex_count * 2);
+    errdefer gpa.free(tex_coords);
+    const indices: []u16 = try gpa.alloc(u16, vertex_count);
+    errdefer gpa.free(indices);
+    const has_source_texcoords: bool = mesh.texcoords != null;
+
+    var triangle_index: usize = 0;
+    while (triangle_index < triangle_count) : (triangle_index += 1) {
+        const corner_source = [3]usize{
+            mesh.indices[triangle_index * 3 + 0],
+            mesh.indices[triangle_index * 3 + 1],
+            mesh.indices[triangle_index * 3 + 2],
+        };
+        var corner: [3][3]f32 = undefined;
+        var which: usize = 0;
+        while (which < 3) : (which += 1) {
+            corner[which] = .{
+                mesh.vertices[corner_source[which] * 3 + 0],
+                mesh.vertices[corner_source[which] * 3 + 1],
+                mesh.vertices[corner_source[which] * 3 + 2],
+            };
+        }
+        // one flat normal shared by all three corners
+        const edge1x: f32 = corner[1][0] - corner[0][0];
+        const edge1y: f32 = corner[1][1] - corner[0][1];
+        const edge1z: f32 = corner[1][2] - corner[0][2];
+        const edge2x: f32 = corner[2][0] - corner[0][0];
+        const edge2y: f32 = corner[2][1] - corner[0][1];
+        const edge2z: f32 = corner[2][2] - corner[0][2];
+        const face_normal: [3]f32 = normXyz(
+            edge1y * edge2z - edge1z * edge2y,
+            edge1z * edge2x - edge1x * edge2z,
+            edge1x * edge2y - edge1y * edge2x,
+        );
+        which = 0;
+        while (which < 3) : (which += 1) {
+            const out_vertex: usize = triangle_index * 3 + which;
+            positions[out_vertex * 3 + 0] = corner[which][0];
+            positions[out_vertex * 3 + 1] = corner[which][1];
+            positions[out_vertex * 3 + 2] = corner[which][2];
+            normals[out_vertex * 3 + 0] = face_normal[0];
+            normals[out_vertex * 3 + 1] = face_normal[1];
+            normals[out_vertex * 3 + 2] = face_normal[2];
+            if (has_source_texcoords) {
+                tex_coords[out_vertex * 2 + 0] = mesh.texcoords[corner_source[which] * 2 + 0];
+                tex_coords[out_vertex * 2 + 1] = mesh.texcoords[corner_source[which] * 2 + 1];
+            } else {
+                tex_coords[out_vertex * 2 + 0] = 0;
+                tex_coords[out_vertex * 2 + 1] = 0;
+            }
+            indices[out_vertex] = @intCast(out_vertex);
+        }
+    }
+    result.vertexCount = @intCast(vertex_count);
+    result.triangleCount = @intCast(triangle_count);
+    result.vertices = positions.ptr;
+    result.normals = normals.ptr;
+    result.texcoords = tex_coords.ptr;
+    result.indices = indices.ptr;
+    return result;
+}
+
+/// "Weld" a mesh: merge vertices sitting within `epsilon` of each other into one
+/// and rewrite the triangle indices to point at the survivors. Shrinks vertex
+/// counts and heals cracks (e.g. after merging parts). Merged vertices' normals
+/// are averaged; the first survivor's texcoord wins.
+pub fn meshWeld(
+    gpa: Allocator,
+    mesh: types.Mesh,
+    epsilon: f32,
+) Allocator.Error!types.Mesh {
+    var result: types.Mesh = std.mem.zeroes(types.Mesh);
+    if (mesh.vertices == null or mesh.indices == null) {
+        return result;
+    }
+    const source_vertex_count: usize = @intCast(mesh.vertexCount);
+    const triangle_count: usize = @intCast(mesh.triangleCount);
+    const has_source_texcoords: bool = mesh.texcoords != null;
+    const has_source_normals: bool = mesh.normals != null;
+    // bucket size = epsilon; verts landing in the same bucket get merged
+    const inv_epsilon: f32 = if (epsilon > 1e-8) 1.0 / epsilon else 100000.0;
+
+    var bucket_to_survivor: std.AutoHashMap([3]i32, u16) = std.AutoHashMap([3]i32, u16).init(gpa);
+    defer bucket_to_survivor.deinit();
+    const old_to_new: []u16 = try gpa.alloc(u16, source_vertex_count);
+    defer gpa.free(old_to_new);
+    var kept_positions: std.ArrayList([3]f32) = .empty;
+    defer kept_positions.deinit(gpa);
+    var kept_normals: std.ArrayList([3]f32) = .empty;
+    defer kept_normals.deinit(gpa);
+    var kept_texcoords: std.ArrayList([2]f32) = .empty;
+    defer kept_texcoords.deinit(gpa);
+
+    var v: usize = 0;
+    while (v < source_vertex_count) : (v += 1) {
+        const px: f32 = mesh.vertices[v * 3 + 0];
+        const py: f32 = mesh.vertices[v * 3 + 1];
+        const pz: f32 = mesh.vertices[v * 3 + 2];
+        const bucket = [3]i32{
+            @floor(px * inv_epsilon),
+            @floor(py * inv_epsilon),
+            @floor(pz * inv_epsilon),
+        };
+        const vertex_normal: [3]f32 = if (has_source_normals)
+            .{ mesh.normals[v * 3 + 0], mesh.normals[v * 3 + 1], mesh.normals[v * 3 + 2] }
+        else
+            .{ 0, 0, 0 };
+        const gop = try bucket_to_survivor.getOrPut(bucket);
+        if (gop.found_existing) {
+            // fold this vertex into the survivor — sum normals so we can average
+            const survivor: u16 = gop.value_ptr.*;
+            kept_normals.items[survivor][0] += vertex_normal[0];
+            kept_normals.items[survivor][1] += vertex_normal[1];
+            kept_normals.items[survivor][2] += vertex_normal[2];
+        } else {
+            const new_index: u16 = @intCast(kept_positions.items.len);
+            gop.value_ptr.* = new_index;
+            try kept_positions.append(gpa, .{ px, py, pz });
+            try kept_normals.append(gpa, vertex_normal);
+            const vertex_texcoord: [2]f32 = if (has_source_texcoords)
+                .{ mesh.texcoords[v * 2 + 0], mesh.texcoords[v * 2 + 1] }
+            else
+                .{ 0, 0 };
+            try kept_texcoords.append(gpa, vertex_texcoord);
+        }
+        old_to_new[v] = gop.value_ptr.*;
+    }
+
+    const welded_vertex_count: usize = kept_positions.items.len;
+    const positions: []f32 = try gpa.alloc(f32, welded_vertex_count * 3);
+    errdefer gpa.free(positions);
+    const normals: []f32 = try gpa.alloc(f32, welded_vertex_count * 3);
+    errdefer gpa.free(normals);
+    const tex_coords: []f32 = try gpa.alloc(f32, welded_vertex_count * 2);
+    errdefer gpa.free(tex_coords);
+    const indices: []u16 = try gpa.alloc(u16, triangle_count * 3);
+    errdefer gpa.free(indices);
+
+    var w: usize = 0;
+    while (w < welded_vertex_count) : (w += 1) {
+        positions[w * 3 + 0] = kept_positions.items[w][0];
+        positions[w * 3 + 1] = kept_positions.items[w][1];
+        positions[w * 3 + 2] = kept_positions.items[w][2];
+        // averaging the summed normals is just a normalize
+        const averaged: [3]f32 = normXyz(kept_normals.items[w][0], kept_normals.items[w][1], kept_normals.items[w][2]);
+        normals[w * 3 + 0] = averaged[0];
+        normals[w * 3 + 1] = averaged[1];
+        normals[w * 3 + 2] = averaged[2];
+        tex_coords[w * 2 + 0] = kept_texcoords.items[w][0];
+        tex_coords[w * 2 + 1] = kept_texcoords.items[w][1];
+    }
+    var i: usize = 0;
+    while (i < triangle_count * 3) : (i += 1) {
+        indices[i] = old_to_new[mesh.indices[i]];
+    }
+    result.vertexCount = @intCast(welded_vertex_count);
+    result.triangleCount = @intCast(triangle_count);
+    result.vertices = positions.ptr;
+    result.normals = normals.ptr;
+    result.texcoords = tex_coords.ptr;
+    result.indices = indices.ptr;
+    return result;
+}
+
+/// Drop triangles whose area is below `min_area` — the slivers and zero-area
+/// junk that can sneak in after a weld or from bad input. Vertices are copied
+/// as-is; only the index list shrinks to the survivors.
+pub fn meshRemoveDegenerate(
+    gpa: Allocator,
+    mesh: types.Mesh,
+    min_area: f32,
+) Allocator.Error!types.Mesh {
+    var result: types.Mesh = std.mem.zeroes(types.Mesh);
+    if (mesh.vertices == null or mesh.indices == null) {
+        return result;
+    }
+    const vertex_count: usize = @intCast(mesh.vertexCount);
+    const triangle_count: usize = @intCast(mesh.triangleCount);
+
+    // pass 1: collect the indices of the triangles worth keeping
+    var kept_indices: std.ArrayList(u16) = .empty;
+    defer kept_indices.deinit(gpa);
+    var t: usize = 0;
+    while (t < triangle_count) : (t += 1) {
+        const ia: usize = mesh.indices[t * 3 + 0];
+        const ib: usize = mesh.indices[t * 3 + 1];
+        const ic: usize = mesh.indices[t * 3 + 2];
+        const e1x: f32 = mesh.vertices[ib * 3 + 0] - mesh.vertices[ia * 3 + 0];
+        const e1y: f32 = mesh.vertices[ib * 3 + 1] - mesh.vertices[ia * 3 + 1];
+        const e1z: f32 = mesh.vertices[ib * 3 + 2] - mesh.vertices[ia * 3 + 2];
+        const e2x: f32 = mesh.vertices[ic * 3 + 0] - mesh.vertices[ia * 3 + 0];
+        const e2y: f32 = mesh.vertices[ic * 3 + 1] - mesh.vertices[ia * 3 + 1];
+        const e2z: f32 = mesh.vertices[ic * 3 + 2] - mesh.vertices[ia * 3 + 2];
+        const cross_x: f32 = e1y * e2z - e1z * e2y;
+        const cross_y: f32 = e1z * e2x - e1x * e2z;
+        const cross_z: f32 = e1x * e2y - e1y * e2x;
+        // triangle area = half the length of the edge cross product
+        const area: f32 = 0.5 * @sqrt(cross_x * cross_x + cross_y * cross_y + cross_z * cross_z);
+        if (area >= min_area) {
+            try kept_indices.append(gpa, mesh.indices[t * 3 + 0]);
+            try kept_indices.append(gpa, mesh.indices[t * 3 + 1]);
+            try kept_indices.append(gpa, mesh.indices[t * 3 + 2]);
+        }
+    }
+
+    // pass 2: copy the (unchanged) vertices + the surviving indices
+    const positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(positions);
+    const normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    errdefer gpa.free(normals);
+    const tex_coords: []f32 = try gpa.alloc(f32, vertex_count * 2);
+    errdefer gpa.free(tex_coords);
+    const indices: []u16 = try gpa.alloc(u16, kept_indices.items.len);
+    errdefer gpa.free(indices);
+    @memcpy(positions, mesh.vertices[0 .. vertex_count * 3]);
+    if (mesh.normals != null) {
+        @memcpy(normals, mesh.normals[0 .. vertex_count * 3]);
+    }
+    if (mesh.texcoords != null) {
+        @memcpy(tex_coords, mesh.texcoords[0 .. vertex_count * 2]);
+    }
+    @memcpy(indices, kept_indices.items);
+    result.vertexCount = @intCast(vertex_count);
+    result.triangleCount = @intCast(kept_indices.items.len / 3);
+    result.vertices = positions.ptr;
+    result.normals = normals.ptr;
+    result.texcoords = tex_coords.ptr;
+    result.indices = indices.ptr;
+    return result;
 }
 
 /// wgpu Step-3a no-op (kept for raylib parity): retained meshes draw from their
@@ -515,7 +1861,7 @@ pub fn uploadMesh(
     gpa: Allocator,
     mesh: *types.Mesh,
     dynamic: bool,
-) Allocator.Error!void {
+) Allocator.Error!void { // lint:off useless-error-return: raylib-parity no-op, Step 4 allocates
     _ = gpa;
     _ = mesh;
     _ = dynamic;
@@ -547,7 +1893,7 @@ pub fn genMeshHeightmap(
     if (map_x < 2 or map_z < 2) {
         return mesh;
     }
-    if (heightmap.format != @intFromEnum(types.PixelFormat.uncompressed_r8g8b8a8)) {
+    if (heightmap.format != @backingInt(types.PixelFormat.uncompressed_r8g8b8a8)) {
         return error.UnsupportedImageFormat;
     }
     const data: *anyopaque = heightmap.data orelse return mesh;
@@ -663,7 +2009,7 @@ pub fn genMeshCubicmap(
     if (cubicmap.width < 1 or cubicmap.height < 1) {
         return mesh;
     }
-    if (cubicmap.format != @intFromEnum(types.PixelFormat.uncompressed_r8g8b8a8)) {
+    if (cubicmap.format != @backingInt(types.PixelFormat.uncompressed_r8g8b8a8)) {
         return error.UnsupportedImageFormat;
     }
     const data: *anyopaque = cubicmap.data orelse return mesh;
@@ -893,7 +2239,7 @@ fn meshWorldPos(
 }
 
 /// World normal of mesh-local vertex `k` after the model transform (rotation
-/// part; the shader normalises). Defaults to +Y when the mesh has no normals.
+/// part; the shader_runtime normalises). Defaults to +Y when the mesh has no normals.
 fn meshWorldNormal(n: [*c]f32, k: usize, xform: Mat) [3]f32 {
     if (n == null) {
         return .{ 0, 1, 0 };
@@ -907,7 +2253,7 @@ fn meshWorldNormal(n: [*c]f32, k: usize, xform: Mat) [3]f32 {
 // ============================================================================
 
 pub const Cube3D = struct {
-    resources: shader.Resources(CubeSchema),
+    resources: shader_runtime.Resources(CubeSchema),
     pipeline: wgpu.RenderPipelineHandle,
     pipeline_layout: wgpu.PipelineLayoutHandle,
     vs_module: wgpu.ShaderModuleHandle,
@@ -954,7 +2300,7 @@ pub const Cube3D = struct {
     decal_receivers: ArrayList(DecalReceiver),
     decal_draws: ArrayList(DecalDraw),
     // Gradient skybox: its own UBO (inverse-view-proj + sky colours) at group 0.
-    skybox_resources: shader.Resources(SkyboxSchema),
+    skybox_resources: shader_runtime.Resources(SkyboxSchema),
     skybox_pipeline: wgpu.RenderPipelineHandle,
 
     // ---- The per-pass VIEW-PROJECTION ring (group 0) ----
@@ -1029,7 +2375,7 @@ pub const Cube3D = struct {
         // queue-timeline clobber the smoke ClobberScan flags) for a value no
         // pass can ever observe. Leaving it null lets the real per-frame write
         // stand alone; the buffer is only ever read after that write.
-        const resources = try shader.Resources(CubeSchema).init(gpa, f, .{});
+        const resources = try shader_runtime.Resources(CubeSchema).init(gpa, f, .{});
 
         const bgls: [1]wgpu.BindGroupLayoutHandle = .{resources.bg_layouts[0]};
         const pipeline_layout: wgpu.PipelineLayoutHandle =
@@ -1040,7 +2386,7 @@ pub const Cube3D = struct {
         const fs_module: wgpu.ShaderModuleHandle =
             wgpu.createShaderModuleWgsl(device, cube_fs_wgsl, "cube3d_fs");
 
-        // Two pipelines sharing shader + layout + UBO: filled triangles
+        // Two pipelines sharing shader_runtime + layout + UBO: filled triangles
         // (back-face culled) for solids, and line-list (no cull) for grids /
         // wires / lines. Both depth-tested in the dedicated 3D pass.
         const pipeline: wgpu.RenderPipelineHandle = try makePipeline(
@@ -1159,7 +2505,7 @@ pub const Cube3D = struct {
         );
         // Billboards/transparent sprites: depth-TEST against the opaque scene but
         // never WRITE depth, so alpha quads don't occlude each other or the scene
-        // behind their transparent pixels. Same shader + layout as tex_pipeline.
+        // behind their transparent pixels. Same shader_runtime + layout as tex_pipeline.
         const billboard_pipeline: wgpu.RenderPipelineHandle = try makePipeline(
             gpa,
             device,
@@ -1183,7 +2529,7 @@ pub const Cube3D = struct {
         // immediately before binding, every frame, so an init seed only
         // double-writes the same buffer+offset in frame 0 (clobber) for a value
         // no pass reads. Default the init arg to null.
-        const skybox_resources = try shader.Resources(SkyboxSchema).init(gpa, f, .{});
+        const skybox_resources = try shader_runtime.Resources(SkyboxSchema).init(gpa, f, .{});
         const sky_bgls = [_]wgpu.BindGroupLayoutHandle{skybox_resources.bg_layouts[0]};
         const sky_pl: wgpu.PipelineLayoutHandle =
             wgpu.createPipelineLayout(device, sky_bgls[0..], "skybox_pl");
@@ -1314,7 +2660,7 @@ pub const Cube3D = struct {
         }
 
         // Every pipeline above is now built, and WebGPU has internalized the
-        // layouts + shader modules each one referenced — so the build-only
+        // layouts + shader_runtime modules each one referenced — so the build-only
         // intermediates can be released immediately (the pipelines keep working).
         // Only tex_pl/tex_vs/tex_fs are shared (tex_pipeline AND billboard_pipeline
         // use them), and both are built by now, so this is safe. The layout + three
@@ -1398,7 +2744,7 @@ pub const Cube3D = struct {
             .sky_bottom = .{ sky_bottom[0], sky_bottom[1], sky_bottom[2], 1 },
             .sky_top = .{ sky_top[0], sky_top[1], sky_top[2], 1 },
         });
-        WgpuBackend.setPipeline(ps, shader.RenderPipeline(void, void){ .gpu_handle = self.skybox_pipeline });
+        WgpuBackend.setPipeline(ps, shader_runtime.RenderPipeline(void, void){ .gpu_handle = self.skybox_pipeline });
         self.skybox_resources.bind(ps);
         render_pass.draw(ps.pass, .{ .vertex_count = 3, .instance_count = 1, .first_vertex = 0, .first_instance = 0 });
     }
@@ -1473,8 +2819,10 @@ pub const Cube3D = struct {
             float(color.b) / 255.0,
             float(color.a) / 255.0,
         };
-        self.line_batch.append(self.gpa, .{ .pos = a, .normal = line_normal, .color = col }) catch {};
-        self.line_batch.append(self.gpa, .{ .pos = b, .normal = line_normal, .color = col }) catch {};
+        self.line_batch.append(self.gpa, .{ .pos = a, .normal = line_normal, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.line_batch.append(self.gpa, .{ .pos = b, .normal = line_normal, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Append a triangle with per-vertex normals into the solid (triangle) batch.
@@ -1488,9 +2836,12 @@ pub const Cube3D = struct {
         n2: [3]f32,
         col: [4]f32,
     ) void {
-        self.batch.append(self.gpa, .{ .pos = p0, .normal = n0, .color = col }) catch {};
-        self.batch.append(self.gpa, .{ .pos = p1, .normal = n1, .color = col }) catch {};
-        self.batch.append(self.gpa, .{ .pos = p2, .normal = n2, .color = col }) catch {};
+        self.batch.append(self.gpa, .{ .pos = p0, .normal = n0, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.batch.append(self.gpa, .{ .pos = p1, .normal = n1, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.batch.append(self.gpa, .{ .pos = p2, .normal = n2, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Append a UV sphere (centre + radius) to the solid batch. Normals are the
@@ -1646,7 +2997,8 @@ pub const Cube3D = struct {
             const rp: [3]f32 = rotateVec3(rot, scaled);
             const wp: [3]f32 = .{ center[0] + rp[0], center[1] + rp[1], center[2] + rp[2] };
             const rn: [3]f32 = rotateVec3(rot, v.normal);
-            self.batch.append(self.gpa, .{ .pos = wp, .normal = rn, .color = col }) catch {};
+            self.batch.append(self.gpa, .{ .pos = wp, .normal = rn, .color = col }) catch
+                assertUnreachable(@src(), "OOM", .{});
         }
     }
 
@@ -1974,7 +3326,7 @@ pub const Cube3D = struct {
         );
         const byte_base: u64 = @as(u64, base) * @sizeOf(BatchVertex);
         wgpu.queueWriteBuffer(ps.queue, buffer_ptr.*, byte_base, std.mem.sliceAsBytes(items[0..n]));
-        WgpuBackend.setPipeline(ps, shader.RenderPipeline(void, void){ .gpu_handle = pipeline });
+        WgpuBackend.setPipeline(ps, shader_runtime.RenderPipeline(void, void){ .gpu_handle = pipeline });
         self.bindViewProj(ps);
         render_pass.setVertexBuffer(ps.pass, .{
             .slot = 0,
@@ -2241,7 +3593,7 @@ pub const Cube3D = struct {
             .receiver = handle,
             .proj_slot = slot,
             .tex_bg = tex_bg,
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Draw every recorded decal: for each, bind the camera (group 0), the
@@ -2253,7 +3605,7 @@ pub const Cube3D = struct {
         if (self.decal_draws.items.len == 0) {
             return;
         }
-        WgpuBackend.setPipeline(ps, shader.RenderPipeline(void, void){ .gpu_handle = self.decal_pipeline });
+        WgpuBackend.setPipeline(ps, shader_runtime.RenderPipeline(void, void){ .gpu_handle = self.decal_pipeline });
         self.bindViewProj(ps);
         for (self.decal_draws.items) |d| {
             const recv: DecalReceiver = self.decal_receivers.items[d.receiver];
@@ -2314,7 +3666,7 @@ pub const Cube3D = struct {
             }
             // Per draw: opaque textured cubes write depth (tex_pipeline);
             // transparent billboards test-only (billboard_pipeline).
-            WgpuBackend.setPipeline(ps, shader.RenderPipeline(void, void){ .gpu_handle = d.pipeline });
+            WgpuBackend.setPipeline(ps, shader_runtime.RenderPipeline(void, void){ .gpu_handle = d.pipeline });
             self.bindViewProj(ps);
             WgpuBackend.setBindGroup(ps, 1, d.bind_group);
             render_pass.draw(ps.pass, .{
@@ -2328,7 +3680,7 @@ pub const Cube3D = struct {
 
     /// Get-or-create the group-1 bind group for a texture, cached by view handle.
     fn texBindGroup(self: *Cube3D, tex: WgpuTexture) wgpu.BindGroupHandle {
-        const key: u64 = @intFromEnum(tex.view);
+        const key: u64 = @backingInt(tex.view);
         if (self.tex_bind_cache.get(key)) |bg| {
             return bg;
         }
@@ -2339,7 +3691,7 @@ pub const Cube3D = struct {
         const blob: []const u8 = gpu.encodeBindGroupEntries(self.gpa, &entries) catch return .invalid;
         defer self.gpa.free(blob);
         const bg: wgpu.BindGroupHandle = wgpu.createBindGroup(self.device, self.tex_bgl, blob, "draw3d_tex_bg");
-        self.tex_bind_cache.put(self.gpa, key, bg) catch {};
+        self.tex_bind_cache.put(self.gpa, key, bg) catch assertUnreachable(@src(), "OOM", .{});
         return bg;
     }
 
@@ -2372,12 +3724,18 @@ pub const Cube3D = struct {
         const sv0: f32 = uv_min[1];
         const su1: f32 = uv_max[0];
         const sv1: f32 = uv_max[1];
-        self.tex_batch.append(self.gpa, .{ .pos = p0, .uv = .{ su0, sv0 }, .color = col }) catch {};
-        self.tex_batch.append(self.gpa, .{ .pos = p1, .uv = .{ su1, sv0 }, .color = col }) catch {};
-        self.tex_batch.append(self.gpa, .{ .pos = p2, .uv = .{ su1, sv1 }, .color = col }) catch {};
-        self.tex_batch.append(self.gpa, .{ .pos = p0, .uv = .{ su0, sv0 }, .color = col }) catch {};
-        self.tex_batch.append(self.gpa, .{ .pos = p2, .uv = .{ su1, sv1 }, .color = col }) catch {};
-        self.tex_batch.append(self.gpa, .{ .pos = p3, .uv = .{ su0, sv1 }, .color = col }) catch {};
+        self.tex_batch.append(self.gpa, .{ .pos = p0, .uv = .{ su0, sv0 }, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.tex_batch.append(self.gpa, .{ .pos = p1, .uv = .{ su1, sv0 }, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.tex_batch.append(self.gpa, .{ .pos = p2, .uv = .{ su1, sv1 }, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.tex_batch.append(self.gpa, .{ .pos = p0, .uv = .{ su0, sv0 }, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.tex_batch.append(self.gpa, .{ .pos = p2, .uv = .{ su1, sv1 }, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
+        self.tex_batch.append(self.gpa, .{ .pos = p3, .uv = .{ su0, sv1 }, .color = col }) catch
+            assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Draw an axis-aligned cube with `tex` mapped 0..1 on each of its six faces.
@@ -2413,7 +3771,7 @@ pub const Cube3D = struct {
             .pipeline = self.tex_pipeline,
             .first = first,
             .count = 36,
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Draw a camera-facing textured quad at `pos`, `w`×`h`, using the camera's
@@ -2452,7 +3810,7 @@ pub const Cube3D = struct {
             .pipeline = self.billboard_pipeline,
             .first = first,
             .count = 6,
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Camera-facing textured quad framing a UV sub-rect of `tex` (a sprite
@@ -2504,7 +3862,7 @@ pub const Cube3D = struct {
             .pipeline = self.billboard_pipeline,
             .first = first,
             .count = 6,
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Draw an arbitrary list of textured, depth-tested 3D triangles from `tex`.
@@ -2531,7 +3889,8 @@ pub const Cube3D = struct {
         const first: u32 = @intCast(self.tex_batch.items.len);
         const col: [4]f32 = Color.toFloats(tint);
         for (positions, uvs) |p, uv| {
-            self.tex_batch.append(self.gpa, .{ .pos = p, .uv = uv, .color = col }) catch {};
+            self.tex_batch.append(self.gpa, .{ .pos = p, .uv = uv, .color = col }) catch
+                assertUnreachable(@src(), "OOM", .{});
         }
         // depth_write=true uses the opaque `tex_pipeline` (test + write); false
         // uses `billboard_pipeline` (test-only), so many overlapping translucent
@@ -2545,7 +3904,85 @@ pub const Cube3D = struct {
             .pipeline = pipeline,
             .first = first,
             .count = @intCast(positions.len),
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
+    }
+
+    /// Upload a mesh to the GPU if it is not there yet, and return its buffers.
+    ///
+    /// ★ THE UPLOAD IS LAZY AND ONLY `drawMeshInstanced` TRIGGERS IT. A caller that draws a
+    /// mesh EXCLUSIVELY through its own pipeline would therefore never get buffers at all —
+    /// `gpuBuffers` would return null forever, and the mesh would silently not render. This is
+    /// the explicit door for that case.
+    pub fn uploadMeshGpu(
+        self: *Cube3D,
+        mesh: *types.Mesh,
+        queue: wgpu.QueueHandle,
+    ) ?MeshGpu {
+        const slot: u32 = self.ensureMeshGpu(mesh, queue) orelse return null;
+        return self.mesh_gpu.items[slot];
+    }
+
+    /// The GPU buffers backing an uploaded mesh, for a pass that draws it with its OWN
+    /// pipeline.
+    ///
+    /// ★ WITHOUT THIS, MULTI-PASS RENDERING RE-UPLOADS THE GEOMETRY. `mesh_gpu` is private and
+    /// `drawMeshInstanced` is the only way in, so a shadow or G-buffer pass wanting a custom
+    /// shader had no route to the vertices it just uploaded — it would have to keep a second
+    /// copy, which is exactly the cost the retained path exists to avoid.
+    ///
+    /// The vertex layout is `MeshVertex`: 3 floats position then 3 floats normal, 24-byte
+    /// stride, matching `gbuffer_vs`'s `Attr(.vec3, 0)` + `Attr(.vec3, 1)`. Indices are u16.
+    ///
+    /// Null when the mesh has never been drawn — upload happens lazily on first draw, so call
+    /// this after at least one `drawMeshInstanced`.
+    pub fn gpuBuffers(self: *const Cube3D, mesh: types.Mesh) ?MeshGpu {
+        if (mesh.vaoId == 0) {
+            return null;
+        }
+        const slot: usize = mesh.vaoId - 1;
+        if (slot >= self.mesh_gpu.items.len) {
+            return null;
+        }
+        return self.mesh_gpu.items[slot];
+    }
+
+    /// Re-upload an already-uploaded mesh's positions and normals to its VBO.
+    ///
+    /// ★ THE RETAINED PATH ASSUMES STATIC GEOMETRY. `ensureMeshGpu` uploads once and caches by
+    /// `mesh.vaoId`, so a CPU-skinned character drawn through `drawMeshInstanced` would show
+    /// its BIND POSE forever. `examples/dynamic_mesh` sidesteps this by using the IMMEDIATE
+    /// path (`updateMeshBuffer` + `drawModel`), which re-walks the CPU arrays every frame —
+    /// fine for a 4-vertex quad, and ~68k triangles of CPU work per pass for a character.
+    ///
+    /// This closes the gap: the VBO is created with `copy_dst`, so refreshing it is one
+    /// `queueWriteBuffer`. A skinned mesh can then live in the retained path and be drawn into
+    /// several passes for the cost of ONE upload rather than one CPU walk per pass.
+    pub fn refreshMeshGpu(
+        self: *Cube3D,
+        mesh: *const types.Mesh,
+        queue: wgpu.QueueHandle,
+    ) void {
+        if (mesh.vaoId == 0 or mesh.vertices == null) {
+            return;
+        }
+        const slot: usize = mesh.vaoId - 1;
+        if (slot >= self.mesh_gpu.items.len) {
+            return;
+        }
+        const vcount: usize = @intCast(@max(mesh.vertexCount, 0));
+        const verts: []MeshVertex = self.gpa.alloc(MeshVertex, vcount) catch return;
+        defer self.gpa.free(verts);
+        const has_normals: bool = mesh.normals != null;
+        for (0..vcount) |i| {
+            verts[i] = .{
+                .pos = .{ mesh.vertices[i * 3], mesh.vertices[i * 3 + 1], mesh.vertices[i * 3 + 2] },
+                .normal = if (has_normals)
+                    .{ mesh.normals[i * 3], mesh.normals[i * 3 + 1], mesh.normals[i * 3 + 2] }
+                else
+                    .{ 0, 1, 0 },
+            };
+        }
+        wgpu.queueWriteBuffer(queue, self.mesh_gpu.items[slot].vbo, 0, std.mem.sliceAsBytes(verts));
     }
 
     fn ensureMeshGpu(self: *Cube3D, mesh: *types.Mesh, queue: wgpu.QueueHandle) ?u32 {
@@ -2578,13 +4015,24 @@ pub const Cube3D = struct {
             .usage = .{ .vertex = true, .copy_dst = true },
             .label = "mesh_vbo",
         });
-        const ibo: wgpu.BufferHandle = wgpu.createBuffer(self.device, .{
-            .size = @as(u64, icount) * @sizeOf(u16),
-            .usage = .{ .index = true, .copy_dst = true },
-            .label = "mesh_ibo",
-        });
+        // ★ `createBufferInit`, NOT createBuffer + queueWriteBuffer.
+        //
+        // A u16 index buffer is a multiple of 4 bytes only when the index COUNT is even —
+        // and indices come in threes, so any mesh with an odd triangle count fails
+        // `queueWriteBuffer`'s alignment rule outright. A real KUKA link has 2759 triangles;
+        // 8277 indices is 16554 bytes, and WebGPU rejects it.
+        //
+        // Nothing about the caller can prevent this: an artist's mesh has whatever triangle
+        // count it has. `createBufferInit` sizes the buffer up to the next multiple of four
+        // and writes the tail padded, so the alignment stops being anyone's problem.
         wgpu.queueWriteBuffer(queue, vbo, 0, std.mem.sliceAsBytes(verts));
-        wgpu.queueWriteBuffer(queue, ibo, 0, std.mem.sliceAsBytes(mesh.indices[0..icount]));
+        const ibo: wgpu.BufferHandle = wgpu.createBufferInit(
+            self.device,
+            queue,
+            std.mem.sliceAsBytes(mesh.indices[0..icount]),
+            .{ .index = true, .copy_dst = true },
+            "mesh_ibo",
+        );
 
         self.mesh_gpu.append(self.gpa, .{ .vbo = vbo, .ibo = ibo, .index_count = @intCast(icount) }) catch return null;
         const slot: u32 = @intCast(self.mesh_gpu.items.len - 1);
@@ -2638,7 +4086,7 @@ pub const Cube3D = struct {
         wgpu.queueWriteBuffer(ps.queue, self.instance_buffer, byte_base, std.mem.sliceAsBytes(insts));
         self.inst_cursor = needed;
 
-        WgpuBackend.setPipeline(ps, shader.RenderPipeline(void, void){ .gpu_handle = self.instanced_pipeline });
+        WgpuBackend.setPipeline(ps, shader_runtime.RenderPipeline(void, void){ .gpu_handle = self.instanced_pipeline });
         self.bindViewProj(ps);
         render_pass.setVertexBuffer(ps.pass, .{ .slot = 0, .buffer = mg.vbo, .offset = 0, .size = ~@as(u64, 0) });
         render_pass.setVertexBuffer(ps.pass, .{
@@ -2662,23 +4110,22 @@ pub const Cube3D = struct {
 // CPU model/mesh library — MOVED from drawing.zig's `models` namespace
 // (GL-retirement P5).  Mesh generators, collision/bounds/raycast math,
 // model + animation loading, CPU pose evaluation.  The GL halves of that
-// namespace (uploadMesh, the rlgl draw paths, GL material/skinned-shader
+// namespace (uploadMesh, the rlgl draw paths, GL material/skinned-shader_runtime
 // wiring) died with the backend; `updateModelAnimation`/`Blend` keep the
 // CPU pose computation the future wgpu GPU-skinning variant will consume.
 // ===========================================================================
 
-const models_types = @import("types.zig");
 const allocator_mod = @import("runtime.zig").allocator;
 
 // ---- Default material (CPU port, GL-retirement P5) -----------------------
-const Material = models_types.Material;
+const Material = types.Material;
 
-const MaterialMap = models_types.MaterialMap;
+const MaterialMap = types.MaterialMap;
 
 pub const max_material_maps: usize = 12;
 
 /// Construct a default Material: heap-allocated `maps` array, identity
-/// colors.  The GL build also wired rlgl's built-in shader + 1x1 white
+/// colors.  The GL build also wired rlgl's built-in shader_runtime + 1x1 white
 /// texture ids; on the wgpu path materials are CPU descriptors and the
 /// renderer resolves textures/pipelines itself.  Free with
 /// `unloadMaterial(gpa, mat)` using the same allocator.
@@ -2697,7 +4144,7 @@ pub fn loadMaterialDefault(
 }
 
 /// Free a Material's CPU-side resources: the `maps` array.  (The GL build
-/// also unloaded the shader + per-map GPU textures; those ids don't exist
+/// also unloaded the shader_runtime + per-map GPU textures; those ids don't exist
 /// on the wgpu path.)
 pub fn unloadMaterial(
     gpa: Allocator,
@@ -2739,11 +4186,6 @@ inline fn v3Add(a: Vec, b: Vec) Vec {
     return v3FromZm(v3ToZm(a) + v3ToZm(b));
 }
 
-/// Vector difference `a - b`.
-inline fn v3Sub(a: Vec, b: Vec) Vec {
-    return v3FromZm(v3ToZm(a) - v3ToZm(b));
-}
-
 /// Scalar multiply `v * s` (`@splat` broadcast).
 inline fn v3Scale(v: Vec, s: f32) Vec {
     return v3FromZm(v3ToZm(v) * @as(Vec, @splat(s)));
@@ -2752,11 +4194,6 @@ inline fn v3Scale(v: Vec, s: f32) Vec {
 /// Negate a vector.
 inline fn v3Negate(v: Vec) Vec {
     return -v;
-}
-
-/// The zero vector.
-inline fn v3Zero() Vec {
-    return vec(0, 0, 0);
 }
 
 /// Normalize a 3-vector.
@@ -2786,21 +4223,6 @@ inline fn v3Length(v: Vec) f32 {
 /// itself - no sqrt - for comparisons).
 inline fn v3DistanceSqr(a: Vec, b: Vec) f32 {
     return lengthSq3(v3ToZm(a) - v3ToZm(b));
-}
-
-/// A unit vector perpendicular to `v`.
-inline fn v3Perpendicular(v: Vec) Vec {
-    return v3FromZm(perpendicular3(v3ToZm(v)));
-}
-
-/// Rotate a vector around an axis (need not be normalized) by an
-/// angle in radians.
-inline fn v3RotateByAxisAngle(
-    v: Vec,
-    axis: Vec,
-    angle: f32,
-) Vec {
-    return v3FromZm(rotateByAxisAngle3(v3ToZm(v), v3ToZm(axis), angle));
 }
 
 const Matrix = Mat;
@@ -2833,136 +4255,18 @@ inline fn v3Divide(a: Vec, b: Vec) Vec {
     return v3FromZm(v3ToZm(a) / v3ToZm(b));
 }
 
-/// Helper: emit the three edges of a triangle as six vertices
-/// (RL_LINES expects vertex pairs).
-inline fn emitTriangleEdges(
-    gl: anytype,
-    verts: [*c]const f32,
-    ia: usize,
-    ib: usize,
-    ic: usize,
-) void {
-    const ax: f32 = verts[ia * 3 + 0];
-    const ay: f32 = verts[ia * 3 + 1];
-    const az: f32 = verts[ia * 3 + 2];
-    const bx: f32 = verts[ib * 3 + 0];
-    const by: f32 = verts[ib * 3 + 1];
-    const bz: f32 = verts[ib * 3 + 2];
-    const cx: f32 = verts[ic * 3 + 0];
-    const cy: f32 = verts[ic * 3 + 1];
-    const cz: f32 = verts[ic * 3 + 2];
-    // Edge A→B
-    gl.vertex3f(ax, ay, az);
-    gl.vertex3f(bx, by, bz);
-    // Edge B→C
-    gl.vertex3f(bx, by, bz);
-    gl.vertex3f(cx, cy, cz);
-    // Edge C→A
-    gl.vertex3f(cx, cy, cz);
-    gl.vertex3f(ax, ay, az);
-}
-
-inline fn sphereVert(phi: f32, theta: f32, r: f32) Vec {
-    return vec(r * @sin(phi) * @cos(theta), r * @cos(phi), r * @sin(phi) * @sin(theta));
-}
-
-inline fn writeFlat(
-    v: []f32,
-    n: []f32,
-    t: []f32,
-    slot: usize,
-    p: Vec,
-    r: f32,
-    u: f32,
-    vt: f32,
-) void {
-    v[slot * 3 + 0] = p[0];
-    v[slot * 3 + 1] = p[1];
-    v[slot * 3 + 2] = p[2];
-    n[slot * 3 + 0] = p[0] / r;
-    n[slot * 3 + 1] = p[1] / r;
-    n[slot * 3 + 2] = p[2] / r;
-    t[slot * 2 + 0] = u;
-    t[slot * 2 + 1] = vt;
-}
-
-inline fn writeXYZ(
-    arr: []f32,
-    slot: usize,
-    p: Vec,
-) void {
-    arr[slot * 3 + 0] = p[0];
-    arr[slot * 3 + 1] = p[1];
-    arr[slot * 3 + 2] = p[2];
-}
-
-inline fn writeUV(
-    arr: []f32,
-    slot: usize,
-    u: f32,
-    v: f32,
-) void {
-    arr[slot * 2 + 0] = u;
-    arr[slot * 2 + 1] = v;
-}
-
-inline fn torusPoint(R: f32, r: f32, u: f32, vAng: f32) Vec {
-    return vec((R + r * @cos(vAng)) * @cos(u), r * @sin(vAng), (R + r * @cos(vAng)) * @sin(u));
-}
-
-inline fn torusNormal(u: f32, vAng: f32) Vec {
-    return vec(@cos(vAng) * @cos(u), @sin(vAng), @cos(vAng) * @sin(u));
-}
-
-const KnotFrame = struct { c: Vec, n: Vec, b: Vec };
-
-inline fn ringVert(
-    frame: KnotFrame,
-    r: f32,
-    ang: f32,
-) Vec {
-    const ca: f32 = @cos(ang);
-    const sa: f32 = @sin(ang);
-    return vec(
-        frame.c[0] + r * (ca * frame.n[0] + sa * frame.b[0]),
-        frame.c[1] + r * (ca * frame.n[1] + sa * frame.b[1]),
-        frame.c[2] + r * (ca * frame.n[2] + sa * frame.b[2]),
-    );
-}
-
-inline fn ringNorm(frame: KnotFrame, ang: f32) Vec {
-    const ca: f32 = @cos(ang);
-    const sa: f32 = @sin(ang);
-    return vec(
-        ca * frame.n[0] + sa * frame.b[0],
-        ca * frame.n[1] + sa * frame.b[1],
-        ca * frame.n[2] + sa * frame.b[2],
-    );
-}
-
-inline fn vec3Cross(a: Vec, b: Vec) Vec {
-    return vec(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]);
-}
-
-inline fn vec3Normalize(v: Vec) Vec {
-    const len_sq: f32 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-    if (len_sq <= 0) {
-        return v;
-    }
-    const inv_len: f32 = 1.0 / @sqrt(len_sq);
-    return vec(v[0] * inv_len, v[1] * inv_len, v[2] * inv_len);
-}
-
 const libc = @import("runtime.zig").libc;
+const codecs = @import("codecs.zig");
+const web = @import("web.zig");
 const Ray = zm.Ray;
 const RayCollision = zm.RayCollision;
-const BoundingBox = models_types.BoundingBox;
-const Mesh = models_types.Mesh;
-const Image = models_types.Image;
-const Model = models_types.Model;
-const MaterialMapIndex = models_types.MaterialMapIndex;
-const ModelAnimation = models_types.ModelAnimation;
-const Texture = models_types.Texture;
+const BoundingBox = types.BoundingBox;
+const Mesh = types.Mesh;
+const Image = types.Image;
+const Model = types.Model;
+const MaterialMapIndex = types.MaterialMapIndex;
+const ModelAnimation = types.ModelAnimation;
+const Texture = types.Texture;
 
 const max_mesh_vertex_buffers: usize = 9; // matches raylib's #define
 
@@ -2972,107 +4276,52 @@ pub const FlatMeshArrays = struct {
     texs: []f32,
 };
 
-fn trefoilFrame(tp: f32, scale: f32) KnotFrame {
-    // Standard trefoil parameterization.  Center curve:
-    //   x = sin(t) + 2*sin(2t)
-    //   y = cos(t) - 2*cos(2t)
-    //   z = -sin(3t)
-    // Tangent is the derivative; we build a perpendicular frame from it.
-    const sx: f32 = @sin(tp);
-    const cx: f32 = @cos(tp);
-    const s2: f32 = @sin(2.0 * tp);
-    const c2: f32 = @cos(2.0 * tp);
-    const s3: f32 = @sin(3.0 * tp);
-    const c3: f32 = @cos(3.0 * tp);
-
-    const center: Vec = vec(scale * (sx + 2.0 * s2), scale * (cx - 2.0 * c2), scale * -s3);
-    const tangent_raw: Vec = vec(cx + 4.0 * c2, -sx + 4.0 * s2, -3.0 * c3);
-    const tangent: Vec = vec3Normalize(tangent_raw);
-    // Pick an arbitrary up to construct a perpendicular frame.
-    const up: Vec = if (@abs(tangent[1]) < 0.9) vec(0, 1, 0) else vec(1, 0, 0);
-    const binormal: Vec = vec3Normalize(vec3Cross(tangent, up));
-    const normal: Vec = vec3Cross(binormal, tangent);
-    return .{ .c = center, .n = normal, .b = binormal };
-}
-
-const eps: f32 = 1e-5;
-
-/// Subdivided plane in the XZ plane. `res_x` × `res_z` give the
-/// face-grid resolution (cells), the vertex grid is one larger in each
-/// dimension. Vertices are shared between adjacent quads (indexed mesh).
-pub fn genMeshPlane(
-    gpa: Allocator,
-    width: f32,
-    length: f32,
-    res_x: i32,
-    res_z: i32,
-) Allocator.Error!Mesh {
-    var mesh: Mesh = std.mem.zeroes(Mesh);
-    if (res_x < 1 or res_z < 1) {
-        return mesh;
-    }
-
-    // raylib increments these once before use; the literal grid is
-    // (res_x + 1) × (res_z + 1) vertices for res_x × res_z faces.
-    const rx: usize = @intCast(res_x + 1);
-    const rz: usize = @intCast(res_z + 1);
-    const vertex_count: usize = rx * rz;
-    const num_faces: usize = (rx - 1) * (rz - 1);
-    const tri_count: usize = num_faces * 2;
-
-    const verts: []f32 = try gpa.alloc(f32, vertex_count * 3);
-    errdefer gpa.free(verts);
-    const tex: []f32 = try gpa.alloc(f32, vertex_count * 2);
-    errdefer gpa.free(tex);
-    const norm: []f32 = try gpa.alloc(f32, vertex_count * 3);
-    errdefer gpa.free(norm);
-    const idx: []u16 = try gpa.alloc(u16, tri_count * 3);
-    errdefer gpa.free(idx);
-
-    const rxf: f32 = float(rx - 1);
-    const rzf: f32 = float(rz - 1);
-    var zi: usize = 0;
-    while (zi < rz) : (zi += 1) {
-        const z_pos = (float(zi) / rzf - 0.5) * length;
-        for (0..rx) |x| {
-            const x_pos = (float(x) / rxf - 0.5) * width;
-            const v: usize = x + zi * rx;
-            verts[v * 3 + 0] = x_pos;
-            verts[v * 3 + 1] = 0;
-            verts[v * 3 + 2] = z_pos;
-            tex[v * 2 + 0] = float(x) / rxf;
-            tex[v * 2 + 1] = float(zi) / rzf;
-            norm[v * 3 + 0] = 0;
-            norm[v * 3 + 1] = 1;
-            norm[v * 3 + 2] = 0;
+/// Debug guard for the pbr3d front-face convention. A mesh fed to the pbr3d
+/// renderer (which culls `.back`) is FRONT-facing when a triangle's winding
+/// normal points OPPOSITE its per-vertex normals — the CW-outward convention
+/// `genMeshSphere` follows. A generator wound the other way renders INVISIBLE
+/// from its normal-facing side: silently culled, NO device error, just a blank
+/// screen (exactly what hid the normal-map floor for three debug rounds). This
+/// checks the first non-degenerate triangle at generation time, so the smoke
+/// (which runs the example) turns a re-break into a named assert instead of a
+/// phone screenshot. Cheap: one triangle, then returns.
+fn debugCheckPbrWinding( // lint:off unused-global: debug tooling, kept intentionally
+    verts: []const f32,
+    norms: []const f32,
+    idx: []const u16,
+    label: []const u8,
+) void {
+    var tri: usize = 0;
+    while (tri * 3 + 2 < idx.len) : (tri += 1) {
+        const va: usize = idx[tri * 3 + 0];
+        const vb: usize = idx[tri * 3 + 1];
+        const vc: usize = idx[tri * 3 + 2];
+        const ax: f32 = verts[vb * 3 + 0] - verts[va * 3 + 0];
+        const ay: f32 = verts[vb * 3 + 1] - verts[va * 3 + 1];
+        const az: f32 = verts[vb * 3 + 2] - verts[va * 3 + 2];
+        const bx: f32 = verts[vc * 3 + 0] - verts[va * 3 + 0];
+        const by: f32 = verts[vc * 3 + 1] - verts[va * 3 + 1];
+        const bz: f32 = verts[vc * 3 + 2] - verts[va * 3 + 2];
+        const wx: f32 = ay * bz - az * by;
+        const wy: f32 = az * bx - ax * bz;
+        const wz: f32 = ax * by - ay * bx;
+        if (wx * wx + wy * wy + wz * wz < 1e-8) {
+            continue;
         }
+        const nx: f32 = norms[va * 3 + 0] + norms[vb * 3 + 0] + norms[vc * 3 + 0];
+        const ny: f32 = norms[va * 3 + 1] + norms[vb * 3 + 1] + norms[vc * 3 + 1];
+        const nz: f32 = norms[va * 3 + 2] + norms[vb * 3 + 2] + norms[vc * 3 + 2];
+        assertf(
+            wx * nx + wy * ny + wz * nz < 0,
+            @src(),
+            "{s}: winding disagrees with pbr3d front-face convention — a triangle's " ++
+                "winding normal must point OPPOSITE its vertex normals (CW-outward, like " ++
+                "genMeshSphere), else the mesh is INVISIBLE under .back cull. " ++
+                "Reverse each triangle's index order.",
+            .{label},
+        );
+        return;
     }
-
-    // Two triangles per face, winding so +Y faces upward (CCW from above).
-    var t: usize = 0;
-    var face: usize = 0;
-    while (face < num_faces) : (face += 1) {
-        // Lower-left vertex of this face. We add `face / (rx-1)` to skip
-        // the right edge of each row.
-        const ll = face + face / (rx - 1);
-        idx[t + 0] = @intCast(ll + rx);
-        idx[t + 1] = @intCast(ll + 1);
-        idx[t + 2] = @intCast(ll);
-        idx[t + 3] = @intCast(ll + rx);
-        idx[t + 4] = @intCast(ll + rx + 1);
-        idx[t + 5] = @intCast(ll + 1);
-        t += 6;
-    }
-
-    mesh.vertexCount = @intCast(vertex_count);
-    mesh.triangleCount = @intCast(tri_count);
-    mesh.vertices = verts.ptr;
-    mesh.texcoords = tex.ptr;
-    mesh.normals = norm.ptr;
-    mesh.indices = idx.ptr;
-
-    try uploadMesh(gpa, &mesh, false);
-    return mesh;
 }
 
 /// Get ray-sphere intersection. Returns hit=true with distance/point/normal
@@ -3705,7 +4954,7 @@ fn materialsFromGltf(
         //   1. baseColorTexture        → MaterialMapIndex.albedo
         //   2. metallicRoughnessTexture → MaterialMapIndex.metalness
         //                                 (B = metalness, G = roughness;
-        //                                  shader samples once and uses
+        //                                  shader_runtime samples once and uses
         //                                  both channels)
         //   3. normalTexture           → MaterialMapIndex.normal
         //   4. occlusionTexture        → MaterialMapIndex.occlusion
@@ -3713,18 +4962,18 @@ fn materialsFromGltf(
         //
         // `loadGltfTexture` returns null on any failure (missing
         // index, decode failure, upload failure) — the material
-        // just won't have that texture, and the shader falls back
+        // just won't have that texture, and the shader_runtime falls back
         // to using the scalar factor alone for that slot.
 
         // Scalar factors — multipliers for the corresponding
         // textures (or used directly when no texture is bound).
-        mat.maps[@intFromEnum(MaterialMapIndex.metalness)].value = gmat.metallic_factor;
-        mat.maps[@intFromEnum(MaterialMapIndex.roughness)].value = gmat.roughness_factor;
+        mat.maps[@backingInt(MaterialMapIndex.metalness)].value = gmat.metallic_factor;
+        mat.maps[@backingInt(MaterialMapIndex.roughness)].value = gmat.roughness_factor;
         // Emissive factor stored as the emission map's `color`
         // tint: per glTF, emissive_factor is RGB in linear space,
         // clamped to [0, 1] then scaled to [0, 255] for our Color.
         const ef: Vec = gmat.emissive_factor;
-        mat.maps[@intFromEnum(MaterialMapIndex.emission)].color = .{
+        mat.maps[@backingInt(MaterialMapIndex.emission)].color = .{
             .r = @trunc(clamp(ef[0] * 255.0, 0.0, 255.0)),
             .g = @trunc(clamp(ef[1] * 255.0, 0.0, 255.0)),
             .b = @trunc(clamp(ef[2] * 255.0, 0.0, 255.0)),
@@ -3838,7 +5087,7 @@ pub fn unloadMesh(
 /// Note: this CPU-side computation only.  Uploading the new
 /// tangents to the GPU as an additional vertex attribute is the
 /// caller's job - re-call `uploadMesh` after if the mesh is being
-/// rebuilt for use with a normal-mapped shader.  Future work will
+/// rebuilt for use with a normal-mapped shader_runtime.  Future work will
 /// add a paired `rlUpdateVertexBuffer` path to update an existing
 /// VAO in place (mirrors raylib's tail-end logic).
 pub fn genMeshTangents(
@@ -3954,7 +5203,7 @@ pub fn genMeshTangents(
 
         // Gram-Schmidt: T' = T - N * dot(N, T), then normalize.
         // This forces the tangent to lie in the tangent plane,
-        // which the shader's TBN matrix construction expects.
+        // which the shader_runtime's TBN matrix construction expects.
         const dot_nt: f32 = v3Dot(normal, tangent);
         const orthog: Vec = v3Normalize(vec(
             tangent[0] - normal[0] * dot_nt,
@@ -3966,7 +5215,7 @@ pub fn genMeshTangents(
         tangents[i * 4 + 1] = orthog[1];
         tangents[i * 4 + 2] = orthog[2];
         // Handedness: +1 / -1 depending on whether tan2's
-        // contribution agrees with N × T.  Used by the shader to
+        // contribution agrees with N × T.  Used by the shader_runtime to
         // reconstruct the bitangent without storing it explicitly.
         const cross_nt: Vec = v3Cross(normal, orthog);
         const handedness: f32 = if (v3Dot(cross_nt, tan2[i]) < 0.0) -1.0 else 1.0;
@@ -3980,8 +5229,8 @@ pub fn loadModelFromMemory(
     gpa: Allocator,
     bytes: []const u8,
 ) errors.LoadError!Model {
-    const codecs_mod = @import("codecs.zig");
-    const dom = @import("web.zig").dom;
+    const codecs_mod = codecs;
+    const dom = web.dom;
     var doc: codecs_mod.gltf.Data = codecs_mod.gltf.parse(gpa, bytes) catch |err| {
         var buf: [192]u8 = undefined;
         const msg: []const u8 = bufPrint(
@@ -4069,7 +5318,7 @@ pub fn loadModelFromMemory(
 }
 
 /// Free a Model - recursively free meshes, free each material's maps
-/// (but not the shader/textures: caller owns those if shared), then
+/// (but not the shader_runtime/textures: caller owns those if shared), then
 /// free the top-level arrays and skeleton data.
 /// Per raylib's contract: shaders and textures are NOT unloaded
 /// because the caller may share them across models.
@@ -4170,7 +5419,7 @@ pub fn loadModelAnimations(
     gpa: Allocator,
     bytes: []const u8,
 ) errors.LoadError![]ModelAnimation {
-    const codecs_mod = @import("codecs.zig");
+    const codecs_mod = codecs;
     var doc: codecs_mod.gltf.Data = codecs_mod.gltf.parse(gpa, bytes) catch return errors.LoadError.GltfParseFailed;
     defer doc.deinit();
 
@@ -4402,8 +5651,8 @@ fn matrixFromTransform(t: types.Transform) Matrix {
 ///   1. Look up keyframe pose at index `frame % keyframeCount`
 ///   2. Compute Matrix from each Transform in the pose
 ///   3. Allocate `boneMatrices: []Matrix` if not already on the model
-///   4. Upload to skinned shader's `boneMatrices[]` uniform via rlSetUniformMatrices
-///   5. Swap each material's shader to the skinned variant
+///   4. Upload to skinned shader_runtime's `boneMatrices[]` uniform via rlSetUniformMatrices
+///   5. Swap each material's shader_runtime to the skinned variant
 /// On host this is mostly a no-op (rlgl forwarders return null/-1)
 /// but the path is exercised end-to-end so smoke tests catch
 /// regressions.
@@ -4447,7 +5696,7 @@ pub fn updateModelAnimation(
     // Mirror the bone-matrix pointer to each mesh that has bone
     // indices.  drawMesh uses `mesh.boneMatrices != null` as the
     // signal to take the skinned path: re-upload the uniform after
-    // binding the shader, draw with the skinned program.  Mirroring
+    // binding the shader_runtime, draw with the skinned program.  Mirroring
     // (rather than passing model into drawMesh) preserves raylib's
     // function-signature contract for drawMesh.
     const mc: usize = @intCast(@max(model.meshCount, 0));
@@ -4458,10 +5707,10 @@ pub fn updateModelAnimation(
     }
 
     // GL-retirement P5: the GL tail (swap materials to the skinned
-    // shader + upload boneMatrices as a uniform array via rlgl) is
+    // shader_runtime + upload boneMatrices as a uniform array via rlgl) is
     // gone.  The CPU pose above (model.boneMatrices + per-mesh
     // mirroring) is the part the wgpu GPU-skinning variant will
-    // consume when the typed-3D-shader arc adds it; until then,
+    // consume when the typed-3D-shader_runtime arc adds it; until then,
     // CPU deformation (skinned_mesh) reads the same pose.
     _ = gl;
 }
@@ -4576,464 +5825,15 @@ pub fn updateModelAnimationBlend(
         model.boneMatrices[b] = matrixFromTransform(blended);
     }
 
-    // Mirror to meshes + swap shader (same as updateModelAnimation).
+    // Mirror to meshes + swap shader_runtime (same as updateModelAnimation).
     const mc: usize = @intCast(@max(model.meshCount, 0));
     for (0..mc) |mi| {
         if (model.meshes[mi].boneIndices != null) {
             model.meshes[mi].boneMatrices = model.boneMatrices;
         }
     }
-    // GL-retirement P5: GL skinned-shader tail removed — the CPU
+    // GL-retirement P5: GL skinned-shader_runtime tail removed — the CPU
     // pose above is the product.
-}
-
-/// success, propagates Allocator.Error on failure (with errdefer
-/// cleanup of partial allocations).
-fn allocFlatMeshArrays(
-    gpa: Allocator,
-    tri_count: usize,
-) Allocator.Error!FlatMeshArrays {
-    const vc: usize = tri_count * 3;
-    const v: []f32 = try gpa.alloc(f32, vc * 3);
-    errdefer gpa.free(v);
-    const n: []f32 = try gpa.alloc(f32, vc * 3);
-    errdefer gpa.free(n);
-    const t: []f32 = try gpa.alloc(f32, vc * 2);
-    return .{ .verts = v, .norms = n, .texs = t };
-}
-
-/// Half-sphere (top hemisphere only, no bottom cap).
-pub fn genMeshHemiSphere(
-    gpa: Allocator,
-    radius: f32,
-    rings: i32,
-    slices: i32,
-) Allocator.Error!Mesh {
-    var mesh: Mesh = std.mem.zeroes(Mesh);
-    if (rings < 3 or slices < 3) {
-        return mesh;
-    }
-
-    const rings_u: usize = @intCast(rings);
-    const slices_u: usize = @intCast(slices);
-    const tri_count: usize = rings_u * slices_u * 2;
-    const arrs: FlatMeshArrays = try allocFlatMeshArrays(gpa, tri_count);
-    errdefer gpa.free(arrs.verts);
-    errdefer gpa.free(arrs.norms);
-    errdefer gpa.free(arrs.texs);
-    const v: []f32 = arrs.verts;
-    const n: []f32 = arrs.norms;
-    const t: []f32 = arrs.texs;
-
-    var idx: usize = 0;
-    var ri: usize = 0;
-    while (ri < rings_u) : (ri += 1) {
-        // phi sweeps only [0, pi/2].
-        const vt0: f32 = float(ri) / float(rings_u);
-        const vt1: f32 = float(ri + 1) / float(rings_u);
-        const phi0 = vt0 * (pi / 2.0);
-        const phi1 = vt1 * (pi / 2.0);
-
-        var si: usize = 0;
-        while (si < slices_u) : (si += 1) {
-            const ut0: f32 = float(si) / float(slices_u);
-            const ut1: f32 = float(si + 1) / float(slices_u);
-            const th0: f32 = ut0 * 2.0 * pi;
-            const th1: f32 = ut1 * 2.0 * pi;
-
-            const a = sphereVert(phi0, th0, radius);
-            const b = sphereVert(phi0, th1, radius);
-            const c = sphereVert(phi1, th1, radius);
-            const d = sphereVert(phi1, th0, radius);
-
-            writeFlat(v, n, t, idx + 0, a, radius, ut0, vt0);
-            writeFlat(v, n, t, idx + 1, c, radius, ut1, vt1);
-            writeFlat(v, n, t, idx + 2, b, radius, ut1, vt0);
-            writeFlat(v, n, t, idx + 3, a, radius, ut0, vt0);
-            writeFlat(v, n, t, idx + 4, d, radius, ut0, vt1);
-            writeFlat(v, n, t, idx + 5, c, radius, ut1, vt1);
-            idx += 6;
-        }
-    }
-
-    mesh.vertices = v.ptr;
-    mesh.normals = n.ptr;
-    mesh.texcoords = t.ptr;
-    mesh.vertexCount = @intCast(tri_count * 3);
-    mesh.triangleCount = @intCast(tri_count);
-    try uploadMesh(gpa, &mesh, false);
-    return mesh;
-}
-
-/// Cylinder along Y, base at y=0, top at y=height.  Includes top + bottom caps.
-pub fn genMeshCylinder(
-    gpa: Allocator,
-    radius: f32,
-    height: f32,
-    slices: i32,
-) Allocator.Error!Mesh {
-    var mesh: Mesh = std.mem.zeroes(Mesh);
-    if (slices < 3) {
-        return mesh;
-    }
-
-    const slices_u: usize = @intCast(slices);
-    // Side: slices × 2 triangles.  Top cap: slices triangles. Bottom cap: slices triangles.
-    const tri_count: usize = slices_u * 2 + slices_u + slices_u;
-    const arrs: FlatMeshArrays = try allocFlatMeshArrays(gpa, tri_count);
-    errdefer gpa.free(arrs.verts);
-    errdefer gpa.free(arrs.norms);
-    errdefer gpa.free(arrs.texs);
-    const v: []f32 = arrs.verts;
-    const n: []f32 = arrs.norms;
-    const t: []f32 = arrs.texs;
-
-    var idx: usize = 0;
-    var si: usize = 0;
-    while (si < slices_u) : (si += 1) {
-        const ut0: f32 = float(si) / float(slices_u);
-        const ut1: f32 = float(si + 1) / float(slices_u);
-        const th0: f32 = ut0 * 2.0 * pi;
-        const th1: f32 = ut1 * 2.0 * pi;
-        const c0 = @cos(th0);
-        const s0 = @sin(th0);
-        const c1 = @cos(th1);
-        const s1 = @sin(th1);
-
-        // ---- Side wall (a quad split into 2 triangles).  Normal is
-        // the radial direction at each vertex.
-        const a: Vec = vec(radius * c0, 0, radius * s0);
-        const b: Vec = vec(radius * c1, 0, radius * s1);
-        const c: Vec = vec(radius * c1, height, radius * s1);
-        const d: Vec = vec(radius * c0, height, radius * s0);
-
-        writeXYZ(v, idx + 0, a);
-        writeXYZ(n, idx + 0, vec(c0, 0, s0));
-        writeUV(t, idx + 0, ut0, 0);
-        writeXYZ(v, idx + 1, c);
-        writeXYZ(n, idx + 1, vec(c1, 0, s1));
-        writeUV(t, idx + 1, ut1, 1);
-        writeXYZ(v, idx + 2, b);
-        writeXYZ(n, idx + 2, vec(c1, 0, s1));
-        writeUV(t, idx + 2, ut1, 0);
-        writeXYZ(v, idx + 3, a);
-        writeXYZ(n, idx + 3, vec(c0, 0, s0));
-        writeUV(t, idx + 3, ut0, 0);
-        writeXYZ(v, idx + 4, d);
-        writeXYZ(n, idx + 4, vec(c0, 0, s0));
-        writeUV(t, idx + 4, ut0, 1);
-        writeXYZ(v, idx + 5, c);
-        writeXYZ(n, idx + 5, vec(c1, 0, s1));
-        writeUV(t, idx + 5, ut1, 1);
-        idx += 6;
-    }
-
-    // ---- Top cap: a fan of slices triangles meeting at (0, height, 0).
-    si = 0;
-    while (si < slices_u) : (si += 1) {
-        const ut0: f32 = float(si) / float(slices_u);
-        const ut1: f32 = float(si + 1) / float(slices_u);
-        const th0: f32 = ut0 * 2.0 * pi;
-        const th1: f32 = ut1 * 2.0 * pi;
-        const a: Vec = vec(0, height, 0);
-        const b: Vec = vec(radius * @cos(th0), height, radius * @sin(th0));
-        const c: Vec = vec(radius * @cos(th1), height, radius * @sin(th1));
-        const up: Vec = vec(0, 1, 0);
-        writeXYZ(v, idx + 0, a);
-        writeXYZ(n, idx + 0, up);
-        writeUV(t, idx + 0, 0.5, 0.5);
-        writeXYZ(v, idx + 1, b);
-        writeXYZ(n, idx + 1, up);
-        writeUV(t, idx + 1, @cos(th0) * 0.5 + 0.5, @sin(th0) * 0.5 + 0.5);
-        writeXYZ(v, idx + 2, c);
-        writeXYZ(n, idx + 2, up);
-        writeUV(t, idx + 2, @cos(th1) * 0.5 + 0.5, @sin(th1) * 0.5 + 0.5);
-        idx += 3;
-    }
-
-    // ---- Bottom cap: fan around (0, 0, 0), normal -Y, reversed winding.
-    si = 0;
-    while (si < slices_u) : (si += 1) {
-        const ut0: f32 = float(si) / float(slices_u);
-        const ut1: f32 = float(si + 1) / float(slices_u);
-        const th0: f32 = ut0 * 2.0 * pi;
-        const th1: f32 = ut1 * 2.0 * pi;
-        const a: Vec = vec(0, 0, 0);
-        const b: Vec = vec(radius * @cos(th0), 0, radius * @sin(th0));
-        const c: Vec = vec(radius * @cos(th1), 0, radius * @sin(th1));
-        const dn: Vec = vec(0, -1, 0);
-        writeXYZ(v, idx + 0, a);
-        writeXYZ(n, idx + 0, dn);
-        writeUV(t, idx + 0, 0.5, 0.5);
-        writeXYZ(v, idx + 1, c);
-        writeXYZ(n, idx + 1, dn);
-        writeUV(t, idx + 1, @cos(th1) * 0.5 + 0.5, @sin(th1) * 0.5 + 0.5);
-        writeXYZ(v, idx + 2, b);
-        writeXYZ(n, idx + 2, dn);
-        writeUV(t, idx + 2, @cos(th0) * 0.5 + 0.5, @sin(th0) * 0.5 + 0.5);
-        idx += 3;
-    }
-
-    mesh.vertices = v.ptr;
-    mesh.normals = n.ptr;
-    mesh.texcoords = t.ptr;
-    mesh.vertexCount = @intCast(tri_count * 3);
-    mesh.triangleCount = @intCast(tri_count);
-    try uploadMesh(gpa, &mesh, false);
-    return mesh;
-}
-
-/// Cone along Y, apex at top.  One triangle slant per slice + bottom cap.
-pub fn genMeshCone(
-    gpa: Allocator,
-    radius: f32,
-    height: f32,
-    slices: i32,
-) Allocator.Error!Mesh {
-    var mesh: Mesh = std.mem.zeroes(Mesh);
-    if (slices < 3) {
-        return mesh;
-    }
-
-    const slices_u: usize = @intCast(slices);
-    // Slant: slices triangles.  Bottom cap: slices triangles.
-    const tri_count: usize = slices_u + slices_u;
-    const arrs: FlatMeshArrays = try allocFlatMeshArrays(gpa, tri_count);
-    errdefer gpa.free(arrs.verts);
-    errdefer gpa.free(arrs.norms);
-    errdefer gpa.free(arrs.texs);
-    const v: []f32 = arrs.verts;
-    const n: []f32 = arrs.norms;
-    const t: []f32 = arrs.texs;
-
-    const slant_len: f32 = @sqrt(radius * radius + height * height);
-    const ny_factor: f32 = radius / slant_len;
-    const ny: f32 = ny_factor; // y-component of slant normal (constant around)
-    const nxz_scale: f32 = height / slant_len;
-
-    var idx: usize = 0;
-    var si: usize = 0;
-    while (si < slices_u) : (si += 1) {
-        const ut0: f32 = float(si) / float(slices_u);
-        const ut1: f32 = float(si + 1) / float(slices_u);
-        const th0: f32 = ut0 * 2.0 * pi;
-        const th1: f32 = ut1 * 2.0 * pi;
-        const c0 = @cos(th0);
-        const s0 = @sin(th0);
-        const c1 = @cos(th1);
-        const s1 = @sin(th1);
-
-        const apex: Vec = vec(0, height, 0);
-        const b: Vec = vec(radius * c0, 0, radius * s0);
-        const c: Vec = vec(radius * c1, 0, radius * s1);
-        // Slant normal: outward radial × scale + constant Y.
-        const n0: Vec = vec(c0 * nxz_scale, ny, s0 * nxz_scale);
-        const n1: Vec = vec(c1 * nxz_scale, ny, s1 * nxz_scale);
-        const napex: Vec = vec((c0 + c1) * 0.5 * nxz_scale, ny, (s0 + s1) * 0.5 * nxz_scale);
-
-        writeXYZ(v, idx + 0, apex);
-        writeXYZ(n, idx + 0, napex);
-        writeUV(t, idx + 0, (ut0 + ut1) * 0.5, 1);
-        writeXYZ(v, idx + 1, c);
-        writeXYZ(n, idx + 1, n1);
-        writeUV(t, idx + 1, ut1, 0);
-        writeXYZ(v, idx + 2, b);
-        writeXYZ(n, idx + 2, n0);
-        writeUV(t, idx + 2, ut0, 0);
-        idx += 3;
-    }
-
-    // Bottom cap.
-    si = 0;
-    while (si < slices_u) : (si += 1) {
-        const ut0: f32 = float(si) / float(slices_u);
-        const ut1: f32 = float(si + 1) / float(slices_u);
-        const th0: f32 = ut0 * 2.0 * pi;
-        const th1: f32 = ut1 * 2.0 * pi;
-        const a: Vec = vec(0, 0, 0);
-        const b: Vec = vec(radius * @cos(th0), 0, radius * @sin(th0));
-        const c: Vec = vec(radius * @cos(th1), 0, radius * @sin(th1));
-        const dn: Vec = vec(0, -1, 0);
-        writeXYZ(v, idx + 0, a);
-        writeXYZ(n, idx + 0, dn);
-        writeUV(t, idx + 0, 0.5, 0.5);
-        writeXYZ(v, idx + 1, c);
-        writeXYZ(n, idx + 1, dn);
-        writeUV(t, idx + 1, @cos(th1) * 0.5 + 0.5, @sin(th1) * 0.5 + 0.5);
-        writeXYZ(v, idx + 2, b);
-        writeXYZ(n, idx + 2, dn);
-        writeUV(t, idx + 2, @cos(th0) * 0.5 + 0.5, @sin(th0) * 0.5 + 0.5);
-        idx += 3;
-    }
-
-    mesh.vertices = v.ptr;
-    mesh.normals = n.ptr;
-    mesh.texcoords = t.ptr;
-    mesh.vertexCount = @intCast(tri_count * 3);
-    mesh.triangleCount = @intCast(tri_count);
-    try uploadMesh(gpa, &mesh, false);
-    return mesh;
-}
-
-/// Torus: major radius `radius`, tube thickness `size`.  `rad_seg` is
-/// the segment count along the major circle, `sides` along the tube.
-pub fn genMeshTorus(
-    gpa: Allocator,
-    radius: f32,
-    size: f32,
-    rad_seg: i32,
-    sides: i32,
-) Allocator.Error!Mesh {
-    var mesh: Mesh = std.mem.zeroes(Mesh);
-    if (rad_seg < 3 or sides < 3) {
-        return mesh;
-    }
-
-    const seg_u: usize = @intCast(rad_seg);
-    const sides_u: usize = @intCast(sides);
-    const tri_count: usize = seg_u * sides_u * 2;
-    const arrs: FlatMeshArrays = try allocFlatMeshArrays(gpa, tri_count);
-    errdefer gpa.free(arrs.verts);
-    errdefer gpa.free(arrs.norms);
-    errdefer gpa.free(arrs.texs);
-    const v: []f32 = arrs.verts;
-    const n: []f32 = arrs.norms;
-    const t: []f32 = arrs.texs;
-
-    var idx: usize = 0;
-    for (0..seg_u) |i| {
-        const ut0: f32 = float(i) / float(seg_u);
-        const ut1: f32 = float(i + 1) / float(seg_u);
-        const a0: f32 = ut0 * 2.0 * pi;
-        const a1: f32 = ut1 * 2.0 * pi;
-        for (0..sides_u) |j| {
-            const vt0: f32 = float(j) / float(sides_u);
-            const vt1: f32 = float(j + 1) / float(sides_u);
-            const b0: f32 = vt0 * 2.0 * pi;
-            const b1: f32 = vt1 * 2.0 * pi;
-
-            const aV: Vec = torusPoint(radius, size, a0, b0);
-            const bV: Vec = torusPoint(radius, size, a1, b0);
-            const cV: Vec = torusPoint(radius, size, a1, b1);
-            const dV: Vec = torusPoint(radius, size, a0, b1);
-
-            const an: Vec = torusNormal(a0, b0);
-            const bn: Vec = torusNormal(a1, b0);
-            const cn: Vec = torusNormal(a1, b1);
-            const dn: Vec = torusNormal(a0, b1);
-
-            writeXYZ(v, idx + 0, aV);
-            writeXYZ(n, idx + 0, an);
-            writeUV(t, idx + 0, ut0, vt0);
-            writeXYZ(v, idx + 1, cV);
-            writeXYZ(n, idx + 1, cn);
-            writeUV(t, idx + 1, ut1, vt1);
-            writeXYZ(v, idx + 2, bV);
-            writeXYZ(n, idx + 2, bn);
-            writeUV(t, idx + 2, ut1, vt0);
-            writeXYZ(v, idx + 3, aV);
-            writeXYZ(n, idx + 3, an);
-            writeUV(t, idx + 3, ut0, vt0);
-            writeXYZ(v, idx + 4, dV);
-            writeXYZ(n, idx + 4, dn);
-            writeUV(t, idx + 4, ut0, vt1);
-            writeXYZ(v, idx + 5, cV);
-            writeXYZ(n, idx + 5, cn);
-            writeUV(t, idx + 5, ut1, vt1);
-            idx += 6;
-        }
-    }
-
-    mesh.vertices = v.ptr;
-    mesh.normals = n.ptr;
-    mesh.texcoords = t.ptr;
-    mesh.vertexCount = @intCast(tri_count * 3);
-    mesh.triangleCount = @intCast(tri_count);
-    try uploadMesh(gpa, &mesh, false);
-    return mesh;
-}
-
-/// Trefoil knot mesh.  `radius` is the dominant scale; `size` is the
-/// tube radius.  rad_seg = curve sample count, sides = tube sides.
-pub fn genMeshKnot(
-    gpa: Allocator,
-    radius: f32,
-    size: f32,
-    rad_seg: i32,
-    sides: i32,
-) Allocator.Error!Mesh {
-    var mesh: Mesh = std.mem.zeroes(Mesh);
-    if (rad_seg < 8 or sides < 3) {
-        return mesh;
-    }
-
-    const seg_u: usize = @intCast(rad_seg);
-    const sides_u: usize = @intCast(sides);
-    const tri_count: usize = seg_u * sides_u * 2;
-    const arrs: FlatMeshArrays = try allocFlatMeshArrays(gpa, tri_count);
-    errdefer gpa.free(arrs.verts);
-    errdefer gpa.free(arrs.norms);
-    errdefer gpa.free(arrs.texs);
-    const v: []f32 = arrs.verts;
-    const n: []f32 = arrs.norms;
-    const t: []f32 = arrs.texs;
-
-    var idx: usize = 0;
-    for (0..seg_u) |i| {
-        const ut0: f32 = float(i) / float(seg_u);
-        const ut1: f32 = float(i + 1) / float(seg_u);
-        const t0: f32 = ut0 * 2.0 * pi;
-        const t1: f32 = ut1 * 2.0 * pi;
-
-        // Trefoil center curve + tangent + a perpendicular frame.
-        const cf0: KnotFrame = trefoilFrame(t0, radius);
-        const cf1: KnotFrame = trefoilFrame(t1, radius);
-
-        for (0..sides_u) |j| {
-            const vt0: f32 = float(j) / float(sides_u);
-            const vt1: f32 = float(j + 1) / float(sides_u);
-            const a0: f32 = vt0 * 2.0 * pi;
-            const a1: f32 = vt1 * 2.0 * pi;
-
-            const aP: Vec = ringVert(cf0, size, a0);
-            const bP: Vec = ringVert(cf1, size, a0);
-            const cP: Vec = ringVert(cf1, size, a1);
-            const dP: Vec = ringVert(cf0, size, a1);
-
-            const aN: Vec = ringNorm(cf0, a0);
-            const bN: Vec = ringNorm(cf1, a0);
-            const cN: Vec = ringNorm(cf1, a1);
-            const dN: Vec = ringNorm(cf0, a1);
-
-            writeXYZ(v, idx + 0, aP);
-            writeXYZ(n, idx + 0, aN);
-            writeUV(t, idx + 0, ut0, vt0);
-            writeXYZ(v, idx + 1, cP);
-            writeXYZ(n, idx + 1, cN);
-            writeUV(t, idx + 1, ut1, vt1);
-            writeXYZ(v, idx + 2, bP);
-            writeXYZ(n, idx + 2, bN);
-            writeUV(t, idx + 2, ut1, vt0);
-            writeXYZ(v, idx + 3, aP);
-            writeXYZ(n, idx + 3, aN);
-            writeUV(t, idx + 3, ut0, vt0);
-            writeXYZ(v, idx + 4, dP);
-            writeXYZ(n, idx + 4, dN);
-            writeUV(t, idx + 4, ut0, vt1);
-            writeXYZ(v, idx + 5, cP);
-            writeXYZ(n, idx + 5, cN);
-            writeUV(t, idx + 5, ut1, vt1);
-            idx += 6;
-        }
-    }
-
-    mesh.vertices = v.ptr;
-    mesh.normals = n.ptr;
-    mesh.texcoords = t.ptr;
-    mesh.vertexCount = @intCast(tri_count * 3);
-    mesh.triangleCount = @intCast(tri_count);
-    try uploadMesh(gpa, &mesh, false);
-    return mesh;
 }
 
 /// Convert any uncompressed Image to a flat RGBA Color slice,
@@ -5057,7 +5857,7 @@ pub fn loadImageColors(
     const src8: [*c]const u8 = @ptrCast(@alignCast(image.data));
     const src16: [*c]const u16 = @ptrCast(@alignCast(image.data));
 
-    const fmt: @import("types.zig").PixelFormat = @enumFromInt(image.format);
+    const fmt: types.PixelFormat = @fromBackingInt(@intCast(image.format));
     switch (fmt) {
         .uncompressed_grayscale => {
             for (out, 0..) |*p, i| {
@@ -5135,10 +5935,6 @@ pub fn loadImageColors(
     return out;
 }
 
-fn close(a: f32, b: f32) bool {
-    return @abs(a - b) <= eps;
-}
-
 // ===========================================================================
 // STRUCTURE-PLAN S2 (t1177): former src/pbr3d.zig folded in as a
 // section namespace.  One-way deps only; the umbrella re-exports keep the
@@ -5152,7 +5948,7 @@ pub const pbr3d = struct {
     // loads a glTF binary into a `Model` (geometry + the five PBR maps), and draws
     // models with a simple beginFrame / draw / endFrame loop.
     //
-    // The whole WebGPU stack -- the shader pipeline, the stage-segregated binding
+    // The whole WebGPU stack -- the shader_runtime pipeline, the stage-segregated binding
     // model, the runtime layers -- is documented atop `src/zimr.zig`; read
     // that first. This file only adds the PBR-model convenience layer on top.
     //
@@ -5170,16 +5966,15 @@ pub const pbr3d = struct {
     //    shared per-renderer buffers that `draw` rewrites each call, so two draws
     //    in one frame would collapse to the last write. Multi-model wants per-model
     //    buffers or dynamic offsets.
-    //  * Shadows are gated off (the shader supports a shadow map; wiring one is
+    //  * Shadows are gated off (the shader_runtime supports a shadow map; wiring one is
     //    future work).
     //  * `loadGltf` leaks the temporary CPU-side mesh arrays from `meshesFromGltf`
     //    -- fine for a handful of one-shot model loads.
     //  * Only embedded images (buffer-view backed) decode; an external-`uri` image
     //    falls back to the neutral texture.
 
-    const codecs = @import("codecs.zig");
     const gpu_iface = @import("gpu_iface.zig");
-    // For drawInApp: composite the PBR result into the app's own render pass
+    // For drawIntoPass: composite the PBR result into the app's own render pass
     // (so a 2D blit + splitter can overlay it). One-way dependency; wgpu_app does
     // not import pbr3d.
 
@@ -5208,7 +6003,7 @@ pub const pbr3d = struct {
         }
     }
 
-    // The PBR shader caps these light counts; the host Ubo mirrors the sizes.
+    // The PBR shader_runtime caps these light counts; the host Ubo mirrors the sizes.
     pub const max_directional_lights: usize = @import("shaders/pbr_common_io.zig").max_directional_lights;
     pub const max_point_lights: usize = @import("shaders/pbr_common_io.zig").max_point_lights;
 
@@ -5235,12 +6030,33 @@ pub const pbr3d = struct {
         tangent: [4]f32 = .{ 1, 0, 0, 1 },
     };
 
-    /// A single directional light plus scene ambient. The shader also supports
+    /// A single directional light plus scene ambient. The shader_runtime also supports
     /// point lights + fog; this v1 leaves those off for a clean default.
     pub const Light = struct {
         dir: [3]f32 = .{ -0.4, -0.8, -0.5 },
         color: [3]f32 = .{ 1, 1, 1 },
         ambient: [3]f32 = .{ 0.12, 0.12, 0.14 },
+    };
+
+    /// A texture handed to `loadMesh` with EXPLICIT ownership. `.owned(tex)`
+    /// means the resulting `Model` frees `tex` on `deinit` (the common case —
+    /// one texture, one model). `.shared(tex)` means the caller keeps ownership
+    /// and frees it ONCE itself, so the SAME texture can back several models
+    /// without a double-free (e.g. one tiled floor texture under a "normal map
+    /// on vs off" A/B pair). Making this visible at the call site is the point:
+    /// a bare `WgpuTexture` used to be silently owned, so sharing it across two
+    /// `loadMesh` calls double-freed it on the second `Model.deinit`.
+    pub const TextureRef = struct {
+        texture: WgpuTexture,
+        owns: bool,
+
+        pub fn owned(texture: WgpuTexture) TextureRef {
+            return .{ .texture = texture, .owns = true };
+        }
+
+        pub fn shared(texture: WgpuTexture) TextureRef {
+            return .{ .texture = texture, .owns = false };
+        }
     };
 
     /// The five PBR maps plus the glTF scalar factors for one model.
@@ -5265,6 +6081,12 @@ pub const pbr3d = struct {
         index_count: u32,
         material: pbr3d.Material,
         material_bind_group: wgpu.BindGroupHandle,
+        /// Which of the material's five maps THIS model frees on deinit, in the
+        /// order [base_color, metallic_roughness, normal, occlusion, emissive].
+        /// Defaults to all-owned (loadGltf/loadObj own every map); `loadMesh`
+        /// clears a slot to false when the caller passed a `TextureRef.shared`
+        /// so a texture shared across models is freed once by the caller.
+        owned_maps: [5]bool = @splat(true),
 
         pub fn deinit(self: *@This()) void {
             if (self.vertex_buffer != .invalid) {
@@ -5276,11 +6098,21 @@ pub const pbr3d = struct {
             if (self.material_bind_group != .invalid) {
                 wgpu.destroyBindGroup(self.material_bind_group);
             }
-            self.material.base_color.deinit();
-            self.material.metallic_roughness.deinit();
-            self.material.normal.deinit();
-            self.material.occlusion.deinit();
-            self.material.emissive.deinit();
+            if (self.owned_maps[0]) {
+                self.material.base_color.deinit();
+            }
+            if (self.owned_maps[1]) {
+                self.material.metallic_roughness.deinit();
+            }
+            if (self.owned_maps[2]) {
+                self.material.normal.deinit();
+            }
+            if (self.owned_maps[3]) {
+                self.material.occlusion.deinit();
+            }
+            if (self.owned_maps[4]) {
+                self.material.emissive.deinit();
+            }
         }
     };
 
@@ -5392,7 +6224,7 @@ pub const pbr3d = struct {
     };
 
     // ============================================================================
-    // FsUbo — the shader's @group(2) @binding(0) uniform block, taken DIRECTLY
+    // FsUbo — the shader_runtime's @group(2) @binding(0) uniform block, taken DIRECTLY
     // from the schema (`src/shaders/pbr_fs_io.zig`).  This used to be a
     // hand-maintained byte-mirror with a "MUST agree" comment; pbr3d and the
     // io file live in the same module, so the mirror is gone and host-vs-WGSL
@@ -5413,7 +6245,7 @@ pub const pbr3d = struct {
     // in `pbr_fs_io.Samplers` becomes a texture at binding N and a paired sampler
     // at N+1 (the solver spaces them 2 apart). Hand-rolling "@0..5 textures,
     // @6..11 samplers" here silently drifted from the interleaved scheme the
-    // codegen emits — Dawn rejected the mismatch ("binding type in the shader
+    // codegen emits — Dawn rejected the mismatch ("binding type in the shader_runtime
     // (sampler) doesn't match the layout (texture)"). Deriving both the layout
     // and the bind group from `solveLayout` makes host-vs-WGSL drift impossible,
     // exactly like FsUbo above.
@@ -5445,7 +6277,7 @@ pub const pbr3d = struct {
         break :blk out;
     };
 
-    // One interleaved vertex buffer feeds five shader locations. The offsets are
+    // One interleaved vertex buffer feeds five shader_runtime locations. The offsets are
     // the byte positions of each `Vertex` field.
     const vertex_layout = gpu.VertexBufferLayout{
         .array_stride = @sizeOf(Vertex),
@@ -5642,16 +6474,16 @@ pub const pbr3d = struct {
             wgpu.destroyBindGroupLayout(material_layout);
             wgpu.destroyBindGroupLayout(fs_layout);
 
-            // ---- shader modules + the render pipeline ----
+            // ---- shader_runtime modules + the render pipeline ----
             // Debug-only safety net: independently reflect the embedded FS WGSL's
             // @group/@binding declarations and compare them, cell by cell, to the
             // host layout `solveLayout(PbrFsIo)` produced (the same authority
             // `material_tex_bindings` uses). If they ever disagree — the exact
-            // drift that shipped as Dawn's opaque "binding type in the shader
+            // drift that shipped as Dawn's opaque "binding type in the shader_runtime
             // doesn't match the layout" — this names the cell in the console at
             // pipeline creation instead of leaving it to Dawn's cascade. Log-only
             // (never crashes) and compiled out of release builds.
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 if (shader_introspect.layoutWgslMismatch(gpa, PbrFsIo, opts.fs_wgsl) catch null) |mm| {
                     std.log.warn(
                         "pbr3d host/WGSL layout drift: @group({d}) @binding({d}) '{s}' is {s} " ++
@@ -5721,13 +6553,17 @@ pub const pbr3d = struct {
             });
             wgpu.queueWriteBuffer(self.queue, vertex_buffer, 0, std.mem.sliceAsBytes(vertices));
 
-            const index_bytes: u64 = index_count * @sizeOf(u16);
-            const index_buffer: wgpu.BufferHandle = wgpu.createBuffer(self.device, .{
-                .size = index_bytes,
-                .usage = .{ .index = true, .copy_dst = true },
-                .label = "pbr3d_ibo",
-            });
-            wgpu.queueWriteBuffer(self.queue, index_buffer, 0, std.mem.sliceAsBytes(indices));
+            // Same alignment rule as `ensureMeshGpu`: an odd index count is not a multiple
+            // of four bytes. `createBufferInit` pads, so a glTF with an odd triangle count
+            // loads rather than asserting.
+            const index_bytes: u64 = wgpu.alignedBufferSize(index_count * @sizeOf(u16));
+            const index_buffer: wgpu.BufferHandle = wgpu.createBufferInit(
+                self.device,
+                self.queue,
+                std.mem.sliceAsBytes(indices),
+                .{ .index = true, .copy_dst = true },
+                "pbr3d_ibo",
+            );
 
             // ---- resolve the material: scalar factors first, then the maps ----
             const source_material: ?codecs.gltf.Material = firstPrimitiveMaterial(document);
@@ -5812,7 +6648,118 @@ pub const pbr3d = struct {
             }
 
             pageLog("pbr3d.loadObj: verts={d} indices={d}", .{ vertex_count, indices.len });
-            return self.uploadDefaultMesh(vertices, indices);
+            const default_material: pbr3d.Material = .{
+                .base_color = self.white_texture,
+                .metallic_roughness = self.default_mr_texture,
+                .normal = self.flat_normal_texture,
+                .occlusion = self.white_texture,
+                .emissive = self.white_texture,
+            };
+            return self.uploadMeshMat(vertices, indices, default_material);
+        }
+
+        /// Build a drawable `Model` from a procedurally-generated `types.Mesh`
+        /// (e.g. `genMeshSphere` + `genMeshTangents`) with CALLER-SUPPLIED PBR
+        /// maps — the non-glTF path for procedural geometry (the normal-map
+        /// demo). Maps left null fall back to the renderer's neutral textures
+        /// (white base, flat tangent-space normal). Read tangents from
+        /// `mesh.tangents` if present (run `genMeshTangents` FIRST for correct
+        /// normal mapping), else default them. Defaults to a dielectric
+        /// (metallic 0) so the surface reads like painted plaster, not metal.
+        pub fn loadMesh(
+            self: *Renderer,
+            mesh: types.Mesh,
+            opts: struct {
+                base_color: ?TextureRef = null,
+                normal: ?TextureRef = null,
+                base_color_factor: [4]f32 = .{ 1, 1, 1, 1 },
+                metallic_factor: f32 = 0,
+                roughness_factor: f32 = 0.6,
+            },
+        ) !pbr3d.Model {
+            const vc: usize = @intCast(mesh.vertexCount);
+            const ic: usize = @intCast(mesh.triangleCount * 3);
+            if (vc == 0 or ic == 0 or mesh.vertices == null or mesh.normals == null) {
+                return error.EmptyMesh;
+            }
+            const has_uv: bool = mesh.texcoords != null;
+            const has_tan: bool = mesh.tangents != null;
+
+            const verts: []Vertex = try self.gpa.alloc(Vertex, vc);
+            defer self.gpa.free(verts);
+            var i: usize = 0;
+            while (i < vc) : (i += 1) {
+                verts[i] = .{
+                    .position = .{ mesh.vertices[i * 3], mesh.vertices[i * 3 + 1], mesh.vertices[i * 3 + 2] },
+                    .tex_coord = if (has_uv) .{ mesh.texcoords[i * 2], mesh.texcoords[i * 2 + 1] } else .{ 0, 0 },
+                    .normal = .{ mesh.normals[i * 3], mesh.normals[i * 3 + 1], mesh.normals[i * 3 + 2] },
+                    .tangent = if (has_tan)
+                        .{
+                            mesh.tangents[i * 4],
+                            mesh.tangents[i * 4 + 1],
+                            mesh.tangents[i * 4 + 2],
+                            mesh.tangents[i * 4 + 3],
+                        }
+                    else
+                        .{ 1, 0, 0, 1 },
+                };
+            }
+
+            const idx: []u16 = try self.gpa.alloc(u16, ic);
+            defer self.gpa.free(idx);
+            i = 0;
+            while (i < ic) : (i += 1) {
+                idx[i] = mesh.indices[i];
+            }
+
+            // Every material texture is OWNED by the Model (Model.deinit frees
+            // all five slots). Unused slots therefore get FRESH 1x1 neutrals,
+            // never the renderer's shared fallbacks — aliasing those here would
+            // make Model.deinit double-free them against renderer.deinit. The
+            // caller likewise transfers ownership of any base_color/normal it
+            // passes, so a texture must not be shared across two loadMesh calls.
+            // Resolve each caller-supplied map to a TextureRef (an unset slot
+            // gets a fresh neutral this model owns). The material binds the raw
+            // texture; the model records who frees it.
+            const base_ref: TextureRef =
+                opts.base_color orelse TextureRef.owned(self.neutralTexture(.{ 255, 255, 255, 255 }, "loadmesh_base"));
+            const normal_ref: TextureRef =
+                opts.normal orelse TextureRef.owned(self.neutralTexture(.{ 128, 128, 255, 255 }, "loadmesh_normal"));
+            const material: pbr3d.Material = .{
+                .base_color = base_ref.texture,
+                .metallic_roughness = self.neutralTexture(.{ 255, 255, 0, 255 }, "loadmesh_mr"),
+                .normal = normal_ref.texture,
+                .occlusion = self.neutralTexture(.{ 255, 255, 255, 255 }, "loadmesh_ao"),
+                .emissive = self.neutralTexture(.{ 0, 0, 0, 255 }, "loadmesh_emissive"),
+                .base_color_factor = opts.base_color_factor,
+                .metallic_factor = opts.metallic_factor,
+                .roughness_factor = opts.roughness_factor,
+            };
+            var model: pbr3d.Model = try self.uploadMeshMat(verts, idx, material);
+            // A `.shared` map is the caller's to free — clear its owned bit so
+            // Model.deinit skips it (the mr/occlusion/emissive neutrals above are
+            // always this model's, so their default-true bits stand).
+            model.owned_maps[0] = base_ref.owns;
+            model.owned_maps[2] = normal_ref.owns;
+            return model;
+        }
+
+        /// A fresh 1x1 neutral texture, one per call, OWNED by whatever material
+        /// binds it. `loadMesh` fills its unused sampler slots with these instead
+        /// of aliasing the renderer's shared `white_texture`/`default_mr_texture`/
+        /// `flat_normal_texture`, so `Model.deinit` frees only per-model textures.
+        fn neutralTexture(self: *Renderer, pixel: [4]u8, label: []const u8) WgpuTexture {
+            const px: [4]u8 = pixel;
+            return WgpuTexture.createFromPixels(self.device, self.queue, .{
+                .pixels = &px,
+                .width = 1,
+                .height = 1,
+                .format = .rgba8_unorm,
+                .mag_filter_linear = false,
+                .min_filter_linear = false,
+                .address_mode = .repeat,
+                .label = label,
+            });
         }
 
         /// Upload an interleaved `Vertex` array + u16 indices to GPU buffers and
@@ -5820,10 +6767,11 @@ pub const pbr3d = struct {
         /// loaders that carry no material of their own (e.g. `loadObj`). Kept
         /// separate from `loadGltf`'s inline upload so that device-tested path
         /// is untouched.
-        fn uploadDefaultMesh(
+        fn uploadMeshMat(
             self: *Renderer,
             vertices: []const Vertex,
             indices: []const u16,
+            material: pbr3d.Material,
         ) !pbr3d.Model {
             const vertex_bytes: u64 = vertices.len * @sizeOf(Vertex);
             const vertex_buffer: wgpu.BufferHandle = wgpu.createBuffer(self.device, .{
@@ -5838,31 +6786,18 @@ pub const pbr3d = struct {
             // the bunny's 208,353) gives 2-mod-4 bytes. Pad the buffer to an
             // even index count — the extra slot is never drawn (index_count
             // below stays the real count).
-            const real_index_count: usize = indices.len;
-            const padded_index_count: usize = real_index_count + (real_index_count & 1);
-            const index_bytes: u64 = padded_index_count * @sizeOf(u16);
-            const index_buffer: wgpu.BufferHandle = wgpu.createBuffer(self.device, .{
-                .size = index_bytes,
-                .usage = .{ .index = true, .copy_dst = true },
-                .label = "pbr3d_obj_ibo",
-            });
-            if (real_index_count != padded_index_count) {
-                const padded: []u16 = try self.gpa.alloc(u16, padded_index_count);
-                defer self.gpa.free(padded);
-                @memcpy(padded[0..real_index_count], indices);
-                padded[real_index_count] = 0;
-                wgpu.queueWriteBuffer(self.queue, index_buffer, 0, std.mem.sliceAsBytes(padded));
-            } else {
-                wgpu.queueWriteBuffer(self.queue, index_buffer, 0, std.mem.sliceAsBytes(indices));
-            }
+            // This site had its own hand-rolled padding — the bug was found here once and
+            // fixed LOCALLY, which left the two identical sites above still broken. Folded
+            // into `createBufferInit` so there is one implementation and no allocation.
+            const index_bytes: u64 = wgpu.alignedBufferSize(indices.len * @sizeOf(u16));
+            const index_buffer: wgpu.BufferHandle = wgpu.createBufferInit(
+                self.device,
+                self.queue,
+                std.mem.sliceAsBytes(indices),
+                .{ .index = true, .copy_dst = true },
+                "pbr3d_obj_ibo",
+            );
 
-            const material: pbr3d.Material = .{
-                .base_color = self.white_texture,
-                .metallic_roughness = self.default_mr_texture,
-                .normal = self.flat_normal_texture,
-                .occlusion = self.white_texture,
-                .emissive = self.white_texture,
-            };
             const material_bind_group: wgpu.BindGroupHandle = try self.buildMaterialBindGroup(material);
 
             const index_count: u32 = @intCast(indices.len);
@@ -5905,7 +6840,7 @@ pub const pbr3d = struct {
             });
             self.pass.queue = frame.queue;
 
-            Backend.setPipeline(&self.pass, shader.RenderPipeline(void, void){ .gpu_handle = self.pipeline });
+            Backend.setPipeline(&self.pass, shader_runtime.RenderPipeline(void, void){ .gpu_handle = self.pipeline });
             Backend.setBindGroup(&self.pass, 0, self.vs_bind_group[0]);
             Backend.setBindGroup(&self.pass, 2, self.fs_bind_group[0]);
         }
@@ -5954,6 +6889,24 @@ pub const pbr3d = struct {
             Backend.setBindGroup(&self.pass, 0, self.vs_bind_group[slot]);
             Backend.setBindGroup(&self.pass, 2, self.fs_bind_group[slot]);
             Backend.setBindGroup(&self.pass, 1, model.material_bind_group);
+            // Guard the whole class of the "3D draws but is invisible" bug: if a
+            // 2D shapes batch is attached to this pass (i.e. we're drawing into
+            // the app's shared screen pass, not pbr3d's own frame pass, where
+            // `batch` is null) it MUST be empty here. Any pending 2D — most
+            // commonly clearViewport's full-screen background quad — is BATCHED
+            // and would flush at endDrawing, AFTER this immediate 3D draw, and
+            // paint over it. beginMode3D flushes before drawing so this holds; if a
+            // future path forgets, this fires headlessly instead of shipping a
+            // silently black model.
+            if (self.pass.batch) |shapes_batch| {
+                assertf(
+                    shapes_batch.vertex_count == 0,
+                    @src(),
+                    "pbr3d immediate 3D draw with {d} pending 2D batch vertices — " ++
+                        "flush the 2D batch first or it paints over the 3D (see drawModel3D / beginMode3D)",
+                    .{shapes_batch.vertex_count},
+                );
+            }
             render_pass.setVertexBuffer(self.pass.pass, .{
                 .slot = 0,
                 .buffer = model.vertex_buffer,
@@ -5995,44 +6948,38 @@ pub const pbr3d = struct {
             self.active_frame = null;
         }
 
-        /// Draw the model into the APP's CURRENT render pass instead of pbr3d
-        /// owning its own frame.  The sanctioned composite pattern wraps this in a
-        /// render-texture pass:
-        ///
-        ///   z.beginTextureMode(gl, rt, clear);   // pass now targets the RTT
-        ///   renderer.drawInApp(gl, desc, model, m);
-        ///   z.endTextureMode(gl);                // fresh backbuffer pass, 2D rebound
-        ///
-        /// `endTextureMode` reopens the backbuffer pass and re-binds the 2D
-        /// pipeline, so pbr3d's pipeline/bind-group state can't leak into later
-        /// 2D draws (the bug the old draw-into-the-frame-pass usage had).  The
-        /// renderer's `surface_format` must match the pass target (the RTT's
-        /// format — `.rgba8_unorm` for `loadRenderTexture`), and the target needs
-        /// a depth attachment matching `depth_format`.  No present here: the
-        /// app's `endDrawing` finishes the frame.
-        pub fn drawInApp(
+        /// Draw a pbr3d model into an ALREADY-OPEN pass, WITHOUT touching the
+        /// 2D batch — the caller owns the 2D↔3D transition. Two callers:
+        /// `wgpu_app.drawModel3D` (the beginMode3D→endMode3D scope, which owns
+        /// the pre-flush AND restore for the shared screen pass — the preferred
+        /// path), and a render texture (helmet_sw: `beginTextureMode` then
+        /// `drawIntoPass(f.gl.pass, …)` then `endTextureMode`, which owns its own
+        /// clear + teardown). Writes the mutated pass state back to `ps` so the
+        /// app's PassState tracker stays honest: a stale tracker is what silently
+        /// disabled the flushBatch layout guard and produced the "resources_bgl
+        /// does not match at group index 1" rejection.
+        pub fn drawIntoPass(
             self: *Renderer,
-            gl: anytype,
+            ps: anytype,
             frame: *gpu.GpuFrame,
             desc: FrameDesc,
             model: pbr3d.Model,
             model_matrix: Mat,
         ) void {
-            // S2: duck-typed `gl` + explicit frame — pbr3d no longer reaches
-            // into wgpu_app (appOf), which would cycle once it lives in draw3d.
             self.active_frame = frame;
             self.frame_desc = desc;
-            // One-shot draw into the app's pass: reset the ring so this draw
-            // takes slot 1 (draw() pre-increments from 0). The initial slot-0
-            // binding below is immediately overridden by draw().
+            // One-shot draw: reset the ring so this draw takes slot 1 (draw()
+            // pre-increments from 0). The slot-0 binding below is immediately
+            // overridden by draw().
             self.ubo_cursor = 0;
             self.ubo_writes_this_frame = 0;
-            self.pass = gl.pass.*;
+            self.pass = ps.*;
             self.pass.queue = frame.queue;
-            Backend.setPipeline(&self.pass, shader.RenderPipeline(void, void){ .gpu_handle = self.pipeline });
+            Backend.setPipeline(&self.pass, shader_runtime.RenderPipeline(void, void){ .gpu_handle = self.pipeline });
             Backend.setBindGroup(&self.pass, 0, self.vs_bind_group[0]);
             Backend.setBindGroup(&self.pass, 2, self.fs_bind_group[0]);
             self.draw(model, model_matrix);
+            ps.* = self.pass;
             self.active_frame = null;
         }
 
@@ -6044,7 +6991,7 @@ pub const pbr3d = struct {
             const light: Light = self.frame_desc.light;
             const camera: Camera = self.frame_desc.camera;
 
-            // Normalize the light direction once; the shader expects a unit vector.
+            // Normalize the light direction once; the shader_runtime expects a unit vector.
             const direction: [3]f32 = light.dir;
             const dir_x_sq: f32 = direction[0] * direction[0];
             const dir_y_sq: f32 = direction[1] * direction[1];
@@ -6498,7 +7445,7 @@ pub const pbr3d = struct {
 pub const draw_points = struct {
     // draw_points.zig — `z.DrawPoints`: zero-copy instanced rendering of points read
     // straight from a GPU storage buffer (the positions a compute kernel wrote). A
-    // tiny instanced pipeline whose vertex shader reads `pos[instance_index]` from the
+    // tiny instanced pipeline whose vertex shader_runtime reads `pos[instance_index]` from the
     // buffer (`var<storage, read>` — vertex-stage storage is allowed read-only) and
     // emits a screen-space quad. No CPU readback: the data never leaves the GPU.
     //
@@ -6509,7 +7456,7 @@ pub const draw_points = struct {
     const WgpuGl = @import("WgpuGl.zig");
 
     // WGSL emitted from `src/shaders/points_vs.zig` + `points_fs.zig` (pure-Zig
-    // @SpirvType → SPIR-V → spv2wgsl), embedded by build.zig's shader
+    // @SpirvType → SPIR-V → spv2wgsl), embedded by build.zig's shader_runtime
     // auto-discovery loop. The storage buffer is read-only (spv2wgsl auto-emits
     // `var<storage, read>` for the vertex stage). Entry point is `entry` for both.
     const points_vs_wgsl = @embedFile("points_vs.wgsl");
@@ -6524,10 +7471,10 @@ pub const draw_points = struct {
 
     // Merged binding schema for `Resources`: the UBO at group 0 binding 0 and
     // the read-only position storage buffer at group 0 binding 1 — the same
-    // layout the VS shader (`points_vs_io.zig`) declares and emits. `Resources`
+    // layout the VS shader_runtime (`points_vs_io.zig`) declares and emits. `Resources`
     // auto-generates the matching bind-group layout + bind group from this, so
     // the host no longer hand-writes them. (Attributes/Builtins live in the
-    // shader's own `_io.zig` and don't bind, so they're omitted here.)
+    // shader_runtime's own `_io.zig` and don't bind, so they're omitted here.)
     const PointsSchema = struct {
         pub const Ubo = Uniforms;
         pub const Storage = struct {
@@ -6543,7 +7490,7 @@ pub const draw_points = struct {
 
     pub const DrawPoints = struct {
         pipeline: wgpu.RenderPipelineHandle,
-        resources: shader.Resources(PointsSchema),
+        resources: shader_runtime.Resources(PointsSchema),
         queue: wgpu.QueueHandle,
         pos_buffer: wgpu.BufferHandle,
 
@@ -6568,7 +7515,7 @@ pub const draw_points = struct {
             // and bind group (UBO at binding 0, positions storage at binding 1)
             // from `PointsSchema`. The host supplies only the caller-owned
             // position buffer; everything else is derived from the schema.
-            const resources = try shader.Resources(PointsSchema).init(gpa, f, .{
+            const resources = try shader_runtime.Resources(PointsSchema).init(gpa, f, .{
                 .positions = .{ .handle = pos_buffer, .size = pos_bytes },
             });
 
@@ -6722,7 +7669,7 @@ pub const draw_points = struct {
 
     pub const FluidDiscs = struct {
         pipeline: wgpu.RenderPipelineHandle,
-        resources: shader.Resources(FluidSchema),
+        resources: shader_runtime.Resources(FluidSchema),
         queue: wgpu.QueueHandle,
         dom_w: f32,
         dom_h: f32,
@@ -6751,7 +7698,7 @@ pub const draw_points = struct {
             // bind group (UBO@0, positions@1, density@2) from `FluidSchema`.
             // The host supplies the two caller-owned storage regions (handle +
             // offset + size); everything else is derived from the schema.
-            const resources = try shader.Resources(FluidSchema).init(gpa, f, .{
+            const resources = try shader_runtime.Resources(FluidSchema).init(gpa, f, .{
                 .positions = .{ .handle = pos.handle, .offset = pos.offset, .size = pos.size },
                 .density = .{ .handle = density.handle, .offset = density.offset, .size = density.size },
             });
@@ -6919,5 +7866,1841 @@ test "pbr3d material bindings are the schema-derived interleaved pairs" {
     for (pbr3d.material_tex_bindings) |b| {
         try expect(@as(i64, b) >= prev + 2);
         prev = @as(i64, b);
+    }
+}
+
+// ===========================================================================
+// BVH skeletal animation
+// ===========================================================================
+
+/// A parsed BVH turned into the engine's own animation types.
+///
+/// `codecs.bvh` yields the FILE's structure — joints with per-joint channel lists and a flat
+/// motion matrix. This turns that into `ModelSkeleton` + `ModelAnimation`, which is what the
+/// rest of the engine already speaks: `ModelAnimation.keyframePoses[k]` is a
+/// `Transform[boneCount]`, i.e. exactly one local TRS per joint per frame. A mocap clip and a
+/// glTF character animation become the same kind of thing, so nothing downstream needs to know
+/// which file it came from.
+///
+/// The skeleton is NOT freed by `unloadModel`: that path uses `libc.free`, because it exists
+/// for models raylib's C loader allocated. This one was allocated with a Zig allocator, so it
+/// pairs with `unloadBvhSkeleton` below. Mixing them is a real crash, not a style question.
+pub const BvhSkeletalClip = struct {
+    skeleton: types.ModelSkeleton,
+    animation: ModelAnimation,
+    /// Seconds per frame, straight from the file. 60 fps and 120 fps both occur in practice,
+    /// so a viewer must not assume either.
+    frame_time: f32,
+    /// Parallel to `skeleton.bones`: true where the joint is a BVH `End Site`. End sites carry
+    /// no channels and exist so the bone out to a fingertip can be drawn — a renderer usually
+    /// wants to style them differently, and nothing in `BoneInfo` can express that.
+    end_site: []bool,
+
+    pub fn boneCount(self: BvhSkeletalClip) usize {
+        return @intCast(@max(self.skeleton.boneCount, 0));
+    }
+
+    /// Bone `i`'s name as a slice, NUL trimmed.
+    ///
+    /// `ModelSkeleton.bones` is `[*c]BoneInfo` for raylib compatibility, and a `&x.name`
+    /// through it is an ALLOWZERO pointer that `std.mem.sliceTo` will not take. Every caller
+    /// would otherwise repeat the same `@ptrCast(@alignCast(...))` dance, so it lives here.
+    pub fn boneName(self: BvhSkeletalClip, i: usize) []const u8 {
+        const bones: [*]const types.BoneInfo = @ptrCast(@alignCast(self.skeleton.bones));
+        return std.mem.sliceTo(&bones[i].name, 0);
+    }
+
+    /// Local TRS for bone `i` at `keyframe`, clamped to the last frame.
+    pub fn pose(self: BvhSkeletalClip, keyframe: usize, i: usize) types.Transform {
+        const kc: usize = @intCast(@max(self.animation.keyframeCount, 0));
+        const k: usize = if (keyframe >= kc) kc - 1 else keyframe;
+        const p: [*]const types.Transform = @ptrCast(@alignCast(self.animation.keyframePoses[k]));
+        return p[i];
+    }
+};
+
+/// Copy `name` into a `BoneInfo.name` ([32]u8, NUL-terminated), warning when it does not fit.
+///
+/// ★ TRUNCATION IS ONLY HALF THE PROBLEM. Cutting `mixamorig:LeftHandMiddle4_end` to 31 bytes
+/// is harmless right up until a SECOND name truncates to the same 31 bytes — at which point two
+/// distinct joints share an identity and any later name-based retargeting silently binds the
+/// wrong one. So the caller checks for collisions separately; this only reports the overflow.
+fn bvhCopyBoneName(dst: *[32]u8, name: []const u8, index: usize) void {
+    dst.* = @splat(0);
+    const capacity: usize = dst.len - 1; // keep room for the NUL
+    if (name.len > capacity) {
+        // `debug`, not `warn`: overflow is the NORMAL case for a Mixamo rig - every
+        // `mixamorig:`-prefixed finger joint trips it - so at `warn` this fired per joint per
+        // load and buried the test output. The thing actually worth warning about is a
+        // COLLISION between two truncated names, which the caller reports separately; see the
+        // note above. Debug builds still print this, so an example author sees it.
+        std.log.debug(
+            "bvh: joint {d} name \"{s}\" is {d} bytes; BoneInfo.name holds {d} - truncated to \"{s}\"",
+            .{ index, name, name.len, capacity, name[0..capacity] },
+        );
+        @memcpy(dst[0..capacity], name[0..capacity]);
+        return;
+    }
+    @memcpy(dst[0..name.len], name);
+}
+
+/// Build a `BvhSkeletalClip` from parsed BVH data. Caller owns it; free with
+/// `unloadBvhSkeletalClip`.
+///
+/// Sampling follows the format's own semantics, which are per-joint and data-driven: position
+/// channels OVERWRITE a component of the joint's OFFSET, rotation channels COMPOSE onto an
+/// accumulator in the order the file lists them. Both real fixtures disagree about that order
+/// (ZYX vs XYZ) and about which joints carry position channels, so neither may be assumed.
+/// Scale every LENGTH a clip carries: each bone's rest offset and every frame's translation.
+///
+/// ★ ROTATIONS ARE UNTOUCHED — scaling moves joints, it never reorients them. That is the same
+/// property GMR relies on to fit a tall human's motion to a short robot, and it is why a scaled
+/// clip still reads as the same motion.
+///
+/// ★★ A CLIP AND THE MESH IT DRIVES MUST SHARE A SCALE. Skinning composes the mesh, the bind
+/// pose and the animated pose; scaling one without the others produces a mesh that explodes or
+/// vanishes. `LoadFbxModelOptions.scale` handles all three for an FBX; a BVH clip loaded
+/// separately — as `geno_dance` does for the dance capture — needs this call to match.
+///
+/// Use `0.01` for a centimetre capture, which is what BVH conventionally is, to reach the
+/// metres the rest of zimr and all of `robot.zig` speak.
+pub fn scaleBvhSkeletalClip(clip: BvhSkeletalClip, scale: f32) void {
+    if (scale == 1.0) {
+        return;
+    }
+    const k: Vec = @splat(scale);
+    const n: usize = clip.boneCount();
+    // ★ `BoneInfo` carries only a name and a parent — the rest OFFSETS live in `bindPose`,
+    // which is where a bone's length actually is.
+    if (clip.skeleton.bindPose) |bind| {
+        for (bind[0..n]) |*t| {
+            t.translation *= k;
+        }
+    }
+    const frames: usize = @intCast(@max(clip.animation.keyframeCount, 0));
+    if (clip.animation.keyframePoses) |poses| {
+        for (0..frames) |f| {
+            if (poses[f]) |pose| {
+                for (pose[0..n]) |*t| {
+                    t.translation *= k;
+                }
+            }
+        }
+    }
+}
+
+pub fn loadBvhSkeletalClip(
+    gpa: Allocator,
+    data: codecs.bvh.Data,
+) errors.LoadError!BvhSkeletalClip {
+    const bone_count: usize = data.joints.len;
+    if (bone_count == 0 or bone_count > @as(usize, @intCast(std.math.maxInt(i32)))) {
+        return errors.LoadError.InvalidDimensions;
+    }
+
+    const bones: []types.BoneInfo = gpa.alloc(types.BoneInfo, bone_count) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(bones);
+    const end_site: []bool = gpa.alloc(bool, bone_count) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(end_site);
+
+    for (data.joints, 0..) |j, i| {
+        bvhCopyBoneName(&bones[i].name, j.name, i);
+        bones[i].parent = j.parent;
+        end_site[i] = j.end_site;
+    }
+
+    // Collision check, separate from truncation: same 31 bytes means two joints now answer to
+    // one name. Reported per pair so the message names the joints, not just the count.
+    for (0..bone_count) |a| {
+        for (a + 1..bone_count) |b| {
+            if (std.mem.eql(u8, &bones[a].name, &bones[b].name)) {
+                std.log.warn(
+                    "bvh: joints {d} (\"{s}\") and {d} (\"{s}\") share the truncated name \"{s}\" — " ++
+                        "name-based lookup cannot tell them apart",
+                    .{ a, data.joints[a].name, b, data.joints[b].name, std.mem.sliceTo(&bones[a].name, 0) },
+                );
+            }
+        }
+    }
+
+    // Bind pose: each joint at its OFFSET with identity rotation. This is the rest skeleton,
+    // and it is meaningful even for a file whose every joint has position channels — the
+    // offsets are still what the up-axis heuristic reads.
+    const bind: []types.Transform = gpa.alloc(types.Transform, bone_count) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(bind);
+    for (data.joints, 0..) |j, i| {
+        bind[i] = .{
+            .translation = vec(j.offset[0], j.offset[1], j.offset[2]),
+            .rotation = quat_identity,
+            .scale = vec(1, 1, 1),
+        };
+    }
+
+    var anim: ModelAnimation = .{ .name = @splat(0), .boneCount = @intCast(bone_count) };
+    const anim_name: []const u8 = "bvh";
+    @memcpy(anim.name[0..anim_name.len], anim_name);
+    anim.keyframeCount = @intCast(data.frame_count);
+
+    const poses: []types.ModelAnimPose = gpa.alloc(types.ModelAnimPose, data.frame_count) catch
+        return errors.LoadError.OutOfMemory;
+    for (poses) |*p| {
+        p.* = null; // cleared first so the errdefer below can free a partial build safely
+    }
+    anim.keyframePoses = poses.ptr;
+    errdefer {
+        for (poses) |p| {
+            if (p != null) {
+                const ptr: [*]types.Transform = @ptrCast(@alignCast(p));
+                gpa.free(ptr[0..bone_count]);
+            }
+        }
+        gpa.free(poses);
+    }
+
+    for (0..data.frame_count) |f| {
+        const pose: []types.Transform = gpa.alloc(types.Transform, bone_count) catch
+            return errors.LoadError.OutOfMemory;
+        var cursor: usize = 0;
+        for (data.joints, 0..) |j, i| {
+            var pos: [3]f32 = j.offset;
+            var rot: Quat = quat_identity;
+            for (j.channels) |c| {
+                const v: f32 = data.motion[f * data.channel_count + cursor];
+                cursor += 1;
+                switch (c) {
+                    .x_position => pos[0] = v,
+                    .y_position => pos[1] = v,
+                    .z_position => pos[2] = v,
+                    .x_rotation => rot = zm.qmul(rot, zm.quatFromAxisAngle(vec(1, 0, 0), radFromDeg(v))),
+                    .y_rotation => rot = zm.qmul(rot, zm.quatFromAxisAngle(vec(0, 1, 0), radFromDeg(v))),
+                    .z_rotation => rot = zm.qmul(rot, zm.quatFromAxisAngle(vec(0, 0, 1), radFromDeg(v))),
+                }
+            }
+            pose[i] = .{
+                .translation = vec(pos[0], pos[1], pos[2]),
+                .rotation = rot,
+                .scale = vec(1, 1, 1),
+            };
+        }
+        // One cursor walks the whole row across every joint; end sites consume nothing. If
+        // this does not land exactly on the row end, the file and the parse disagree.
+        assert(cursor == data.channel_count, @src());
+        poses[f] = pose.ptr;
+    }
+
+    return .{
+        .skeleton = .{
+            .boneCount = @intCast(bone_count),
+            .bones = bones.ptr,
+            .bindPose = bind.ptr,
+        },
+        .animation = anim,
+        .frame_time = data.frame_time,
+        .end_site = end_site,
+    };
+}
+
+/// Free a clip built by `loadBvhSkeletalClip`. Do NOT pass it to `unloadModel` — that frees
+/// through libc.
+pub fn unloadBvhSkeletalClip(gpa: Allocator, clip: BvhSkeletalClip) void {
+    const bc: usize = clip.boneCount();
+    const kc: usize = @intCast(@max(clip.animation.keyframeCount, 0));
+    for (0..kc) |k| {
+        if (clip.animation.keyframePoses[k] != null) {
+            const ptr: [*]types.Transform = @ptrCast(@alignCast(clip.animation.keyframePoses[k]));
+            gpa.free(ptr[0..bc]);
+        }
+    }
+    if (clip.animation.keyframePoses != null) {
+        const kp: [*]types.ModelAnimPose = @ptrCast(@alignCast(clip.animation.keyframePoses));
+        gpa.free(kp[0..kc]);
+    }
+    if (clip.skeleton.bindPose != null) {
+        const bp: [*]types.Transform = @ptrCast(@alignCast(clip.skeleton.bindPose));
+        gpa.free(bp[0..bc]);
+    }
+    if (clip.skeleton.bones != null) {
+        const bo: [*]types.BoneInfo = @ptrCast(@alignCast(clip.skeleton.bones));
+        gpa.free(bo[0..bc]);
+    }
+    gpa.free(clip.end_site);
+}
+
+/// Global joint positions and rotations for one keyframe.
+///
+/// A single forward pass: the BVH parser appends depth-first, so a joint's parent always has a
+/// lower index and no sorting or recursion is needed. `out_positions` and `out_rotations` must
+/// both hold `boneCount` entries.
+/// Forward kinematics from EXPLICIT local rotations, using a skeleton's own rest offsets.
+///
+/// ── ★★★ WHY THIS IS DIFFERENT FROM `bvhForwardKinematics` ──
+///
+/// That one reads a keyframe out of the clip, and on a BVH like `dance1` — where EVERY joint
+/// carries position channels — it uses each frame's stored TRANSLATION. That is right for
+/// playing a clip on its own skeleton and WRONG for a retarget: the source's translations
+/// encode the source's bone lengths, so using them would give the target the source's
+/// proportions and defeat the whole exercise.
+///
+/// ★ Here every bone's offset comes from the TARGET's own rest pose, and only the ROOT takes a
+/// translation — the one the caller scaled with `codecs.bvh.scaleRootPosition`. The result is
+/// the source's motion on the target's body.
+pub fn bvhForwardKinematicsFromRotations(
+    clip: BvhSkeletalClip,
+    root_translation: Vec,
+    local_rotations: []const Quat,
+    out_positions: []Vec,
+    out_rotations: []Quat,
+) void {
+    const bone_count: usize = clip.boneCount();
+    assert(out_positions.len >= bone_count, @src());
+    assert(out_rotations.len >= bone_count, @src());
+    assert(local_rotations.len >= bone_count, @src());
+
+    const rest_pose: [*]types.Transform = @ptrCast(@alignCast(clip.skeleton.bindPose));
+
+    for (0..bone_count) |bone| {
+        const parent_bone: i32 = clip.skeleton.bones[bone].parent;
+        const bone_is_root: bool = parent_bone < 0;
+
+        if (bone_is_root) {
+            out_positions[bone] = root_translation;
+            out_rotations[bone] = local_rotations[bone];
+            continue;
+        }
+
+        const parent: usize = @intCast(parent_bone);
+        const rest_offset_from_parent: Vec = rest_pose[bone].translation;
+        const offset_in_world: Vec = zm.rotate(out_rotations[parent], rest_offset_from_parent);
+
+        out_positions[bone] = out_positions[parent] + offset_in_world;
+        out_rotations[bone] = zm.qmul(out_rotations[parent], local_rotations[bone]);
+    }
+}
+
+pub fn bvhForwardKinematics(
+    clip: BvhSkeletalClip,
+    keyframe: usize,
+    out_positions: []Vec,
+    out_rotations: []Quat,
+) void {
+    const n: usize = clip.boneCount();
+    assert(out_positions.len >= n, @src());
+    assert(out_rotations.len >= n, @src());
+    const kc: usize = @intCast(@max(clip.animation.keyframeCount, 0));
+    if (kc == 0) {
+        return;
+    }
+    const k: usize = if (keyframe >= kc) kc - 1 else keyframe;
+    const pose: [*]types.Transform = @ptrCast(@alignCast(clip.animation.keyframePoses[k]));
+    for (0..n) |i| {
+        const parent: i32 = clip.skeleton.bones[i].parent;
+        if (parent < 0) {
+            out_positions[i] = pose[i].translation;
+            out_rotations[i] = pose[i].rotation;
+        } else {
+            const p: usize = @intCast(parent);
+            out_positions[i] = zm.rotate(out_rotations[p], pose[i].translation) + out_positions[p];
+            out_rotations[i] = zm.qmul(out_rotations[p], pose[i].rotation);
+        }
+    }
+}
+
+const bvh_synth = @import("bvh_synth.zig");
+const d3_expect = std.testing.expect;
+const d3_expectEqual = std.testing.expectEqual;
+const d3_expectError = std.testing.expectError;
+const d3_expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const d3_expectEqualSlices = std.testing.expectEqualSlices;
+
+test "bvh clip: a real capture keeps its golden FK values through the conversion" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    const path: []const u8 = "assets/0005_2FeetJump001.bvh";
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.log.warn("(fixture {s} not present; skipping)", .{path});
+            return;
+        },
+        else => return err,
+    };
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+
+    var data: codecs.bvh.Data = try codecs.bvh.parse(gpa, bytes, null);
+    defer data.deinit();
+    const clip: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, data);
+    defer unloadBvhSkeletalClip(gpa, clip);
+
+    try d3_expectEqual(@as(usize, 30), clip.boneCount());
+    try d3_expectEqual(@as(i32, 2575), clip.animation.keyframeCount);
+    try d3_expectApproxEqAbs(@as(f32, 0.008333), clip.frame_time, 1.0e-6);
+
+    const n: usize = clip.boneCount();
+    const pos: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(pos);
+    const rot: []Quat = try gpa.alloc(Quat, n);
+    defer gpa.free(rot);
+    bvhForwardKinematics(clip, 0, pos, rot);
+
+    // Same numbers the codecs-level test asserts, now via the engine types — so a bug in the
+    // conversion cannot hide behind a correct parser.
+    var hips: usize = 0;
+    var head: usize = 0;
+    for (0..n) |i| {
+        const nm: []const u8 = clip.boneName(i);
+        if (std.mem.eql(u8, nm, "Hips")) {
+            hips = i;
+        }
+        if (std.mem.eql(u8, nm, "Head")) {
+            head = i;
+        }
+    }
+    try d3_expectApproxEqAbs(@as(f32, 1.1473), pos[hips][0], 1.0e-3);
+    try d3_expectApproxEqAbs(@as(f32, 32.8029), pos[hips][1], 1.0e-3);
+    try d3_expectApproxEqAbs(@as(f32, 2.3308), pos[head][0], 1.0e-2);
+    try d3_expectApproxEqAbs(@as(f32, 57.4773), pos[head][1], 1.0e-2);
+}
+
+test "bvh clip: end sites survive as flags, and the bind pose is the offsets" {
+    const gpa: Allocator = std.testing.allocator;
+    const src: []u8 = try bvh_synth.generate(gpa, .{
+        .joint_count = 3,
+        .frame_count = 2,
+        .bone_length = 10.0,
+    });
+    defer gpa.free(src);
+    var data: codecs.bvh.Data = try codecs.bvh.parse(gpa, src, null);
+    defer data.deinit();
+    const clip: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, data);
+    defer unloadBvhSkeletalClip(gpa, clip);
+
+    // 3 joints + 1 end site; only the last is an end site.
+    try d3_expectEqual(@as(usize, 4), clip.boneCount());
+    try d3_expectEqualSlices(bool, &.{ false, false, false, true }, clip.end_site);
+    // Bind pose = each joint at its OFFSET. Bones run along +Y at 10 apart.
+    const bind: [*]types.Transform = @ptrCast(@alignCast(clip.skeleton.bindPose));
+    try d3_expectApproxEqAbs(@as(f32, 0.0), bind[0].translation[1], 1.0e-6);
+    try d3_expectApproxEqAbs(@as(f32, 10.0), bind[1].translation[1], 1.0e-6);
+
+    const pos: []Vec = try gpa.alloc(Vec, 4);
+    defer gpa.free(pos);
+    const rot: []Quat = try gpa.alloc(Quat, 4);
+    defer gpa.free(rot);
+    bvhForwardKinematics(clip, 0, pos, rot);
+    // Rest pose: joint i at y = 10*i, end site at 30.
+    try d3_expectApproxEqAbs(@as(f32, 20.0), pos[2][1], 1.0e-4);
+    try d3_expectApproxEqAbs(@as(f32, 30.0), pos[3][1], 1.0e-4);
+}
+
+test "bvh clip: a long joint name is truncated to 31 bytes plus NUL" {
+    const gpa: Allocator = std.testing.allocator;
+    // 24-byte prefix + "Joint0" overflows BoneInfo.name's 32 bytes, the Mixamo case.
+    const src: []u8 = try bvh_synth.generate(gpa, .{
+        .joint_count = 2,
+        .frame_count = 1,
+        .name_prefix = "mixamorig:LeftHandMiddle",
+    });
+    defer gpa.free(src);
+    var data: codecs.bvh.Data = try codecs.bvh.parse(gpa, src, null);
+    defer data.deinit();
+    // codecs keeps the full name — the 32-byte limit belongs to the engine type, not the format.
+    try d3_expectEqualSlices(u8, "mixamorig:LeftHandMiddleJoint0", data.joints[0].name);
+
+    const clip: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, data);
+    defer unloadBvhSkeletalClip(gpa, clip);
+    const stored: []const u8 = clip.boneName(0);
+    try d3_expectEqual(@as(usize, 30), stored.len);
+    // NUL-terminated: the last byte is never written, so C-style reads stay in bounds.
+    try d3_expectEqual(@as(u8, 0), clip.skeleton.bones[0].name[31]);
+}
+
+// ===========================================================================
+// FBX → Model: skeleton, mesh and skin in one object
+// ===========================================================================
+
+/// A character loaded from a single FBX: geometry, skin weights, skeleton and clip.
+///
+/// ── ★ WHY THIS ASSEMBLES RATHER THAN PARSES ──
+///
+/// Every piece already exists — `codecs.fbx.meshOf`, `codecs.fbx.skinOf`,
+/// `codecs.bvh.fromFbxWithMap`, `loadBvhSkeletalClip`. What was missing is the ONE place that
+/// guarantees they were built against the same skeleton numbering, because that is the failure
+/// nobody can diagnose from a screenshot: a mesh bound to the wrong bones deforms wrongly while
+/// the skeleton animates correctly, and looks like a broken rig.
+///
+/// So the conversion happens once, here, and the map is threaded from it to the skin — never
+/// re-derived. `codecs.bvh.FbxConversion.joint_of_object` carries the contract.
+pub const FbxModel = struct {
+    /// Meshes, skin weights and material slots. `boneMatrices` is left null until
+    /// `updateModelAnimation` fills the palette.
+    model: Model,
+    /// Skeleton plus the clip from the FBX's chosen take, in engine types.
+    clip: BvhSkeletalClip,
+    /// ★ `inverse(bindWorld[j])` per joint, READ FROM THE FILE'S CLUSTERS — not derived from
+    /// the rest pose. See `codecs.fbx.SkinData.inverse_bind`: a skin is bound at a specific
+    /// moment recorded in `TransformLink`, and on `Geno.fbx` that pose is nowhere near the
+    /// node hierarchy's current rest transform. Deriving it gave a correct torso with limbs
+    /// stretched into tentacles.
+    ///
+    /// Owned by this struct; `unloadFbxModel` frees it.
+    inverse_bind: []Mat,
+    /// The bind pose itself, per joint — `TransformLink` from the skin clusters.
+    bind: []Mat,
+};
+
+/// Replace a mesh's normals with smooth ones derived from its triangle winding.
+///
+/// Accumulates each triangle's face normal onto its three vertices, then normalises. Mutates
+/// `mesh.normals` in place; the mesh must already have an allocated normals array.
+///
+/// ── ★ WHEN THIS IS THE RIGHT THING, MEASURED ──
+///
+/// A file's own normals are usually better than recomputed ones, because they encode hard
+/// edges that averaging destroys. But they can also be WRONG, and `Geno.fbx` is a real example:
+///
+///     Geno.fbx       52.6% of triangles have a vertex normal opposing their winding
+///     Drop_Kick.fbx   0.0%
+///
+/// The winding is not the problem — recomputing from it gives a normal distribution matching
+/// Drop_Kick's almost exactly, while the file's stored normals differ by 24 points. The stored
+/// normals are simply inconsistent, and they render as dark banding across the limbs.
+///
+/// ★ So: default to the file's normals, and reach for this when a mesh bands. It is opt-in
+/// (`LoadFbxModelOptions.recompute_normals`) rather than automatic, because silently
+/// overwriting authored normals would smooth every hard edge in a hard-surface model.
+pub fn computeMeshNormals(mesh: Mesh) void {
+    const vertex_count: usize = @intCast(@max(mesh.vertexCount, 0));
+    const triangle_count: usize = @intCast(@max(mesh.triangleCount, 0));
+    if (mesh.normals == null or mesh.vertices == null or mesh.indices == null) {
+        return;
+    }
+    @memset(mesh.normals[0 .. vertex_count * 3], 0);
+    for (0..triangle_count) |t| {
+        const ia: usize = mesh.indices[t * 3 + 0];
+        const ib: usize = mesh.indices[t * 3 + 1];
+        const ic: usize = mesh.indices[t * 3 + 2];
+        const pa: Vec = vec(mesh.vertices[ia * 3], mesh.vertices[ia * 3 + 1], mesh.vertices[ia * 3 + 2]);
+        const pb: Vec = vec(mesh.vertices[ib * 3], mesh.vertices[ib * 3 + 1], mesh.vertices[ib * 3 + 2]);
+        const pc: Vec = vec(mesh.vertices[ic * 3], mesh.vertices[ic * 3 + 1], mesh.vertices[ic * 3 + 2]);
+        const e1: Vec = pb - pa;
+        const e2: Vec = pc - pa;
+        // Face normal, UNNORMALISED — its length is twice the triangle area, which weights big
+        // triangles more heavily. That is the standard and better-looking choice.
+        const face: Vec = vec(
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        );
+        inline for (.{ ia, ib, ic }) |dst| {
+            mesh.normals[dst * 3 + 0] += face[0];
+            mesh.normals[dst * 3 + 1] += face[1];
+            mesh.normals[dst * 3 + 2] += face[2];
+        }
+    }
+    for (0..vertex_count) |v| {
+        const nx: f32 = mesh.normals[v * 3 + 0];
+        const ny: f32 = mesh.normals[v * 3 + 1];
+        const nz: f32 = mesh.normals[v * 3 + 2];
+        const len: f32 = @sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 1.0e-12) {
+            mesh.normals[v * 3 + 0] = nx / len;
+            mesh.normals[v * 3 + 1] = ny / len;
+            mesh.normals[v * 3 + 2] = nz / len;
+        } else {
+            mesh.normals[v * 3 + 1] = 1.0;
+        }
+    }
+}
+
+/// Each joint's world ORIENTATION at bind, pulled from the skin clusters' `TransformLink`.
+///
+/// ── ★★★ THIS IS THE FBX'S T-POSE, AND IT IS ALREADY IN THE FILE ──
+///
+/// Retargeting needs a reference pose whose orientations are TRUE, not inferred. Deriving one
+/// from bone directions fails on a rig like Mixamo's, whose offsets sit in ROTATED local joint
+/// frames: FK-ing them with identity rotations puts `LeftHand` at (4.6, 212.0, 0.7) — straight
+/// up above the shoulder, which is not a pose at all.
+///
+/// ★ `TransformLink` is the bone's GLOBAL transform at the moment the skin was bound, rotations
+/// included. Its rotation block is exactly the reference orientation retargeting wants, and
+/// §11 already extracts it into `FbxModel.bind` for skinning.
+///
+/// ★ The translation is discarded here on purpose: a reference ORIENTATION is what aligns two
+/// rigs; their sizes are handled separately by `codecs.bvh.scaleRootPosition`.
+///
+/// ★ A joint no cluster binds keeps an identity bind (see `codecs.fbx.SkinData.bind`) and so
+/// reports identity here — correct, because there is no evidence about it either way.
+pub fn fbxBindOrientations(fbx_model: FbxModel, out_orientations: []Quat) void {
+    const joint_count: usize = @min(fbx_model.bind.len, out_orientations.len);
+    for (0..joint_count) |joint| {
+        const bind_matrix: Mat = fbx_model.bind[joint];
+        // Rotation block only — rows 0..2, columns 0..2. Row 3 is the translation.
+        const rotation_only: Mat = .{
+            .{ bind_matrix[0][0], bind_matrix[0][1], bind_matrix[0][2], 0 },
+            .{ bind_matrix[1][0], bind_matrix[1][1], bind_matrix[1][2], 0 },
+            .{ bind_matrix[2][0], bind_matrix[2][1], bind_matrix[2][2], 0 },
+            .{ 0, 0, 0, 1 },
+        };
+        out_orientations[joint] = zm.quatFromMat(rotation_only);
+    }
+}
+
+/// Free everything `loadFbxModel` allocated.
+///
+/// ★ THE SKELETON IS BORROWED, NOT OWNED. `model.skeleton` points at the SAME arrays `clip`
+/// owns, so `updateModelAnimation` and bone gizmos can reach them without a second copy — but
+/// `unloadModel` frees skeleton arrays with **libc.free** (it predates the gpa-allocating
+/// loaders) while `loadBvhSkeletalClip` allocates them with the gpa. Letting both run crashes
+/// in teardown, which is how this was found: 60 frames rendered fine and the smoke died in
+/// `runnerDeinit`. The borrowed pointers are cleared before `unloadModel` sees them.
+pub fn unloadFbxModel(gpa: Allocator, fbx_model: FbxModel) void {
+    var model: Model = fbx_model.model;
+    model.skeleton = .{};
+    unloadModel(gpa, model);
+    unloadBvhSkeletalClip(gpa, fbx_model.clip);
+    gpa.free(fbx_model.inverse_bind);
+    gpa.free(fbx_model.bind);
+}
+
+pub const LoadFbxModelOptions = struct {
+    /// Resample rate for the animation. `null` reads it from the file's own key spacing —
+    /// captures here run at 60 and 120 fps and Mixamo at 30, so a hardcoded rate throws away
+    /// most of some clips.
+    fps: ?f32 = null,
+    /// Uniform scale applied at LOAD to every length the file carries: mesh vertices, the bind
+    /// matrices' translations, and the clip's joint offsets and root motion.
+    ///
+    /// ★ ONE SCALE, THREE PLACES, AND ALL THREE OR NONE. Skinning composes the mesh, the bind
+    /// pose and the animated pose; scaling two of them produces a mesh that explodes or
+    /// vanishes. That is §11's failure mode exactly, and it is why this lives in the loader
+    /// rather than at each call site.
+    ///
+    /// ★ ROTATIONS ARE NOT TOUCHED. Scaling changes where things are, never which way they
+    /// face — the same property that lets GMR fit a tall human's motion to a short robot.
+    ///
+    /// Use `0.01` to turn a centimetre file into metres, which is what the rest of zimr and
+    /// all of `robot.zig` speak. Default 1.0 keeps a file in its authored units.
+    scale: f32 = 1.0,
+    /// Replace the file's normals with smooth ones from the winding. See `computeMeshNormals`
+    /// — `Geno.fbx` needs this (52.6% of its normals oppose their winding, rendering as dark
+    /// banding); `Drop_Kick.fbx` does not.
+    recompute_normals: bool = false,
+    /// Which take to convert; `null` means the first take that actually has curves.
+    take: ?usize = null,
+};
+
+/// Load geometry + skin + skeleton + animation from FBX bytes.
+///
+/// Returns `errors.LoadError.InvalidDimensions` when the file has no skeleton — a static mesh,
+/// an optical-marker capture or a blend-shape rig. Those are legitimate FBX files that simply
+/// are not characters, so the caller should say so rather than showing one bone.
+pub fn loadFbxModel(
+    gpa: Allocator,
+    bytes: []const u8,
+    opts: LoadFbxModelOptions,
+) errors.LoadError!FbxModel {
+    var scene: codecs.fbx.Scene = codecs.fbx.loadScene(gpa, bytes) catch
+        return errors.LoadError.DecodeFailed;
+    defer scene.deinit();
+
+    // Read the frame rate from the file unless told otherwise.
+    const fps: f32 = if (opts.fps) |given| given else blk: {
+        const hint: ?f32 = codecs.bvh.fbxFrameTimeHint(&scene);
+        break :blk if (hint) |frame_time| (if (frame_time > 0) 1.0 / frame_time else 30.0) else 30.0;
+    };
+
+    var conv: codecs.bvh.FbxConversion = codecs.bvh.fromFbxWithMap(gpa, &scene, .{
+        .fps = fps,
+        .take = opts.take,
+    }) catch |err| switch (err) {
+        error.NoSkeleton => return errors.LoadError.InvalidDimensions,
+        error.OutOfMemory => return errors.LoadError.OutOfMemory,
+        else => return errors.LoadError.DecodeFailed,
+    };
+    defer conv.data.deinit();
+
+    const clip: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, conv.data);
+    errdefer unloadBvhSkeletalClip(gpa, clip);
+
+    // Count the mesh geometries first so the meshes array can be sized once. A Mixamo export
+    // has two (`Beta_Surface` and `Beta_Joints`); Geno has one.
+    var mesh_count: usize = 0;
+    for (scene.objects) |o| {
+        if (o.kind == .geometry and std.mem.eql(u8, o.sub_class, "Mesh")) {
+            mesh_count += 1;
+        }
+    }
+    if (mesh_count == 0) {
+        return errors.LoadError.InvalidDimensions;
+    }
+
+    const meshes: []Mesh = gpa.alloc(Mesh, mesh_count) catch return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(meshes);
+    for (meshes) |*m| {
+        m.* = std.mem.zeroes(Mesh);
+    }
+    var built: usize = 0;
+    errdefer for (meshes[0..built]) |m| {
+        unloadMesh(gpa, m);
+    };
+
+    // ── ★ THE BIND POSE COMES FROM THE SKIN CLUSTERS, NOT FROM FORWARD KINEMATICS ──
+    //
+    // Each `Cluster` records `TransformLink`: the bone's global transform at the moment the
+    // skin was bound. That is a DIFFERENT POSE from the file's animation frame 0, and on
+    // `Geno.fbx` the difference is enormous — measured by taking, for each joint, the centroid
+    // of the vertices it dominantly weights and comparing it to the candidate bind position:
+    //
+    //     bind from FK on frame 0        mean 35.0 units off, worst 55.5
+    //     bind from cluster TransformLink  mean  5.0 units off, worst 20.9
+    //
+    // 5 units is flesh-radius around a bone; 35 is a limb length. Geno's frame 0 is a T-POSE
+    // (every hand joint at Y~138, arms horizontal) while the MESH is modelled in an A-POSE
+    // (its hand vertices centred near Y~95). Skinning an A-posed mesh with a T-posed bind tears
+    // the limbs off, which is exactly what it did.
+    //
+    // ★ THIS WAS TRIED AND WRONGLY REJECTED EARLIER. The evidence against it —
+    // `inverse(TransformLink) * bindWorldFromFk` deviating from the identity on all 96 joints —
+    // was CORRECT AND EXPECTED: they are two genuinely different poses. It only looked like a
+    // bug because two zm convention errors (`vec` instead of `pointVec`, and `mulMat`'s
+    // argument order) were still corrupting the render at the time, so switching binds changed
+    // nothing visible. Correct evidence, misread, because a second fault masked the test.
+    const bone_count: usize = clip.boneCount();
+    const inverse_bind: []Mat = gpa.alloc(Mat, bone_count) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(inverse_bind);
+    for (inverse_bind) |*m| {
+        m.* = identity();
+    }
+    const bind: []Mat = gpa.alloc(Mat, bone_count) catch return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(bind);
+    for (bind) |*m| {
+        m.* = identity();
+    }
+    {
+        const bind_positions: []Vec = gpa.alloc(Vec, bone_count) catch
+            return errors.LoadError.OutOfMemory;
+        defer gpa.free(bind_positions);
+        const bind_rotations: []Quat = gpa.alloc(Quat, bone_count) catch
+            return errors.LoadError.OutOfMemory;
+        defer gpa.free(bind_rotations);
+        bvhForwardKinematics(clip, 0, bind_positions, bind_rotations);
+        for (0..bone_count) |j| {
+            // ★ Built from the INVERSE TRS rather than by inverting a matrix: undo the
+            // translation, then undo the rotation. `mulMat(a, b)` applies b first, so that
+            // reads `mulMat(inverse-rotation, negative-translation)`. Composing the inverse
+            // directly needs no assumption about which row or column holds the translation —
+            // the very assumption that produced a mesh bound to transforms it never visits.
+            inverse_bind[j] = mulMat(
+                matFromQuat(zm.conjugate(bind_rotations[j])),
+                translationV(-bind_positions[j]),
+            );
+        }
+    }
+
+    for (scene.objects) |geometry| {
+        if (geometry.kind != .geometry or !std.mem.eql(u8, geometry.sub_class, "Mesh")) {
+            continue;
+        }
+        var source: codecs.fbx.MeshData = codecs.fbx.meshOf(gpa, &scene, geometry) catch
+            return errors.LoadError.DecodeFailed;
+        defer source.deinit();
+        var skin: codecs.fbx.SkinData = codecs.fbx.skinOf(
+            gpa,
+            &scene,
+            geometry,
+            source,
+            conv.joint_of_object,
+        ) catch return errors.LoadError.DecodeFailed;
+        defer skin.deinit();
+
+        // ★ Bake the mesh NODE's world transform into the vertices. Control points are in
+        // node-local space; everything else here — the skeleton, the bind matrices, the
+        // animation — is in world space. See `codecs.fbx.globalTransform`.
+        const node_to_world: [16]f64 = if (codecs.fbx.modelOfGeometry(&scene, geometry)) |model_index|
+            codecs.fbx.globalTransform(&scene, model_index)
+        else
+            .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+
+        for (skin.inverse_bind, 0..) |flat_in, joint| {
+            if (joint >= bone_count) {
+                break;
+            }
+            // ★ The inverse bind maps a scaled vertex into bone space, so ONLY its translation
+            // row scales — the rotation block is unitless and must not.
+            var flat: [16]f32 = flat_in;
+            flat[12] *= opts.scale;
+            flat[13] *= opts.scale;
+            flat[14] *= opts.scale;
+            inverse_bind[joint] = .{
+                .{ flat[0], flat[1], flat[2], flat[3] },
+                .{ flat[4], flat[5], flat[6], flat[7] },
+                .{ flat[8], flat[9], flat[10], flat[11] },
+                .{ flat[12], flat[13], flat[14], flat[15] },
+            };
+        }
+        for (skin.bind, 0..) |flat_in, joint| {
+            if (joint >= bone_count) {
+                break;
+            }
+            var flat: [16]f32 = flat_in;
+            flat[12] *= opts.scale;
+            flat[13] *= opts.scale;
+            flat[14] *= opts.scale;
+            bind[joint] = .{
+                .{ flat[0], flat[1], flat[2], flat[3] },
+                .{ flat[4], flat[5], flat[6], flat[7] },
+                .{ flat[8], flat[9], flat[10], flat[11] },
+                .{ flat[12], flat[13], flat[14], flat[15] },
+            };
+        }
+
+        // The node transform and the unit scale compose into one matrix, so vertices are
+        // walked once rather than twice.
+        var placement: [16]f64 = node_to_world;
+        if (opts.scale != 1.0) {
+            const k: f64 = opts.scale;
+            for (&placement) |*v| {
+                v.* *= k;
+            }
+        }
+        meshes[built] = try fbxMeshToEngine(gpa, source, skin, placement);
+        if (opts.recompute_normals) {
+            computeMeshNormals(meshes[built]);
+        }
+        built += 1;
+    }
+
+    // ★★ THE CLIP SCALES TOO — mesh, bind AND ANIMATED POSE, all three or none.
+    //
+    // Missing this shipped a bug: Geno survived because its motion came from an external BVH
+    // scaled separately, while the Mixamo character plays its OWN take and vanished — a metre
+    // bind driven by a centimetre animation displaces it a hundredfold, straight off-screen.
+    // ★ The two-scale test that was supposed to prevent exactly this checked mesh and bind and
+    // NOT the clip, while its own comment named all three. Writing the right words is not the
+    // same as asserting them.
+    scaleBvhSkeletalClip(clip, opts.scale);
+
+    return .{
+        .model = .{
+            .transform = zm.identity(),
+            .meshCount = @intCast(built),
+            .materialCount = 0,
+            .meshes = meshes.ptr,
+            .skeleton = clip.skeleton,
+        },
+        .clip = clip,
+        .inverse_bind = inverse_bind,
+        .bind = bind,
+    };
+}
+
+/// Build the per-joint skin matrices for one keyframe of `clip`.
+///
+/// ── ★ THE TWO zm CONVENTIONS THIS FUNCTION EXISTS TO GET RIGHT ──
+///
+/// Both cost days when they were spread across call sites, and **both are invisible in a bind
+/// pose** — where the translations are zero and the composition is the identity — so a green
+/// bind-pose test proves nothing about either.
+///
+///   1. **`mulMat(a, b)` APPLIES b FIRST, THEN a**, the opposite of reading it left to right
+///      and the opposite of raylib's `MatrixMultiply`. So "rotate then translate" is
+///      `mulMat(translation, rotation)`, and "inverse bind then animated world" is
+///      `mulMat(world, inverse_bind)`.
+///   2. **`zm.vec` IS A DIRECTION** (lane 3 = 0), so an affine translation has no effect on it.
+///      Vertex positions must use `pointVec`. See `skinMeshCpu`.
+///
+/// Both are pinned by the test `zm: mulMat and mulMatVec compose in the order the skinning path
+/// assumes`. Callers get them for free by using this function instead of hand-rolling the math.
+///
+/// `inverse_bind` is `FbxModel.inverse_bind` — read from the skin clusters, NOT derived from
+/// the rest pose; `codecs.fbx` documents why. `out_positions` / `out_rotations` are scratch the
+/// caller owns, and are left holding the sampled world pose, which is what a bone gizmo wants.
+pub fn poseSkinMatrices(
+    clip: BvhSkeletalClip,
+    inverse_bind: []const Mat,
+    keyframe: usize,
+    out_positions: []Vec,
+    out_rotations: []Quat,
+    out_skin: []Mat,
+) void {
+    const n: usize = clip.boneCount();
+    assert(out_skin.len >= n, @src());
+    assert(inverse_bind.len >= n, @src());
+    bvhForwardKinematics(clip, keyframe, out_positions, out_rotations);
+    for (0..n) |j| {
+        // Rotate, then translate — hence translation on the LEFT (see convention 1).
+        const world: Mat = mulMat(translationV(out_positions[j]), matFromQuat(out_rotations[j]));
+        // Inverse bind first, then the animated world — hence world on the LEFT.
+        out_skin[j] = mulMat(world, inverse_bind[j]);
+    }
+}
+
+/// Deform one mesh's positions AND normals using skin matrices from `poseSkinMatrices`, then
+/// upload both.
+///
+/// ── ★ WHY THIS TAKES SIX ARGUMENTS INSTEAD OF FOUR ──
+///
+/// It used to take positions only, and it silently left normals in the BIND POSE: the mesh
+/// deformed while its lighting stayed fixed to the rest pose. On a moving character that reads
+/// as shading which is wrong in some places and fine in others — the kind of thing that gets
+/// blamed on the asset's normal data, which is exactly what happened.
+///
+/// ★★ THE FIX IS THE SIGNATURE, NOT A COMMENT. With normals absent from the parameter list,
+/// forgetting them was not an oversight a caller could make — it was UNREPRESENTABLE, and the
+/// omission lived in this function where no caller could see it. Requiring `base_normals` and
+/// `out_normals` means a caller cannot skin geometry without deciding what happens to its
+/// normals. A comment saying "remember to handle normals" would not have fired.
+///
+/// ★ Backed by the test `skinning: a normal follows its bone's rotation, not just the
+/// position`, which was verified to FAIL when the bug is reintroduced — an invariant nobody has
+/// watched fail is not known to be a guard.
+///
+/// ★ `base_positions` MUST BE A SEPARATE COPY OF THE REST POSE, not `mesh.vertices`.
+/// `updateMeshBuffer` writes into `mesh.vertices` itself, so reading the rest pose from there
+/// feeds each frame's output back in as the next frame's input: the figure inflates into a fan
+/// of triangles and keeps drifting even with playback PAUSED.
+pub fn skinMeshCpu(
+    mesh: Mesh,
+    base_positions: []const f32,
+    base_normals: []const f32,
+    skin: []const Mat,
+    out: []f32,
+    out_normals: []f32,
+) void {
+    const vertex_count: usize = @intCast(@max(mesh.vertexCount, 0));
+    assert(base_positions.len >= vertex_count * 3, @src());
+    assert(out.len >= vertex_count * 3, @src());
+    if (mesh.boneIndices == null or mesh.boneWeights == null) {
+        @memcpy(out[0 .. vertex_count * 3], base_positions[0 .. vertex_count * 3]);
+        @memcpy(out_normals[0 .. vertex_count * 3], base_normals[0 .. vertex_count * 3]);
+        return;
+    }
+    for (0..vertex_count) |v| {
+        // `pointVec`, NOT `vec` — see convention 2 on `poseSkinMatrices`.
+        const rest: Vec = pointVec(
+            base_positions[v * 3 + 0],
+            base_positions[v * 3 + 1],
+            base_positions[v * 3 + 2],
+        );
+        var acc: Vec = vec(0, 0, 0);
+        var total: f32 = 0;
+        for (0..4) |k| {
+            const weight: f32 = mesh.boneWeights[v * 4 + k];
+            if (weight <= 0) {
+                continue;
+            }
+            const joint: usize = mesh.boneIndices[v * 4 + k];
+            if (joint >= skin.len) {
+                continue;
+            }
+            acc += mulMatVec(skin[joint], rest) * @as(Vec, @splat(weight));
+            total += weight;
+        }
+        // A vertex no bone claims stays put rather than collapsing to the origin.
+        const p: Vec = if (total > 0) acc else rest;
+        out[v * 3 + 0] = p[0];
+        out[v * 3 + 1] = p[1];
+        out[v * 3 + 2] = p[2];
+
+        // ★ NORMALS MUST BE SKINNED TOO, and with `vec` — a DIRECTION, lane 3 = 0 — so the
+        // skin matrix's TRANSLATION is excluded. This is the same `vec`/`pointVec` distinction
+        // that cost days on positions, used deliberately here: a position needs the
+        // translation and a normal must not have it.
+        //
+        // Leaving normals in the bind pose is invisible on a static mesh and wrong the moment
+        // anything bends: the geometry moves while its lighting stays fixed to the rest pose,
+        // which reads as shading that is subtly wrong in some places and fine in others.
+        //
+        // The rotation-only inverse-transpose is skipped on purpose: these skin matrices are
+        // rotation plus translation with no scale or shear, and for those the matrix IS its own
+        // correct normal transform.
+        const rest_n: Vec = vec(
+            base_normals[v * 3 + 0],
+            base_normals[v * 3 + 1],
+            base_normals[v * 3 + 2],
+        );
+        var acc_n: Vec = vec(0, 0, 0);
+        for (0..4) |k| {
+            const weight: f32 = mesh.boneWeights[v * 4 + k];
+            if (weight <= 0) {
+                continue;
+            }
+            const joint: usize = mesh.boneIndices[v * 4 + k];
+            if (joint >= skin.len) {
+                continue;
+            }
+            acc_n += mulMatVec(skin[joint], rest_n) * @as(Vec, @splat(weight));
+        }
+        const nlen: f32 = @sqrt(acc_n[0] * acc_n[0] + acc_n[1] * acc_n[1] + acc_n[2] * acc_n[2]);
+        const n_out: Vec = if (nlen > 1.0e-8) acc_n / @as(Vec, @splat(nlen)) else rest_n;
+        out_normals[v * 3 + 0] = n_out[0];
+        out_normals[v * 3 + 1] = n_out[1];
+        out_normals[v * 3 + 2] = n_out[2];
+    }
+    updateMeshBuffer(mesh, 0, std.mem.sliceAsBytes(out), 0);
+    updateMeshBuffer(mesh, 2, std.mem.sliceAsBytes(out_normals), 0);
+}
+
+/// Copy a parsed mesh into engine-owned arrays that `unloadMesh` can free.
+///
+/// ★ `Mesh.indices` IS 16-BIT. Welding is what keeps a real character under 65535 — an
+/// unwelded `Beta_Surface` would be 84816 corner-vertices — but a big enough mesh still will
+/// not fit, and silently wrapping the indices scrambles the geometry instead of failing. So the
+/// bound is checked here, where the narrowing actually happens.
+fn fbxMeshToEngine(
+    gpa: Allocator,
+    source: codecs.fbx.MeshData,
+    skin: codecs.fbx.SkinData,
+    node_to_world: [16]f64,
+) errors.LoadError!Mesh {
+    const vertex_count: usize = source.vertexCount();
+    if (vertex_count > std.math.maxInt(u16)) {
+        return errors.LoadError.InvalidDimensions;
+    }
+
+    var mesh: Mesh = std.mem.zeroes(Mesh);
+    mesh.vertexCount = @intCast(vertex_count);
+    mesh.triangleCount = @intCast(source.triangleCount());
+
+    const vertices: []f32 = gpa.alloc(f32, vertex_count * 3) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(vertices);
+    for (0..vertex_count) |v| {
+        const moved: [3]f32 = codecs.fbx.transformPoint(node_to_world, .{
+            source.positions[v * 3 + 0],
+            source.positions[v * 3 + 1],
+            source.positions[v * 3 + 2],
+        });
+        vertices[v * 3 + 0] = moved[0];
+        vertices[v * 3 + 1] = moved[1];
+        vertices[v * 3 + 2] = moved[2];
+    }
+    mesh.vertices = vertices.ptr;
+
+    const normals: []f32 = gpa.alloc(f32, vertex_count * 3) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(normals);
+    for (0..vertex_count) |v| {
+        // Directions take the rotation/scale but not the translation.
+        const turned: [3]f32 = codecs.fbx.transformDirection(node_to_world, .{
+            source.normals[v * 3 + 0],
+            source.normals[v * 3 + 1],
+            source.normals[v * 3 + 2],
+        });
+        const len: f32 = @sqrt(turned[0] * turned[0] + turned[1] * turned[1] + turned[2] * turned[2]);
+        const inv_len: f32 = if (len > 0) 1.0 / len else 0;
+        normals[v * 3 + 0] = turned[0] * inv_len;
+        normals[v * 3 + 1] = turned[1] * inv_len;
+        normals[v * 3 + 2] = turned[2] * inv_len;
+    }
+    mesh.normals = normals.ptr;
+
+    const texcoords: []f32 = gpa.alloc(f32, vertex_count * 2) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(texcoords);
+    @memcpy(texcoords, source.uvs);
+    mesh.texcoords = texcoords.ptr;
+
+    const indices: []u16 = gpa.alloc(u16, source.indices.len) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(indices);
+    for (source.indices, 0..) |wide, i| {
+        indices[i] = @intCast(wide);
+    }
+    mesh.indices = indices.ptr;
+
+    const bone_ids: []u8 = gpa.alloc(u8, vertex_count * 4) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(bone_ids);
+    @memcpy(bone_ids, skin.bone_indices);
+    mesh.boneIndices = bone_ids.ptr;
+
+    const bone_weights: []f32 = gpa.alloc(f32, vertex_count * 4) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(bone_weights);
+    @memcpy(bone_weights, skin.bone_weights);
+    mesh.boneWeights = bone_weights.ptr;
+
+    return mesh;
+}
+
+test "fbx model: Geno loads as a skinned Model in one call" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    const path: []const u8 = "assets/Geno.fbx";
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.log.warn("(fixture {s} not present; skipping)", .{path});
+            return;
+        },
+        else => return err,
+    };
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+
+    var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, loaded);
+
+    // ★ ONE CALL, and everything downstream sees ordinary engine types: a `Model` with a
+    // skinned `Mesh`, and a `ModelSkeleton` + `ModelAnimation` beside it. GenoView needs an
+    // offline Maya export to reach this point because raylib cannot read FBX.
+    try d3_expectEqual(@as(i32, 1), loaded.model.meshCount);
+    const mesh: Mesh = loaded.model.meshes[0];
+    try d3_expectEqual(@as(i32, 10329), mesh.vertexCount);
+    try d3_expectEqual(@as(i32, 18660), mesh.triangleCount);
+    try d3_expect(mesh.vertices != null);
+    try d3_expect(mesh.normals != null);
+    try d3_expect(mesh.texcoords != null);
+    try d3_expect(mesh.indices != null);
+    try d3_expect(mesh.boneIndices != null);
+    try d3_expect(mesh.boneWeights != null);
+
+    // The skeleton came through the same conversion the skin was bound against.
+    try d3_expectEqual(@as(usize, 96), loaded.clip.boneCount()); // 75 joints + 21 end sites
+    try d3_expectEqualSlices(u8, "Hips", loaded.clip.boneName(0));
+
+    // ★ Every 16-bit index must address a real vertex. This is where the u32 -> u16 narrowing
+    // happens, and a wrapped index scrambles geometry rather than failing, so it is checked
+    // rather than assumed.
+    const index_count: usize = @intCast(mesh.triangleCount * 3);
+    for (0..index_count) |i| {
+        try d3_expect(mesh.indices[i] < mesh.vertexCount);
+    }
+
+    // Weights survived the copy into engine-owned memory.
+    const vc: usize = @intCast(mesh.vertexCount);
+    for (0..@min(vc, 256)) |v| {
+        var sum: f32 = 0;
+        for (0..4) |k| {
+            sum += mesh.boneWeights[v * 4 + k];
+        }
+        try d3_expectApproxEqAbs(@as(f32, 1.0), sum, 1.0e-4);
+    }
+}
+
+test "fbx model: files that are not characters are refused, not half-loaded" {
+    // DISABLED: both fixtures it reads - `subject2.fbx` and `metahuman.fbx` - were dropped from
+    // `assets/` for size (26 MB between them). Note this test would still PASS without them:
+    // its loop skips missing files with `continue`, so an empty run asserts nothing. Skipping
+    // says that out loud instead of reporting a green test that checked nothing.
+    if (true) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    // ★ An optical-marker capture and a blend-shape rig are perfectly valid FBX files that
+    // are simply not characters. Reporting that beats rendering one bone and calling it a
+    // skeleton — which is what an earlier joint heuristic did for both of these.
+    for ([_][]const u8{ "assets/subject2.fbx", "assets/metahuman.fbx" }) |path| {
+        var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer fh.close(io);
+        const st: std.Io.File.Stat = try fh.stat(io);
+        const bytes: []u8 = try gpa.alloc(u8, st.size);
+        defer gpa.free(bytes);
+        _ = try fh.readPositionalAll(io, bytes, 0);
+        try d3_expectError(errors.LoadError.InvalidDimensions, loadFbxModel(gpa, bytes, .{}));
+    }
+}
+
+test "fbx model: the skinned mesh lands on the skeleton, not around it" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    const path: []const u8 = "assets/Geno.fbx";
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.log.warn("(fixture {s} not present; skipping)", .{path});
+            return;
+        },
+        else => return err,
+    };
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+
+    var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, loaded);
+
+    // ★ THE TEST THAT WOULD HAVE CAUGHT "POSSESSED DR OCTOPUS".
+    //
+    // An earlier version DERIVED the inverse bind from the node hierarchy's rest pose, which
+    // rendered a correct torso with limbs stretched into metre-long tentacles. The bind-pose
+    // identity check it shipped with passed anyway — because `inverse(X) * X == identity` for
+    // ANY X, so that check validates the inverse and the multiply order and NEVER the choice
+    // of X.
+    //
+    // This one is a statement about the WORLD instead: skin the character with its own
+    // skeleton and the vertices must land ON the bones. Tentacles are exactly a mesh whose
+    // extent dwarfs its skeleton's, so comparing the two bounding boxes catches it.
+    const n: usize = loaded.clip.boneCount();
+    const positions: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(positions);
+    const rotations: []Quat = try gpa.alloc(Quat, n);
+    defer gpa.free(rotations);
+    const skin: []Mat = try gpa.alloc(Mat, n);
+    defer gpa.free(skin);
+
+    poseSkinMatrices(loaded.clip, loaded.inverse_bind, 0, positions, rotations, skin);
+
+    var bone_lo: Vec = vec(1.0e30, 1.0e30, 1.0e30);
+    var bone_hi: Vec = vec(-1.0e30, -1.0e30, -1.0e30);
+    for (0..n) |j| {
+        inline for (0..3) |c| {
+            bone_lo[c] = @min(bone_lo[c], positions[j][c]);
+            bone_hi[c] = @max(bone_hi[c], positions[j][c]);
+        }
+    }
+
+    const mesh: Mesh = loaded.model.meshes[0];
+    const vertex_count: usize = @intCast(mesh.vertexCount);
+    const rest_positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(rest_positions);
+    @memcpy(rest_positions, mesh.vertices[0 .. vertex_count * 3]);
+    const skinned: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(skinned);
+    const rest_normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(rest_normals);
+    @memcpy(rest_normals, mesh.normals[0 .. vertex_count * 3]);
+    const skinned_normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(skinned_normals);
+    skinMeshCpu(mesh, rest_positions, rest_normals, skin, skinned, skinned_normals);
+
+    var mesh_lo: Vec = vec(1.0e30, 1.0e30, 1.0e30);
+    var mesh_hi: Vec = vec(-1.0e30, -1.0e30, -1.0e30);
+    for (0..vertex_count) |v| {
+        inline for (0..3) |c| {
+            mesh_lo[c] = @min(mesh_lo[c], skinned[v * 3 + c]);
+            mesh_hi[c] = @max(mesh_hi[c], skinned[v * 3 + c]);
+        }
+    }
+
+    // The mesh must SIT ON the skeleton, not beside or under it. Before the node transform
+    // was baked in, the character rendered 139 units underground at exactly the right size —
+    // which no amount of staring at extents alone would have flagged.
+    inline for (0..3) |c| {
+        try d3_expect(mesh_lo[c] < bone_hi[c] and mesh_hi[c] > bone_lo[c]);
+    }
+
+    // ★ ALL THREE AXES, TIGHTLY. Flesh extends past the joint centres by a hand's width, not
+    // a body length. Measured with the bind and the animation sharing one FK:
+    //
+    //     bones  (-89.3,  1.1, -9.6)..(90.4, 171.1, 15.0)
+    //     mesh   (-59.7, -0.5,-16.2)..(59.7, 170.2, 11.9)
+    //
+    // Every earlier bug blew one of these open — tentacles took X and Y past 10x, the missing
+    // node transform put Y 139 units under the floor, and mixing bind spaces spread Z to 104
+    // against the skeleton's 25. A loose depth tolerance was carried here for exactly one
+    // revision; it is gone now that the cause is fixed rather than tolerated.
+    inline for (0..3) |c| {
+        const bone_extent: f32 = bone_hi[c] - bone_lo[c];
+        const mesh_extent: f32 = mesh_hi[c] - mesh_lo[c];
+        try d3_expect(mesh_extent < bone_extent * 1.5);
+        try d3_expect(mesh_extent > bone_extent * 0.5);
+    }
+}
+
+test "zm: matFromQuat and rotate agree about direction" {
+    // ★ THE DECISIVE CONVENTION CHECK. `bvhForwardKinematics` composes world rotations for use
+    // with `zm.rotate`; the skinning path turns those same quaternions into matrices with
+    // `matFromQuat` and applies them with `mulMatVec`. If the two disagree — if one is the
+    // transpose of the other — then joint POSITIONS stay correct (they only ever go through
+    // `rotate`) while every skin matrix carries an inverted rotation.
+    //
+    // That is invisible in a skeleton overlay, which draws positions and nothing else.
+    const angle: f32 = 0.7;
+    const axis: Vec = vec(0.267, 0.535, 0.802); // normalized-ish
+    const q: Quat = zm.quatFromAxisAngle(axis, angle);
+    const v: Vec = vec(1.0, 2.0, -0.5);
+
+    const by_rotate: Vec = zm.rotate(q, v);
+    const by_matrix: Vec = mulMatVec(matFromQuat(q), v);
+    inline for (0..3) |c| {
+        try d3_expectApproxEqAbs(by_rotate[c], by_matrix[c], 1.0e-4);
+    }
+}
+
+test "fbx model: the character skinned by a FOREIGN clip stays the size of that clip's skeleton" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+    var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, loaded);
+
+    const dance_path: []const u8 = "examples/geno_dance/dance1_20s.bvh";
+    var dh: std.Io.File = std.Io.Dir.cwd().openFile(io, dance_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dh.close(io);
+    const dst: std.Io.File.Stat = try dh.stat(io);
+    const dbytes: []u8 = try gpa.alloc(u8, dst.size);
+    defer gpa.free(dbytes);
+    _ = try dh.readPositionalAll(io, dbytes, 0);
+    var dance_data: codecs.bvh.Data = try codecs.bvh.parse(gpa, dbytes, null);
+    defer dance_data.deinit();
+    const dance: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, dance_data);
+    defer unloadBvhSkeletalClip(gpa, dance);
+
+    // ★ THE CHECK THE BIND-POSE ONE CANNOT MAKE. Posing the character with its OWN bind pose
+    // is identity by construction, so it passes whatever else is wrong. Driving it with a
+    // DIFFERENT clip is where a real mismatch shows: if the dance's skeleton and the
+    // character's bind disagree, the mesh inflates instead of moving.
+    const n: usize = loaded.clip.boneCount();
+    try d3_expectEqual(n, dance.boneCount());
+    const positions: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(positions);
+    const rotations: []Quat = try gpa.alloc(Quat, n);
+    defer gpa.free(rotations);
+    const skin: []Mat = try gpa.alloc(Mat, n);
+    defer gpa.free(skin);
+
+    const mesh: Mesh = loaded.model.meshes[0];
+    const vertex_count: usize = @intCast(mesh.vertexCount);
+    // `skinMeshCpu` uploads into `mesh.vertices`, so the rest pose is copied out first.
+    const rest_positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(rest_positions);
+    @memcpy(rest_positions, mesh.vertices[0 .. vertex_count * 3]);
+    const skinned: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(skinned);
+    const rest_normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(rest_normals);
+    @memcpy(rest_normals, mesh.normals[0 .. vertex_count * 3]);
+    const skinned_normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(skinned_normals);
+
+    // Sample several frames — one lucky frame proves nothing about a clip.
+    const frames = [_]usize{ 0, 60, 200, 400 };
+    for (frames) |k| {
+        poseSkinMatrices(dance, loaded.inverse_bind, k, positions, rotations, skin);
+        var bone_lo: Vec = vec(1.0e30, 1.0e30, 1.0e30);
+        var bone_hi: Vec = vec(-1.0e30, -1.0e30, -1.0e30);
+        for (0..n) |j| {
+            inline for (0..3) |c| {
+                bone_lo[c] = @min(bone_lo[c], positions[j][c]);
+                bone_hi[c] = @max(bone_hi[c], positions[j][c]);
+            }
+        }
+        var mesh_lo: Vec = vec(1.0e30, 1.0e30, 1.0e30);
+        var mesh_hi: Vec = vec(-1.0e30, -1.0e30, -1.0e30);
+        skinMeshCpu(mesh, rest_positions, rest_normals, skin, skinned, skinned_normals);
+        for (0..vertex_count) |v| {
+            inline for (0..3) |c| {
+                mesh_lo[c] = @min(mesh_lo[c], skinned[v * 3 + c]);
+                mesh_hi[c] = @max(mesh_hi[c], skinned[v * 3 + c]);
+            }
+        }
+        // ★ THE ASSERTION THAT PINS BOTH CONVENTION BUGS AT ONCE. Measured on this clip:
+        //
+        //     frame   0  bones (98,-1,344)..(193,163,410)   mesh (74,0,338)..(202,209,420)
+        //     frame 400  bones (-35,2,442)..(17,142,514)    mesh (-65,0,419)..(46,146,521)
+        //
+        // With `vec` instead of `pointVec` the mesh collapsed toward the ORIGIN while the
+        // skeleton walked off to X~180, Z~370. With the `mulMat` order reversed it inflated to
+        // several times the skeleton's size. Both are caught by requiring the mesh to stay
+        // wrapped around its own bones as the root travels.
+        inline for (0..3) |c| {
+            const bone_extent: f32 = bone_hi[c] - bone_lo[c];
+            const mesh_extent: f32 = mesh_hi[c] - mesh_lo[c];
+            // With a correct bind the mesh hugs its bones: measured within 2-6 units on every
+            // sampled frame, e.g. frame 0 bones (98,-1,344)..(193,163,410) against mesh
+            // (95,-2,338)..(193,164,409). The old tolerances were 60 units wide because a
+            // wrong bind needed them.
+            try d3_expect(mesh_extent < bone_extent + 30.0);
+            const bone_mid: f32 = (bone_lo[c] + bone_hi[c]) * 0.5;
+            const mesh_mid: f32 = (mesh_lo[c] + mesh_hi[c]) * 0.5;
+            try d3_expect(@abs(bone_mid - mesh_mid) < 15.0);
+        }
+    }
+}
+
+test "zm: mulMat and mulMatVec compose in the order the skinning path assumes" {
+    // ★ THE CONVENTION THIS WHOLE PIPELINE RESTS ON, pinned down instead of assumed.
+    // `examples/skinned_mesh` writes `mulMat(rot, translation)` and calls it "rotate then
+    // translate"; every skin matrix here is built the same way. If `mulMat(a, b)` actually
+    // meant "b then a", positions would still look plausible while every composed transform
+    // was silently reversed.
+    const r: Mat = matFromQuat(zm.quatFromAxisAngle(vec(0, 0, 1), pi * 0.5));
+    const t: Mat = translationV(vec(10, 0, 0));
+    const p: Vec = pointVec(1, 0, 0);
+
+    // ★★★ `zm.mulMat(a, b)` APPLIES **b FIRST, THEN a** — the opposite of what reading it
+    // left-to-right suggests, and the opposite of raylib's `MatrixMultiply`. Measured:
+    // `mulMat(rotate90Z, translate10X)` moves (1,0,0) to (0,11,0), i.e. TRANSLATE then ROTATE.
+    //
+    // Getting this backwards is invisible wherever the translation is zero — which is exactly
+    // a bind pose — and only appears once a clip moves the root.
+    const translate_then_rotate: Vec = mulMatVec(mulMat(r, t), p);
+    try d3_expectApproxEqAbs(@as(f32, 0.0), translate_then_rotate[0], 1.0e-4);
+    try d3_expectApproxEqAbs(@as(f32, 11.0), translate_then_rotate[1], 1.0e-4);
+
+    // So "rotate then translate" is `mulMat(translation, rotation)`.
+    const rotate_then_translate: Vec = mulMatVec(mulMat(t, r), p);
+    try d3_expectApproxEqAbs(@as(f32, 10.0), rotate_then_translate[0], 1.0e-4);
+    try d3_expectApproxEqAbs(@as(f32, 1.0), rotate_then_translate[1], 1.0e-4);
+
+    // ★ AND `vec` IS A DIRECTION: lane 3 is ZERO, so an affine translation has NO EFFECT on
+    // it. Using it for a vertex POSITION silently drops every translation — which is exactly
+    // how a skinned character can pass a bind-pose test (where the translation is zero) and
+    // then collapse toward the origin the moment a clip moves the root.
+    const as_direction: Vec = mulMatVec(t, vec(1, 0, 0));
+    try d3_expectApproxEqAbs(@as(f32, 1.0), as_direction[0], 1.0e-4);
+    const as_point: Vec = mulMatVec(t, pointVec(1, 0, 0));
+    try d3_expectApproxEqAbs(@as(f32, 11.0), as_point[0], 1.0e-4);
+}
+
+test "fbx model: the bind pose is the pose the MESH is in" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+    var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, loaded);
+
+    // ★★★ THE TEST THAT WOULD HAVE FOUND THIS ON DAY ONE, and the one every earlier check
+    // missed. It asks a question about the WORLD rather than about matrix algebra:
+    //
+    //     if a joint's bind position is right, the vertices that joint dominantly weights
+    //     must CLUSTER AROUND IT.
+    //
+    // Measured on `Geno.fbx`, over the 53 joints that own vertices:
+    //
+    //     bind from FK on the file's frame 0    mean 35.0 units off, worst 55.5
+    //     bind from the clusters' TransformLink mean  5.0 units off, worst 20.9
+    //
+    // 5 units is flesh-radius around a bone. 35 is a limb length — Geno's frame 0 is a T-POSE
+    // (hand joints at Y~138, arms horizontal) while the MESH is modelled in an A-POSE (hand
+    // vertices centred near Y~95). Every previous test — bind-pose identity, bounding boxes,
+    // the convention checks — passed happily with the wrong pose, because none of them
+    // compared the mesh against the skeleton POSITIONALLY.
+    const mesh: Mesh = loaded.model.meshes[0];
+    const vc: usize = @intCast(mesh.vertexCount);
+    const n: usize = loaded.clip.boneCount();
+
+    const sum: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(sum);
+    const cnt: []usize = try gpa.alloc(usize, n);
+    defer gpa.free(cnt);
+    @memset(cnt, 0);
+    for (sum) |*sv| {
+        sv.* = vec(0, 0, 0);
+    }
+    for (0..vc) |v| {
+        var best: usize = 0;
+        var best_w: f32 = -1;
+        for (0..4) |k| {
+            const weight: f32 = mesh.boneWeights[v * 4 + k];
+            if (weight > best_w) {
+                best_w = weight;
+                best = mesh.boneIndices[v * 4 + k];
+            }
+        }
+        if (best_w <= 0 or best >= n) {
+            continue;
+        }
+        // ★ No weight may land on an END SITE: they are drawing aids with no bind matrix.
+        try d3_expect(!loaded.clip.end_site[best]);
+        sum[best] += pointVec(
+            mesh.vertices[v * 3 + 0],
+            mesh.vertices[v * 3 + 1],
+            mesh.vertices[v * 3 + 2],
+        );
+        cnt[best] += 1;
+    }
+
+    var owned: usize = 0;
+    var total: f32 = 0;
+    var worst: f32 = 0;
+    for (0..n) |j| {
+        if (cnt[j] == 0) {
+            continue;
+        }
+        const centroid: Vec = sum[j] / @as(Vec, @splat(float(cnt[j])));
+        const bind_pos: Vec = vec(
+            loaded.bind[j][3][0],
+            loaded.bind[j][3][1],
+            loaded.bind[j][3][2],
+        );
+        const d: Vec = centroid - bind_pos;
+        const dist: f32 = @sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        owned += 1;
+        total += dist;
+        worst = @max(worst, dist);
+    }
+    try d3_expect(owned > 40);
+    // Generous next to the 35.0 the wrong pose scored, tight enough to catch a relapse.
+    try d3_expect(total / float(owned) < 12.0);
+    try d3_expect(worst < 30.0);
+}
+
+test "fbx model: a second, unrelated rig loads and binds correctly too" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Drop_Kick.fbx", .{}) catch return;
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+
+    var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, loaded);
+
+    // ★ A COMPLETELY DIFFERENT RIG: 65 `mixamorig:` joints against Geno's 75, TWO skinned
+    // meshes rather than one, and its own animation rather than a borrowed clip. Everything
+    // the Geno path proved could still have been Geno-specific; this is the check that it is
+    // not. It also exercises the multi-mesh path, which Geno never does.
+    try d3_expectEqual(@as(i32, 2), loaded.model.meshCount);
+    try d3_expect(loaded.clip.animation.keyframeCount > 1);
+    try d3_expectEqualSlices(u8, "mixamorig:Hips", loaded.clip.boneName(0));
+
+    // Same world-facing check as Geno's: vertices must cluster around the joints they weight.
+    const n: usize = loaded.clip.boneCount();
+    const sum: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(sum);
+    const cnt: []usize = try gpa.alloc(usize, n);
+    defer gpa.free(cnt);
+    @memset(cnt, 0);
+    for (sum) |*sv| {
+        sv.* = vec(0, 0, 0);
+    }
+    for (0..@intCast(loaded.model.meshCount)) |mi| {
+        const mesh: Mesh = loaded.model.meshes[mi];
+        const vc: usize = @intCast(mesh.vertexCount);
+        for (0..vc) |v| {
+            var best: usize = 0;
+            var best_w: f32 = -1;
+            for (0..4) |k| {
+                const weight: f32 = mesh.boneWeights[v * 4 + k];
+                if (weight > best_w) {
+                    best_w = weight;
+                    best = mesh.boneIndices[v * 4 + k];
+                }
+            }
+            if (best_w <= 0 or best >= n) {
+                continue;
+            }
+            sum[best] += pointVec(
+                mesh.vertices[v * 3 + 0],
+                mesh.vertices[v * 3 + 1],
+                mesh.vertices[v * 3 + 2],
+            );
+            cnt[best] += 1;
+        }
+    }
+    var owned: usize = 0;
+    var total: f32 = 0;
+    for (0..n) |j| {
+        if (cnt[j] == 0) {
+            continue;
+        }
+        const centroid: Vec = sum[j] / @as(Vec, @splat(float(cnt[j])));
+        const bind_pos: Vec = vec(
+            loaded.bind[j][3][0],
+            loaded.bind[j][3][1],
+            loaded.bind[j][3][2],
+        );
+        const d: Vec = centroid - bind_pos;
+        owned += 1;
+        total += @sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    }
+    // 4.1 measured — the same flesh-radius figure Geno scores, on a rig that shares nothing
+    // with it. The bind logic is general, not tuned to one file.
+    try d3_expect(owned > 30);
+    try d3_expect(total / float(owned) < 12.0);
+}
+
+test "fbx model: recomputing normals fixes a mesh whose stored ones oppose their winding" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+
+    // ★ MEASURED, NOT ASSUMED. `Geno.fbx` stores normals that oppose their triangle's winding
+    // on 52.6% of faces; `Drop_Kick.fbx` does so on 0.0%. That renders as dark banding across
+    // the limbs, and it is the ASSET, not the loader — but it IS fixable, which is worth
+    // knowing before writing it off.
+    const as_authored: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, as_authored);
+    const fixed: FbxModel = try loadFbxModel(gpa, bytes, .{ .recompute_normals = true });
+    defer unloadFbxModel(gpa, fixed);
+
+    try d3_expect(countOpposedNormals(as_authored.model.meshes[0]) > 8000);
+    // Recomputed normals come FROM the winding, so essentially none can oppose it — but a
+    // SMOOTH normal is the area-weighted average of a vertex's faces, so a sliver triangle can
+    // still end up on the wrong side of its own tiny face. Measured: 1 of 18660. Assert "a
+    // handful", not zero; demanding zero would be asserting that no mesh has slivers.
+    try d3_expect(countOpposedNormals(fixed.model.meshes[0]) < 10);
+
+    // And a mesh whose normals were already consistent must be left alone by the default path.
+    var kh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Drop_Kick.fbx", .{}) catch return;
+    defer kh.close(io);
+    const kst: std.Io.File.Stat = try kh.stat(io);
+    const kbytes: []u8 = try gpa.alloc(u8, kst.size);
+    defer gpa.free(kbytes);
+    _ = try kh.readPositionalAll(io, kbytes, 0);
+    const mixamo: FbxModel = try loadFbxModel(gpa, kbytes, .{});
+    defer unloadFbxModel(gpa, mixamo);
+    try d3_expectEqual(@as(usize, 0), countOpposedNormals(mixamo.model.meshes[0]));
+}
+
+/// How many triangles have a first-vertex normal pointing against their winding.
+fn countOpposedNormals(mesh: Mesh) usize {
+    const triangle_count: usize = @intCast(@max(mesh.triangleCount, 0));
+    var opposed: usize = 0;
+    for (0..triangle_count) |t| {
+        const ia: usize = mesh.indices[t * 3 + 0];
+        const ib: usize = mesh.indices[t * 3 + 1];
+        const ic: usize = mesh.indices[t * 3 + 2];
+        const pa: Vec = vec(mesh.vertices[ia * 3], mesh.vertices[ia * 3 + 1], mesh.vertices[ia * 3 + 2]);
+        const pb: Vec = vec(mesh.vertices[ib * 3], mesh.vertices[ib * 3 + 1], mesh.vertices[ib * 3 + 2]);
+        const pc: Vec = vec(mesh.vertices[ic * 3], mesh.vertices[ic * 3 + 1], mesh.vertices[ic * 3 + 2]);
+        const e1: Vec = pb - pa;
+        const e2: Vec = pc - pa;
+        const face: Vec = vec(
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        );
+        const n: Vec = vec(mesh.normals[ia * 3], mesh.normals[ia * 3 + 1], mesh.normals[ia * 3 + 2]);
+        if (face[0] * n[0] + face[1] * n[1] + face[2] * n[2] < 0) {
+            opposed += 1;
+        }
+    }
+    return opposed;
+}
+
+test "skinning: a normal follows its bone's rotation, not just the position" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+    const loaded: FbxModel = try loadFbxModel(gpa, bytes, .{ .recompute_normals = true });
+    defer unloadFbxModel(gpa, loaded);
+
+    var dh: std.Io.File =
+        std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    defer dh.close(io);
+    const dst: std.Io.File.Stat = try dh.stat(io);
+    const db: []u8 = try gpa.alloc(u8, dst.size);
+    defer gpa.free(db);
+    _ = try dh.readPositionalAll(io, db, 0);
+    var dd: codecs.bvh.Data = try codecs.bvh.parse(gpa, db, null);
+    defer dd.deinit();
+    const dance: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, dd);
+    defer unloadBvhSkeletalClip(gpa, dance);
+
+    // ★★★ THE TEST THAT WOULD HAVE CAUGHT "NORMALS ARE NEVER SKINNED".
+    //
+    // `skinMeshCpu` wrote POSITIONS ONLY for its whole life. The mesh deformed while its
+    // normals stayed in the bind pose, so lighting was frozen to the rest pose on a moving
+    // body — read on device as "shading that looks wrong in some places and fine in others".
+    //
+    // Nothing caught it: the bounding-box test, the centroid test and the foreign-clip test
+    // are all about POSITIONS, and a bind-pose test is the identity for normals too.
+    //
+    // The invariant here is exact rather than statistical: for a vertex bound ENTIRELY to one
+    // bone, the skinned normal must equal that bone's skin rotation applied to the rest normal.
+    // A pipeline that forgets to transform normals fails it by the full bone rotation.
+    const mesh: Mesh = loaded.model.meshes[0];
+    const vertex_count: usize = @intCast(mesh.vertexCount);
+    const n: usize = loaded.clip.boneCount();
+
+    const positions: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(positions);
+    const rotations: []Quat = try gpa.alloc(Quat, n);
+    defer gpa.free(rotations);
+    const skin: []Mat = try gpa.alloc(Mat, n);
+    defer gpa.free(skin);
+    // Frame 200: well away from the bind pose, so a missing transform is unmissable.
+    poseSkinMatrices(dance, loaded.inverse_bind, 200, positions, rotations, skin);
+
+    const rest_p: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(rest_p);
+    @memcpy(rest_p, mesh.vertices[0 .. vertex_count * 3]);
+    const rest_n: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(rest_n);
+    @memcpy(rest_n, mesh.normals[0 .. vertex_count * 3]);
+    const out_p: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(out_p);
+    const out_n: []f32 = try gpa.alloc(f32, vertex_count * 3);
+    defer gpa.free(out_n);
+    skinMeshCpu(mesh, rest_p, rest_n, skin, out_p, out_n);
+
+    var checked: usize = 0;
+    var moved: usize = 0;
+    for (0..vertex_count) |v| {
+        // Every skinned normal must stay unit length, whatever its weights.
+        const on: Vec = vec(out_n[v * 3 + 0], out_n[v * 3 + 1], out_n[v * 3 + 2]);
+        const len: f32 = @sqrt(on[0] * on[0] + on[1] * on[1] + on[2] * on[2]);
+        try d3_expectApproxEqAbs(@as(f32, 1.0), len, 1.0e-3);
+
+        const rn: Vec = vec(rest_n[v * 3 + 0], rest_n[v * 3 + 1], rest_n[v * 3 + 2]);
+        if (on[0] != rn[0] or on[1] != rn[1] or on[2] != rn[2]) {
+            moved += 1;
+        }
+
+        // Single-bone vertices give the exact check.
+        if (mesh.boneWeights[v * 4 + 0] < 0.999) {
+            continue;
+        }
+        const joint: usize = mesh.boneIndices[v * 4 + 0];
+        if (joint >= n) {
+            continue;
+        }
+        // `vec` — a DIRECTION, so the skin matrix's translation is excluded. Using `pointVec`
+        // here would add the bone's world translation to a unit vector.
+        const want: Vec = normalize3(mulMatVec(skin[joint], rn));
+        inline for (0..3) |c| {
+            try d3_expectApproxEqAbs(want[c], on[c], 1.0e-3);
+        }
+        checked += 1;
+    }
+    // Guard the guard: if no vertex were fully bound to one bone, the loop above would assert
+    // nothing at all and still pass.
+    try d3_expect(checked > 100);
+    // And the mesh must actually be moving — a pose that happened to equal the bind would make
+    // "normals unchanged" trivially true.
+    try d3_expect(moved > vertex_count / 2);
+}
+
+test "fbx model: load-time scale moves mesh and bind together, not one of them" {
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    defer fh.close(io);
+    const st: std.Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+
+    // ★★ THE FAILURE THIS EXISTS TO CATCH: scaling the mesh but not the bind pose (or vice
+    // versa). Skinning composes mesh, bind and animated pose; scale a subset and the character
+    // explodes or vanishes. Loading the SAME file at two scales and comparing makes a partial
+    // conversion arithmetic rather than visual.
+    const k: f32 = 0.01;
+    const big: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, big);
+    const small: FbxModel = try loadFbxModel(gpa, bytes, .{ .scale = k });
+    defer unloadFbxModel(gpa, small);
+
+    try d3_expectEqual(big.model.meshes[0].vertexCount, small.model.meshes[0].vertexCount);
+    const vertex_count: usize = @intCast(big.model.meshes[0].vertexCount);
+
+    // Every vertex scales by exactly k.
+    for (0..vertex_count) |v| {
+        inline for (0..3) |c| {
+            try d3_expectApproxEqAbs(
+                big.model.meshes[0].vertices[v * 3 + c] * k,
+                small.model.meshes[0].vertices[v * 3 + c],
+                1.0e-3,
+            );
+        }
+    }
+
+    // ★ And the BIND POSE scales with it — its TRANSLATION only. The rotation block is
+    // unitless: scaling it would shear the character rather than resize it.
+    for (0..small.bind.len) |j| {
+        inline for (0..3) |c| {
+            try d3_expectApproxEqAbs(big.bind[j][3][c] * k, small.bind[j][3][c], 1.0e-4);
+        }
+        inline for (0..3) |r| {
+            inline for (0..3) |c| {
+                try d3_expectApproxEqAbs(big.bind[j][r][c], small.bind[j][r][c], 1.0e-5);
+            }
+        }
+    }
+
+    // ★★★ AND THE CLIP — the third of the three, and the one this test originally MISSED.
+    // Its absence shipped a character that vanished: a metre bind driven by a centimetre
+    // animation. Checking the pose the animation actually produces, rather than the arrays it
+    // is stored in, is what makes this catch a partial conversion anywhere in the chain.
+    const n: usize = big.clip.boneCount();
+    try d3_expectEqual(n, small.clip.boneCount());
+    const big_pos: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(big_pos);
+    const big_rot: []Quat = try gpa.alloc(Quat, n);
+    defer gpa.free(big_rot);
+    const small_pos: []Vec = try gpa.alloc(Vec, n);
+    defer gpa.free(small_pos);
+    const small_rot: []Quat = try gpa.alloc(Quat, n);
+    defer gpa.free(small_rot);
+    bvhForwardKinematics(big.clip, 0, big_pos, big_rot);
+    bvhForwardKinematics(small.clip, 0, small_pos, small_rot);
+    for (0..n) |j| {
+        inline for (0..3) |c| {
+            // Positions scale...
+            try d3_expectApproxEqAbs(big_pos[j][c] * k, small_pos[j][c], 1.0e-3);
+        }
+        inline for (0..4) |c| {
+            // ...and rotations do NOT. A scale that touched them would shear the skeleton.
+            try d3_expectApproxEqAbs(big_rot[j][c], small_rot[j][c], 1.0e-5);
+        }
+    }
+
+    // ★ Normals are DIRECTIONS and must stay unit length through a scale.
+    for (0..vertex_count) |v| {
+        const nv: Vec = vec(
+            small.model.meshes[0].normals[v * 3 + 0],
+            small.model.meshes[0].normals[v * 3 + 1],
+            small.model.meshes[0].normals[v * 3 + 2],
+        );
+        const nlen: f32 = @sqrt(nv[0] * nv[0] + nv[1] * nv[1] + nv[2] * nv[2]);
+        try d3_expectApproxEqAbs(@as(f32, 1.0), nlen, 1.0e-3);
     }
 }

@@ -115,7 +115,7 @@ pub const descriptions = [_]Entry{
             "music, over web-audio bridge externs with host no-op fallbacks.",
     },
     .{
-        .path = "src/shader_runtime_wgpu.zig",
+        .path = "src/shader_runtime.zig",
         .text = "The typed shader runtime for the wgpu path: Resources(Schema) bind-group " ++
             "containers, typed IO structs, samplers, UBO plumbing, and the wave_fs demo IO. " ++
             "Pairs with shader_introspect's comptime schema solving.",
@@ -400,11 +400,15 @@ pub const descriptions = [_]Entry{
     },
     .{
         .path = "src/assets/sample.ogg",
-        .text = "Small OGG used by the sound tests.",
+        .text = "Ogg fixture EMBEDDED BY src/codecs.zig via a relative `@embedFile`. " ++
+            "Byte-identical to assets/sample.ogg and NOT redundant: `@embedFile` resolves " ++
+            "relative to the importing file, so codecs cannot reach the repo-root copy. " ++
+            "Deleting this breaks `zig build test` while `zig build check` stays green.",
     },
     .{
         .path = "src/assets/test_sine.wav",
-        .text = "Sine-wave WAV fixture for sound tests.",
+        .text = "WAV fixture embedded by src/codecs.zig and src/tests/features_test.zig. " ++
+            "See src/assets/sample.ogg for why the identical copy elsewhere is not a substitute.",
     },
     .{
         .path = "src/notes/math_audit.csv",
@@ -578,7 +582,7 @@ pub const key_symbols = [_]KeySyms{
     .{ .name = "ui", .syms = "Ui Window|DrawList|Table TabBar|Dock Tween|widgets (ImGui)" },
     .{ .name = "zimrphysics", .syms = "World Body|Shape Constraint|Vehicle Character|Ragdoll SoftBody|collide step" },
     .{ .name = "raster", .syms = "Context|Framebuffer|Texture|DrawMode|BlendFactor (SW GL)" },
-    .{ .name = "draw3d", .syms = "Mesh Model|genMeshCube|genMeshSphere|drawModel|ray collision|pbr3d" },
+    .{ .name = "draw3d", .syms = "Mesh Model|genMeshCube|genMeshSphereLegacy|drawModel|ray collision|pbr3d" },
     .{ .name = "gpu", .syms = "PipelineCache|GpuFrame|StateCombo|descriptors" },
     .{ .name = "codecs", .syms = "png jpeg|truetype|gltf|audio|rectpack" },
     .{ .name = "image", .syms = "genImage*|drawTexture|imageDraw*|color ops" },
@@ -592,7 +596,7 @@ pub const key_symbols = [_]KeySyms{
     .{ .name = "plot_ui", .syms = "Subplots|Series|Overlay|DragHandle" },
     .{ .name = "plot_core", .syms = "Colormap|sampleColormap" },
     .{ .name = "spv2wgsl", .syms = "convertSpirvToWgsl|ir sccp|wgsl_check" },
-    .{ .name = "shader_runtime_wgpu", .syms = "RenderPipeline|loadShader|ShaderDesc" },
+    .{ .name = "shader_runtime", .syms = "RenderPipeline|loadShader|ShaderDesc" },
     .{ .name = "shader_introspect", .syms = "solveLayout|BindGroupLayout|validate" },
     .{ .name = "shader_interface", .syms = "Sampler2D|Attr|binding|shared" },
     .{ .name = "shader_codegen", .syms = "ShaderPipeline (build-time)" },

@@ -1,0 +1,201 @@
+//! Does the trim loop keep up with a MOVING attitude command? One question, one file.
+//!
+//! ★ THE STATIC ERROR IS ALREADY CLOSED by six lines of feedback. But that trim is an
+//! INTEGRATOR, and an integrator converges to a CONSTANT target and lags a moving one — the same
+//! structural lag the PD had on the tracking arm. **This decides whether an MPC example here is
+//! worth building at all**, and a small lag would mean the honest answer is "leave it alone".
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+const sim_dt: f32 = 1.0 / 250.0;
+/// Incommensurate on purpose: the attitude never exactly repeats.
+const cone_rate: f32 = 0.55;
+const roll_rate: f32 = 0.31;
+const cone_amount: f32 = 0.22;
+const roll_amount: f32 = 0.20;
+
+fn commandAt(t: f32) [3]f32 {
+    const cone: f32 = t * cone_rate * 2.0 * zm.pi;
+    const rock: f32 = t * roll_rate * 2.0 * zm.pi;
+    return .{ roll_amount * @sin(rock), cone_amount * @cos(cone), cone_amount * @sin(cone) };
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, go1_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+
+    var applied: bool = false;
+    for (robot.keyframes) |key| {
+        if (std.mem.eql(u8, key.name, "home")) applied = rmj.applyKeyframe(&m, &d, key);
+    }
+    if (!applied) @memcpy(d.pos, m.qpos0);
+    d.stage = .stale;
+    rbt.forward(&m, &d);
+
+    var world: zp.World = try .init(gpa, 256);
+    defer world.deinit(gpa);
+    world.gravity = vec(0, 0, -9.81);
+    const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(6, 6, 0.5), .convex_radius = 0.01 },
+    });
+    _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+    var bridge: rphys.Bridge = try .init(gpa, &world, &m, &d, 256);
+    defer bridge.deinit(&world);
+    bridge.listen(&world);
+
+    var act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    const home: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(home);
+    var settle: u32 = 0;
+    while (settle < 500) : (settle += 1) {
+        (ctl.PoseHold{ .target = home, .kp = 400, .kv = 12, .max_torque = 35 }).apply(&m, &d, act);
+        rbt.forward(&m, &d);
+        try bridge.sync(&world, &m, &d);
+        try zp.step(&world, sim_dt);
+        bridge.harvest(&d);
+        rbt.step(&m, &d);
+    }
+    rbt.forward(&m, &d);
+
+    const stance: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(stance);
+    const rest_rot: zm.Quat = d.body_xrot[1];
+    const rest_height: f32 = d.pos[m.jnt_qpos_adr[0] + 2];
+
+    var foot_body: [4]u32 = undefined;
+    var foot_offset: [4]zm.Vec = undefined;
+    var planted: [4]zm.Vec = undefined;
+    var legs: [4]ctl.Actuation = undefined;
+    const names = [_][]const u8{ "FR_calf", "FL_calf", "RR_calf", "RL_calf" };
+    for (names, 0..) |name, i| {
+        const body: u32 = imp.bodyIndex(name) orelse return error.NoFoot;
+        foot_body[i] = body;
+        legs[i] = try ctl.limbActuation(gpa, &m, body);
+        var offset: zm.Vec = vec(0, 0, 0);
+        for (0..m.ngeom) |g| {
+            if (m.geom_body[g] != body) continue;
+            switch (m.geom_shape[g]) {
+                .sphere => offset = m.geom_pos[g],
+                else => {},
+            }
+        }
+        foot_offset[i] = offset;
+        planted[i] = d.body_xpos[body] + zm.rotate(d.body_xrot[body], offset);
+    }
+    defer for (0..4) |i| legs[i].deinit();
+
+    const target: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(target);
+    const keep: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(keep);
+
+    p("routine: cone {d:.2} Hz, roll {d:.2} Hz — incommensurate, never repeats\n\n", .{ cone_rate, roll_rate });
+    p("  trim cadence   mean lag    worst lag\n", .{});
+
+    // ★ THE CADENCE IS SWEPT. A slow trim is the shipped setting; a fast one is the best the
+    // integrator can do before it fights the PD it sits on. Both bound what a planner must beat.
+    for ([_]u32{ 12, 4, 1 }) |cadence| {
+        @memcpy(d.pos, stance);
+        @memset(d.vel, 0);
+        @memset(d.applied_force, 0);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        bridge.teleported();
+        @memcpy(target, stance);
+
+        var trim_roll: f32 = 0;
+        var trim_pitch: f32 = 0;
+        var total: f64 = 0;
+        var worst: f32 = 0;
+        var samples: u32 = 0;
+        var tick: u32 = 0;
+        var clock: f32 = 0;
+        while (clock < 12.0) : (clock += sim_dt) {
+            const want = commandAt(clock);
+            if (tick % cadence == 0) {
+                const seen = zm.quatToEulerXYZ(zm.qmul(d.body_xrot[1], zm.conjugate(rest_rot)));
+                trim_roll = zm.clamp(trim_roll + 0.5 * (want[0] - seen[0]), -0.4, 0.4);
+                trim_pitch = zm.clamp(trim_pitch + 0.5 * (want[1] - seen[1]), -0.4, 0.4);
+
+                @memcpy(keep, d.pos[0..m.nq]);
+                @memcpy(d.pos, stance);
+                const root: u32 = m.jnt_qpos_adr[0];
+                d.pos[root + 2] = rest_height;
+                const dq: zm.Quat = zm.qmul(
+                    zm.qmul(
+                        zm.quatFromAxisAngle(vec(0, 0, 1), want[2]),
+                        zm.quatFromAxisAngle(vec(0, 1, 0), want[1] + trim_pitch),
+                    ),
+                    zm.quatFromAxisAngle(vec(1, 0, 0), want[0] + trim_roll),
+                );
+                const wq: zm.Quat = zm.qmul(dq, rest_rot);
+                d.pos[root + 3] = wq[0];
+                d.pos[root + 4] = wq[1];
+                d.pos[root + 5] = wq[2];
+                d.pos[root + 6] = wq[3];
+                d.stage = .stale;
+                for (0..4) |i| {
+                    _ = (ctl.Ik{ .max_iterations = 24 }).solve(&m, &d, legs[i], .{ .body = foot_body[i], .offset = foot_offset[i], .goal = planted[i] }, ik_scratch);
+                }
+                @memcpy(target, stance);
+                for (0..m.njnt) |j| {
+                    if (m.jnt_type[j] != .hinge) continue;
+                    const q: u32 = m.jnt_qpos_adr[j];
+                    target[q] = d.pos[q];
+                }
+                @memcpy(d.pos[0..m.nq], keep);
+                d.stage = .stale;
+                rbt.forward(&m, &d);
+            }
+            (ctl.PoseHold{ .target = target, .kp = 400, .kv = 12, .max_torque = 35 }).apply(&m, &d, act);
+            rbt.forward(&m, &d);
+            try bridge.sync(&world, &m, &d);
+            try zp.step(&world, sim_dt);
+            bridge.harvest(&d);
+            rbt.step(&m, &d);
+            tick += 1;
+            if (clock > 2.0) {
+                const seen = zm.quatToEulerXYZ(zm.qmul(d.body_xrot[1], zm.conjugate(rest_rot)));
+                const gap: f32 = @sqrt(
+                    (want[0] - seen[0]) * (want[0] - seen[0]) +
+                        (want[1] - seen[1]) * (want[1] - seen[1]),
+                );
+                total += gap;
+                worst = @max(worst, gap);
+                samples += 1;
+            }
+        }
+        const mean: f32 = @floatCast(total / @as(f64, @floatFromInt(@max(1, samples))));
+        p("  {d:>12}   {d:>8.4}   {d:>10.4}\n", .{ cadence, mean, worst });
+    }
+}

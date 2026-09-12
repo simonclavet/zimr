@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec = zm.Vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -130,7 +130,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.add_shader.setVertex(ps, 0, s.vbo, vbo_bytes);
     s.add_shader.draw(ps, verts, 1);
 
-    co.caption(f.gl, s.font, "pipeline_settings: blend modes - left alpha, right additive (same geometry)");
+    common.caption(f.gl, s.font, "pipeline_settings: blend modes - left alpha, right additive (same geometry)");
     z.endDrawing(f.gl);
 }
 

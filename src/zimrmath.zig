@@ -1,24 +1,29 @@
-//! SHADER-SAFE — this file may be @imported by shader sources
+//! lint:alias zm
+//! SHADER-SAFE - this file may be @imported by shader sources
 //! (compiled through the SPIR-V pipeline) and by comptime executors.
 //! Lint enforces the tier: no allocators, no runtime std, no externs,
 //! no bridge imports outside `test` blocks.
 //!
-//! src/zimrmath.zig — **zimrmath**, zimr's unified math library.
+//! src/zimrmath.zig - **zimrmath**, zimr's unified math library.
 //! Imported everywhere as `const zm = @import("zm");`.
 //!
 //! GPU-MATH VOCABULARY (search this block by the name you know):
-//!   step       -> zm.step        CANONICAL (was `stepEdge`)
-//!   lerp       -> zm.lerp        CANONICAL (GLSL calls it `mix`)
-//!   clamp01    -> zm.clamp01     CANONICAL (HLSL calls it `saturate`)
-//!   clamp      -> zm.clamp       (declared `pub inline fn` — grep for `fn clamp`)
-//!   mix / saturate / stepEdge    -> exist only as PRIVATE, EMPTY decls whose doc
-//!     names the canonical spelling. One name per operation, enforced by the
-//!     COMPILER — not by a lint rule you have to remember to run.
-//!   smoothstep -> zm.smoothstep
-//!   fract      -> zm.fract
-//!   dot cross normalize length distance reflect -> same names
-//!   abs min max floor ceil sqrt pow exp log -> Zig BUILTINS (@abs, @min, ...),
-//!     deliberately NOT wrapped: a wrapper would just hide the builtin.
+//! step       -> zm.step        CANONICAL (was `stepEdge`)
+//! lerp       -> zm.lerp        CANONICAL (GLSL calls it `mix`)
+//! clamp01    -> zm.clamp01     CANONICAL (HLSL calls it `saturate`)
+//! clamp      -> zm.clamp       (declared `pub inline fn` - grep for `fn clamp`)
+//! sin/cos/sincos -> zm.sinRad/cosRad/sincosRad   (radians)
+//! zm.sinTurns/cosTurns/sincosTurns (turns)
+//! The UNIT IS IN THE NAME. There is no bare `sin`: with both units
+//! available the plain spelling names two operations, not one.
+//! mix / saturate / stepEdge / sin / cos / sincos -> exist only as PRIVATE, EMPTY
+//! decls whose doc names the canonical spelling. One name per operation, enforced
+//! by the COMPILER - not by a lint rule you have to remember to run.
+//! smoothstep -> zm.smoothstep
+//! fract      -> zm.fract
+//! dot cross normalize length distance reflect -> same names
+//! abs min max floor ceil sqrt pow exp log -> Zig BUILTINS (@abs, @min, ...),
+//! deliberately NOT wrapped: a wrapper would just hide the builtin.
 //!
 //! One library, two targets.  zimrmath compiles for CPU (wasm32-
 //! wasi for the runtime, native for host tests) AND for SPIR-V
@@ -38,30 +43,30 @@
 //! ### Conventions
 //!
 //! - **Column-major matrices**, multiplied as `M * v` (post-Z4 of
-//!   the math-unification plan).  Composition: `mulMat(B, A)` means
-//!   "apply A then B" — read right-to-left like math notation.
-//!   This is the OPPOSITE of the vendor zmath convention; the
-//!   matrix-convention switch in Stage 2 of math-unification
-//!   touched ~73 sites across 17 files.  See
-//!   `src/notes/math_unification.md` for the migration log.
+//! the math-unification plan).  Composition: `mulMat(B, A)` means
+//! "apply A then B" - read right-to-left like math notation.
+//! This is the OPPOSITE of the vendor zmath convention; the
+//! matrix-convention switch in Stage 2 of math-unification
+//! touched ~73 sites across 17 files.  See
+//! `src/notes/math_unification.md` for the migration log.
 //! - **Quaternion storage**: `(x, y, z, w)`.  Matches raylib,
-//!   glTF 2.0, DirectX, GLM — the ecosystem zimr builds on.  Math
-//!   papers typically write `q = w + xi + yj + zk` (scalar first);
-//!   the storage is the GPU/asset convention.
+//! glTF 2.0, DirectX, GLM - the ecosystem zimr builds on.  Math
+//! papers typically write `q = w + xi + yj + zk` (scalar first);
+//! the storage is the GPU/asset convention.
 //! - **No `Vec3` for SIMD storage**.  `Vec = @Vector(4, f32)` is the
-//!   primary 3D-math type with a `w` lane reserved for SIMD
-//!   alignment (1.0 for points, 0.0 for directions).
-//!   `Vec3 = @Vector(3, f32)` exists for compact storage (3D point
-//!   arrays, GLSL `vec3` uniforms) but most math operates on `Vec`.
-//! - **`Vec2 = @Vector(2, f32)`** for UI / 2D math — 8 bytes,
-//!   distinct from `Vec` for storage efficiency.
+//! primary 3D-math type with a `w` lane reserved for SIMD
+//! alignment (1.0 for points, 0.0 for directions).
+//! `Vec3 = @Vector(3, f32)` exists for compact storage (3D point
+//! arrays, GLSL `vec3` uniforms) but most math operates on `Vec`.
+//! - **`Vec2 = @Vector(2, f32)`** for UI / 2D math - 8 bytes,
+//! distinct from `Vec` for storage efficiency.
 //! - **GLSL-style scalar helpers** (`vec3(x, y, z)`, `clamp01(t)`,
-//!   `lerp(a, b, t)`, `fract(x)`, `smoothstep(e0, e1, x)`,
-//!   `pow(x, y)`, `sw(v, "yzx")`, ...) live at the top level so
-//!   shader code reads idiomatically.
+//! `lerp(a, b, t)`, `fract(x)`, `smoothstep(e0, e1, x)`,
+//! `pow(x, y)`, `sw(v, "yzx")`, ...) live at the top level so
+//! shader code reads idiomatically.
 //! - **Shader decorators** (`location`, `binding`, `zsample2d`)
-//!   live here too — they're SPIR-V-only inline-asm helpers,
-//!   placed at the bottom of the file under their own section.
+//! live here too - they're SPIR-V-only inline-asm helpers,
+//! placed at the bottom of the file under their own section.
 //!
 //! ### Lineage
 //!
@@ -70,13 +75,13 @@
 //! no upstream-merge story.  Major surgery since vendor:
 //! - Z2..Z4: Vec2 SIMD, GLSL helpers, column-major switch.
 //! - Stage 1 of math-unification: target-conditional veneer for
-//!   assert + scalar trig polynomials, originally in a separate
-//!   `math_intrinsic.zig`, inlined here at end of Stage 3.
+//! assert + scalar trig polynomials, originally in a separate
+//! `math_intrinsic.zig`, inlined here at end of Stage 3.
 //! - Stage 5: shadermath retired in favor of this file.  SPIR-V
-//!   decorators (`location`, `binding`, `zsample2d`) absorbed.
-//!   File renamed `math.zig` → `zimrmath.zig` for unambiguous
-//!   branding (no collision with std's internal `math` module —
-//!   see "build wiring" below).
+//! decorators (`location`, `binding`, `zsample2d`) absorbed.
+//! File renamed `math.zig` -> `zimrmath.zig` for unambiguous
+//! branding (no collision with std's internal `math` module -
+//! see "build wiring" below).
 //!
 //! ### Build wiring
 //!
@@ -87,7 +92,7 @@
 //! zimrmath_mod)`.  Two name layers because the global module
 //! name "zimrmath" must NOT collide with std's internal `math`
 //! module (naming it "math" triggers `error: no module named
-//! 'math' available within module 'std'` in compiler_rt — see
+//! 'math' available within module 'std'` in compiler_rt - see
 //! the Stage 5 log in math_unification.md for the full story).
 //! The short import alias `zm` keeps call sites unchanged:
 //! `const zm = @import("zm")` is the universal first line.
@@ -108,14 +113,14 @@
 // f32x4(e0: f32, e1: f32, e2: f32, e3: f32) F32x4
 // f32x8(e0: f32, e1: f32, e2: f32, e3: f32, e4: f32, e5: f32, e6: f32, e7: f32) F32x8
 // f32x16(e0: f32, e1: f32, e2: f32, e3: f32, e4: f32, e5: f32, e6: f32, e7: f32,
-//        e8: f32, e9: f32, ea: f32, eb: f32, ec: f32, ed: f32, ee: f32, ef: f32) F32x16
+// e8: f32, e9: f32, ea: f32, eb: f32, ec: f32, ed: f32, ee: f32, ef: f32) F32x16
 // splat(v: f32) Vec          -- broadcast scalar to all lanes (canonical)
 // splat2(v: f32) Vec2        -- 2-lane broadcast
 // splat8(v: f32) F32x8       -- 8-lane broadcast
 // boolx4(e0: bool, e1: bool, e2: bool, e3: bool) Boolx4
 // boolx8(e0: bool, e1: bool, e2: bool, e3: bool, e4: bool, e5: bool, e6: bool, e7: bool) Boolx8
 // boolx16(e0: bool, e1: bool, e2: bool, e3: bool, e4: bool, e5: bool, e6: bool, e7: bool,
-//         e8: bool, e9: bool, ea: bool, eb: bool, ec: bool, ed: bool, ee: bool, ef: bool) Boolx16
+// e8: bool, e9: bool, ea: bool, eb: bool, ec: bool, ed: bool, ee: bool, ef: bool) Boolx16
 // load(mem: []const f32, comptime T: type, comptime len: u32) T
 // store(mem: []f32, v: anytype, comptime len: u32) void
 // loadArr2(arr: [2]f32) F32x4
@@ -295,13 +300,13 @@
 /// Euler's number (e)
 pub const euler = 2.71828182845904523536028747135266249775724709369995;
 
-/// Archimedes' constant (π)
+/// Archimedes' constant (pi)
 pub const pi = 3.14159265358979323846264338327950288419716939937510;
 
-/// Phi or Golden ratio constant (Φ) = (1 + sqrt(5))/2
+/// Phi or Golden ratio constant (Phi) = (1 + sqrt(5))/2
 pub const phi = 1.6180339887498948482045868343656381177203091798057628621;
 
-/// Circle constant (τ)
+/// Circle constant (tau)
 pub const tau = 2 * pi;
 
 /// log2(e)
@@ -316,7 +321,7 @@ pub const ln2 = 0.693147180559945309417232121458176568;
 /// ln(10)
 pub const ln10 = 2.302585092994045684017991454684364208;
 
-/// 2/sqrt(π)
+/// 2/sqrt(pi)
 pub const two_sqrtpi = 1.128379167095512573896158903121545172;
 
 /// sqrt(2)
@@ -326,8 +331,8 @@ pub const sqrt2 = 1.414213562373095048801688724209698079;
 pub const sqrt1_2 = 0.707106781186547524400844362104849039;
 
 /// pi/180.0
-/// NOTE: prefer the `radFromDeg()` function over this raw constant. zimr's API is radians-centric —
-/// rotation parameters take radians and are named `_rad` — so convert degrees at the UI layer with
+/// NOTE: prefer the `radFromDeg()` function over this raw constant. zimr's API is radians-centric -
+/// rotation parameters take radians and are named `_rad` - so convert degrees at the UI layer with
 /// `radFromDeg(deg)` rather than multiplying by this constant deep inside the system.
 pub const rad_per_deg = 0.0174532925199432957692369076848861271344287188854172545609719144;
 
@@ -335,21 +340,21 @@ pub const rad_per_deg = 0.017453292519943295769236907684886127134428718885417254
 /// NOTE: prefer the `degFromRad()` function over this raw constant (see `rad_per_deg`).
 pub const deg_per_rad = 57.295779513082320876798154814105170332405472466564321549160243861;
 
-// `std.math` re-exports — single-import convenience.  Callers can use
+// `std.math` re-exports - single-import convenience.  Callers can use
 // `zm.X` for these without needing a second `std.math` import.  Each is
 // a direct compile-time alias, identical signature and behavior to its
 // Where `math_intrinsic.zig` (the SPIR-V-aware veneer) provides an
 // equivalent, we re-export via `mi` so math.zig itself compiles for
 // shader targets.  Pure-arithmetic / integer-utility functions
 // (isFinite, isPowerOfTwo, etc.) re-export directly from std.math
-// — they're either SPIR-V-safe as-is, or used only from host-only
+// - they're either SPIR-V-safe as-is, or used only from host-only
 // code (FFT family).
 
 const builtin = @import("builtin");
 
 /// `true` when compiling for any SPIR-V target (32-bit or 64-bit,
 /// Vulkan or OpenCL).  Drives target-conditional behavior in this
-/// file — `assert` becomes a no-op, and a few scalar trig helpers
+/// file - `assert` becomes a no-op, and a few scalar trig helpers
 /// (`atan2Scalar`, `asinScalar`) use polynomial approximations
 /// instead of `std.math.X` (which uses lookup tables incompatible
 /// with SPIR-V's Logical addressing model).
@@ -360,28 +365,43 @@ const builtin = @import("builtin");
 pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 /// Floating-point power: `base ** exponent`.  GLSL-style 2-arg
 /// signature (`pow(x, y)` rather than std.math's `pow(T, x, y)`).
-/// Implementation: `@exp(@log(x) * y)` — works for f32 on host AND
+/// Implementation: `@exp(@log(x) * y)` - works for f32 on host AND
 /// SPIR-V (the Zig builtins lower to GLSL.std.450 ops).  Stage 5
 /// of math-unification switched from `pub const pow = std.math.pow`
 /// because std.math.pow has an f64 path the SPIR-V backend rejects
 /// ("floating point width of 64 bits is not supported for the
 /// current SPIR-V feature set").  Host callers that previously
 /// passed `zm.pow(x, y)` now pass `zm.pow(x, y)` directly.
-pub inline fn pow(base: f32, exponent: f32) f32 {
+/// `base` raised to `exponent`.
+///
+/// BOTH ARGUMENTS ARE `anytype`, AND THE REASON IS A REAL BUG
+///
+/// The signature was `exponent: @TypeOf(base)` when this file was made generic. That reads as
+/// "the same type", and it is - but it also means a comptime literal base FIXES the type to
+/// `comptime_float`, so `pow(2.0, x)` for a runtime `x` stopped compiling. `easings.zig` had
+/// exactly that call and its tests broke silently, because no gate runs them.
+///
+/// `@TypeOf(base, exponent)` is the peer type of the two, which is what was meant: a literal
+/// coerces to whatever the other argument is.
+pub fn pow(base: anytype, exponent: anytype) @TypeOf(base, exponent) {
+    if (comptime @typeInfo(@TypeOf(base)) == .vector) {
+        return perLane2(pow, base, exponent);
+    }
     // CPU: std.math.pow is accurate and handles the special cases
-    // (negative base, integer exponents, pow(x,0)==1, …) that the
+    // (negative base, integer exponents, pow(x,0)==1, ...) that the
     // exp/log identity below gets wrong; it is >100 lines so we
     // delegate rather than copy.  GPU: the cheap identity is fine for
     // cosmetic shader work.
     if (comptime !is_gpu) {
-        return std.math.pow(f32, base, exponent);
+        return std.math.pow(@TypeOf(base, exponent), base, exponent);
     }
     return @exp(@log(base) * exponent);
 }
-// ---- small exact utilities, vendored in-house --------------------------
+// small exact utilities, vendored in-house
 // zimrmath is the ONE file allowed to touch std.math (enforced by the
 // `std-math` lint rule).  For the small, exact functions below we COPY
 // std's implementation rather than delegate, so there's a single un-gated
@@ -389,20 +409,137 @@ pub inline fn pow(base: f32, exponent: f32) f32 {
 // integer ops lower fine to SPIR-V).  No `comptime !is_gpu` split needed:
 // the host result is bit-identical to std for the f32/f64/integer types
 // zimr uses.  The big transcendentals that genuinely warrant delegation
-// (pow, atan, atan2, hypot — all >100 lines) still call std on the CPU
+// (pow, atan, atan2, hypot - all >100 lines) still call std on the CPU
 // path under a gate; see those functions.  When you need a std.math
 // function that isn't here: add it (vendored if small, gated-delegate if
-// big) — do NOT reach for std.math at the call site.
+// big) - do NOT reach for std.math at the call site.
 
-/// Degrees → radians.
-pub inline fn radFromDeg(d: anytype) @TypeOf(d) {
+/// Degrees -> radians.
+pub fn radFromDeg(d: anytype) @TypeOf(d) {
     return d * (pi / 180.0);
 }
-/// Radians → degrees.
-pub inline fn degFromRad(r: anytype) @TypeOf(r) {
+/// Radians -> degrees.
+pub fn degFromRad(r: anytype) @TypeOf(r) {
     return r * (180.0 / pi);
 }
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+
+test "zm: the std.math replacements, against std.math itself" {
+    // EVERY ONE CHECKED AGAINST THE FUNCTION IT REPLACES
+    //
+    // These exist so callers never reach for `std.math` - the lint bans it outside this file for
+    // GPU portability, and every gap in here is a workaround written somewhere else. That makes
+    // agreement with the original the whole specification, so the test compares directly rather
+    // than against a table.
+    const pairs = [_][2]i32{
+        .{ 7, 2 },    .{ -7, 2 }, .{ 7, -2 }, .{ -7, -2 },
+        .{ 6, 3 },    .{ -6, 3 }, .{ 0, 5 },  .{ 100, 7 },
+        .{ -100, 7 }, .{ 1, 1 },
+    };
+    for (pairs) |pair| {
+        const a: i32 = pair[0];
+        const b: i32 = pair[1];
+        try expectEqual(@divFloor(a, b), try divFloor(a, b));
+        try expectEqual(@divTrunc(a, b), try divTrunc(a, b));
+        try expectEqual(try std.math.divCeil(i32, a, b), try divCeil(a, b));
+        try expectEqual(@mod(a, b), try mod(a, b));
+        try expectEqual(@rem(a, b), try rem(a, b));
+        // The identity that ties each pair together, so neither half can be wrong alone.
+        try expectEqual(a, (try divFloor(a, b)) * b + (try mod(a, b)));
+        try expectEqual(a, (try divTrunc(a, b)) * b + (try rem(a, b)));
+    }
+
+    // A ZERO DIVISOR IS AN ERROR, NOT A TRAP - integer division by zero halts the program.
+    try expectError(error.DivisionByZero, divFloor(1, 0));
+    try expectError(error.DivisionByZero, mod(1, 0));
+    // And `divExact` refuses to round where `@divExact` would be undefined behaviour.
+    try expectEqual(@as(i32, 3), try divExact(6, 2));
+    try expectError(error.Inexact, divExact(7, 2));
+
+    // GCD AND LCM against std.math, including the zero conventions nobody documents.
+    const whole = [_][2]u32{ .{ 12, 18 }, .{ 7, 13 }, .{ 0, 5 }, .{ 5, 0 }, .{ 48, 180 } };
+    for (whole) |pair| {
+        try expectEqual(std.math.gcd(pair[0], pair[1]), gcd(u32, pair[0], pair[1]));
+    }
+    try expectEqual(@as(u32, 36), lcm(u32, 12, 18));
+    try expectEqual(@as(u32, 0), lcm(u32, 0, 5));
+    // `lcm` divides before multiplying, so a product that would overflow still works.
+    try expectEqual(@as(u32, 3000000000), lcm(u32, 1500000000, 3000000000));
+
+    // AND THE SAME FUNCTIONS ON A VECTOR, LANE BY LANE
+    //
+    // A function here that only works on scalars is half a function: the same expression has to
+    // run on a lane, on a scalar, and in a shader. The first version of these six compared
+    // `denominator == 0`, which on a `@Vector` yields a vector of BOOLS and does not compile.
+    // This is the check that would have caught it.
+    const V = @Vector(4, i32);
+    const numerators: V = .{ 7, -7, 6, -6 };
+    const denominators: V = .{ 2, 2, 3, 3 };
+    const floored: V = try divFloor(numerators, denominators);
+    try expectEqual(V{ 3, -4, 2, -2 }, floored);
+    const truncated: V = try divTrunc(numerators, denominators);
+    try expectEqual(V{ 3, -3, 2, -2 }, truncated);
+    const ceiled: V = try divCeil(numerators, denominators);
+    try expectEqual(V{ 4, -3, 2, -2 }, ceiled);
+    const wrapped: V = try mod(numerators, @as(V, @splat(3)));
+    try expectEqual(V{ 1, 2, 0, 0 }, wrapped);
+    const left: V = try rem(numerators, @as(V, @splat(3)));
+    try expectEqual(V{ 1, -1, 0, 0 }, left);
+
+    // Every lane agrees with the scalar call on the same pair, which is the property that makes
+    // one implementation serving both worth having.
+    inline for (0..4) |lane| {
+        try expectEqual(try divFloor(numerators[lane], denominators[lane]), floored[lane]);
+        try expectEqual(try divTrunc(numerators[lane], denominators[lane]), truncated[lane]);
+    }
+
+    // A ZERO IN ANY LANE FAILS THE WHOLE OPERATION, which is the honest reading: there is no
+    // per-lane error to return, and a silently wrong lane is worse than a refused vector.
+    const has_zero: V = .{ 2, 0, 3, 3 };
+    try expectError(error.DivisionByZero, divFloor(numerators, has_zero));
+    try expectError(error.Inexact, divExact(numerators, denominators));
+    const even: V = .{ 6, -6, 6, -6 };
+    try expectEqual(V{ 3, -3, 2, -2 }, try divExact(even, denominators));
+
+    // THE CLASSIFIERS NAME STATES `isFinite` CANNOT DISTINGUISH.
+    try expect(isNormal(@as(f64, 1.5)));
+    try expect(!isNormal(@as(f64, 0)));
+    try expect(!isNormal(inf(f64)));
+    try expect(!isNormal(floatMin(f64) / 2)); // subnormal
+    try expectEqual(std.math.isNormal(@as(f64, 1.5)), isNormal(@as(f64, 1.5)));
+
+    try expect(isPositiveInf(inf(f64)));
+    try expect(!isPositiveInf(-inf(f64)));
+    try expect(isNegativeInf(-inf(f64)));
+
+    // NEGATIVE ZERO IS INVISIBLE TO `==` and survives division: `1 / -0.0` is negative infinity
+    // where `1 / 0.0` is positive. That is why it is worth being able to ask about.
+    const minus_zero: f64 = -0.0;
+    try expect(minus_zero == 0.0);
+    try expect(isNegativeZero(minus_zero));
+    try expect(!isNegativeZero(@as(f64, 0.0)));
+    try expect(isNegativeInf(1.0 / minus_zero));
+    try expect(isPositiveInf(1.0 / @as(f64, 0.0)));
+    // maxInt AND minInt, ACROSS EVERY WIDTH AND BOTH SIGNEDNESSES
+    //
+    // These are computed here from the bit count rather than imported, so the agreement is the
+    // whole specification - a shift that is off by one gives a number that still LOOKS like a
+    // limit, and only comparing against std catches it.
+    //
+    // They earn their place because `std.math` is banned outside this file: without them a
+    // caller wanting a sentinel reaches for `highest`, which is the max-reduction identity and
+    // means something else. That happened in `RowPair.no_row` before this test existed.
+    inline for (.{ u8, i8, u16, i16, u32, i32, u64, i64, usize, isize }) |T| {
+        try expectEqual(std.math.maxInt(T), maxInt(T));
+        try expectEqual(std.math.minInt(T), minInt(T));
+    }
+    // An unsigned type has no negative room, and a signed one is asymmetric - the edges where a
+    // hand-rolled version goes wrong.
+    try expectEqual(@as(comptime_int, 0), minInt(u32));
+    try expectEqual(@as(comptime_int, 255), maxInt(u8));
+    try expectEqual(@as(comptime_int, -128), minInt(i8));
+    try expectEqual(@as(comptime_int, 127), maxInt(i8));
+}
 
 test "zm.radFromDeg" {
     try expectApproxEqAbs(@as(f32, pi), radFromDeg(@as(f32, 180.0)), 1.0e-4);
@@ -411,7 +548,7 @@ test "zm.degFromRad" {
     try expectApproxEqAbs(@as(f32, 180.0), degFromRad(@as(f32, pi)), 1.0e-4);
 }
 /// Positive infinity of float type `T`.
-pub inline fn inf(comptime T: type) T {
+pub fn inf(comptime T: type) T {
     return switch (T) {
         f32 => @bitCast(@as(u32, 0x7F80_0000)),
         f64 => @bitCast(@as(u64, 0x7FF0_0000_0000_0000)),
@@ -419,31 +556,40 @@ pub inline fn inf(comptime T: type) T {
     };
 }
 
-/// True when `x` is neither inf nor nan.
-pub inline fn isFinite(x: anytype) bool {
-    // Finite iff not-NaN (x == x) and not-±inf.  Bit-identical result to
-    // std.math.isFinite for f32/f64.
-    return (x == x) and (@abs(x) != inf(@TypeOf(x)));
+/// True when `x` is neither inf nor nan. Scalar in, `bool` out; vector in, vector of bools out -
+/// the same shape as `isNan` and `isInf` beside it.
+pub fn isFinite(
+    x: anytype,
+) if (@typeInfo(@TypeOf(x)) == .vector) @Vector(veclen(@TypeOf(x)), bool) else bool {
+    const T = @TypeOf(x);
+    // Finite iff not-NaN (x == x) and not-+/-inf. Bit-identical to std.math.isFinite for f32/f64.
+    // The vector form uses `&` where the scalar uses `and`, because vectors have no `and`; it
+    // is the same predicate written twice rather than two different tests.
+    if (comptime @typeInfo(T) == .vector) {
+        const child = @typeInfo(T).vector.child;
+        return (x == x) & (abs(x) != @as(T, @splat(inf(child))));
+    }
+    return (x == x) and (@abs(x) != inf(T));
 }
 /// True when `x` is a positive power of two.
-pub inline fn isPowerOfTwo(x: anytype) bool {
+pub fn isPowerOfTwo(x: anytype) bool {
     // std.math.isPowerOfTwo asserts `x > 0`; this returns false for x <= 0
     // instead (a safer contract for the same valid-input behavior).
     return x > 0 and (x & (x - 1)) == 0;
 }
 /// True in stripped ship builds (ReleaseSmall/Fast). Asserts compile to a bare
 /// `unreachable` in this mode unless `-Dassert-log` forces them back on.
-const is_stripped: bool = builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast;
+const is_stripped: bool = builtin.mode == .small or builtin.mode == .fast;
 
-/// Assertion with a source location but no message — cheaper to write than
+/// Assertion with a source location but no message - cheaper to write than
 /// `assertf` when the condition is self-explanatory. `std.debug.assert` on GPU.
 /// On CPU: a dev (debug) build logs file:line + `@panic`s; a release build with
 /// `assert_log` (e.g. the on-device standalones) logs file:line to the page's
 /// log overlay and KEEPS RUNNING (a frozen canvas is a worse failure than a
-/// logged, recoverable glitch — callers that need to bail must do so themselves);
+/// logged, recoverable glitch - callers that need to bail must do so themselves);
 /// a ship build compiles the check out (`unreachable`).
-///     assert(len > 0, @src());
-pub inline fn assert(ok: bool, src: std.builtin.SourceLocation) void {
+/// assert(len > 0, @src());
+pub fn assert(ok: bool, src: std.builtin.SourceLocation) void {
     if (comptime is_gpu) {
         if (!ok) {
             unreachable;
@@ -453,7 +599,7 @@ pub inline fn assert(ok: bool, src: std.builtin.SourceLocation) void {
             if (comptime !is_stripped) {
                 std.log.err("assert failed at {s}:{d}:{d}", .{ src.file, src.line, src.column });
                 @panic("assertion failed");
-            } else if (comptime @import("build_options").assert_log) {
+            } else if (comptime build_options.assert_log) {
                 std.log.err("assert failed at {s}:{d}:{d}", .{ src.file, src.line, src.column });
             } else {
                 unreachable;
@@ -471,12 +617,171 @@ pub fn Log2Int(comptime T: type) type {
     return @Int(.unsigned, log2_bits);
 }
 
-/// Smallest power of two ≥ `value` (asserts no overflow on host).
-pub inline fn ceilPowerOfTwo(comptime T: type, value: T) error{Overflow}!T {
+/// Smallest power of two >= `value` (asserts no overflow on host).
+/// Integer division rounding toward negative infinity: `divFloor(-7, 2)` is `-4`.
+///
+/// ZIG NAMES FOUR DIVISIONS AND zimrmath SHOULD HAVE ALL FOUR
+///
+/// `a / b` on two signed integers is a compile error whose message is the specification:
+/// *"signed integers must use @divTrunc, @divFloor, @divCeil, or @divExact"*. A caller who
+/// cannot reach `std.math` needs the same four here, or they write the workaround instead -
+/// which is exactly what happened in zimrnum before these existed.
+///
+/// SCALARS AND VECTORS, LIKE EVERYTHING ELSE IN THIS FILE
+///
+/// The first version took `comptime T` and compared `denominator == 0`, which on a `@Vector`
+/// yields a vector of bools and does not compile. **A function here that only works on scalars
+/// is half a function**: the same expression has to run on a lane, on a scalar, and in a shader.
+/// So the divisor check is `@reduce(.Or, ...)` on a vector and a plain comparison otherwise.
+pub fn divFloor(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @divFloor(numerator, denominator);
+}
+
+/// Integer division rounding toward zero: `divTrunc(-7, 2)` is `-3`.
+pub fn divTrunc(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @divTrunc(numerator, denominator);
+}
+
+/// Integer division rounding up: `divCeil(7, 2)` is `4`.
+///
+/// The one you want when sizing a buffer - `divCeil(items, per_chunk)` is how many chunks you
+/// need, and rounding down loses the last partial one.
+pub fn divCeil(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    // Flooring the negation and negating back, which needs no second builtin and vectorises.
+    return -@divFloor(-numerator, denominator);
+}
+
+/// Integer division that REFUSES to round, because the caller said it would not have to.
+///
+/// `@divExact` is ILLEGAL BEHAVIOUR when the division is inexact - in a release build that is
+/// silent corruption rather than a crash. Checking first turns a wrong assumption into a value.
+pub fn divExact(
+    numerator: anytype,
+    denominator: @TypeOf(numerator),
+) error{ DivisionByZero, Inexact }!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    if (anyNonZero(@rem(numerator, denominator))) {
+        return error.Inexact;
+    }
+    return @divExact(numerator, denominator);
+}
+
+/// The remainder pairing with `divFloor`: its sign follows the DIVISOR, so `mod(-7, 3)` is `2`.
+///
+/// This is the one that wraps an index - never negative for a positive divisor, which `rem` is
+/// not. The pair agrees on positive inputs and disagrees on negative ones, so code tested on
+/// positive data passes either way and then indexes with a negative number.
+pub fn mod(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @mod(numerator, denominator);
+}
+
+/// The remainder pairing with `divTrunc`: its sign follows the DIVIDEND, so `rem(-7, 3)` is `-1`.
+pub fn rem(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @rem(numerator, denominator);
+}
+
+/// True if any lane is zero. One scalar comparison, or a reduction across the lanes.
+fn anyZero(x: anytype) bool {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return @reduce(.Or, x == splatLike(@TypeOf(x), 0));
+    }
+    return x == 0;
+}
+
+/// True if any lane is nonzero. The mirror of `anyZero`, for the inexact check.
+fn anyNonZero(x: anytype) bool {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return @reduce(.Or, x != splatLike(@TypeOf(x), 0));
+    }
+    return x != 0;
+}
+
+/// The largest whole number dividing both, by Euclid.
+///
+/// Zero is handled the way every library does and nobody documents: `gcd(0, n)` is `n`, because
+/// every number divides zero. `gcd(0, 0)` is zero for the same reason and is the one case where
+/// the answer is a convention rather than a fact.
+///
+/// SCALAR ONLY, AND THAT IS A REAL LIMIT RATHER THAN AN OVERSIGHT: Euclid's loop runs a
+/// different number of times per lane, so a vector version would have to run every lane to the
+/// worst case and mask. Worth doing when something wants it, not before.
+pub fn gcd(comptime T: type, first: T, second: T) T {
+    var a: T = if (first < 0) -first else first;
+    var b: T = if (second < 0) -second else second;
+    while (b != 0) {
+        const carry: T = b;
+        b = @rem(a, b);
+        a = carry;
+    }
+    return a;
+}
+
+/// The smallest whole number both divide.
+///
+/// Divides BEFORE multiplying, so `lcm(a, b)` survives inputs whose product would overflow.
+/// Scalar only, for the same reason as `gcd`.
+pub fn lcm(comptime T: type, first: T, second: T) T {
+    if (first == 0 or second == 0) {
+        return 0;
+    }
+    const shared: T = gcd(T, first, second);
+    const a: T = if (first < 0) -first else first;
+    const b: T = if (second < 0) -second else second;
+    return @divExact(a, shared) * b;
+}
+
+/// True when `x` is a normal float - finite, nonzero, and not subnormal.
+///
+/// The four classifiers below name states that `isFinite` alone cannot distinguish, and a caller
+/// who cannot reach `std.math` has no other way to ask. Each answers about ONE value, so they
+/// take a scalar; a lane-wise version would return a vector of bools and belongs beside the
+/// comparisons rather than here.
+pub fn isNormal(x: anytype) bool {
+    const T = @TypeOf(x);
+    return isFinite(x) and x != 0 and @abs(x) >= floatMin(T);
+}
+
+/// True for positive infinity only. `isInf` cannot tell the two apart.
+pub fn isPositiveInf(x: anytype) bool {
+    return x == inf(@TypeOf(x));
+}
+
+/// True for negative infinity only.
+pub fn isNegativeInf(x: anytype) bool {
+    return x == -inf(@TypeOf(x));
+}
+
+/// True for negative zero, which `x == 0` cannot detect because `-0.0 == 0.0`.
+///
+/// The sign of zero survives division: `1 / -0.0` is negative infinity where `1 / 0.0` is
+/// positive. That makes negative zero worth being able to ask about.
+pub fn isNegativeZero(x: anytype) bool {
+    const T = @TypeOf(x);
+    return x == 0 and @as(@Int(.unsigned, @bitSizeOf(T)), @bitCast(x)) != 0;
+}
+
+pub fn ceilPowerOfTwo(comptime T: type, value: T) error{Overflow}!T {
     // Vendored from std.math.ceilPowerOfTwo: promote to one extra bit so
     // the overflow bit can be tested, then narrow back.  Keeps std's
     // `error.Overflow` contract.  (The `value <= 1` guard subsumes std's
-    // `assert(value != 0)` — we return 1 rather than trapping on 0.)
+    // `assert(value != 0)` - we return 1 rather than trapping on 0.)
     const info = @typeInfo(T).int;
     comptime assert(info.signedness == .unsigned, @src());
     if (value <= 1) {
@@ -491,7 +796,7 @@ pub inline fn ceilPowerOfTwo(comptime T: type, value: T) error{Overflow}!T {
     return @as(T, @intCast(x));
 }
 /// Quiet NaN of float type `T`.
-pub inline fn nan(comptime T: type) T {
+pub fn nan(comptime T: type) T {
     return switch (T) {
         f32 => @bitCast(@as(u32, 0x7FC0_0000)),
         f64 => @bitCast(@as(u64, 0x7FF8_0000_0000_0000)),
@@ -499,15 +804,163 @@ pub inline fn nan(comptime T: type) T {
     };
 }
 /// Machine epsilon of float type `T`.
-pub inline fn floatEps(comptime T: type) T {
+pub fn floatEps(comptime T: type) T {
     return switch (T) {
         f32 => 1.1920928955078125e-7,
         f64 => 2.220446049250313e-16,
         else => @compileError("zm.floatEps: unsupported float type"),
     };
 }
+/// Cube root. `x^(1/3)`, sign-preserving.
+///
+/// WRAPPED HERE RATHER THAN CALLED FROM std BECAUSE OF THE GPU BRANCH. `pow` is undefined
+/// for a negative base, so the naive `pow(x, 1.0/3.0)` returns NaN for exactly half its
+/// domain; taking the magnitude and restoring the sign is correct on both sides. On the CPU
+/// std's version is more accurate, so use it there.
+pub fn cbrt(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(cbrt, x);
+    }
+    if (comptime is_gpu) {
+        const magnitude: @TypeOf(x) = @exp(@log(@abs(x)) * (1.0 / 3.0));
+        return if (x < 0) -magnitude else magnitude;
+    }
+    return cbrtExact(@TypeOf(x), x);
+}
+
+/// `cbrt` at full precision, without `std.math`.
+///
+/// THE INITIAL GUESS IS AN INTEGER DIVISION ON THE EXPONENT
+///
+/// Dividing a float's exponent field by three gives a starting point already accurate to about
+/// five bits, for the cost of one integer divide - the magic constants are the rounding
+/// correction that makes it unbiased. Two Newton steps then take f32 to 47 bits, which is why the
+/// f32 path does its refinement in f64 and casts once at the end.
+///
+/// f64 needs more: a fifth-degree polynomial to reach 23 bits, a deliberate truncation of the
+/// result to 32 significant bits so the final division is exact, and one Newton step in a form
+/// chosen so the rounding of `q` does not feed back. The coefficients and the truncation mask are
+/// std's, term for term.
+///
+/// **Negatives are handled by the sign bit, not by a branch on the value** - the cube root of a
+/// negative number is the negation of the cube root of its magnitude, and carrying the sign
+/// through the bit pattern keeps that exact for every input including the zeros.
+fn cbrtExact(comptime T: type, x: T) T {
+    if (comptime T == f32) {
+        const b1: u32 = 709958130; // (127 - 127/3 - 0.03306235651) * 2^23
+        const b2: u32 = 642849266; // b1, less 24/3 * 2^23, for subnormal inputs
+        var u: u32 = @bitCast(x);
+        var hx: u32 = u & 0x7FFFFFFF;
+        if (hx >= 0x7F800000) {
+            return x + x; // inf or nan, propagated
+        }
+        if (hx < 0x00800000) {
+            if (hx == 0) {
+                return x; // both zeros keep their sign
+            }
+            u = @bitCast(x * 0x1.0p24);
+            hx = u & 0x7FFFFFFF;
+            hx = hx / 3 + b2;
+        } else {
+            hx = hx / 3 + b1;
+        }
+        u &= 0x80000000;
+        u |= hx;
+        // Both Newton steps in f64: f32 cannot hold the intermediate to 47 bits.
+        var t: f64 = @as(f32, @bitCast(u));
+        var r: f64 = t * t * t;
+        t = t * (@as(f64, x) + x + r) / (x + r + r);
+        r = t * t * t;
+        t = t * (@as(f64, x) + x + r) / (x + r + r);
+        return @floatCast(t);
+    }
+    const b1: u32 = 715094163;
+    const b2: u32 = 696219795;
+    const p0: f64 = 1.87595182427177009643;
+    const p1: f64 = -1.88497979543377169875;
+    const p2: f64 = 1.621429720105354466140;
+    const p3: f64 = -0.758397934778766047437;
+    const p4: f64 = 0.145996192886612446982;
+    var u: u64 = @bitCast(x);
+    var hx: u32 = @as(u32, @intCast(u >> 32)) & 0x7FFFFFFF;
+    if (hx >= 0x7FF00000) {
+        return x + x;
+    }
+    if (hx < 0x00100000) {
+        u = @bitCast(x * 0x1.0p54);
+        hx = @as(u32, @intCast(u >> 32)) & 0x7FFFFFFF;
+        if (hx == 0) {
+            return x;
+        }
+        hx = hx / 3 + b2;
+    } else {
+        hx = hx / 3 + b1;
+    }
+    u &= 1 << 63;
+    u |= @as(u64, hx) << 32;
+    var t: f64 = @bitCast(u);
+    const r: f64 = (t * t) * (t / x);
+    t = t * ((p0 + r * (p1 + r * p2)) + ((r * r) * r) * (p3 + r * p4));
+    // Truncate to 32 significant bits so `x / (t*t)` below is exact.
+    u = @bitCast(t);
+    u = (u + 0x80000000) & 0xFFFFFFFFC0000000;
+    t = @bitCast(u);
+    const sq: f64 = t * t;
+    var q: f64 = x / sq;
+    const w: f64 = t + t;
+    q = (q - t) / (w + q);
+    return t + t * q;
+}
+/// Hyperbolic cosine. `(e^x + e^-^x)/2`.
+///
+/// WRAPPED HERE RATHER THAN CALLED FROM std BECAUSE OF THE GPU BRANCH, like `cbrt` above.
+/// SPIR-V has no `cosh` builtin, but it does have `exp`, and the identity is exact - there is
+/// no accuracy argument for preferring one over the other on the GPU side.
+///
+/// Wanted by the balancing model: an inverted pendulum released from rest goes as `cosh(omega*t)`,
+/// and checking against that closed form is how the model's instability is verified to be the
+/// physical `sqrt(g/h)` rather than whatever the integrator happened to produce.
+pub fn cosh(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(cosh, x);
+    }
+    // ONE EXPRESSION FOR BOTH BACKENDS, LIKE `sinh` BESIDE IT
+    //
+    // This used to be `math.cosh` on the host and the identity on SPIR-V. The device measured a
+    // worst error of **29.6** against a bar of 8e-6 - not a rounding difference, a different
+    // answer. `sinh`, `asinh`, `atanh` and `rsqrt` are written as identities with no branch at
+    // all and every one of them measured EXACTLY ZERO on the same device.
+    //
+    // The lesson is the one `pow` already recorded: where the two backends can compute a function
+    // by two routes, they eventually will, and the only way to be sure they agree is to write the
+    // expression once. The accuracy given up against `math.cosh` is nil in the range that
+    // matters - both overflow together, near |x| = 89 in f32.
+    return 0.5 * (@exp(x) + @exp(-x));
+}
+/// The value that loses every `>` comparison, for any numeric `T`.
+///
+/// ONE NAME FOR TWO DIFFERENT IDEAS, BECAUSE THE CALLER WANTS THE SAME THING
+///
+/// A max reduction needs a seed nothing can be smaller than. For a float that is `-inf`; for an
+/// integer there is no infinity and it is the type's minimum. A caller reducing over `anytype`
+/// wants "the identity for max" and should not have to branch on which kind of number it has.
+pub fn lowest(comptime T: type) T {
+    if (comptime @typeInfo(T) == .int) {
+        return std.math.minInt(T);
+    }
+    return -inf(T);
+}
+
+/// The value that loses every `<` comparison. The mirror of `lowest`.
+pub fn highest(comptime T: type) T {
+    if (comptime @typeInfo(T) == .int) {
+        return std.math.maxInt(T);
+    }
+    return inf(T);
+}
+
 /// Largest finite value of float type `T`.
-pub inline fn floatMax(comptime T: type) T {
+pub fn floatMax(comptime T: type) T {
     return switch (T) {
         f32 => 3.4028234663852886e38,
         f64 => 1.7976931348623157e308,
@@ -515,7 +968,7 @@ pub inline fn floatMax(comptime T: type) T {
     };
 }
 /// Smallest positive normal value of float type `T`.
-pub inline fn floatMin(comptime T: type) T {
+pub fn floatMin(comptime T: type) T {
     return switch (T) {
         f32 => 1.1754943508222875e-38,
         f64 => 2.2250738585072014e-308,
@@ -523,7 +976,7 @@ pub inline fn floatMin(comptime T: type) T {
     };
 }
 /// Sign bit of `x` (true for negative, including -0.0).
-pub inline fn signbit(x: anytype) bool {
+pub fn signbit(x: anytype) bool {
     const bits = @typeInfo(@TypeOf(x)).float.bits;
     const U: type = @Int(.unsigned, bits);
     return (@as(U, @bitCast(x)) >> (bits - 1)) != 0;
@@ -534,7 +987,7 @@ const has_avx = if (cpu_arch == .x86_64) std.Target.x86.featureSetHas(builtin.cp
 
 const has_fma = if (cpu_arch == .x86_64) std.Target.x86.featureSetHas(builtin.cpu.features, .fma) else false;
 
-pub inline fn mulAdd(
+pub fn mulAdd(
     v0: anytype,
     v1: anytype,
     v2: anytype,
@@ -544,7 +997,7 @@ pub inline fn mulAdd(
     // from a build-injected `zmath_options` module.  zimr vendors this
     // file directly and doesn't use zmath's build.zig, so the option
     // becomes a local const.  zimr ships wasm32 (no HW fma path anyway)
-    // and wants reproducible results across machines → determinism ON.
+    // and wants reproducible results across machines -> determinism ON.
     const enable_cross_platform_determinism: bool = true;
     if (enable_cross_platform_determinism) {
         return v0 * v1 + v2; // Compiler will generate mul, add sequence (no fma even if the target supports it).
@@ -585,7 +1038,7 @@ pub const F32x16 = @Vector(16, f32);
 /// float -> integer T (truncating toward zero, like @intFromFloat). Comptime-
 /// asserts `x` is a float and T is an int. `int(u16, v)` instead of
 /// `int(u16, v)`. For pixel rounding prefer floori/roundi.
-pub inline fn int(comptime T: type, x: anytype) T {
+pub fn int(comptime T: type, x: anytype) T {
     comptime {
         if (@typeInfo(T) != .int) {
             @compileError("zm.int target must be an integer; got " ++ @typeName(T));
@@ -611,11 +1064,11 @@ pub fn modAngle32(in_angle_rad: f32) f32 {
 
 const has_avx512f = if (cpu_arch == .x86_64) std.Target.x86.featureSetHas(builtin.cpu.features, .avx512f) else false;
 
-pub inline fn veclen(comptime T: type) comptime_int {
+pub fn veclen(comptime T: type) comptime_int {
     return @typeInfo(T).vector.len;
 }
 
-pub inline fn andInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn andInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
     const Tu = @Vector(veclen(T), u32);
     const v0u: Tu = @bitCast(v0);
@@ -623,11 +1076,11 @@ pub inline fn andInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     return @as(T, @bitCast(v0u & v1u)); // andps
 }
 
-inline fn splatNegativeZero(comptime T: type) T {
+fn splatNegativeZero(comptime T: type) T {
     return @splat(@as(f32, @bitCast(@as(u32, 0x8000_0000))));
 }
 
-pub inline fn orInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn orInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
     const Tu = @Vector(veclen(T), u32);
     const v0u: Tu = @bitCast(v0);
@@ -635,15 +1088,15 @@ pub inline fn orInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     return @as(T, @bitCast(v0u | v1u)); // orps
 }
 
-inline fn splatNoFraction(comptime T: type) T {
+fn splatNoFraction(comptime T: type) T {
     return @splat(@as(f32, 8_388_608.0));
 }
 
-pub inline fn abs(v: anytype) @TypeOf(v) {
+pub fn abs(v: anytype) @TypeOf(v) {
     return @abs(v); // load, andps
 }
 
-pub inline fn blend(
+pub fn blend(
     mask: anytype,
     v0: anytype,
     v1: anytype,
@@ -653,6 +1106,18 @@ pub inline fn blend(
 
 pub fn round(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
+    // --  SCALAR BRANCH, matching what `sin`, `cos` and the rest of the `anytype` family
+    // already do. Without it `zm.round(2.7)` fails deep inside `veclen` with
+    // "expected array or vector type", which names neither the caller nor the fix - it cost
+    // three rounds during the zimrnum port before anyone tested which call was at fault.
+    //
+    // The signature `(v: anytype)` promises nothing about vectors, and 96 of zimrmath's
+    // functions share it while differing in whether a scalar works. A caller cannot tell them
+    // apart without compiling. Where the scalar case is one builtin away, refusing it is a trap
+    // for no benefit.
+    if (comptime @typeInfo(T) != .vector) {
+        return @round(v);
+    }
     // [zimr Z0] The `cpu_arch == .x86_64` branch below is x86 inline
     // assembly (vroundps / vrndscaleps).  zimr ships wasm32 only, so
     // this branch is already comptime-dead in every real zimr build
@@ -696,8 +1161,8 @@ pub fn round(v: anytype) @TypeOf(v) {
             return @shuffle(f32, ymm0, ymm1, [16]i32{ 0, 1, 2, 3, 4, 5, 6, 7, -1, -2, -3, -4, -5, -6, -7, -8 });
         }
     } else {
-        const sign = andInt(v, splatNegativeZero(T));
-        const magic = orInt(splatNoFraction(T), sign);
+        const sign_bits = andInt(v, splatNegativeZero(T));
+        const magic = orInt(splatNoFraction(T), sign_bits);
         var r1: T = v + magic;
         r1 = r1 - magic;
         const r2: T = abs(v);
@@ -706,7 +1171,7 @@ pub fn round(v: anytype) @TypeOf(v) {
     }
 }
 
-pub inline fn modAngle32xN(v: anytype) @TypeOf(v) {
+pub fn modAngle32xN(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
     return v - @as(T, @splat(tau)) * round(v * @as(T, @splat(1.0 / tau))); // 2 x vmulps, 2 x load, vroundps, vaddps
 }
@@ -720,7 +1185,7 @@ pub fn modAngle(v: anytype) @TypeOf(v) {
     };
 }
 
-pub inline fn andNotInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn andNotInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
     const Tu = @Vector(veclen(T), u32);
     const v0u: Tu = @bitCast(v0);
@@ -733,9 +1198,9 @@ fn sin32xN(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
 
     var x: T = modAngle(v);
-    const sign = andInt(x, splatNegativeZero(T));
-    const c = orInt(sign, @as(T, @splat(pi)));
-    const absx: T = andNotInt(sign, x);
+    const sign_bits = andInt(x, splatNegativeZero(T));
+    const c = orInt(sign_bits, @as(T, @splat(pi)));
+    const absx: T = andNotInt(sign_bits, x);
     const rflx: T = c - x;
     const comp = absx <= @as(T, @splat(0.5 * pi));
     x = blend(comp, x, rflx);
@@ -749,7 +1214,7 @@ fn sin32xN(v: anytype) @TypeOf(v) {
     return x * result;
 }
 
-pub fn sin(v: anytype) @TypeOf(v) {
+pub fn sinRad(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
     // Scalar on CPU: exact (== std.math.sin == @sin).  Vectors (CPU SIMD
     // path + GPU): zmath's vectorized polynomial for maximum throughput.
@@ -759,14 +1224,14 @@ pub fn sin(v: anytype) @TypeOf(v) {
     return switch (T) {
         f32 => sin32(v),
         Vec, F32x8, F32x16 => sin32xN(v),
-        else => @compileError("zm.sin() not implemented for " ++ @typeName(T)),
+        else => @compileError("zm.sinRad() not implemented for " ++ @typeName(T)),
     };
 }
 
 fn cos32(v: f32) f32 {
     var y: f32 = v - tau * @round(v * 1.0 / tau);
 
-    const sign: f32 = blk: {
+    const sign_value: f32 = blk: {
         if (y > 0.5 * pi) {
             y = pi - y;
             break :blk @as(f32, -1.0);
@@ -784,7 +1249,7 @@ fn cos32(v: f32) f32 {
     cosv = mulAdd(cosv, y2, -0.0013888378);
     cosv = mulAdd(cosv, y2, 0.041666638);
     cosv = mulAdd(cosv, y2, -0.5);
-    return sign * mulAdd(cosv, y2, 1.0);
+    return sign_value * mulAdd(cosv, y2, 1.0);
 }
 
 fn cos32xN(v: anytype) @TypeOf(v) {
@@ -792,13 +1257,13 @@ fn cos32xN(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
 
     var x: T = modAngle(v);
-    var sign: T = andInt(x, splatNegativeZero(T));
-    const c = orInt(sign, @as(T, @splat(pi)));
-    const absx: T = andNotInt(sign, x);
+    var sign_value: T = andInt(x, splatNegativeZero(T));
+    const c = orInt(sign_value, @as(T, @splat(pi)));
+    const absx: T = andNotInt(sign_value, x);
     const rflx: T = c - x;
     const comp = absx <= @as(T, @splat(0.5 * pi));
     x = blend(comp, x, rflx);
-    sign = blend(comp, @as(T, @splat(1.0)), @as(T, @splat(-1.0)));
+    sign_value = blend(comp, @as(T, @splat(1.0)), @as(T, @splat(-1.0)));
     const x2: T = x * x;
 
     var result: T = mulAdd(@as(T, @splat(-2.6051615e-07)), x2, @as(T, @splat(2.4760495e-05)));
@@ -806,10 +1271,10 @@ fn cos32xN(v: anytype) @TypeOf(v) {
     result = mulAdd(result, x2, @as(T, @splat(0.041666638)));
     result = mulAdd(result, x2, @as(T, @splat(-0.5)));
     result = mulAdd(result, x2, @as(T, @splat(1.0)));
-    return sign * result;
+    return sign_value * result;
 }
 
-pub fn cos(v: anytype) @TypeOf(v) {
+pub fn cosRad(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
     // Scalar on CPU: exact (== std.math.cos == @cos).  Vectors (CPU SIMD
     // path + GPU): zmath's vectorized polynomial for maximum throughput.
@@ -819,62 +1284,836 @@ pub fn cos(v: anytype) @TypeOf(v) {
     return switch (T) {
         f32 => cos32(v),
         Vec, F32x8, F32x16 => cos32xN(v),
-        else => @compileError("zm.cos() not implemented for " ++ @typeName(T)),
+        else => @compileError("zm.cosRad() not implemented for " ++ @typeName(T)),
     };
 }
 
 /// Tangent.  On GPU, sin/cos (both already GPU-portable here).
-pub inline fn tan(x: anytype) @TypeOf(x) {
+pub fn tanRad(x: anytype) @TypeOf(x) {
     // Scalar on CPU: exact (== std.math.tan == @tan).  Vectors (CPU SIMD
     // path + GPU): sin/cos, which route through the vectorized polynomial.
     if (comptime !is_gpu and @typeInfo(@TypeOf(x)) != .vector) {
         return std.math.tan(x);
     }
-    return sin(x) / cos(x);
+    return sinRad(x) / cosRad(x);
 }
 /// Base-2 logarithm.  `@log2` lowers to a GLSL.std.450 op on SPIR-V.
-pub inline fn log2(x: anytype) @TypeOf(x) {
+pub fn log2(x: anytype) @TypeOf(x) {
     return @log2(x);
 }
 /// Base-10 logarithm.  `@log10` lowers to a GLSL.std.450 op on SPIR-V.
-pub inline fn log10(x: anytype) @TypeOf(x) {
+pub fn log10(x: anytype) @TypeOf(x) {
     return @log10(x);
 }
 /// Base-2 exponential.  `@exp2` lowers to a GLSL.std.450 op on SPIR-V.
-pub inline fn exp2(x: anytype) @TypeOf(x) {
+pub fn exp2(x: anytype) @TypeOf(x) {
     return @exp2(x);
 }
 /// Base-10 exponential (10^x).  There is no `@exp10` builtin; the
 /// `@exp(x * ln10)` identity lowers cleanly on host and SPIR-V alike.
-pub inline fn exp10(x: anytype) @TypeOf(x) {
+pub fn exp10(x: anytype) @TypeOf(x) {
     return @exp(x * ln10);
 }
 
-// ---- Pure-builtin wrappers (work on host, GPU, and comptime alike) ------
-// No std.math needed — these are Zig builtins that lower to GLSL.std.450
+// Pure-builtin wrappers (work on host, GPU, and comptime alike)
+// No std.math needed - these are Zig builtins that lower to GLSL.std.450
 // ops on SPIR-V.  Exposed as `zm.*` so call sites never need a bare
 // builtin sprinkled through non-math code (and the rule stays clean).
 // (`abs`, `sqrt`, `min`, `max` already live further down this file.)
 
 /// Base-e exponential.
-pub inline fn exp(x: anytype) @TypeOf(x) {
+pub fn exp(x: anytype) @TypeOf(x) {
     return @exp(x);
 }
+/// THE ELEMENTWISE SET, COMPLETED TO MATCH zimrnum
+///
+/// Everything below was missing from zimrmath while zimrnum had a tensor version of it. That is
+/// backwards: a tensor operation is an elementwise one applied over a shape, so **zimrmath is the
+/// definition and zimrnum is the loop**. A function present in only one of the pair means a
+/// reader has to know which library to reach into for what, and the answer stops being "whichever
+/// matches your shape".
+///
+/// Each is written so the same expression runs on a scalar, on a vector, on the CPU and in a
+/// shader - the rule the whole file follows. Where the standard library has a more accurate
+/// scalar form, `perLane` bridges it to vectors rather than trading accuracy for reach.
+/// `1 / sqrt(x)`, elementwise. NaN below zero, infinity at zero.
+pub fn rsqrt(x: anytype) @TypeOf(x) {
+    return splatLike(@TypeOf(x), 1.0) / @sqrt(x);
+}
+
+/// `-1`, `0` or `+1` by the sign of `x`. Zero for zero, and NaN for NaN.
+pub fn sign(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(sign, x);
+    }
+    if (x > 0) {
+        return 1;
+    }
+    if (x < 0) {
+        return -1;
+    }
+    return x; // preserves NaN and both zeros
+}
+
+/// `e^x - 1`, accurate near zero.
+///
+/// FIVE LINES INSTEAD OF std's TWO HUNDRED AND SIXTY, AND WITHIN TWO ULP OF IT
+///
+/// The naive `@exp(x) - 1` is what this used to be, and it is wrong in a way the function exists
+/// to prevent: for small `x`, `e^x` is just above 1 and subtracting 1 throws away the digits that
+/// were the answer. Measured against std at f64:
+///
+///     x = 1e-5    identity 9.7e-12    here 1.7e-16
+///     x = 1e-8    identity 1.1e-8     here 1.7e-16
+///     x = 1e-12   identity 8.9e-5     here EXACT
+///
+/// **Kahan's observation is that the error is recoverable.** `u = e^x` is computed to within a
+/// rounding step, and `log(u)` is the value of `x` that WOULD have produced exactly that `u`. So
+/// `(u - 1) * x / log(u)` rescales the badly-cancelled `u - 1` by the ratio of the true argument
+/// to the effective one, and the cancellation divides out. Both `u - 1` and `log(u)` lose the
+/// same digits, and their quotient does not.
+///
+/// std's `expm1` is 251 lines of argument reduction and a minimax polynomial per width, and it is
+/// worth ~2 ULP more than this. Measured over 300 000 points across thirty decades: **f64 3.4e-16,
+/// f32 2.0e-7** - one to two ULP at each width. That trade is the right one for a library that
+/// also has to run in a shader.
+///
+/// The two guards are the endpoints, not special cases: `u == 1` means `x` was too small to move
+/// the exponential at all, so `x` IS the answer; `u - 1 == -1` means `e^x` underflowed, and the
+/// limit is -1.
+pub fn expm1(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(expm1, x);
+    }
+    const one_: T = splatLike(T, 1.0);
+    const u: T = @exp(x);
+    if (u == one_) {
+        return x;
+    }
+    if (u - one_ == -one_) {
+        return -one_;
+    }
+    return (u - one_) * x / @log(u);
+}
+
+/// `log(1 + x)`, accurate near zero by the same trick as `expm1` - measured f64 4.1e-16,
+/// f32 2.1e-7.
+pub fn log1p(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(log1p, x);
+    }
+    const one_: T = splatLike(T, 1.0);
+    const u: T = one_ + x;
+    if (u == one_) {
+        return x;
+    }
+    // THE KAHAN TRICK NEEDS AN ACCURATE `log` NEAR ONE, AND A SHADER DOES NOT HAVE ONE
+    //
+    // `log(u) * (x / (u - 1))` is exact reasoning and it rests on `log(u)` being accurate for u
+    // just above 1. The host's is. **SPIR-V's is not**: measured on the device, its `@log`
+    // differs from the host's by about 1.19e-7 ABSOLUTE, and near u = 1 the result is small, so
+    // that absolute error is enormous relatively:
+    //
+    //     x = 1e-6    log1p is 1.0e-6    an absolute 1.19e-7 error is 11.9 PERCENT
+    //     x = 1e-4    log1p is 1.0e-4    1.19e-3
+    //     x = 1e-1    log1p is 9.5e-2    1.25e-6
+    //
+    // The device found it: `log1p` on a band of magnitudes near 1e-6 came back **27 000 times
+    // over its bar**, where the same row on a field spanning decades had looked merely marginal.
+    //
+    // So below an eighth, the series is used instead - and on BOTH backends, because a function
+    // with two routes is the `cosh` mistake. Sixteen terms reach 7.5e-16 across that range,
+    // measured, which is where the arithmetic itself runs out. Above an eighth, `log(u)` is large
+    // enough that even a shader's absolute error is about a millionth relatively, and the Kahan
+    // form is better than any series of reasonable length.
+    if (@abs(x) < splatLike(T, 0.125)) {
+        var total: T = splatLike(T, 0.0);
+        var power: T = x;
+        comptime var term: usize = 1;
+        inline while (term <= 16) : (term += 1) {
+            const reciprocal: T = splatLike(T, 1.0 / @as(comptime_float, @floatFromInt(term)));
+            total = if (term % 2 == 1) total + power * reciprocal else total - power * reciprocal;
+            power *= x;
+        }
+        return total;
+    }
+    return @log(u) * (x / (u - one_));
+}
+
+/// `(e^x - e^-^x)/2`, elementwise. Overflows to infinity where the true function does.
+pub fn sinh(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(sinh, x);
+    }
+    // Above 20 the negative term is below the rounding step of the positive one.
+    if (@abs(x) > splatLike(T, 20.0)) {
+        const half_exp: T = @exp(@abs(x)) * splatLike(T, 0.5);
+        return if (x < 0) -half_exp else half_exp;
+    }
+    // `expm1(x) - expm1(-x)` rather than `e^x - e^-x`: for small x both exponentials round to 1
+    // and their difference is zero, so the old form returned 0 where the answer was x. Each
+    // `expm1` keeps exactly the digits that subtraction destroys, and the form stays symmetric,
+    // so neither term dominates. Measured f32: the identity 1.0 relative error, this 1.8e-7.
+    return (expm1(x) - expm1(-x)) * splatLike(T, 0.5);
+}
+
+/// `log(x + sqrt(x^2+1))`, elementwise. Defined everywhere.
+pub fn asinh(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(asinh, x);
+    }
+    const magnitude: T = @abs(x);
+    // `log(x + sqrt(x*x + 1))` loses everything for small x: `x*x + 1` rounds to 1, the root is
+    // 1, `x + 1` rounds to 1, and the logarithm is 0 where the answer was x. Rewriting the
+    // argument as `1 + t` and using `log1p` keeps it. Above 1e4 the square root would overflow
+    // before it helped, and `log(2x)` is the answer to within a rounding step.
+    const result: T = if (magnitude < splatLike(T, 1.0e4))
+        log1p(magnitude + magnitude * magnitude /
+            (splatLike(T, 1.0) + @sqrt(magnitude * magnitude + splatLike(T, 1.0))))
+    else
+        @log(magnitude) + splatLike(T, 0.6931471805599453);
+    return if (x < 0) -result else result;
+}
+
+/// The inverse hyperbolic cosine. NaN below 1.
+///
+/// `x*x - 1` CANCELS NEAR ONE, AND SO DOES THE LOGARITHM AFTER IT
+///
+/// The textbook form `log(x + sqrt(x*x - 1))` has two failures stacked on each other for x just
+/// above 1: `x*x - 1` subtracts nearly-equal numbers, and then the logarithm is asked for a value
+/// near 1, which is where `log` is weakest. Measured at f32 across the domain, against the f64
+/// answer for the same f32 input: **6.77e-5 relative**, about 570 ULP.
+///
+/// Both are removable. `x - 1` is EXACT when x is near 1 - Sterbenz's lemma, since the two are
+/// within a factor of two - and `(x-1)*(x+1)` is `x*x - 1` without ever forming either square.
+/// Feeding the result to `log1p` rather than `log` removes the second. Measured after:
+/// **2.97e-7**, about two and a half ULP, a factor of 228.
+///
+/// Away from 1 the two forms agree; the rewrite costs one subtract and buys the whole region
+/// where the function is most used.
+pub fn acosh(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(acosh, x);
+    }
+    const below: T = x - splatLike(T, 1.0);
+    return log1p(below + @sqrt(below * (x + splatLike(T, 1.0))));
+}
+/// `1/2*log((1+x)/(1-x))`, elementwise. NaN outside `(-1, 1)`, +/-infinity at the ends.
+pub fn atanh(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(atanh, x);
+    }
+    // Same failure and same cure as `asinh`: `(1+x)/(1-x)` rounds to 1 for small x and the
+    // logarithm returns 0. `log1p(2x/(1-x))` is the same value with the cancellation removed.
+    const magnitude: T = @abs(x);
+    const result: T = splatLike(T, 0.5) *
+        log1p(splatLike(T, 2.0) * magnitude / (splatLike(T, 1.0) - magnitude));
+    return if (x < 0) -result else result;
+}
+
+/// `max(0, x)`, elementwise - the rectifier.
+pub fn relu(x: anytype) @TypeOf(x) {
+    return @max(x, splatLike(@TypeOf(x), 0.0));
+}
+
+// NO `saturate` HERE. The name is deliberately reserved as a private stub further down, so
+// that an author who types `zm.saturate` is told the house name - `clamp01` - instead of getting
+// "no member named". I added a real `saturate` during this pass and the compiler's duplicate-name
+// error led me straight to the decision I was about to override. **A stub that argues its case is
+// worth more than a comment**, and `clamp01` already satisfies the scalar-and-vector rule.
+
+/// The magnitude of `x` with the sign of `y`, elementwise.
+pub fn copysign(x: anytype, y: @TypeOf(x)) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane2(copysign, x, y);
+    }
+    return if (y < 0) -@abs(x) else @abs(x);
+}
+
+/// A comptime float lifted into `T`, whether `T` is a scalar or a vector.
+///
+/// This is the small piece that makes every function above read the same for both shapes. A
+/// bare `1.0` mixed with a vector is a compile error; `@splat` on a scalar is one too.
+fn splatLike(comptime T: type, comptime value: comptime_float) T {
+    if (comptime @typeInfo(T) == .vector) {
+        return @splat(@as(@typeInfo(T).vector.child, value));
+    }
+    return value;
+}
+
+/// Sine of an angle measured in TURNS, where one turn is a full circle.
+///
+/// WHY A SEPARATE FUNCTION AND NOT `sin(tau * x)`
+///
+/// Most code that calls `sin` already has a value that is periodic on [0, 1] - a phase, a
+/// fraction of a cycle, a normalised time - and multiplies it by tau only because `sin` demands
+/// radians. Every fast `sin` implementation then divides that back out as its first act. The
+/// multiply and the divide cancel, and both lose bits.
+///
+/// **The win is that reducing modulo one turn is EXACT.** `x - floor(x)` drops the integer part
+/// of a binary float without touching a mantissa bit, where `tau * x` rounds before `sin` ever
+/// sees it. Measured at f32, against the exact answer of 1:
+///
+///     x = 1_000.25 turns      sin(tau*x) is off by 5.96e-8      this is EXACT
+///     x = 100_000.25 turns    sin(tau*x) is off by 2.76e-4      this is EXACT
+///
+/// And over two thousand whole turns at f64, where every answer should be zero, `sin(n*tau)`
+/// drifts to 1.38e-12 while this returns **exactly zero** every time.
+///
+/// The quarter turns are exact inputs too: 0.25, 0.5 and 0.75 need at most one mantissa bit,
+/// where pi/2 is not representable at any width.
+pub fn sinTurns(x_turns: anytype) @TypeOf(x_turns) {
+    const T = @TypeOf(x_turns);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(sinTurns, x_turns);
+    }
+    return quarterTurn(T, x_turns, 0);
+}
+
+/// Cosine of an angle in turns. Same reduction, same exactness, as `sinTurns`.
+pub fn cosTurns(x_turns: anytype) @TypeOf(x_turns) {
+    const T = @TypeOf(x_turns);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(cosTurns, x_turns);
+    }
+    // Cosine is sine a quarter turn ahead, and shifting the QUADRANT rather than the angle keeps
+    // the shift exact.
+    return quarterTurn(T, x_turns, 1);
+}
+
+/// Tangent of an angle in turns.
+///
+/// TURNS MAKE THE POLES REACHABLE, AND THAT IS A BEHAVIOUR CHANGE
+///
+/// `tan` is infinite at a quarter turn and at three quarters. In radians those are pi/2 and
+/// 3pi/2, neither of which is representable, so `tan(pi/2)` returns a large finite number - about
+/// 1.6e16 - and code downstream carries on with it.
+///
+/// In turns, **0.25 and 0.75 are exact**, so the pole is genuinely reachable and the honest
+/// answer is infinity. That is not a regression: a silent 1.6e16 is a wrong answer that looks
+/// like a right one, and an infinity says what happened. It IS a difference a caller can trip
+/// over, which is why it is stated here rather than discovered.
+///
+/// The period is half a turn, not a whole one, so the reduction is modulo 0.5.
+pub fn tanTurns(x_turns: anytype) @TypeOf(x_turns) {
+    const T = @TypeOf(x_turns);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(tanTurns, x_turns);
+    }
+    const half: T = splatLike(T, 0.5);
+    // Reduce onto [0, 0.5), the actual period, then centre on [-0.25, 0.25) so the pole sits at
+    // the edges rather than in the middle of the range.
+    const wrapped: T = x_turns / half - @floor(x_turns / half);
+    if (wrapped == half) {
+        return if (x_turns < 0) -inf(T) else inf(T);
+    }
+    return tanRad(sin_turn_scale(T) * (wrapped * half));
+}
+
+/// Both of a turn angle's coordinates on the unit circle.
+pub fn SinCos(comptime T: type) type {
+    return struct { sin: T, cos: T };
+}
+
+/// Sine and cosine of one angle in turns, computed together.
+///
+/// One reduction serves both, which is the saving - the quadrant split is the expensive part and
+/// the two results differ only in which quadrant they read from.
+pub fn sincosTurns(x_turns: anytype) SinCos(@TypeOf(x_turns)) {
+    const T = @TypeOf(x_turns);
+    return .{ .sin = quarterTurn(T, x_turns, 0), .cos = quarterTurn(T, x_turns, 1) };
+}
+
+/// Sine of `x` turns, advanced by `quadrant_shift` quarter turns.
+///
+/// EVERY STEP OF THE REDUCTION IS EXACT, WHICH IS WHY THE QUARTER TURNS COME OUT EXACT
+///
+/// Reducing to the whole turn (`x - floor(x)`) drops the integer part without touching a mantissa
+/// bit. Multiplying by four is a power of two, so it is exact. Splitting off the quadrant is
+/// exact for the same reason the first step was. **Nothing has rounded yet**, and the residual
+/// angle is in [0, a quarter turn), where one multiply by tau/4 gives the only rounding in the
+/// whole function.
+///
+/// Doing it this way rather than one multiply by tau is what makes `sinTurns(0.5)` return
+/// **exactly zero** instead of 1.2e-16: a half turn is quadrant 2 with a residual of exactly
+/// zero, and `sin(0)` is exactly zero. Through radians it is `sin(pi)`, and pi is not
+/// representable.
+fn quarterTurn(comptime T: type, x_turns: T, comptime quadrant_shift: u2) T {
+    const whole: T = x_turns - @floor(x_turns);
+    const scaled: T = whole * 4; // exact: a power of two
+    const quadrant: T = @floor(scaled);
+    const residual: T = scaled - quadrant; // exact, and in [0, 1)
+    const angle: T = residual * splatLike(T, 1.5707963267948966); // one quarter turn, in radians
+    // `quadrant` is in [0, 4) and whole by construction, so the low two bits are the quadrant.
+    //  already yields a whole number in [0, 4); the rule wants the rounding named rather
+    // than a bare cast wrapped round it.
+    const index: u2 = @floor(@mod(quadrant, 4));
+    const which: u2 = index +% quadrant_shift;
+    return switch (which) {
+        0 => sinRad(angle),
+        1 => cosRad(angle),
+        2 => -sinRad(angle),
+        3 => -cosRad(angle),
+    };
+}
+
+/// One turn, in radians.
+fn sin_turn_scale(comptime T: type) T {
+    return splatLike(T, 6.283185307179586);
+}
+
+/// Turns from radians. One turn is `tau` radians.
+pub fn turnsFromRad(x: anytype) @TypeOf(x) {
+    return x * splatLike(@TypeOf(x), 0.15915494309189535);
+}
+
+/// Radians from turns.
+pub fn radFromTurns(x_turns: anytype) @TypeOf(x_turns) {
+    return x_turns * splatLike(@TypeOf(x_turns), 6.283185307179586);
+}
+
+/// Turns from degrees. A turn is 360 degrees, so this is exact for every multiple of 45.
+pub fn turnsFromDeg(x: anytype) @TypeOf(x) {
+    return x * splatLike(@TypeOf(x), 1.0 / 360.0);
+}
+
+/// Degrees from turns.
+pub fn degFromTurns(x_turns: anytype) @TypeOf(x_turns) {
+    return x_turns * splatLike(@TypeOf(x_turns), 360.0);
+}
+
 /// Natural logarithm.
-pub inline fn ln(x: anytype) @TypeOf(x) {
+pub fn ln(x: anytype) @TypeOf(x) {
     return @log(x);
 }
-/// Euclidean length of (x, y) — `sqrt(x*x + y*y)`.
-pub inline fn hypot(x: anytype, y: anytype) @TypeOf(x, y) {
+/// `hypot` at full precision, without `std.math`.
+///
+/// OWNED, NOT DELEGATED - AND HALF THE SIZE, BECAUSE IT IS f32 AND f64 ONLY
+///
+/// std's `hypot` is 87 lines covering f16, f80 and f128 and carrying an unfused fallback for
+/// targets without a fused multiply-add. zimrmath needs neither: it is f32 and f64, and both have
+/// `@mulAdd`.
+///
+/// **f32 is one line.** Widening to f64 and taking the square root there is exact for every f32
+/// input, because `x*x + y*y` cannot overflow f64 for any finite f32 - so there is no scaling to
+/// do and no correction term to apply. std does exactly this too.
+///
+/// f64 needs the work: the sum of squares can overflow, so the operands are scaled into range
+/// first, and one Newton correction recovers the bits the square root lost. The correction is
+/// std's, term for term - this is a port, not a re-derivation, and the tests below are the ones
+/// that would catch a transcription error.
+fn hypotExact(comptime T: type, x: T, y: T) T {
+    if (comptime T == f32) {
+        return @floatCast(@sqrt(@mulAdd(f64, x, x, @as(f64, y) * y)));
+    }
+    if (isInf(x) or isInf(y)) {
+        return inf(T);
+    }
+    if (isNan(x) or isNan(y)) {
+        return nan(T);
+    }
+    var major: T = @abs(x);
+    var minor: T = @abs(y);
+    if (minor > major) {
+        const swap: T = major;
+        major = minor;
+        minor = swap;
+    }
+    if (minor == 0.0) {
+        return major;
+    }
+    // The smaller operand contributes nothing the larger can represent.
+    if (major - minor == major) {
+        return major;
+    }
+    // `true_min` is the smallest subnormal; scaling by it and its reciprocal keeps the squares in
+    // range at both ends without losing a bit.
+    const true_min: T = 4.9406564584124654e-324;
+    const lower: T = @sqrt(floatMin(T));
+    const upper: T = @sqrt(floatMax(T) / 2);
+    const scale: T = true_min * upper;
+    if (major > upper) {
+        return hypotFused(T, major * scale, minor * scale) / scale;
+    }
+    if (minor < lower) {
+        return hypotFused(T, major / scale, minor / scale) * scale;
+    }
+    return hypotFused(T, major, minor);
+}
+
+/// One Newton step on `sqrt(x^2 + y^2)`, recovering what the square root rounded away.
+fn hypotFused(comptime T: type, x: T, y: T) T {
+    const r: T = @sqrt(@mulAdd(T, x, x, y * y));
+    const rr: T = r * r;
+    const xx: T = x * x;
+    const z: T = @mulAdd(T, -y, y, rr - xx) + @mulAdd(T, r, r, -rr) - @mulAdd(T, x, x, -xx);
+    return r - z / (2 * r);
+}
+
+/// Euclidean length of (x, y) - `sqrt(x*x + y*y)`.
+pub fn hypot(x: anytype, y: anytype) @TypeOf(x, y) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane2(hypot, x, y);
+    }
     if (comptime !is_gpu) {
-        return std.math.hypot(x, y);
+        return hypotExact(@TypeOf(x, y), x, y);
     }
     return @sqrt(x * x + y * y);
 }
 
-/// Smallest power of ten >= `x` (for `x > 0`) — handy for "nice" axis
+// ===== ZNUM-UPSTREAM(ml-activations): activation functions missing from zm =====
+// Merged from znum's vendored delta ledger (`shaders/vendor/zimr/PROVENANCE.md`), where the
+// block is recorded as `offered`. Kept under its original markers so a re-sync can `grep
+// ZNUM-UPSTREAM` and see it is already upstream.
+//
+// WHY THESE LIVE HERE. A neural-net kernel needs `tanh`, `sigmoid` and `gelu`, and `@tanh` is
+// NOT a Zig builtin (unlike `@exp`/`@sqrt`/`@sin`), so it cannot lower to a WGSL builtin the way
+// the others do. Putting them in zm rather than forking a second math module means they follow
+// the exact `if (comptime !is_gpu) return std.math.X;` shape `pow`/`atan2`/`hypot` use above -
+// host gets precise `std.math`, GPU gets a portable form built on `@exp` - and zimr's own
+// shaders gain them too.
+//
+// GENERIC over the float type, exactly like `pow`/`atan2`/`hypot`. znum records that writing
+// these f32-only "blocked dtype-generic layers", because a kernel generic over an injected
+// element type `T` cannot compose with an activation stuck at f32. The float literals coerce to
+// `@TypeOf(x)` on their own.
+//
+// NOT added to the linter's `reserved-math-names` list, deliberately: reserving them would
+// forbid `nn.tanh` / `nn.sigmoid` / `nn.gelu` as layer wrappers, which is exactly what a neural
+// network library wants to spell. `tan` is reserved; `tanh` is a different word.
+
+/// Hyperbolic tangent. The GPU form uses `tanh(x) = (e^{2x} - 1) / (e^{2x} + 1)`, built on the
+/// GPU-portable `exp`. Generic over the float type of `x`.
+/// ONE EXPRESSION FOR BOTH BACKENDS, AND IT IS MORE ACCURATE THAN THE ONE IT REPLACES
+///
+/// This used to be `std.math.tanh` on the host and `(e^2x - 1)/(e^2x + 1)` in a shader. That
+/// identity is algebraically right and numerically terrible near zero: for small `x`, `e^2x`
+/// rounds to exactly 1, the numerator becomes 0, and `tanh(x)` comes back as 0 when the answer
+/// was `x`. Measured against std over thirty decades, **the old shader identity is 1.0 relative
+/// error at f32** - not inaccurate, wrong - and 5.3e-7 at f64.
+///
+/// `expm1(2x) / (expm1(2x) + 2)` is the same function with the cancellation removed, because
+/// `expm1` is exactly the function that keeps the digits `e^2x - 1` throws away. Measured:
+/// **f32 3.4e-7, f64 5.6e-16** - one to two ULP against std at both widths, in a form that is
+/// still `@exp` and `@log` only and so still lowers to SPIR-V.
+///
+/// So there is no `is_gpu` branch: the host and the shader run the same line, and the host gives
+/// up nothing to get that. The saturation guard is not an optimisation - `2x` overflows the
+/// exponential before `tanh` stops being 1 to within a rounding step.
+pub fn tanh(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    if (comptime @typeInfo(T) == .vector) {
+        return perLane(tanh, x);
+    }
+    const saturate_at: T = splatLike(T, if (T == f32) 10.0 else 20.0);
+    if (@abs(x) > saturate_at) {
+        return if (x < 0) splatLike(T, -1.0) else splatLike(T, 1.0);
+    }
+    const u: T = expm1(splatLike(T, 2.0) * x);
+    return u / (u + splatLike(T, 2.0));
+}
+
+/// Logistic sigmoid, `1 / (1 + e^{-x})`. Generic over the float type of `x`.
+pub fn sigmoid(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(sigmoid, x);
+    }
+    if (comptime !is_gpu) {
+        return 1.0 / (1.0 + std.math.exp(-x));
+    }
+    return 1.0 / (1.0 + exp(-x));
+}
+
+/// GELU (Gaussian Error Linear Unit), the tanh approximation PyTorch spells
+/// `gelu(approximate="tanh")` and the GPT family uses:
+/// `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))`
+/// `sqrt(2/pi)` is precomputed. Expressed entirely through `tanh` above, so CPU and GPU agree by
+/// construction rather than by tolerance. Generic over the float type of `x`.
+pub fn gelu(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(gelu, x);
+    }
+    const T = @TypeOf(x);
+    const sqrt_2_over_pi: T = 0.7978845608;
+    const x_cubed: T = x * x * x;
+    const inner: T = sqrt_2_over_pi * (x + 0.044715 * x_cubed);
+    // `x * sigmoid(2u)` rather than `0.5 * x * (1 + tanh(u))`, WHICH IS THE SAME NUMBER
+    //
+    // `(1 + tanh(u)) / 2` IS `sigmoid(2u)` - not an approximation of it, the same expression
+    // rearranged. But `1 + tanh(u)` cancels when `tanh(u)` approaches -1, which is every
+    // sufficiently negative input: at x = -5 the old form gave -5.96e-7 where the answer is
+    // -2.29e-7, and at x = -6 it gave exactly 0. Worst relative error over [-8, 8] went from
+    // **3.0 to 0.5**, and what remains sits at magnitudes near 1e-11 where it cannot matter.
+    //
+    // It is also one call instead of three operations, which is the part worth having: the
+    // cancellation-free form is the SHORTER one.
+    return x * sigmoid(2.0 * inner);
+}
+
+test "zm: every elementwise function stays within a few ULP, INCLUDING near zero" {
+    // THE AUDIT THAT FOUND FOUR BUGS, MADE PERMANENT
+    //
+    // `zm.tanh` was 1.0 relative error at f32 near zero for as long as this file existed, and it
+    // was found by accident. Running the same question over every elementwise function found
+    // three more of exactly the same shape - `sinh`, `asinh` and `atanh`, each 1.0 - plus `gelu`
+    // at 3.0. All four were a subtraction of nearly-equal numbers, and none of the existing tests
+    // could see them because none of them asked about small inputs.
+    //
+    // So the question is asked here, for every function, over eight decades down to 1e-8. The
+    // reference is the f64 path, which is a genuine oracle for the f32 one: it is the same
+    // algorithm with fifty-two bits instead of twenty-three, so agreement means the FORM is right
+    // rather than that two implementations share a mistake.
+    //
+    // The bar is 1e-5, not one ULP. Some of these are two or three ULP by construction and one -
+    // `gelu` - is 4e-6 at inputs where its own value is near 1e-11. A bar tight enough to catch
+    // those would fail on arithmetic that is working correctly; 1e-5 is two orders below anything
+    // a cancellation bug produces, and every one of the four found here was at 1.0 or worse.
+    const Probe = struct {
+        fn check(
+            comptime name: []const u8,
+            comptime narrow: fn (f32) f32,
+            comptime wide: fn (f64) f64,
+            low: f64,
+            high: f64,
+        ) !void {
+            const steps: usize = 4000;
+            var i: usize = 0;
+            while (i < steps) : (i += 1) {
+                const t: f64 = float64(i) / float64(steps - 1);
+                const decade: f64 = low + (high - low) * t;
+                const magnitude: f64 = pow(@as(f64, 10.0), decade);
+                const signed: f64 = if (i % 2 == 0) magnitude else -magnitude;
+                const x: f32 = @floatCast(signed);
+                if (!isFinite(x)) {
+                    continue;
+                }
+                const got: f32 = narrow(x);
+                const want: f64 = wide(@as(f64, x));
+                if (want == 0 or !isFinite(want) or @abs(want) < 1.0e-30) {
+                    continue;
+                }
+                if (!isFinite(got)) {
+                    std.debug.print("zm.{s}: non-finite at x={e}\n", .{ name, x });
+                    return error.NonFinite;
+                }
+                const relative: f64 = @abs((@as(f64, got) - want) / want);
+                if (relative > 1.0e-5) {
+                    std.debug.print("zm.{s}: {e} relative at x={e}\n", .{ name, relative, x });
+                    return error.TooInaccurate;
+                }
+            }
+        }
+    };
+    const Narrow = struct {
+        fn sinhF(x: f32) f32 {
+            return sinh(x);
+        }
+        fn coshF(x: f32) f32 {
+            return cosh(x);
+        }
+        fn tanhF(x: f32) f32 {
+            return tanh(x);
+        }
+        fn asinhF(x: f32) f32 {
+            return asinh(x);
+        }
+        fn atanhF(x: f32) f32 {
+            return atanh(x);
+        }
+        fn expm1F(x: f32) f32 {
+            return expm1(x);
+        }
+        fn log1pF(x: f32) f32 {
+            return log1p(x);
+        }
+        fn cbrtF(x: f32) f32 {
+            return cbrt(x);
+        }
+        fn geluF(x: f32) f32 {
+            return gelu(x);
+        }
+        fn sigmoidF(x: f32) f32 {
+            return sigmoid(x);
+        }
+    };
+    const Wide = struct {
+        fn sinhD(x: f64) f64 {
+            return sinh(x);
+        }
+        fn coshD(x: f64) f64 {
+            return cosh(x);
+        }
+        fn tanhD(x: f64) f64 {
+            return tanh(x);
+        }
+        fn asinhD(x: f64) f64 {
+            return asinh(x);
+        }
+        fn atanhD(x: f64) f64 {
+            return atanh(x);
+        }
+        fn expm1D(x: f64) f64 {
+            return expm1(x);
+        }
+        fn log1pD(x: f64) f64 {
+            return log1p(x);
+        }
+        fn cbrtD(x: f64) f64 {
+            return cbrt(x);
+        }
+        fn geluD(x: f64) f64 {
+            return gelu(x);
+        }
+        fn sigmoidD(x: f64) f64 {
+            return sigmoid(x);
+        }
+    };
+    try Probe.check("sinh", Narrow.sinhF, Wide.sinhD, -8, 1);
+    try Probe.check("cosh", Narrow.coshF, Wide.coshD, -8, 1);
+    try Probe.check("tanh", Narrow.tanhF, Wide.tanhD, -8, 1);
+    try Probe.check("asinh", Narrow.asinhF, Wide.asinhD, -8, 2);
+    try Probe.check("atanh", Narrow.atanhF, Wide.atanhD, -8, -0.01);
+    try Probe.check("expm1", Narrow.expm1F, Wide.expm1D, -8, 1);
+    try Probe.check("log1p", Narrow.log1pF, Wide.log1pD, -8, 1);
+    try Probe.check("cbrt", Narrow.cbrtF, Wide.cbrtD, -8, 8);
+    try Probe.check("gelu", Narrow.geluF, Wide.geluD, -8, 0.7);
+    try Probe.check("sigmoid", Narrow.sigmoidF, Wide.sigmoidD, -8, 1);
+
+    // ACOSH WAS NOT ON THIS LIST, WHICH IS WHY IT SURVIVED THE LAST AUDIT AT 570 ULP
+    //
+    // Its argument runs from 1 upward, not through zero, so the shared probe above - which walks
+    // decades of magnitude either side of zero - could not reach the region where it fails. A
+    // function whose weak point is not at zero needs a range of its own, and leaving it out was
+    // the whole reason it was missed.
+    {
+        var i: usize = 1;
+        while (i < 4000) : (i += 1) {
+            const offset: f64 = pow(@as(f64, 10.0), -8.0 + 16.0 * float64(i) / 4000.0);
+            const x: f32 = @floatCast(1.0 + offset);
+            if (!isFinite(x) or x <= 1.0) {
+                continue;
+            }
+            const want: f64 = acosh(@as(f64, x));
+            if (want == 0 or !isFinite(want)) {
+                continue;
+            }
+            const relative: f64 = @abs((@as(f64, acosh(x)) - want) / want);
+            if (relative > 1.0e-5) {
+                std.debug.print("zm.acosh: {e} relative at x={d:.9}\n", .{ relative, x });
+                return error.TooInaccurate;
+            }
+        }
+    }
+}
+
+test "zm turns: the quarter turns are exact, and the reduction never rounds" {
+    // WHAT MAKES TURNS WORTH A SEPARATE FUNCTION, ASSERTED
+    //
+    // Not "close to 1" - EXACTLY 1. Every step of the reduction is exact: dropping the whole
+    // turns touches no mantissa bit, multiplying by four is a power of two, and splitting off the
+    // quadrant is exact for the same reason. The only rounding in the whole function is one
+    // multiply on an angle already inside a quarter turn_count.
+    inline for (.{ f32, f64 }) |T| {
+        try expectEqual(@as(T, 0), sinTurns(@as(T, 0.0)));
+        try expectEqual(@as(T, 1), sinTurns(@as(T, 0.25)));
+        try expectEqual(@as(T, 0), @abs(sinTurns(@as(T, 0.5))));
+        try expectEqual(@as(T, -1), sinTurns(@as(T, 0.75)));
+        try expectEqual(@as(T, 0), sinTurns(@as(T, 1.0)));
+        try expectEqual(@as(T, 1), cosTurns(@as(T, 0.0)));
+        try expectEqual(@as(T, 0), @abs(cosTurns(@as(T, 0.25))));
+        try expectEqual(@as(T, -1), cosTurns(@as(T, 0.5)));
+        // Through radians NONE of these is exact, because pi/2 is not representable at any width.
+        try expect(@sin(@as(T, 0.5) * 6.283185307179586) != 0);
+    }
+
+    // WHOLE TURNS RETURN EXACTLY ZERO, HOWEVER MANY OF THEM. The radian route drifts: measured,
+    // 1.38e-12 over two thousand turns at f64.
+    var turn_count: f64 = 0;
+    var worst_radians: f64 = 0;
+    while (turn_count < 2000) : (turn_count += 1) {
+        try expectEqual(@as(f64, 0), sinTurns(turn_count));
+        try expectEqual(@as(f64, 1), cosTurns(turn_count));
+        worst_radians = @max(worst_radians, @abs(@sin(turn_count * 6.283185307179586)));
+    }
+    try expect(worst_radians > 1.0e-13); // the drift this avoids is real, not hypothetical
+
+    // AND AT f32, WHERE A PHASE COUNTER ACTUALLY LIVES. sin(tau*x) at 100 000.25 turns is off by
+    // 2.76e-4; this is exact.
+    try expectEqual(@as(f32, 1), sinTurns(@as(f32, 100000.25)));
+    try expect(@abs(@sin(@as(f32, 100000.25) * 6.2831855) - 1.0) > 1.0e-4);
+
+    // The reduction must not have cost accuracy anywhere else: Pythagoras across ten turns.
+    var i: usize = 0;
+    while (i < 20000) : (i += 1) {
+        const t_turns: f64 = -5.0 + 10.0 * float64(i) / 19999.0;
+        const s: f64 = sinTurns(t_turns);
+        const c: f64 = cosTurns(t_turns);
+        try expect(@abs(s * s + c * c - 1.0) < 1.0e-15);
+        const both = sincosTurns(t_turns);
+        try expectEqual(s, both.sin);
+        try expectEqual(c, both.cos);
+    }
+
+    // TAN REACHES ITS POLES, which is the behaviour change turns bring. Through radians the same
+    // call returns about 1.6e16 - a wrong answer wearing the shape of a right one.
+    try expect(isInf(tanTurns(@as(f64, 0.25))));
+    try expect(isInf(tanTurns(@as(f64, 0.75))));
+    try expect(isFinite(@tan(@as(f64, 0.25) * 6.283185307179586)));
+    try expect(approxEqAbs(1.0, tanTurns(@as(f64, 0.125)), 1.0e-15));
+    try expectEqual(@as(f64, 0), tanTurns(@as(f64, 0.0)));
+
+    // The conversions are exact on the angles anyone actually types.
+    try expectEqual(@as(f64, 0.25), turnsFromDeg(@as(f64, 90.0)));
+    try expectEqual(@as(f64, 90.0), degFromTurns(@as(f64, 0.25)));
+    try expectEqual(@as(f64, 0.125), turnsFromDeg(@as(f64, 45.0)));
+    try expect(approxEqAbs(0.5, turnsFromRad(@as(f64, 3.141592653589793)), 1.0e-16));
+    try expect(approxEqAbs(6.283185307179586, radFromTurns(@as(f64, 1.0)), 1.0e-15));
+
+    // Vectors, lane by lane.
+    const lane_turns: @Vector(4, f32) = .{ 0.0, 0.25, 0.5, 0.75 };
+    const sines: @Vector(4, f32) = sinTurns(lane_turns);
+    try expectEqual(@as(f32, 0), sines[0]);
+    try expectEqual(@as(f32, 1), sines[1]);
+    try expectEqual(@as(f32, -1), sines[3]);
+}
+
+test "zm.tanh / sigmoid / gelu: known points, both float widths" {
+    // tanh is odd and saturates; sigmoid(0) is exactly a half.
+    try expectApproxEqAbs(@as(f32, 0.0), tanh(@as(f32, 0.0)), 1.0e-7);
+    try expectApproxEqAbs(@as(f64, 0.7615941559557649), tanh(@as(f64, 1.0)), 1.0e-12);
+    try expectApproxEqAbs(@as(f64, -0.7615941559557649), tanh(@as(f64, -1.0)), 1.0e-12);
+    try expectApproxEqAbs(@as(f64, 0.5), sigmoid(@as(f64, 0.0)), 1.0e-15);
+    try expectApproxEqAbs(@as(f32, 0.7310586), sigmoid(@as(f32, 1.0)), 1.0e-6);
+
+    // GELU pins against PyTorch's tanh approximation at three points, and gelu(0) == 0 exactly.
+    try expectApproxEqAbs(@as(f64, 0.0), gelu(@as(f64, 0.0)), 1.0e-15);
+    try expectApproxEqAbs(@as(f64, 0.8411919906082768), gelu(@as(f64, 1.0)), 1.0e-9);
+    try expectApproxEqAbs(@as(f64, -0.15880800939252304), gelu(@as(f64, -1.0)), 1.0e-9);
+    // THE CONSTANT ABOVE WAS WRONG THE FIRST TIME (it was the erf-exact gelu, not the
+    // tanh approximation) and this test caught it on the first run. The identity below is
+    // what a golden should have been anchored to all along: `gelu(x) - gelu(-x) == x`
+    // holds for the approximation exactly, and needs no remembered digits.
+    try expectApproxEqAbs(@as(f64, 1.0), gelu(@as(f64, 1.0)) - gelu(@as(f64, -1.0)), 1.0e-15);
+
+    // The property that makes the three worth having together: gelu is built ON tanh, so a
+    // change to tanh that broke gelu would otherwise show up only in a network's loss curve.
+    const x: f64 = 0.37;
+    const by_hand: f64 = 0.5 * x * (1.0 + tanh(0.7978845608 * (x + 0.044715 * x * x * x)));
+    try expectApproxEqAbs(by_hand, gelu(x), 1.0e-15);
+}
+// ===== END ZNUM-UPSTREAM(ml-activations) =====
+
+/// Smallest power of ten >= `x` (for `x > 0`) - handy for "nice" axis
 /// upper bounds. `ceilPowerOf10(250) == 1000`, `ceilPowerOf10(1) == 1`.
-pub inline fn ceilPowerOf10(x: f64) f64 {
+pub fn ceilPowerOf10(x: f64) f64 {
     return exp10(@ceil(log10(x)));
 }
 
@@ -887,12 +2126,12 @@ test "zm.log10 / exp10 / ceilPowerOf10" {
     try expectApproxEqAbs(@as(f64, 1.0), ceilPowerOf10(1.0), 1.0e-9);
 }
 
-// ---- Integer / comptime utilities ---------------------------------------
+// Integer / comptime utilities
 // These are comptime or pure-integer, so they're target-independent (the
 // comptime ones produce constants usable in a shader; the runtime ones
 // use only integer ops).  Exposed via zm so the `std-math` rule stays
 // clean across the codebase.
-pub inline fn maxInt(comptime T: type) comptime_int {
+pub fn maxInt(comptime T: type) comptime_int {
     const info = @typeInfo(T);
     const bit_count: u16 = info.int.bits;
     if (bit_count == 0) {
@@ -900,7 +2139,7 @@ pub inline fn maxInt(comptime T: type) comptime_int {
     }
     return (1 << (bit_count - @intFromBool(info.int.signedness == .signed))) - 1;
 }
-pub inline fn minInt(comptime T: type) comptime_int {
+pub fn minInt(comptime T: type) comptime_int {
     const info = @typeInfo(T);
     const bit_count: u16 = info.int.bits;
     if (info.int.signedness == .unsigned) {
@@ -912,14 +2151,14 @@ pub inline fn minInt(comptime T: type) comptime_int {
     return -(1 << (bit_count - 1));
 }
 /// floor(log2(x)) for x > 0.
-pub inline fn log2_int(comptime T: type, x: T) Log2Int(T) {
+pub fn log2_int(comptime T: type, x: T) Log2Int(T) {
     // floor(log2(x)) for x > 0 (matches std.math.log2_int, which likewise
-    // requires x != 0 — here x == 0 would @intCast a negative, trapping).
+    // requires x != 0 - here x == 0 would @intCast a negative, trapping).
     const bits = @typeInfo(T).int.bits;
     return @intCast(bits - 1 - @clz(x));
 }
-/// Checked subtraction — `error.Overflow` on wrap.  CPU/comptime utility.
-pub inline fn subChecked(
+/// Checked subtraction - `error.Overflow` on wrap.  CPU/comptime utility.
+pub fn subChecked(
     comptime T: type,
     a: T,
     b: T,
@@ -930,8 +2169,8 @@ pub inline fn subChecked(
     }
     return r[0];
 }
-/// Checked multiplication — `error.Overflow` on wrap.  CPU/comptime utility.
-pub inline fn mulChecked(
+/// Checked multiplication - `error.Overflow` on wrap.  CPU/comptime utility.
+pub fn mulChecked(
     comptime T: type,
     a: T,
     b: T,
@@ -942,8 +2181,8 @@ pub inline fn mulChecked(
     }
     return r[0];
 }
-/// Checked addition — `error.Overflow` on wrap.  CPU/comptime utility.
-pub inline fn addChecked(
+/// Checked addition - `error.Overflow` on wrap.  CPU/comptime utility.
+pub fn addChecked(
     comptime T: type,
     a: T,
     b: T,
@@ -958,7 +2197,7 @@ pub inline fn addChecked(
 /// Mirrors std.math.cast; the body is GPU-portable (only comparisons,
 /// `@intCast`, and the comptime maxInt/minInt above), so no std branch
 /// is needed.
-pub inline fn cast(comptime T: type, x: anytype) ?T {
+pub fn cast(comptime T: type, x: anytype) ?T {
     comptime assert(@typeInfo(T) == .int, @src());
     const is_comptime = @TypeOf(x) == comptime_int;
     comptime assert(is_comptime or @typeInfo(@TypeOf(x)) == .int, @src());
@@ -977,7 +2216,7 @@ pub fn square(v: anytype) @TypeOf(v) {
 // Fundamental types.  `Vec` is the canonical 4-lane f32 SIMD type;
 // it's both 3D (with w lane = 0 for direction, w = 1 for point,
 // per the homogeneous-coordinates convention) and 4D math.  `Vec2`
-// is the 2-lane version.  There are no Vec3/Vec4 names — same
+// is the 2-lane version.  There are no Vec3/Vec4 names - same
 // underlying type, different function suites (`dot3` vs `dot4`).
 // `F32x8` and `F32x16` are wider SIMD types kept for the
 // generic-width SIMD utilities (load, store, all, any, etc.).
@@ -987,7 +2226,7 @@ pub fn square(v: anytype) @TypeOf(v) {
 pub const Vec2 = @Vector(2, f32);
 pub const Vec3 = @Vector(3, f32);
 
-/// Complex number — SIMD alias for `@Vector(2, f32)` (same storage
+/// Complex number - SIMD alias for `@Vector(2, f32)` (same storage
 /// as `Vec2`).  Lane 0 is the real part, lane 1 the imaginary part.
 ///
 /// Distinct from `Vec2` only in the call site: `Complex` reads as
@@ -995,7 +2234,7 @@ pub const Vec3 = @Vector(3, f32);
 /// "this is a 2D point/UV/whatever".  Same bytes, same alignment.
 ///
 /// Because it IS `@Vector(2, f32)`, the native `+` and `-`
-/// operators do complex addition / subtraction directly — the
+/// operators do complex addition / subtraction directly - the
 /// headline one-liner for mandelbrot is `z = cmul(z, z) + c` with
 /// no boilerplate around the `+`.  The `*` operator is
 /// COMPONENTWISE (not complex multiplication); use `cmul` for the
@@ -1010,7 +2249,7 @@ pub const Vec3 = @Vector(3, f32);
 /// mathematically valid output.
 pub const Complex = @Vector(2, f32);
 
-/// Integer 2D vector — pixel coordinates, viewport dimensions, any
+/// Integer 2D vector - pixel coordinates, viewport dimensions, any
 /// value that's conceptually a count rather than a measurement.
 /// Sister type to `Vec2`; SIMD-aligned, 8 bytes, native arithmetic
 /// (`+` / `-` / `*` componentwise; use `@min` / `@max` builtins for
@@ -1019,6 +2258,29 @@ pub const Complex = @Vector(2, f32);
 /// Migrated from a named `Vector2i` struct in the math-unification
 /// plan (see `src/notes/math_unification.md` Phase -1).
 pub const Vec2i = @Vector(2, i32);
+/// A 4x4 matrix, stored as four `Vec` **rows** - `Mat[3]` is the
+/// translation row `.{ x, y, z, 1 }`. The API follows the OpenGL /
+/// glTF **column-vector** convention: a matrix `M` transforms a
+/// point with `mulMatPoint(M, p)` (or a vector with `mulMatVec`),
+/// and products read like GLSL - in `A*B` the RIGHT operand acts on
+/// the point FIRST. (Storage is the logical transpose, i.e. rows
+/// rather than columns, purely so point transforms compile to a
+/// branch-free splat-multiply-add.)
+///
+/// BUILDING A TRANSFORM - read this to avoid silent mirror/melt bugs:
+/// - Prefer `compose(first, then)` / `composeN(a, b, c)`. They read
+/// in APPLICATION order - "do a, then b, then c":
+/// // glTF node local: scale, then rotate, then translate
+/// const local = composeN(scalingV(s), matFromQuat(r), translationV(t));
+/// - Raw `mulMat(A, B)` applies B FIRST, then A - the later
+/// transform goes on the LEFT. So `composeN(a, b, c)` ==
+/// `mulMat(c, mulMat(b, a))`, and `compose(a, b)` == `mulMat(b, a)`.
+/// - Common glTF/skinning products, spelled out:
+/// world[child] = mulMat(world[parent], childLocal); // == compose(childLocal, parentWorld)
+/// skinMatrix   = mulMat(jointWorld, inverseBind);   // == compose(inverseBind, jointWorld)
+/// - Porting raylib? Its `MatrixMultiply(left, right)` applies
+/// `left` first, so it maps 1:1 to `compose(left, right)`, NOT
+/// `mulMat(left, right)`. See `mulMat` for the full warning.
 pub const Mat = [4]Vec;
 pub const Quat = Vec;
 pub const Boolx4 = @Vector(4, bool);
@@ -1056,9 +2318,9 @@ pub const is_wasm: bool = builtin.target.cpu.arch.isWasm();
 /// preconditions behind `if (comptime zm.allow_assert)` so they vanish in ship
 /// builds along with the asserts they guard. (Moved here from utils.zig so the
 /// whole codebase shares one assert home.)
-pub const allow_assert: bool = !is_stripped or @import("build_options").assert_log;
+pub const allow_assert: bool = !is_stripped or build_options.assert_log;
 
-/// Formatted assertion — the canonical assert for the whole codebase.
+/// Formatted assertion - the canonical assert for the whole codebase.
 ///
 /// On GPU (SPIR-V) it is exactly `std.debug.assert`: `if (!ok) unreachable`,
 /// with no log/panic machinery (a shader has none). On CPU, in a dev build
@@ -1068,25 +2330,25 @@ pub const allow_assert: bool = !is_stripped or @import("build_options").assert_l
 /// branch is comptime-dead in a SPIR-V compile, so `build_options` / `std.log` /
 /// `@panic` are never pulled into shaders.
 ///
-/// MENTAL MODEL: in a ship build this is NOT a runtime check — it is a PROMISE
+/// MENTAL MODEL: in a ship build this is NOT a runtime check - it is a PROMISE
 /// to the optimizer that `ok` is always true, and the optimizer builds on that
 /// promise. Breaking it is undefined behaviour, and "undefined" is as bad as it
 /// sounds. The deliberately absurd case:
-///     var a: u32 = 5;
-///     assertf(a == 10, @src(), "a must be 10", .{}); // ship: "assume a == 10"
-///     if (a == 10) deleteAllUserData();              // a == 10 is now "known"
-///                                                    // true, so the compiler
-///                                                    // may run this branch
-///                                                    // UNCONDITIONALLY
-/// `a` is 5, yet the user's data is gone — because we lied to the compiler. So
+/// var a: u32 = 5;
+/// assertf(a == 10, @src(), "a must be 10", .{}); // ship: "assume a == 10"
+/// if (a == 10) deleteAllUserData();              // a == 10 is now "known"
+/// // true, so the compiler
+/// // may run this branch
+/// // UNCONDITIONALLY
+/// `a` is 5, yet the user's data is gone - because we lied to the compiler. So
 /// only assert invariants that genuinely cannot be false in a shipped build; if
-/// you are not certain it holds, it is not an assert — handle it as a real case.
+/// you are not certain it holds, it is not an assert - handle it as a real case.
 ///
 /// Pass `@src()`: this fn is `inline`, so an internal `@src()` would resolve to
-/// `zimrmath.zig`, and wasm stack traces are unsymbolicated — the caller-side
+/// `zimrmath.zig`, and wasm stack traces are unsymbolicated - the caller-side
 /// `@src()` is our only localisation when one fires.
-///     assertf(len < cap, @src(), "ring overflow: len={d} cap={d}", .{ len, cap });
-pub inline fn assertf(
+/// assertf(len < cap, @src(), "ring overflow: len={d} cap={d}", .{ len, cap });
+pub fn assertf(
     ok: bool,
     src: std.builtin.SourceLocation,
     comptime fmt: []const u8,
@@ -1101,7 +2363,7 @@ pub inline fn assertf(
             if (comptime !is_stripped) {
                 std.log.err("assert failed at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
                 @panic("assertion failed");
-            } else if (comptime @import("build_options").assert_log) {
+            } else if (comptime build_options.assert_log) {
                 // Release (not ship): surface on the page's log overlay (std.log.err ->
                 // console.error -> overlay) but keep running. A frozen canvas is a worse
                 // failure than a logged, recoverable glitch; a caller that must bail after a
@@ -1114,15 +2376,52 @@ pub inline fn assertf(
     }
 }
 
+/// `assertUnreachable(@src(), fmt, args)` == `assertf(false, @src(), fmt, args)`:
+/// the "control should never get here" assertion, spelled so the reader sees the
+/// intent and MUST supply a message (unlike a bare `unreachable`, which says
+/// nothing). Same lowering as assertf -- logs file:line + `@panic` in dev,
+/// logs+continues under `assert_log`, bare `unreachable` on GPU and in ship.
+/// Returns `void`, so it fits a void-result `catch`:
+/// list.append(gpa, x) catch assertUnreachable(@src(), "OOM", .{});
+pub fn assertUnreachable(
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    // lint:off prefer-assert-unreachable: this IS assertUnreachable's own impl
+    assertf(false, src, fmt, args);
+}
+
+/// `panicf(@src(), fmt, args)` -- like assertUnreachable but `noreturn`, so it
+/// fits a VALUE-result `catch` where there is no value to continue with:
+/// const w = gpa.create(Window) catch panicf(@src(), "OOM", .{});
+/// Diverges in every non-ship build (dev + assert_log both `@panic` with the
+/// message); GPU + ship lower to bare `unreachable` (free, UB if it fires).
+pub fn panicf(
+    src: std.builtin.SourceLocation,
+    comptime fmt: []const u8,
+    args: anytype,
+) noreturn {
+    if (comptime is_gpu) {
+        unreachable;
+    } else if (comptime (!is_stripped or build_options.assert_log)) {
+        std.log.err("panic at {s}:{d}:{d}: " ++ fmt, .{ src.file, src.line, src.column } ++ args);
+        @panic("panicf");
+    } else {
+        unreachable;
+    }
+}
+
 const expect = std.testing.expect;
+const expectError = std.testing.expectError;
 
 //
 // 1. Initialization functions
 //
-pub inline fn f32x4(e0: f32, e1: f32, e2: f32, e3: f32) Vec {
+pub fn f32x4(e0: f32, e1: f32, e2: f32, e3: f32) Vec {
     return .{ e0, e1, e2, e3 };
 }
-pub inline fn f32x8(
+pub fn f32x8(
     e0: f32,
     e1: f32,
     e2: f32,
@@ -1135,21 +2434,21 @@ pub inline fn f32x8(
     return .{ e0, e1, e2, e3, e4, e5, e6, e7 };
 }
 // zig fmt: off
-pub inline fn f32x16(
+pub fn f32x16(
     e0: f32, e1: f32, e2: f32, e3: f32, e4: f32, e5: f32, e6: f32, e7: f32,
     e8: f32, e9: f32, ea: f32, eb: f32, ec: f32, ed: f32, ee: f32, ef: f32) F32x16 {
     return .{ e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, ea, eb, ec, ed, ee, ef };
 }
 // zig fmt: on
 
-pub inline fn splat8(v: f32) F32x8 {
+pub fn splat8(v: f32) F32x8 {
     return @as(F32x8, @splat(v));
 }
 
-pub inline fn boolx4(e0: bool, e1: bool, e2: bool, e3: bool) Boolx4 {
+pub fn boolx4(e0: bool, e1: bool, e2: bool, e3: bool) Boolx4 {
     return .{ e0, e1, e2, e3 };
 }
-pub inline fn boolx8(
+pub fn boolx8(
     e0: bool,
     e1: bool,
     e2: bool,
@@ -1162,14 +2461,14 @@ pub inline fn boolx8(
     return .{ e0, e1, e2, e3, e4, e5, e6, e7 };
 }
 // zig fmt: off
-pub inline fn boolx16(
+pub fn boolx16(
     e0: bool, e1: bool, e2: bool, e3: bool, e4: bool, e5: bool, e6: bool, e7: bool,
     e8: bool, e9: bool, ea: bool, eb: bool, ec: bool, ed: bool, ee: bool, ef: bool) Boolx16 {
     return .{ e0, e1, e2, e3, e4, e5, e6, e7, e8, e9, ea, eb, ec, ed, ee, ef };
 }
 // zig fmt: on
 
-pub inline fn splatInt(comptime T: type, value: u32) T {
+pub fn splatInt(comptime T: type, value: u32) T {
     return @splat(@bitCast(value));
 }
 
@@ -1241,7 +2540,7 @@ test "zm.store" {
 /// they want to re-stamp the w lane to 1.  Use this when reading
 /// 3D points from arrays, GLTF files, or any source where the
 /// data is naturally a 3-tuple.
-pub inline fn pointFromArr3(arr: anytype) Vec {
+pub fn pointFromArr3(arr: anytype) Vec {
     return .{ arr[0], arr[1], arr[2], 1.0 };
 }
 /// Build a Vec from a 3-elem indexable as a DIRECTION (w=0).
@@ -1249,48 +2548,48 @@ pub inline fn pointFromArr3(arr: anytype) Vec {
 /// directions need w=0 to remain invariant under translation.
 /// Equivalent to the legacy `loadArr3(arr)` under a more semantic
 /// name.
-pub inline fn dirFromArr3(arr: anytype) Vec {
+pub fn dirFromArr3(arr: anytype) Vec {
     return .{ arr[0], arr[1], arr[2], 0.0 };
 }
 
-pub inline fn loadArr2(arr: [2]f32) Vec {
+pub fn loadArr2(arr: [2]f32) Vec {
     return f32x4(arr[0], arr[1], 0.0, 0.0);
 }
-pub inline fn loadArr2zw(
+pub fn loadArr2zw(
     arr: [2]f32,
     z: f32,
     w: f32,
 ) Vec {
     return f32x4(arr[0], arr[1], z, w);
 }
-pub inline fn loadArr3(arr: [3]f32) Vec {
+pub fn loadArr3(arr: [3]f32) Vec {
     return dirFromArr3(arr);
 }
-pub inline fn loadArr3w(arr: [3]f32, w: f32) Vec {
+pub fn loadArr3w(arr: [3]f32, w: f32) Vec {
     return f32x4(arr[0], arr[1], arr[2], w);
 }
-pub inline fn loadArr4(arr: [4]f32) Vec {
+pub fn loadArr4(arr: [4]f32) Vec {
     return f32x4(arr[0], arr[1], arr[2], arr[3]);
 }
 
-pub inline fn storeArr2(arr: *[2]f32, v: Vec) void {
+pub fn storeArr2(arr: *[2]f32, v: Vec) void {
     arr.* = .{ v[0], v[1] };
 }
-pub inline fn storeArr3(arr: *[3]f32, v: Vec) void {
+pub fn storeArr3(arr: *[3]f32, v: Vec) void {
     arr.* = .{ v[0], v[1], v[2] };
 }
-pub inline fn storeArr4(arr: *[4]f32, v: Vec) void {
+pub fn storeArr4(arr: *[4]f32, v: Vec) void {
     arr.* = .{ v[0], v[1], v[2], v[3] };
 }
 
-pub inline fn arr3Ptr(ptr: anytype) *const [3]f32 {
+pub fn arr3Ptr(ptr: anytype) *const [3]f32 {
     comptime assert(@typeInfo(@TypeOf(ptr)) == .pointer, @src());
     const T = std.meta.Child(@TypeOf(ptr));
     comptime assert(T == Vec, @src());
     return @as(*const [3]f32, @ptrCast(ptr));
 }
 
-pub inline fn arrNPtr(ptr: anytype) [*]const f32 {
+pub fn arrNPtr(ptr: anytype) [*]const f32 {
     comptime assert(@typeInfo(@TypeOf(ptr)) == .pointer, @src());
     const T = std.meta.Child(@TypeOf(ptr));
     comptime assert(T == Mat or T == Vec or T == F32x8 or T == F32x16, @src());
@@ -1310,7 +2609,11 @@ pub fn identity() Mat {
 
 test "zm.arrNPtr" {
     {
-        const mat: Mat = identity();
+        // `var` + `_ = &x` forces RUNTIME memory. On 0.17.0-dev.1980 a comptime-known
+        // `@Vector` has no well-defined layout, so dereferencing one through `[*]const f32` is a
+        // compile error - and the layout is exactly what this test exists to assert.
+        var mat: Mat = identity();
+        _ = &mat;
         const f32ptr: [*]const f32 = arrNPtr(&mat);
         try expect(f32ptr[0] == 1.0);
         try expect(f32ptr[5] == 1.0);
@@ -1318,7 +2621,8 @@ test "zm.arrNPtr" {
         try expect(f32ptr[15] == 1.0);
     }
     {
-        const v8: F32x8 = splat8(1.0);
+        var v8: F32x8 = splat8(1.0);
+        _ = &v8;
         const f32ptr: [*]const f32 = arrNPtr(&v8);
         try expect(f32ptr[1] == 1.0);
         try expect(f32ptr[7] == 1.0);
@@ -1338,13 +2642,13 @@ test "zm.loadArr" {
     }
 }
 
-pub inline fn vecToArr2(v: Vec) [2]f32 {
+pub fn vecToArr2(v: Vec) [2]f32 {
     return .{ v[0], v[1] };
 }
-pub inline fn vecToArr3(v: Vec) [3]f32 {
+pub fn vecToArr3(v: Vec) [3]f32 {
     return .{ v[0], v[1], v[2] };
 }
-pub inline fn vecToArr4(v: Vec) [4]f32 {
+pub fn vecToArr4(v: Vec) [4]f32 {
     return .{ v[0], v[1], v[2], v[3] };
 }
 //
@@ -1397,11 +2701,11 @@ test "zm.any" {
     try expect(anyTrue(boolx8(false, false, false, false, false, true, false, false), 4) == false);
 }
 
-pub inline fn maxFast(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn maxFast(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     return blend(v0 > v1, v0, v1); // maxps
 }
 
-pub inline fn isNearEqual(
+pub fn isNearEqual(
     v0: anytype,
     v1: anytype,
     epsilon: anytype,
@@ -1414,7 +2718,7 @@ pub inline fn isNearEqual(
 /// Broadcast a scalar to a 4-wide `Vec`.  Replaces
 /// `splat(v)` at zimr call sites - the type annotation is
 /// pure noise when the result is always `Vec`.
-pub inline fn splat(v: f32) Vec {
+pub fn splat(v: f32) Vec {
     return @splat(v);
 }
 
@@ -1453,9 +2757,12 @@ test "zm.isNearEqual" {
     ), 0) == false);
 }
 
-pub inline fn isNan(
+pub fn isNan(
     v: anytype,
-) @Vector(veclen(@TypeOf(v)), bool) {
+) if (@typeInfo(@TypeOf(v)) == .vector) @Vector(veclen(@TypeOf(v)), bool) else bool {
+    // A scalar branch, like `isFinite` beside it already had. `veclen` reads `.vector` off the
+    // type info, so calling this with an `f64` failed inside zm rather than at the call site -
+    // the same vector-only gap `trunc` and `round` had.
     return v != v;
 }
 test "zm.isNan" {
@@ -1471,10 +2778,16 @@ test "zm.isNan" {
     }
 }
 
-pub inline fn isInf(
+pub fn isInf(
     v: anytype,
-) @Vector(veclen(@TypeOf(v)), bool) {
+) if (@typeInfo(@TypeOf(v)) == .vector) @Vector(veclen(@TypeOf(v)), bool) else bool {
     const T = @TypeOf(v);
+    // A scalar branch, like `isFinite` beside it. Fourth helper here to need one, after
+    // `trunc`, `round` and `isNan` - the pattern was "written for vectors, called with a scalar
+    // years later", and the audit found the rest of them at once instead of one at a time.
+    if (comptime @typeInfo(T) != .vector) {
+        return abs(v) == inf(T);
+    }
     return abs(v) == @as(T, @splat(math.inf(f32)));
 }
 test "zm.isInf" {
@@ -1490,7 +2803,7 @@ test "zm.isInf" {
     }
 }
 
-pub inline fn isInBounds(
+pub fn isInBounds(
     v: anytype,
     bounds: anytype,
 ) @Vector(veclen(@TypeOf(v)), bool) {
@@ -1576,7 +2889,7 @@ test "zm.orInt" {
     }
 }
 
-pub inline fn norInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn norInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
     const Tu = @Vector(veclen(T), u32);
     const v0u: Tu = @bitCast(v0);
@@ -1584,7 +2897,7 @@ pub inline fn norInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     return @as(T, @bitCast(~(v0u | v1u))); // por, pcmpeqd, pxor
 }
 
-pub inline fn xorInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn xorInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
     const Tu = @Vector(veclen(T), u32);
     const v0u: Tu = @bitCast(v0);
@@ -1612,7 +2925,7 @@ test "zm.xorInt" {
     }
 }
 
-pub inline fn minFast(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn minFast(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     return blend(v0 < v1, v0, v1); // minps
 }
 test "zm.minFast" {
@@ -1654,7 +2967,7 @@ test "zm.maxFast" {
     }
 }
 
-pub inline fn min(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn min(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
     return switch (@typeInfo(T)) {
         // Vec / F32x8 / F32x16: per-lane NaN-aware min.
@@ -1670,7 +2983,7 @@ pub inline fn min(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
             break :blk @select(Child, nan0, v1, @select(Child, nan1, v0, @min(v0, v1)));
         },
         // Scalar: plain @min builtin.  NaN handling is whatever the
-        // platform decides — callers passing NaN to scalar min should
+        // platform decides - callers passing NaN to scalar min should
         // use std.math.min directly if they need a specific behavior.
         else => @min(v0, v1),
     };
@@ -1713,7 +3026,7 @@ test "zm.min" {
     }
 }
 
-pub inline fn max(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn max(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
     return switch (@typeInfo(T)) {
         // Vec / F32x8 / F32x16: per-lane NaN-aware max.
@@ -1781,9 +3094,9 @@ pub fn expectVecApproxEqAbs(
 
 /// int -> f32. Comptime-asserts `x` is an integer (a float/bool/etc is a
 /// COMPILE error, so this can't silently hide a bad conversion the way bare
-/// @floatFromInt can — and the f32 output is PINNED, not context-inferred).
+/// @floatFromInt can - and the f32 output is PINNED, not context-inferred).
 /// `float(width)` instead of `float(width)`.
-pub inline fn float(x: anytype) f32 {
+pub fn float(x: anytype) f32 {
     comptime {
         const info = @typeInfo(@TypeOf(x));
         if (info != .int and info != .comptime_int) {
@@ -1895,6 +3208,18 @@ fn floatToIntAndBack(v: anytype) @TypeOf(v) {
 
 pub fn trunc(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
+    // --  SCALAR BRANCH, matching what `sin`, `cos` and the rest of the `anytype` family
+    // already do. Without it `zm.trunc(2.7)` fails deep inside `veclen` with
+    // "expected array or vector type", which names neither the caller nor the fix - it cost
+    // three rounds during the zimrnum port before anyone tested which call was at fault.
+    //
+    // The signature `(v: anytype)` promises nothing about vectors, and 96 of zimrmath's
+    // functions share it while differing in whether a scalar works. A caller cannot tell them
+    // apart without compiling. Where the scalar case is one builtin away, refusing it is a trap
+    // for no benefit.
+    if (comptime @typeInfo(T) != .vector) {
+        return @trunc(v);
+    }
     // [zimr Z0] The `cpu_arch == .x86_64` branch below is x86 inline
     // assembly (vroundps / vrndscaleps).  zimr ships wasm32 only, so
     // this branch is already comptime-dead in every real zimr build
@@ -2013,6 +3338,11 @@ test "zm.trunc" {
 
 pub fn floor(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
+    // Scalars go straight to the builtin; the vector path below is the hand-rolled
+    // round-trip that predates it and is kept for the lanes it is tuned for.
+    if (comptime @typeInfo(T) != .vector) {
+        return @floor(v);
+    }
     // [zimr Z0] The `cpu_arch == .x86_64` branch below is x86 inline
     // assembly (vroundps / vrndscaleps).  zimr ships wasm32 only, so
     // this branch is already comptime-dead in every real zimr build
@@ -2134,6 +3464,11 @@ test "zm.floor" {
 
 pub fn ceil(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
+    // Scalars go straight to the builtin; the vector path below is the hand-rolled
+    // round-trip that predates it and is kept for the lanes it is tuned for.
+    if (comptime @typeInfo(T) != .vector) {
+        return @ceil(v);
+    }
     // [zimr Z0] The `cpu_arch == .x86_64` branch below is x86 inline
     // assembly (vroundps / vrndscaleps).  zimr ships wasm32 only, so
     // this branch is already comptime-dead in every real zimr build
@@ -2253,15 +3588,17 @@ test "zm.ceil" {
     }
 }
 
-pub inline fn clamp(
+pub fn clamp(
     v: anytype,
     vmin: anytype,
     vmax: anytype,
 ) @TypeOf(v, vmin, vmax) {
+    // NAMED CONSTANTS, NOT A REASSIGNED `var`. `T` resolves to `comptime_int` whenever every
+    // operand is a literal - `clamp01(-1)` below - and 0.17.0-dev.1980 rejects a `var` of that
+    // type outright. Two consts say the same thing and read better besides.
     const T = @TypeOf(v, vmin, vmax);
-    var result: T = max(vmin, v);
-    result = min(vmax, result);
-    return result;
+    const lower_bounded: T = max(vmin, v);
+    return min(vmax, lower_bounded);
 }
 test "zm.clamp" {
     {
@@ -2286,7 +3623,7 @@ test "zm.clamp" {
     }
 }
 
-pub inline fn clampFast(
+pub fn clampFast(
     v: anytype,
     vmin: anytype,
     vmax: anytype,
@@ -2304,28 +3641,28 @@ test "zm.clampFast" {
     }
 }
 
-/// HLSL `saturate` — clamp to [0, 1]. Works on scalars AND vectors, like `lerp`.
+/// HLSL `saturate` - clamp to [0, 1]. Works on scalars AND vectors, like `lerp`.
 ///
 /// It used to be vector-ONLY (`@splat` does not accept a scalar), which meant a
-/// scalar caller had to reach for `clamp01` instead — the same operation under a
+/// scalar caller had to reach for `clamp01` instead - the same operation under a
 /// second name, with no hint that the "wrong" one would not compile. Two names
 /// for one idea is exactly how `step` got lost; one that works on both domains is
 /// the fix. `clamp01` remains for the callers that already use it.
-/// HLSL's `saturate` — the spelling zimr does NOT use.
+/// HLSL's `saturate` - the spelling zimr does NOT use.
 ///
 /// Kept as a decl so the name RESOLVES: an author who types `zm.saturate` gets
 /// told the house name instead of "no member named 'saturate'", and @hasDecl can
-/// still see it — but it is PRIVATE and empty, so reaching for `zm.saturate`
+/// still see it - but it is PRIVATE and empty, so reaching for `zm.saturate`
 /// fails with "not marked pub" and lands you right here, on this comment.
 ///
 /// USE `zm.clamp01`.
 ///
 /// Why not `pub const saturate = @compileError(...)`? Because a PUB
 /// @compileError decl is referenced by `std.testing.refAllDecls(zm)`, which
-/// `src/tests.zig` runs — so the dead name took the whole test gate down with
+/// `src/tests.zig` runs - so the dead name took the whole test gate down with
 /// it. `@typeInfo` only exposes pub decls, so a private one is invisible to
 /// refAllDecls while staying visible to a human reading the file.
-fn saturate() void {}
+fn saturate() void {} // lint:off unused-global: reference-pinned discoverability stub
 test "zm.clamp01 (vector + scalar; HLSL calls it saturate)" {
     {
         const v0: Vec = f32x4(-1.0, 0.2, 1.1, -0.3);
@@ -2368,7 +3705,7 @@ test "zm.clamp01 (vector + scalar; HLSL calls it saturate)" {
     }
 }
 
-pub inline fn saturateFast(v: anytype) @TypeOf(v) {
+pub fn saturateFast(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
     var result = maxFast(v, @as(T, @splat(0.0)));
     result = minFast(result, @as(T, @splat(1.0)));
@@ -2400,7 +3737,7 @@ test "zm.saturateFast" {
 /// Integer floor-sqrt, vendored from std.math.sqrt's `sqrt_int` (bit-by-
 /// bit restoring algorithm).  Returns the result in the input type `T`
 /// (std narrows to ~T/2 bits; zm.sqrt's signature is `@TypeOf(v)`, so we
-/// keep the width).  Pure integer ops — GPU-portable.
+/// keep the width).  Pure integer ops - GPU-portable.
 fn sqrtInt(comptime T: type, value: T) T {
     if (@typeInfo(T).int.bits <= 2) {
         return if (value == 0) 0 else 1;
@@ -2428,14 +3765,53 @@ fn sqrtInt(comptime T: type, value: T) T {
     return res;
 }
 
-pub inline fn sqrt(v: anytype) @TypeOf(v) {
+/// Apply a scalar function to every lane of a vector.
+///
+/// THE BRIDGE THAT MAKES "SCALARS AND VECTORS" TRUE RATHER THAN INTENDED
+///
+/// A dozen functions here were declared `anytype` and then called `std.math.something`, which
+/// takes scalars only. They compiled, they were tested on scalars, and they failed to compile the
+/// first time anyone passed a vector - `tanh`, `sigmoid`, `gelu`, `cosh`, `cbrt`, `isFinite`,
+/// `hypot`, `pow`, `step`, `fract`. The signature promised one thing and the body delivered
+/// another.
+///
+/// Rather than rewriting each in vector-safe arithmetic - which would lose the accuracy the
+/// standard library has near the edges of each function's range - a vector argument is split into
+/// lanes, the scalar path runs on each, and the lanes are reassembled. Same answer as the scalar
+/// call, by construction, on every lane.
+///
+/// NOT `inline` itself, though the loop inside is comptime-unrolled. An `inline fn` calling a
+/// scalar function that is also `inline` is inline recursion, which the compiler refuses - the
+/// helper has to be an ordinary function for the pattern to work at all.
+pub fn perLane(comptime scalar: anytype, v: anytype) @TypeOf(v) {
+    const T = @TypeOf(v);
+    const lanes = @typeInfo(T).vector.len;
+    var result: T = undefined;
+    inline for (0..lanes) |i| {
+        result[i] = scalar(v[i]);
+    }
+    return result;
+}
+
+/// Two-argument form of `perLane`.
+pub fn perLane2(comptime scalar: anytype, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    const T = @TypeOf(a);
+    const lanes = @typeInfo(T).vector.len;
+    var result: T = undefined;
+    inline for (0..lanes) |i| {
+        result[i] = scalar(a[i], b[i]);
+    }
+    return result;
+}
+
+pub fn sqrt(v: anytype) @TypeOf(v) {
     if (comptime @typeInfo(@TypeOf(v)) == .int) {
         return sqrtInt(@TypeOf(v), v); // integer floor-sqrt
     }
-    return @sqrt(v); // sqrtps — floats + vectors, all targets
+    return @sqrt(v); // sqrtps - floats + vectors, all targets
 }
 
-pub inline fn lerp(
+pub fn lerp(
     v0: anytype,
     v1: anytype,
     t: f32,
@@ -2449,7 +3825,7 @@ pub inline fn lerp(
     };
 }
 
-pub inline fn lerpV(
+pub fn lerpV(
     v0: anytype,
     v1: anytype,
     t: anytype,
@@ -2457,7 +3833,7 @@ pub inline fn lerpV(
     return v0 + (v1 - v0) * t; // subps, addps, mulps
 }
 
-pub inline fn lerpInverse(
+pub fn lerpInverse(
     v0: anytype,
     v1: anytype,
     t: anytype,
@@ -2466,7 +3842,7 @@ pub inline fn lerpInverse(
     return (@as(T, @splat(t)) - v0) / (v1 - v0);
 }
 
-pub inline fn lerpInverseV(
+pub fn lerpInverseV(
     v0: anytype,
     v1: anytype,
     t: anytype,
@@ -2486,7 +3862,7 @@ test "zm.lerpInverse" {
 
 // Frame rate independent lerp (or "damp"), for approaching things over time.
 // Reference: https://www.gamedeveloper.com/programming/improved-lerp-smoothing-
-pub inline fn lerpOverTime(
+pub fn lerpOverTime(
     v0: anytype,
     v1: anytype,
     rate: anytype,
@@ -2500,7 +3876,7 @@ pub inline fn lerpOverTime(
     return lerp(v1, v0, t);
 }
 
-pub inline fn lerpVOverTime(
+pub fn lerpVOverTime(
     v0: anytype,
     v1: anytype,
     rate: anytype,
@@ -2523,7 +3899,7 @@ test "zm.lerpOverTime" {
 }
 
 /// To transform a vector of values from one range to another.
-pub inline fn mapLinear(
+pub fn mapLinear(
     v: anytype,
     min1: anytype,
     max1: anytype,
@@ -2539,7 +3915,7 @@ pub inline fn mapLinear(
     return min2V + (v - min1V) * (max2V - min2V) / dV;
 }
 
-pub inline fn mapLinearV(
+pub fn mapLinearV(
     v: anytype,
     min1: anytype,
     max1: anytype,
@@ -2559,17 +3935,17 @@ test "zm.mapLinear" {
 
 pub const F32x4Component = enum { x, y, z, w };
 
-pub inline fn swizzle(
+pub fn swizzle(
     v: Vec,
     comptime x: F32x4Component,
     comptime y: F32x4Component,
     comptime z: F32x4Component,
     comptime w: F32x4Component,
 ) Vec {
-    return @shuffle(f32, v, undefined, [4]i32{ @intFromEnum(x), @intFromEnum(y), @intFromEnum(z), @intFromEnum(w) });
+    return @shuffle(f32, v, undefined, [4]i32{ @backingInt(x), @backingInt(y), @backingInt(z), @backingInt(w) });
 }
 
-pub inline fn modulo(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
+pub fn modulo(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     // vdivps, vroundps, vmulps, vsubps
     return v0 - v1 * trunc(v0 / v1);
 }
@@ -2599,28 +3975,28 @@ test "zm.modAngle" {
     try expectVecApproxEqAbs(modAngle(splat(2.5 * pi)), splat(0.5 * pi), 0.0005);
 }
 
-test "zm.sin" {
+test "zm.sinRad" {
     const epsilon: f32 = 0.0001;
 
-    try expectVecApproxEqAbs(sin(splat(0.5 * pi)), splat(1.0), epsilon);
-    try expectVecApproxEqAbs(sin(splat(0.0)), splat(0.0), epsilon);
-    try expectVecApproxEqAbs(sin(splat(-0.0)), splat(-0.0), epsilon);
-    try expectVecApproxEqAbs(sin(splat(89.123)), splat(0.916166), epsilon);
-    try expectVecApproxEqAbs(sin(@as(F32x8, @splat(89.123))), @as(F32x8, @splat(0.916166)), epsilon);
-    try expectVecApproxEqAbs(sin(@as(F32x16, @splat(89.123))), @as(F32x16, @splat(0.916166)), epsilon);
-    try expect(allTrue(isNan(sin(splat(math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(sin(splat(-math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(sin(splat(math.nan(f32)))), 0) == true);
-    try expect(allTrue(isNan(sin(splat(math.snan(f32)))), 0) == true);
+    try expectVecApproxEqAbs(sinRad(splat(0.5 * pi)), splat(1.0), epsilon);
+    try expectVecApproxEqAbs(sinRad(splat(0.0)), splat(0.0), epsilon);
+    try expectVecApproxEqAbs(sinRad(splat(-0.0)), splat(-0.0), epsilon);
+    try expectVecApproxEqAbs(sinRad(splat(89.123)), splat(0.916166), epsilon);
+    try expectVecApproxEqAbs(sinRad(@as(F32x8, @splat(89.123))), @as(F32x8, @splat(0.916166)), epsilon);
+    try expectVecApproxEqAbs(sinRad(@as(F32x16, @splat(89.123))), @as(F32x16, @splat(0.916166)), epsilon);
+    try expect(allTrue(isNan(sinRad(splat(math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(sinRad(splat(-math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(sinRad(splat(math.nan(f32)))), 0) == true);
+    try expect(allTrue(isNan(sinRad(splat(math.snan(f32)))), 0) == true);
 
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const vr: Vec = sin(splat(f));
+        const vr: Vec = sinRad(splat(f));
         const fr: Vec = @sin(splat(f));
-        const vr8: F32x8 = sin(@as(F32x8, @splat(f)));
+        const vr8: F32x8 = sinRad(@as(F32x8, @splat(f)));
         const fr8: F32x8 = @sin(@as(F32x8, @splat(f)));
-        const vr16: F32x16 = sin(@as(F32x16, @splat(f)));
+        const vr16: F32x16 = sinRad(@as(F32x16, @splat(f)));
         const fr16: F32x16 = @sin(@as(F32x16, @splat(f)));
         try expectVecApproxEqAbs(vr, fr, epsilon);
         try expectVecApproxEqAbs(vr8, fr8, epsilon);
@@ -2629,25 +4005,25 @@ test "zm.sin" {
     }
 }
 
-test "zm.cos" {
+test "zm.cosRad" {
     const epsilon: f32 = 0.0001;
 
-    try expectVecApproxEqAbs(cos(splat(0.5 * pi)), splat(0.0), epsilon);
-    try expectVecApproxEqAbs(cos(splat(0.0)), splat(1.0), epsilon);
-    try expectVecApproxEqAbs(cos(splat(-0.0)), splat(1.0), epsilon);
-    try expect(allTrue(isNan(cos(splat(math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(cos(splat(-math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(cos(splat(math.nan(f32)))), 0) == true);
-    try expect(allTrue(isNan(cos(splat(math.snan(f32)))), 0) == true);
+    try expectVecApproxEqAbs(cosRad(splat(0.5 * pi)), splat(0.0), epsilon);
+    try expectVecApproxEqAbs(cosRad(splat(0.0)), splat(1.0), epsilon);
+    try expectVecApproxEqAbs(cosRad(splat(-0.0)), splat(1.0), epsilon);
+    try expect(allTrue(isNan(cosRad(splat(math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(cosRad(splat(-math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(cosRad(splat(math.nan(f32)))), 0) == true);
+    try expect(allTrue(isNan(cosRad(splat(math.snan(f32)))), 0) == true);
 
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const vr: Vec = cos(splat(f));
+        const vr: Vec = cosRad(splat(f));
         const fr: Vec = @cos(splat(f));
-        const vr8: F32x8 = cos(@as(F32x8, @splat(f)));
+        const vr8: F32x8 = cosRad(@as(F32x8, @splat(f)));
         const fr8: F32x8 = @cos(@as(F32x8, @splat(f)));
-        const vr16: F32x16 = cos(@as(F32x16, @splat(f)));
+        const vr16: F32x16 = cosRad(@as(F32x16, @splat(f)));
         const fr16: F32x16 = @cos(@as(F32x16, @splat(f)));
         try expectVecApproxEqAbs(vr, fr, epsilon);
         try expectVecApproxEqAbs(vr8, fr8, epsilon);
@@ -2657,9 +4033,9 @@ test "zm.cos" {
 }
 
 /// CPU scalar asin matching zimrmath's forgiving contract: std-accurate
-/// for valid inputs; clamps finite |x|>1 to ±π/2 (avoids NaN from fp
+/// for valid inputs; clamps finite |x|>1 to +/-pi/2 (avoids NaN from fp
 /// overshoot like asin(dot) at 1.0000001) but passes inf/nan through to
-/// NaN.  (GPU/CPU precision may differ — that's fine — but both clamp, so
+/// NaN.  (GPU/CPU precision may differ - that's fine - but both clamp, so
 /// there's no semantic NaN-vs-clamp surprise across the two paths.)
 fn asinCpu(x: anytype) @TypeOf(x) {
     const T = @TypeOf(x);
@@ -2679,7 +4055,7 @@ fn acosCpu(x: anytype) @TypeOf(x) {
 fn sincos32(v: f32) [2]f32 {
     var y: f32 = v - tau * @round(v * 1.0 / tau);
 
-    const sign: f32 = blk: {
+    const sign_value: f32 = blk: {
         if (y > 0.5 * pi) {
             y = pi - y;
             break :blk @as(f32, -1.0);
@@ -2704,7 +4080,7 @@ fn sincos32(v: f32) [2]f32 {
     cosv = mulAdd(cosv, y2, -0.0013888378);
     cosv = mulAdd(cosv, y2, 0.041666638);
     cosv = mulAdd(cosv, y2, -0.5);
-    cosv = sign * mulAdd(cosv, y2, 1.0);
+    cosv = sign_value * mulAdd(cosv, y2, 1.0);
 
     return .{ sinv, cosv };
 }
@@ -2713,13 +4089,13 @@ fn sincos32xN(v: anytype) [2]@TypeOf(v) {
     const T = @TypeOf(v);
 
     var x: T = modAngle(v);
-    var sign: T = andInt(x, splatNegativeZero(T));
-    const c = orInt(sign, @as(T, @splat(pi)));
-    const absx: T = andNotInt(sign, x);
+    var sign_value: T = andInt(x, splatNegativeZero(T));
+    const c = orInt(sign_value, @as(T, @splat(pi)));
+    const absx: T = andNotInt(sign_value, x);
     const rflx: T = c - x;
     const comp = absx <= @as(T, @splat(0.5 * pi));
     x = blend(comp, x, rflx);
-    sign = blend(comp, @as(T, @splat(1.0)), @as(T, @splat(-1.0)));
+    sign_value = blend(comp, @as(T, @splat(1.0)), @as(T, @splat(-1.0)));
     const x2: T = x * x;
 
     var sresult = mulAdd(@as(T, @splat(-2.3889859e-08)), x2, @as(T, @splat(2.7525562e-06)));
@@ -2732,12 +4108,12 @@ fn sincos32xN(v: anytype) [2]@TypeOf(v) {
     cresult = mulAdd(cresult, x2, @as(T, @splat(-0.0013888378)));
     cresult = mulAdd(cresult, x2, @as(T, @splat(0.041666638)));
     cresult = mulAdd(cresult, x2, @as(T, @splat(-0.5)));
-    cresult = sign * mulAdd(cresult, x2, @as(T, @splat(1.0)));
+    cresult = sign_value * mulAdd(cresult, x2, @as(T, @splat(1.0)));
 
     return .{ sresult, cresult };
 }
 
-pub fn sincos(v: anytype) [2]@TypeOf(v) {
+pub fn sincosRad(v: anytype) [2]@TypeOf(v) {
     const T = @TypeOf(v);
     if (comptime !is_gpu and @typeInfo(T) != .vector) {
         return .{ @sin(v), @cos(v) };
@@ -2745,7 +4121,7 @@ pub fn sincos(v: anytype) [2]@TypeOf(v) {
     return switch (T) {
         f32 => sincos32(v),
         Vec, F32x8, F32x16 => sincos32xN(v),
-        else => @compileError("zm.sincos() not implemented for " ++ @typeName(T)),
+        else => @compileError("zm.sincosRad() not implemented for " ++ @typeName(T)),
     };
 }
 
@@ -2788,7 +4164,7 @@ fn asin32xN(v: anytype) @TypeOf(v) {
     return @as(T, @splat(0.5 * pi)) - blend(v >= @as(T, @splat(0.0)), t0, t1);
 }
 
-pub fn asin(v: anytype) @TypeOf(v) {
+pub fn asinRad(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
     // Scalar on CPU: std accuracy with the forgiving-domain clamp.
     // Vectors (CPU SIMD path + GPU): zmath's vectorized polynomial.
@@ -2798,7 +4174,7 @@ pub fn asin(v: anytype) @TypeOf(v) {
     return switch (T) {
         f32 => asin32(v),
         Vec, F32x8, F32x16 => asin32xN(v),
-        else => @compileError("zm.asin() not implemented for " ++ @typeName(T)),
+        else => @compileError("zm.asinRad() not implemented for " ++ @typeName(T)),
     };
 }
 
@@ -2841,7 +4217,7 @@ fn acos32xN(v: anytype) @TypeOf(v) {
     return blend(v >= @as(T, @splat(0.0)), t0, t1);
 }
 
-pub fn acos(v: anytype) @TypeOf(v) {
+pub fn acosRad(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
     // Scalar on CPU: std accuracy with the forgiving-domain clamp.
     // Vectors (CPU SIMD path + GPU): zmath's vectorized polynomial.
@@ -2851,7 +4227,7 @@ pub fn acos(v: anytype) @TypeOf(v) {
     return switch (T) {
         f32 => acos32(v),
         Vec, F32x8, F32x16 => acos32xN(v),
-        else => @compileError("zm.acos() not implemented for " ++ @typeName(T)),
+        else => @compileError("zm.acosRad() not implemented for " ++ @typeName(T)),
     };
 }
 
@@ -2861,9 +4237,9 @@ test "zm.sincos32xN" {
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const sc = sincos(splat(f));
-        const sc8 = sincos(@as(F32x8, @splat(f)));
-        const sc16 = sincos(@as(F32x16, @splat(f)));
+        const sc = sincosRad(splat(f));
+        const sc8 = sincosRad(@as(F32x8, @splat(f)));
+        const sc16 = sincosRad(@as(F32x16, @splat(f)));
         const s4 = @sin(splat(f));
         const s8 = @sin(@as(F32x8, @splat(f)));
         const s16 = @sin(@as(F32x16, @splat(f)));
@@ -2885,8 +4261,8 @@ fn atanScalar(x: f32) f32 {
     const ax: f32 = @abs(x);
     const z: f32 = if (ax > 1.0) 1.0 / ax else ax;
     const z2: f32 = z * z;
-    // Horner on the odd polynomial p(z) = z·(c5·z^10 + c4·z^8 +
-    // c3·z^6 + c2·z^4 + c1·z^2 + c0).
+    // Horner on the odd polynomial p(z) = z*(c5*z^10 + c4*z^8 +
+    // c3*z^6 + c2*z^4 + c1*z^2 + c0).
     var p: f32 = -0.013480470;
     p = p * z2 + 0.057477314;
     p = p * z2 + -0.121239071;
@@ -2898,7 +4274,7 @@ fn atanScalar(x: f32) f32 {
     return if (x < 0.0) -r else r;
 }
 
-pub fn atan(v: anytype) @TypeOf(v) {
+pub fn atanRad(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
     // Scalar: exact std.math.atan on CPU (>100 lines, delegated),
     // polynomial on GPU.  Vectors (CPU SIMD perf + GPU): the 17-degree
@@ -2912,9 +4288,9 @@ pub fn atan(v: anytype) @TypeOf(v) {
 
     const vabs: T = abs(v);
     const vinv = @as(T, @splat(1.0)) / v;
-    var sign = blend(v > @as(T, @splat(1.0)), @as(T, @splat(1.0)), @as(T, @splat(-1.0)));
+    var sign_value = blend(v > @as(T, @splat(1.0)), @as(T, @splat(1.0)), @as(T, @splat(-1.0)));
     const comp = vabs <= @as(T, @splat(1.0));
-    sign = blend(comp, @as(T, @splat(0.0)), sign);
+    sign_value = blend(comp, @as(T, @splat(0.0)), sign_value);
     const x: T = blend(comp, v, vinv);
     const x2: T = x * x;
 
@@ -2927,15 +4303,15 @@ pub fn atan(v: anytype) @TypeOf(v) {
     result = mulAdd(result, x2, @as(T, @splat(-0.3333314528)));
     result = x * mulAdd(result, x2, @as(T, @splat(1.0)));
 
-    const result1: T = sign * @as(T, @splat(0.5 * pi)) - result;
-    return blend(sign == @as(T, @splat(0.0)), result, result1);
+    const result1: T = sign_value * @as(T, @splat(0.5 * pi)) - result;
+    return blend(sign_value == @as(T, @splat(0.0)), result, result1);
 }
-test "zm.atan" {
+test "zm.atanRad" {
     const epsilon: f32 = 0.0001;
     {
         const v: Vec = f32x4(0.25, 0.5, 1.0, 1.25);
         const e: Vec = f32x4(math.atan(v[0]), math.atan(v[1]), math.atan(v[2]), math.atan(v[3]));
-        try expectVecApproxEqAbs(e, atan(v), epsilon);
+        try expectVecApproxEqAbs(e, atanRad(v), epsilon);
     }
     {
         const v: F32x8 = f32x8(-0.25, 0.5, -1.0, 1.25, 100.0, -200.0, 300.0, 400.0);
@@ -2945,7 +4321,7 @@ test "zm.atan" {
             math.atan(v[4]), math.atan(v[5]), math.atan(v[6]), math.atan(v[7]),
         );
         // zig fmt: on
-        try expectVecApproxEqAbs(e, atan(v), epsilon);
+        try expectVecApproxEqAbs(e, atanRad(v), epsilon);
     }
     {
         // zig fmt: off
@@ -2960,20 +4336,20 @@ test "zm.atan" {
             math.atan(v[12]), math.atan(v[13]), math.atan(v[14]), math.atan(v[15]),
         );
         // zig fmt: on
-        try expectVecApproxEqAbs(e, atan(v), epsilon);
+        try expectVecApproxEqAbs(e, atanRad(v), epsilon);
     }
     {
-        try expectVecApproxEqAbs(atan(splat(math.inf(f32))), splat(0.5 * pi), epsilon);
-        try expectVecApproxEqAbs(atan(splat(-math.inf(f32))), splat(-0.5 * pi), epsilon);
-        try expect(allTrue(isNan(atan(splat(math.nan(f32)))), 0) == true);
-        try expect(allTrue(isNan(atan(splat(-math.nan(f32)))), 0) == true);
+        try expectVecApproxEqAbs(atanRad(splat(math.inf(f32))), splat(0.5 * pi), epsilon);
+        try expectVecApproxEqAbs(atanRad(splat(-math.inf(f32))), splat(-0.5 * pi), epsilon);
+        try expect(allTrue(isNan(atanRad(splat(math.nan(f32)))), 0) == true);
+        try expect(allTrue(isNan(atanRad(splat(-math.nan(f32)))), 0) == true);
     }
 }
 
-// ---- Scalar trig fallbacks (SPIR-V-safe) ----------------------------
+// Scalar trig fallbacks (SPIR-V-safe)
 //
 // zmath's `atan(v: anytype)` / `asin(v: anytype)` only work for vector
-// `T` (Vec/F32x8/F32x16) — they call `@splat` and `@select` which
+// `T` (Vec/F32x8/F32x16) - they call `@splat` and `@select` which
 // reject scalar arguments.  zimr's call sites that need the SCALAR
 // form (`atan2(f32, f32)`, `asin(f32)`) hit these helpers instead.
 //
@@ -2985,14 +4361,14 @@ test "zm.atan" {
 // visual comparisons stay bit-identical.
 //
 // Solution: roll our own polynomial.  Degree-11 odd minimax on [-1,1]
-// with the `atan(x) = π/2 - atan(1/x)` identity to fold |x|>1 into
-// the unit interval.  Max abs error ≈ 3e-6 over [-1000, 1000] (≈22
-// bits of f32 precision) — verified against Python's math.atan on
+// with the `atan(x) = pi/2 - atan(1/x)` identity to fold |x|>1 into
+// the unit interval.  Max abs error ~= 3e-6 over [-1000, 1000] (~=22
+// bits of f32 precision) - verified against Python's math.atan on
 // 10k samples.  Plenty for rendering work.  Was originally factored
 // into `src/math_intrinsic.zig` during Stage 1 of math-unification
 // and merged here in Stage 3 (one file, one mental model).
 
-/// Scalar atan2 — 4-quadrant reconstruction from atanScalar.  Inherits
+/// Scalar atan2 - 4-quadrant reconstruction from atanScalar.  Inherits
 /// the polynomial's ~3e-6 precision; the wrapper is just sign +
 /// quadrant offset, exact at f32 precision.
 fn atan2Scalar(y: f32, x: f32) f32 {
@@ -3015,20 +4391,7 @@ fn atan2Scalar(y: f32, x: f32) f32 {
     return 0.0;
 }
 
-/// Scalar asin via atan identity: asin(x) = atan(x / sqrt(1 - x²)).
-/// Clamped at the |x|=1 asymptote.
-fn asinScalar(x: f32) f32 {
-    if (x >= 1.0) {
-        return pi / 2.0;
-    }
-    if (x <= -1.0) {
-        return -pi / 2.0;
-    }
-    const denom: f32 = @sqrt(1.0 - x * x);
-    return atanScalar(x / denom);
-}
-
-pub fn atan2(vy: anytype, vx: anytype) @TypeOf(vx, vy) {
+pub fn atan2Rad(vy: anytype, vx: anytype) @TypeOf(vx, vy) {
     const T = @TypeOf(vx, vy);
     // Scalar: exact std.math.atan2 on CPU (>100 lines, delegated),
     // polynomial on GPU.  Vectors (CPU SIMD perf + GPU): the
@@ -3059,78 +4422,78 @@ pub fn atan2(vy: anytype, vx: anytype) @TypeOf(vx, vy) {
     const result_valid = @as(Tu, @bitCast(result)) == @as(Tu, @splat(0xffff_ffff));
 
     const v: T = vy / vx;
-    const r0: T = atan(v);
+    const r0: T = atanRad(v);
 
     r1 = blend(vx_is_positive, splatNegativeZero(T), c1_00pi);
     r2 = r0 + r1;
 
     return blend(result_valid, r2, result);
 }
-test "zm.atan2" {
+test "zm.atan2Rad" {
     // From DirectXMath XMVectorATan2():
     // Return the inverse tangent of Y / X in the range of -Pi to Pi with the following exceptions:
 
-    //     Y == 0 and X is Negative         -> Pi with the sign of Y
-    //     y == 0 and x is positive         -> 0 with the sign of y
-    //     Y != 0 and X == 0                -> Pi / 2 with the sign of Y
-    //     Y != 0 and X is Negative         -> atan(y/x) + (PI with the sign of Y)
-    //     X == -Infinity and Finite Y      -> Pi with the sign of Y
-    //     X == +Infinity and Finite Y      -> 0 with the sign of Y
-    //     Y == Infinity and X is Finite    -> Pi / 2 with the sign of Y
-    //     Y == Infinity and X == -Infinity -> 3Pi / 4 with the sign of Y
-    //     Y == Infinity and X == +Infinity -> Pi / 4 with the sign of Y
+    // Y == 0 and X is Negative         -> Pi with the sign of Y
+    // y == 0 and x is positive         -> 0 with the sign of y
+    // Y != 0 and X == 0                -> Pi / 2 with the sign of Y
+    // Y != 0 and X is Negative         -> atan(y/x) + (PI with the sign of Y)
+    // X == -Infinity and Finite Y      -> Pi with the sign of Y
+    // X == +Infinity and Finite Y      -> 0 with the sign of Y
+    // Y == Infinity and X is Finite    -> Pi / 2 with the sign of Y
+    // Y == Infinity and X == -Infinity -> 3Pi / 4 with the sign of Y
+    // Y == Infinity and X == +Infinity -> Pi / 4 with the sign of Y
 
     const epsilon: f32 = 0.0001;
-    try expectVecApproxEqAbs(atan2(splat(0.0), splat(-1.0)), splat(pi), epsilon);
-    try expectVecApproxEqAbs(atan2(splat(-0.0), splat(-1.0)), splat(-pi), epsilon);
-    try expectVecApproxEqAbs(atan2(splat(1.0), splat(0.0)), splat(0.5 * pi), epsilon);
-    try expectVecApproxEqAbs(atan2(splat(-1.0), splat(0.0)), splat(-0.5 * pi), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(0.0), splat(-1.0)), splat(pi), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(-0.0), splat(-1.0)), splat(-pi), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(1.0), splat(0.0)), splat(0.5 * pi), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(-1.0), splat(0.0)), splat(-0.5 * pi), epsilon);
     try expectVecApproxEqAbs(
-        atan2(splat(1.0), splat(-1.0)),
+        atan2Rad(splat(1.0), splat(-1.0)),
         splat(math.atan(@as(f32, -1.0)) + pi),
         epsilon,
     );
     try expectVecApproxEqAbs(
-        atan2(splat(-10.0), splat(-2.0)),
+        atan2Rad(splat(-10.0), splat(-2.0)),
         splat(math.atan(@as(f32, 5.0)) - pi),
         epsilon,
     );
-    try expectVecApproxEqAbs(atan2(splat(1.0), splat(-math.inf(f32))), splat(pi), epsilon);
-    try expectVecApproxEqAbs(atan2(splat(-1.0), splat(-math.inf(f32))), splat(-pi), epsilon);
-    try expectVecApproxEqAbs(atan2(splat(1.0), splat(math.inf(f32))), splat(0.0), epsilon);
-    try expectVecApproxEqAbs(atan2(splat(-1.0), splat(math.inf(f32))), splat(-0.0), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(1.0), splat(-math.inf(f32))), splat(pi), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(-1.0), splat(-math.inf(f32))), splat(-pi), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(1.0), splat(math.inf(f32))), splat(0.0), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(-1.0), splat(math.inf(f32))), splat(-0.0), epsilon);
     try expectVecApproxEqAbs(
-        atan2(splat(math.inf(f32)), splat(2.0)),
+        atan2Rad(splat(math.inf(f32)), splat(2.0)),
         splat(0.5 * pi),
         epsilon,
     );
     try expectVecApproxEqAbs(
-        atan2(splat(-math.inf(f32)), splat(2.0)),
+        atan2Rad(splat(-math.inf(f32)), splat(2.0)),
         splat(-0.5 * pi),
         epsilon,
     );
     try expectVecApproxEqAbs(
-        atan2(splat(math.inf(f32)), splat(-math.inf(f32))),
+        atan2Rad(splat(math.inf(f32)), splat(-math.inf(f32))),
         splat(0.75 * pi),
         epsilon,
     );
     try expectVecApproxEqAbs(
-        atan2(splat(-math.inf(f32)), splat(-math.inf(f32))),
+        atan2Rad(splat(-math.inf(f32)), splat(-math.inf(f32))),
         splat(-0.75 * pi),
         epsilon,
     );
     try expectVecApproxEqAbs(
-        atan2(splat(math.inf(f32)), splat(math.inf(f32))),
+        atan2Rad(splat(math.inf(f32)), splat(math.inf(f32))),
         splat(0.25 * pi),
         epsilon,
     );
     try expectVecApproxEqAbs(
-        atan2(splat(-math.inf(f32)), splat(math.inf(f32))),
+        atan2Rad(splat(-math.inf(f32)), splat(math.inf(f32))),
         splat(-0.25 * pi),
         epsilon,
     );
     try expectVecApproxEqAbs(
-        atan2(
+        atan2Rad(
             f32x8(0.0, -math.inf(f32), -0.0, 2.0, math.inf(f32), math.inf(f32), 1.0, -math.inf(f32)),
             f32x8(-2.0, math.inf(f32), 1.0, 0.0, 10.0, -math.inf(f32), 1.0, -math.inf(f32)),
         ),
@@ -3146,12 +4509,12 @@ test "zm.atan2" {
         ),
         epsilon,
     );
-    try expectVecApproxEqAbs(atan2(splat(0.0), splat(0.0)), splat(0.0), epsilon);
-    try expectVecApproxEqAbs(atan2(splat(-0.0), splat(0.0)), splat(0.0), epsilon);
-    try expect(allTrue(isNan(atan2(splat(1.0), splat(math.nan(f32)))), 0) == true);
-    try expect(allTrue(isNan(atan2(splat(-1.0), splat(math.nan(f32)))), 0) == true);
-    try expect(allTrue(isNan(atan2(splat(math.nan(f32)), splat(-1.0))), 0) == true);
-    try expect(allTrue(isNan(atan2(splat(-math.nan(f32)), splat(1.0))), 0) == true);
+    try expectVecApproxEqAbs(atan2Rad(splat(0.0), splat(0.0)), splat(0.0), epsilon);
+    try expectVecApproxEqAbs(atan2Rad(splat(-0.0), splat(0.0)), splat(0.0), epsilon);
+    try expect(allTrue(isNan(atan2Rad(splat(1.0), splat(math.nan(f32)))), 0) == true);
+    try expect(allTrue(isNan(atan2Rad(splat(-1.0), splat(math.nan(f32)))), 0) == true);
+    try expect(allTrue(isNan(atan2Rad(splat(math.nan(f32)), splat(-1.0))), 0) == true);
+    try expect(allTrue(isNan(atan2Rad(splat(-math.nan(f32)), splat(1.0))), 0) == true);
 }
 //
 // 3. 2D, 3D, 4D vector functions
@@ -3160,15 +4523,15 @@ test "zm.atan2" {
 /// returned Vec.  Use when the next operation is more SIMD math
 /// (multiplying against a Vec, etc.); use `dot2` (f32) when the
 /// result is being compared or stored as a scalar.
-pub inline fn dot2Splat(v0: Vec, v1: Vec) Vec {
+pub fn dot2Splat(v0: Vec, v1: Vec) Vec {
     var xmm0: Vec = v0 * v1; // | x0*x1 | y0*y1 | -- | -- |
     const xmm1: Vec = swizzle(xmm0, .y, .x, .x, .x); // | y0*y1 | -- | -- | -- |
     xmm0 = f32x4(xmm0[0] + xmm1[0], xmm0[1], xmm0[2], xmm0[3]); // | x0*x1 + y0*y1 | -- | -- | -- |
     return swizzle(xmm0, .x, .x, .x, .x);
 }
 /// 2D dot product (lanes 0,1) as f32.  Generic over `Vec` and
-/// `Vec2` — any 2-indexable input.
-pub inline fn dot2(v: anytype, w: anytype) f32 {
+/// `Vec2` - any 2-indexable input.
+pub fn dot2(v: anytype, w: anytype) f32 {
     return v[0] * w[0] + v[1] * w[1];
 }
 test "zm.dot2" {
@@ -3183,12 +4546,12 @@ test "zm.dot2" {
 }
 
 /// 3D dot product (lanes 0,1,2), splatted across all lanes.
-pub inline fn dot3Splat(v0: Vec, v1: Vec) Vec {
+pub fn dot3Splat(v0: Vec, v1: Vec) Vec {
     const d_v: Vec = v0 * v1;
     return splat(d_v[0] + d_v[1] + d_v[2]);
 }
 /// 3D dot product (lanes 0,1,2) as f32.  Default form.
-pub inline fn dot3(v0: Vec, v1: Vec) f32 {
+pub fn dot3(v0: Vec, v1: Vec) f32 {
     return dot3Splat(v0, v1)[0];
 }
 test "zm.dot3" {
@@ -3199,7 +4562,7 @@ test "zm.dot3" {
 }
 
 /// 4D dot product, splatted across all lanes.
-pub inline fn dot4Splat(v0: Vec, v1: Vec) Vec {
+pub fn dot4Splat(v0: Vec, v1: Vec) Vec {
     var xmm0: Vec = v0 * v1; // | x0*x1 | y0*y1 | z0*z1 | w0*w1 |
     var xmm1: Vec = swizzle(xmm0, .y, .x, .w, .x); // | y0*y1 | -- | w0*w1 | -- |
     xmm1 = xmm0 + xmm1; // | x0*x1 + y0*y1 | -- | z0*z1 + w0*w1 | -- |
@@ -3208,7 +4571,7 @@ pub inline fn dot4Splat(v0: Vec, v1: Vec) Vec {
     return swizzle(xmm0, .x, .x, .x, .x);
 }
 /// 4D dot product as f32.  Default form.
-pub inline fn dot4(v0: Vec, v1: Vec) f32 {
+pub fn dot4(v0: Vec, v1: Vec) f32 {
     return dot4Splat(v0, v1)[0];
 }
 test "zm.dot4" {
@@ -3218,7 +4581,7 @@ test "zm.dot4" {
     try expectVecApproxEqAbs(dot4Splat(v0, v1), splat(20.0), 0.0001);
 }
 
-pub inline fn cross(v0: Vec, v1: Vec) Vec {
+pub fn cross(v0: Vec, v1: Vec) Vec {
     var xmm0: Vec = swizzle(v0, .y, .z, .x, .w);
     var xmm1: Vec = swizzle(v1, .z, .x, .y, .w);
     var result: Vec = xmm0 * xmm1;
@@ -3230,7 +4593,7 @@ pub inline fn cross(v0: Vec, v1: Vec) Vec {
     // bitcast `@bitCast(Vec, @Vector(4, u32))` that SPIR-V's Logical
     // addressing model rejects (verified empirically: the Stage 3
     // smoke shader trips `OpLoad Pointer is not a logical pointer`).
-    // @shuffle compiles cleanly on both targets — emits a single
+    // @shuffle compiles cleanly on both targets - emits a single
     // SPIR-V OpVectorShuffle.  The second operand is the zero vector;
     // shuffle index `~3` selects the second operand's lane 3 (the 0).
     return @shuffle(f32, result, Vec{ 0, 0, 0, 0 }, [4]i32{ 0, 1, 2, ~@as(i32, 3) });
@@ -3256,41 +4619,41 @@ test "zm.cross" {
     }
 }
 
-pub inline fn lengthSq2Splat(v: Vec) Vec {
+pub fn lengthSq2Splat(v: Vec) Vec {
     return dot2Splat(v, v);
 }
-pub inline fn lengthSq3Splat(v: Vec) Vec {
+pub fn lengthSq3Splat(v: Vec) Vec {
     return dot3Splat(v, v);
 }
-pub inline fn lengthSq4Splat(v: Vec) Vec {
+pub fn lengthSq4Splat(v: Vec) Vec {
     return dot4Splat(v, v);
 }
-pub inline fn lengthSq2(v: anytype) f32 {
+pub fn lengthSq2(v: anytype) f32 {
     return dot2(v, v);
 }
-pub inline fn lengthSq3(v: Vec) f32 {
+pub fn lengthSq3(v: Vec) f32 {
     return dot3(v, v);
 }
-pub inline fn lengthSq4(v: Vec) f32 {
+pub fn lengthSq4(v: Vec) f32 {
     return dot4(v, v);
 }
 
-pub inline fn length2Splat(v: Vec) Vec {
+pub fn length2Splat(v: Vec) Vec {
     return sqrt(dot2Splat(v, v));
 }
-pub inline fn length3Splat(v: Vec) Vec {
+pub fn length3Splat(v: Vec) Vec {
     return sqrt(dot3Splat(v, v));
 }
-pub inline fn length4Splat(v: Vec) Vec {
+pub fn length4Splat(v: Vec) Vec {
     return sqrt(dot4Splat(v, v));
 }
-pub inline fn length2(v: anytype) f32 {
+pub fn length2(v: anytype) f32 {
     return @sqrt(dot2(v, v));
 }
-pub inline fn length3(v: Vec) f32 {
+pub fn length3(v: Vec) f32 {
     return @sqrt(dot3(v, v));
 }
-pub inline fn length4(v: Vec) f32 {
+pub fn length4(v: Vec) f32 {
     return @sqrt(dot4(v, v));
 }
 test "zm.length3" {
@@ -3313,10 +4676,10 @@ test "zm.length3" {
     }
 }
 
-pub inline fn normalize2(v: Vec) Vec {
+pub fn normalize2(v: Vec) Vec {
     return v / length2Splat(v);
 }
-pub inline fn normalize3(v: Vec) Vec {
+pub fn normalize3(v: Vec) Vec {
     // Guard: normalizing a zero vector divides by 0 -> NaN, which has repeatedly
     // blanked frames. Caught in dev at ZERO release/shader cost (assertf assumes
     // the condition on GPU + in ship). If the input CAN be zero, use
@@ -3327,12 +4690,12 @@ pub inline fn normalize3(v: Vec) Vec {
 
 /// NaN-free normalize: returns `fallback` when `v` is at/near the zero vector
 /// (length below `eps`), instead of dividing by ~0 to produce NaN. BRANCHLESS
-/// (uses @select), so it lowers to SPIR-V/WGSL — safe in shaders. This is the
+/// (uses @select), so it lowers to SPIR-V/WGSL - safe in shaders. This is the
 /// preventive tool for the recurring "degenerate input -> NaN -> black/white
 /// frame" class: prefer it over normalize3 anywhere the input can be zero (ray
 /// directions, scatter dirs, gradients). `fallback` should be a unit vector
 /// (e.g. .{0,0,1,0}) or .{0,0,0,0} if a zero result is acceptable.
-pub inline fn safeNormalize3(v: Vec, fallback: Vec) Vec {
+pub fn safeNormalize3(v: Vec, fallback: Vec) Vec {
     const len_sq: f32 = dot3(v, v);
     const eps: f32 = 1.0e-12;
     // mask lanes are all-true when length is usable; @select picks per-lane.
@@ -3342,16 +4705,16 @@ pub inline fn safeNormalize3(v: Vec, fallback: Vec) Vec {
 }
 
 /// Replace any NaN/inf lanes of `v` with the matching lane of `fallback`.
-/// BRANCHLESS — for sanitizing accumulated shader values (color, position)
+/// BRANCHLESS - for sanitizing accumulated shader values (color, position)
 /// right before they leave a hot loop, so a single bad lane can't blacken/
 /// whiten the whole frame. (isNan covers NaN; for inf, comparisons also fail,
 /// so we test finiteness via `v == v` for NaN AND a magnitude clamp upstream.)
-pub inline fn finiteOr3(v: Vec, fallback: Vec) Vec {
+pub fn finiteOr3(v: Vec, fallback: Vec) Vec {
     // v != v is true only for NaN lanes; @select replaces those.
     const is_nan: @Vector(4, bool) = v != v;
     return @select(f32, is_nan, fallback, v);
 }
-pub inline fn normalize4(v: Vec) Vec {
+pub fn normalize4(v: Vec) Vec {
     return v / length4Splat(v);
 }
 test "zm.normalize3" {
@@ -3389,9 +4752,6 @@ fn vecMulMat(v: Vec, m: Mat) Vec {
     const vw = @shuffle(f32, v, undefined, [4]i32{ 3, 3, 3, 3 });
     return vx * m[0] + vy * m[1] + vz * m[2] + vw * m[3];
 }
-fn matMulVec(m: Mat, v: Vec) Vec {
-    return .{ dot4(m[0], v), dot4(m[1], v), dot4(m[2], v), dot4(m[3], v) };
-}
 //
 // 4. Matrix functions
 //
@@ -3405,7 +4765,7 @@ pub fn matFromArr(arr: [16]f32) Mat {
     };
 }
 
-// ---- Matrix arithmetic — column-major, M*v convention ---------------
+// Matrix arithmetic - column-major, M*v convention
 //
 // Storage: `Mat = [4]Vec`.  Mat[i] is COLUMN i.  Translation lives in
 // the LAST column: `mat[3] = (x, y, z, 1)`.
@@ -3418,30 +4778,36 @@ pub fn matFromArr(arr: [16]f32) Mat {
 //
 // Stage 2 of the math-unification plan replaced an old polymorphic
 // `mul(a, b)` that used row-major `v*M` convention.  The byte
-// storage is unchanged from that era — `translation(x, y, z)`
-// produces the same 64 bytes — but the operand-order convention
+// storage is unchanged from that era - `translation(x, y, z)`
+// produces the same 64 bytes - but the operand-order convention
 // flipped: old `mul(view, proj)` became new `mulMat(proj, view)`
 // because "left applies first" inverts when you switch from
 // post-multiply to pre-multiply convention.  See `src/notes/
 // math_unification.md` for the full duality analysis.
 
+/// Low-level matrix product. **If you are building a transform from
+/// steps, reach for `compose`/`composeN` instead** - they read in
+/// application order and are far harder to get backwards. Use
+/// `mulMat` directly only when you want the raw product and know the
+/// operand order below.
+///
 /// Compose two matrices: `A * B`.  Applied to a vector `v` later,
 /// `mulMatVec(mulMat(A, B), v)` equals `mulMatVec(A, mulMatVec(B,
-/// v))` — B is applied to v first, then A.  The mental model is
+/// v))` - B is applied to v first, then A.  The mental model is
 /// the same as GLSL: build MVP as `mulMat(proj, mulMat(view,
-/// model))` and the resulting matrix transforms model-space →
+/// model))` and the resulting matrix transforms model-space ->
 /// clip-space when multiplied against a position.
 ///
 /// APPLICATION ORDER: `mulMat(SECOND, FIRST)`.  To apply transform
 /// P to a point and THEN Q (Q acting in P's output space), write
-/// `mulMat(Q, P)` — the later transform goes on the LEFT.
+/// `mulMat(Q, P)` - the later transform goes on the LEFT.
 ///
-/// ⚠ PORTING FROM RAYLIB: raylib's `MatrixMultiply(left, right)`
-/// uses the OPPOSITE (row-vector) order — it applies `left` first,
+/// PORTING FROM RAYLIB: raylib's `MatrixMultiply(left, right)`
+/// uses the OPPOSITE (row-vector) order - it applies `left` first,
 /// then `right` (`v * left * right`).  So a raylib line
 /// `M = MatrixMultiply(A, B)` translates to `mulMat(B, A)` here,
 /// NOT `mulMat(A, B)`.  Copying the operand order verbatim silently
-/// reverses the composition — it type-checks and often *looks*
+/// reverses the composition - it type-checks and often *looks*
 /// close, then places/orients things wrongly (see the decals port:
 /// raylib `MatrixMultiply(splat, MatrixRotateZ(a))` became
 /// `mulMat(rotationZ(a), splat)`).  This is doubly easy to miss
@@ -3452,7 +4818,7 @@ pub fn mulMat(a: Mat, b: Mat) Mat {
     // output column, multiply A by B's i-th column (treating it as
     // a 4-vector).  Implementation: splat each scalar of B.col[i],
     // multiply by A's columns, sum.  This is the SAME arithmetic
-    // as `vecMulMat(b[i], a)` for each i — i.e. old-row-major
+    // as `vecMulMat(b[i], a)` for each i - i.e. old-row-major
     // `mulMatRowMajor(B, A)` with operand swap.
     var result: Mat = undefined;
     comptime var col: u32 = 0;
@@ -3469,16 +4835,16 @@ pub fn mulMat(a: Mat, b: Mat) Mat {
 
 /// Compose transforms in APPLICATION ORDER: `compose(first, then)`
 /// returns a matrix that applies `first` to a point, then `then`.
-/// This is the readable inverse of `mulMat`'s operand order —
-/// `compose(a, b) == mulMat(b, a)` — and exists so call sites can
+/// This is the readable inverse of `mulMat`'s operand order -
+/// `compose(a, b) == mulMat(b, a)` - and exists so call sites can
 /// state intent instead of juggling which operand goes on the left.
 ///
 /// Prefer this when building a transform as a sequence of steps,
 /// and ESPECIALLY when porting raylib: raylib's
 /// `MatrixMultiply(left, right)` already means "apply left, then
 /// right", so it maps 1:1 to `compose(left, right)` with the SAME
-/// operand order — no silent flip.  Example: raylib
-/// `splat = MatrixMultiply(lookAtMat, MatrixRotateZ(a))` →
+/// operand order - no silent flip.  Example: raylib
+/// `splat = MatrixMultiply(lookAtMat, MatrixRotateZ(a))` ->
 /// `compose(lookAtMat, rotationZ(a))`.
 pub fn compose(first: Mat, then: Mat) Mat {
     return mulMat(then, first);
@@ -3486,17 +4852,18 @@ pub fn compose(first: Mat, then: Mat) Mat {
 
 /// Compose three transforms in application order: apply `first`,
 /// then `second`, then `third`.  `composeN` for the common
-/// three-step case (model→view→proj reads `composeN(model, view,
+/// three-step case (model->view->proj reads `composeN(model, view,
 /// proj)`); equals `mulMat(third, mulMat(second, first))`.
 pub fn composeN(first: Mat, second: Mat, third: Mat) Mat {
     return mulMat(third, mulMat(second, first));
 }
 
-/// Internally identical to the legacy private `vecMulMat(v, M)`:
-/// the column-major M*v computation equals the row-major v*M
-/// computation when the same bytes are interpreted under the
-/// dual conventions (commutative scalar mul + matching indexed
-/// reads).  See `src/notes/math_unification.md`.
+/// Transform `v` by matrix `m` - returns `m` applied to `v` (the
+/// vec4 `v` treated as a column vector, `m * v`). For a 3D position
+/// use `mulMatPoint` (which supplies `w = 1`); this is the general
+/// vec4 form used for directions or already-homogeneous points.
+/// (Equivalent to the legacy row-vector `vecMulMat(v, m)`; same
+/// bytes under the transposed storage - see `src/notes/math_unification.md`.)
 pub fn mulMatVec(m: Mat, v: Vec) Vec {
     return vecMulMat(v, m);
 }
@@ -3509,7 +4876,7 @@ pub fn mulMatScalar(m: Mat, s: f32) Mat {
     return Mat{ m[0] * vs, m[1] * vs, m[2] * vs, m[3] * vs };
 }
 
-/// Transform a 3D point through a mat4 with implied `w = 1` — the
+/// Transform a 3D point through a mat4 with implied `w = 1` - the
 /// standard "transform a position" operation, matching GLSL's
 /// `M * vec4(p, 1.0)`.  Returns a vec4; caller divides by `.w`
 /// for the perspective divide if needed.
@@ -3535,8 +4902,8 @@ test "mulMat composes in math order: mulMatVec(mulMat(A,B), v) == A*(B*v)" {
     const composed: Vec = mulMatVec(mulMat(A, B), v);
     try expectVecApproxEqAbs(direct, composed, 1e-6);
     // Translation column should be (10, 40, 90, 1):
-    // B translates (1,1,1) → (11,21,31), then A scales by (1,2,3)
-    // → (11, 42, 93).  v.w stays 1.
+    // B translates (1,1,1) -> (11,21,31), then A scales by (1,2,3)
+    // -> (11, 42, 93).  v.w stays 1.
     try expectVecApproxEqAbs(composed, f32x4(11, 42, 93, 1), 1e-6);
 }
 
@@ -3556,10 +4923,10 @@ test "compose applies first, then second (application order == raylib MatrixMult
         f32x4(10, 20, 30, 1),
     };
     const v: Vec = f32x4(1, 1, 1, 1);
-    // Apply scale first: (1,1,1) → (1,2,3); then translate → (11, 22, 33).
+    // Apply scale first: (1,1,1) -> (1,2,3); then translate -> (11, 22, 33).
     const m: Mat = compose(scale, translate);
     try expectVecApproxEqAbs(mulMatVec(m, v), f32x4(11, 22, 33, 1), 1e-6);
-    // compose(a, b) is exactly mulMat(b, a) — the operand-order inverse.
+    // compose(a, b) is exactly mulMat(b, a) - the operand-order inverse.
     try expectVecApproxEqAbs(mulMatVec(compose(scale, translate), v), mulMatVec(mulMat(translate, scale), v), 1e-6);
     // composeN(model, view, proj) == mulMat(proj, mulMat(view, model)).
     const three: Vec = mulMatVec(composeN(scale, translate, scale), v);
@@ -3567,6 +4934,10 @@ test "compose applies first, then second (application order == raylib MatrixMult
     try expectVecApproxEqAbs(three, nested, 1e-6);
 }
 
+/// Translation matrix - moves a point by `(x, y, z)`. The offset
+/// lives in row 3 (`Mat[3]`). Chain it with `compose`/`composeN`
+/// (application order) or `mulMat` (later transform on the LEFT);
+/// see `Mat` for the convention.
 pub fn translation(x: f32, y: f32, z: f32) Mat {
     return .{
         f32x4(1.0, 0.0, 0.0, 0.0),
@@ -3599,7 +4970,7 @@ test "mulMat against known matrix product" {
     // Note: under the new column-major + M*v convention, c = mulMat(a, b)
     // means "applied to v, c*v == a*(b*v)".  The byte-level result is
     // the operand-swap of the legacy row-major mul(a, b).  Hence the
-    // expected values here differ from the old test by swapping a ↔ b.
+    // expected values here differ from the old test by swapping a  and  b.
     const a: Mat = .{
         f32x4(0.1, 0.2, 0.3, 0.4),
         f32x4(0.5, 0.6, 0.7, 0.8),
@@ -3649,8 +5020,36 @@ test "zm.matrix.transpose" {
     try expectVecApproxEqAbs(mt[3], f32x4(4.0, 8.0, 12.0, 16.0), 0.0001);
 }
 
+/// The rotation taking a Z-up frame into zimr's Y-up one: `(x, y, z) -> (x, z, -y)`.
+///
+/// WHY THIS CONVERSION EXISTS AT ALL, AND WHY IT IS NOT DONE AT LOAD TIME
+///
+/// MuJoCo and essentially every published robot model are **Z-up**, and `robot_mjcf.zig`
+/// deliberately does NOT rotate them on import. The acceptance test for MJCF import is that
+/// forward kinematics agrees with MuJoCo **body for body**, and a frame conversion sitting in
+/// the middle of that turns any disagreement into two candidate explanations instead of one.
+/// Nearly a thousand lines of MuJoCo-derived reference values rest on the correspondence being
+/// direct. URDF models ARE rotated at the root, precisely because there is no oracle there to
+/// preserve.
+///
+/// So a Z-up model stays Z-up all the way through the physics, and this is the single place the
+/// convention changes - at the boundary where something is drawn.
+///
+/// IT LIVES HERE BECAUSE FIVE EXAMPLES NEEDED IT. Four had identical private copies of
+/// `rotationX(-0.5*pi)` and a fifth had the same rotation written as a hand-rolled swizzle;
+/// one of them then had to guess which axis a yaw turned into. A convention that changes in one
+/// place should be spelled in one place.
+pub fn zUpToYUp() Mat {
+    return rotationX(-0.5 * pi);
+}
+
+/// `zUpToYUp` applied to a single point, for callers that need a position rather than a matrix.
+pub fn zUpToYUpPoint(v: Vec) Vec {
+    return vec(v[0], v[2], -v[1]);
+}
+
 pub fn rotationX(angle_rad: f32) Mat {
-    const sc: [2]f32 = sincos(angle_rad);
+    const sc: [2]f32 = sincosRad(angle_rad);
     return .{
         f32x4(1.0, 0.0, 0.0, 0.0),
         f32x4(0.0, sc[1], sc[0], 0.0),
@@ -3660,7 +5059,7 @@ pub fn rotationX(angle_rad: f32) Mat {
 }
 
 pub fn rotationY(angle_rad: f32) Mat {
-    const sc: [2]f32 = sincos(angle_rad);
+    const sc: [2]f32 = sincosRad(angle_rad);
     return .{
         f32x4(sc[1], 0.0, -sc[0], 0.0),
         f32x4(0.0, 1.0, 0.0, 0.0),
@@ -3670,7 +5069,7 @@ pub fn rotationY(angle_rad: f32) Mat {
 }
 
 pub fn rotationZ(angle_rad: f32) Mat {
-    const sc: [2]f32 = sincos(angle_rad);
+    const sc: [2]f32 = sincosRad(angle_rad);
     return .{
         f32x4(sc[1], sc[0], 0.0, 0.0),
         f32x4(-sc[0], sc[1], 0.0, 0.0),
@@ -3679,10 +5078,13 @@ pub fn rotationZ(angle_rad: f32) Mat {
     };
 }
 
+/// `translation` taking a `Vec` (uses `.x/.y/.z`).
 pub fn translationV(v: Vec) Mat {
     return translation(v[0], v[1], v[2]);
 }
 
+/// Scale matrix - scales a point by `(x, y, z)` per axis. Chain via
+/// `compose`/`composeN` or `mulMat`; see `Mat` for the convention.
 pub fn scaling(x: f32, y: f32, z: f32) Mat {
     return .{
         f32x4(x, 0.0, 0.0, 0.0),
@@ -3691,6 +5093,7 @@ pub fn scaling(x: f32, y: f32, z: f32) Mat {
         f32x4(0.0, 0.0, 0.0, 1.0),
     };
 }
+/// `scaling` taking a `Vec` (uses `.x/.y/.z`).
 pub fn scalingV(v: Vec) Mat {
     return scaling(v[0], v[1], v[2]);
 }
@@ -3740,7 +5143,7 @@ test "zm.matrix.lookToLh" {
 }
 
 pub fn perspectiveFovLh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
-    const scfov: [2]f32 = sincos(0.5 * fovy);
+    const scfov: [2]f32 = sincosRad(0.5 * fovy);
 
     assert(near > 0.0 and far > 0.0, @src());
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001), @src());
@@ -3758,7 +5161,7 @@ pub fn perspectiveFovLh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
     };
 }
 pub fn perspectiveFovRh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
-    const scfov: [2]f32 = sincos(0.5 * fovy);
+    const scfov: [2]f32 = sincosRad(0.5 * fovy);
 
     assert(near > 0.0 and far > 0.0, @src());
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001), @src());
@@ -3778,7 +5181,7 @@ pub fn perspectiveFovRh(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
 
 // Produces Z values in [-1.0, 1.0] range (OpenGL defaults)
 pub fn perspectiveFovLhGl(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
-    const scfov: [2]f32 = sincos(0.5 * fovy);
+    const scfov: [2]f32 = sincosRad(0.5 * fovy);
 
     assert(near > 0.0 and far > 0.0, @src());
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001), @src());
@@ -3798,7 +5201,7 @@ pub fn perspectiveFovLhGl(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
 
 // Produces Z values in [-1.0, 1.0] range (OpenGL defaults)
 pub fn perspectiveFovRhGl(fovy: f32, aspect: f32, near: f32, far: f32) Mat {
-    const scfov: [2]f32 = sincos(0.5 * fovy);
+    const scfov: [2]f32 = sincosRad(0.5 * fovy);
 
     assert(near > 0.0 and far > 0.0, @src());
     assert(!math.approxEqAbs(f32, scfov[0], 0.0, 0.001), @src());
@@ -4105,14 +5508,28 @@ fn inverseMat(m: Mat) Mat {
     return inverseDet(m, null);
 }
 
-pub inline fn conjugate(q: Quat) Quat {
+pub fn conjugate(q: Quat) Quat {
     return q * f32x4(-1.0, -1.0, -1.0, 1.0);
 }
 
 fn inverseQuat(q: Quat) Quat {
-    const l: Vec = lengthSq4Splat(q);
-    const conj: Quat = conjugate(q);
-    return blend(l <= splat(math.floatEps(f32)), splat(0.0), conj / l);
+    // A SCALAR COMPARE, NOT A VECTOR ONE - AND THE REASON IS A wasm BACKEND BUG
+    //
+    // This was `blend(l <= splat(eps), splat(0), conj / l)`, comparing a `Vec` against a `Vec` to
+    // build a lane mask. Legal Zig, and the wasm backend miscompiles it: the module fails to
+    // INSTANTIATE with `f32.le[0] expected type f32, found local.get of type v128`.
+    //
+    // It was invisible because this function was `inline`. Removing that did not create the bug,
+    // it revealed it - and adding `inline` back only moved the failure to whichever function the
+    // comparison landed in next, `plot3d.pixelsToNDCRay` among them.
+    //
+    // Every lane of `lengthSq4Splat` holds the same number, so the mask was never doing lane-wise
+    // work: one scalar compare says the same thing, generates correct code, and reads better.
+    const length_squared: f32 = lengthSq4(q);
+    if (length_squared <= math.floatEps(f32)) {
+        return splat(0.0);
+    }
+    return conjugate(q) / splat(length_squared);
 }
 
 pub fn inverse(a: anytype) @TypeOf(a) {
@@ -4141,7 +5558,7 @@ test "zm.matrix.inverse" {
     try expectVecApproxEqAbs(m_inv[3], f32x4(0.18986, 0.103096, 0.272882, 0.10854), 0.0001);
 }
 
-inline fn f32x4_mask3() Vec {
+fn f32x4_mask3() Vec {
     return Vec{
         @as(f32, @bitCast(@as(u32, 0xffff_ffff))),
         @as(f32, @bitCast(@as(u32, 0xffff_ffff))),
@@ -4151,7 +5568,7 @@ inline fn f32x4_mask3() Vec {
 }
 
 pub fn matFromNormAxisAngle(axis: Vec, angle_rad: f32) Mat {
-    const sincos_angle: [2]f32 = sincos(angle_rad);
+    const sincos_angle: [2]f32 = sincosRad(angle_rad);
 
     const c2: Vec = splat(1.0 - sincos_angle[1]);
     const c1: Vec = splat(sincos_angle[1]);
@@ -4221,6 +5638,9 @@ test "zm.matrix.matFromAxisAngle" {
     }
 }
 
+/// Rotation matrix from a unit quaternion `q = (x, y, z, w)` - glTF /
+/// zm order, so `quat_identity` is `(0, 0, 0, 1)`. Chain via
+/// `compose`/`composeN` or `mulMat`; see `Mat` for the convention.
 pub fn matFromQuat(q: Quat) Mat {
     const q0: Quat = q + q;
     var q1: Vec = q * q0;
@@ -4275,7 +5695,7 @@ test "zm.matrix.matFromQuat" {
 }
 
 pub fn quatFromRollPitchYawV(angles: Vec) Quat { // | pitch | yaw | roll | 0 |
-    const sc: [2]Vec = sincos(splat(0.5) * angles);
+    const sc: [2]Vec = sincosRad(splat(0.5) * angles);
     const p0: Vec = @shuffle(f32, sc[1], sc[0], [4]i32{ ~@as(i32, 0), 0, 0, 0 });
     const p1: Vec = @shuffle(f32, sc[0], sc[1], [4]i32{ ~@as(i32, 0), 0, 0, 0 });
     const y0: Vec = @shuffle(f32, sc[1], sc[0], [4]i32{ 1, ~@as(i32, 1), 1, 1 });
@@ -4342,7 +5762,7 @@ pub fn matToQuat(m: Mat) Quat {
     return quatFromMat(m);
 }
 
-pub inline fn loadMat(mem: []const f32) Mat {
+pub fn loadMat(mem: []const f32) Mat {
     return .{
         loadVec(mem[0..4], Vec, 0),
         loadVec(mem[4..8], Vec, 0),
@@ -4365,14 +5785,14 @@ test "zm.loadMat" {
     try expectVecEqual(m[3], f32x4(14.0, 15.0, 16.0, 17.0));
 }
 
-pub inline fn storeMat(mem: []f32, m: Mat) void {
+pub fn storeMat(mem: []f32, m: Mat) void {
     storeVec(mem[0..4], m[0], 0);
     storeVec(mem[4..8], m[1], 0);
     storeVec(mem[8..12], m[2], 0);
     storeVec(mem[12..16], m[3], 0);
 }
 
-pub inline fn loadMat43(mem: []const f32) Mat {
+pub fn loadMat43(mem: []const f32) Mat {
     return .{
         dirFromArr3(mem),
         f32x4(mem[3], mem[4], mem[5], 0.0),
@@ -4381,14 +5801,14 @@ pub inline fn loadMat43(mem: []const f32) Mat {
     };
 }
 
-pub inline fn storeMat43(mem: []f32, m: Mat) void {
+pub fn storeMat43(mem: []f32, m: Mat) void {
     storeVec(mem[0..3], m[0], 3);
     storeVec(mem[3..6], m[1], 3);
     storeVec(mem[6..9], m[2], 3);
     storeVec(mem[9..12], m[3], 3);
 }
 
-pub inline fn loadMat34(mem: []const f32) Mat {
+pub fn loadMat34(mem: []const f32) Mat {
     return .{
         loadVec(mem[0..4], Vec, 0),
         loadVec(mem[4..8], Vec, 0),
@@ -4397,25 +5817,25 @@ pub inline fn loadMat34(mem: []const f32) Mat {
     };
 }
 
-pub inline fn storeMat34(mem: []f32, m: Mat) void {
+pub fn storeMat34(mem: []f32, m: Mat) void {
     storeVec(mem[0..4], m[0], 0);
     storeVec(mem[4..8], m[1], 0);
     storeVec(mem[8..12], m[2], 0);
 }
 
-pub inline fn matToArr(m: Mat) [16]f32 {
+pub fn matToArr(m: Mat) [16]f32 {
     var out_arr: [16]f32 = undefined;
     storeMat(out_arr[0..], m);
     return out_arr;
 }
 
-pub inline fn matToArr43(m: Mat) [12]f32 {
+pub fn matToArr43(m: Mat) [12]f32 {
     var out_arr: [12]f32 = undefined;
     storeMat43(out_arr[0..], m);
     return out_arr;
 }
 
-pub inline fn matToArr34(m: Mat) [12]f32 {
+pub fn matToArr34(m: Mat) [12]f32 {
     var out_arr: [12]f32 = undefined;
     storeMat34(out_arr[0..], m);
     return out_arr;
@@ -4444,7 +5864,7 @@ fn qmulRaw(q0: Quat, q1: Quat) Quat {
     return result + q1y;
 }
 
-/// Quaternion (Hamilton) product. `qmul(a, b)` applies `b` first, then `a` — so it
+/// Quaternion (Hamilton) product. `qmul(a, b)` applies `b` first, then `a` - so it
 /// matches matrix composition (`mulMat(a, b) == a*b`, B applied first) and Jolt's
 /// `operator*`. Concretely: `matFromQuat(qmul(a, b)) == mulMat(matFromQuat(a), matFromQuat(b))`
 /// and `rotate(qmul(a, b), v) == rotate(a, rotate(b, v))`. This is the convention every
@@ -4472,11 +5892,11 @@ pub fn quatToAxisAngle(
     angle: *f32,
 ) void {
     axis.* = q;
-    angle.* = 2.0 * acos(q[3]);
+    angle.* = 2.0 * acosRad(q[3]);
 }
 pub fn quatFromNormAxisAngle(axis: Vec, angle_rad: f32) Quat {
     const n: Vec = pointFromArr3(axis);
-    const sc: [2]f32 = sincos(0.5 * angle_rad);
+    const sc: [2]f32 = sincosRad(0.5 * angle_rad);
     return n * f32x4(sc[0], sc[0], sc[0], sc[1]);
 }
 
@@ -4486,7 +5906,9 @@ test "zm.quaternion.quatToAxisAngle" {
         var axis: Vec = f32x4(4.0, 3.0, 2.0, 1.0);
         var angle: f32 = 10.0;
         quatToAxisAngle(q0, &axis, &angle);
-        try expect(math.approxEqAbs(f32, axis[0], @sin(@as(f32, 0.25) * pi * 0.5), 0.0001));
+        // `0.25 * pi * 0.5` radians is a SIXTEENTH of a turn - the half-angle of the eighth
+        // turn `q0` was built from. In turns that is 0.0625 and needs no constant.
+        try expect(math.approxEqAbs(f32, axis[0], sinTurns(@as(f32, 0.0625)), 0.0001));
         try expect(axis[1] == 0.0);
         try expect(axis[2] == 0.0);
         try expect(math.approxEqAbs(f32, angle, 0.25 * pi, 0.0001));
@@ -4547,7 +5969,7 @@ test "zm.quaternion.quatFromNormAxisAngle" {
     }
 }
 
-pub inline fn qidentity() Quat {
+pub fn qidentity() Quat {
     return f32x4(@as(f32, 0.0), @as(f32, 0.0), @as(f32, 0.0), @as(f32, 1.0));
 }
 
@@ -4578,7 +6000,7 @@ test "zm.quaternion.rotate" {
     try expectVecApproxEqAbs(rotate(q, right), mulMatVec(mat, right), 0.0001);
 }
 
-inline fn f32x4_mask2() Vec {
+fn f32x4_mask2() Vec {
     return Vec{
         @as(f32, @bitCast(@as(u32, 0xffff_ffff))),
         @as(f32, @bitCast(@as(u32, 0xffff_ffff))),
@@ -4587,7 +6009,7 @@ inline fn f32x4_mask2() Vec {
     };
 }
 
-inline fn f32x4_sign_mask1() Vec {
+fn f32x4_sign_mask1() Vec {
     return Vec{ @as(f32, @bitCast(@as(u32, 0x8000_0000))), 0, 0, 0 };
 }
 
@@ -4597,24 +6019,24 @@ pub fn slerpV(
     t: Vec,
 ) Quat {
     var cos_omega: Vec = dot4Splat(q0, q1);
-    const sign: Vec = blend(cos_omega < splat(0.0), splat(-1.0), splat(1.0));
+    const sign_value: Vec = blend(cos_omega < splat(0.0), splat(-1.0), splat(1.0));
 
-    cos_omega = cos_omega * sign;
+    cos_omega = cos_omega * sign_value;
     const sin_omega: Vec = sqrt(splat(1.0) - cos_omega * cos_omega);
 
-    const omega: Vec = atan2(sin_omega, cos_omega);
+    const omega: Vec = atan2Rad(sin_omega, cos_omega);
 
     var v01: Vec = t;
     v01 = xorInt(andInt(v01, f32x4_mask2()), f32x4_sign_mask1());
     v01 = f32x4(1.0, 0.0, 0.0, 0.0) + v01;
 
-    var s0: Vec = sin(v01 * omega) / sin_omega;
+    var s0: Vec = sinRad(v01 * omega) / sin_omega;
     s0 = blend(cos_omega < splat(1.0 - 0.00001), s0, v01);
 
     const s1: Vec = swizzle(s0, .y, .y, .y, .y);
     s0 = swizzle(s0, .x, .x, .x, .x);
 
-    return q0 * s0 + sign * q1 * s1;
+    return q0 * s0 + sign_value * q1 * s1;
 }
 
 pub fn slerp(
@@ -4633,9 +6055,9 @@ test "zm.quaternion.slerp" {
 
 // Converts q back to euler angles, assuming a YXZ rotation order.
 // See: http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler
-/// 3D *direction* — lane 3 is 0, so the translation row of an
+/// 3D *direction* - lane 3 is 0, so the translation row of an
 /// affine matrix has no effect.
-pub inline fn vec(x: f32, y: f32, z: f32) Vec {
+pub fn vec(x: f32, y: f32, z: f32) Vec {
     return .{ x, y, z, 0.0 };
 }
 
@@ -4643,9 +6065,9 @@ pub fn quatToRollPitchYaw(q: Quat) [3]f32 {
     var angles: [3]f32 = undefined;
 
     const p: Vec = swizzle(q, .w, .y, .x, .z);
-    const sign: f32 = -1.0;
+    const sign_value: f32 = -1.0;
 
-    const singularity: f32 = p[0] * p[2] + sign * p[1] * p[3];
+    const singularity: f32 = p[0] * p[2] + sign_value * p[1] * p[3];
     if (singularity > 0.499) {
         angles[0] = pi * 0.5;
         angles[1] = 2.0 * math.atan2(p[1], p[0]);
@@ -4657,12 +6079,12 @@ pub fn quatToRollPitchYaw(q: Quat) [3]f32 {
     } else {
         const sq: Vec = p * p;
         const y: Vec = splat(2.0) * vec(
-            p[0] * p[1] - sign * p[2] * p[3],
-            p[0] * p[3] - sign * p[1] * p[2],
+            p[0] * p[1] - sign_value * p[2] * p[3],
+            p[0] * p[3] - sign_value * p[1] * p[2],
             0.0,
         );
         const x: Vec = splat(1.0) - (splat(2.0) * vec(sq[1] + sq[2], sq[2] + sq[3], 0.0));
-        const res: Vec = atan2(y, x);
+        const res: Vec = atan2Rad(y, x);
         angles[0] = math.asin(2.0 * singularity);
         angles[1] = res[0];
         angles[2] = res[1];
@@ -4888,12 +6310,12 @@ test "zm.color.hslToRgb" {
 }
 
 // =====================================================================
-// Color — the high-level color currency, centralized here.
+// Color - the high-level color currency, centralized here.
 // =====================================================================
 // `Color` is sRGB bytes (raylib convention) and is CPU-side. The color
 // MATH (hsv/srgb/linear) lives below as `Vec` (vec4f, 0..1 RGBA)
 // functions so it transpiles to WGSL and runs IDENTICALLY on CPU and
-// GPU — shaders use those helpers, never the u8 struct. Two packed-u32
+// GPU - shaders use those helpers, never the u8 struct. Two packed-u32
 // forms, named so they can't be confused: `hex`/`toHex` are human order
 // 0xRRGGBBAA (like CSS), `toWire`/`fromWire` are the GPU/draw-list order
 // 0xAABBGGRR (ImGui IM_COL32, R in the low byte).
@@ -4971,10 +6393,10 @@ pub const linearToSrgb = rgbToSrgb;
 /// single packed-color type used across the engine, UI, and plot libraries.
 pub const ColorU32 = u32;
 
-/// HSV → RGB, 3-channel (no alpha).  Scalar implementation returning a plain
+/// HSV -> RGB, 3-channel (no alpha).  Scalar implementation returning a plain
 /// `[3]f32`: array-output callers (e.g. ui colour pickers) use this directly,
 /// with no pack-to-Vec / SIMD round-trip.  Deliberately mirrors the scalar
-/// `is_wasm` branch of `hsvToRgb` — keep the two in sync if the algorithm ever
+/// `is_wasm` branch of `hsvToRgb` - keep the two in sync if the algorithm ever
 /// changes.  (The Vec `hsvToRgb` remains the alpha-preserving Vec4 form.)
 pub fn hsvToRgb3(h: f32, s: f32, v: f32) [3]f32 {
     if (s == 0) {
@@ -4998,7 +6420,7 @@ pub fn hsvToRgb3(h: f32, s: f32, v: f32) [3]f32 {
 
 /// float -> integer T via @floor (toward -inf). The "to pixel" pattern:
 /// `floori(i32, x * scale)` instead of `@floor(x * scale)`.
-pub inline fn floori(comptime T: type, x: anytype) T {
+pub fn floori(comptime T: type, x: anytype) T {
     return @floor(x);
 }
 
@@ -5050,7 +6472,7 @@ pub fn hsvToRgb(hsv: Vec) Vec {
     return blend(boolx4(true, true, true, false), rgb, hsv);
 }
 
-/// RGB → HSV, 3-channel (no alpha).  Inverse of `hsvToRgb3`; scalar `[3]f32`
+/// RGB -> HSV, 3-channel (no alpha).  Inverse of `hsvToRgb3`; scalar `[3]f32`
 /// form, the direct path for array-output callers.  Mirrors the scalar
 /// `is_wasm` branch of `rgbToHsv`.
 pub fn rgbToHsv3(r: f32, g: f32, b: f32) [3]f32 {
@@ -5161,7 +6583,7 @@ pub const Color = extern struct {
             .a = @trunc(c[3]),
         };
     }
-    /// From a 0..1 LINEAR-light `Vec` — encodes to sRGB then to bytes.
+    /// From a 0..1 LINEAR-light `Vec` - encodes to sRGB then to bytes.
     /// Use when a shader/lighting path produced linear color.
     pub fn fromLinear(v: Vec) Color {
         return fromVec(linearToSrgb(v));
@@ -5172,15 +6594,15 @@ pub const Color = extern struct {
     }
 
     // ---- Conversions out
-    /// 0..1 sRGB floats, RGBA order — for shader uniforms + color widgets.
+    /// 0..1 sRGB floats, RGBA order - for shader uniforms + color widgets.
     pub fn toFloats(c: Color) [4]f32 {
         return .{ float(c.r) / 255.0, float(c.g) / 255.0, float(c.b) / 255.0, float(c.a) / 255.0 };
     }
-    /// 0..1 sRGB as a `Vec` — the input shape for the GPU-safe color math.
+    /// 0..1 sRGB as a `Vec` - the input shape for the GPU-safe color math.
     pub fn toVec(c: Color) Vec {
         return .{ float(c.r) / 255.0, float(c.g) / 255.0, float(c.b) / 255.0, float(c.a) / 255.0 };
     }
-    /// 0..1 LINEAR-light `Vec` — for correct blending/lighting math.
+    /// 0..1 LINEAR-light `Vec` - for correct blending/lighting math.
     pub fn toLinear(c: Color) Vec {
         return srgbToLinear(c.toVec());
     }
@@ -5192,7 +6614,7 @@ pub const Color = extern struct {
     pub fn toHex(c: Color) u32 {
         return (@as(u32, c.r) << 24) | (@as(u32, c.g) << 16) | (@as(u32, c.b) << 8) | @as(u32, c.a);
     }
-    /// GPU/draw-list packed u32 0xAABBGGRR (ImGui IM_COL32 — R in low byte).
+    /// GPU/draw-list packed u32 0xAABBGGRR (ImGui IM_COL32 - R in low byte).
     /// This is the vertex/draw-list WIRE format; prefer passing `Color` and
     /// letting the engine call this at the GPU boundary.
     pub fn toWire(c: Color) u32 {
@@ -5228,7 +6650,7 @@ pub const Color = extern struct {
     pub fn alpha(c: Color, a01: f32) Color {
         return .{ .r = c.r, .g = c.g, .b = c.b, .a = @trunc(255.0 * std.math.clamp(a01, 0, 1)) };
     }
-    /// Alias of `alpha` — "make this color partially transparent".
+    /// Alias of `alpha` - "make this color partially transparent".
     pub const fade = alpha;
     /// Multiply each RGB channel by `factor` (>=0); alpha unchanged.
     pub fn brightness(c: Color, factor: f32) Color {
@@ -5423,30 +6845,30 @@ test "zm.sincos32" {
 test "zm.asin32" {
     const epsilon: f32 = 0.0001;
 
-    try expect(math.approxEqAbs(f32, asin(@as(f32, -1.1)), -0.5 * pi, epsilon));
-    try expect(math.approxEqAbs(f32, asin(@as(f32, 1.1)), 0.5 * pi, epsilon));
-    try expect(math.approxEqAbs(f32, asin(@as(f32, -1000.1)), -0.5 * pi, epsilon));
-    try expect(math.approxEqAbs(f32, asin(@as(f32, 100000.1)), 0.5 * pi, epsilon));
-    try expect(math.isNan(asin(math.inf(f32))));
-    try expect(math.isNan(asin(-math.inf(f32))));
-    try expect(math.isNan(asin(math.nan(f32))));
-    try expect(math.isNan(asin(-math.nan(f32))));
+    try expect(math.approxEqAbs(f32, asinRad(@as(f32, -1.1)), -0.5 * pi, epsilon));
+    try expect(math.approxEqAbs(f32, asinRad(@as(f32, 1.1)), 0.5 * pi, epsilon));
+    try expect(math.approxEqAbs(f32, asinRad(@as(f32, -1000.1)), -0.5 * pi, epsilon));
+    try expect(math.approxEqAbs(f32, asinRad(@as(f32, 100000.1)), 0.5 * pi, epsilon));
+    try expect(math.isNan(asinRad(math.inf(f32))));
+    try expect(math.isNan(asinRad(-math.inf(f32))));
+    try expect(math.isNan(asinRad(math.nan(f32))));
+    try expect(math.isNan(asinRad(-math.nan(f32))));
 
-    try expectVecApproxEqAbs(asin(@as(F32x8, @splat(-100.0))), @as(F32x8, @splat(-0.5 * pi)), epsilon);
-    try expectVecApproxEqAbs(asin(@as(F32x16, @splat(100.0))), @as(F32x16, @splat(0.5 * pi)), epsilon);
-    try expect(allTrue(isNan(asin(splat(math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(asin(splat(-math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(asin(splat(math.nan(f32)))), 0) == true);
-    try expect(allTrue(isNan(asin(splat(math.snan(f32)))), 0) == true);
+    try expectVecApproxEqAbs(asinRad(@as(F32x8, @splat(-100.0))), @as(F32x8, @splat(-0.5 * pi)), epsilon);
+    try expectVecApproxEqAbs(asinRad(@as(F32x16, @splat(100.0))), @as(F32x16, @splat(0.5 * pi)), epsilon);
+    try expect(allTrue(isNan(asinRad(splat(math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(asinRad(splat(-math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(asinRad(splat(math.nan(f32)))), 0) == true);
+    try expect(allTrue(isNan(asinRad(splat(math.snan(f32)))), 0) == true);
 
     var f: f32 = -1.0;
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
         const r0: f32 = asin32(f);
         const r1: f32 = math.asin(f);
-        const r4: Vec = asin(splat(f));
-        const r8: F32x8 = asin(@as(F32x8, @splat(f)));
-        const r16: F32x16 = asin(@as(F32x16, @splat(f)));
+        const r4: Vec = asinRad(splat(f));
+        const r8: F32x8 = asinRad(@as(F32x8, @splat(f)));
+        const r16: F32x16 = asinRad(@as(F32x16, @splat(f)));
         try expect(math.approxEqAbs(f32, r0, r1, epsilon));
         try expectVecApproxEqAbs(r4, splat(r1), epsilon);
         try expectVecApproxEqAbs(r8, @as(F32x8, @splat(r1)), epsilon);
@@ -5458,30 +6880,30 @@ test "zm.asin32" {
 test "zm.acos32" {
     const epsilon: f32 = 0.1;
 
-    try expect(math.approxEqAbs(f32, acos(@as(f32, -1.1)), pi, epsilon));
-    try expect(math.approxEqAbs(f32, acos(@as(f32, -10000.1)), pi, epsilon));
-    try expect(math.approxEqAbs(f32, acos(@as(f32, 1.1)), 0.0, epsilon));
-    try expect(math.approxEqAbs(f32, acos(@as(f32, 1000.1)), 0.0, epsilon));
-    try expect(math.isNan(acos(math.inf(f32))));
-    try expect(math.isNan(acos(-math.inf(f32))));
-    try expect(math.isNan(acos(math.nan(f32))));
-    try expect(math.isNan(acos(-math.nan(f32))));
+    try expect(math.approxEqAbs(f32, acosRad(@as(f32, -1.1)), pi, epsilon));
+    try expect(math.approxEqAbs(f32, acosRad(@as(f32, -10000.1)), pi, epsilon));
+    try expect(math.approxEqAbs(f32, acosRad(@as(f32, 1.1)), 0.0, epsilon));
+    try expect(math.approxEqAbs(f32, acosRad(@as(f32, 1000.1)), 0.0, epsilon));
+    try expect(math.isNan(acosRad(math.inf(f32))));
+    try expect(math.isNan(acosRad(-math.inf(f32))));
+    try expect(math.isNan(acosRad(math.nan(f32))));
+    try expect(math.isNan(acosRad(-math.nan(f32))));
 
-    try expectVecApproxEqAbs(acos(@as(F32x8, @splat(-100.0))), @as(F32x8, @splat(pi)), epsilon);
-    try expectVecApproxEqAbs(acos(@as(F32x16, @splat(100.0))), @as(F32x16, @splat(0.0)), epsilon);
-    try expect(allTrue(isNan(acos(splat(math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(acos(splat(-math.inf(f32)))), 0) == true);
-    try expect(allTrue(isNan(acos(splat(math.nan(f32)))), 0) == true);
-    try expect(allTrue(isNan(acos(splat(math.snan(f32)))), 0) == true);
+    try expectVecApproxEqAbs(acosRad(@as(F32x8, @splat(-100.0))), @as(F32x8, @splat(pi)), epsilon);
+    try expectVecApproxEqAbs(acosRad(@as(F32x16, @splat(100.0))), @as(F32x16, @splat(0.0)), epsilon);
+    try expect(allTrue(isNan(acosRad(splat(math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(acosRad(splat(-math.inf(f32)))), 0) == true);
+    try expect(allTrue(isNan(acosRad(splat(math.nan(f32)))), 0) == true);
+    try expect(allTrue(isNan(acosRad(splat(math.snan(f32)))), 0) == true);
 
     var f: f32 = -1.0;
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
         const r0: f32 = acos32(f);
         const r1: f32 = math.acos(f);
-        const r4: Vec = acos(splat(f));
-        const r8: F32x8 = acos(@as(F32x8, @splat(f)));
-        const r16: F32x16 = acos(@as(F32x16, @splat(f)));
+        const r4: Vec = acosRad(splat(f));
+        const r8: F32x8 = acosRad(@as(F32x8, @splat(f)));
+        const r16: F32x16 = acosRad(@as(F32x16, @splat(f)));
         try expect(math.approxEqAbs(f32, r0, r1, epsilon));
         try expectVecApproxEqAbs(r4, splat(r1), epsilon);
         try expectVecApproxEqAbs(r8, @as(F32x8, @splat(r1)), epsilon);
@@ -5918,19 +7340,19 @@ pub fn fftInitUnityTable(out_unity_table: []Vec) void {
             unity_table[j + len_n * 4] = splat(0.0);
 
             var vls = vjp * vlstep;
-            var sin_cos = sincos(vls);
+            var sin_cos = sincosRad(vls);
             unity_table[j + len_n] = sin_cos[1];
             unity_table[j + len_n * 5] = sin_cos[0] * splat(-1.0);
 
             var vijp = vjp + vjp;
             vls = vijp * vlstep;
-            sin_cos = sincos(vls);
+            sin_cos = sincosRad(vls);
             unity_table[j + len_n * 2] = sin_cos[1];
             unity_table[j + len_n * 6] = sin_cos[0] * splat(-1.0);
 
             vijp = vijp + vjp;
             vls = vijp * vlstep;
-            sin_cos = sincos(vls);
+            sin_cos = sincosRad(vls);
             unity_table[j + len_n * 3] = sin_cos[1];
             unity_table[j + len_n * 7] = sin_cos[0] * splat(-1.0);
 
@@ -6262,17 +7684,13 @@ test "zm.ifft" {
 // `const` so SPIR-V codegen folds the literal at every call site.
 // Module-scope `const Vec` declarations get lowered to a private-
 // storage variable that requires `OpLoad` through a non-logical
-// pointer — which SPIR-V's Logical addressing model rejects (e.g.
+// pointer - which SPIR-V's Logical addressing model rejects (e.g.
 // `cross` failed with "OpLoad Pointer is not a logical pointer"
 // at Stage 3 of math-unification before this rewrite).  Inline
 // functions returning vector literals avoid the load entirely:
 // the compiler emits an `OpConstantComposite` and uses it inline.
-// On host the inline fn is identical to a const at runtime —
+// On host the inline fn is identical to a const at runtime -
 // constant-folded by the optimizer.
-
-inline fn splatAbsMask(comptime T: type) T {
-    return @splat(@as(f32, @bitCast(@as(u32, 0x7fff_ffff))));
-}
 
 test "zm.floatToIntAndBack" {
     {
@@ -6296,9 +7714,9 @@ test "zm.floatToIntAndBack" {
 /// 1. Matrix functions
 ///
 /// As an example, in a left handed Y-up system:
-///   getAxisX is equivalent to the right vector
-///   getAxisY is equivalent to the up vector
-///   getAxisZ is equivalent to the forward vector
+/// getAxisX is equivalent to the right vector
+/// getAxisY is equivalent to the up vector
+/// getAxisZ is equivalent to the forward vector
 /// getTranslationVec(m: Mat) Vec
 /// getAxisX(m: Mat) Vec
 /// getAxisY(m: Mat) Vec
@@ -6372,7 +7790,7 @@ pub const util = struct {
     }
 
     test "zm.util.mat.scale" {
-        // Old: `mul(scaling(3,4,5), translation(6,7,8))` — scaling
+        // Old: `mul(scaling(3,4,5), translation(6,7,8))` - scaling
         // applied first.  Under column-major: `mulMat(translation,
         // scaling)` (operand swap).  The decomposition test only
         // looks at the scale columns, which sit in the same lanes
@@ -6384,14 +7802,14 @@ pub const util = struct {
 
     test "zm.util.mat.rotation" {
         const rotate_origin: Mat = matFromRollPitchYaw(0.1, 1.2, 2.3);
-        // Old: mul(mul(rotate_origin, scaling), translation) →
+        // Old: mul(mul(rotate_origin, scaling), translation) ->
         // mulMat(translation, mulMat(scaling, rotate_origin))
         const mat: Mat = mulMat(
             translation(6, 7, 8),
             mulMat(scaling(3, 4, 5), rotate_origin),
         );
         const rotate_get: Quat = getRotationQuat(mat);
-        // Old `mul(splat(1), rotate_origin)` is Vec×Mat → mulMatVec.
+        // Old `mul(splat(1), rotate_origin)` is VecxMat -> mulMatVec.
         const v0: Vec = mulMatVec(rotate_origin, splat(1));
         const v1: Vec = mulMatVec(quatToMat(rotate_get), splat(1));
         try expectVecApproxEqAbs(v0, v1, 0.0001);
@@ -6472,22 +7890,22 @@ pub const util = struct {
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 // ============================================================================
 // ============================================================================
-//   zimr additions
-//   Everything below this line is zimr's, not upstream zm.  `math.zig`
-//   is a hard fork (see the provenance header at the top of this file and
-//   notes/zmath-adoption-plan.md), so gap-fill functions - capability zimr
-//   needs that stock zmath lacks - live here, in zmath's own style and
-//   tested zmath's way.
-//   Ground rules for this section (plan decision 7 - "one name per
-//   concept, ship the best one"):
-//     * Only add things zmath genuinely does NOT have.  If zmath already
-//       does it under a different name, that name is canonical - do not
-//       add a second spelling.  (E.g. zimr's old scalar `remap` and
-//       scalar `normalize` are NOT here: they are exactly `mapLinear`
-//       and `lerpInverse`, which already accept scalars.)
-//     * Match zmath's conventions: `anytype` + `@TypeOf` where it
-//       generalises, terse names, a `test "zm.<name>"`-style block
-//       right after each function.
+// zimr additions
+// Everything below this line is zimr's, not upstream zm.  `math.zig`
+// is a hard fork (see the provenance header at the top of this file and
+// notes/zmath-adoption-plan.md), so gap-fill functions - capability zimr
+// needs that stock zmath lacks - live here, in zmath's own style and
+// tested zmath's way.
+// Ground rules for this section (plan decision 7 - "one name per
+// concept, ship the best one"):
+// * Only add things zmath genuinely does NOT have.  If zmath already
+// does it under a different name, that name is canonical - do not
+// add a second spelling.  (E.g. zimr's old scalar `remap` and
+// scalar `normalize` are NOT here: they are exactly `mapLinear`
+// and `lerpInverse`, which already accept scalars.)
+// * Match zmath's conventions: `anytype` + `@TypeOf` where it
+// generalises, terse names, a `test "zm.<name>"`-style block
+// right after each function.
 // ============================================================================
 // ============================================================================
 
@@ -6512,9 +7930,9 @@ test "zm.vec" {
     try expectEqual(@as(f32, 0.0), v[3]);
 }
 
-/// 3D *point* — lane 3 is 1, so the translation row of an affine
+/// 3D *point* - lane 3 is 1, so the translation row of an affine
 /// matrix applies.  Use this for positions, `vec` for directions.
-pub inline fn pointVec(x: f32, y: f32, z: f32) Vec {
+pub fn pointVec(x: f32, y: f32, z: f32) Vec {
     return .{ x, y, z, 1.0 };
 }
 
@@ -6524,10 +7942,10 @@ test "zm.point" {
     try expectEqual(@as(f32, 1.0), p[3]);
 }
 
-/// 4-component Vec constructor — no w-lane assumption.  Use when
+/// 4-component Vec constructor - no w-lane assumption.  Use when
 /// all four lanes are meaningful (RGBA colors, homogeneous coords
 /// you're building by hand, etc).
-pub inline fn vec4(a: f32, b: f32, c: f32, d: f32) Vec {
+pub fn vec4(a: f32, b: f32, c: f32, d: f32) Vec {
     return .{ a, b, c, d };
 }
 
@@ -6536,13 +7954,13 @@ pub inline fn vec4(a: f32, b: f32, c: f32, d: f32) Vec {
 /// `Vec` with `w = 0` for SIMD alignment.  Use this when storage
 /// size matters (3D positions in compact arrays) or when feeding a
 /// GLSL `vec3` uniform.
-pub inline fn vec3(x_: f32, y_: f32, z_: f32) Vec3 {
+pub fn vec3(x_: f32, y_: f32, z_: f32) Vec3 {
     return .{ x_, y_, z_ };
 }
-/// Quaternion constructor — same storage as `vec4` but reads as
+/// Quaternion constructor - same storage as `vec4` but reads as
 /// "this is a quaternion" at the callsite.  Convention is
 /// `(x, y, z, w)` per zmath/raylib.
-pub inline fn quat(x: f32, y: f32, z: f32, w: f32) Quat {
+pub fn quat(x: f32, y: f32, z: f32, w: f32) Quat {
     return .{ x, y, z, w };
 }
 
@@ -6553,7 +7971,7 @@ pub inline fn quat(x: f32, y: f32, z: f32, w: f32) Quat {
 /// not in that path, and the 8-vs-16-byte size matters across the
 /// many widget rects / gesture positions.  If you need a 4-wide
 /// F32x4 to feed a 4-wide zmath op, use `loadArr2(.{ x, y })`.
-pub inline fn vec2(x: f32, y: f32) Vec2 {
+pub fn vec2(x: f32, y: f32) Vec2 {
     return .{ x, y };
 }
 
@@ -6573,16 +7991,16 @@ test "zm.vec2" {
 // directly with `@as(T, ...)`.
 
 /// Broadcast a scalar to a 2-wide `@Vector(2, f32)`.  For UI / 2D math.
-pub inline fn splat2(v: f32) Vec2 {
+pub fn splat2(v: f32) Vec2 {
     return @splat(v);
 }
 
 /// Broadcast a scalar to a 2-wide `@Vector(2, i32)` (`Vec2i`).
-/// Integer sister of `splat2` — pixel coords, viewport dims, any
+/// Integer sister of `splat2` - pixel coords, viewport dims, any
 /// "exact count" 2D value.  Use when broadcasting `0` / `1` / a
 /// `width = height` square value; for explicit per-component
 /// values, prefer the struct literal `Vec2i{ a, b }`.
-pub inline fn splat2i(v: i32) Vec2i {
+pub fn splat2i(v: i32) Vec2i {
     return @splat(v);
 }
 
@@ -6592,7 +8010,7 @@ pub inline fn splat2i(v: i32) Vec2i {
 /// between upstream zmath and zimr is then a 1:1 identifier change.
 /// Use this when the result type isn't `Vec`/`@Vector(2, f32)`; in
 /// those cases prefer `splat`/`splat2`.
-pub inline fn zsplat(comptime T: type, v: f32) T {
+pub fn zsplat(comptime T: type, v: f32) T {
     return @splat(v);
 }
 
@@ -6669,7 +8087,7 @@ test "zm.wrap32" {
 /// reciprocal as intent.  (Note: `mapLinear` and `lerpInverse` already
 /// cover scalar re-ranging and inverse-lerp - zimr's old scalar
 /// `remap` / `normalize` are deliberately NOT re-added here.)
-pub inline fn rcp32(x: f32) f32 {
+pub fn rcp32(x: f32) f32 {
     return 1.0 / x;
 }
 test "zm.rcp32" {
@@ -6704,7 +8122,7 @@ pub fn luminance8(rgb: [3]u8) u8 {
 test "zm.luminance8" {
     try expectEqual(@as(u8, 255), luminance8(.{ 255, 255, 255 }));
     try expectEqual(@as(u8, 0), luminance8(.{ 0, 0, 0 }));
-    // pure green -> 150/256 * 255 ≈ 149
+    // pure green -> 150/256 * 255 ~= 149
     try expectEqual(@as(u8, 149), luminance8(.{ 0, 255, 0 }));
 }
 
@@ -6739,14 +8157,14 @@ test "zm.halfFloatRoundTrip" {
 // full 2D surface - but per plan decision 7 ("ship one name per
 // concept, the best one"), most of raylib's 32 `vector2*` functions do
 // NOT get ported, because the concept already exists:
-//   * `vector2Dot/Length/LengthSqr/Normalize` -> zmath already has
-//     `dot2` / `length2` / `lengthSq2` / `normalize2`.
-//   * `vector2Add/Subtract/Multiply/Divide/Negate/Scale/AddValue/...`
-//     -> zmath deliberately has NO add/sub/scale functions; `@Vector`
-//     supports `+ - * /` natively.  `a + b`, `a * splat(s)`.
-//   * `vector2Min/Max/Clamp/Lerp` -> zmath's generic `min` / `max` /
-//     `clamp` / `lerp` already operate on `Vec` (all four lanes; for a
-//     2D value lanes 2,3 are the zero fill and ride along harmlessly).
+// * `vector2Dot/Length/LengthSqr/Normalize` -> zmath already has
+// `dot2` / `length2` / `lengthSq2` / `normalize2`.
+// * `vector2Add/Subtract/Multiply/Divide/Negate/Scale/AddValue/...`
+// -> zmath deliberately has NO add/sub/scale functions; `@Vector`
+// supports `+ - * /` natively.  `a + b`, `a * splat(s)`.
+// * `vector2Min/Max/Clamp/Lerp` -> zmath's generic `min` / `max` /
+// `clamp` / `lerp` already operate on `Vec` (all four lanes; for a
+// 2D value lanes 2,3 are the zero fill and ride along harmlessly).
 // What follows is the GENUINE 2D gap - the 2D-specific operations
 // zmath has no equivalent for at any width.  All operate on `Vec` with
 // the value in lanes 0,1 (the plan's locked compute-type decision:
@@ -6761,12 +8179,12 @@ test "zm.halfFloatRoundTrip" {
 /// the z-component the 3D `cross` would produce for two vectors in
 /// the xy-plane - in 2D it is fundamentally a scalar.  Generic over
 /// `Vec` and `Vec2`; see `cross2Splat` for the Vec broadcast.
-pub inline fn cross2(v: anytype, w: anytype) f32 {
+pub fn cross2(v: anytype, w: anytype) f32 {
     // x0*y1 - y0*x1
     return v[0] * w[1] - v[1] * w[0];
 }
 /// `cross2` returning a Vec with the scalar splatted across all lanes.
-pub inline fn cross2Splat(v0: Vec, v1: Vec) Vec {
+pub fn cross2Splat(v0: Vec, v1: Vec) Vec {
     const prod: Vec = v0 * swizzle(v1, .y, .x, .x, .x); // | x0*y1 | y0*x1 | .. | .. |
     return splat(prod[0] - prod[1]);
 }
@@ -6791,10 +8209,10 @@ test "zm.cross2" {
 
 /// 2D distance between two points (lanes 0,1).  Generic over
 /// `Vec` and `Vec2`.
-pub inline fn distance2(v0: anytype, v1: anytype) f32 {
+pub fn distance2(v0: anytype, v1: anytype) f32 {
     return length2(v1 - v0);
 }
-pub inline fn distance2Splat(v0: Vec, v1: Vec) Vec {
+pub fn distance2Splat(v0: Vec, v1: Vec) Vec {
     return length2Splat(v1 - v0);
 }
 test "zm.distance2" {
@@ -6808,10 +8226,10 @@ test "zm.distance2" {
 /// 2D squared distance between two points (lanes 0,1).  Cheaper
 /// than `distance2` when only comparing distances.  Generic over
 /// `Vec` and `Vec2`.
-pub inline fn distanceSq2(v0: anytype, v1: anytype) f32 {
+pub fn distanceSq2(v0: anytype, v1: anytype) f32 {
     return lengthSq2(v1 - v0);
 }
-pub inline fn distanceSq2Splat(v0: Vec, v1: Vec) Vec {
+pub fn distanceSq2Splat(v0: Vec, v1: Vec) Vec {
     return lengthSq2Splat(v1 - v0);
 }
 test "zm.distanceSq2" {
@@ -6827,7 +8245,7 @@ test "zm.distanceSq2" {
 /// `atan2(cross2, dot2)` - inherently a plain scalar, so unlike the
 /// reductions above it returns `f32`, not a splatted `F32x4`.
 pub fn angle2(v0: anytype, v1: anytype) f32 {
-    return atan2(cross2(v0, v1), dot2(v0, v1));
+    return atan2Rad(cross2(v0, v1), dot2(v0, v1));
 }
 test "zm.angle2" {
     // +x to +y is +pi/2
@@ -6861,7 +8279,7 @@ test "zm.angle2" {
 /// one function rotating the other way is a footgun.  Code ported
 /// from raylib that relied on the old sign must negate the result.
 pub fn lineAngle2(start: anytype, end: anytype) f32 {
-    return atan2(end[1] - start[1], end[0] - start[0]);
+    return atan2Rad(end[1] - start[1], end[0] - start[0]);
 }
 test "zm.lineAngle2" {
     // segment along +x -> angle 0
@@ -6886,10 +8304,10 @@ test "zm.lineAngle2" {
 
 /// Reflect a 2D vector about a normal.  `normal` is assumed
 /// unit-length, matching the GLSL `reflect` contract.  Result:
-/// `v - 2*(v·n)*n`.
+/// `v - 2*(v*n)*n`.
 /// zmath has no `reflect` at any width - this is the 2D one; the 3D
 /// `reflect3` is a Z2-step-3 gap entry.
-pub inline fn reflect2(v: Vec2, normal: Vec2) Vec2 {
+pub fn reflect2(v: Vec2, normal: Vec2) Vec2 {
     const two_d: Vec2 = @splat(2.0 * dot2(v, normal));
     return v - normal * two_d;
 }
@@ -6909,7 +8327,7 @@ test "zm.reflect2" {
 /// Returns the zero vector on total internal reflection.  Matches
 /// raylib's `Vector2Refract` / the GLSL `refract` formula.
 /// As with `reflect2`, zmath has no `refract` at any width.
-pub inline fn refract2(
+pub fn refract2(
     v: Vec2,
     n: Vec2,
     r: f32,
@@ -6934,7 +8352,7 @@ test "zm.refract2" {
 }
 
 /// Rotate a 2D vector by `angle` radians, counter-clockwise.
-pub inline fn rotate2(v: Vec2, angle_rad: f32) Vec2 {
+pub fn rotate2(v: Vec2, angle_rad: f32) Vec2 {
     const c: f32 = @cos(angle_rad);
     const s: f32 = @sin(angle_rad);
     return .{ v[0] * c - v[1] * s, v[0] * s + v[1] * c };
@@ -6956,7 +8374,7 @@ test "zm.rotate2" {
 /// Under the column-major M*v convention, this is `mulMatVec(m,
 /// (x, y, 0, 1))`.  (Pre-Stage-2 this was `mul(point, m)` with the
 /// point built as a row.)
-pub inline fn transform2(v: Vec, m: Mat) Vec {
+pub fn transform2(v: Vec, m: Mat) Vec {
     const p_in: Vec = f32x4(v[0], v[1], 0.0, 1.0);
     const out: Vec = mulMatVec(m, p_in);
     return f32x4(out[0], out[1], 0.0, 0.0);
@@ -6978,7 +8396,7 @@ test "zm.transform2" {
 /// keeping its direction.  A zero vector stays zero.  (This is
 /// raylib's `Vector2ClampValue` - a magnitude clamp, distinct from
 /// the component-wise `clamp`.)
-pub inline fn clampLength2(
+pub fn clampLength2(
     v: Vec,
     min_len: f32,
     max_len: f32,
@@ -7011,7 +8429,7 @@ test "zm.clampLength2" {
 
 /// Move `v` toward `target` (lanes 0,1) by at most `max_dist`.  If the
 /// remaining distance is within `max_dist`, returns `target` exactly.
-pub inline fn moveTowards2(
+pub fn moveTowards2(
     v: Vec,
     target: Vec,
     max_dist: f32,
@@ -7037,7 +8455,7 @@ test "zm.moveTowards2" {
 
 /// Epsilon equality of two 2D vectors (lanes 0,1), using the same
 /// magnitude-relative tolerance as the scalar `floatEquals`.
-pub inline fn equals2(p: Vec, q: Vec) bool {
+pub fn equals2(p: Vec, q: Vec) bool {
     return floatEquals(p[0], q[0]) and floatEquals(p[1], q[1]);
 }
 test "zm.equals2" {
@@ -7082,10 +8500,10 @@ test "zm.randomInUnitDisk2" {
 // lanes 0,1,2; 4D uses all four).  Ported.
 // ---- 3D
 /// 3D distance between two points (lanes 0,1,2).  Default form (f32).
-pub inline fn distance3(v0: Vec, v1: Vec) f32 {
+pub fn distance3(v0: Vec, v1: Vec) f32 {
     return length3(v1 - v0);
 }
-pub inline fn distance3Splat(v0: Vec, v1: Vec) Vec {
+pub fn distance3Splat(v0: Vec, v1: Vec) Vec {
     return length3Splat(v1 - v0);
 }
 test "zm.distance3" {
@@ -7098,10 +8516,10 @@ test "zm.distance3" {
 
 /// 3D squared distance between two points (lanes 0,1,2).  Cheaper
 /// than `distance3` for distance comparisons.
-pub inline fn distanceSq3(v0: Vec, v1: Vec) f32 {
+pub fn distanceSq3(v0: Vec, v1: Vec) f32 {
     return lengthSq3(v1 - v0);
 }
-pub inline fn distanceSq3Splat(v0: Vec, v1: Vec) Vec {
+pub fn distanceSq3Splat(v0: Vec, v1: Vec) Vec {
     return lengthSq3Splat(v1 - v0);
 }
 test "zm.distanceSq3" {
@@ -7117,7 +8535,7 @@ test "zm.distanceSq3" {
 /// for near-parallel and near-antiparallel inputs.  Returns `f32`
 /// (an angle is inherently scalar).
 pub fn angle3(v0: Vec, v1: Vec) f32 {
-    return atan2(length3(cross(v0, v1)), dot3(v0, v1));
+    return atan2Rad(length3(cross(v0, v1)), dot3(v0, v1));
 }
 test "zm.angle3" {
     // +x to +y is pi/2
@@ -7143,7 +8561,7 @@ test "zm.angle3" {
 /// Some vector perpendicular to `v` (lanes 0,1,2).  Not normalized,
 /// not unique - picks the cardinal axis most orthogonal to `v` and
 /// crosses with it, which is numerically stable for any non-zero `v`.
-pub inline fn perpendicular3(v: Vec) Vec {
+pub fn perpendicular3(v: Vec) Vec {
     var min_comp: f32 = @abs(v[0]);
     var axis: Vec = f32x4(1.0, 0.0, 0.0, 0.0);
     if (@abs(v[1]) < min_comp) {
@@ -7171,7 +8589,7 @@ test "zm.perpendicular3" {
 
 /// Projection of `a` onto `b` (lanes 0,1,2): the component of `a`
 /// parallel to `b`, as a vector.
-pub inline fn project3(a: Vec, b: Vec) Vec {
+pub fn project3(a: Vec, b: Vec) Vec {
     const mag: f32 = dot3(a, b) / dot3(b, b);
     return b * splat(mag);
 }
@@ -7184,7 +8602,7 @@ test "zm.project3" {
 
 /// Rejection of `a` from `b` (lanes 0,1,2): the component of `a`
 /// perpendicular to `b`.  `a - project3(a, b)`.
-pub inline fn reject3(a: Vec, b: Vec) Vec {
+pub fn reject3(a: Vec, b: Vec) Vec {
     return a - project3(a, b);
 }
 test "zm.reject3" {
@@ -7202,9 +8620,9 @@ test "zm.reject3" {
 }
 
 /// Reflect a 3D vector about a unit normal (lanes 0,1,2).  GLSL
-/// `reflect` contract: `v - 2*(v·n)*n`.  zmath has no `reflect` at
+/// `reflect` contract: `v - 2*(v*n)*n`.  zmath has no `reflect` at
 /// any width - `reflect2` is its 2D sibling.
-pub inline fn reflect3(v: Vec, normal: Vec) Vec {
+pub fn reflect3(v: Vec, normal: Vec) Vec {
     const d: f32 = dot3(v, normal);
     return v - normal * splat(2.0 * d);
 }
@@ -7220,7 +8638,7 @@ test "zm.reflect3" {
 /// unit surface normal, `r` the ratio of indices of refraction
 /// (n_in / n_out).  Returns the zero vector on total internal
 /// reflection.  GLSL `refract` formula; `refract2` is the 2D sibling.
-pub inline fn refract3(
+pub fn refract3(
     v: Vec,
     n: Vec,
     r: f32,
@@ -7244,7 +8662,7 @@ test "zm.refract3" {
 
 /// Move `v` toward `target` (lanes 0,1,2) by at most `max_dist`.
 /// Snaps to `target` exactly when within range.
-pub inline fn moveTowards3(
+pub fn moveTowards3(
     v: Vec,
     target: Vec,
     max_dist: f32,
@@ -7267,7 +8685,7 @@ test "zm.moveTowards3" {
 
 /// Epsilon equality of two 3D vectors (lanes 0,1,2), magnitude-
 /// relative tolerance (same as scalar `floatEquals`).
-pub inline fn equals3(p: Vec, q: Vec) bool {
+pub fn equals3(p: Vec, q: Vec) bool {
     return floatEquals(p[0], q[0]) and floatEquals(p[1], q[1]) and floatEquals(p[2], q[2]);
 }
 test "zm.equals3" {
@@ -7345,7 +8763,7 @@ test "zm.barycenter3" {
 /// Cubic Hermite spline interpolation between `v1` (at t=0) and `v2`
 /// (at t=1) with endpoint tangents `tangent1` / `tangent2`.  Lanes
 /// 0,1,2.  `t` is the interpolation parameter.
-pub inline fn cubicHermite3(
+pub fn cubicHermite3(
     v1: Vec,
     tangent1: Vec,
     v2: Vec,
@@ -7415,7 +8833,7 @@ test "zm.rotateByAxisAngle3" {
 /// world space, given the projection and view matrices.  `source` is
 /// the NDC point (lanes 0,1,2); the result is the world-space point
 /// (lanes 0,1,2, perspective-divided).
-/// Under the column-major M*v convention, the world→clip matrix is
+/// Under the column-major M*v convention, the world->clip matrix is
 /// `mulMat(projection, view)` (projection applied last; pre-Stage-2
 /// this was `mul(view, projection)` under row-major v*M).
 pub fn unproject3(
@@ -7449,10 +8867,10 @@ test "zm.unproject3" {
 
 // ---- 4D
 /// 4D distance between two points (all four lanes).  Default form (f32).
-pub inline fn distance4(v0: Vec, v1: Vec) f32 {
+pub fn distance4(v0: Vec, v1: Vec) f32 {
     return length4(v1 - v0);
 }
-pub inline fn distance4Splat(v0: Vec, v1: Vec) Vec {
+pub fn distance4Splat(v0: Vec, v1: Vec) Vec {
     return length4Splat(v1 - v0);
 }
 test "zm.distance4" {
@@ -7464,10 +8882,10 @@ test "zm.distance4" {
 }
 
 /// 4D squared distance between two points (all four lanes).
-pub inline fn distanceSq4(v0: Vec, v1: Vec) f32 {
+pub fn distanceSq4(v0: Vec, v1: Vec) f32 {
     return lengthSq4(v1 - v0);
 }
-pub inline fn distanceSq4Splat(v0: Vec, v1: Vec) Vec {
+pub fn distanceSq4Splat(v0: Vec, v1: Vec) Vec {
     return lengthSq4Splat(v1 - v0);
 }
 test "zm.distanceSq4" {
@@ -7480,7 +8898,7 @@ test "zm.distanceSq4" {
 
 /// Move `v` toward `target` (all four lanes) by at most `max_dist`.
 /// Snaps to `target` exactly when within range.
-pub inline fn moveTowards4(
+pub fn moveTowards4(
     v: Vec,
     target: Vec,
     max_dist: f32,
@@ -7502,7 +8920,7 @@ test "zm.moveTowards4" {
 
 /// Epsilon equality of two 4D vectors (all four lanes), magnitude-
 /// relative tolerance.
-pub inline fn equals4(p: Vec, q: Vec) bool {
+pub fn equals4(p: Vec, q: Vec) bool {
     return floatEquals(p[0], q[0]) and floatEquals(p[1], q[1]) and
         floatEquals(p[2], q[2]) and floatEquals(p[3], q[3]);
 }
@@ -7520,7 +8938,7 @@ test "zm.equals4" {
 // What follows is the genuine gap.  Ported.
 // ---- Matrix
 /// Trace of a 4x4 matrix - the sum of its diagonal.
-pub inline fn matrixTrace(m: Mat) f32 {
+pub fn matrixTrace(m: Mat) f32 {
     return m[0][0] + m[1][1] + m[2][2] + m[3][3];
 }
 test "zm.matrixTrace" {
@@ -7572,7 +8990,7 @@ test "zm.matrixFrustum" {
     }
 }
 
-/// Build a transform matrix from translation, rotation, and scale —
+/// Build a transform matrix from translation, rotation, and scale -
 /// the standard Trs composition.  Under the column-major M*v
 /// convention, the composition that applies "scale, then rotate,
 /// then translate" to a point is `mulMat(T, mulMat(R, S))`.
@@ -7595,7 +9013,7 @@ test "zm.matrixCompose" {
         quatFromAxisAngle(f32x4(0.0, 0.0, 1.0, 0.0), 0.0),
         f32x4(1.0, 1.0, 1.0, 0.0),
     );
-    // Old: mul(point, m1) Vec×Mat → mulMatVec(m1, point).
+    // Old: mul(point, m1) VecxMat -> mulMatVec(m1, point).
     const p: Vec = mulMatVec(m1, f32x4(0.0, 0.0, 0.0, 1.0));
     try expectApproxEqAbs(@as(f32, 10.0), p[0], 1.0e-5);
     try expectApproxEqAbs(@as(f32, 20.0), p[1], 1.0e-5);
@@ -7612,14 +9030,14 @@ test "zm.matrixCompose" {
 
 /// Column-major 3x3 matrix (`col[j]` is the jth basis vector in the upper 3
 /// lanes). The companion to the 4x4 `Mat` for rotation / inertia / covariance
-/// work that never needs translation. Pure SIMD value type — shader- and
+/// work that never needs translation. Pure SIMD value type - shader- and
 /// comptime-safe.
 pub const Mat3 = struct {
     col: [3]Vec,
 
     pub const zero: Mat3 = .{ .col = .{ vec_zero, vec_zero, vec_zero } };
 
-    /// Matrix * vector (column-major: result = Σ vᵢ · colᵢ).
+    /// Matrix * vector (column-major: result = Sigma vi * coli).
     pub fn mulVec(m: Mat3, v: Vec) Vec {
         const cx: Vec = splat(v[0]) * m.col[0];
         const cy: Vec = splat(v[1]) * m.col[1];
@@ -7721,7 +9139,7 @@ pub const Mat2 = struct {
 };
 
 /// Axis-aligned bounding box (min/max corners in the upper 3 lanes). The one
-/// canonical AABB for the whole engine — broad-phase, culling, mesh bounds.
+/// canonical AABB for the whole engine - broad-phase, culling, mesh bounds.
 /// Pure SIMD value type, shader- and comptime-safe.
 pub const Aabb = struct {
     min: Vec,
@@ -7973,7 +9391,7 @@ test "zm.quatCubicHermite" {
 /// NOTE: this is a *component* compare - it does NOT treat `q` and
 /// `-q` as equal even though they represent the same rotation.  If
 /// you need rotational equality, compare `abs(dot4(a,b))` to 1.
-pub inline fn quatEquals(a: Quat, b: Quat) bool {
+pub fn quatEquals(a: Quat, b: Quat) bool {
     return floatEquals(a[0], b[0]) and floatEquals(a[1], b[1]) and
         floatEquals(a[2], b[2]) and floatEquals(a[3], b[3]);
 }
@@ -8021,15 +9439,15 @@ pub fn quatToEulerXYZ(q: Quat) Vec {
     // x-axis rotation
     const sx: f32 = 2.0 * (q[3] * q[0] + q[1] * q[2]);
     const cx: f32 = 1.0 - 2.0 * (q[0] * q[0] + q[1] * q[1]);
-    const x: f32 = atan2(sx, cx);
+    const x: f32 = atan2Rad(sx, cx);
     // y-axis rotation, clamped for the gimbal-lock pole
     var sy: f32 = 2.0 * (q[3] * q[1] - q[2] * q[0]);
     sy = @max(@as(f32, -1.0), @min(@as(f32, 1.0), sy));
-    const y: f32 = asin(sy);
+    const y: f32 = asinRad(sy);
     // z-axis rotation
     const sz: f32 = 2.0 * (q[3] * q[2] + q[0] * q[1]);
     const cz: f32 = 1.0 - 2.0 * (q[1] * q[1] + q[2] * q[2]);
-    const z: f32 = atan2(sz, cz);
+    const z: f32 = atan2Rad(sz, cz);
     return f32x4(x, y, z, 0.0);
 }
 
@@ -8075,17 +9493,17 @@ test "zm.euler XYZ and ZXY genuinely differ" {
 }
 
 // ============================================================================
-// Z-shader-parity — generic helpers that mirror `src/shadermath.zig`'s API.
+// Z-shader-parity - generic helpers that mirror `src/shadermath.zig`'s API.
 // ============================================================================
 // Added S1.2 of the Zig-shader-pipeline arc.  These exist so a function
 // written once can be called from both CPU and GPU code without renaming.
-// See `src/notes/zig-shader-pipeline-plan.md` §0.3 for the design lock.
+// See `src/notes/zig-shader-pipeline-plan.md` section 0.3 for the design lock.
 //
 // Conventions: generic over the vector arity (work on `@Vector(N, f32)`
 // for N=2, 3, 4).  Returns f32 for scalar-producing ops (`dot`, `length`,
 // `distance`), input type for vector-producing ops (`normalize`).
 //
-// These DO NOT replace zmath's `dot2`/`dot3`/`dot4`/etc — those are kept
+// These DO NOT replace zmath's `dot2`/`dot3`/`dot4`/etc - those are kept
 // because they (a) return Vec-broadcast scalars for the SIMD pipeline and
 // (b) make the arity explicit at the callsite, which is the right choice
 // for hot SIMD loops on the CPU.  Use the generic forms for general
@@ -8094,28 +9512,28 @@ test "zm.euler XYZ and ZXY genuinely differ" {
 /// `max(0, min(1, x))`.  Matches `shadermath.clamp01`.
 /// Clamp to [0, 1]. Scalars and vectors. HLSL calls this `saturate`; zimr calls
 /// it `clamp01`, and `zm.saturate` exists only to say so (it is a @compileError).
-pub inline fn clamp01(v: anytype) @TypeOf(v) {
+pub fn clamp01(v: anytype) @TypeOf(v) {
     const T = @TypeOf(v);
-    // clamp01 IS `clamp(v, 0, 1)` — a specialization of the canonical clamp, not a
+    // clamp01 IS `clamp(v, 0, 1)` - a specialization of the canonical clamp, not a
     // re-implementation of it. That buys three things at once:
     //
-    //  * BRANCH-FREE. `clamp` is `min(hi, max(lo, v))`, and zm's min/max are
-    //    `@min`/`@max` (+ a NaN select for vectors) — no control flow. The old
-    //    SCALAR path was `if (v < 0) 0 else if (v > 1) 1 else v`, and those `if`s
-    //    are REAL BRANCHES in SPIR-V: any `textureSample` downstream of a scalar
-    //    clamp01 ended up nested inside them in the transpiled WGSL, which Dawn
-    //    rejects — "'textureSample' must only be called from uniform control
-    //    flow" (decal_fs + effect_ascii_fs, device, zimr786). A branching helper
-    //    in the math vocabulary is a hazard to every sample downstream of it.
-    //  * SCALAR AND VECTOR AGREE. Both comparisons are FALSE for NaN, so the old
-    //    scalar path returned NaN while the vector path returned 0 — a silent
-    //    disagreement. The vector test has always pinned `clamp01(NaN) == 0`;
-    //    now the scalar path is that same code, so it cannot drift again.
-    //  * ONE definition of clamping. The `[clamp-pattern]` lint forbids raw
-    //    `@min(@max(..))` for exactly this reason; clamp01 must not be an exception.
+    // * BRANCH-FREE. `clamp` is `min(hi, max(lo, v))`, and zm's min/max are
+    // `@min`/`@max` (+ a NaN select for vectors) - no control flow. The old
+    // SCALAR path was `if (v < 0) 0 else if (v > 1) 1 else v`, and those `if`s
+    // are REAL BRANCHES in SPIR-V: any `textureSample` downstream of a scalar
+    // clamp01 ended up nested inside them in the transpiled WGSL, which Dawn
+    // rejects - "'textureSample' must only be called from uniform control
+    // flow" (decal_fs + effect_ascii_fs, device, zimr786). A branching helper
+    // in the math vocabulary is a hazard to every sample downstream of it.
+    // * SCALAR AND VECTOR AGREE. Both comparisons are FALSE for NaN, so the old
+    // scalar path returned NaN while the vector path returned 0 - a silent
+    // disagreement. The vector test has always pinned `clamp01(NaN) == 0`;
+    // now the scalar path is that same code, so it cannot drift again.
+    // * ONE definition of clamping. The `[clamp-pattern]` lint forbids raw
+    // `@min(@max(..))` for exactly this reason; clamp01 must not be an exception.
     //
     // Vector behaviour is bit-identical to the previous implementation (it was
-    // already `max(v, 0)` then `min(result, 1)` — which is what `clamp` does).
+    // already `max(v, 0)` then `min(result, 1)` - which is what `clamp` does).
     const lo: T = switch (@typeInfo(T)) {
         .vector => @splat(0.0),
         else => 0.0,
@@ -8129,16 +9547,22 @@ pub inline fn clamp01(v: anytype) @TypeOf(v) {
 
 /// `x - floor(x)`.  Range `[0, 1)` for positive inputs.  Matches
 /// `shadermath.fract`.
-pub fn fract(v: f32) f32 {
+pub fn fract(v: anytype) @TypeOf(v) {
+    if (comptime @typeInfo(@TypeOf(v)) == .vector) {
+        return perLane(fract, v);
+    }
     return v - @floor(v);
 }
 
-/// GLSL/WGSL `step(edge, x)` — `0` below the edge, `1` at or above it.
+/// GLSL/WGSL `step(edge, x)` - `0` below the edge, `1` at or above it.
 ///
 /// This is the CANONICAL name. It used to be called `stepEdge`, which nobody
-/// searches for — and the cost of that was exactly what you would predict: a
+/// searches for - and the cost of that was exactly what you would predict: a
 /// shader author looked for `step`, did not find it, and hand-rolled a duplicate.
-pub fn step(edge: f32, v: f32) f32 {
+pub fn step(edge: anytype, v: @TypeOf(edge)) @TypeOf(edge) {
+    if (comptime @typeInfo(@TypeOf(edge)) == .vector) {
+        return perLane2(step, edge, v);
+    }
     // BRANCH-FREE, same reason as `clamp01`: a branch here puts every
     // `textureSample` downstream of it inside non-uniform control flow once
     // transpiled to WGSL. The bool->float conversion lowers to OpSelect, not
@@ -8148,50 +9572,74 @@ pub fn step(edge: f32, v: f32) f32 {
 }
 
 /// The old spelling. USE `zm.step`.
-/// Private + empty on purpose — see `saturate` for why a dead name is still a decl.
-fn stepEdge() void {}
+/// Private + empty on purpose - see `saturate` for why a dead name is still a decl.
+fn stepEdge() void {} // lint:off unused-global: reference-pinned discoverability stub
 
-// ---------------------------------------------------------------------------
-// GPU-MATH VOCABULARY — the standard GLSL/HLSL/WGSL spellings.
+//
+// GPU-MATH VOCABULARY - the standard GLSL/HLSL/WGSL spellings.
 //
 // Only TWO names were actually missing. Everything else (`clamp`, `saturate`,
-// `lerp`, `smoothstep`, `fract`, `cross`, ...) was already here — it just could
+// `lerp`, `smoothstep`, `fract`, `cross`, ...) was already here - it just could
 // not be FOUND, and that is the same failure as being absent:
 //
-//   * `step` existed as `stepEdge`. A shader author searched for `step`, did not
-//     find it, and hand-rolled a duplicate. A standard operation under a
-//     non-standard name is invisible, not merely oddly-spelled.
-//   * `clamp`, `saturate` and `lerp` were invisible to `grep '^pub fn clamp'`
-//     because they are declared `pub inline fn`. The grep LIED — three times.
+// * `step` existed as `stepEdge`. A shader author searched for `step`, did not
+// find it, and hand-rolled a duplicate. A standard operation under a
+// non-standard name is invisible, not merely oddly-spelled.
+// * `clamp`, `saturate` and `lerp` were invisible to `grep '^pub fn clamp'`
+// because they are declared `pub inline fn`. The grep LIED - three times.
 //
 // So: the name you would TYPE now exists, aliased to the implementation that was
 // already here (nothing that calls `stepEdge`/`lerp` breaks), and the vocabulary
-// is pinned by @hasDecl in features_test.zig — which cannot be fooled by either
+// is pinned by @hasDecl in features_test.zig - which cannot be fooled by either
 // a non-standard name or a bad grep pattern.
-// ---------------------------------------------------------------------------
+//
 
-/// GLSL/WGSL's `mix` — the spelling zimr does NOT use. USE `zm.lerp`.
+/// GLSL/WGSL's `mix` - the spelling zimr does NOT use. USE `zm.lerp`.
 /// zimr already had `lerp` (vector-generic, scalar factor), which IS this
 /// operation; a second spelling would be pure noise.
-/// Private + empty on purpose — see `saturate` for why a dead name is still a decl.
-fn mix() void {}
+/// Private + empty on purpose - see `saturate` for why a dead name is still a decl.
+fn mix() void {} // lint:off unused-global: reference-pinned discoverability stub
+
+/// The UNIT-AMBIGUOUS spelling. USE `zm.sinRad` (radians) or `zm.sinTurns` (turns).
+/// Unlike `mix`/`saturate`/`stepEdge`, this one was not a bad name for a known
+/// operation - it was a name for TWO operations. While radians were the only
+/// option `sin` was unambiguous; the moment `sinTurns` landed, a bare `sin` at a
+/// call site stopped saying which unit its argument is in, and that is exactly the
+/// kind of thing that is wrong for a long time before anyone notices.
+/// Private + empty on purpose - see `saturate` for why a dead name is still a decl.
+fn sin() void {} // lint:off unused-global: reference-pinned discoverability stub
+
+/// The UNIT-AMBIGUOUS spelling. USE `zm.cosRad` (radians) or `zm.cosTurns` (turns).
+/// See `sin` above.
+fn cos() void {} // lint:off unused-global: reference-pinned discoverability stub
+
+/// The UNIT-AMBIGUOUS spelling. USE `zm.sincosRad` (radians) or `zm.sincosTurns`
+/// (turns). See `sin` above.
+fn sincos() void {} // lint:off unused-global: reference-pinned discoverability stub
 
 test "zm: the dead spellings still exist (privately) to stay discoverable" {
-    // From INSIDE this file, @hasDecl sees private decls. From outside it does
-    // not — which is the whole point: `zm.mix` is "not marked pub", and Zig
-    // points at the decl above, whose doc names the canonical spelling.
+    // PINNED BY REFERENCE, NOT BY `@hasDecl`. On Zig 0.17.0-dev.1980 `@hasDecl` no longer
+    // reports PRIVATE decls, even from inside the declaring file - measured: it answers `false`
+    // for a private fn and `true` for a pub one in the same file. The old form here looped
+    // `@hasDecl(@This(), name)` and fired its own `@compileError` on every build of this file's
+    // tests, which nothing ran: zimrmath is not in `fast_test_roots` and build.zig's dedicated
+    // `math-test` step is commented out. So a load-bearing mechanism broke silently.
     //
-    // If someone DELETES one of these, `zm.mix` degrades to "no member named
-    // 'mix'" and we are back to the original failure: a standard op under a
-    // non-standard name, invisible to the person looking for it. So pin them.
-    // (features_test.zig pins the other half: they must NOT be pub.)
-    inline for ([_][]const u8{ "mix", "saturate", "stepEdge" }) |n| {
-        if (!@hasDecl(@This(), n)) {
-            @compileError("zimrmath dropped the dead spelling '" ++ n ++
-                "' — keep it as a PRIVATE, empty decl whose doc comment names " ++
-                "the canonical spelling, or `zm." ++ n ++ "` becomes undiscoverable.");
-        }
-    }
+    // Taking the address is strictly STRONGER than `@hasDecl` and needs no builtin: delete
+    // one of these and the failure is a compile error naming the exact identifier, here, rather
+    // than a boolean that quietly flips. Verified by deleting `mix` and watching it go red.
+    //
+    // WHY THEY EXIST AT ALL: `zm.mix` must resolve to something that TEACHES. Private + present,
+    // Zig says "'mix' is not marked pub" and points at the decl's doc comment, which names the
+    // canonical spelling. Deleted, it degrades to "no member named 'mix'" - a standard op under
+    // a non-standard name, invisible to the person looking for it, which is the original bug.
+    // (`features_test.zig` pins the other half: they must NOT be pub.)
+    _ = &mix;
+    _ = &saturate;
+    _ = &stepEdge;
+    _ = &sin;
+    _ = &cos;
+    _ = &sincos;
 }
 
 /// `0` below `e0`, `1` above `e1`, smooth Hermite interpolation
@@ -8232,11 +9680,11 @@ pub fn normalize(v: anytype) @TypeOf(v) {
 /// `@Vector(3, f32)` since `math.zig` has no `Vec3` alias.)
 ///
 /// Note: the single-component swizzles `x`/`y`/`z`/`w` that
-/// `shadermath.zig` exposes do NOT exist in `math.zig` — they'd
+/// `shadermath.zig` exposes do NOT exist in `math.zig` - they'd
 /// collide with the many local `const x: f32 = ...` bindings in
 /// vendored zmath code.  For shared code (a function callable from
 /// both CPU and GPU), use direct index access `v[0]` / `v[1]` /
-/// etc — idiomatic Zig, works on both sides.
+/// etc - idiomatic Zig, works on both sides.
 pub fn sw(v: anytype, comptime chars: []const u8) @Vector(chars.len, f32) {
     const indices: @Vector(chars.len, i32) = comptime blk: {
         var arr: [chars.len]i32 = undefined;
@@ -8254,7 +9702,7 @@ pub fn sw(v: anytype, comptime chars: []const u8) @Vector(chars.len, f32) {
     return @shuffle(f32, v, undefined, indices);
 }
 
-// ---- Complex arithmetic ---------------------------------------------
+// Complex arithmetic
 //
 // `Complex` is a `@Vector(2, f32)` (declared near `Vec` at the top
 // of the file).  Native `+` and `-` work as complex addition /
@@ -8262,12 +9710,12 @@ pub fn sw(v: anytype, comptime chars: []const u8) @Vector(chars.len, f32) {
 // quotients, conjugation, modulus, argument, and transcendentals.
 //
 // Headline use case (mandelbrot one-liner):
-//   z = cmul(z, z) + c;
+// z = cmul(z, z) + c;
 //
 // SPIR-V-portable: every function below uses Zig builtins (`@sqrt`,
 // `@sin`, `@cos`, `@exp`, `@log`) and the polynomial `atan2Scalar`
 // (defined earlier in this file).  No `std.math.X` for transcendentals
-// — those would pull in lookup tables SPIR-V Logical addressing
+// - those would pull in lookup tables SPIR-V Logical addressing
 // rejects.
 //
 // Locked decision D3 (math-unification): SIMD alias, no nominal
@@ -8283,7 +9731,7 @@ pub const c_one: Complex = .{ 1, 0 };
 pub const c_i: Complex = .{ 0, 1 };
 
 /// Construct a complex number from real and imaginary parts.
-pub inline fn complex(re: f32, im: f32) Complex {
+pub fn complex(re: f32, im: f32) Complex {
     return .{ re, im };
 }
 
@@ -8291,16 +9739,16 @@ pub inline fn complex(re: f32, im: f32) Complex {
 /// The `*` operator on `Complex` does COMPONENTWISE multiplication
 /// (because Complex is `@Vector(2, f32)`); use `cmul` for the real
 /// complex product.
-pub inline fn cmul(a: Complex, b: Complex) Complex {
+pub fn cmul(a: Complex, b: Complex) Complex {
     return .{
         a[0] * b[0] - a[1] * b[1],
         a[0] * b[1] + a[1] * b[0],
     };
 }
 
-/// Complex division: `(a + bi) / (c + di) = ((ac + bd) + (bc - ad)i) / (c² + d²)`.
+/// Complex division: `(a + bi) / (c + di) = ((ac + bd) + (bc - ad)i) / (c^2 + d^2)`.
 /// Returns NaN-laden vector when `b == c_zero`.
-pub inline fn cdiv(a: Complex, b: Complex) Complex {
+pub fn cdiv(a: Complex, b: Complex) Complex {
     const denom: f32 = b[0] * b[0] + b[1] * b[1];
     return .{
         (a[0] * b[0] + a[1] * b[1]) / denom,
@@ -8309,59 +9757,59 @@ pub inline fn cdiv(a: Complex, b: Complex) Complex {
 }
 
 /// Complex conjugate: `(a + bi)* = a - bi`.
-pub inline fn cconj(z: Complex) Complex {
+pub fn cconj(z: Complex) Complex {
     return .{ z[0], -z[1] };
 }
 
-/// Squared modulus: `|z|² = a² + b²`.  Cheaper than `cabs` (no sqrt);
+/// Squared modulus: `|z|^2 = a^2 + b^2`.  Cheaper than `cabs` (no sqrt);
 /// use this for "is this complex number's modulus greater than N"
 /// comparisons (`cnorm2(z) > N*N` avoids the sqrt).  Hot path in
 /// mandelbrot/julia iteration escape tests.
-pub inline fn cnorm2(z: Complex) f32 {
+pub fn cnorm2(z: Complex) f32 {
     return z[0] * z[0] + z[1] * z[1];
 }
 
-/// Modulus: `|z| = sqrt(a² + b²)`.  Uses `@sqrt` (lowers to a single
+/// Modulus: `|z| = sqrt(a^2 + b^2)`.  Uses `@sqrt` (lowers to a single
 /// `OpExtInst Sqrt` on SPIR-V).
-pub inline fn cabs(z: Complex) f32 {
+pub fn cabs(z: Complex) f32 {
     return @sqrt(cnorm2(z));
 }
 
-/// Argument: `arg(z) = atan2(b, a)`.  Range `(-π, π]`.  Uses the
+/// Argument: `arg(z) = atan2(b, a)`.  Range `(-pi, pi]`.  Uses the
 /// polynomial `atan2Scalar` defined earlier in this file (avoids
 /// std.math.atan2's lookup table that SPIR-V rejects).
-pub inline fn carg(z: Complex) f32 {
+pub fn carg(z: Complex) f32 {
     return atan2Scalar(z[1], z[0]);
 }
 
-/// Complex exponential: `exp(a + bi) = e^a · (cos b + i sin b)`.
-/// Uses `@exp`, `@cos`, `@sin` builtins — all SPIR-V-portable.
-pub inline fn cexp(z: Complex) Complex {
+/// Complex exponential: `exp(a + bi) = e^a * (cos b + i sin b)`.
+/// Uses `@exp`, `@cos`, `@sin` builtins - all SPIR-V-portable.
+pub fn cexp(z: Complex) Complex {
     const ea: f32 = @exp(z[0]);
     return .{ ea * @cos(z[1]), ea * @sin(z[1]) };
 }
 
-/// Complex natural logarithm (principal branch): `log(z) = log|z| + i·arg(z)`.
+/// Complex natural logarithm (principal branch): `log(z) = log|z| + i*arg(z)`.
 /// Returns `-inf + 0i` at `z = c_zero`.  Branch cut on the negative
-/// real axis (where `arg` discontinuously jumps from `+π` to `-π`).
-pub inline fn clog(z: Complex) Complex {
+/// real axis (where `arg` discontinuously jumps from `+pi` to `-pi`).
+pub fn clog(z: Complex) Complex {
     return .{ @log(cabs(z)), carg(z) };
 }
 
-/// Complex power with REAL exponent: `z^n = exp(n · log(z))`.  Use
+/// Complex power with REAL exponent: `z^n = exp(n * log(z))`.  Use
 /// `cexp(cmul(complex(n, 0), clog(z)))` if you need a complex
 /// exponent.  Branch cut inherited from `clog`.
-pub inline fn cpow(z: Complex, n: f32) Complex {
+pub fn cpow(z: Complex, n: f32) Complex {
     const lz: Complex = clog(z);
     return cexp(.{ n * lz[0], n * lz[1] });
 }
 
-/// One step of the Mandelbrot / Julia iteration: `z' = z² + c`.
-/// The mandelbrot set varies `c` per pixel with `z₀ = c_zero`; the
+/// One step of the Mandelbrot / Julia iteration: `z' = z^2 + c`.
+/// The mandelbrot set varies `c` per pixel with `z0 = c_zero`; the
 /// Julia set fixes `c` (mouse parameter or constant) and varies
-/// `z₀` per pixel.  Iteration math is identical; only the meaning
-/// of `c` and `z₀` differs.
-pub inline fn cmandelbrot_step(z: Complex, c: Complex) Complex {
+/// `z0` per pixel.  Iteration math is identical; only the meaning
+/// of `c` and `z0` differs.
+pub fn cmandelbrot_step(z: Complex, c: Complex) Complex {
     return cmul(z, z) + c;
 }
 
@@ -8430,7 +9878,7 @@ test "cexp: exp(0) = 1, exp(iπ) = -1 (Euler)" {
     try expectApproxEqAbs(@as(f32, 1), e0[0], 1e-6);
     try expectApproxEqAbs(@as(f32, 0), e0[1], 1e-6);
 
-    // Euler's identity: e^(iπ) + 1 = 0
+    // Euler's identity: e^(ipi) + 1 = 0
     const ePi: Complex = cexp(complex(0, pi));
     try expectApproxEqAbs(@as(f32, -1), ePi[0], 1e-6);
     try expectApproxEqAbs(@as(f32, 0), ePi[1], 1e-6);
@@ -8524,7 +9972,7 @@ test "shader parity: swizzles return correct types and values" {
 }
 
 // ============================================================================
-// Cameras — the ONE home for 2D + 3D camera types and their math. Fundamental
+// Cameras - the ONE home for 2D + 3D camera types and their math. Fundamental
 // enough to live in zm so every backend (GL, WebGPU), the raytracer, and all
 // examples share ONE definition and never roll their own. raylib-style data;
 // methods produce the matrices / world<->screen maps / ray bases.
@@ -8547,7 +9995,7 @@ pub const Camera2D = struct {
     /// Zoom multiplier (must not be 0).
     zoom: f32 = 1,
     /// When true, world +Y maps toward screen -Y. Use for a Y-up world (e.g. a
-    /// physics sim) drawn to a Y-down screen — reflects the Y axis about `target`.
+    /// physics sim) drawn to a Y-down screen - reflects the Y axis about `target`.
     flip_y: bool = false,
 
     /// World->screen matrix: T(offset) * S(zoom) * R(rotation) * T(-target).
@@ -8593,7 +10041,7 @@ pub const RayCamera = struct {
     origin: Vec,
     px00: Vec, // world point of pixel (0,0) = bottom-left
     pdu: Vec, // one pixel right (world)
-    pdv: Vec, // one pixel UP (world) — matches frag.y increasing upward
+    pdv: Vec, // one pixel UP (world) - matches frag.y increasing upward
     res_w: f32,
     res_h: f32,
 };
@@ -8620,8 +10068,8 @@ pub fn rayCamera(
     const half_h: f32 = @tan(theta / 2.0) * desc.focus_dist;
     const half_w: f32 = half_h * (res_w / res_h);
 
-    const viewport_u: Vec = u * splat(2.0 * half_w); // left→right
-    const viewport_v: Vec = v * splat(2.0 * half_h); // bottom→top (UP)
+    const viewport_u: Vec = u * splat(2.0 * half_w); // left->right
+    const viewport_v: Vec = v * splat(2.0 * half_h); // bottom->top (UP)
     const pdu: Vec = viewport_u * splat(1.0 / res_w);
     const pdv: Vec = viewport_v * splat(1.0 / res_h);
 
@@ -8662,7 +10110,7 @@ pub const Camera3D = struct {
         near: f32,
         far: f32,
     ) Mat {
-        if (cam.projection == @intFromEnum(CameraProjection.orthographic)) {
+        if (cam.projection == @backingInt(CameraProjection.orthographic)) {
             const top: f32 = cam.fovy_deg * 0.5;
             const right: f32 = top * aspect;
             return orthographicOffCenterRh(-right, right, -top, top, near, far);
@@ -8698,7 +10146,7 @@ pub const Camera3D = struct {
 };
 
 // ============================================================================
-// RayCamera — pixel→world ray basis matching the engine's frag_tex_coord
+// RayCamera - pixel->world ray basis matching the engine's frag_tex_coord
 // convention (v=0 at screen BOTTOM, v=1 at TOP).
 // ============================================================================
 //
@@ -8710,7 +10158,7 @@ pub const Camera3D = struct {
 // (reconstructing the ray) use `pixelRay`, so they cannot disagree.
 //
 // frag_tex_coord is (0,0) at the BOTTOM-LEFT of the screen and (1,1) at the
-// TOP-RIGHT — matching drawFullscreenTriangle's UVs and
+// TOP-RIGHT - matching drawFullscreenTriangle's UVs and
 // raster_shader.dispatchFragmentShader (v = 1 - row/height). So `px00` is the
 // world point of the bottom-left pixel, `pdu` steps one pixel RIGHT, and `pdv`
 // steps one pixel UP as frag.y increases.
@@ -8737,7 +10185,7 @@ test "rayCamera: frag (0.5,0.5) looks at lookat; frag.y=1 is UP" {
         .lookat = .{ 0, 0, -1, 0 },
         .vfov_deg = 90,
     }, 100, 100);
-    // Center pixel → straight toward lookat (-Z).
+    // Center pixel -> straight toward lookat (-Z).
     const center: Vec = pixelRayDir(cam, 0.5, 0.5, 0, 0);
     try expectApproxEqAbs(@as(f32, 0), center[0], 0.02);
     try expectApproxEqAbs(@as(f32, 0), center[1], 0.02);
@@ -8771,7 +10219,7 @@ test "zm.finiteOr3: NaN lanes replaced" {
     try expectApproxEqAbs(@as(f32, 4.0), r[3], 1.0e-6); // kept
 }
 
-// ---- int<->float cast helpers: kill the @floatFromInt/@intFromFloat noise ---
+// int<->float cast helpers: kill the @floatFromInt/@intFromFloat noise
 // Zig makes these casts explicit on purpose (precision/sign safety). These keep
 // that safety (comptime-reject the wrong source type) while removing the
 // boilerplate. f32 is the float target ~96% of the time so the float->f32 path
@@ -8780,9 +10228,9 @@ test "zm.finiteOr3: NaN lanes replaced" {
 
 /// int -> f64. Comptime-asserts `x` is an integer (a float/bool/etc is a
 /// COMPILE error, so this can't silently hide a bad conversion the way bare
-/// @floatFromInt can — and the f64 output is PINNED, not context-inferred).
+/// @floatFromInt can - and the f64 output is PINNED, not context-inferred).
 /// `float64(width)` instead of `float64(width)`.
-pub inline fn float64(x: anytype) f64 {
+pub fn float64(x: anytype) f64 {
     comptime {
         const info = @typeInfo(@TypeOf(x));
         if (info != .int and info != .comptime_int) {
@@ -8794,12 +10242,12 @@ pub inline fn float64(x: anytype) f64 {
 }
 
 /// float -> integer T via @round (nearest). `roundi(i32, x)`.
-pub inline fn roundi(comptime T: type, x: anytype) T {
+pub fn roundi(comptime T: type, x: anytype) T {
     return @round(x);
 }
 
 /// float -> integer T via @ceil (toward +inf). `ceili(i32, x)`.
-pub inline fn ceili(comptime T: type, x: anytype) T {
+pub fn ceili(comptime T: type, x: anytype) T {
     return @ceil(x);
 }
 
@@ -8814,8 +10262,8 @@ test "zm.float / zm.int / floori / roundi / ceili" {
 }
 
 // ============================================================================
-// [SECTION] Data-space numerics — remap / nice ticks / Range
-// ----------------------------------------------------------------------------
+// [SECTION] Data-space numerics - remap / nice ticks / Range
+//
 // A small, float-generic kit for axis / grid / ruler / histogram math.
 // Builds on the existing `lerpV` (generic linear interpolation); adds the
 // degenerate-safe inverse + remap and a value-typed `Range` that axis
@@ -8830,7 +10278,7 @@ test "zm.float / zm.int / floori / roundi / ceili" {
 
 /// Remap `v` from `[in_min, in_max]` to `[out_min, out_max]`, linearly and
 /// unclamped.  A degenerate input interval (`in_min == in_max`) maps to
-/// `out_min` instead of producing NaN/inf — the behaviour axis math wants.
+/// `out_min` instead of producing NaN/inf - the behaviour axis math wants.
 pub fn remap(
     v: anytype,
     in_min: @TypeOf(v),
@@ -8844,7 +10292,7 @@ pub fn remap(
 }
 
 /// "Nice number" near `x` for human-readable tick spacing (Heckbert's
-/// algorithm). `round == true` snaps to the nearest of {1,2,5}·10^k;
+/// algorithm). `round == true` snaps to the nearest of {1,2,5}*10^k;
 /// `round == false` takes the ceiling within that set. Requires `x > 0`.
 pub fn niceNum(comptime T: type, x: T, snap: bool) T {
     const expv: T = @floor(@log10(x));
@@ -8958,7 +10406,7 @@ test "zm.Range" {
 // ====  Z-physics2d : 2D rotation / transform / matrix / AABB primitives  ====
 // ============================================================================
 //
-// ADDED BLOCK (everything below this banner) — appended for `zimrphysics2d.zig`,
+// ADDED BLOCK (everything below this banner) - appended for `zimrphysics2d.zig`,
 // a faithful single-file Box2D v3 port. Box2D's `math_functions.h/.c` provide a
 // handful of 2D primitives that `zm` did not yet have (cos/sin rotations,
 // rigid transforms, column-major 2x2 matrices, 2D AABBs, and a few vector
@@ -8966,13 +10414,13 @@ test "zm.Range" {
 // block can be lifted out wholesale.
 //
 // Conventions (kept consistent with the existing `zm` 2D surface):
-//   * `Vec2 = @Vector(2, f32)`; use native `+ - *` and `v * splat2(s)`.
-//   * The `*2` name suffix marks a 2D operation.
-//   * Reductions over a `Vec2` (dot/length/cross) return a plain `f32`.
-//   * We reuse the existing `dot2`, `cross2`, `length2`, `lengthSq2`, `splat2`,
-//     `vec2`, and `pi` — DO NOT redefine them. We deliberately do NOT use
-//     `normalize2`, because that one operates on the wide 4-lane `Vec`, not on
-//     `Vec2`; the `Vec2`-native `normalizeOrZero2` below is the right tool.
+// * `Vec2 = @Vector(2, f32)`; use native `+ - *` and `v * splat2(s)`.
+// * The `*2` name suffix marks a 2D operation.
+// * Reductions over a `Vec2` (dot/length/cross) return a plain `f32`.
+// * We reuse the existing `dot2`, `cross2`, `length2`, `lengthSq2`, `splat2`,
+// `vec2`, and `pi` - DO NOT redefine them. We deliberately do NOT use
+// `normalize2`, because that one operates on the wide 4-lane `Vec`, not on
+// `Vec2`; the `Vec2`-native `normalizeOrZero2` below is the right tool.
 //
 // Determinism note: Box2D's whole value proposition is bit-reproducible results
 // across platforms, which it achieves with hand-rolled `atan2`/`cos`/`sin`
@@ -8983,14 +10431,14 @@ test "zm.Range" {
 // Parity tags ("// box2d: <symbol> <file>:<line>") mark the upstream source each
 // item mirrors, so the two can be diffed side by side.
 
-// ---------------------------------------------------------------------------
+//
 // Vec2 helpers that Box2D has but `zm` did not. (math_functions.h:209-365)
-// ---------------------------------------------------------------------------
+//
 
 /// 2D cross product of a vector with a scalar, producing a vector: `v x s`.
 /// Equivalent to rotating `v` by -90 degrees and scaling by `s`.
 /// box2d: b2CrossVS  math_functions.h:215
-pub inline fn crossVS2(v: Vec2, s: f32) Vec2 {
+pub fn crossVS2(v: Vec2, s: f32) Vec2 {
     return .{ s * v[1], -s * v[0] };
 }
 
@@ -8998,32 +10446,32 @@ pub inline fn crossVS2(v: Vec2, s: f32) Vec2 {
 /// This is the velocity contribution of an angular rate `s` at lever arm `v`
 /// (i.e. `omega x r`), used constantly in the constraint solver.
 /// box2d: b2CrossSV  math_functions.h:221
-pub inline fn crossSV2(s: f32, v: Vec2) Vec2 {
+pub fn crossSV2(s: f32, v: Vec2) Vec2 {
     return .{ -s * v[1], s * v[0] };
 }
 
 /// Left/counter-clockwise perpendicular of `v` (== crossSV2(1, v)).
 /// box2d: b2LeftPerp  math_functions.h:227
-pub inline fn leftPerp2(v: Vec2) Vec2 {
+pub fn leftPerp2(v: Vec2) Vec2 {
     return .{ -v[1], v[0] };
 }
 
 /// Right/clockwise perpendicular of `v` (== crossVS2(v, 1)). The contact solver
 /// derives its friction tangent as `rightPerp2(normal)`.
 /// box2d: b2RightPerp  math_functions.h:233
-pub inline fn rightPerp2(v: Vec2) Vec2 {
+pub fn rightPerp2(v: Vec2) Vec2 {
     return .{ v[1], -v[0] };
 }
 
 /// Fused multiply-add for vectors: `a + s * b`.
 /// box2d: b2MulAdd  math_functions.h:276
-pub inline fn mulAdd2(a: Vec2, s: f32, b: Vec2) Vec2 {
+pub fn mulAdd2(a: Vec2, s: f32, b: Vec2) Vec2 {
     return a + b * splat2(s);
 }
 
 /// Fused multiply-subtract for vectors: `a - s * b`.
 /// box2d: b2MulSub  math_functions.h:282
-pub inline fn mulSub2(a: Vec2, s: f32, b: Vec2) Vec2 {
+pub fn mulSub2(a: Vec2, s: f32, b: Vec2) Vec2 {
     return a - b * splat2(s);
 }
 
@@ -9032,7 +10480,7 @@ pub inline fn mulSub2(a: Vec2, s: f32, b: Vec2) Vec2 {
 /// matching Box2D's guarded behavior. Prefer this over a raw divide anywhere the
 /// input can be degenerate.
 /// box2d: b2GetLengthAndNormalize  math_functions.h:362
-pub inline fn getLengthAndNormalize2(length_out: *f32, v: Vec2) Vec2 {
+pub fn getLengthAndNormalize2(length_out: *f32, v: Vec2) Vec2 {
     const len: f32 = length2(v);
     length_out.* = len;
     if (len < std.math.floatEps(f32)) {
@@ -9046,18 +10494,18 @@ pub inline fn getLengthAndNormalize2(length_out: *f32, v: Vec2) Vec2 {
 /// This is Box2D's `b2Normalize` (the safe one). `zm.normalize2` is a different
 /// thing (it works on the wide `Vec` and divides blindly), so we keep this name.
 /// box2d: b2Normalize  math_functions.h:338
-pub inline fn normalizeOrZero2(v: Vec2) Vec2 {
+pub fn normalizeOrZero2(v: Vec2) Vec2 {
     var len: f32 = undefined;
     return getLengthAndNormalize2(&len, v);
 }
 
-// ---------------------------------------------------------------------------
+//
 // Box2D deterministic trig (ported verbatim for cross-platform reproducibility).
 // (math_functions.c:91-167)
-// ---------------------------------------------------------------------------
+//
 
 /// Deterministic two-argument arctangent over the full circle, result in
-/// [-pi, pi]. A minimax polynomial approximation — NOT libm's `atan2` — so that
+/// [-pi, pi]. A minimax polynomial approximation - NOT libm's `atan2` - so that
 /// rotations match Box2D bit-for-bit. Returns 0 for the (0,0) input (matching
 /// `atan2f` and avoiding NaN).
 /// box2d: b2Atan2  math_functions.c:91
@@ -9135,16 +10583,16 @@ pub fn computeCosSin2(radians: f32) Rot2 {
 /// box2d: b2UnwindAngle  math_functions.h (uses remainderf, round-half-to-even).
 /// We use round-to-nearest (`@round`, half-away-from-zero); the two differ only
 /// in the last bit at exact half-turn multiples, which never matters for a pose.
-pub inline fn unwindAngle(radians: f32) f32 {
+pub fn unwindAngle(radians: f32) f32 {
     const two_pi: f32 = 2.0 * pi;
     const turns: f32 = @round(radians / two_pi);
     return radians - turns * two_pi;
 }
 
-// ---------------------------------------------------------------------------
+//
 // Rot2 : a 2D rotation stored as (cosine, sine) of its angle.
 // box2d: b2Rot  math_functions.h:34
-// ---------------------------------------------------------------------------
+//
 
 /// A unit-magnitude 2D rotation. Storing (cosine, sine) instead of an angle
 /// makes composition a couple of multiplies and keeps the solver branch-free.
@@ -9202,7 +10650,7 @@ pub const Rot2 = struct {
 
 /// Compose two rotations: the result applies `r` then `q` (i.e. `q * r`).
 /// box2d: b2MulRot  math_functions.h:501
-pub inline fn mulRot2(q: Rot2, r: Rot2) Rot2 {
+pub fn mulRot2(q: Rot2, r: Rot2) Rot2 {
     return .{
         .sine = q.sine * r.cosine + q.cosine * r.sine,
         .cosine = q.cosine * r.cosine - q.sine * r.sine,
@@ -9212,7 +10660,7 @@ pub inline fn mulRot2(q: Rot2, r: Rot2) Rot2 {
 /// Compose the inverse of `a` with `b` (i.e. `inv(a) * b`), the rotation that
 /// takes frame `a` to frame `b`.
 /// box2d: b2InvMulRot  math_functions.h:516
-pub inline fn invMulRot2(a: Rot2, b: Rot2) Rot2 {
+pub fn invMulRot2(a: Rot2, b: Rot2) Rot2 {
     return .{
         .sine = a.cosine * b.sine - a.sine * b.cosine,
         .cosine = a.cosine * b.cosine + a.sine * b.sine,
@@ -9221,7 +10669,7 @@ pub inline fn invMulRot2(a: Rot2, b: Rot2) Rot2 {
 
 /// The signed angle from rotation `a` to rotation `b`, in [-pi, pi].
 /// box2d: b2RelativeAngle  math_functions.h:530
-pub inline fn relativeAngle2(a: Rot2, b: Rot2) f32 {
+pub fn relativeAngle2(a: Rot2, b: Rot2) f32 {
     const sin_delta: f32 = a.cosine * b.sine - a.sine * b.cosine;
     const cos_delta: f32 = a.cosine * b.cosine + a.sine * b.sine;
     return atan2Det(sin_delta, cos_delta);
@@ -9229,20 +10677,20 @@ pub inline fn relativeAngle2(a: Rot2, b: Rot2) f32 {
 
 /// Rotate a vector by `q`.
 /// box2d: b2RotateVector  math_functions.h:545
-pub inline fn rotateVec2(q: Rot2, v: Vec2) Vec2 {
+pub fn rotateVec2(q: Rot2, v: Vec2) Vec2 {
     return .{ q.cosine * v[0] - q.sine * v[1], q.sine * v[0] + q.cosine * v[1] };
 }
 
 /// Rotate a vector by the inverse of `q`.
 /// box2d: b2InvRotateVector  math_functions.h:552
-pub inline fn invRotateVec2(q: Rot2, v: Vec2) Vec2 {
+pub fn invRotateVec2(q: Rot2, v: Vec2) Vec2 {
     return .{ q.cosine * v[0] + q.sine * v[1], -q.sine * v[0] + q.cosine * v[1] };
 }
 
 /// Advance rotation `q1` by `delta_angle` radians and renormalize. This is the
 /// first-order rotation integrator the position solver uses each sub-step.
 /// box2d: b2IntegrateRotation  math_functions.h:393
-pub inline fn integrateRot2(q1: Rot2, delta_angle: f32) Rot2 {
+pub fn integrateRot2(q1: Rot2, delta_angle: f32) Rot2 {
     const q2: Rot2 = .{
         .cosine = q1.cosine - delta_angle * q1.sine,
         .sine = q1.sine + delta_angle * q1.cosine,
@@ -9253,13 +10701,13 @@ pub inline fn integrateRot2(q1: Rot2, delta_angle: f32) Rot2 {
 /// Recover the angular velocity that carries `q1` to `q2` over a step of length
 /// `1 / inv_h`. Uses the small-angle identity `sin(da) ~= da`.
 /// box2d: b2ComputeAngularVelocity  math_functions.h:465
-pub inline fn computeAngularVelocity2(q1: Rot2, q2: Rot2, inv_h: f32) f32 {
+pub fn computeAngularVelocity2(q1: Rot2, q2: Rot2, inv_h: f32) f32 {
     return inv_h * (q2.sine * q1.cosine - q2.cosine * q1.sine);
 }
 
 /// Normalized linear interpolation between two rotations (cheap slerp stand-in).
 /// box2d: b2NLerp  math_functions.h:451
-pub inline fn nLerp2(q1: Rot2, q2: Rot2, t: f32) Rot2 {
+pub fn nLerp2(q1: Rot2, q2: Rot2, t: f32) Rot2 {
     const one_minus_t: f32 = 1.0 - t;
     const blended: Rot2 = .{
         .cosine = one_minus_t * q1.cosine + t * q2.cosine,
@@ -9275,10 +10723,10 @@ pub fn rotationBetween2(from: Vec2, to: Vec2) Rot2 {
     return r.normalize();
 }
 
-// ---------------------------------------------------------------------------
+//
 // Transform2 : a rigid 2D transform (rotation then translation).
 // box2d: b2Transform  math_functions.h:42
-// ---------------------------------------------------------------------------
+//
 
 /// A rigid body transform: rotate by `q`, then translate by `p`.
 pub const Transform2 = struct {
@@ -9290,7 +10738,7 @@ pub const Transform2 = struct {
 
 /// Map a point from local space into the frame `t` (rotate then translate).
 /// box2d: b2TransformPoint  math_functions.h:557
-pub inline fn transformPoint2(t: Transform2, p: Vec2) Vec2 {
+pub fn transformPoint2(t: Transform2, p: Vec2) Vec2 {
     const x: f32 = (t.q.cosine * p[0] - t.q.sine * p[1]) + t.p[0];
     const y: f32 = (t.q.sine * p[0] + t.q.cosine * p[1]) + t.p[1];
     return .{ x, y };
@@ -9298,7 +10746,7 @@ pub inline fn transformPoint2(t: Transform2, p: Vec2) Vec2 {
 
 /// Map a point from the frame `t` back into local space (the inverse transform).
 /// box2d: b2InvTransformPoint  math_functions.h:566
-pub inline fn invTransformPoint2(t: Transform2, p: Vec2) Vec2 {
+pub fn invTransformPoint2(t: Transform2, p: Vec2) Vec2 {
     const vx: f32 = p[0] - t.p[0];
     const vy: f32 = p[1] - t.p[1];
     return .{ t.q.cosine * vx + t.q.sine * vy, -t.q.sine * vx + t.q.cosine * vy };
@@ -9306,7 +10754,7 @@ pub inline fn invTransformPoint2(t: Transform2, p: Vec2) Vec2 {
 
 /// Compose two transforms: apply `b` then `a` (i.e. `a * b`).
 /// box2d: b2MulTransforms  math_functions.h:578
-pub inline fn mulTransforms2(a: Transform2, b: Transform2) Transform2 {
+pub fn mulTransforms2(a: Transform2, b: Transform2) Transform2 {
     return .{ .q = mulRot2(a.q, b.q), .p = rotateVec2(a.q, b.p) + a.p };
 }
 
@@ -9314,17 +10762,17 @@ pub inline fn mulTransforms2(a: Transform2, b: Transform2) Transform2 {
 /// uses this to run the narrow phase in frame A, preserving precision far from
 /// the origin.
 /// box2d: b2InvMulTransforms  math_functions.h:588
-pub inline fn invMulTransforms2(a: Transform2, b: Transform2) Transform2 {
+pub fn invMulTransforms2(a: Transform2, b: Transform2) Transform2 {
     return .{ .q = invMulRot2(a.q, b.q), .p = invRotateVec2(a.q, b.p - a.p) };
 }
 
-// ---------------------------------------------------------------------------
+//
 // Mat22 : a column-major 2x2 matrix (columns are Vec2).
 // box2d: b2Mat22  math_functions.h:72
 //
 // Distinct from the existing scalar-field `zm.Mat2`: this column form lets the
 // joint K-matrix code read as a one-to-one translation of Box2D.
-// ---------------------------------------------------------------------------
+//
 
 pub const Mat22 = struct {
     cx: Vec2, // first column
@@ -9335,13 +10783,13 @@ pub const Mat22 = struct {
 
 /// Matrix-times-vector: `m * v`.
 /// box2d: b2MulMV  math_functions.h:696
-pub inline fn mulMV22(m: Mat22, v: Vec2) Vec2 {
+pub fn mulMV22(m: Mat22, v: Vec2) Vec2 {
     return .{ m.cx[0] * v[0] + m.cy[0] * v[1], m.cx[1] * v[0] + m.cy[1] * v[1] };
 }
 
 /// The inverse of `m`, or the zero matrix if `m` is singular.
 /// box2d: b2GetInverse22  math_functions.h:706
-pub inline fn inverse22(m: Mat22) Mat22 {
+pub fn inverse22(m: Mat22) Mat22 {
     const a: f32 = m.cx[0];
     const b: f32 = m.cy[0];
     const c: f32 = m.cx[1];
@@ -9355,7 +10803,7 @@ pub inline fn inverse22(m: Mat22) Mat22 {
 
 /// Solve `m * x = rhs` for `x` via Cramer's rule (returns zero if singular).
 /// box2d: b2Solve22  math_functions.h:735
-pub inline fn solve22(m: Mat22, rhs: Vec2) Vec2 {
+pub fn solve22(m: Mat22, rhs: Vec2) Vec2 {
     const a11: f32 = m.cx[0];
     const a12: f32 = m.cy[0];
     const a21: f32 = m.cx[1];
@@ -9367,10 +10815,10 @@ pub inline fn solve22(m: Mat22, rhs: Vec2) Vec2 {
     return .{ det * (a22 * rhs[0] - a12 * rhs[1]), det * (a11 * rhs[1] - a21 * rhs[0]) };
 }
 
-// ---------------------------------------------------------------------------
+//
 // Aabb2 : an axis-aligned bounding box in 2D.
 // box2d: b2AABB  math_functions.h:79
-// ---------------------------------------------------------------------------
+//
 
 pub const Aabb2 = struct {
     lower: Vec2,
@@ -9422,10 +10870,10 @@ pub const Aabb2 = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
+//
 // Plane2 and Sweep2 : helpers for collision and continuous collision.
 // box2d: b2Plane math_functions.h:86 ; b2Sweep collision.h
-// ---------------------------------------------------------------------------
+//
 
 /// A 2D plane (a line): points `x` with `dot(normal, x) == offset` lie on it.
 pub const Plane2 = struct {
@@ -9435,7 +10883,7 @@ pub const Plane2 = struct {
 
 /// Signed distance from `point` to the plane (positive on the normal side).
 /// box2d: b2PlaneSeparation  math_functions.h:845
-pub inline fn planeSeparation2(plane: Plane2, point: Vec2) f32 {
+pub fn planeSeparation2(plane: Plane2, point: Vec2) f32 {
     return dot2(plane.normal, point) - plane.offset;
 }
 
@@ -9460,3 +10908,40 @@ pub fn sweepTransform2(sweep: Sweep2, t: f32) Transform2 {
 }
 
 // ====  end Z-physics2d additions  ==========================================
+
+test "Camera3D: projMatrix honours the projection field, and ortho fovy_deg is a HEIGHT" {
+    // THE PROPERTY `beginMode3D` USED TO BREAK. It built `perspectiveFovRh` unconditionally
+    // and ignored `projection`, so an orthographic camera silently became a perspective one
+    // whose `fovy_deg` was read as DEGREES - a light with a 4-unit half-extent turned into a
+    // 4-degree telephoto lens. Nothing asserted; the pass just rendered flat.
+    //
+    // Two consumers already honoured the field (`projMatrix` here, and
+    // `getScreenToWorldRayWithViewport`), which is what made the third one an inconsistency
+    // rather than a missing feature.
+    const ortho: Camera3D = .{
+        .position = vec(0, 0, 5),
+        .target = vec(0, 0, 0),
+        .up = vec(0, 1, 0),
+        .fovy_deg = 10,
+        .projection = @backingInt(CameraProjection.orthographic),
+    };
+    const persp: Camera3D = .{
+        .position = ortho.position,
+        .target = ortho.target,
+        .up = ortho.up,
+        .fovy_deg = 10,
+        .projection = @backingInt(CameraProjection.perspective),
+    };
+    const mo: Mat = ortho.projMatrix(1.0, 0.1, 100.0);
+    const mp: Mat = persp.projMatrix(1.0, 0.1, 100.0);
+
+    // An orthographic matrix has no perspective divide: row 2 column 3 is 0, and row 3
+    // column 3 is 1. A perspective one puts -1 there.
+    try expectApproxEqAbs(@as(f32, 0.0), mo[2][3], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, 1.0), mo[3][3], 1.0e-6);
+    try expectApproxEqAbs(@as(f32, -1.0), mp[2][3], 1.0e-6);
+
+    // And `fovy_deg` is a WORLD HEIGHT for ortho, not an angle: with fovy_deg = 10 the view
+    // spans +/-5, so the x scale is 2/10 = 0.2. Reading it as degrees would give ~11.4.
+    try expectApproxEqAbs(@as(f32, 0.2), mo[0][0], 1.0e-6);
+}

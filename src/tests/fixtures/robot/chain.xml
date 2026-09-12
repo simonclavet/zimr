@@ -1,0 +1,43 @@
+<mujoco model="chain">
+  <compiler angle="radian"/>
+  <option gravity="0 0 0"/>
+  <default>
+    <joint type="hinge" axis="0 1 0" limited="false"/>
+    <geom type="capsule" size="0.035" density="800"/>
+  </default>
+  <worldbody>
+    <body name="link1" pos="0 0 0">
+      <joint name="j1"/><geom name="g1" fromto="0 0 0 0.3 0 0"/>
+      <body name="link2" pos="0.3 0 0">
+        <joint name="j2"/><geom name="g2" fromto="0 0 0 0.3 0 0"/>
+        <body name="link3" pos="0.3 0 0">
+          <joint name="j3"/><geom name="g3" fromto="0 0 0 0.3 0 0"/>
+          <body name="link4" pos="0.3 0 0">
+            <joint name="j4"/><geom name="g4" fromto="0 0 0 0.3 0 0"/>
+            <body name="link5" pos="0.3 0 0">
+              <joint name="j5"/><geom name="g5" fromto="0 0 0 0.3 0 0"/>
+              <body name="link6" pos="0.3 0 0">
+                <joint name="j6"/><geom name="g6" fromto="0 0 0 0.3 0 0"/>
+                <body name="link7" pos="0.3 0 0">
+                  <joint name="j7"/><geom name="g7" fromto="0 0 0 0.3 0 0"/>
+                  <body name="link8" pos="0.3 0 0">
+                    <joint name="j8"/><geom name="g8" fromto="0 0 0 0.3 0 0"/>
+                    <body name="link9" pos="0.3 0 0">
+                      <joint name="j9"/><geom name="g9" fromto="0 0 0 0.3 0 0"/>
+                      <body name="link10" pos="0.3 0 0">
+                        <joint name="j10"/><geom name="g10" fromto="0 0 0 0.3 0 0"/>
+                        <body name="tip" pos="0.3 0 0">
+                          <geom name="gtip" type="sphere" size="0.05"/>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

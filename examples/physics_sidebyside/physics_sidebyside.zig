@@ -17,6 +17,7 @@ const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
+const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
 const ui = z.ui_real;
 
@@ -186,8 +187,8 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn update(f: *z.Frame, s: *State) void {
     // STEP — identical across the two engines.
-    p2.step(&s.world2d, fixed_dt) catch {};
-    p3.step(&s.world3d, fixed_dt) catch {};
+    p2.step(&s.world2d, fixed_dt) catch assertUnreachable(@src(), "OOM", .{});
+    p3.step(&s.world3d, fixed_dt) catch assertUnreachable(@src(), "OOM", .{});
 
     const fw: f32 = f.window.widthf();
     const fh: f32 = f.window.heightf();

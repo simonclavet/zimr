@@ -1,3 +1,4 @@
+//! lint:alias raster_pixel
 // src/raster_pixel.zig
 // Pixel format definitions + the comptime-specialized read/write
 // codecs used by the rasterizer's framebuffer access paths.

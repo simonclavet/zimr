@@ -6,7 +6,10 @@
 // out true and `NaN != NaN` false. Every ordered compare with NaN must be false;
 // only `!=` is true.
 var sink: f64 = 0;
-fn rf(x: f64) f64 { sink += x; return x; }
+fn rf(x: f64) f64 {
+    sink += x;
+    return x;
+}
 
 export fn run_test() i32 {
     const nan = rf(0.0) / rf(0.0);

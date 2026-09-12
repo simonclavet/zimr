@@ -248,8 +248,8 @@ fn printUsage(io: std.Io) void {
         \\           # split-sampler rewrite (WGSL/wgpu path).  --sampler-group sets
         \\           # the @group(N) for synthesized samplers (default 0).
         \\
-    , .{}) catch {};
-    stderr_w.interface.flush() catch {};
+    , .{}) catch {}; // lint:off catch-suppression: stderr write, best-effort
+    stderr_w.interface.flush() catch {}; // lint:off catch-suppression: stderr flush, best-effort
 }
 
 fn cmdCheck(

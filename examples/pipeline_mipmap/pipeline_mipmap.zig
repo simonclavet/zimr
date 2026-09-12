@@ -21,7 +21,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -174,7 +174,7 @@ fn fillMips(gpa: Allocator, f: *z.Frame, tex: z.wgpu.TextureHandle) !void {
             .resource = .{ .storage_texture = .{ .access = .write_only, .format = .rgba8_unorm } },
         },
     }, "mip_cs_bgl");
-    var pipe: z.ComputePipeline = try z.ComputePipeline.init(gpa, f, .{
+    var pipe: z.ComputePipeline = z.ComputePipeline.init(gpa, f, .{
         .wgsl = compute_wgsl,
         .bind_group_layouts = &.{bgl},
         .label = "mip_cs",
@@ -285,7 +285,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.pipe.setVertex(ps, 0, s.vbo, @sizeOf(@TypeOf(plane)));
     s.pipe.drawArrays(ps, plane.len, 1);
 
-    co.caption(f.gl, s.font, "pipeline_mipmap: each band is a mip level - distance selects the LOD");
+    common.caption(f.gl, s.font, "pipeline_mipmap: each band is a mip level - distance selects the LOD");
     z.endDrawing(f.gl);
 }
 

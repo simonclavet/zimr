@@ -12,7 +12,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -104,7 +104,7 @@ fn update(f: *z.Frame, state: *State) void {
         state.last_pinch_a = z.getGesturePinchAngle(&state.gestures);
     }
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     f.gl.text(.{ 20, 16 }, "zimr gestures - testbed", .{ .size = 22, .color = c.amber_300, .font = &state.font });
     const sub: []const u8 = allocPrint(arena, "frame {d}", .{state.frame_count}) catch "";

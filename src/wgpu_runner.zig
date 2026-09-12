@@ -143,7 +143,7 @@ pub export fn runnerReinit() void {
 /// The example's declared memory mode (0 = arena, 1 = managed) — the leak
 /// harness only ENFORCES a flat twice-lifecycle census for `.managed` examples.
 pub export fn runnerMemoryMode() i32 {
-    return @intFromEnum(spec.memory);
+    return @backingInt(spec.memory);
 }
 
 /// Net live bytes currently handed out through the example's allocator — the

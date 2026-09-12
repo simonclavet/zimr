@@ -8,10 +8,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
-const cos = zm.cos;
+const sinRad = zm.sinRad;
+const cosRad = zm.cosRad;
 const tau = zm.tau;
 const distance = zm.distance;
 const float = zm.float;
@@ -108,8 +108,8 @@ fn buildSheet(px: [*]Color) void {
         var j: usize = 0;
         while (j < frames) : (j += 1) {
             const ang: f32 = float(j) / float(frames) * tau;
-            const offx: i32 = @round(cos(ang) * 30.0);
-            const offy: i32 = @round(sin(ang) * 30.0);
+            const offx: i32 = @round(cosRad(ang) * 30.0);
+            const offy: i32 = @round(sinRad(ang) * 30.0);
             const ox: i32 = cx + offx;
             const oy: i32 = cy - offy;
             if (j == fi) {
@@ -145,7 +145,7 @@ fn update(f: *z.Frame, s: *State) void {
     const h: f32 = f.window.heightf();
     const gl = f.gl;
     s.t += f.time.delta_time;
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     if (!s.placed) {
         s.dst_center = .{ w * 0.5, h * 0.56 };
@@ -185,8 +185,8 @@ fn update(f: *z.Frame, s: *State) void {
     };
 
     // crosshair through the destination centre (the rotation pivot)
-    gl.line(.{ s.dst_center[0], 0 }, .{ s.dst_center[0], h }, .{ .color = co.palette.ink_dim, .thickness = 1.0 });
-    gl.line(.{ 0, s.dst_center[1] }, .{ w, s.dst_center[1] }, .{ .color = co.palette.ink_dim, .thickness = 1.0 });
+    gl.line(.{ s.dst_center[0], 0 }, .{ s.dst_center[0], h }, .{ .color = common.palette.ink_dim, .thickness = 1.0 });
+    gl.line(.{ 0, s.dst_center[1] }, .{ w, s.dst_center[1] }, .{ .color = common.palette.ink_dim, .thickness = 1.0 });
 
     gl.texture(dest, s.tex, .{
         .source = source,
@@ -203,7 +203,7 @@ fn update(f: *z.Frame, s: *State) void {
         "frame {d}/{d} - tap to cycle, drag to move",
         .{ s.selected + 1, frames },
     ) catch "";
-    co.caption(gl, s.font, label);
+    common.caption(gl, s.font, label);
     z.endDrawing(gl);
 }
 
@@ -215,12 +215,12 @@ fn drawSheetStrip(f: *z.Frame, s: *State, w: f32) void {
     const tx: f32 = (w - tw) * 0.5;
     const ty: f32 = pad;
     gl.texture(.{ .x = tx, .y = ty, .width = tw, .height = th }, s.tex, .{ .tint = white });
-    gl.rect(.{ .x = tx, .y = ty, .width = tw, .height = th }, .{ .color = co.palette.ink_dim, .outline = 1.0 });
+    gl.rect(.{ .x = tx, .y = ty, .width = tw, .height = th }, .{ .color = common.palette.ink_dim, .outline = 1.0 });
     // box the active frame
     const fw: f32 = tw / float(frames);
     gl.rect(
         .{ .x = tx + float(s.selected) * fw, .y = ty, .width = fw, .height = th },
-        .{ .color = co.palette.accent, .outline = 1.0 },
+        .{ .color = common.palette.accent, .outline = 1.0 },
     );
 }
 

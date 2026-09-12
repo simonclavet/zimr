@@ -17,7 +17,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -243,9 +243,9 @@ fn update(f: *z.Frame, s: *State) void {
     for (grid) |c| {
         const px: f32 = (c.cx * sx * 0.5 + 0.5) * w;
         const py: f32 = (0.5 - (c.cy - half) * sy * 0.5) * h + 8.0;
-        f.gl.text(.{ px - 40.0, py }, c.label, .{ .size = 20, .color = co.palette.ink_dim, .font = &s.font });
+        f.gl.text(.{ px - 40.0, py }, c.label, .{ .size = 20, .color = common.palette.ink_dim, .font = &s.font });
     }
-    co.caption(f.gl, s.font, "pipeline_array: one texture_2d_array, 4 layers, sampled by per-vertex index");
+    common.caption(f.gl, s.font, "pipeline_array: one texture_2d_array, 4 layers, sampled by per-vertex index");
     z.endDrawing(f.gl);
 }
 

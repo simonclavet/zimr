@@ -1,0 +1,167 @@
+//! GATE 3: does the planner land the spread, and does the PD land any of it?
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const mpc = @import("robot_mpc.zig");
+
+const body: mpc.RocketModel = .{ .mass = 500.0, .inertia = 3000.0, .arm = 5.0, .gravity = 9.81 };
+const weight: f32 = 500.0 * 9.81;
+const limits: mpc.RocketLimits = .{
+    .min_thrust = 0.4 * weight,
+    .max_thrust = 2.0 * weight,
+    .max_gimbal = 0.262,
+};
+const dt: f32 = 0.05;
+
+fn landed(x: [mpc.rocket_state_dim]f32) bool {
+    return @abs(x[mpc.rocket_vy_offset]) < 0.5 and @abs(x[mpc.rocket_vx_offset]) < 0.3 and
+        @abs(x[mpc.rocket_tilt_offset]) < 0.087 and @abs(x[mpc.rocket_x_offset]) < 1.0;
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    const starts = [_][mpc.rocket_state_dim]f32{
+        .{ 30, 100, -10, -30, 0.10, 0 },
+        .{ -25, 90, 8, -25, -0.08, 0 },
+        .{ 40, 120, -15, -35, 0.15, 0 },
+        .{ 0, 80, 0, -28, 0.0, 0 },
+    };
+
+    p("rocket: land on the pad. thrust [{d:.0}, {d:.0}] N, gimbal ±{d:.0}°\n", .{ limits.min_thrust, limits.max_thrust, limits.max_gimbal * 57.2958 });
+    p("  cannot throttle below {d:.0}%% of weight — coasting is not available\n\n", .{100.0 * limits.min_thrust / weight});
+    p("  ctrl   start x     vx      vy     tilt    min alt   verdict\n", .{});
+
+    for ([_]u32{ 4, 12, 30, 60 }) |passes| {
+        const horizon: u32 = 60;
+        p("  --- {d} iLQR passes, horizon {d} ---\n", .{ passes, horizon });
+        for ([_]bool{true}) |planned| {
+            var landings: u32 = 0;
+            for (starts) |start| {
+                var x: [mpc.rocket_state_dim]f32 = start;
+                var plan: mpc.RocketPlan = try mpc.RocketPlan.init(gpa, horizon);
+                defer plan.deinit();
+                @memset(plan.ctrl, 0);
+                for (0..plan.horizon) |k| {
+                    plan.ctrl[k * mpc.rocket_control_dim + mpc.rocket_thrust_offset] = weight;
+                }
+                @memset(plan.reference, 0);
+
+                var min_alt: f32 = 1.0e9;
+                var i: usize = 0;
+                while (i < 600 and x[mpc.rocket_y_offset] > 0) : (i += 1) {
+                    var u: [mpc.rocket_control_dim]f32 = undefined;
+                    if (planned) {
+                        // ── ★★★ A GLIDE SLOPE, NOT A DESTINATION ──
+                        //
+                        // The pad is 100 m away and the horizon is 3 s. "Be at zero altitude" is
+                        // simply unreachable inside it, so the planner does the next best thing the
+                        // cost asks for — zero VELOCITY — and hovers. Measured: it leaned 0.474 rad
+                        // to waste thrust it is not allowed to switch off, and hung there at 1.71 m.
+                        // A clever answer to the wrong question.
+                        //
+                        // The reference has to be a state the horizon can actually reach: a descent
+                        // rate that shrinks with altitude, so every knot has somewhere to go and the
+                        // profile lands itself.
+                        var altitude: f32 = x[mpc.rocket_y_offset];
+                        var lateral: f32 = x[mpc.rocket_x_offset];
+                        for (0..plan.horizon + 1) |k| {
+                            // ★ A CONSTANT-DECELERATION PROFILE, WHICH IS HOW YOU ACTUALLY STOP.
+                            // `v = −√(2·a·h)` is the fastest descent from which a given deceleration
+                            // still brings you to rest at the ground — the linear `−0.4·h` I tried
+                            // first commands −2.2 m/s with 5 m left, and the rocket faithfully
+                            // arrived at −2.2 against a 0.5 bar. The square root is not a tuning
+                            // choice; it is the shape the kinematics has.
+                            const want_vy: f32 = -@min(
+                                35.0,
+                                @sqrt(2.0 * 0.6 * altitude) + 0.15,
+                            );
+                            plan.reference[k * mpc.rocket_state_dim + mpc.rocket_y_offset] = altitude;
+                            plan.reference[k * mpc.rocket_state_dim + mpc.rocket_vy_offset] = want_vy;
+                            // ── ★★★ THE LATERAL AXIS NEEDS A PROFILE TOO ──
+                            //
+                            // The vertical reference was fixed and this one was not: `x` stayed
+                            // a STEP target of zero at every knot, so a vehicle starting 30 m
+                            // out was told to be over the pad IMMEDIATELY. That is the same
+                            // unreachable reference that made the first version hover, left in
+                            // place on the other axis — and it is exactly why the centred start
+                            // always lands and the offset ones never do.
+                            //
+                            // Close the gap over the time actually remaining, which the descent
+                            // profile above already knows: `vx = −x / t_left`.
+                            const fall_speed: f32 = @max(0.5, -want_vy);
+                            const time_left: f32 = @max(1.0, altitude / fall_speed);
+                            const want_vx: f32 = zm.clamp(-lateral / time_left, -25.0, 25.0);
+                            plan.reference[k * mpc.rocket_state_dim + mpc.rocket_x_offset] = lateral;
+                            plan.reference[k * mpc.rocket_state_dim + mpc.rocket_vx_offset] = want_vx;
+                            lateral += want_vx * dt;
+
+                            altitude = @max(0.0, altitude + want_vy * dt);
+                        }
+                        _ = mpc.solveRocket(body, &plan, &x, weights(), limits, dt, passes);
+                        mpc.shiftRocketPlan(&plan);
+                        u = .{ plan.ctrl[0], plan.ctrl[1] };
+                    } else {
+                        // ★ THE HONEST BASELINE: PD on altitude and attitude, same bounds. It has no
+                        // way to say "tilt to waste thrust I am not allowed to switch off".
+                        const want_vy: f32 = -0.15 * x[mpc.rocket_y_offset] - 1.0;
+                        const thrust: f32 = weight + 900.0 * (want_vy - x[mpc.rocket_vy_offset]);
+                        const want_tilt: f32 = zm.clamp(-0.02 * x[mpc.rocket_x_offset] - 0.08 * x[mpc.rocket_vx_offset], -0.3, 0.3);
+                        const gimbal: f32 = -2.0 * (want_tilt - x[mpc.rocket_tilt_offset]) +
+                            1.5 * x[mpc.rocket_rate_offset];
+                        u = .{
+                            zm.clamp(thrust, limits.min_thrust, limits.max_thrust),
+                            zm.clamp(gimbal, -limits.max_gimbal, limits.max_gimbal),
+                        };
+                    }
+                    x = mpc.rocketStep(body, &x, &u, dt);
+                    min_alt = @min(min_alt, x[mpc.rocket_y_offset]);
+                    // ★ THE MEASUREMENT THE PLAN CALLS FOR: what is the throttle doing on the way
+                    // down? If it is not saturating high near the ground, the planner does not
+                    // believe it needs to flare — a reference problem, not a weights problem.
+                    if (false) {
+                        p("      alt {d:>6.2}  vy {d:>7.3}  want_vy {d:>7.3}  throttle {d:>5.0}%%  tilt {d:>6.3}\n", .{
+                            x[mpc.rocket_y_offset],               x[mpc.rocket_vy_offset],
+                            plan.reference[mpc.rocket_vy_offset], 100.0 * u[mpc.rocket_thrust_offset] / weight,
+                            x[mpc.rocket_tilt_offset],
+                        });
+                    }
+                }
+                const ok: bool = landed(x);
+                if (ok) landings += 1;
+                p("  {s}  {d:>8.1}  {d:>6.2}  {d:>6.2}  {d:>6.3}  {d:>9.2}   {s}\n", .{
+                    if (planned) "MPC " else "PD  ", start[mpc.rocket_x_offset],
+                    x[mpc.rocket_vx_offset],         x[mpc.rocket_vy_offset],
+                    x[mpc.rocket_tilt_offset],       min_alt,
+                    if (ok) "LANDED" else "crashed",
+                });
+            }
+            p("  -> landed {d} of {d}\n\n", .{ landings, starts.len });
+        }
+    }
+}
+
+fn weights() mpc.Weights {
+    // Arriving at the pad, upright and slow, is what matters; the path is free.
+    // ── ★★★ LEANING MUST BE CHEAP EN ROUTE AND EXPENSIVE AT THE END ──
+    //
+    // A rocket 30 m off the pad has to translate, and the only way to translate is to lean —
+    // `ax = T·sin(θ+δ)/m`. Weighting tilt at 40 along the whole path made the lean cost more
+    // than the miss, so the planner flew down beside the pad and hovered. Measured: it stopped
+    // 1.15 to 2.23 m up with 5.65 m/s of sideways drift still on it.
+    //
+    // The shape that works is the same one the flywheel needed: **nearly free in the middle of
+    // the horizon, heavily penalised at the last knot.** Lean to get there, be upright to land.
+    const state_w = [_]f32{ 3.0, 0.02, 4.0, 4.0, 5.0, 8.0 };
+    const control_w = [_]f32{ 2.0e-6, 30.0 };
+    const terminal_w = [_]f32{ 300.0, 40.0, 600.0, 600.0, 1200.0, 800.0 };
+    const holder = struct {
+        const s = state_w;
+        const c = control_w;
+        const t = terminal_w;
+    };
+    return .{ .state = &holder.s, .control = &holder.c, .terminal = &holder.t };
+}

@@ -52,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
     {
         var i: usize = 0;
         while (i < ast.nodes.len) : (i += 1) {
-            const node: Ast.Node.Index = @enumFromInt(i);
+            const node: Ast.Node.Index = @fromBackingInt(@intCast(i));
             if (ast.nodeTag(node) == .identifier) {
                 const tok: u32 = ast.nodeMainToken(node);
                 if (eql(u8, ast.tokenSlice(tok), old_name)) {

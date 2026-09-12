@@ -8,7 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
@@ -78,8 +78,8 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     // Tap cycles the colour; it also auto-advances every few seconds so an untouched demo
     // keeps moving through the palette.
@@ -125,11 +125,11 @@ fn update(f: *z.Frame, s: *State) void {
         "Dash: {d:.0}  |  Space: {d:.0}",
         .{ dash, gap },
     ) catch "Dash: --  |  Space: --";
-    f.gl.text(.{ 22, 52 }, readout, .{ .size = 14, .color = co.palette.ink, .font = &s.font });
-    f.gl.text(.{ 22, 74 }, "tap: cycle colour", .{ .size = 13, .color = co.palette.ink_dim, .font = &s.font });
-    f.gl.text(.{ 22, 94 }, "drag: aim the line", .{ .size = 13, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ 22, 52 }, readout, .{ .size = 14, .color = common.palette.ink, .font = &s.font });
+    f.gl.text(.{ 22, 74 }, "tap: cycle colour", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ 22, 94 }, "drag: aim the line", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 
-    co.caption(f.gl, s.font, "dashed line");
+    common.caption(f.gl, s.font, "dashed line");
     z.endDrawing(f.gl);
 }
 

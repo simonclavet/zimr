@@ -128,8 +128,8 @@ fn sortCards(
             1 => if (a.priority < b.priority) @as(i32, -1) else if (a.priority > b.priority) @as(i32, 1) else 0,
             2 => if (a.age_days < b.age_days) @as(i32, -1) else if (a.age_days > b.age_days) @as(i32, 1) else 0,
             3 => blk: {
-                const ai: i32 = @intFromEnum(a.status);
-                const bi: i32 = @intFromEnum(b.status);
+                const ai: i32 = @backingInt(a.status);
+                const bi: i32 = @backingInt(b.status);
                 break :blk if (ai < bi) -1 else if (ai > bi) 1 else 0;
             },
             else => 0,

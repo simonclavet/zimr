@@ -8,13 +8,13 @@
 //!     instantiate. Zero imports is the whole trick: the worker's JS can instantiate it
 //!     with `{}`. Nothing to stub, no DOM, no WebGPU, no WASI.
 //!
-//! It imports `zimr` like any other example — but it may only TOUCH the pure parts of it
-//! (`codecs`, `zm`, `jobs`, `easings`, ...). Reach for `zimr.drawText` and the kernel wasm
+//! It imports `z` like any other example — but it may only TOUCH the pure parts of it
+//! (`codecs`, `zm`, `jobs`, `easings`, ...). Reach for `z.drawText` and the kernel wasm
 //! sprouts a `dom` import and the trick dies. That is not a style rule you can forget: the
 //! build ASSERTS the kernel wasm's import section is empty, so a kernel that touches the
 //! DOM fails to build, with a message saying which import gave it away.
 //!
-//! (Zig's lazy analysis is what makes this work: `src/zimr.zig` declares the whole engine,
+//! (Zig's lazy analysis is what makes this work: `src/z.zig` declares the whole engine,
 //! but only what the kernel actually REACHES gets compiled in. Touch nothing impure and
 //! nothing impure is linked.)
 //!
@@ -23,10 +23,10 @@
 //! buffers.
 
 const std = @import("std");
-const zimr = @import("zimr");
+const z = @import("zimr");
 
-const codecs = zimr.codecs;
-const jobs = zimr.jobs;
+const codecs = z.codecs;
+const jobs = z.jobs;
 const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
 const expectEqualSlices = std.testing.expectEqualSlices;

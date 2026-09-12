@@ -7,7 +7,10 @@
 const Color = enum(u8) { red, green, blue, alpha };
 var arr: [6]Color = .{ .red, .green, .blue, .alpha, .red, .blue };
 var sink: usize = 0;
-fn ri(x: usize) usize { sink +%= x; return x; }
+fn ri(x: usize) usize {
+    sink +%= x;
+    return x;
+}
 
 export fn run_test() i32 {
     const lo = ri(1);
@@ -15,7 +18,7 @@ export fn run_test() i32 {
     const s = arr[lo..hi]; // {green, blue, alpha, red}
     var t: u32 = 0;
     for (s) |c| {
-        const d: u32 = @intFromEnum(c);
+        const d: u32 = @backingInt(c);
         t = t * 10 + d;
     }
     if (t != 1230) return 1; // green=1, blue=2, alpha=3, red=0

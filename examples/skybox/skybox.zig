@@ -15,7 +15,7 @@ const pi = zm.pi;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -56,7 +56,11 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawCylinderBetween(f.gl, pointVec(0, 0.2, -2.2), pointVec(0, 2, -2.2), 0.5, 0.5, 16, c.emerald_400);
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "drawSkybox - per-pixel gradient sky (warm horizon -> blue zenith) behind the 3D scene");
+    common.caption(
+        f.gl,
+        s.font,
+        "drawSkybox - per-pixel gradient sky (warm horizon -> blue zenith) behind the 3D scene",
+    );
     z.endDrawing(f.gl);
 }
 

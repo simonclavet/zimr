@@ -1,5 +1,5 @@
 // src/tests/snapshot_regression_test.zig — host-side visual
-// regression tests built on the `ui_screenshot.snapshot` helper.
+// regression tests built on the `ui.snapshot` helper.
 //
 // What's tested:
 //   - First-run baseline: snapshot() writes a fresh PNG when no
@@ -22,7 +22,6 @@ const Allocator = std.mem.Allocator;
 const ui = @import("../ui.zig");
 const shapes2d = @import("../shapes2d.zig");
 const text2d = @import("../text2d.zig");
-const ui_screenshot = @import("../ui.zig");
 
 const width: u32 = 240;
 const height: u32 = 180;
@@ -56,7 +55,10 @@ fn drawSceneB(u_handle: ui.Ui) void {
 fn buildContext(gpa: Allocator) ui.UiContext {
     return .{
         .gpa = gpa,
-        .frame_arena = std.heap.ArenaAllocator.init(gpa),
+        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // live-byte tripwire that catches a dropped per-frame reset). These four test
+        // files were imported by nothing, so they never compiled against the change.
+        .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),
         .canvas_w = width,
         .canvas_h = height,
     };
@@ -66,8 +68,8 @@ fn buildContext(gpa: Allocator) ui.UiContext {
 /// file APIs.  Both swallow errors — the tests are robust to host
 /// environments where `tests/snapshots/` isn't writable.
 fn prepareSnapshotPath(io: std.Io, ref_path: []const u8) void {
-    std.Io.Dir.cwd().createDirPath(io, snapshot_dir) catch {};
-    std.Io.Dir.cwd().deleteFile(io, ref_path) catch {};
+    std.Io.Dir.cwd().createDirPath(io, snapshot_dir) catch {}; // lint:off catch-suppression: ensure-dir, ok if exists
+    std.Io.Dir.cwd().deleteFile(io, ref_path) catch {}; // lint:off catch-suppression: remove if present
 }
 
 test "snapshot: first-run writes baseline and returns clean diff" {
@@ -88,7 +90,7 @@ test "snapshot: first-run writes baseline and returns clean diff" {
     const u_handle: ui.Ui = ctx.beginFrameRaw(.{}, null, width, height, &gl_dummy, &shapes_dummy, &font_dummy);
     drawSceneA(u_handle);
 
-    const diff: ui_screenshot.PixelDiff = ui_screenshot.snapshotPng(gpa, io, &ctx, width, height, ref_path) catch {
+    const diff: ui.PixelDiff = ui.snapshotPng(gpa, io, &ctx, width, height, ref_path) catch {
         // If the snapshot dir isn't writable (rare host), bail.
         // The codepath still ran up to the file write.
         return;
@@ -117,7 +119,7 @@ test "snapshot: identical scene re-run is byte-for-byte equal" {
         const font_dummy: text2d.FontCache = .{};
         const u_handle: ui.Ui = ctx.beginFrameRaw(.{}, null, width, height, &gl_dummy, &shapes_dummy, &font_dummy);
         drawSceneA(u_handle);
-        _ = ui_screenshot.snapshotPng(gpa, io, &ctx, width, height, ref_path) catch return;
+        _ = ui.snapshotPng(gpa, io, &ctx, width, height, ref_path) catch return;
     }
 
     // Pass 2: identical scene → must read the baseline + compare
@@ -130,7 +132,7 @@ test "snapshot: identical scene re-run is byte-for-byte equal" {
     const u_handle: ui.Ui = ctx.beginFrameRaw(.{}, null, width, height, &gl_dummy, &shapes_dummy, &font_dummy);
     drawSceneA(u_handle);
 
-    const diff: ui_screenshot.PixelDiff = ui_screenshot.snapshotPng(
+    const diff: ui.PixelDiff = ui.snapshotPng(
         gpa,
         io,
         &ctx,
@@ -160,7 +162,7 @@ test "snapshot: different scene against same reference yields nonzero diff" {
         const font_dummy: text2d.FontCache = .{};
         const u_handle: ui.Ui = ctx.beginFrameRaw(.{}, null, width, height, &gl_dummy, &shapes_dummy, &font_dummy);
         drawSceneA(u_handle);
-        _ = ui_screenshot.snapshotPng(gpa, io, &ctx, width, height, ref_path) catch return;
+        _ = ui.snapshotPng(gpa, io, &ctx, width, height, ref_path) catch return;
     }
 
     // Pass 2: render Scene B against Scene A's baseline.  Should
@@ -173,7 +175,7 @@ test "snapshot: different scene against same reference yields nonzero diff" {
     const u_handle: ui.Ui = ctx.beginFrameRaw(.{}, null, width, height, &gl_dummy, &shapes_dummy, &font_dummy);
     drawSceneB(u_handle);
 
-    const diff: ui_screenshot.PixelDiff = ui_screenshot.snapshotPng(
+    const diff: ui.PixelDiff = ui.snapshotPng(
         gpa,
         io,
         &ctx,
@@ -187,7 +189,7 @@ test "snapshot: different scene against same reference yields nonzero diff" {
 test "comparePixels: identical buffers report zero difference" {
     const a: []const u8 = &.{ 10, 20, 30, 255, 100, 150, 200, 255 };
     const b: []const u8 = &.{ 10, 20, 30, 255, 100, 150, 200, 255 };
-    const diff: ui_screenshot.PixelDiff = ui_screenshot.comparePixels(a, b, 0);
+    const diff: ui.PixelDiff = ui.comparePixels(a, b, 0);
     try expectEqual(@as(u32, 2), diff.total);
     try expectEqual(@as(u32, 0), diff.differing);
     try expectEqual(@as(u8, 0), diff.max_channel_delta);
@@ -196,7 +198,7 @@ test "comparePixels: identical buffers report zero difference" {
 test "comparePixels: single-channel delta above tolerance counts" {
     const a: []const u8 = &.{ 10, 20, 30, 255 };
     const b: []const u8 = &.{ 15, 20, 30, 255 };
-    const diff: ui_screenshot.PixelDiff = ui_screenshot.comparePixels(a, b, 2);
+    const diff: ui.PixelDiff = ui.comparePixels(a, b, 2);
     try expectEqual(@as(u32, 1), diff.total);
     try expectEqual(@as(u32, 1), diff.differing);
     try expectEqual(@as(u8, 5), diff.max_channel_delta);
@@ -205,7 +207,7 @@ test "comparePixels: single-channel delta above tolerance counts" {
 test "comparePixels: delta within tolerance is not counted" {
     const a: []const u8 = &.{ 10, 20, 30, 255 };
     const b: []const u8 = &.{ 11, 21, 29, 254 };
-    const diff: ui_screenshot.PixelDiff = ui_screenshot.comparePixels(a, b, 2);
+    const diff: ui.PixelDiff = ui.comparePixels(a, b, 2);
     try expectEqual(@as(u32, 1), diff.total);
     try expectEqual(@as(u32, 0), diff.differing);
     try expectEqual(@as(u8, 1), diff.max_channel_delta);

@@ -135,7 +135,7 @@ const image: [img_h * (img_w + 1)]u8 = renderAscii(
 // SECTION 4 — runtime entry point
 // ============================================================================
 
-pub fn main() !void {
+pub fn main() void {
     std.debug.print(
         \\zimr — comptime Julia set
         \\

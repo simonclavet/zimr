@@ -8,6 +8,7 @@ const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
 const float64 = zm.float64;
 const float = zm.float;
 const Vec2 = zm.Vec2;
@@ -310,7 +311,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     for (0..n) |k| {
         const fr: f64 = float64(k) / @as(f64, n - 1);
         s.time_x[k] = t0 + fr * tspan;
-        const diurnal: f64 = 15.0 + 8.0 * @sin(fr * 2.0 * 6.2831853 - 1.5708);
+        // Two turns across the span, started a quarter turn back so it opens at the trough.
+        const diurnal: f64 = 15.0 + 8.0 * sinTurns(fr * 2.0 - 0.25);
         s.time_y[k] = diurnal + gauss(&tseed) * 0.6;
     }
 
@@ -326,7 +328,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     for (0..n) |k| {
         const fr: f64 = float64(k) / @as(f64, n - 1);
         s.acfg_x[k] = fr;
-        s.acfg_y[k] = 60.0 + 50.0 * @sin(fr * 6.2831853);
+        s.acfg_y[k] = 60.0 + 50.0 * sinTurns(fr);
     }
 
     // Equal-aspect series: a unit circle (round only with equal aspect).

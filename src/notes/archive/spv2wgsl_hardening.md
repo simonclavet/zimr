@@ -383,7 +383,7 @@ branch is never analyzed for shaders).  Every other zimr file calls the
   'cast'".  When auditing zm coverage, grep `math.X` in the TWO aliased
   files (src/entities.zig, src/zimr.zig), not just `zm.X`.
 
-The `std-math` lint rule (tools/lint_zimr.zig): fires on any `std.math.*`
+The `std-math` lint rule (tools/zimrlint.zig): fires on any `std.math.*`
 field-access, EXEMPTS files ending `zimrmath.zig`, and is NON-SUPPRESSIBLE
 (lineSuppressedByDirective returns false for tag "std-math" — a
 `// lint:off std-math` does NOT silence it; verified with a probe).  The

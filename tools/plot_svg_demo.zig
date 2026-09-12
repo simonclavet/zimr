@@ -11,7 +11,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const plot = @import("plot");
 
-pub fn main() !void {
+pub fn main() void {
     const gpa: Allocator = std.heap.page_allocator;
     // I/O implementation is chosen here in main and threaded to the write.
     var io_threaded: std.Io.Threaded = .init(gpa, .{});
@@ -22,5 +22,5 @@ pub fn main() !void {
     defer gpa.free(svg);
 
     const out: std.Io.File = std.Io.File.stdout();
-    out.writeStreamingAll(io, svg) catch {};
+    out.writeStreamingAll(io, svg) catch {}; // lint:off catch-suppression: best-effort stdout write
 }

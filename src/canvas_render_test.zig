@@ -3,7 +3,7 @@
 //! no device. Excluded from the style gate via build.zig `deletion_skip`.
 const std = @import("std");
 const Canvas = @import("Canvas.zig");
-const img = @import("image.zig");
+const image = @import("image.zig");
 const Sprite = @import("Sprite.zig");
 
 pub fn main() !void {
@@ -17,7 +17,7 @@ pub fn main() !void {
 
     // A procedural checker -> Sprite (owns a copy; free the source right after to
     // prove the Sprite is self-contained).
-    const checker: img.Image = try img.genImageChecked(
+    const checker: image.Image = try image.genImageChecked(
         gpa,
         64,
         64,
@@ -27,7 +27,7 @@ pub fn main() !void {
         .{ .r = 230, .g = 205, .b = 90, .a = 255 },
     );
     var sprite = try Sprite.fromImage(gpa, checker);
-    img.unloadImage(gpa, checker);
+    image.unloadImage(gpa, checker);
     defer sprite.deinit(gpa);
 
     canvas.rect(

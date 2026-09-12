@@ -28,6 +28,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const tau = zm.tau;
@@ -39,10 +40,10 @@ const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
 
-    // Animation phase 0..1 cycling 4 seconds, used to drive
+    // Animation phase in turns, 0..1 cycling every 4 seconds, used to drive
     // any primitives that look better moving (mainly the bezier
     // and the arc sweep).  Cycles forever.
-    phase: f32 = 0,
+    phase_turns: f32 = 0,
 };
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -60,7 +61,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 // (label + frame) is drawn for the caller.
 const Card = struct {
     label: []const u8,
-    draw: *const fn (dl: ui.DrawListHandle, area: z.Rectangle, phase: f32) void,
+    draw: *const fn (dl: ui.DrawListHandle, area: z.Rectangle, phase_turns: f32) void,
 };
 
 const card_height: f32 = 170;
@@ -68,7 +69,7 @@ const card_height: f32 = 170;
 fn drawCard(
     u: ui.Ui,
     card: Card,
-    phase: f32,
+    phase_turns: f32,
 ) void {
     u.text("{s}", .{card.label});
     const canvas_dim: Vec2 = .{ 380, card_height };
@@ -86,7 +87,7 @@ fn drawCard(
             .width = c.rect.width - 16,
             .height = c.rect.height - 16,
         };
-        card.draw(c.drawList(), area, phase);
+        card.draw(c.drawList(), area, phase_turns);
     }
     u.spacing();
 }
@@ -103,9 +104,9 @@ const white: Color = Color.fromWire(0xFFFFFFFF);
 fn drawRectFilledCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: solid green rectangle in the middle.
     const r: z.Rectangle = .{
         .x = area.x + 60,
@@ -128,9 +129,9 @@ fn drawRectFilledCard(
 fn drawLineCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: three lines at different thicknesses across the card.
     const y0: f32 = area.y + 30;
     const y1: f32 = area.y + 70;
@@ -145,9 +146,9 @@ fn drawLineCard(
 fn drawDiagonalLinesCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: an X drawn from corner to corner.
     dl.addLine(
         .{ area.x, area.y },
@@ -166,10 +167,10 @@ fn drawDiagonalLinesCard(
 fn drawArcCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
     // EXPECT: a quarter-arc, a semicircle, and a sweeping arc that
-    // grows with phase.  Top→bottom three rows.
+    // grows with phase_turns.  Top→bottom three rows.
     const cy: f32 = area.y + area.height * 0.5;
     const r: f32 = 45;
 
@@ -191,8 +192,8 @@ fn drawArcCard(
         accent2,
         4,
     );
-    // Animated full sweep — grows from 0 to 2π as phase cycles.
-    const a1: f32 = -pi * 0.5 + tau * phase;
+    // Animated full sweep — grows from 0 to 2π as phase_turns cycles.
+    const a1: f32 = -pi * 0.5 + tau * phase_turns;
     dl.addArc(
         .{ area.x + 300, cy },
         r,
@@ -206,7 +207,7 @@ fn drawArcCard(
 fn drawArcFilledCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
     // EXPECT: a pie slice, a half-disk, and a full disk.
     const cy: f32 = area.y + area.height * 0.5;
@@ -232,8 +233,8 @@ fn drawArcFilledCard(
     dl.addArcFilled(
         .{ area.x + 300, cy },
         r,
-        phase * tau,
-        phase * tau + tau,
+        phase_turns * tau,
+        phase_turns * tau + tau,
         accent3,
     );
 }
@@ -241,9 +242,9 @@ fn drawArcFilledCard(
 fn drawCircleCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: three concentric circles, thin / medium / thick outline.
     const cx: f32 = area.x + area.width * 0.5;
     const cy: f32 = area.y + area.height * 0.5;
@@ -255,9 +256,9 @@ fn drawCircleCard(
 fn drawCircleFilledCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: three filled discs, decreasing size, overlapping.
     const cx: f32 = area.x + area.width * 0.5;
     const cy: f32 = area.y + area.height * 0.5;
@@ -269,9 +270,9 @@ fn drawCircleFilledCard(
 fn drawPolylineCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: a zigzag (open polyline) on the left, a closed
     // polyline (triangle outline) on the right.
     const zigzag = [_]Vec2{
@@ -295,9 +296,9 @@ fn drawPolylineCard(
 fn drawPolygonCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: filled hexagon on the left, filled pentagon on the right.
     const hex: [6]Vec2 = blk: {
         var out: [6]Vec2 = undefined;
@@ -327,9 +328,9 @@ fn drawPolygonCard(
 fn drawTriangleCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: outline triangle (green), filled triangle (amber),
     // and a quad fill (red).
     dl.addTriangle(
@@ -357,11 +358,11 @@ fn drawTriangleCard(
 fn drawBezierCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
     // EXPECT: a cubic bezier from left to right with control
-    // points swinging up/down based on phase.
-    const sway: f32 = @sin(phase * tau) * 60;
+    // points swinging up/down based on phase_turns.
+    const sway: f32 = sinTurns(phase_turns) * 60;
     const p1: Vec2 = .{ area.x + 10, area.y + area.height * 0.5 };
     const p2: Vec2 = .{ area.x + area.width * 0.33, area.y + area.height * 0.5 + sway };
     const p3: Vec2 = .{ area.x + area.width * 0.66, area.y + area.height * 0.5 - sway };
@@ -375,13 +376,13 @@ fn drawBezierCard(
 fn drawNgonCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
     // EXPECT: a stroked octagon, a filled pentagon, and a filled
     // 12-gon — three regular n-gons across the card.  Rotates
     // continuously to make sure rotation works.
     const cy: f32 = area.y + area.height * 0.5;
-    const rot: f32 = phase * tau;
+    const rot: f32 = phase_turns * tau;
     dl.addNgon(.{ area.x + 60, cy }, 50, 8, rot, accent, 3);
     dl.addNgonFilled(.{ area.x + 180, cy }, 50, 5, rot, accent2);
     dl.addNgonFilled(.{ area.x + 300, cy }, 50, 12, rot, accent3);
@@ -390,9 +391,9 @@ fn drawNgonCard(
 fn drawEllipseCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: wide ellipse outline (green), tall ellipse outline
     // (amber), filled ellipse on the right (red).
     const cy: f32 = area.y + area.height * 0.5;
@@ -404,9 +405,9 @@ fn drawEllipseCard(
 fn drawTextCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: small/medium/large text rendered inside the card.
     dl.addText("small text 14", .{ area.x + 10, area.y + 20 }, 14, accent);
     dl.addText("medium text 22", .{ area.x + 10, area.y + 50 }, 22, accent2);
@@ -416,9 +417,9 @@ fn drawTextCard(
 fn drawTransparencyCard(
     dl: ui.DrawListHandle,
     area: z.Rectangle,
-    phase: f32,
+    phase_turns: f32,
 ) void {
-    _ = phase;
+    _ = phase_turns;
     // EXPECT: three overlapping translucent discs.  Where they
     // overlap, the alpha should accumulate visibly.
     const cy: f32 = area.y + area.height * 0.5;
@@ -452,9 +453,9 @@ fn update(f: *z.Frame, s: *State) void {
     const u: ui.Ui = s.ui_host.begin(f);
     defer s.ui_host.render(f);
 
-    s.phase += s.ui_host.ctx.input.delta_time * 0.25; // 4-second cycle
-    if (s.phase >= 1.0) {
-        s.phase -= 1.0;
+    s.phase_turns += s.ui_host.ctx.input.delta_time * 0.25; // 4-second cycle
+    if (s.phase_turns >= 1.0) {
+        s.phase_turns -= 1.0;
     }
 
     const fw: f32 = float(f.window.screen_width);
@@ -474,7 +475,7 @@ fn update(f: *z.Frame, s: *State) void {
         u.text("each card draws ONE primitive.  Blank = broken.", .{});
         u.separator();
         for (cards) |card| {
-            drawCard(u, card, s.phase);
+            drawCard(u, card, s.phase_turns);
         }
     }
 }

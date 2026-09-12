@@ -21,7 +21,7 @@ const Camera3D = zm.Camera3D;
 const Vec = zm.Vec;
 const pointVec = zm.pointVec;
 const rad_per_deg = zm.rad_per_deg;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -66,7 +66,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const u: z.ui_real.Ui = s.ui_host.begin(f);
     const cam: Camera3D = s.cam.update(f, u.wantCaptureMouse(), .{
@@ -111,8 +111,8 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- HUD ----
     const hint: []const u8 = "a tesseract (4D hypercube) rotating through the XW plane";
-    f.gl.text(.{ 14, 42 }, hint, .{ .size = 18, .color = co.palette.ink_dim, .font = &s.font });
-    co.caption(f.gl, s.font, "WebGPU 3D - tesseract view (drag / pinch to orbit)");
+    f.gl.text(.{ 14, 42 }, hint, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+    common.caption(f.gl, s.font, "WebGPU 3D - tesseract view (drag / pinch to orbit)");
     s.ui_host.render(f);
 }
 

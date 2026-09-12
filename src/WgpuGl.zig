@@ -1,3 +1,4 @@
+//! lint:alias WgpuGl
 //! src/WgpuGl.zig — the WebGPU `gl: anytype` adapter (the "third renderer").
 //!
 //! `src/renderer_trait.zig` defines a comptime trait (`assertIsGlContext`) plus two
@@ -39,10 +40,11 @@
 //!    when textured 2D lands; for now it forces a flush + records the id.
 
 const renderer_2d = @import("renderer_2d.zig");
-const BindGroupHandle = @import("wgpu.zig").BindGroupHandle;
+const BindGroupHandle = wgpu.BindGroupHandle;
 const gpu_iface = @import("gpu_iface.zig");
 const raster = @import("raster.zig");
 const zm = @import("zm");
+const turnsFromRad = zm.turnsFromRad;
 const Mat = zm.Mat;
 const std_for_tests = @import("std");
 const Vec = zm.Vec;
@@ -67,7 +69,7 @@ const Rectangle = @import("types.zig").Rectangle;
 const draw2d = @import("draw2d.zig");
 const WgpuTexture = @import("wgpu_texture.zig").WgpuTexture;
 const Texture = @import("types.zig").Texture;
-const image_mod = @import("image.zig");
+const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
 const text2d = @import("text2d.zig");
 const Font = @import("types.zig").Font;
 const Sprite = @import("Sprite.zig");
@@ -249,6 +251,74 @@ pub fn begin(self: *WgpuGl, mode: raster.DrawMode) void {
     self.group_len = 0;
 }
 
+// Reached only as `self.emitTriangle()`; the bare-identifier ref count skips
+// `.`-preceded names, so unused-global cannot see the call.
+// lint:off unused-global: private method, called through `self.`
+fn emitTriangle(
+    self: *WgpuGl,
+    a: usize,
+    b: usize,
+    c: usize,
+) void {
+    const va: GroupVertex = self.group[a];
+    const vb: GroupVertex = self.group[b];
+    const vc: GroupVertex = self.group[c];
+    Backend.drawTriangleBatched(self.pass, .{
+        .p0 = va.pos,
+        .p1 = vb.pos,
+        .p2 = vc.pos,
+        .uv0 = va.uv,
+        .uv1 = vb.uv,
+        .uv2 = vc.uv,
+        .colors = .{ va.color, vb.color, vc.color },
+    });
+}
+
+// Reached only as `self.resolveSprite()`; the bare-identifier ref count skips
+// `.`-preceded names, so unused-global cannot see the call.
+// lint:off unused-global: private method, called through `self.`
+fn resolveSprite(self: *WgpuGl, sprite: Sprite) u32 {
+    const r: *Renderer2D = self.renderer();
+    if (r.findSprite(sprite.id)) |id| {
+        return id;
+    }
+    const w: u32 = @intCast(sprite.image.width);
+    const h: u32 = @intCast(sprite.image.height);
+    const bytes: []const u8 = @as([*]const u8, @ptrCast(sprite.image.data.?))[0 .. w * h * 4];
+    const wtex: WgpuTexture = WgpuTexture.createFromPixels(r.resources.f.device, r.resources.f.queue, .{
+        .pixels = bytes,
+        .width = w,
+        .height = h,
+    });
+    const id: u32 = r.registerOwnedTexture(wtex);
+    r.cacheSprite(sprite.id, id);
+    return id;
+}
+
+// Reached only as `self.flushGroup()`; the bare-identifier ref count skips
+// `.`-preceded names, so unused-global cannot see the call.
+// lint:off unused-global: private method, called through `self.`
+fn flushGroup(self: *WgpuGl) void {
+    switch (self.mode) {
+        .triangles => {
+            var i: usize = 0;
+            while (i + 2 < self.group_len) : (i += 3) {
+                self.emitTriangle(i, i + 1, i + 2);
+            }
+        },
+        .quads => {
+            var i: usize = 0;
+            while (i + 3 < self.group_len) : (i += 4) {
+                self.emitTriangle(i, i + 1, i + 2);
+                self.emitTriangle(i, i + 2, i + 3);
+            }
+        },
+        // points / lines: expansion to thin quads is N5; emitting nothing is
+        // sound (no spurious geometry) until then.
+        else => {},
+    }
+}
+
 pub fn end(self: *WgpuGl) void {
     self.flushGroup();
     self.group_len = 0;
@@ -333,7 +403,7 @@ pub fn bindTexture(self: *WgpuGl, tex: WgpuTexture) void {
     self.renderer().shapes_batch.bindTextureGroup(bg);
 }
 
-/// gl_iface trait method: bind a texture by its REGISTERED id (the same
+/// renderer_trait trait method: bind a texture by its REGISTERED id (the same
 /// `setTexture(id: u32)` shape as GlAdapter/SwAdapter). This is what makes
 /// the reusable, `gl: anytype`-generic texture+text stack (drawTexturePro,
 /// drawWithFont, ...) work through WgpuGl: it resolves the id to the
@@ -356,7 +426,7 @@ pub fn flushBeforeMaterialSwap(self: *WgpuGl) void {
     Backend.flushBatch(self.pass);
 }
 
-/// gl_iface trait: per-vertex normal. 2D drawing ignores it (the shapes
+/// renderer_trait trait: per-vertex normal. 2D drawing ignores it (the shapes
 /// pipeline has no lighting), but drawTexturePro calls it, so it must exist.
 pub fn normal3f(
     self: *WgpuGl,
@@ -477,27 +547,6 @@ pub fn circle(
     }
 }
 
-/// Resolve a Sprite to a registered GPU texture id, uploading `sprite.image` and
-/// registering it (engine-owned) on first draw. The residency is cached by the
-/// Sprite's monotonic id in the renderer, so each Sprite uploads exactly once.
-fn resolveSprite(self: *WgpuGl, sprite: Sprite) u32 {
-    const r: *Renderer2D = self.renderer();
-    if (r.findSprite(sprite.id)) |id| {
-        return id;
-    }
-    const w: u32 = @intCast(sprite.image.width);
-    const h: u32 = @intCast(sprite.image.height);
-    const bytes: []const u8 = @as([*]const u8, @ptrCast(sprite.image.data.?))[0 .. w * h * 4];
-    const wtex: WgpuTexture = WgpuTexture.createFromPixels(r.resources.f.device, r.resources.f.queue, .{
-        .pixels = bytes,
-        .width = w,
-        .height = h,
-    });
-    const id: u32 = r.registerOwnedTexture(wtex);
-    r.cacheSprite(sprite.id, id);
-    return id;
-}
-
 /// Unified primitive: draw `sprite` (uploaded + cached on first use) into `dst`.
 /// Reuses the proven `drawTexturePro` / `drawTextureNPatch` paths.
 pub fn image(self: *WgpuGl, dst: Rectangle, sprite: Sprite, opts: draw2d.ImageOpts) void {
@@ -563,7 +612,7 @@ pub fn texture(
     var ub: f32 = 1;
     var vb: f32 = 1;
     if (opts.source) |source_in| {
-        // Identical normalization to image.zig:drawTexturePro — negative width
+        // Identical normalization to image_mod.zig:drawTexturePro — negative width
         // mirrors u; negative height slides the origin down by |height| and
         // leaves the extent negative, so v runs bottom-to-top.
         var src: Rectangle = source_in;
@@ -651,7 +700,11 @@ pub fn circleSector(
     segments: i32,
     opts: draw2d.ShapeOpts,
 ) void {
-    draw2d.circleSectorFilled(self, center, radius, start_rad, end_rad, segments, opts.color);
+    // draw2d works in turns; this layer's API is raylib-compatible and speaks radians, so the
+    // unit changes exactly here and the locals say which side they are on.
+    const start_turns: f32 = turnsFromRad(start_rad);
+    const end_turns: f32 = turnsFromRad(end_rad);
+    draw2d.circleSectorFilled(self, center, radius, start_turns, end_turns, segments, opts.color);
 }
 
 pub fn circleSectorLines(
@@ -663,7 +716,9 @@ pub fn circleSectorLines(
     segments: i32,
     opts: draw2d.ShapeOpts,
 ) void {
-    shapes2d.drawCircleSectorLines(self, center, radius, start_rad, end_rad, segments, opts.color);
+    const start_turns: f32 = turnsFromRad(start_rad);
+    const end_turns: f32 = turnsFromRad(end_rad);
+    shapes2d.drawCircleSectorLines(self, center, radius, start_turns, end_turns, segments, opts.color);
 }
 
 pub fn ellipse(
@@ -706,7 +761,9 @@ pub fn ring(
     segments: i32,
     opts: draw2d.ShapeOpts,
 ) void {
-    draw2d.ringFilled(self, center, inner, outer, start_rad, end_rad, segments, opts.color);
+    const start_turns: f32 = turnsFromRad(start_rad);
+    const end_turns: f32 = turnsFromRad(end_rad);
+    draw2d.ringFilled(self, center, inner, outer, start_turns, end_turns, segments, opts.color);
 }
 
 pub fn ringLines(
@@ -719,7 +776,9 @@ pub fn ringLines(
     segments: i32,
     opts: draw2d.ShapeOpts,
 ) void {
-    shapes2d.drawRingLines(self, center, inner, outer, start_rad, end_rad, segments, opts.color);
+    const start_turns: f32 = turnsFromRad(start_rad);
+    const end_turns: f32 = turnsFromRad(end_rad);
+    shapes2d.drawRingLines(self, center, inner, outer, start_turns, end_turns, segments, opts.color);
 }
 
 pub fn poly(
@@ -730,7 +789,7 @@ pub fn poly(
     rotation_rad: f32,
     opts: draw2d.ShapeOpts,
 ) void {
-    draw2d.polyFilled(self, center, sides, radius, rotation_rad, opts.color);
+    draw2d.polyFilled(self, center, sides, radius, turnsFromRad(rotation_rad), opts.color);
 }
 
 pub fn polyLines(
@@ -741,7 +800,7 @@ pub fn polyLines(
     rotation_rad: f32,
     opts: draw2d.ShapeOpts,
 ) void {
-    shapes2d.drawPolyLines(self, center, sides, radius, rotation_rad, opts.color);
+    shapes2d.drawPolyLines(self, center, sides, radius, turnsFromRad(rotation_rad), opts.color);
 }
 
 pub fn circleGradient(
@@ -862,7 +921,7 @@ pub fn rectRotated(
     rotation_rad: f32,
     opts: draw2d.RectOpts,
 ) void {
-    draw2d.rectRotatedFilled(self, rec, origin, rotation_rad, opts.color);
+    draw2d.rectRotatedFilled(self, rec, origin, turnsFromRad(rotation_rad), opts.color);
 }
 
 /// Gap primitive: rounded filled rectangle (loose numbers, roundness 0..1).
@@ -911,7 +970,7 @@ pub fn frustum(
 }
 
 /// Multiply the active matrix stack by an orthographic projection, matching
-/// glOrtho / rlOrtho semantics. Mirrors `frustum`. Part of the gl_iface
+/// glOrtho / rlOrtho semantics. Mirrors `frustum`. Part of the renderer_trait
 /// trait so `fn drawX(gl: anytype)` 2D code (e.g. the UI panel's
 /// `ortho(0, w, h, 0, -1, 1)` top-left setup) runs on the WGPU backend
 /// unchanged.
@@ -931,9 +990,9 @@ pub fn ortho(
     }
 }
 
-/// Blend recipe. Matches the shape of gl_iface's trait `setBlendMode` (an
+/// Blend recipe. Matches the shape of renderer_trait's trait `setBlendMode` (an
 /// enum-literal `.alpha` coerces to this), but defined locally so the WGPU
-/// backend doesn't depend on gl_iface → rlgl. WgpuGl's 2D pipeline is
+/// backend doesn't depend on renderer_trait → rlgl. WgpuGl's 2D pipeline is
 /// created with standard alpha blending already, so `.alpha` is native and
 /// this is a no-op — present so `gl: anytype` scene code compiles + runs on
 /// WGPU. (Seam for swapping the pipeline's blend state when more modes land.)
@@ -962,7 +1021,7 @@ pub fn disable(self: *WgpuGl, cap: raster.Capability) void {
         // clamped to the render area by the GPU, so no surface query needed.
         .scissor_test => {
             self.flushBeforeMaterialSwap();
-            @import("wgpu.zig").render_pass.setScissorRect(self.pass.pass, 0, 0, self.render_w, self.render_h);
+            wgpu.render_pass.setScissorRect(self.pass.pass, 0, 0, self.render_w, self.render_h);
         },
         else => {},
     }
@@ -989,7 +1048,7 @@ pub fn scissor(
     // left/top shrinks the width/height instead of letting the right/bottom
     // edge blow past the window (the off-screen-left "spills right" bug).
     const sc: ScissorRect = clampScissorRect(x, y, w, h, rw, rh);
-    @import("wgpu.zig").render_pass.setScissorRect(
+    wgpu.render_pass.setScissorRect(
         self.pass.pass,
         @intCast(sc.x),
         @intCast(sc.y),
@@ -1015,67 +1074,24 @@ pub fn clear(self: *WgpuGl, mask: raster.ClearMask) void {
 
 // ---- internals -----------------------------------------------------
 
-/// Assemble the buffered group into triangles and emit them into the 2D
-/// shapes batch. `.triangles` consumes vertices in threes; `.quads` (4 per
-/// face) becomes two triangles; lines/points are not yet expanded (N5).
-fn flushGroup(self: *WgpuGl) void {
-    switch (self.mode) {
-        .triangles => {
-            var i: usize = 0;
-            while (i + 2 < self.group_len) : (i += 3) {
-                self.emitTriangle(i, i + 1, i + 2);
-            }
-        },
-        .quads => {
-            var i: usize = 0;
-            while (i + 3 < self.group_len) : (i += 4) {
-                self.emitTriangle(i, i + 1, i + 2);
-                self.emitTriangle(i, i + 2, i + 3);
-            }
-        },
-        // points / lines: expansion to thin quads is N5; emitting nothing is
-        // sound (no spurious geometry) until then.
-        else => {},
-    }
-}
-
-fn emitTriangle(
-    self: *WgpuGl,
-    a: usize,
-    b: usize,
-    c: usize,
-) void {
-    const va: GroupVertex = self.group[a];
-    const vb: GroupVertex = self.group[b];
-    const vc: GroupVertex = self.group[c];
-    Backend.drawTriangleBatched(self.pass, .{
-        .p0 = va.pos,
-        .p1 = vb.pos,
-        .p2 = vc.pos,
-        .uv0 = va.uv,
-        .uv1 = vb.uv,
-        .uv2 = vc.uv,
-        .colors = .{ va.color, vb.color, vc.color },
-    });
-}
-
 // ============================================================================
 // Matrix helpers (column-major [4]Vec, matching zm.Mat / glFrustum)
 // ============================================================================
 
 // ============================================================================
-// Tests — the headline: WgpuGl satisfies the gl_iface trait, and a single
+// Tests — the headline: WgpuGl satisfies the renderer_trait trait, and a single
 // `fn drawX(gl: anytype)` compiles against all three adapters.
 // ============================================================================
 
-const gl_iface = @import("renderer_trait.zig");
+const renderer_trait = @import("renderer_trait.zig");
+const wgpu = @import("wgpu.zig");
 
-test "WgpuGl satisfies the gl_iface trait" {
+test "WgpuGl satisfies the renderer_trait trait" {
     // Comptime check: errors at compile time if any required method is missing.
     var dummy_renderer: ?Renderer2D = @as(?Renderer2D, null);
     var dummy_pass: PassState = undefined;
     var gl: WgpuGl = WgpuGl.init(&dummy_renderer, &dummy_pass);
-    gl_iface.assertIsGlContext(&gl);
+    renderer_trait.assertIsGlContext(&gl);
 }
 
 test "one `gl: anytype` scene fn compiles against WgpuGl" {
@@ -1086,7 +1102,7 @@ test "one `gl: anytype` scene fn compiles against WgpuGl" {
     // surface matches; drawTriangleBatched is a no-op when the batch is unset.
     const Scene = struct {
         fn draw(gl: anytype) void {
-            gl_iface.assertIsGlContext(gl);
+            renderer_trait.assertIsGlContext(gl);
             gl.matrixMode(.modelview);
             gl.loadIdentity();
             gl.begin(.triangles);
@@ -1111,7 +1127,7 @@ test "assertIsGlContext: WgpuGl satisfies the trait" {
     // renderer has every required method (GL-retirement P5: this
     // replaces the GlAdapter check).
     var dummy: WgpuGl = undefined;
-    gl_iface.assertIsGlContext(&dummy);
+    renderer_trait.assertIsGlContext(&dummy);
 }
 
 // ----------------------------------------------------------------------------

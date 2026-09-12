@@ -29,7 +29,7 @@ const float = zm.float;
 const pointVec = zm.pointVec;
 const rad_per_deg = zm.rad_per_deg;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -92,7 +92,7 @@ fn update(f: *z.Frame, s: *State) void {
     const t: f32 = f.time.time;
     const dt: f32 = @floatCast(f.time.delta_time);
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
     handleCamera(f, s, dt);
 
     // Global breathing pulse (raylib: (2 + sin(time)) * 0.7).
@@ -143,7 +143,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "WebGPU 3D - waving cubes (drag orbit, pinch zoom)");
+    common.caption(f.gl, s.font, "WebGPU 3D - waving cubes (drag orbit, pinch zoom)");
 }
 
 pub const app: z.AppSpec(State) = .{

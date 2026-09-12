@@ -1,0 +1,251 @@
+//! GATE 1, take two: inside a real `zp.World`, the way `examples/humanoid` does it.
+//!
+//! ★ THE LAST ATTEMPT HAND-PUSHED CONTACTS and carried 0.2% of the robot's weight — 0.9 N under
+//! a 400.7 N humanoid. That technique works for the Go1, whose feet genuinely ARE spheres, and
+//! does not transfer to a biped on two flat soles. The collision pipeline generates the
+//! contacts here; nothing is invented.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const mpc = @import("robot_mpc.zig");
+const vec = zm.vec;
+const humanoid_xml = @embedFile("tests/fixtures/robot/humanoid.xml");
+
+const dt: f32 = 1.0 / 1000.0;
+
+/// Centre of pressure: contact points weighted by the normal force the solver found. Row 0 of
+/// each contact's four rows is the normal.
+fn centreOfPressure(d: *const rbt.Data, total_normal: *f32) [2]f32 {
+    var weighted: [2]f32 = .{ 0, 0 };
+    var total: f32 = 0;
+    for (0..d.contact_count) |c| {
+        // ★★★ ALL FOUR ROWS, NOT ROW ZERO. `rows_per_contact = 4` is a PYRAMID FRICTION BASIS —
+        // four non-negative multipliers arranged about the normal — not `[normal, t1, t2, …]`.
+        // Row 0 alone gave exactly a FIFTH of the robot's weight at every timestep, and summing
+        // the four gives **400.25 N against a weight of 400.7**. Every ankle torque in this gate
+        // is `f_z · lever`, so reading a fifth of the load commanded a fifth of the torque —
+        // which is precisely "the ankle cannot hold it up", across every sign and every gain.
+        var force: f32 = 0;
+        for (0..rbt.rows_per_contact) |r| {
+            force += d.constraint_force[c * rbt.rows_per_contact + r];
+        }
+        if (force <= 0) continue;
+        weighted[0] += d.contacts[c].position[0] * force;
+        weighted[1] += d.contacts[c].position[1] * force;
+        total += force;
+    }
+    total_normal.* = total;
+    if (total <= 1.0e-6) return .{ 0, 0 };
+    return .{ weighted[0] / total, weighted[1] / total };
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    const m: *const rbt.Model = &imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    defer d.deinit();
+
+    var world: zp.World = try .init(gpa, 128);
+    defer world.deinit(gpa);
+    world.gravity = vec(0, 0, -9.81);
+    const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(5, 5, 0.5), .convex_radius = 0.01 },
+    });
+    _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+
+    rbt.forward(m, &d);
+    var bridge: rphys.Bridge = try .init(gpa, &world, m, &d, 128);
+    defer bridge.deinit(&world);
+    bridge.listen(&world);
+
+    const home: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(home);
+    var actuated: ctl.Actuation = try ctl.Actuation.init(gpa, m);
+    defer actuated.deinit();
+
+    const feet = [2]u32{
+        imp.bodyIndex("foot_left") orelse return error.NoFoot,
+        imp.bodyIndex("foot_right") orelse return error.NoFoot,
+    };
+    // ★ THE PITCH ANKLE ONLY. Each foot carries `ankle_y` then `ankle_x`; the first is the one
+    // that rocks the sole fore-and-aft, which is what moves the pressure along x. Driving both
+    // would twist the foot as a side effect of a command about a single axis.
+    var ankle_pitch: [64]bool = @splat(false);
+    for (feet) |foot| {
+        const first: u32 = m.body_jnt_adr[foot];
+        ankle_pitch[m.jnt_dof_adr[first]] = true;
+    }
+
+    // ★★★ AND THE ANKLE COMES OUT OF THE POSE SERVO ENTIRELY. Layering a pressure command on
+    // top of `PoseHold` means fighting it — measured, a shift of 0.065 where 0.165 was asked
+    // for. The ankle torque IS the pressure command; every other joint keeps its servo.
+    var stance_hold: ctl.Actuation = try ctl.Actuation.init(gpa, m);
+    defer stance_hold.deinit();
+    for (0..m.nv) |v| {
+        if (ankle_pitch[v]) stance_hold.powered[v] = false;
+    }
+
+    var total_mass: f32 = 0;
+    for (0..m.nbody) |b| total_mass += m.body_mass[b];
+    p("humanoid, mass {d:.1} kg (weight {d:.1} N), real contacts\n\n", .{ total_mass, total_mass * 9.81 });
+    // ★ WHERE THINGS ACTUALLY ARE, BEFORE ASKING THE ROBOT FOR ANYTHING. A pressure command of
+    // zero only makes sense if zero is where the mass is — and nothing has checked that.
+    @memcpy(d.pos, home);
+    d.stage = .stale;
+    rbt.forward(m, &d);
+    p("geometry at qpos0:\n", .{});
+    p("  centre of mass x  {d:>8.4}\n", .{d.subtree_com[rbt.world_body][0]});
+    p("  left foot     x  {d:>8.4}   right foot x  {d:>8.4}\n", .{ d.body_xpos[feet[0]][0], d.body_xpos[feet[1]][0] });
+    p("  ankle pitch dofs:", .{});
+    for (0..m.nv) |v| {
+        if (ankle_pitch[v]) p(" {d}", .{v});
+    }
+    p("\n\n", .{});
+
+    p("  want CoP   contacts   normal N   torso z   achieved   error    verdict\n", .{});
+
+    // ── ★★★ THE LOOP IS CLOSED BY THE PLANNER, NOT BY A FIXED COMMAND ──
+    //
+    // Every previous attempt held the pressure at ONE spot and asked whether the robot stood.
+    // It never could: an inverted pendulum held open-loop has no restoring anything, so it
+    // drifts and goes over whatever the torque. **The pressure has to MOVE in response to where
+    // the mass is** — and producing that motion, with the foot's limits respected, is precisely
+    // what `solveBalance` was built for.
+    var plan: mpc.BalancePlan = try mpc.BalancePlan.init(gpa, 40);
+    defer plan.deinit();
+    @memset(plan.ctrl, 0);
+    @memset(plan.reference, 0);
+
+    const state_w = [_]f32{ 400, 400, 40, 40, 0.02, 0.02 };
+    const control_w = [_]f32{ 1.0, 1.0, 0.002, 0.002 };
+    const terminal_w = [_]f32{ 4000, 4000, 400, 400, 0.2, 0.2 };
+    const weights: mpc.Weights = .{ .state = &state_w, .control = &control_w, .terminal = &terminal_w };
+    // The two soles together, and only what the ankle can actually reach.
+    const limits: mpc.BalanceLimits = .{ .foot_half = .{ 0.09, 0.08 }, .max_momentum_rate = 0.0 };
+
+    const com_jac: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+    defer gpa.free(com_jac);
+    const jac_scratch: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+    defer gpa.free(jac_scratch);
+
+    // ── ★★★ DERIVE THE SIGN FROM WHAT ALREADY WORKS ──
+    //
+    // Plain `PoseHold` stands this robot. So whatever torque it puts on the ankle IS the right
+    // torque, sign and all — no need to argue about cross products. Read it, and compare
+    // against `f_z · (com − ankle)`, which is what the pressure command computes.
+    @memcpy(d.pos, home);
+    @memset(d.vel, 0);
+    d.stage = .stale;
+    rbt.forward(m, &d);
+    for (0..2000) |_| {
+        rbt.forward(m, &d);
+        bridge.sync(&world, m, &d) catch break;
+        zp.step(&world, dt) catch break;
+        bridge.harvest(&d);
+        (ctl.PoseHold{ .target = home, .kp = 400, .kv = 25 }).apply(m, &d, actuated);
+        rbt.step(m, &d);
+    }
+    {
+        var carried0: f32 = 0;
+        const cop0: [2]f32 = centreOfPressure(&d, &carried0);
+        (ctl.PoseHold{ .target = home, .kp = 400, .kv = 25 }).apply(m, &d, actuated);
+        const com0: zm.Vec = d.subtree_com[rbt.world_body];
+        p("what the WORKING controller does at the ankle:\n", .{});
+        p("  normal force {d:.1} N   CoP x {d:.4}   CM x {d:.4}   torso z {d:.4}\n", .{ carried0, cop0[0], com0[0], d.body_xpos[1][2] });
+        for (feet) |foot| {
+            const dof: u32 = m.jnt_dof_adr[m.body_jnt_adr[foot]];
+            const lever: f32 = com0[0] - d.body_xpos[foot][0];
+            p("  dof {d:>2}: PoseHold applies {d:>8.3} N·m    f_z·lever/2 = {d:>8.3}\n", .{ dof, d.applied_force[dof], 0.5 * carried0 * lever });
+        }
+        p("\n", .{});
+    }
+
+    p("  push m/s   ankle kv   torso z   CM drift   CoP x     verdict\n", .{});
+    for ([_]f32{ 0.0, 0.15, 0.30 }) |push| {
+        for ([_]f32{ 4.0, 15.0 }) |ankle_damping| {
+            @memcpy(d.pos, home);
+            @memset(d.vel, 0);
+            d.stage = .stale;
+            rbt.forward(m, &d);
+            const start_com: f32 = d.subtree_com[rbt.world_body][0];
+            @memset(plan.ctrl, 0);
+
+            var cop: [2]f32 = .{ 0, 0 };
+            var carried: f32 = 0;
+            for (0..3000) |step_index| { // 3 s
+                rbt.forward(m, &d);
+                bridge.sync(&world, m, &d) catch break;
+                zp.step(&world, dt) catch break;
+                bridge.harvest(&d);
+
+                if (step_index == 500) {
+                    for (0..m.nv) |v| d.vel[v] += 0;
+                    d.vel[0] += push; // a shove along x, once
+                }
+
+                // The balancing state, read off the real robot.
+                const com: zm.Vec = d.subtree_com[rbt.world_body];
+                ctl.comJacobian(m, &d, com_jac, jac_scratch);
+                var com_vel: zm.Vec = vec(0, 0, 0);
+                for (0..m.nv) |v| com_vel += com_jac[v] * zm.splat(d.vel[v]);
+
+                var x: [mpc.lipm_state_dim]f32 = @splat(0);
+                x[mpc.lipm_com_offset] = com[0];
+                x[mpc.lipm_com_offset + 1] = com[1];
+                x[mpc.lipm_vel_offset] = com_vel[0];
+                x[mpc.lipm_vel_offset + 1] = com_vel[1];
+                _ = mpc.solveBalance(
+                    .{ .mass = 40.8, .height = com[2], .gravity = 9.81 },
+                    &plan,
+                    &x,
+                    weights,
+                    limits,
+                    0.02,
+                    2,
+                );
+                const want: f32 = plan.ctrl[mpc.lipm_cop_offset];
+
+                cop = centreOfPressure(&d, &carried);
+                (ctl.PoseHold{ .target = home, .kp = 400, .kv = 25 }).apply(m, &d, stance_hold);
+                for (feet) |foot| {
+                    const dof: u32 = m.jnt_dof_adr[m.body_jnt_adr[foot]];
+                    const lever: f32 = want - d.body_xpos[foot][0];
+                    // ★★★ THE SIGN, READ OFF THE CONTROLLER THAT ALREADY WORKS RATHER THAN
+                    // ARGUED FROM A CROSS PRODUCT. Standing under plain `PoseHold`, the ankle
+                    // carries **+7.816 N·m**, and `0.5·f_z·(p_cop − p_ankle)` comes to **+7.29**
+                    // — within 7%. POSITIVE. Every attempt in this gate used the negative, which
+                    // is why the ankle drove the robot over instead of holding it up, at every
+                    // magnitude and every gain.
+                    d.applied_force[dof] = 0.5 * carried * lever - ankle_damping * d.vel[dof];
+                }
+                rbt.step(m, &d);
+            }
+            const standing: bool = d.body_xpos[1][2] > 1.1;
+            p("  {d:>8.2}   {d:>8.1}   {d:>7.4}   {d:>8.4}   {d:>7.4}   {s}\n", .{
+                push,                                         ankle_damping, d.body_xpos[1][2],
+                d.subtree_com[rbt.world_body][0] - start_com, cop[0],        if (standing) "STANDS" else "fell",
+            });
+        }
+    }
+}

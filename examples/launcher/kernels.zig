@@ -16,9 +16,9 @@
 //! (0.17.0-dev.1282) has no `@Type`, no `std.meta.Tuple`, and `@Struct` with numeric field
 //! names yields something that does not support indexing. Two entries are cheap to write out;
 //! when the language grows the tuple back, this becomes `a.job_kernels ++ b.job_kernels`.
-const zimr = @import("zimr");
+const z = @import("zimr");
 
-const jobs = zimr.jobs;
+const jobs = z.jobs;
 
 /// The examples on the launcher that have job kernels.
 ///
@@ -41,7 +41,7 @@ const four = @import("k_four_ways");
 /// other.
 pub const job_kernels = .{
     .{ "encodePng", png.encodePng },
-    .{ "mandel", zimr.komputeKernel(four.module, "mandel") },
+    .{ "mandel", z.komputeKernel(four.module, "mandel") },
 };
 
 /// The bounds are the MAX over the members: one buffer serves every kernel on the page, so it

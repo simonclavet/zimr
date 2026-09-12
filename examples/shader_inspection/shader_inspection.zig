@@ -14,7 +14,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const bufPrint = std.fmt.bufPrint;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -66,11 +66,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    f.gl.text(.{ 28, 28 }, "shader inspection", .{ .size = 30, .color = co.palette.ink, .font = &s.font });
+    f.gl.text(.{ 28, 28 }, "shader inspection", .{ .size = 30, .color = common.palette.ink, .font = &s.font });
     f.gl.text(
         .{ 28, 66 },
         "bind-group layout reflected from WGSL",
-        .{ .size = 16, .color = co.palette.ink_dim, .font = &s.font },
+        .{ .size = 16, .color = common.palette.ink_dim, .font = &s.font },
     );
 
     var buf: [256]u8 = undefined;
@@ -87,7 +87,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var foot: [64]u8 = undefined;
     const summary: []const u8 = bufPrint(&foot, "{d} bindings", .{s.bindings.len}) catch "";
-    f.gl.text(.{ 28, y + 12 }, summary, .{ .size = 16, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ 28, y + 12 }, summary, .{ .size = 16, .color = common.palette.ink_dim, .font = &s.font });
 
     z.endDrawing(f.gl);
 }

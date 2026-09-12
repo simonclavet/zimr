@@ -22,8 +22,8 @@
 
 const std = @import("std");
 const expect = std.testing.expect;
-const textures = @import("../image.zig");
-const models = @import("../draw3d.zig");
+const image = @import("../image.zig");
+const draw3d = @import("../draw3d.zig");
 const types = @import("../types.zig");
 const Image = types.Image;
 const rng_mod = @import("../runtime.zig").effects.rng;
@@ -37,8 +37,8 @@ test "leak: gen/free image - 100 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 100) : (i += 1) {
-        const img = try textures.genImageColor(ta, 32, 32, .{ .r = 100, .g = 50, .b = 200, .a = 255 });
-        textures.unloadImage(ta, img);
+        const img = try image.genImageColor(ta, 32, 32, .{ .r = 100, .g = 50, .b = 200, .a = 255 });
+        image.unloadImage(ta, img);
     }
 }
 
@@ -46,9 +46,9 @@ test "leak: gen/resize/free chain - 50 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        var img = try textures.genImageColor(ta, 16, 16, .{ .r = 80, .g = 80, .b = 80, .a = 255 });
-        try textures.imageResize(ta, &img, 32, 32);
-        textures.unloadImage(ta, img);
+        var img = try image.genImageColor(ta, 16, 16, .{ .r = 80, .g = 80, .b = 80, .a = 255 });
+        try image.imageResize(ta, &img, 32, 32);
+        image.unloadImage(ta, img);
     }
 }
 
@@ -58,13 +58,13 @@ test "leak: gen/full-transform-chain/free - 25 iterations" {
     while (i < 25) : (i += 1) {
         // Build a 32×32 image, run it through 5 different transforms,
         // then free.  Any errdefer or freeImageData mismatch leaks.
-        var img = try textures.genImageColor(ta, 32, 32, .{ .r = 50, .g = 100, .b = 150, .a = 255 });
-        try textures.imageResize(ta, &img, 64, 64);
-        try textures.imageRotateCW(ta, &img);
-        try textures.imageCrop(ta, &img, .{ .x = 8, .y = 8, .width = 32, .height = 32 });
-        try textures.imageResizeNN(ta, &img, 16, 16);
-        try textures.imageResizeCanvas(ta, &img, 24, 24, 4, 4, .{ .r = 0, .g = 0, .b = 0, .a = 255 });
-        textures.unloadImage(ta, img);
+        var img = try image.genImageColor(ta, 32, 32, .{ .r = 50, .g = 100, .b = 150, .a = 255 });
+        try image.imageResize(ta, &img, 64, 64);
+        try image.imageRotateCW(ta, &img);
+        try image.imageCrop(ta, &img, .{ .x = 8, .y = 8, .width = 32, .height = 32 });
+        try image.imageResizeNN(ta, &img, 16, 16);
+        try image.imageResizeCanvas(ta, &img, 24, 24, 4, 4, .{ .r = 0, .g = 0, .b = 0, .a = 255 });
+        image.unloadImage(ta, img);
     }
 }
 
@@ -72,10 +72,10 @@ test "leak: imageCopy roundtrip - 50 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const src = try textures.genImageColor(ta, 12, 12, .{ .r = 200, .g = 100, .b = 50, .a = 255 });
-        const dst = try textures.imageCopy(ta, src);
-        textures.unloadImage(ta, src);
-        textures.unloadImage(ta, dst);
+        const src = try image.genImageColor(ta, 12, 12, .{ .r = 200, .g = 100, .b = 50, .a = 255 });
+        const dst = try image.imageCopy(ta, src);
+        image.unloadImage(ta, src);
+        image.unloadImage(ta, dst);
     }
 }
 
@@ -83,10 +83,10 @@ test "leak: imageFromImage extract - 50 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const src = try textures.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
-        const sub = try textures.imageFromImage(ta, src, .{ .x = 1, .y = 1, .width = 4, .height = 4 });
-        textures.unloadImage(ta, src);
-        textures.unloadImage(ta, sub);
+        const src = try image.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
+        const sub = try image.imageFromImage(ta, src, .{ .x = 1, .y = 1, .width = 4, .height = 4 });
+        image.unloadImage(ta, src);
+        image.unloadImage(ta, sub);
     }
 }
 
@@ -94,9 +94,9 @@ test "leak: gen/blur/free - exercises gpa scratch buffers" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 20) : (i += 1) {
-        var img = try textures.genImageColor(ta, 16, 16, .{ .r = 200, .g = 200, .b = 200, .a = 255 });
-        try textures.imageBlurGaussian(ta, &img, 2);
-        textures.unloadImage(ta, img);
+        var img = try image.genImageColor(ta, 16, 16, .{ .r = 200, .g = 200, .b = 200, .a = 255 });
+        try image.imageBlurGaussian(ta, &img, 2);
+        image.unloadImage(ta, img);
     }
 }
 
@@ -106,24 +106,24 @@ test "leak: gen all image variants" {
     const c1: Color = .{ .r = 10, .g = 20, .b = 30, .a = 255 };
     const c2: Color = .{ .r = 200, .g = 180, .b = 160, .a = 255 };
 
-    const img1: Image = try textures.genImageColor(ta, 16, 16, c1);
-    defer textures.unloadImage(ta, img1);
+    const img1: Image = try image.genImageColor(ta, 16, 16, c1);
+    defer image.unloadImage(ta, img1);
 
-    const img2: Image = try textures.genImageGradientLinear(ta, 16, 16, radFromDeg(45.0), c1, c2);
-    defer textures.unloadImage(ta, img2);
+    const img2: Image = try image.genImageGradientLinear(ta, 16, 16, radFromDeg(45.0), c1, c2);
+    defer image.unloadImage(ta, img2);
 
-    const img3: Image = try textures.genImageGradientRadial(ta, 16, 16, 0.3, c1, c2);
-    defer textures.unloadImage(ta, img3);
+    const img3: Image = try image.genImageGradientRadial(ta, 16, 16, 0.3, c1, c2);
+    defer image.unloadImage(ta, img3);
 
-    const img4: Image = try textures.genImageGradientSquare(ta, 16, 16, 0.3, c1, c2);
-    defer textures.unloadImage(ta, img4);
+    const img4: Image = try image.genImageGradientSquare(ta, 16, 16, 0.3, c1, c2);
+    defer image.unloadImage(ta, img4);
 
-    const img5: Image = try textures.genImageChecked(ta, 16, 16, 4, 4, c1, c2);
-    defer textures.unloadImage(ta, img5);
+    const img5: Image = try image.genImageChecked(ta, 16, 16, 4, 4, c1, c2);
+    defer image.unloadImage(ta, img5);
 
     var seeded: rng_mod.Seeded = rng_mod.Seeded.init(42);
-    const img6: Image = try textures.genImageWhiteNoise(ta, seeded.rng(), 16, 16, 0.5);
-    defer textures.unloadImage(ta, img6);
+    const img6: Image = try image.genImageWhiteNoise(ta, seeded.rng(), 16, 16, 0.5);
+    defer image.unloadImage(ta, img6);
 
     try expect(img1.data != null and img1.width == 16);
     try expect(img2.data != null and img2.width == 16);
@@ -143,41 +143,41 @@ test "leak: gen/free mesh - 25 iterations across mesh types" {
     // pair is balanced.
     var i: usize = 0;
     while (i < 25) : (i += 1) {
-        const cube: types.Mesh = try models.genMeshCube(ta, 1.0, 1.0, 1.0);
-        models.unloadMesh(ta, cube);
+        const cube: types.Mesh = try draw3d.genMeshCube(ta, 1.0, 1.0, 1.0);
+        draw3d.unloadMesh(ta, cube);
 
-        const sphere: types.Mesh = try models.genMeshSphere(ta, 0.5, 8, 8);
-        models.unloadMesh(ta, sphere);
+        const sphere: types.Mesh = try draw3d.genMeshSphere(ta, 0.5, 8, 8);
+        draw3d.unloadMesh(ta, sphere);
 
         // genMeshTangents allocates a 4×vc float array and stores
         // it on mesh.tangents.  unloadMesh must free it via the
         // same allocator.
-        var sphere_with_tangents: types.Mesh = try models.genMeshSphere(ta, 0.5, 8, 8);
-        try models.genMeshTangents(ta, &sphere_with_tangents);
-        models.unloadMesh(ta, sphere_with_tangents);
+        var sphere_with_tangents: types.Mesh = try draw3d.genMeshSphere(ta, 0.5, 8, 8);
+        try draw3d.genMeshTangents(ta, &sphere_with_tangents);
+        draw3d.unloadMesh(ta, sphere_with_tangents);
 
         // Re-running genMeshTangents on a mesh that already has
         // tangents must free the old buffer before allocating the
         // new one.
-        var cube_repeat: types.Mesh = try models.genMeshCube(ta, 1.0, 1.0, 1.0);
-        try models.genMeshTangents(ta, &cube_repeat);
-        try models.genMeshTangents(ta, &cube_repeat);
-        models.unloadMesh(ta, cube_repeat);
+        var cube_repeat: types.Mesh = try draw3d.genMeshCube(ta, 1.0, 1.0, 1.0);
+        try draw3d.genMeshTangents(ta, &cube_repeat);
+        try draw3d.genMeshTangents(ta, &cube_repeat);
+        draw3d.unloadMesh(ta, cube_repeat);
 
-        const plane = try models.genMeshPlane(ta, 1.0, 1.0, 2, 2);
-        models.unloadMesh(ta, plane);
+        const plane = try draw3d.genMeshPlane(ta, 1.0, 1.0, 2, 2);
+        draw3d.unloadMesh(ta, plane);
     }
 }
 
-// loadImageColors stress - Phase E.2's models.zig private API
+// loadImageColors stress - Phase E.2's draw3d.zig private API
 test "leak: loadImageColors round-trip - 50 iterations" {
     const ta: Allocator = std.testing.allocator;
-    const src: types.Image = try textures.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
-    defer textures.unloadImage(ta, src);
+    const src: types.Image = try image.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
+    defer image.unloadImage(ta, src);
 
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const colors = try models.loadImageColors(ta, src);
+        const colors = try draw3d.loadImageColors(ta, src);
         defer ta.free(colors);
         try expect(colors.len == 64);
         try expect(colors[0].r == 30);

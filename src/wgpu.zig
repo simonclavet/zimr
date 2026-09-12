@@ -1,3 +1,4 @@
+//! lint:alias wgpu
 // src/wgpu.zig - WebGPU JS bridge: typed handles + extern decls + thin wrappers.
 // WebGPU architecture is documented centrally in src/zimr.zig
 // (the module-level `//!` doc) — read that before changing wgpu code.
@@ -71,7 +72,7 @@ pub const CommandBufferHandle = enum(u32) { invalid = 0, _ };
 
 /// Check if a handle is the invalid sentinel.
 pub inline fn isValid(handle: anytype) bool {
-    return @intFromEnum(handle) != 0;
+    return @backingInt(handle) != 0;
 }
 
 // ============================================================================
@@ -495,28 +496,28 @@ pub fn initDevice() DeviceHandle {
     if (comptime !is_wasm) {
         return .invalid;
     }
-    return @enumFromInt(js_init_device());
+    return @fromBackingInt(@intCast(js_init_device()));
 }
 
 pub fn getQueue(device: DeviceHandle) QueueHandle {
     if (comptime !is_wasm) {
         return .invalid;
     }
-    return @enumFromInt(js_device_get_queue(@intFromEnum(device)));
+    return @fromBackingInt(@intCast(js_device_get_queue(@backingInt(device))));
 }
 
 pub fn getSurface() SurfaceHandle {
     if (comptime !is_wasm) {
         return .invalid;
     }
-    return @enumFromInt(js_get_surface());
+    return @fromBackingInt(@intCast(js_get_surface()));
 }
 
 pub fn getSurfaceFormat(surface: SurfaceHandle) TextureFormat {
     if (comptime !is_wasm) {
         return .undefined_;
     }
-    return @enumFromInt(js_surface_get_format(@intFromEnum(surface)));
+    return @fromBackingInt(@intCast(js_surface_get_format(@backingInt(surface))));
 }
 
 /// Backing-pixel dimensions of a surface's canvas.
@@ -529,7 +530,7 @@ pub fn getSurfaceSize(surface: SurfaceHandle) SurfaceSize {
     if (comptime !is_wasm) {
         return .{ .width = 1, .height = 1 };
     }
-    const packed_size: u32 = js_surface_get_size(@intFromEnum(surface));
+    const packed_size: u32 = js_surface_get_size(@backingInt(surface));
     return .{ .width = packed_size >> 16, .height = packed_size & 0xffff };
 }
 
@@ -542,7 +543,7 @@ pub fn getSurfaceCssSize(surface: SurfaceHandle) SurfaceSize {
     if (comptime !is_wasm) {
         return .{ .width = 1, .height = 1 };
     }
-    const packed_size: u32 = js_surface_get_css_size(@intFromEnum(surface));
+    const packed_size: u32 = js_surface_get_css_size(@backingInt(surface));
     return .{ .width = packed_size >> 16, .height = packed_size & 0xffff };
 }
 
@@ -567,14 +568,14 @@ pub fn getCurrentTextureView(surface: SurfaceHandle) TextureViewHandle {
     if (comptime !is_wasm) {
         return .invalid;
     }
-    return @enumFromInt(js_surface_get_current_texture(@intFromEnum(surface)));
+    return @fromBackingInt(@intCast(js_surface_get_current_texture(@backingInt(surface))));
 }
 
 pub fn surfacePresent(surface: SurfaceHandle) void {
     if (comptime !is_wasm) {
         return;
     }
-    js_surface_present(@intFromEnum(surface));
+    js_surface_present(@backingInt(surface));
 }
 
 /// Create a buffer.  Caller owns the returned handle.
@@ -589,13 +590,13 @@ pub fn createBuffer(device: DeviceHandle, desc: BufferDesc) BufferHandle {
         return .invalid;
     }
     bumpHandle(.buffer, 1);
-    return @enumFromInt(js_device_create_buffer(
-        @intFromEnum(device),
+    return @fromBackingInt(@intCast(js_device_create_buffer(
+        @backingInt(device),
         desc.size,
         @bitCast(desc.usage),
         desc.label.ptr,
         desc.label.len,
-    ));
+    )));
 }
 
 // ---- GPU-handle leak canary (Phase 1b) --------------------------------------
@@ -653,7 +654,7 @@ pub fn destroyBuffer(buffer: BufferHandle) void {
         return;
     }
     bumpHandle(.buffer, -1);
-    js_buffer_destroy(@intFromEnum(buffer));
+    js_buffer_destroy(@backingInt(buffer));
 }
 
 /// Fetch the adapter's vendor/architecture/device/description string —
@@ -691,8 +692,8 @@ pub fn queueWriteBuffer(
         return;
     }
     js_queue_write_buffer(
-        @intFromEnum(queue),
-        @intFromEnum(buffer),
+        @backingInt(queue),
+        @backingInt(buffer),
         offset,
         data.ptr,
         data.len,
@@ -707,6 +708,16 @@ pub fn queueWriteBuffer(
 /// allocator needed: the aligned prefix is written directly and a ≤3-byte
 /// tail is zero-extended into a 4-byte stack write. `usage` must include
 /// `copy_dst`.
+/// The buffer size `createBufferInit` will allocate for `bytes`: rounded up to the next
+/// multiple of four.
+///
+/// Exposed so callers that must record the buffer's size cannot compute it differently from
+/// the function that creates it — the two disagreeing is how a padded buffer ends up with an
+/// unpadded length recorded against it.
+pub fn alignedBufferSize(byte_count: usize) u64 {
+    return (@as(u64, byte_count) + 3) & ~@as(u64, 3);
+}
+
 pub fn createBufferInit(
     device: DeviceHandle,
     queue: QueueHandle,
@@ -746,13 +757,13 @@ pub fn createShaderModuleWgsl(
         return .invalid;
     }
     bumpHandle(.shader_module, 1);
-    return @enumFromInt(js_device_create_shader_module_wgsl(
-        @intFromEnum(device),
+    return @fromBackingInt(@intCast(js_device_create_shader_module_wgsl(
+        @backingInt(device),
         wgsl.ptr,
         wgsl.len,
         label.ptr,
         label.len,
-    ));
+    )));
 }
 
 /// Create a command encoder.  One per frame.  Caller calls `finish`
@@ -761,7 +772,7 @@ pub fn createCommandEncoder(device: DeviceHandle) CommandEncoderHandle {
     if (comptime !is_wasm) {
         return .invalid;
     }
-    return @enumFromInt(js_device_create_command_encoder(@intFromEnum(device)));
+    return @fromBackingInt(@intCast(js_device_create_command_encoder(@backingInt(device))));
 }
 
 /// Copy `size` bytes between two GPU buffers (src must be COPY_SRC, dst COPY_DST).
@@ -777,10 +788,10 @@ pub fn copyBufferToBuffer(
         return;
     }
     js_encoder_copy_buffer_to_buffer(
-        @intFromEnum(encoder),
-        @intFromEnum(src),
+        @backingInt(encoder),
+        @backingInt(src),
         src_off,
-        @intFromEnum(dst),
+        @backingInt(dst),
         dst_off,
         size,
     );
@@ -807,9 +818,9 @@ pub fn copyTextureToBuffer(
         return;
     }
     js_encoder_copy_texture_to_buffer(
-        @intFromEnum(encoder),
-        @intFromEnum(texture),
-        @intFromEnum(dst),
+        @backingInt(encoder),
+        @backingInt(texture),
+        @backingInt(dst),
         bytes_per_row,
         width,
         height,
@@ -820,7 +831,7 @@ pub fn bufferReadStart(buf: BufferHandle, size: u32) BufferRead {
     if (comptime !is_wasm) {
         return .invalid;
     }
-    return @enumFromInt(js_buffer_read_start(@intFromEnum(buf), size));
+    return @fromBackingInt(@intCast(js_buffer_read_start(@backingInt(buf), size)));
 }
 
 /// 0 = still mapping, 1 = data ready to copy via `bufferReadInto`.
@@ -828,7 +839,7 @@ pub fn bufferReadPoll(handle: BufferRead) bool {
     if (comptime !is_wasm) {
         return false;
     }
-    return js_buffer_read_poll(@intFromEnum(handle)) != 0;
+    return js_buffer_read_poll(@backingInt(handle)) != 0;
 }
 
 /// Copy the mapped bytes into `dst` (only valid after poll==true).
@@ -836,7 +847,7 @@ pub fn bufferReadInto(handle: BufferRead, dst: []u8) void {
     if (comptime !is_wasm) {
         return;
     }
-    js_buffer_read_into(@intFromEnum(handle), dst.ptr, @intCast(dst.len));
+    js_buffer_read_into(@backingInt(handle), dst.ptr, @intCast(dst.len));
 }
 
 /// Unmap + free the read handle.
@@ -844,21 +855,21 @@ pub fn bufferReadRelease(handle: BufferRead) void {
     if (comptime !is_wasm) {
         return;
     }
-    js_buffer_read_release(@intFromEnum(handle));
+    js_buffer_read_release(@backingInt(handle));
 }
 
 pub fn finishCommandEncoder(encoder: CommandEncoderHandle) CommandBufferHandle {
     if (comptime !is_wasm) {
         return .invalid;
     }
-    return @enumFromInt(js_command_encoder_finish(@intFromEnum(encoder)));
+    return @fromBackingInt(@intCast(js_command_encoder_finish(@backingInt(encoder))));
 }
 
 pub fn queueSubmit(queue: QueueHandle, cmd_buffer: CommandBufferHandle) void {
     if (comptime !is_wasm) {
         return;
     }
-    js_queue_submit(@intFromEnum(queue), @intFromEnum(cmd_buffer));
+    js_queue_submit(@backingInt(queue), @backingInt(cmd_buffer));
 }
 
 /// Create a bind group layout from a pre-serialized entries blob.
@@ -875,13 +886,13 @@ pub fn createBindGroupLayout(
         return .invalid;
     }
     bumpHandle(.bind_group_layout, 1);
-    return @enumFromInt(js_device_create_bind_group_layout(
-        @intFromEnum(device),
+    return @fromBackingInt(@intCast(js_device_create_bind_group_layout(
+        @backingInt(device),
         entries_blob.ptr,
         entries_blob.len,
         label.ptr,
         label.len,
-    ));
+    )));
 }
 
 /// Create a bind group from a pre-serialized entries blob.  See
@@ -896,14 +907,14 @@ pub fn createBindGroup(
         return .invalid;
     }
     bumpHandle(.bind_group, 1);
-    return @enumFromInt(js_device_create_bind_group(
-        @intFromEnum(device),
-        @intFromEnum(layout),
+    return @fromBackingInt(@intCast(js_device_create_bind_group(
+        @backingInt(device),
+        @backingInt(layout),
         entries_blob.ptr,
         entries_blob.len,
         label.ptr,
         label.len,
-    ));
+    )));
 }
 
 /// Create a pipeline layout from a slice of bind group layout
@@ -920,13 +931,13 @@ pub fn createPipelineLayout(
     bumpHandle(.pipeline_layout, 1);
     // BindGroupLayoutHandle is enum(u32); slice cast is safe.
     const ids: []const u8 = std.mem.sliceAsBytes(bind_group_layouts);
-    return @enumFromInt(js_device_create_pipeline_layout(
-        @intFromEnum(device),
+    return @fromBackingInt(@intCast(js_device_create_pipeline_layout(
+        @backingInt(device),
         @ptrCast(@alignCast(ids.ptr)),
         bind_group_layouts.len,
         label.ptr,
         label.len,
-    ));
+    )));
 }
 
 /// Create a render pipeline.  Descriptor passed as a pre-serialized
@@ -951,16 +962,16 @@ pub fn createRenderPipeline(
         return .invalid;
     }
     bumpHandle(.render_pipeline, 1);
-    return @enumFromInt(js_device_create_render_pipeline(
-        @intFromEnum(device),
-        @intFromEnum(layout),
-        @intFromEnum(vs_module),
-        @intFromEnum(fs_module),
+    return @fromBackingInt(@intCast(js_device_create_render_pipeline(
+        @backingInt(device),
+        @backingInt(layout),
+        @backingInt(vs_module),
+        @backingInt(fs_module),
         descriptor_blob.ptr,
         descriptor_blob.len,
         label.ptr,
         label.len,
-    ));
+    )));
 }
 
 /// Create a compute pipeline.  Compute pipelines use only one entry
@@ -976,15 +987,15 @@ pub fn createComputePipeline(
         return .invalid;
     }
     bumpHandle(.compute_pipeline, 1);
-    return @enumFromInt(js_device_create_compute_pipeline(
-        @intFromEnum(device),
-        @intFromEnum(layout),
-        @intFromEnum(shader_module),
+    return @fromBackingInt(@intCast(js_device_create_compute_pipeline(
+        @backingInt(device),
+        @backingInt(layout),
+        @backingInt(shader_module),
         entry_point.ptr,
         entry_point.len,
         label.ptr,
         label.len,
-    ));
+    )));
 }
 
 // --- Texture / Sampler ---
@@ -1011,18 +1022,18 @@ pub fn createTexture(device: DeviceHandle, desc: TextureDesc) TextureHandle {
         return .invalid;
     }
     bumpHandle(.texture, 1);
-    return @enumFromInt(js_device_create_texture(
-        @intFromEnum(device),
+    return @fromBackingInt(@intCast(js_device_create_texture(
+        @backingInt(device),
         desc.width,
         desc.height,
-        @intFromEnum(desc.format),
+        @backingInt(desc.format),
         @bitCast(desc.usage),
         desc.label.ptr,
         desc.label.len,
         desc.sample_count,
         desc.mip_level_count,
         desc.array_layers,
-    ));
+    )));
 }
 
 pub fn createTextureView(texture: TextureHandle) TextureViewHandle {
@@ -1030,7 +1041,7 @@ pub fn createTextureView(texture: TextureHandle) TextureViewHandle {
         return .invalid;
     }
     bumpHandle(.texture_view, 1);
-    return @enumFromInt(js_texture_create_view(@intFromEnum(texture)));
+    return @fromBackingInt(@intCast(js_texture_create_view(@backingInt(texture))));
 }
 
 /// A view of a single mip level (base_mip_level = `base_mip`, count 1) — used to
@@ -1045,7 +1056,7 @@ pub fn createTextureViewMip(
         return .invalid;
     }
     bumpHandle(.texture_view, 1);
-    return @enumFromInt(js_texture_create_view_mip(@intFromEnum(texture), base_mip, mip_count));
+    return @fromBackingInt(@intCast(js_texture_create_view_mip(@backingInt(texture), base_mip, mip_count)));
 }
 
 /// A 2d-array view covering `layer_count` layers (base layer 0). Bind it as a
@@ -1055,7 +1066,7 @@ pub fn createTextureViewArray(texture: TextureHandle, layer_count: u32) TextureV
         return .invalid;
     }
     bumpHandle(.texture_view, 1);
-    return @enumFromInt(js_texture_create_view_array(@intFromEnum(texture), layer_count));
+    return @fromBackingInt(@intCast(js_texture_create_view_array(@backingInt(texture), layer_count)));
 }
 
 pub fn destroyTexture(texture: TextureHandle) void {
@@ -1063,7 +1074,7 @@ pub fn destroyTexture(texture: TextureHandle) void {
         return;
     }
     bumpHandle(.texture, -1);
-    js_texture_destroy(@intFromEnum(texture));
+    js_texture_destroy(@backingInt(texture));
 }
 
 // Explicit destroys for the remaining GPU resource types (WebGPU GC's these
@@ -1073,56 +1084,56 @@ pub fn destroyBindGroup(handle: BindGroupHandle) void {
         return;
     }
     bumpHandle(.bind_group, -1);
-    js_bind_group_destroy(@intFromEnum(handle));
+    js_bind_group_destroy(@backingInt(handle));
 }
 pub fn destroyBindGroupLayout(handle: BindGroupLayoutHandle) void {
     if (comptime !is_wasm) {
         return;
     }
     bumpHandle(.bind_group_layout, -1);
-    js_bind_group_layout_destroy(@intFromEnum(handle));
+    js_bind_group_layout_destroy(@backingInt(handle));
 }
 pub fn destroyPipelineLayout(handle: PipelineLayoutHandle) void {
     if (comptime !is_wasm) {
         return;
     }
     bumpHandle(.pipeline_layout, -1);
-    js_pipeline_layout_destroy(@intFromEnum(handle));
+    js_pipeline_layout_destroy(@backingInt(handle));
 }
 pub fn destroyRenderPipeline(handle: RenderPipelineHandle) void {
     if (comptime !is_wasm) {
         return;
     }
     bumpHandle(.render_pipeline, -1);
-    js_render_pipeline_destroy(@intFromEnum(handle));
+    js_render_pipeline_destroy(@backingInt(handle));
 }
 pub fn destroyComputePipeline(handle: ComputePipelineHandle) void {
     if (comptime !is_wasm) {
         return;
     }
     bumpHandle(.compute_pipeline, -1);
-    js_compute_pipeline_destroy(@intFromEnum(handle));
+    js_compute_pipeline_destroy(@backingInt(handle));
 }
 pub fn destroySampler(handle: SamplerHandle) void {
     if (comptime !is_wasm) {
         return;
     }
     bumpHandle(.sampler, -1);
-    js_sampler_destroy(@intFromEnum(handle));
+    js_sampler_destroy(@backingInt(handle));
 }
 pub fn destroyShaderModule(handle: ShaderModuleHandle) void {
     if (comptime !is_wasm) {
         return;
     }
     bumpHandle(.shader_module, -1);
-    js_shader_module_destroy(@intFromEnum(handle));
+    js_shader_module_destroy(@backingInt(handle));
 }
 pub fn destroyTextureView(handle: TextureViewHandle) void {
     if (comptime !is_wasm) {
         return;
     }
     bumpHandle(.texture_view, -1);
-    js_texture_view_destroy(@intFromEnum(handle));
+    js_texture_view_destroy(@backingInt(handle));
 }
 
 pub fn queueWriteTexture(
@@ -1151,8 +1162,8 @@ pub fn queueWriteTextureLevel(
         return;
     }
     js_queue_write_texture(
-        @intFromEnum(queue),
-        @intFromEnum(texture),
+        @backingInt(queue),
+        @backingInt(texture),
         width,
         height,
         bytes_per_row,
@@ -1180,13 +1191,13 @@ pub fn createSampler(device: DeviceHandle, desc: SamplerDesc) SamplerHandle {
         return .invalid;
     }
     bumpHandle(.sampler, 1);
-    return @enumFromInt(js_device_create_sampler(
-        @intFromEnum(device),
+    return @fromBackingInt(@intCast(js_device_create_sampler(
+        @backingInt(device),
         @intFromBool(desc.mag_filter_linear),
         @intFromBool(desc.min_filter_linear),
-        @intFromEnum(desc.address_mode),
+        @backingInt(desc.address_mode),
         @intFromBool(desc.mipmap_filter_linear),
-    ));
+    )));
 }
 
 // Render pass / compute pass helpers live in `render_pass.zig` and
@@ -1281,22 +1292,22 @@ pub const render_pass = struct {
         const load_op: wgpu.LoadOp = if (desc.clear != null) wgpu.LoadOp.clear else desc.load_op;
         const clear = desc.clear orelse wgpu.ColorF32{ .r = 0, .g = 0, .b = 0, .a = 1 };
 
-        return @enumFromInt(wgpu_js.begin_render_pass(
-            @intFromEnum(desc.encoder),
-            @intFromEnum(desc.color_view),
+        return @fromBackingInt(@intCast(wgpu_js.begin_render_pass(
+            @backingInt(desc.encoder),
+            @backingInt(desc.color_view),
             clear.r,
             clear.g,
             clear.b,
             clear.a,
-            @intFromEnum(load_op),
-            @intFromEnum(desc.store_op),
-            if (desc.depth_view) |dv| @intFromEnum(dv) else 0,
-            if (desc.resolve_view) |rv| @intFromEnum(rv) else 0,
-        ));
+            @backingInt(load_op),
+            @backingInt(desc.store_op),
+            if (desc.depth_view) |dv| @backingInt(dv) else 0,
+            if (desc.resolve_view) |rv| @backingInt(rv) else 0,
+        )));
     }
 
     pub fn end(pass: wgpu.RenderPassEncoderHandle) void {
-        wgpu_js.render_pass_end(@intFromEnum(pass));
+        wgpu_js.render_pass_end(@backingInt(pass));
     }
 
     /// Begin an MRT render pass: `color_views` (up to 8 — WebGPU's
@@ -1321,19 +1332,19 @@ pub const render_pass = struct {
         var raw: [8]u32 = undefined;
         const n: usize = @min(desc.color_views.len, raw.len);
         for (desc.color_views[0..n], raw[0..n]) |v, *r| {
-            r.* = @intFromEnum(v);
+            r.* = @backingInt(v);
         }
-        return @enumFromInt(wgpu_js.begin_render_pass_mrt(
-            @intFromEnum(desc.encoder),
+        return @fromBackingInt(@intCast(wgpu_js.begin_render_pass_mrt(
+            @backingInt(desc.encoder),
             raw[0..n],
             clear.r,
             clear.g,
             clear.b,
             clear.a,
-            @intFromEnum(load_op),
-            @intFromEnum(desc.store_op),
-            if (desc.depth_view) |dv| @intFromEnum(dv) else 0,
-        ));
+            @backingInt(load_op),
+            @backingInt(desc.store_op),
+            if (desc.depth_view) |dv| @backingInt(dv) else 0,
+        )));
     }
 
     pub fn setPipeline(
@@ -1341,8 +1352,8 @@ pub const render_pass = struct {
         pipeline: wgpu.RenderPipelineHandle,
     ) void {
         wgpu_js.render_pass_set_pipeline(
-            @intFromEnum(pass),
-            @intFromEnum(pipeline),
+            @backingInt(pass),
+            @backingInt(pipeline),
         );
     }
 
@@ -1352,9 +1363,9 @@ pub const render_pass = struct {
         bind_group: wgpu.BindGroupHandle,
     ) void {
         wgpu_js.render_pass_set_bind_group(
-            @intFromEnum(pass),
+            @backingInt(pass),
             group_index,
-            @intFromEnum(bind_group),
+            @backingInt(bind_group),
         );
     }
 
@@ -1370,9 +1381,9 @@ pub const render_pass = struct {
         binding: VertexBufferBinding,
     ) void {
         wgpu_js.render_pass_set_vertex_buffer(
-            @intFromEnum(pass),
+            @backingInt(pass),
             binding.slot,
-            @intFromEnum(binding.buffer),
+            @backingInt(binding.buffer),
             binding.offset,
             binding.size,
         );
@@ -1390,9 +1401,9 @@ pub const render_pass = struct {
         binding: IndexBufferBinding,
     ) void {
         wgpu_js.render_pass_set_index_buffer(
-            @intFromEnum(pass),
-            @intFromEnum(binding.buffer),
-            @intFromEnum(binding.format),
+            @backingInt(pass),
+            @backingInt(binding.buffer),
+            @backingInt(binding.format),
             binding.offset,
             binding.size,
         );
@@ -1407,7 +1418,7 @@ pub const render_pass = struct {
 
     pub fn draw(pass: wgpu.RenderPassEncoderHandle, desc: DrawDesc) void {
         wgpu_js.render_pass_draw(
-            @intFromEnum(pass),
+            @backingInt(pass),
             desc.vertex_count,
             desc.instance_count,
             desc.first_vertex,
@@ -1425,7 +1436,7 @@ pub const render_pass = struct {
 
     pub fn drawIndexed(pass: wgpu.RenderPassEncoderHandle, desc: DrawIndexedDesc) void {
         wgpu_js.render_pass_draw_indexed(
-            @intFromEnum(pass),
+            @backingInt(pass),
             desc.index_count,
             desc.instance_count,
             desc.first_index,
@@ -1443,7 +1454,7 @@ pub const render_pass = struct {
         w: u32,
         h: u32,
     ) void {
-        wgpu_js.render_pass_set_scissor_rect(@intFromEnum(pass), x, y, w, h);
+        wgpu_js.render_pass_set_scissor_rect(@backingInt(pass), x, y, w, h);
     }
 
     // ============================================================================
@@ -1707,14 +1718,14 @@ pub const compute_pass = struct {
         if (comptime !is_wasm) {
             return .invalid;
         }
-        return @enumFromInt(externs.js_encoder_begin_compute_pass(@intFromEnum(encoder)));
+        return @fromBackingInt(@intCast(externs.js_encoder_begin_compute_pass(@backingInt(encoder))));
     }
 
     pub fn end(pass: wgpu.ComputePassEncoderHandle) void {
         if (comptime !is_wasm) {
             return;
         }
-        externs.js_compute_pass_end(@intFromEnum(pass));
+        externs.js_compute_pass_end(@backingInt(pass));
     }
 
     pub fn setPipeline(
@@ -1725,8 +1736,8 @@ pub const compute_pass = struct {
             return;
         }
         externs.js_compute_pass_set_pipeline(
-            @intFromEnum(pass),
-            @intFromEnum(pipeline),
+            @backingInt(pass),
+            @backingInt(pipeline),
         );
     }
 
@@ -1739,9 +1750,9 @@ pub const compute_pass = struct {
             return;
         }
         externs.js_compute_pass_set_bind_group(
-            @intFromEnum(pass),
+            @backingInt(pass),
             group_index,
-            @intFromEnum(bind_group),
+            @backingInt(bind_group),
         );
     }
 
@@ -1755,7 +1766,7 @@ pub const compute_pass = struct {
             return;
         }
         externs.js_compute_pass_dispatch_workgroups(
-            @intFromEnum(pass),
+            @backingInt(pass),
             d.x,
             d.y,
             d.z,
@@ -1961,3 +1972,40 @@ pub const storage_buffer = struct {
         try expectEqual(@as(u64, 400), sb.sizeBytes());
     }
 };
+
+const expectTrue = std.testing.expect;
+
+test "alignedBufferSize rounds up to four, which is what queueWriteBuffer requires" {
+    // ★ THE SHAPE OF A REAL BUG, pinned.
+    //
+    // `queueWriteBuffer` requires a byte count that is a multiple of four. A u16 index
+    // buffer meets that only when the index COUNT is even — and indices come in threes, so
+    // ANY mesh with an odd triangle count fails. A KUKA arm link has 2759 triangles: 8277
+    // indices, 16554 bytes, rejected by WebGPU with an error that surfaces in the browser
+    // rather than at the call site.
+    //
+    // The bug had already been found once and fixed LOCALLY at one of the three index-upload
+    // sites, leaving the other two broken. This asserts the arithmetic every one of them now
+    // shares.
+
+    // The exact case that failed, in the field.
+    try expectTrue(alignedBufferSize(2759 * 3 * @sizeOf(u16)) == 16556);
+    // Already aligned: untouched.
+    try expectTrue(alignedBufferSize(16) == 16);
+    try expectTrue(alignedBufferSize(0) == 0);
+    // Every remainder rounds up, never down — a short buffer would be worse than an
+    // unaligned one, since the tail of the data would simply be missing.
+    for (1..64) |n| {
+        const padded: u64 = alignedBufferSize(n);
+        try expectTrue(padded % 4 == 0);
+        try expectTrue(padded >= n);
+        try expectTrue(padded - n < 4);
+    }
+    // And an odd count of u16 is ALWAYS unaligned, which is the property that makes this a
+    // rule about triangle counts rather than a coincidence.
+    for (0..32) |triangles| {
+        const indices: usize = triangles * 3;
+        const bytes: usize = indices * @sizeOf(u16);
+        try expectTrue((bytes % 4 == 0) == (indices % 2 == 0));
+    }
+}

@@ -61,9 +61,9 @@ const mode_count: usize = std.enums.values(Mode).len;
 /// Step through the effects, wrapping. `dir` is +1 / -1.
 fn cycleMode(m: Mode, dir: i32) Mode {
     const n: i32 = @intCast(mode_count);
-    const i: i32 = @intCast(@intFromEnum(m));
+    const i: i32 = @intCast(@backingInt(m));
     const next: i32 = @mod(i + dir + n, n);
-    return @enumFromInt(@as(u32, @intCast(next)));
+    return @fromBackingInt(@intCast(@as(u32, @intCast(next))));
 }
 
 const bg_clear: Color = .{ .r = 28, .g = 27, .b = 34, .a = 255 };
@@ -411,7 +411,7 @@ fn update(f: *z.Frame, s: *State) void {
         }
         u.sameLine(.{});
         u.text("{s}", .{@tagName(s.mode)});
-        u.text("effect {d} of {d}", .{ @intFromEnum(s.mode) + 1, mode_count });
+        u.text("effect {d} of {d}", .{ @backingInt(s.mode) + 1, mode_count });
         u.separator();
         switch (s.mode) {
             .source => u.text("unfiltered scene", .{}),

@@ -28,7 +28,7 @@ Simon asked: "Do we really need linter arguments?  We don't
 need to skip or do only one rule…  simple, like zig, no
 warnings."
 
-What got stripped from `tools/lint_zimr.zig`:
+What got stripped from `tools/zimrlint.zig`:
 
 - `--quiet` flag — gone.  Either the file passes or it doesn't.
 - `--only=tag,tag` — gone.  No per-rule filtering.

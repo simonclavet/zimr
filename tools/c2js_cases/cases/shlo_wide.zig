@@ -2,9 +2,15 @@
 // zig_shlo_TN helper, so it hit the unhandled-C marker and the result was 0.
 // References build the wrapped value and the overflow flag independently.
 var su: u64 = 0;
-fn ru(x: u64) u64 { su +%= x; return x; }
+fn ru(x: u64) u64 {
+    su +%= x;
+    return x;
+}
 var sw: u32 = 0;
-fn rw(x: u32) u32 { sw +%= x; return x; }
+fn rw(x: u32) u32 {
+    sw +%= x;
+    return x;
+}
 
 export fn run_test() i32 {
     var code: i32 = 1;

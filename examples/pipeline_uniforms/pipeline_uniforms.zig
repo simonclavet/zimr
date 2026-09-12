@@ -24,7 +24,7 @@ const zm = @import("zm");
 const mulMat = zm.mulMat;
 const scaling = zm.scaling;
 const rotationZ = zm.rotationZ;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -109,7 +109,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.shader.setVertex(ps, 0, s.vbo, @sizeOf(@TypeOf(vertices)));
     s.shader.draw(ps, vertices.len, 1);
 
-    co.caption(f.gl, s.font, "pipeline_uniforms: a vertex-stage UBO transform drives a custom pipeline");
+    common.caption(f.gl, s.font, "pipeline_uniforms: a vertex-stage UBO transform drives a custom pipeline");
     z.endDrawing(f.gl);
 }
 

@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 const Mat = zm.Mat;
 const mulMat = zm.mulMat;
 const translation = zm.translation;
@@ -264,7 +264,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.pipeline.setVertex(ps, 0, s.vbo, @sizeOf(@TypeOf(box_verts)));
     s.pipeline.drawArrays(ps, box_verts.len, joint_count);
 
-    co.caption(f.gl, s.font, "forward_kinematics: one instanced draw, per-joint world matrices");
+    common.caption(f.gl, s.font, "forward_kinematics: one instanced draw, per-joint world matrices");
     z.endDrawing(f.gl);
 }
 

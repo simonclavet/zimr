@@ -1,3 +1,4 @@
+//! lint:alias plot_ui
 //! plot_ui.zig — the `ui.zig` adapter for `plot.zig`.
 //!
 //! Two pieces:

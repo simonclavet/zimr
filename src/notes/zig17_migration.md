@@ -75,7 +75,7 @@ through any dependency breakage against a local checkout.
   configures fine — so the bug is **Fmt-specific, not general LazyPath**).
   WORKAROUND (applied, B8): both `b.addFmt(...)` replaced with
   `b.addSystemCommand(&.{ b.graph.zig_exe, "fmt", [--check], "src", "examples",
-  "build.zig", "tools/lint_zimr.zig", "tools/build.zig" })`. TODO: file upstream
+  "build.zig", "tools/zimrlint.zig", "tools/build.zig" })`. TODO: file upstream
   for 0.17.1; revert to `b.addFmt` once fixed.
 
 ## Steps (tagged)
@@ -129,15 +129,15 @@ through any dependency breakage against a local checkout.
 
 ## Progress log / STATUS  ← update at END of every session, read at START
 
-**STATUS (session 6 — `tools/lint_zimr.zig` made 0.17-clean; standalone is
+**STATUS (session 6 — `tools/zimrlint.zig` made 0.17-clean; standalone is
 C++-SPIR-V-gated):** Chasing a `zig build wgpu-lambert-standalone` request, the
-`tools_subbuild` step (builds `lint_zimr` + the C++ SPIR-V tools) surfaced **two
-real 0.17 regressions in `lint_zimr.zig`**, now fixed: (1) `Allocator.dupeZ` was
+`tools_subbuild` step (builds `zimrlint` + the C++ SPIR-V tools) surfaced **two
+real 0.17 regressions in `zimrlint.zig`**, now fixed: (1) `Allocator.dupeZ` was
 removed → replaced with `allocSentinel` + `@memcpy` (line ~1954, the
 `Ast.parse` source buffer); (2) the linter's own `checkArrayMult` rule + the
 `.array_mult` case in its binary-op tag list referenced the **`array_mult` AST
 node, which 0.17 deleted alongside the `**` operator** — removed both (the rule
-is self-obsolete now that the compiler rejects `**`). `lint_zimr.zig` compiles
+is self-obsolete now that the compiler rejects `**`). `zimrlint.zig` compiles
 to a native object under 0.17 and is fmt-clean. The other tools (`spv2wgsl`,
 `zspv`, `zglsl`) already build; only the **C++ SPIR-V tools remain**.
 
@@ -188,7 +188,7 @@ across 10 files converted (`life`, `keys`, `particles` [multi-line, by hand],
 `ui_input_flags_zoo_phone` [13], `ui_log_viewer` [`@splat(.info)`], `ui_notes_phone`,
 `ui_shortcuts`, `ui_window_menubar`). `zig fmt --check examples` 10→0 errors; the
 nested/struct/enum `@splat` forms verified to type-check; and **`zig build fmt`
-now passes end-to-end** (src + examples + build.zig + tools + lint_zimr.zig).
+now passes end-to-end** (src + examples + build.zig + tools + zimrlint.zig).
 Re-verified this session that the **whole maker pipeline executes** (the `fmt`
 step ran configurer→serialize→maker→`zig fmt` for real) and `tools/buildaux.zig`
 compiles native — i.e. the B-track migration is functionally sound, not just

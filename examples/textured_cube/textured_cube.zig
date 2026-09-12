@@ -14,7 +14,7 @@ const pi = zm.pi;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -55,7 +55,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawCubeTexture(f.gl, s.tex, pointVec(0, 1, 0), 2.0, c.white);
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "drawCubeTexture - checker mapped on each face, depth-tested with the grid");
+    common.caption(f.gl, s.font, "drawCubeTexture - checker mapped on each face, depth-tested with the grid");
     z.endDrawing(f.gl);
 }
 

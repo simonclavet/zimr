@@ -32,7 +32,7 @@ const zm = @import("zm");
 const Color = zm.Color;
 const float = zm.float;
 const Vec2 = zm.Vec2;
-const sin = zm.sin;
+const sinRad = zm.sinRad;
 const ui = z.ui_real;
 
 const screen_w: i32 = 1280;
@@ -441,7 +441,7 @@ fn panelPlots(
     s.fps_idx = (s.fps_idx + 1) % s.fps_hist.len;
 
     s.sine_phase += dt * 1.5;
-    s.sine_hist[s.sine_idx] = sin(s.sine_phase) * 0.5 + 0.5;
+    s.sine_hist[s.sine_idx] = sinRad(s.sine_phase) * 0.5 + 0.5;
     s.sine_idx = (s.sine_idx + 1) % s.sine_hist.len;
 
     u.text("Sparkline plots - plotLines + plotHistogram", .{});

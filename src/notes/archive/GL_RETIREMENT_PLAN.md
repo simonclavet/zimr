@@ -9,7 +9,7 @@ folded in where they belong in the order.
 
 ## THE MAP (what the study found)
 
-### Who is condemned (lint's `isSkipped`, tools/lint_zimr.zig ~899)
+### Who is condemned (lint's `isSkipped`, tools/zimrlint.zig ~899)
 - src/{zimr, rlgl, gl, gl_iface, drawing, test}.zig
 - every top-level `examples/<name>.zig` EXCEPT `_fs.zig`/`_vs.zig` shader
   sources (those are LIVE — the shader pipeline compiles them and wgpu

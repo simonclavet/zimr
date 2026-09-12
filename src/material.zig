@@ -1,13 +1,14 @@
+//! lint:alias material
 //! material.zig — the public custom-pipeline API ("complete WebGPU control").
 //!
 //! This is the keystone of `src/notes/webgpu_control.md`. It collapses the ~90
-//! lines of pipeline plumbing that `cube_demo` hand-rolls — create shader
+//! lines of pipeline plumbing that `cube_demo` hand-rolls — create shader_runtime
 //! module → pipeline layout → `StateCombo` → encode descriptor → create
 //! pipeline, then `setPipeline` → `setVertexBuffer` → draw — into one `Pipeline`
 //! an app builds with a designated struct literal and draws with one call,
 //! inside the normal frame pass.
 //!
-//! Raw WGSL is the escape hatch (the zimr default is a Zig shader; both reach
+//! Raw WGSL is the escape hatch (the zimr default is a Zig shader_runtime; both reach
 //! the same descriptor). A SINGLE WGSL module serves both the vertex and the
 //! fragment stage, matching raygpu's `LoadPipeline(source)` shape: the module
 //! declares `@vertex fn vs_main` and `@fragment fn fs_main`.
@@ -15,7 +16,7 @@
 //! Built on the layers zimr already had but never surfaced to apps: `wgpu.zig`
 //! (handles + render-pass ops), `gpu.zig` (descriptor encoder + `StateCombo`),
 //! `gpu_iface.WgpuBackend` (pass binding), and the typed `RenderPipeline`
-//! wrapper from `shader_runtime_wgpu.zig`.
+//! wrapper from `shader_runtime.zig`.
 //!
 //! Composition: a `Pipeline` is depthLESS by default, so it draws into the
 //! engine's 2D frame pass and composites with `drawCircle`/`drawText` in the
@@ -28,7 +29,7 @@ const Allocator = std.mem.Allocator;
 const wgpu = @import("wgpu.zig");
 const gpu = @import("gpu.zig");
 const gpu_iface = @import("gpu_iface.zig");
-const shader = @import("shader_runtime_wgpu.zig");
+const shader_runtime = @import("shader_runtime_wgpu.zig");
 const shader_introspect = @import("shader_introspect.zig");
 
 const render_pass = wgpu.render_pass;
@@ -48,11 +49,11 @@ pub const VertexAttribute = gpu.VertexAttribute;
 pub const VertexBufferLayout = gpu.VertexBufferLayout;
 /// One WGSL pipeline-overridable constant (`override name = value`).
 pub const Constant = gpu.PipelineConstant;
-/// Which shader stages a binding is visible to, e.g. `.{ .vertex = true }`.
+/// Which shader_runtime stages a binding is visible to, e.g. `.{ .vertex = true }`.
 pub const ShaderStage = wgpu.ShaderStage;
 /// One bind-group-layout entry (uniform/storage/sampler/texture/storage texture).
 pub const LayoutEntry = shader_introspect.BindGroupLayoutEntry;
-/// Reflect the resource bindings out of WGSL source — the "shader inspection"
+/// Reflect the resource bindings out of WGSL source — the "shader_runtime inspection"
 /// surface. Returns owned `WgslBinding`s (free with `freeWgslBindings`).
 pub const WgslBinding = shader_introspect.WgslBinding;
 pub const reflectWgslBindings = shader_introspect.reflectWgslBindings;
@@ -62,15 +63,15 @@ pub const BindEntry = gpu.BindGroupEntry;
 
 /// Everything needed to build a custom render pipeline, as one designated
 /// literal. `wgsl` is a single module declaring both entry points. Provide
-/// `bind_group_layouts` when the shader has bindings (see the uniforms
-/// example); leave empty for a self-contained shader. State is data, not
+/// `bind_group_layouts` when the shader_runtime has bindings (see the uniforms
+/// example); leave empty for a self-contained shader_runtime. State is data, not
 /// setters.
 pub const PipelineOptions = struct {
     wgsl: []const u8,
     vs_entry: []const u8 = "vs_main",
     fs_entry: []const u8 = "fs_main",
     /// One entry per bound vertex buffer (raygpu's VAO). Empty = no vertex
-    /// input (a shader that synthesises positions from `@builtin(vertex_index)`).
+    /// input (a shader_runtime that synthesises positions from `@builtin(vertex_index)`).
     layouts: []const VertexBufferLayout = &.{},
     bind_group_layouts: []const wgpu.BindGroupLayoutHandle = &.{},
     topology: Topology = .triangle_list,
@@ -138,7 +139,7 @@ pub const Pipeline = struct {
         return .{ .handle = handle, .layout = pl, .module = module };
     }
 
-    /// Free the render pipeline, its pipeline layout, and its shader module.
+    /// Free the render pipeline, its pipeline layout, and its shader_runtime module.
     /// The app owns the `Pipeline` and calls this from its own `deinit` —
     /// managed memory means every GPU handle has a named owner that releases
     /// it. (Unlike `loadShaderVF`, this pipeline is built directly, not shared
@@ -160,7 +161,7 @@ pub const Pipeline = struct {
 
     /// Bind this pipeline on the pass. Call before binding groups / drawing.
     pub fn bind(self: Pipeline, ps: *PassState) void {
-        const wrapper: shader.RenderPipeline(void, void) = .{ .gpu_handle = self.handle };
+        const wrapper: shader_runtime.RenderPipeline(void, void) = .{ .gpu_handle = self.handle };
         Backend.setPipeline(ps, wrapper);
     }
 
@@ -371,7 +372,7 @@ pub fn fillStorageView(
     const bg: wgpu.BindGroupHandle = try bindGroup(gpa, f, bgl, &.{
         .{ .binding = 0, .resource = .{ .texture_view = view } },
     }, opts.label);
-    var pipe: ComputePipeline = try ComputePipeline.init(gpa, f, .{
+    var pipe: ComputePipeline = ComputePipeline.init(gpa, f, .{
         .wgsl = opts.wgsl,
         .bind_group_layouts = &.{bgl},
         .label = opts.label,
@@ -424,7 +425,7 @@ pub const ComputePipeline = struct {
         label: []const u8 = "compute_pipeline",
     };
 
-    pub fn init(gpa: Allocator, f: anytype, opts: Options) !ComputePipeline {
+    pub fn init(gpa: Allocator, f: anytype, opts: Options) ComputePipeline {
         _ = gpa;
         const device: wgpu.DeviceHandle = f.gpu.device;
         const module: wgpu.ShaderModuleHandle =

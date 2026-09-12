@@ -15,9 +15,10 @@ const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
+const turnsFromRad = zm.turnsFromRad;
 const Vec2 = zm.Vec2;
 const float = zm.float;
-const pi = zm.pi;
 const ui = z.ui_real;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -105,7 +106,7 @@ fn update(f: *z.Frame, s: *State) void {
         var sine_buf: [128]f32 = undefined;
         for (sine_buf[0..], 0..) |*v, i| {
             const t: f32 = float(i) / float(sine_buf.len - 1);
-            v.* = @sin(2.0 * pi * s.sine_freq * t + s.sine_phase);
+            v.* = sinTurns(s.sine_freq * t + turnsFromRad(s.sine_phase));
         }
         u.plotLines("animated sine", sine_buf[0..], .{
             .min = -1.2,

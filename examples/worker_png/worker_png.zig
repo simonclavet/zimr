@@ -22,8 +22,8 @@ const zm = @import("zm");
 
 const kernels = @import("kernels.zig");
 const jobs = z.jobs;
-const cos = zm.cos;
-const sin = zm.sin;
+const cosRad = zm.cosRad;
+const sinRad = zm.sinRad;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -224,7 +224,7 @@ fn update(f: *z.Frame, s: *State) void {
     const orbit: f32 = 46.0;
     f.gl.circle(.{ cx, cy }, 52.0, .{ .color = .{ .r = 22, .g = 30, .b = 48, .a = 255 }, .segments = 32 });
     f.gl.circle(
-        .{ cx + orbit * cos(angle), cy + orbit * sin(angle) },
+        .{ cx + orbit * cosRad(angle), cy + orbit * sinRad(angle) },
         11.0,
         .{ .color = .{ .r = 126, .g = 231, .b = 135, .a = 255 }, .segments = 16 },
     );

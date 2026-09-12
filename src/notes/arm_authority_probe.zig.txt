@@ -1,0 +1,134 @@
+//! How much balance authority does the arm actually have?
+//!
+//! ★ TWO MECHANISMS, AND THEY ARE DIFFERENT PHYSICS:
+//!
+//!   * **CoM shifting** — move mass, move where gravity acts. Quasi-static, persistent, bounded
+//!     by REACH.
+//!   * **Angular momentum** — accelerate the arm, get an equal and opposite torque on the body.
+//!     Dynamic, transient, bounded by SPEED and by running out of arm. This is the flywheel.
+//!
+//! ★★ THE SECOND ONE MATTERS MOST ON THIS ROBOT because of what was already measured: during the
+//! routine the friction cone runs at **1.83x** — the feet are saturated and cannot supply more
+//! corrective force. **Arm momentum needs no contact force at all**, so it works precisely where
+//! the legs have run out.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+const arm_bodies =
+    \\      <body name="arm_base" pos="0.02 0 0.06">
+    \\        <joint name="arm_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="1.2" armature="0.02"/>
+    \\        <geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.030" density="700"/>
+    \\        <body name="arm_upper" pos="0 0 0.10">
+    \\          <joint name="arm_shoulder" type="hinge" axis="0 1 0" range="-2.4 2.4" damping="1.2" armature="0.02"/>
+    \\          <geom type="capsule" fromto="0 0 0 0 0 0.26" size="0.026" density="700"/>
+    \\          <body name="arm_fore" pos="0 0 0.26">
+    \\            <joint name="arm_elbow" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="1.0" armature="0.015"/>
+    \\            <geom type="capsule" fromto="0 0 0 0 0 0.22" size="0.022" density="700"/>
+    \\            <body name="arm_wrist" pos="0 0 0.22">
+    \\              <joint name="arm_wrist" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.8" armature="0.01"/>
+    \\              <geom type="capsule" fromto="0 0 0 0 0 0.08" size="0.019" density="700"/>
+    \\              <body name="gripper" pos="0 0 0.08">
+    \\                <geom name="gripper_g" type="sphere" size="0.060" density="1100"/>
+    \\              </body>
+    \\            </body>
+    \\          </body>
+    \\        </body>
+    \\      </body>
+    \\
+;
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    const tail: []const u8 = "    </body>\n  </worldbody>";
+    const at: usize = std.mem.indexOf(u8, go1_xml, tail) orelse return error.NoTail;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa, go1_xml[0..at]);
+    try text.appendSlice(gpa, arm_bodies);
+    try text.appendSlice(gpa, go1_xml[at..]);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, text.items, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = 1.0 / 250.0,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    const m: *const rbt.Model = &imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    defer d.deinit();
+    @memcpy(d.pos, m.qpos0);
+    d.pos[2] = 0.27;
+    for ([_]f32{ 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8 }, 0..) |a, k| d.pos[7 + k] = a;
+    d.stage = .stale;
+    rbt.forward(m, &d);
+
+    var total: f32 = 0;
+    for (0..m.nbody) |b| total += m.body_mass[b];
+    const trunk: zm.Vec = d.body_xpos[1];
+
+    // ── ARM INERTIA ABOUT THE SHOULDER ──
+    //
+    // ★ THE POINT-MASS ESTIMATE IS ENOUGH HERE. What matters is the ORDER of the reaction torque
+    // against the tipping torque, and a factor of two either way does not change the conclusion.
+    var arm_mass: f32 = 0;
+    var arm_inertia: f32 = 0;
+    const shoulder: zm.Vec = d.body_xpos[imp.bodyIndex("arm_upper").?];
+    for ([_][]const u8{ "arm_base", "arm_upper", "arm_fore", "arm_wrist", "gripper" }) |name| {
+        const b: u32 = imp.bodyIndex(name) orelse continue;
+        const r: f32 = zm.length3(d.body_xpos[b] - shoulder);
+        arm_mass += m.body_mass[b];
+        arm_inertia += m.body_mass[b] * r * r;
+    }
+
+    // The shoulder motor's rating, from the spliced actuator block.
+    const shoulder_torque: f32 = 60.0;
+    const alpha: f32 = shoulder_torque / @max(0.001, arm_inertia);
+
+    p("=== ARM AS A BALANCE ACTUATOR: THE ARITHMETIC ===\n\n", .{});
+    p("  robot total mass          {d:.2} kg\n", .{total});
+    p("  arm mass                  {d:.2} kg\n", .{arm_mass});
+    p("  arm inertia about shoulder{d:.4} kg m^2\n", .{arm_inertia});
+    p("  shoulder motor            {d:.0} N.m\n\n", .{shoulder_torque});
+
+    p("  ★ REACTION TORQUE AVAILABLE = motor torque, directly: {d:.1} N.m\n", .{shoulder_torque});
+    p("    (the arm pushes on the trunk exactly as hard as the motor pushes the arm)\n", .{});
+    p("    peak angular acceleration {d:.0} rad/s^2\n\n", .{alpha});
+
+    // ── THE DISTURBANCE IT HAS TO FIGHT ──
+    for ([_]f32{ 0.02, 0.05, 0.10 }) |offset| {
+        const tipping: f32 = total * 9.81 * offset;
+        p("  CoM {d:.2} m outside support -> tipping torque {d:>6.2} N.m   arm authority {d:>5.1}x\n", .{ offset, tipping, shoulder_torque / tipping });
+    }
+
+    // ── AND HOW LONG THE ARM CAN SUSTAIN IT ──
+    //
+    // ★★ MOMENTUM CONTROL IS BOUNDED BY TRAVEL, NOT BY TORQUE. At full acceleration the arm
+    // crosses its range in `sqrt(2*range/alpha)` seconds, and after that it must stop — and
+    // stopping it applies the OPPOSITE torque. That window is the whole budget.
+    const range: f32 = 2.4; // shoulder range, one direction
+    const window: f32 = @sqrt(2.0 * range / alpha);
+    p("\n  ★★ SUSTAIN WINDOW: full range {d:.1} rad at {d:.0} rad/s^2 = **{d:.3} s** of torque\n", .{ range, alpha, window });
+    p("     then the arm is at its stop and must be unwound slowly, or it gives the torque back.\n", .{});
+
+    // ── CoM SHIFTING, THE OTHER MECHANISM ──
+    const swing: f32 = 0.144; // measured earlier: CoM excursion over the arm's range
+    p("\n  ★ CoM SHIFTING (the quasi-static mechanism): the arm moves the whole-body CoM\n", .{});
+    p("    {d:.3} m fore-aft, against a support base of about 0.36 m — {d:.0}%% of it.\n", .{ swing, 100.0 * swing / 0.36 });
+    p("    Persistent, unlike momentum, but slow and bounded by reach.\n", .{});
+    _ = trunk;
+}

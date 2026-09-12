@@ -75,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
     {
         var i: usize = 0;
         while (i < ast.nodes.len) : (i += 1) {
-            const node: Ast.Node.Index = @enumFromInt(i);
+            const node: Ast.Node.Index = @fromBackingInt(@intCast(i));
             const vd: Ast.full.VarDecl = ast.fullVarDecl(node) orelse continue;
             const name_tok: u32 = vd.ast.mut_token + 1;
             if (!eql(u8, ast.tokenSlice(name_tok), old_name)) {
@@ -106,7 +106,7 @@ pub fn main(init: std.process.Init) !void {
     {
         var i: usize = 0;
         while (i < ast.nodes.len) : (i += 1) {
-            const node: Ast.Node.Index = @enumFromInt(i);
+            const node: Ast.Node.Index = @fromBackingInt(@intCast(i));
             const t: Ast.Node.Tag = ast.nodeTag(node);
             if (t != .fn_decl and t != .test_decl) {
                 continue;
@@ -128,7 +128,7 @@ pub fn main(init: std.process.Init) !void {
     {
         var i: usize = 0;
         while (i < ast.nodes.len) : (i += 1) {
-            const node: Ast.Node.Index = @enumFromInt(i);
+            const node: Ast.Node.Index = @fromBackingInt(@intCast(i));
             if (ast.nodeTag(node) == .identifier) {
                 const tok: u32 = ast.nodeMainToken(node);
                 if (tok >= best_ft and tok <= best_lt) {

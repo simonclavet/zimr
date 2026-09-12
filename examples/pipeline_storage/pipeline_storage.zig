@@ -20,7 +20,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -37,12 +37,12 @@ const compute_wgsl =
     \\    }
     \\    let fx = f32(gid.x) / f32(dims.x);
     \\    let fy = f32(gid.y) / f32(dims.y);
-    \\    let v = sin(fx * 10.0) + sin(fy * 10.0) + sin((fx + fy) * 10.0)
-    \\          + sin(sqrt(fx * fx + fy * fy) * 14.0);
+    \\    let v = sinRad(fx * 10.0) + sinRad(fy * 10.0) + sinRad((fx + fy) * 10.0)
+    \\          + sinRad(sqrt(fx * fx + fy * fy) * 14.0);
     \\    let c = vec3f(
-    \\        0.5 + 0.5 * sin(v * 1.5),
-    \\        0.5 + 0.5 * sin(v * 1.5 + 2.094),
-    \\        0.5 + 0.5 * sin(v * 1.5 + 4.188)
+    \\        0.5 + 0.5 * sinRad(v * 1.5),
+    \\        0.5 + 0.5 * sinRad(v * 1.5 + 2.094),
+    \\        0.5 + 0.5 * sinRad(v * 1.5 + 4.188)
     \\    );
     \\    textureStore(out_tex, vec2i(i32(gid.x), i32(gid.y)), vec4f(c, 1.0));
     \\}
@@ -147,7 +147,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.render_pipe.setBindGroup(ps, 0, s.render_bg);
     s.render_pipe.drawArrays(ps, 3, 1);
 
-    co.caption(f.gl, s.font, "pipeline_storage: compute shader -> storage texture -> sampled fullscreen");
+    common.caption(f.gl, s.font, "pipeline_storage: compute shader -> storage texture -> sampled fullscreen");
     z.endDrawing(f.gl);
 }
 

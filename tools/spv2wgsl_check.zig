@@ -71,6 +71,9 @@ const Diag = struct {
 
 const Result = struct {
     name: []const u8,
+    /// The shader's own name, recovered from the SPIR-V debug strings. Null when the module
+    /// carries none. Printed on failure so a content hash is never the only identification.
+    source_name: ?[]const u8 = null,
     path: []const u8,
     spv_bytes: usize,
     trans_ok: bool,
@@ -505,6 +508,7 @@ fn checkOne(
         return r;
     };
     r.spv_bytes = bytes.len;
+    r.source_name = guessShaderName(bytes);
     if (bytes.len % 4 != 0) {
         r.trans_error = try arena.dupe(u8, "input is not multiple of 4 bytes (not SPIR-V)");
         return r;
@@ -556,10 +560,21 @@ fn checkOne(
 // Path discovery
 // ============================================================================
 
+/// True when `path` exists AND holds at least one byte.
+///
+/// ★ THE SIZE CHECK IS THE POINT. A FAILED shader compile leaves a ZERO-BYTE `.spv` behind in
+/// the cache, and this walker would happily hand it to the translator, which correctly refuses
+/// an empty module — reported as TRANS-FAIL. That is build detritus being scored as a
+/// translator bug, and it cost real time: two of five failures in the SSAO session were empty
+/// files, and their presence made the three REAL failures look like a pre-existing condition.
+///
+/// An empty `.spv` is never interesting to this gate: whatever produced it already failed
+/// loudly at compile time.
 fn statFile(io: std.Io, path: []const u8) bool {
     var f: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
-    f.close(io);
-    return true;
+    defer f.close(io);
+    const st: std.Io.File.Stat = f.stat(io) catch return false;
+    return st.size > 0;
 }
 
 fn lessThanStr(
@@ -570,6 +585,27 @@ fn lessThanStr(
     return std.mem.lessThan(u8, a, b);
 }
 
+/// Every `.spv` the build has ever produced and still has cached.
+///
+/// ── ★★ THIS IS CACHE-DERIVED, NOT SOURCE-DERIVED, AND THAT HAS TEETH ──
+///
+/// The walk is over `.zig-cache/o/<hash>/`, which knows nothing about which shader sources
+/// currently exist. Three consequences, all of them real:
+///
+///   1. **A DELETED OR RENAMED SHADER KEEPS BEING CHECKED** until the cache is cleared. Its
+///      failures have no source to fix.
+///   2. **EVERY REVISION OF A SHADER UNDER DEVELOPMENT ACCUMULATES.** Iterating on one shader
+///      left THREE cached entries, all failing, all reported separately — which read as three
+///      independent problems.
+///   3. ★ **DELETING A SOURCE FILE IS NOT A CONTROL EXPERIMENT.** Removing three new shaders
+///      and re-running gave an IDENTICAL failure count, which looked like proof they were
+///      innocent. The cached `.spv` were still there and still being scanned. They were
+///      guilty. To attribute a failure here, identify the input directly —
+///      `strings <hash>/shader.spv | grep <name>` names it immediately — or clear the cache.
+///
+/// The breadth is deliberate: scanning everything the build ever emitted is what makes this a
+/// corpus rather than a spot check, and it catches shaders no example currently draws. But the
+/// price is that a result here is evidence about the CACHE, not about the working tree.
 fn listOurCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
     // Walk .zig-cache/o/<hash>/ for shader.opt.spv, shader.spv, or compute.spv.
     // `compute.spv` is the kompute compute-kernel output (addCompute) — without
@@ -632,6 +668,42 @@ fn listTintCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
 // Reporting
 // ============================================================================
 
+/// Pull a shader's own name out of its SPIR-V, for failure reporting.
+///
+/// ★ THE CACHE NAMES EVERY SHADER BY CONTENT HASH, which is exactly no help when one fails:
+/// `ERR-MARKER ... 13f8626c97ee8878e34ed80e22be531d` says nothing about WHICH shader is
+/// broken. Attributing three failures in the SSAO session meant running
+/// `strings <hash>/shader.spv | grep` by hand, and the missing attribution is what made a
+/// wrong conclusion easy to reach in the first place.
+///
+/// SPIR-V keeps `OpName`/`OpSource` debug strings in the module, so the source name is sitting
+/// right there in the bytes. This scans for the first identifier-shaped run ending in `_fs`,
+/// `_vs` or `_io` — deliberately lexical rather than a real SPIR-V parse, because this runs
+/// only on the failure path and must never itself fail.
+fn guessShaderName(spv: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < spv.len) : (i += 1) {
+        if (!isIdentByte(spv[i])) {
+            continue;
+        }
+        var j: usize = i;
+        while (j < spv.len and isIdentByte(spv[j])) : (j += 1) {}
+        const word: []const u8 = spv[i..j];
+        if (word.len >= 5 and word.len <= 64 and
+            (endsWith(u8, word, "_fs") or endsWith(u8, word, "_vs") or endsWith(u8, word, "_io")))
+        {
+            return word;
+        }
+        i = j;
+    }
+    return null;
+}
+
+fn isIdentByte(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+        (c >= '0' and c <= '9') or c == '_';
+}
+
 fn printRow(
     io: std.Io,
     stdout_w: *std.Io.File.Writer,
@@ -659,6 +731,12 @@ fn printRow(
             r.name,
         },
     );
+    // ★ On any failure, say WHICH SHADER — the hash alone is unactionable.
+    if (r.outcome() != .ok) {
+        if (r.source_name) |src| {
+            try stdout_w.interface.print("     shader: {s}\n", .{src});
+        }
+    }
     if (r.trans_error) |msg| {
         try stdout_w.interface.print("     trans: {s}\n", .{msg});
     }

@@ -1,0 +1,423 @@
+//! Can the arm's momentum keep the walking robot up? One question, one file, written once.
+//!
+//! ★ THE GAIT PROBE RESISTED TWO EDITS IN A ROW, so this is a rewrite rather than a third patch —
+//! `claude.md` already carries that rule and it has been right every time.
+//!
+//! ── ★★★ THE QUESTION, AND THE BASELINE THAT MAKES IT HONEST ──
+//!
+//! At hz 2.0 / stride 0.16 / duty 0.60 the BARE robot walks +1.43 m in 10 s. With the arm it
+//! falls (trunk z 0.13). So: does driving the arm as a momentum actuator recover that cell?
+//!
+//! **The baseline is the arm PRESENT AND HELD STILL** — same mass, same inertia, same geometry,
+//! only the control differs. Removing the arm would change three things at once.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+const sim_dt: f32 = 1.0 / 250.0;
+
+const arm_bodies =
+    \\      <body name="arm_base" pos="0.02 0 0.06">
+    \\        <joint name="arm_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="1.2" armature="0.02"/>
+    \\        <geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.030" density="700"/>
+    \\        <body name="arm_upper" pos="0 0 0.10">
+    \\          <joint name="arm_shoulder" type="hinge" axis="0 1 0" range="-2.4 2.4" damping="1.2" armature="0.02"/>
+    \\          <geom type="capsule" fromto="0 0 0 0 0 0.26" size="0.026" density="700"/>
+    \\          <body name="arm_fore" pos="0 0 0.26">
+    \\            <joint name="arm_elbow" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="1.0" armature="0.015"/>
+    \\            <geom type="capsule" fromto="0 0 0 0 0 0.22" size="0.022" density="700"/>
+    \\            <body name="arm_wrist" pos="0 0 0.22">
+    \\              <joint name="arm_wrist" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.8" armature="0.01"/>
+    \\              <geom type="capsule" fromto="0 0 0 0 0 0.08" size="0.019" density="700"/>
+    \\              <body name="gripper" pos="0 0 0.08">
+    \\                <geom name="gripper_g" type="sphere" size="0.060" density="1100"/>
+    \\              </body>
+    \\            </body>
+    \\          </body>
+    \\        </body>
+    \\      </body>
+    \\
+;
+
+fn cycle(phase: f32, stride: f32, lift: f32, duty: f32) zm.Vec {
+    const w: f32 = phase - @floor(phase);
+    if (w < duty) {
+        const t: f32 = w / duty;
+        return vec(stride * (0.5 - t), 0, 0); // stance: foot back under the body
+    }
+    const t: f32 = (w - duty) / (1.0 - duty);
+    return vec(stride * (t - 0.5), 0, lift * @sin(t * zm.pi));
+}
+
+const Run = struct {
+    moved: f32,
+    height: f32,
+    arm_swing: f32,
+    worst_pitch: f32,
+    /// ★★★ WHEN AND WHICH WAY. "It fell" is not a diagnosis: toppling at 0.4 s from the first
+    /// step is a different fault from losing a slow fight over eight seconds.
+    fell_at: f32,
+    pitch_at_fall: f32,
+    trace: [10]f32,
+};
+
+fn run(gpa: Allocator, hz: f32, stride: f32, duty: f32, roll_amp: f32, pitch_amp: f32, bob_amp: f32, arm_lift_amp: f32) !Run {
+    const tail: []const u8 = "    </body>\n  </worldbody>";
+    const at: usize = std.mem.indexOf(u8, go1_xml, tail) orelse return error.NoTail;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa, go1_xml[0..at]);
+    try text.appendSlice(gpa, arm_bodies);
+    try text.appendSlice(gpa, go1_xml[at..]);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, text.items, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+    for (robot.keyframes) |key| {
+        if (std.mem.eql(u8, key.name, "home")) _ = rmj.applyKeyframe(&m, &d, key);
+    }
+
+    var adr: [4]u32 = undefined;
+    for ([_][]const u8{ "arm_yaw", "arm_shoulder", "arm_elbow", "arm_wrist" }, 0..) |nm, k| {
+        for (robot.joints, 0..) |joint, j| {
+            if (std.mem.eql(u8, joint.name, nm)) adr[k] = m.jnt_qpos_adr[j];
+        }
+    }
+    // Half bent: 2.4 rad of travel each way, so the momentum budget is symmetric.
+    d.pos[adr[1]] = 1.1;
+    d.pos[adr[2]] = -1.6;
+    d.pos[adr[3]] = 0.5;
+    d.stage = .stale;
+    rbt.forward(&m, &d);
+
+    var world: zp.World = try .init(gpa, 256);
+    defer world.deinit(gpa);
+    world.gravity = vec(0, 0, -9.81);
+    const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(12, 12, 0.5), .convex_radius = 0.01 },
+    });
+    _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+    var bridge: rphys.Bridge = try .init(gpa, &world, &m, &d, 256);
+    defer bridge.deinit(&world);
+    bridge.listen(&world);
+    bridge.flesh.thickness_m = 0.0001;
+    bridge.flesh.soft_min = 0.99;
+
+    var act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer act.deinit();
+    // ★ THE ARM'S DOFS BY ACTUATION MASK, never by matching names against a model index — that
+    // mismatch (MJCF parse order versus importer order) is what left the demo's arm vertical.
+    const grip_body: u32 = imp.bodyIndex("gripper") orelse return error.NoGripper;
+    var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, grip_body);
+    defer arm_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    var foot_body: [4]u32 = undefined;
+    var foot_offset: [4]zm.Vec = undefined;
+    var foot_rest: [4]zm.Vec = undefined;
+    var legs: [4]ctl.Actuation = undefined;
+    for ([_][]const u8{ "FR_calf", "FL_calf", "RR_calf", "RL_calf" }, 0..) |name, i| {
+        const b: u32 = imp.bodyIndex(name) orelse return error.NoFoot;
+        foot_body[i] = b;
+        legs[i] = try ctl.limbActuation(gpa, &m, b);
+        var off: zm.Vec = vec(0, 0, 0);
+        for (0..m.ngeom) |g| {
+            if (m.geom_body[g] != b) continue;
+            switch (m.geom_shape[g]) {
+                .sphere => off = m.geom_pos[g],
+                else => {},
+            }
+        }
+        foot_offset[i] = off;
+        const wf: zm.Vec = d.body_xpos[b] + zm.rotate(d.body_xrot[b], off);
+        foot_rest[i] = zm.rotate(zm.conjugate(d.body_xrot[1]), wf - d.body_xpos[1]);
+    }
+    defer for (0..4) |i| legs[i].deinit();
+
+    const home: []f32 = try gpa.dupe(f32, d.pos[0..m.nq]);
+    defer gpa.free(home);
+    const saved: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(saved);
+    const rest_rot: zm.Quat = d.body_xrot[1];
+    const rest_h: f32 = d.pos[2];
+    const start_x: f32 = d.body_xpos[1][0];
+    // ── ★★★ THE GAIT PATTERN IS FOUR NUMBERS, AND IT DECIDES HOW MANY FEET ARE DOWN ──
+    //
+    // Legs are ordered FR, FL, RR, RL.
+    //
+    //   * **trot** {0, .5, .5, 0} moves diagonal pairs together — **two feet down** at a time,
+    //     which is fast and needs active balance to stay up.
+    //   * **crawl** {0, .5, .25, .75} spreads them evenly, and with duty above 0.75 leaves
+    //     **three feet down** at all times: the centre of mass only has to stay inside a
+    //     triangle that always exists. **Statically stable by construction.**
+    //
+    // ★ FOR A TOP-HEAVY ROBOT THAT IS THE OBVIOUS GAIT AND I HAD NOT TRIED IT. Every failure so
+    // far has been a trot fighting 2 kg mounted high, and no amount of arm tuning changes how
+    // many feet are on the ground.
+    const crawl: bool = true;
+    const amp: f32 = 0;
+    const ph_off: f32 = 0;
+    const lift: f32 = 0.06;
+    const offsets: [4]f32 = if (crawl)
+        .{ 0.0, 0.5, 0.25, 0.75 }
+    else
+        .{ 0.0, 0.5, 0.5, 0.0 };
+
+    var lo: f32 = 1e9;
+    var hi: f32 = -1e9;
+    var worst_pitch: f32 = 0;
+    var fell_at: f32 = -1;
+    var pitch_at_fall: f32 = 0;
+    var trace: [10]f32 = @splat(0);
+    var trim_pitch_acc: f32 = 0;
+    var phase: f32 = 0;
+    var tick: u32 = 0;
+    while (tick < 2500) : (tick += 1) {
+        phase += sim_dt * hz;
+        phase -= @floor(phase);
+
+        @memcpy(saved, d.pos[0..m.nq]);
+        for (0..m.njnt) |j| {
+            if (m.jnt_type[j] != .hinge) continue;
+            d.pos[m.jnt_qpos_adr[j]] = home[m.jnt_qpos_adr[j]];
+        }
+        // ── ★★★ THE SHOW: TORSO ATTITUDE AND HEIGHT ON THEIR OWN CLOCKS, WHILE WALKING ──
+        //
+        // Four incommensurate rates — gait 1.4, roll 0.23, pitch 0.31, bob 0.17 — so the pose
+        // never repeats and the whole thing reads as deliberate rather than looped. **The gait's
+        // own clock is deliberately NOT one of them**: a torso motion locked to the footfall
+        // would look like a limp, and one that drifts against it looks like dancing.
+        //
+        // ★ AND IT IS ALL FEEDFORWARD. No trim, no balance loop — those are what toppled every
+        // earlier attempt. The torso is commanded, the legs solve for it, and a crawl's three
+        // planted feet are what keeps it up.
+        const t: f32 = @as(f32, @floatFromInt(tick)) * sim_dt;
+        const show_roll: f32 = roll_amp * @sin(t * 0.23 * 2.0 * zm.pi);
+        const show_pitch: f32 = pitch_amp * @sin(t * 0.31 * 2.0 * zm.pi);
+        const show_bob: f32 = bob_amp * @sin(t * 0.17 * 2.0 * zm.pi);
+        const show: zm.Quat = zm.qmul(
+            zm.quatFromAxisAngle(vec(0, 1, 0), show_pitch),
+            zm.quatFromAxisAngle(vec(1, 0, 0), show_roll),
+        );
+        const posed: zm.Quat = zm.qmul(show, rest_rot);
+        d.pos[2] = rest_h + show_bob;
+        d.pos[3] = posed[0];
+        d.pos[4] = posed[1];
+        d.pos[5] = posed[2];
+        d.pos[6] = posed[3];
+        d.stage = .stale;
+        const torso_pos: zm.Vec = d.body_xpos[1];
+        const torso_rot: zm.Quat = d.body_xrot[1];
+        for (0..4) |i| {
+            // ★ FOOT LIFT IS SWEPT, NOT FIXED. Simon's suggestion, and it is the parameter that
+            // decides whether a swinging foot CLEARS or catches — a foot that catches mid-swing
+            // is a trip, and a trip on a top-heavy robot is a fall.
+            const off: zm.Vec = cycle(phase + offsets[i], stride, lift, duty);
+            const goal: zm.Vec = torso_pos + zm.rotate(torso_rot, foot_rest[i] + off);
+            _ = (ctl.Ik{ .max_iterations = 12, .max_step = 0.5 }).solve(&m, &d, legs[i], .{ .body = foot_body[i], .offset = foot_offset[i], .goal = goal }, ik_scratch);
+        }
+        for (0..m.njnt) |j| {
+            if (m.jnt_type[j] != .hinge) continue;
+            home[m.jnt_qpos_adr[j]] = d.pos[m.jnt_qpos_adr[j]];
+        }
+        @memcpy(d.pos[0..m.nq], saved);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+
+        // ── ★★★ THE DEMO'S ATTITUDE TRIM, WHICH THIS PROBE NEVER HAD ──
+        //
+        // The demo runs `solveBodyPose` on a 4-frame cadence, integrating measured attitude error
+        // into a trim and re-solving the legs — **writing the same `s.home` the gait writes.**
+        // The probe's flat pitch trace and the demo's oscillation differ by exactly this loop, so
+        // it is the suspect and this is the test.
+        //
+        // ★ AN INTEGRATOR ON A GAIT'S PITCH IS A DIFFERENT PROPOSITION FROM ONE ON A STANDING
+        // ROBOT'S. Walking pitches by design, every step; integrating that and correcting for it
+        // is fighting the gait rather than a disturbance.
+        if (false) {
+            const e = zm.quatToEulerXYZ(zm.qmul(d.body_xrot[1], zm.conjugate(rest_rot)));
+            trim_pitch_acc = zm.clamp(trim_pitch_acc + 0.5 * (0.0 - e[1]), -0.4, 0.4);
+            // Applied the way the demo applies it: folded into the commanded torso attitude,
+            // which the legs then solve against.
+            for (0..4) |i| {
+                const off: zm.Vec = cycle(phase + offsets[i], stride, lift, duty);
+                const tilt: zm.Quat = zm.quatFromAxisAngle(vec(0, 1, 0), trim_pitch_acc);
+                const goal: zm.Vec = d.body_xpos[1] +
+                    zm.rotate(zm.qmul(tilt, d.body_xrot[1]), foot_rest[i] + off);
+                _ = (ctl.Ik{ .max_iterations = 8, .max_step = 0.5 }).solve(&m, &d, legs[i], .{ .body = foot_body[i], .offset = foot_offset[i], .goal = goal }, ik_scratch);
+            }
+            for (0..m.njnt) |j| {
+                if (m.jnt_type[j] != .hinge) continue;
+                const v: u32 = m.jnt_dof_adr[j];
+                if (v < m.nv and arm_act.powered[v]) continue;
+                home[m.jnt_qpos_adr[j]] = d.pos[m.jnt_qpos_adr[j]];
+            }
+            @memcpy(d.pos[0..m.nq], saved);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+        }
+
+        // ── ★★★ THE ARM AS A MOMENTUM ACTUATOR ──
+        //
+        // Trunk pitch and its RATE drive the shoulder. Accelerating the arm one way torques the
+        // trunk the other, with the reaction equal to the motor torque and **no contact force
+        // involved** — which is why it works when the feet are saturated.
+        //
+        // ★ `kd` DOMINATES BY DESIGN. The budget is 0.168 s of arm travel; waiting for a lean to
+        // develop before responding spends most of it. Rate feedback catches the fall starting.
+        // ── ★★★ FEEDFORWARD, PHASE-LOCKED TO THE GAIT — NOT FEEDBACK ──
+        //
+        // Every feedback law tried so far made things worse, and the reason is now clear: **the
+        // passive robot does not need rescuing.** It walks with a steady -0.011 rad of pitch. A
+        // reactive controller has nothing to react to, so it can only inject noise, and an
+        // integrator on a never-zero error additionally winds to its stop.
+        //
+        // ★★ BUT THE DISTURBANCE IS PERIODIC AND KNOWN. A trot's pitch wobble comes from the
+        // diagonal pairs alternating at exactly `hz` — the same frequency the gait is driven at,
+        // with a fixed phase relationship. **So it can be cancelled open-loop**, by swinging the
+        // arm at that frequency with the right amplitude and phase.
+        //
+        // ★ AND IT CANNOT WIND UP. A bounded sinusoid gives a bounded arm angle, always, with no
+        // gate, no anti-windup and no pull-home — the three patches the integrator needed and
+        // that never worked. This is the same insight as `examples/tracking`: **when the
+        // disturbance is known in advance, feedforward beats feedback.**
+        // ★ THE ARM RISES AND FALLS SLOWLY, on a fifth rate. Its shoulder sweeps around the
+        // half-bent rest, so it never approaches a joint stop and never becomes dead weight at
+        // maximum lever arm — the failure mode that saturated every earlier balance attempt.
+        if (arm_lift_amp != 0) {
+            for (0..m.njnt) |j| {
+                if (m.jnt_type[j] != .hinge) continue;
+                const v: u32 = m.jnt_dof_adr[j];
+                if (v >= m.nv or !arm_act.powered[v]) continue;
+                if (m.jnt_qpos_adr[j] != adr[1]) continue;
+                home[adr[1]] = 1.1 + arm_lift_amp * @sin(t * 0.11 * 2.0 * zm.pi);
+            }
+        }
+        if (amp != 0) {
+            const swing: f32 = amp * @sin((phase + ph_off) * 2.0 * zm.pi);
+            home[adr[1]] = 1.1 + swing;
+        }
+        {
+            const e = zm.quatToEulerXYZ(zm.qmul(d.body_xrot[1], zm.conjugate(rest_rot)));
+            worst_pitch = @max(worst_pitch, @abs(e[1]));
+        }
+        lo = @min(lo, home[adr[1]]);
+        hi = @max(hi, home[adr[1]]);
+
+        // ── ★★★ THE ARM GETS ITS OWN GAINS — IT IS A TUNED MASS DAMPER, NOT A LEG ──
+        //
+        // At the legs' `kp = 100` the arm's natural frequency is sqrt(100/0.352) = 16.9 rad/s =
+        // **2.7 Hz**, and the gait runs at **2.0 Hz**. Near resonance with the exact disturbance
+        // it is supposed to absorb, which is why it rings instead of damping.
+        //
+        // ★★ A MASS ON A SPRING ABSORBS ENERGY WHEN IT IS DAMPED AND DETUNED, and pumps it when
+        // it is stiff and resonant. That is the skyscraper's tuned mass damper, and it is a
+        // PASSIVE mechanism — no measurement, no feedback, nothing to destabilise.
+        //
+        // `PoseHold` clears `applied_force` and writes every powered DOF, so the arm's gains are
+        // applied afterwards by overwriting just its rows — gravity compensation included, since
+        // `bias_force` is what holds a 2 kg arm up at all.
+        (ctl.PoseHold{ .target = home, .kp = 100, .kv = 6, .max_torque = 35 }).apply(&m, &d, act);
+        for (0..m.njnt) |j| {
+            if (m.jnt_type[j] != .hinge) continue;
+            const v: u32 = m.jnt_dof_adr[j];
+            if (v >= m.nv or !arm_act.powered[v]) continue;
+            const q: u32 = m.jnt_qpos_adr[j];
+            const wanted: f32 = 100.0 * (home[q] - d.pos[q]) - 6.0 * d.vel[v];
+            d.applied_force[v] = zm.clamp(wanted + d.bias_force[v], -35.0, 35.0);
+        }
+        rbt.forward(&m, &d);
+        try bridge.sync(&world, &m, &d);
+        try zp.step(&world, sim_dt);
+        bridge.harvest(&d);
+        rbt.step(&m, &d);
+        const now: f32 = @as(f32, @floatFromInt(tick)) * sim_dt;
+        const e2 = zm.quatToEulerXYZ(zm.qmul(d.body_xrot[1], zm.conjugate(rest_rot)));
+        trace[@min(9, @as(usize, @intFromFloat(now)))] = e2[1];
+        // ★ FIRST MOMENT THE TRUNK DROPS, with the pitch at that instant — the SIGN says which
+        // end went down, which decides which way an arm would have to swing to help.
+        if (fell_at < 0 and d.body_xpos[1][2] < 0.20) {
+            fell_at = now;
+            pitch_at_fall = e2[1];
+        }
+    }
+    rbt.forward(&m, &d);
+    return .{
+        .fell_at = fell_at,
+        .pitch_at_fall = pitch_at_fall,
+        .trace = trace,
+        .moved = d.body_xpos[1][0] - start_x,
+        .height = d.body_xpos[1][2],
+        .arm_swing = hi - lo,
+        .worst_pitch = worst_pitch,
+    };
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    p("trot 10 s, WITH the arm. baseline = arm present but held still.\n", .{});
+    p("bare robot at 2.0/0.16/0.60 walked +1.43 m; with the arm it fell.\n\n", .{});
+    // ★★★ EFFICIENCY IS THE DIAGNOSTIC, NOT DISTANCE. A crawl advances one STRIDE per cycle, so
+    // `stride * hz * 10 s` is what perfect grip would deliver. **The shipped setting reaches 10%
+    // of it** — nine tenths of every step is the feet dragging rather than pushing. Distance
+    // alone cannot tell "the gait is too slow" from "the gait slips", and those want opposite
+    // fixes: more stride, or better grip.
+    p("  roll pitch   bob  armlift    moved     z\n", .{});
+
+    // ★ AMPLITUDE AND PHASE SWEPT TOGETHER. Phase is the parameter that matters — the same
+    // swing helps or hurts depending purely on WHEN in the step it happens.
+    // ★ ARM STIFFNESS AND DAMPING SWEPT TOGETHER. The natural frequency is sqrt(kp/0.352); the
+    // gait is 2.0 Hz = 12.6 rad/s, so **kp 56 is exactly resonant** and must be avoided. Below it
+    // the arm is soft and lags the body (absorbing); far above it the arm is rigid and rides
+    // along (doing nothing).
+    for ([_][4]f32{
+        // amp, phase, hz, stride, duty, lift, ARM_KP, ARM_KV
+        // roll, pitch, bob, armlift   (gait fixed at the measured 1.4 / 0.20 / 0.80)
+        .{ 0.00, 0.00, 0.000, 0.0 }, // the crawl alone, for reference
+        .{ 0.06, 0.06, 0.015, 0.3 },
+        .{ 0.10, 0.10, 0.025, 0.5 },
+        .{ 0.14, 0.14, 0.035, 0.7 },
+        .{ 0.18, 0.18, 0.045, 0.9 },
+        .{ 0.14, 0.14, 0.035, 0.0 }, // same torso show, arm still
+        .{ 0.00, 0.00, 0.000, 0.9 }, // arm alone, torso still
+    }) |cfg| {
+        const r: Run = try run(gpa, 1.4, 0.20, 0.80, cfg[0], cfg[1], cfg[2], cfg[3]);
+        const up: bool = r.height > 0.20;
+        p("  {d:>4.2} {d:>5.2} {d:>5.3} {d:>7.1} {d:>8.3} {d:>6.3}  {s}\n", .{
+            cfg[0],                                                     cfg[1], cfg[2], cfg[3], r.moved, r.height,
+            if (!up) "FELL" else if (r.moved > 0.1) "FORWARD" else "-",
+        });
+        // ★★ THE PITCH TRACE, ONE VALUE PER SECOND. A steady march in one direction is a bias
+        // nothing resists; a growing oscillation is a loop going unstable. **They need opposite
+        // fixes**, and only the shape tells them apart.
+        p("      pitch/s:", .{});
+        for (r.trace) |v| p(" {d:>6.3}", .{v});
+        if (r.fell_at >= 0) p("  fell {d:.2}s pitch {d:.3}", .{ r.fell_at, r.pitch_at_fall });
+        p("\n", .{});
+        if (false) p("{d}", .{r.worst_pitch});
+    }
+}

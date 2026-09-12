@@ -1,0 +1,178 @@
+//! What stops the creep WITHOUT costing performance?
+//!
+//! ★ `max_iterations` is 60 and the robot converges at about 14, so it is NOT hitting the cap —
+//! raising it does nothing. The solver stops because it believes it converged, which points at
+//! `tolerance` and at the constraint IMPEDANCE instead.
+//!
+//! ★★ AND THE TWO HAVE OPPOSITE COST PROFILES, which is the whole point of measuring both:
+//!
+//!   * **tolerance** — a tighter target costs ITERATIONS, so it is paid for every step forever;
+//!   * **impedance** — a stiffer constraint is a different NUMBER in the same arithmetic. If it
+//!     works it is free.
+//!
+//! Every row reports creep AND nanoseconds per step, so a fix that trades one for the other
+//! cannot hide.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+const sim_dt: f32 = 1.0 / 250.0;
+
+/// ★ THE SAME CLOCK `robot_bench.zig` USES, so these numbers are comparable to the ns/step
+/// figures already recorded in the engine's own comments rather than to a fresh baseline.
+fn monotonicNanos() u64 {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
+const Setup = struct {
+    label: []const u8,
+    tolerance: f32,
+    imp_min: f32,
+    imp_max: f32,
+    width: f32,
+};
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    p("static Go1, 20 s. creep vs cost.\n\n", .{});
+    p("  setup                    slid (m)   cone   iters   ns/step\n", .{});
+
+    // ── ★ ONLY FREE KNOBS. Every row here is a different CONSTANT in the same arithmetic —
+    // no extra iterations, no new state — so any that works costs nothing to keep. The ns/step
+    // column is what proves that claim rather than asserting it.
+    //
+    // `contactImpedance` (robot_physics.zig:231) clamps `max` to 0.99 when `thickness_m > 0`, so
+    // `imp_min` is the real knob and `imp_max` in this table is only a label. Worth saying
+    // outright: the earlier ".99/.999" row was actually 0.99/0.99.
+    const setups = [_]Setup{
+        .{ .label = "shipped default", .tolerance = 1.0e-6, .imp_min = 0.9, .imp_max = 0.95, .width = 0.001 },
+        .{ .label = "in the demo now", .tolerance = 1.0e-6, .imp_min = 0.99, .imp_max = 0.99, .width = 0.0001 },
+        .{ .label = "min .995", .tolerance = 1.0e-6, .imp_min = 0.995, .imp_max = 0.99, .width = 0.0001 },
+        .{ .label = "min .999", .tolerance = 1.0e-6, .imp_min = 0.999, .imp_max = 0.99, .width = 0.0001 },
+        .{ .label = "min .999 width 1e-5", .tolerance = 1.0e-6, .imp_min = 0.999, .imp_max = 0.99, .width = 0.00001 },
+        .{ .label = "min .9999 width 1e-5", .tolerance = 1.0e-6, .imp_min = 0.9999, .imp_max = 0.99, .width = 0.00001 },
+        .{ .label = "min .999 width 1e-3", .tolerance = 1.0e-6, .imp_min = 0.999, .imp_max = 0.99, .width = 0.001 },
+    };
+
+    for (setups) |setup| {
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, go1_xml, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+            .max_contacts = 64,
+            .timestep = sim_dt,
+            .gravity = vec(0, 0, -9.81),
+        });
+        defer imp.deinit();
+        var m: rbt.Model = imp.model;
+        m.opt.solver.tolerance = setup.tolerance;
+        var d: rbt.Data = try rbt.Data.init(gpa, &m);
+        defer d.deinit();
+
+        for (robot.keyframes) |key| {
+            if (std.mem.eql(u8, key.name, "home")) _ = rmj.applyKeyframe(&m, &d, key);
+        }
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+
+        var world: zp.World = try .init(gpa, 256);
+        defer world.deinit(gpa);
+        world.gravity = vec(0, 0, -9.81);
+        const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+            .box = .{ .half_extent = vec(8, 8, 0.5), .convex_radius = 0.01 },
+        });
+        _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+        var bridge: rphys.Bridge = try .init(gpa, &world, &m, &d, 256);
+        defer bridge.deinit(&world);
+        bridge.listen(&world);
+        // ★ THE BRIDGE OWNS THE CONTACT IMPEDANCE (`contactImpedance`, robot_physics.zig:231),
+        // driven by its `flesh` settings — so that is where the stiffness knob lives.
+        bridge.flesh.thickness_m = setup.width;
+        bridge.flesh.soft_min = setup.imp_min;
+
+        var act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+        defer act.deinit();
+
+        var foot_body: [4]u32 = undefined;
+        var foot_offset: [4]zm.Vec = undefined;
+        for ([_][]const u8{ "FR_calf", "FL_calf", "RR_calf", "RL_calf" }, 0..) |name, i| {
+            const b: u32 = imp.bodyIndex(name) orelse return error.NoFoot;
+            foot_body[i] = b;
+            var off: zm.Vec = vec(0, 0, 0);
+            for (0..m.ngeom) |g| {
+                if (m.geom_body[g] != b) continue;
+                switch (m.geom_shape[g]) {
+                    .sphere => off = m.geom_pos[g],
+                    else => {},
+                }
+            }
+            foot_offset[i] = off;
+        }
+
+        const home: []f32 = try gpa.dupe(f32, d.pos[0..m.nq]);
+        defer gpa.free(home);
+        var warm: u32 = 0;
+        while (warm < 750) : (warm += 1) {
+            (ctl.PoseHold{ .target = home, .kp = 100, .kv = 6, .max_torque = 35 }).apply(&m, &d, act);
+            rbt.forward(&m, &d);
+            try bridge.sync(&world, &m, &d);
+            try zp.step(&world, sim_dt);
+            bridge.harvest(&d);
+            rbt.step(&m, &d);
+        }
+        rbt.forward(&m, &d);
+        var start: [4]zm.Vec = undefined;
+        for (0..4) |i| {
+            start[i] = d.body_xpos[foot_body[i]] + zm.rotate(d.body_xrot[foot_body[i]], foot_offset[i]);
+        }
+
+        var cone: f32 = 0;
+        var iters: u64 = 0;
+        const t0: u64 = monotonicNanos();
+        var tick: u32 = 0;
+        while (tick < 5000) : (tick += 1) {
+            (ctl.PoseHold{ .target = home, .kp = 100, .kv = 6, .max_torque = 35 }).apply(&m, &d, act);
+            rbt.forward(&m, &d);
+            try bridge.sync(&world, &m, &d);
+            try zp.step(&world, sim_dt);
+            bridge.harvest(&d);
+            rbt.step(&m, &d);
+            iters += d.solver_iterations;
+            for (0..d.contact_count) |c| {
+                const base: usize = c * rbt.rows_per_contact;
+                var normal: f32 = 0;
+                for (0..rbt.rows_per_contact) |r| normal += d.constraint_force[base + r];
+                if (normal < 1.0) continue;
+                const t1: f32 = d.constraint_force[base] - d.constraint_force[base + 1];
+                const t2: f32 = d.constraint_force[base + 2] - d.constraint_force[base + 3];
+                const tang: f32 = @sqrt(t1 * t1 + t2 * t2);
+                cone = @max(cone, tang / (@max(0.01, d.contacts[c].friction[0]) * normal));
+            }
+        }
+        const ns: u64 = (monotonicNanos() - t0) / 5000;
+        rbt.forward(&m, &d);
+        var slid: f32 = 0;
+        for (0..4) |i| {
+            const now: zm.Vec = d.body_xpos[foot_body[i]] +
+                zm.rotate(d.body_xrot[foot_body[i]], foot_offset[i]);
+            slid += zm.length3(now - start[i]);
+        }
+        p("  {s:<22} {d:>9.4}  {d:>5.2}  {d:>6.1}  {d:>8}\n", .{ setup.label, slid, cone, @as(f64, @floatFromInt(iters)) / 5000.0, ns });
+    }
+}

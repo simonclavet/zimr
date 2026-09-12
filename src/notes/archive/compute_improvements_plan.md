@@ -63,7 +63,7 @@ The named ones that matter:
   type; `@sizeOf(Params) % 16 == 0` (Step 6).
 
 **Enforcement — new lint rule (ban `std.debug.assert`).** Add a check to
-`tools/lint_zimr.zig` that flags any `std.debug.assert` use (and the
+`tools/zimrlint.zig` that flags any `std.debug.assert` use (and the
 `const assert = std.debug.assert;` alias) with the message: *"use `assertf` /
 `assert` (src/utils.zig) instead — they are identical to `std.debug.assert` in
 ship, but in our dev build (ReleaseSmall + `-Dassert-log`) they log your message

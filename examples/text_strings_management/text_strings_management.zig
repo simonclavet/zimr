@@ -21,7 +21,7 @@ const zm = @import("zm");
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson = @embedFile("atkinson_mono_ttf");
 
@@ -331,7 +331,7 @@ fn drawScene(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
     label(f, s, .{ rr.x + 20, rr.y + 11 }, "reset", 18, .{ .r = 226, .g = 232, .b = 240, .a = 255 });
 
     drawHud(f, s, vw, vh);
-    co.caption(f.gl, s.font, "tap = split into letters, drag-and-drop = join - the two string ops as gestures");
+    common.caption(f.gl, s.font, "tap = split into letters, drag-and-drop = join - the two string ops as gestures");
 }
 
 /// Join every chip back into one sentence in visual (left-to-right) order and

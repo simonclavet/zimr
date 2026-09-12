@@ -1,0 +1,362 @@
+//! Does preview close the gimbal's drift? The bar is 5 mm against the servo's 20.
+//!
+//! ── ★★★ WHY THIS IS THE RIGHT SHAPE ──
+//!
+//! The arm's 20 mm of drift is LAG, not noise: it is IK'd to the fixed point from wherever the
+//! base has ALREADY moved to, then a PD chases those angles, so every correction starts after
+//! the disturbance has happened.
+//!
+//! **The disturbance is a closed-form function of time.** Where the base will be 0.2 s from now
+//! is exactly computable, so the arm's required joint trajectory is too — which is preview, the
+//! one advantage that survived every ablation in this project.
+//!
+//! ★ AND THE SERVO GETS THE SAME REFERENCE FROM THE SAME TABLE, at the current instant instead
+//! of the future one, so the comparison measures preview rather than whose IK ran more
+//! iterations. Its gain is swept until the trend reverses.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const float = zm.float;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+// ★★★ 1/250, NOT 1/125. The coarser step was borrowed from the tracking demo, where it was
+// measured to be both cheaper AND more accurate — but that was a fixed-base arm with no
+// contacts. Here the legs push against a ground solver, and at 1/125 the same gains that stand
+// comfortably at 1/250 fall over: kp 100 went from standing with 20 mm of drift to FELL.
+//
+// ★ A TIMESTEP THAT IS FINE FOR ONE ROBOT IS NOT A GENERAL SETTING. Contact stiffness sets the
+// rate a leg needs, and nothing about the arm's result transfers to a robot that touches things.
+const sim_dt: f32 = 1.0 / 250.0;
+const cone_rate: f32 = 0.55;
+const roll_rate: f32 = 0.31;
+const bob_rate: f32 = 0.19;
+const cone_amp: f32 = 0.16;
+const roll_amp: f32 = 0.14;
+const bob_amp: f32 = 0.025;
+const preview_knots: u32 = 40;
+
+const arm_bodies =
+    \\      <body name="arm_base" pos="0.02 0 0.06">
+    \\        <joint name="arm_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="1.2" armature="0.02"/>
+    \\        <geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.030" density="700"/>
+    \\        <body name="arm_upper" pos="0 0 0.10">
+    \\          <joint name="arm_shoulder" type="hinge" axis="0 1 0" range="-2.4 2.4" damping="1.2" armature="0.02"/>
+    \\          <geom type="capsule" fromto="0 0 0 0 0 0.26" size="0.026" density="700"/>
+    \\          <body name="arm_fore" pos="0 0 0.26">
+    \\            <joint name="arm_elbow" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="1.0" armature="0.015"/>
+    \\            <geom type="capsule" fromto="0 0 0 0 0 0.22" size="0.022" density="700"/>
+    \\            <body name="arm_wrist" pos="0 0 0.22">
+    \\              <joint name="arm_wrist" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.8" armature="0.01"/>
+    \\              <geom type="capsule" fromto="0 0 0 0 0 0.08" size="0.019" density="700"/>
+    \\              <body name="gripper" pos="0 0 0.08">
+    \\                <geom name="gripper_g" type="sphere" size="0.060" density="1100"/>
+    \\              </body>
+    \\            </body>
+    \\          </body>
+    \\        </body>
+    \\      </body>
+    \\
+;
+
+const arm_motors =
+    \\    <motor name="m_arm_yaw" joint="arm_yaw" ctrlrange="-40 40" gear="1"/>
+    \\    <motor name="m_arm_shoulder" joint="arm_shoulder" ctrlrange="-60 60" gear="1"/>
+    \\    <motor name="m_arm_elbow" joint="arm_elbow" ctrlrange="-45 45" gear="1"/>
+    \\    <motor name="m_arm_wrist" joint="arm_wrist" ctrlrange="-25 25" gear="1"/>
+    \\
+;
+
+/// The torso's commanded attitude and height at time `t`.
+fn torsoAt(t: f32) [4]f32 {
+    return .{
+        roll_amp * @sin(t * roll_rate * 2.0 * zm.pi),
+        cone_amp * @cos(t * cone_rate * 2.0 * zm.pi),
+        cone_amp * @sin(t * cone_rate * 2.0 * zm.pi),
+        bob_amp * @sin(t * bob_rate * 2.0 * zm.pi),
+    };
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    const tail: []const u8 = "    </body>\n  </worldbody>";
+    const at: usize = std.mem.indexOf(u8, go1_xml, tail) orelse return error.NoTrunkEnd;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa, go1_xml[0..at]);
+    try text.appendSlice(gpa, arm_bodies);
+    const act_tag: []const u8 = "  <actuator>\n";
+    const act_at: usize = std.mem.indexOf(u8, go1_xml[at..], act_tag) orelse return error.NoAct;
+    const cut: usize = at + act_at + act_tag.len;
+    try text.appendSlice(gpa, go1_xml[at..cut]);
+    try text.appendSlice(gpa, arm_motors);
+    try text.appendSlice(gpa, go1_xml[cut..]);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, text.items, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+
+    var adr: [4]u32 = undefined;
+    for ([_][]const u8{ "arm_yaw", "arm_shoulder", "arm_elbow", "arm_wrist" }, 0..) |name, k| {
+        for (robot.joints, 0..) |joint, j| {
+            if (std.mem.eql(u8, joint.name, name)) adr[k] = m.jnt_qpos_adr[j];
+        }
+    }
+    const grip: u32 = imp.bodyIndex("gripper") orelse return error.NoGripper;
+
+    @memcpy(d.pos, m.qpos0);
+    d.pos[2] = 0.27;
+    for ([_]f32{ 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8 }, 0..) |a, k| {
+        d.pos[7 + k] = a;
+    }
+    d.pos[adr[1]] = 1.1;
+    d.pos[adr[2]] = -1.6;
+    d.pos[adr[3]] = 0.5;
+    @memset(d.vel, 0);
+    d.stage = .stale;
+    rbt.forward(&m, &d);
+    const stance: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(stance);
+    const rest_rot: zm.Quat = d.body_xrot[1];
+    const rest_h: f32 = d.pos[2];
+    const hold: zm.Vec = d.body_xpos[grip];
+
+    var act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer act.deinit();
+    var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, grip);
+    defer arm_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    var foot_body: [4]u32 = undefined;
+    var foot_offset: [4]zm.Vec = undefined;
+    var planted: [4]zm.Vec = undefined;
+    var legs: [4]ctl.Actuation = undefined;
+    for ([_][]const u8{ "FR_calf", "FL_calf", "RR_calf", "RL_calf" }, 0..) |name, i| {
+        const b: u32 = imp.bodyIndex(name) orelse return error.NoFoot;
+        foot_body[i] = b;
+        legs[i] = try ctl.limbActuation(gpa, &m, b);
+        var off: zm.Vec = vec(0, 0, 0);
+        for (0..m.ngeom) |g| {
+            if (m.geom_body[g] != b) continue;
+            switch (m.geom_shape[g]) {
+                .sphere => off = m.geom_pos[g],
+                else => {},
+            }
+        }
+        foot_offset[i] = off;
+        planted[i] = d.body_xpos[b] + zm.rotate(d.body_xrot[b], off);
+    }
+    defer for (0..4) |i| legs[i].deinit();
+
+    // ── ★★★ THE WHOLE POSE, TABULATED BY TIME ──
+    //
+    // The routine is a closed-form function of time, so the pose that satisfies it — legs
+    // holding their planted feet, arm holding the world point — is computable for ANY instant,
+    // future included. Building it once means the planner and the servo read the same numbers
+    // and the comparison measures preview rather than inverse kinematics.
+    //
+    // ★ THE THREE RATES ARE INCOMMENSURATE, so there is no short period to tabulate against —
+    // the table therefore covers a fixed WINDOW of time rather than one cycle, and the run is
+    // bounded by it.
+    const table_dt: f32 = sim_dt;
+    const table_n: u32 = 3200; // 12.8 s at 1/250
+    const table: []f32 = try gpa.alloc(f32, table_n * m.nq);
+    defer gpa.free(table);
+    {
+        @memcpy(d.pos, stance);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        for (0..table_n) |i| {
+            const t: f32 = float(i) * table_dt;
+            const want = torsoAt(t);
+            @memcpy(d.pos, stance);
+            d.pos[2] = rest_h + want[3];
+            const dq: zm.Quat = zm.qmul(
+                zm.qmul(
+                    zm.quatFromAxisAngle(vec(0, 0, 1), want[2]),
+                    zm.quatFromAxisAngle(vec(0, 1, 0), want[1]),
+                ),
+                zm.quatFromAxisAngle(vec(1, 0, 0), want[0]),
+            );
+            const wq: zm.Quat = zm.qmul(dq, rest_rot);
+            d.pos[3] = wq[0];
+            d.pos[4] = wq[1];
+            d.pos[5] = wq[2];
+            d.pos[6] = wq[3];
+            d.stage = .stale;
+            for (0..4) |k| {
+                _ = (ctl.Ik{ .max_iterations = 20 }).solve(&m, &d, legs[k], .{ .body = foot_body[k], .offset = foot_offset[k], .goal = planted[k] }, ik_scratch);
+            }
+            _ = (ctl.Ik{ .max_iterations = 20 }).solve(&m, &d, arm_act, .{ .body = grip, .offset = vec(0, 0, 0), .goal = hold }, ik_scratch);
+            @memcpy(table[i * m.nq ..][0..m.nq], d.pos[0..m.nq]);
+        }
+    }
+
+    var plan: mpc.Plan = try mpc.Plan.init(gpa, &m, preview_knots);
+    defer plan.deinit();
+    const nstate: u32 = m.nq + m.nv;
+    const reference: []f32 = try gpa.alloc(f32, (preview_knots + 1) * nstate);
+    defer gpa.free(reference);
+    const state_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(state_w);
+    const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(term_w);
+    const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+    defer gpa.free(ctrl_w);
+    for (0..m.nv) |i| {
+        state_w[i] = 8.0;
+        state_w[m.nv + i] = 0.05;
+        term_w[i] = 40.0;
+        term_w[m.nv + i] = 1.0;
+    }
+    @memset(ctrl_w, 1.0e-5);
+
+    p("gimbal: gripper holds a world point while the torso weaves.\n", .{});
+    p("  bar: drift under 5 mm.  servo swept until its trend reverses.\n\n", .{});
+    const want_acc: []f32 = try gpa.alloc(f32, m.nv);
+    defer gpa.free(want_acc);
+    const ff_torque: []f32 = try gpa.alloc(f32, m.nv);
+    defer gpa.free(ff_torque);
+    p("  controller     mean drift   worst    trunk z   verdict\n", .{});
+
+    // ── ★★★ PREVIEW WITHOUT A PLANNER ──
+    //
+    // The trajectory is known in closed form, so the joint ACCELERATIONS along it are known too
+    // — second differences of the table. `inverseDynamics` turns those into the torque that
+    // flies the trajectory, and the PD is left to correct only what the model gets wrong.
+    //
+    // ★ THAT IS THE SAME INFORMATION MPC WOULD USE, obtained without differentiating through the
+    // contact solver — which is the exact thing that put the robot on the floor. **Feedforward
+    // is preview for a trajectory you already know**, and here the whole point is that we do.
+    for ([_]f32{ 60, 100, 200, 400, -1, -2 }) |kp| {
+        const planning: bool = kp == -1;
+        const feedforward: bool = kp == -2;
+        @memcpy(d.pos, stance);
+        @memset(d.vel, 0);
+        @memset(d.ctrl, 0);
+        @memset(d.applied_force, 0);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        @memset(plan.ctrl, 0);
+
+        var world: zp.World = try .init(gpa, 256);
+        defer world.deinit(gpa);
+        world.gravity = vec(0, 0, -9.81);
+        const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+            .box = .{ .half_extent = vec(6, 6, 0.5), .convex_radius = 0.01 },
+        });
+        _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+        var bridge: rphys.Bridge = try .init(gpa, &world, &m, &d, 256);
+        defer bridge.deinit(&world);
+        bridge.listen(&world);
+
+        var sum: f64 = 0;
+        var n: u32 = 0;
+        var worst: f32 = 0;
+        var tick: u32 = 0;
+        while (tick + preview_knots + 2 < table_n) : (tick += 1) {
+            if (planning) {
+                // ★ EVERY KNOT READS THE TABLE AT ITS OWN FUTURE INSTANT. This is the preview.
+                for (0..plan.horizon + 1) |k| {
+                    const idx: usize = @min(table_n - 1, tick + k);
+                    @memcpy(reference[k * nstate ..][0..m.nq], table[idx * m.nq ..][0..m.nq]);
+                    @memset(reference[k * nstate + m.nq ..][0..m.nv], 0);
+                }
+                if (tick % 2 == 0) {
+                    _ = mpc.optimize(&m, &d, &plan, .{
+                        .state = state_w,
+                        .control = ctrl_w,
+                        .terminal = term_w,
+                        .reference = reference,
+                    }, .{ .iterations = 4 });
+                }
+                mpc.feedbackControl(&m, &d, &plan, d.ctrl[0..m.nu]);
+                mpc.shift(&plan);
+            } else if (feedforward) {
+                // The servo at its measured best, PLUS the torque that flies the known path.
+                (ctl.PoseHold{
+                    .target = table[tick * m.nq ..][0..m.nq],
+                    .kp = 200,
+                    .kv = 0.6 * @sqrt(200.0),
+                    .max_torque = 35,
+                }).apply(&m, &d, act);
+
+                // ★ SECOND DIFFERENCE OF THE TABLE GIVES THE JOINT ACCELERATION ALONG IT.
+                const base_i: usize = @min(table_n - 3, tick);
+                for (0..m.nv) |v| {
+                    const q: usize = v + 1; // nq is nv + 1: the free joint carries an extra quaternion term
+                    if (q + 2 >= m.nq) {
+                        want_acc[v] = 0;
+                        continue;
+                    }
+                    const a0: f32 = table[base_i * m.nq + q];
+                    const a1: f32 = table[(base_i + 1) * m.nq + q];
+                    const a2: f32 = table[(base_i + 2) * m.nq + q];
+                    want_acc[v] = (a2 - 2.0 * a1 + a0) / (sim_dt * sim_dt);
+                }
+                rbt.forward(&m, &d);
+                rbt.inverseDynamics(&m, &d, want_acc, ff_torque);
+                // Only the ARM gets feedforward: the legs are in contact and their inverse
+                // dynamics does not account for the constraint forces holding them up.
+                for (0..m.nv) |v| {
+                    if (arm_act.powered[v]) {
+                        d.applied_force[v] += zm.clamp(ff_torque[v], -25.0, 25.0);
+                    }
+                }
+            } else {
+                // ★ THE SERVO READS THE SAME TABLE AT THE CURRENT INSTANT. Same numbers, no
+                // future — so the difference measured is preview and nothing else.
+                (ctl.PoseHold{
+                    .target = table[tick * m.nq ..][0..m.nq],
+                    .kp = kp,
+                    .kv = 0.6 * @sqrt(kp),
+                    .max_torque = 35,
+                }).apply(&m, &d, act);
+            }
+            rbt.forward(&m, &d);
+            try bridge.sync(&world, &m, &d);
+            try zp.step(&world, sim_dt);
+            bridge.harvest(&d);
+            rbt.step(&m, &d);
+            if (tick > 250) {
+                const drift: f32 = zm.length3(d.body_xpos[grip] - hold);
+                sum += drift;
+                n += 1;
+                worst = @max(worst, drift);
+            }
+        }
+        rbt.forward(&m, &d);
+        const mean: f32 = @floatCast(sum / @as(f64, @floatFromInt(@max(1, n))));
+        const up: bool = d.body_xpos[1][2] > 0.20;
+        if (feedforward) {
+            p("  PD + feedfwd   {d:>10.4}  {d:>7.4}  {d:>9.4}   {s}\n", .{ mean, worst, d.body_xpos[1][2], if (up) "stands" else "FELL" });
+        } else if (planning) {
+            p("  MPC preview    {d:>10.4}  {d:>7.4}  {d:>9.4}   {s}\n", .{ mean, worst, d.body_xpos[1][2], if (up) "stands" else "FELL" });
+        } else {
+            p("  PD kp {d:>5.0}     {d:>10.4}  {d:>7.4}  {d:>9.4}   {s}\n", .{ kp, mean, worst, d.body_xpos[1][2], if (up) "stands" else "FELL" });
+        }
+    }
+}

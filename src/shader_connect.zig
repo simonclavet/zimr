@@ -2,7 +2,7 @@
 //!
 //! Bridges a vertex shader's `Out` to a fragment shader's `Io` by
 //! matching field names.  Used by:
-//!   - `shader_runtime_wgpu.zig` (browser path) internally during pipeline
+//!   - `shader_runtime.zig` (browser path) internally during pipeline
 //!     creation to wire varyings
 //!   - native examples (CPU path) to connect VS outputs to FS inputs
 //!     during `raster_shader.rasterizeTriangles` dispatch

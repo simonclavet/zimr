@@ -34,10 +34,10 @@ export fn main() callconv(.{ .spirv_fragment = .{} }) void {
 
     // Scalar trig — routes through the polynomial fallbacks
     // (atan2Scalar, asinScalar) inlined into math.zig at Stage 3.
-    const angle: f32 = zm.atan2(@as(f32, v), @as(f32, u));
-    const asin_val: f32 = zm.asin(@as(f32, u * 0.5));
+    const angle: f32 = zm.atan2Rad(@as(f32, v), @as(f32, u));
+    const asin_val: f32 = zm.asinRad(@as(f32, u * 0.5));
 
-    // NOTE: Vector trig (zm.sin/cos/atan on Vec/F32x8/F32x16) is
+    // NOTE: Vector trig (zm.sinRad/cos/atan on Vec/F32x8/F32x16) is
     // NOT yet GPU-portable.  zmath's sin32xN body uses `andInt` /
     // `orInt` / `xorInt` for sign-bit manipulation; those go through
     // `@bitCast(Vec, @Vector(4, u32))` which SPIR-V's Logical
@@ -45,7 +45,7 @@ export fn main() callconv(.{ .spirv_fragment = .{} }) void {
     // call sites) to use componentwise scalar bitcasts is post-plan
     // work.  For now, shader code that needs trig should use the
     // SCALAR forms (atan2Scalar / asinScalar are reachable through
-    // the scalar dispatch in zm.atan2(f32, f32) / zm.asin(f32)).
+    // the scalar dispatch in zm.atan2Rad(f32, f32) / zm.asinRad(f32)).
 
     // Matrix math — the column-major M*v API landed in Stage 2.
     const t: zm.Mat = zm.translation(u * 10.0, v * 10.0, 0.0);

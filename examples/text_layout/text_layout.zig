@@ -14,7 +14,7 @@ const zm = @import("zm");
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 const int = zm.int;
 
@@ -114,7 +114,7 @@ fn update(f: *z.Frame, state: *State) void {
     _ = state.scratch.reset(.retain_capacity);
     const a: Allocator = state.scratch.allocator();
     state.frame_count += 1;
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const font: z.Font = state.font;
     const margin: f32 = 16;
@@ -151,7 +151,7 @@ fn update(f: *z.Frame, state: *State) void {
     );
     f.gl.text(.{ margin, y }, sample, .{ .size = 22, .color = c.violet_400, .font = &font });
 
-    co.caption(f.gl, font, "text rendering + measureText word-wrap, multi-size from one TTF atlas");
+    common.caption(f.gl, font, "text rendering + measureText word-wrap, multi-size from one TTF atlas");
     z.endDrawing(f.gl);
 }
 

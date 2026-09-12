@@ -32,7 +32,7 @@ const pi = zm.pi;
 const pointVec = zm.pointVec;
 const tau = zm.tau;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -183,7 +183,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // SCREEN PASS: open once, clear, then composite.
     z.beginDrawing(f.gl);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // Composite the two halves + divider + labels.
     const half: f32 = vw * 0.5;
@@ -202,7 +202,7 @@ fn update(f: *z.Frame, s: *State) void {
         "P2 - amber zone",
         .{ .size = 22, .color = .{ .r = 235, .g = 235, .b = 245, .a = 255 }, .font = &s.font },
     );
-    co.caption(f.gl, s.font, "one world, two cameras, two render textures - per-camera atmosphere");
+    common.caption(f.gl, s.font, "one world, two cameras, two render textures - per-camera atmosphere");
     z.endDrawing(f.gl);
 }
 

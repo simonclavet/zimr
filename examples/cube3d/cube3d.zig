@@ -14,7 +14,7 @@ const Mat = zm.Mat;
 const matFromAxisAngle = zm.matFromAxisAngle;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const Color = zm.Color;
@@ -35,7 +35,7 @@ fn update(f: *z.Frame, s: *State) void {
     const t: f32 = f.time.time;
     const angle: f32 = t * 0.8; // ~45°/sec about Y
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const cam: Camera3D = .{
         .position = pointVec(4, 4, 4),
@@ -56,7 +56,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "WebGPU 3D cube - spinning solid + wires, grid, sphere");
+    common.caption(f.gl, s.font, "WebGPU 3D cube - spinning solid + wires, grid, sphere");
     z.endDrawing(f.gl);
 }
 

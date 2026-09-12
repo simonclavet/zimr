@@ -1,0 +1,160 @@
+//! How heavy an arm can the Go1's legs actually carry?
+//!
+//! ★ EVERY REST POSE FELL, so it is not the arm's SHAPE — it is its MASS. The arm as first
+//! spliced adds 4.3 kg to an 11.9 kg robot whose actuators cap at 35 N·m, and no folded
+//! configuration rescues a 36% mass increase.
+//!
+//! ★★ THE ARM IS A DESIGN ARTEFACT — this is a game, not a real robot — so the honest move is to
+//! size it to the machine that has to carry it, and to find that size by measuring rather than
+//! by halving numbers until something works.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+fn spliced(gpa: Allocator, link_density: u32, grip_density: u32) ![]u8 {
+    // ★ `std.fmt.allocPrint` rather than a writer: this Zig's ArrayList has no `writer(gpa)`,
+    // and a one-shot format is what is wanted anyway.
+    const arm: []u8 = try std.fmt.allocPrint(gpa,
+        \\      <body name="arm_base" pos="0.02 0 0.06">
+        \\        <joint name="arm_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="1.2" armature="0.02"/>
+        \\        <geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.030" density="{d}" rgba="0.85 0.62 0.30 1"/>
+        \\        <body name="arm_upper" pos="0 0 0.10">
+        \\          <joint name="arm_shoulder" type="hinge" axis="0 1 0" range="-2.4 2.4" damping="1.2" armature="0.02"/>
+        \\          <geom type="capsule" fromto="0 0 0 0 0 0.26" size="0.026" density="{d}" rgba="0.85 0.62 0.30 1"/>
+        \\          <body name="arm_fore" pos="0 0 0.26">
+        \\            <joint name="arm_elbow" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="1.0" armature="0.015"/>
+        \\            <geom type="capsule" fromto="0 0 0 0 0 0.22" size="0.022" density="{d}" rgba="0.85 0.62 0.30 1"/>
+        \\            <body name="arm_wrist" pos="0 0 0.22">
+        \\              <joint name="arm_wrist" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.8" armature="0.01"/>
+        \\              <geom type="capsule" fromto="0 0 0 0 0 0.08" size="0.019" density="{d}" rgba="0.85 0.62 0.30 1"/>
+        \\              <body name="gripper" pos="0 0 0.08">
+        \\                <geom name="gripper_g" type="sphere" size="0.060" density="{d}" rgba="0.35 0.80 0.60 1"/>
+        \\              </body>
+        \\            </body>
+        \\          </body>
+        \\        </body>
+        \\      </body>
+        \\
+    , .{ link_density, link_density, link_density, link_density, grip_density });
+    defer gpa.free(arm);
+
+    // ── ★★★ THE ARM GOES AFTER THE LEGS, AND THE POSITION IS THE WHOLE BUG ──
+    //
+    // Inserted BEFORE `FR_hip`, the arm's four joints come first in qpos order and **every leg
+    // index shifts by four.** Leg angles then land in arm joints, the legs stay at qpos0 —
+    // straight — and the robot topples. Which looked exactly like "the arm is too heavy",
+    // and survived a rest-pose sweep and a mass sweep down to 0.25 kg before the real cause
+    // showed itself: **it still fell with a quarter-kilo arm.**
+    //
+    // ★ AS THE LAST CHILD OF THE TRUNK, the arm's joints come after every leg's, so all existing
+    // indices are preserved — the keyframe, the actuator order, and any code that assumes where
+    // a leg lives all keep working, and padding the keyframe at the END becomes correct.
+    const tail: []const u8 = "    </body>\n  </worldbody>";
+    const tail_at: usize = std.mem.indexOf(u8, go1_xml, tail) orelse return error.NoTrunkEnd;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, go1_xml[0..tail_at]);
+    try out.appendSlice(gpa, arm);
+    try out.appendSlice(gpa, go1_xml[tail_at..]);
+    return out.toOwnedSlice(gpa);
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    p("the Go1 is about 11.9 kg and its actuators stop at 35 N.m.\n", .{});
+    p("rest pose: shoulder 2.2, elbow -2.4 (folded forward and down)\n\n", .{});
+    p("  link  grip   arm kg   total kg   trunk z after 3 s   verdict\n", .{});
+
+    for ([_][2]u32{
+        .{ 700, 1100 }, // as first spliced
+        .{ 350, 550 },
+        .{ 200, 350 },
+        .{ 120, 220 },
+        .{ 80, 140 },
+    }) |dens| {
+        const text: []u8 = try spliced(gpa, dens[0], dens[1]);
+        defer gpa.free(text);
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, text, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+            .max_contacts = 64,
+            .timestep = 1.0 / 250.0,
+            .gravity = vec(0, 0, -9.81),
+        });
+        defer imp.deinit();
+        const m: *const rbt.Model = &imp.model;
+        var d: rbt.Data = try rbt.Data.init(gpa, m);
+        defer d.deinit();
+
+        var arm_mass: f32 = 0;
+        for ([_][]const u8{ "arm_base", "arm_upper", "arm_fore", "arm_wrist", "gripper" }) |n| {
+            if (imp.bodyIndex(n)) |b| arm_mass += m.body_mass[b];
+        }
+        var total: f32 = 0;
+        for (0..m.nbody) |b| total += m.body_mass[b];
+
+        var adr: [4]u32 = undefined;
+        for ([_][]const u8{ "arm_yaw", "arm_shoulder", "arm_elbow", "arm_wrist" }, 0..) |name, k| {
+            for (robot.joints, 0..) |joint, j| {
+                if (std.mem.eql(u8, joint.name, name)) adr[k] = m.jnt_qpos_adr[j];
+            }
+        }
+
+        @memcpy(d.pos, m.qpos0);
+        d.pos[2] = 0.27;
+        const legs_home = [_]f32{ 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8 };
+        for (legs_home, 0..) |angle, k| d.pos[7 + k] = angle;
+        d.pos[adr[0]] = 0;
+        d.pos[adr[1]] = 2.2;
+        d.pos[adr[2]] = -2.4;
+        d.pos[adr[3]] = 0;
+        @memset(d.vel, 0);
+        d.stage = .stale;
+        rbt.forward(m, &d);
+        const home: []f32 = try gpa.dupe(f32, d.pos[0..m.nq]);
+        defer gpa.free(home);
+
+        var world: zp.World = try .init(gpa, 256);
+        defer world.deinit(gpa);
+        world.gravity = vec(0, 0, -9.81);
+        const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+            .box = .{ .half_extent = vec(6, 6, 0.5), .convex_radius = 0.01 },
+        });
+        _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+        var bridge: rphys.Bridge = try .init(gpa, &world, m, &d, 256);
+        defer bridge.deinit(&world);
+        bridge.listen(&world);
+        var act: ctl.Actuation = try ctl.Actuation.init(gpa, m);
+        defer act.deinit();
+
+        var tick: u32 = 0;
+        while (tick < 750) : (tick += 1) {
+            (ctl.PoseHold{ .target = home, .kp = 100, .kv = 6, .max_torque = 35 }).apply(m, &d, act);
+            rbt.forward(m, &d);
+            try bridge.sync(&world, m, &d);
+            try zp.step(&world, 1.0 / 250.0);
+            bridge.harvest(&d);
+            rbt.step(m, &d);
+        }
+        rbt.forward(m, &d);
+        const up: bool = d.body_xpos[1][2] > 0.22;
+        p("  {d:>4} {d:>5}   {d:>6.2}   {d:>8.2}   {d:>17.4}   {s}\n", .{
+            dens[0], dens[1], arm_mass, total, d.body_xpos[1][2], if (up) "STANDS" else "falls",
+        });
+    }
+}

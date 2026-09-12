@@ -13,6 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const assertUnreachable = zm.assertUnreachable;
 const float64 = zm.float64;
 const builtin = @import("builtin");
 const ui = z.ui_real;
@@ -357,7 +358,8 @@ fn update(f: *z.Frame, s: *State) void {
     const pointer_world: Vec2 = s.cam.screenToWorld(z.getMousePosition(f.input));
     if (s.drag != null) {
         if (z.isMouseButtonDown(f.input, .left)) {
-            phys.setTransform(&s.world, s.drag.?.anchor, pointer_world, Rot2.identity) catch {};
+            phys.setTransform(&s.world, s.drag.?.anchor, pointer_world, Rot2.identity) catch
+                assertUnreachable(@src(), "OOM", .{});
         } else {
             endDrag(s);
         }
@@ -400,7 +402,7 @@ fn update(f: *z.Frame, s: *State) void {
             } else if (sc.update) |hook| {
                 hook(&s.world);
             }
-            phys.step(&s.world, fixed_dt) catch {};
+            phys.step(&s.world, fixed_dt) catch assertUnreachable(@src(), "OOM", .{});
             s.phys_accum -= fixed_dt;
             steps_run += 1;
 
@@ -413,7 +415,7 @@ fn update(f: *z.Frame, s: *State) void {
                     s.snap = phys.snapshot(&s.world, s.mem.allocator()) catch null;
                 } else if (tick >= snapshot_restore_step) {
                     if (s.snap) |*sn| {
-                        phys.restore(&s.world, s.mem.allocator(), sn) catch {};
+                        phys.restore(&s.world, s.mem.allocator(), sn) catch assertUnreachable(@src(), "OOM", .{});
                     }
                     s.scene_state.u[0] = snapshot_capture_step; // loop: re-diverge from the checkpoint
                 }
@@ -432,7 +434,7 @@ fn update(f: *z.Frame, s: *State) void {
         .draw_bounds = s.draw_aabbs,
         .draw_contacts = s.draw_contacts,
     });
-    phys.draw(&s.world, &dd) catch {};
+    phys.draw(&s.world, &dd) catch assertUnreachable(@src(), "OOM", .{});
     s.perf_draw_ms += (@as(f32, @floatCast(z.wgpu.nowMs() - draw_t0)) - s.perf_draw_ms) * 0.15;
     s.perf_frame_ms += (f.time.delta_time * 1000.0 - s.perf_frame_ms) * 0.15;
 
@@ -517,11 +519,12 @@ fn update(f: *z.Frame, s: *State) void {
         const nav: ui.ButtonOpts = .{ .size = .{ 116, 30 } };
         if (u.button("< Prev", nav)) {
             const n: usize = scenes.list.len;
-            loadScene(s, if (s.current_scene == 0) n - 1 else s.current_scene - 1) catch {};
+            loadScene(s, if (s.current_scene == 0) n - 1 else s.current_scene - 1) catch
+                assertUnreachable(@src(), "OOM", .{});
         }
         u.sameLine(.{});
         if (u.button("Next >", nav)) {
-            loadScene(s, (s.current_scene + 1) % scenes.list.len) catch {};
+            loadScene(s, (s.current_scene + 1) % scenes.list.len) catch assertUnreachable(@src(), "OOM", .{});
         }
         u.separator();
         // Category dropdown, then a dropdown of that category's scenes: any of the
@@ -529,7 +532,7 @@ fn update(f: *z.Frame, s: *State) void {
         var cat_i: i32 = @intCast(s.cat_index);
         if (u.combo("category", &cat_i, &scenes.categories, .{})) {
             s.cat_index = @intCast(cat_i);
-            loadScene(s, scenes.firstInCategory(s.cat_index)) catch {};
+            loadScene(s, scenes.firstInCategory(s.cat_index)) catch assertUnreachable(@src(), "OOM", .{});
         }
         var names: [40][]const u8 = undefined;
         var globals: [40]usize = undefined;
@@ -548,12 +551,12 @@ fn update(f: *z.Frame, s: *State) void {
             count += 1;
         }
         if (u.combo("scene", &local_sel, names[0..count], .{})) {
-            loadScene(s, globals[@intCast(local_sel)]) catch {};
+            loadScene(s, globals[@intCast(local_sel)]) catch assertUnreachable(@src(), "OOM", .{});
         }
         u.separator();
         _ = u.checkbox("paused", &s.paused);
         if (u.button("reset scene", .{})) {
-            loadScene(s, s.current_scene) catch {};
+            loadScene(s, s.current_scene) catch assertUnreachable(@src(), "OOM", .{});
         }
         _ = u.slider("zoom (px/m)", &s.cam.zoom, .{ .min = 8, .max = 120 });
         u.separator();

@@ -1,0 +1,279 @@
+//! Is there ANY regime where planning beats a servo at catching? One question, one file.
+//!
+//! ── ★★★ THE CLOSING EXPERIMENT, AND IT IS DESIGNED TO BE ABLE TO SAY "NO" ──
+//!
+//! Sweeping the ball's speed AT INTERCEPTION turns a binary into a curve. A slow ball is easy to
+//! match and everything should catch it; a fast one is hard. Where each controller falls off is
+//! the answer, and "the planner falls off at the same place" is a result worth having.
+//!
+//! Three controllers, because the two-way comparison was unfair:
+//!   1. **PD to a fixed pose** — arrives STOPPED. The swatter. What most people write first.
+//!   2. **PD tracking the ball** — IK to the ball's live position every tick, so it CAN arrive
+//!      moving. ★ THIS IS THE HONEST BASELINE and it was missing: a servo is not obliged to aim
+//!      at a frozen point, and comparing against the version that does was flattering the plan.
+//!   3. **MPC**, joint-space reference with the shrinking horizon — the best measured setup.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const keeper_xml = @embedFile("tests/fixtures/robot/keeper.xml");
+
+const gravity: f32 = 9.81;
+const sim_dt: f32 = 1.0 / 250.0;
+const max_horizon: u32 = 220;
+
+fn ballAt(p0: zm.Vec, v0: zm.Vec, t: f32) zm.Vec {
+    return p0 + v0 * zm.splat(t) + vec(0, 0, -0.5 * gravity * t * t);
+}
+fn ballVel(v0: zm.Vec, t: f32) zm.Vec {
+    return v0 + vec(0, 0, -gravity * t);
+}
+
+const Mode = enum { fixed_pd, tracking_pd, planner };
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, keeper_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 16,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -gravity),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+    rbt.forward(&m, &d);
+    const hand: u32 = imp.bodyIndex("hand") orelse return error.NoHand;
+    const rest: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(rest);
+
+    var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, hand);
+    defer arm_act.deinit();
+    var all_act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer all_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    var plan: mpc.Plan = try mpc.Plan.init(gpa, &m, max_horizon);
+    defer plan.deinit();
+    const nstate: u32 = m.nq + m.nv;
+    const reference: []f32 = try gpa.alloc(f32, (max_horizon + 1) * nstate);
+    defer gpa.free(reference);
+    const state_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(state_w);
+    const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(term_w);
+    const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+    defer gpa.free(ctrl_w);
+    const meet_pose: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(meet_pose);
+    const meet_qvel: []f32 = try gpa.alloc(f32, m.nv);
+    defer gpa.free(meet_qvel);
+    const live_pose: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(live_pose);
+    for (0..m.nv) |i| {
+        state_w[i] = 0.5;
+        state_w[m.nv + i] = 0.02;
+        term_w[i] = 60.0;
+        term_w[m.nv + i] = 4.0;
+    }
+    @memset(ctrl_w, 1.0e-4);
+
+    // ── ★ FIRST: WHAT HAND SPEED CAN THIS ARM EVEN REACH? ──
+    //
+    // If the arm cannot move its hand as fast as the ball, matching velocity is impossible for
+    // EVERY controller and the whole comparison is moot. Measured before anything else, because
+    // an infeasible task explains every result at once.
+    {
+        @memcpy(d.pos, rest);
+        @memset(d.vel, 0);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        var fastest: f32 = 0;
+        var tick: u32 = 0;
+        while (tick < 250) : (tick += 1) {
+            // Slam every joint one way at full torque — a crude upper bound on hand speed.
+            for (0..m.nu) |j| d.ctrl[j] = if (j % 2 == 0) 260.0 else -260.0;
+            rbt.step(&m, &d);
+            rbt.forward(&m, &d);
+            fastest = @max(fastest, zm.length3(d.cvel[hand].lin));
+        }
+        p("arm's peak hand speed at full torque: {d:.2} m/s\n\n", .{fastest});
+    }
+
+    p("  ball speed     fixed PD          tracking PD        MPC\n", .{});
+    p("  at meet      gap    rel        gap    rel         gap    rel\n", .{});
+
+    for ([_]f32{ 0.35, 0.5, 0.7, 1.0 }) |scale| {
+        const p0: zm.Vec = vec(-1.5 * scale - 0.6, 0.0, 1.0);
+        const v0: zm.Vec = vec(3.4 * scale, 0.0, 3.0 * scale);
+
+        // Interception: latest reachable instant.
+        var meet_t: f32 = -1;
+        var t: f32 = 0.1;
+        while (t < 1.6) : (t += 0.02) {
+            const at: zm.Vec = ballAt(p0, v0, t);
+            if (at[2] < 0.3) break;
+            @memcpy(d.pos, rest);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            const r: ctl.Ik.Result = (ctl.Ik{ .max_iterations = 50 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = at }, ik_scratch);
+            // ── ★★★ THE EARLIEST REACHABLE INSTANT, NOT THE LATEST ──
+            //
+            // Taking the latest looked like prudence — more time before committing — and it is
+            // exactly backwards for a CATCH. Matching velocity means the hand has to be
+            // CO-MOVING with the ball when they meet, and converging to another object's
+            // velocity takes time. Choosing the last possible moment leaves the least of it.
+            //
+            // The measurements say so plainly: at every ball speed, relative speed came back
+            // roughly EQUAL to the ball's speed — the hand was essentially stationary at closest
+            // approach, for all three controllers. Nobody was co-moving, because nobody had
+            // time to.
+            //
+            // A catch is a rendezvous, not an arrival.
+            if (r.reached) {
+                meet_t = t;
+                break;
+            }
+        }
+        if (meet_t <= 0) {
+            p("  scale {d:.2}: never reachable\n", .{scale});
+            continue;
+        }
+        const meet_speed: f32 = zm.length3(ballVel(v0, meet_t));
+
+        @memcpy(d.pos, rest);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        _ = (ctl.Ik{ .max_iterations = 70 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = ballAt(p0, v0, meet_t) }, ik_scratch);
+        @memcpy(meet_pose, d.pos[0..m.nq]);
+        {
+            const jac: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+            defer gpa.free(jac);
+            rbt.jacPoint(&m, &d, hand, d.body_xpos[hand], jac, null);
+            var gram: [9]f32 = @splat(0);
+            inline for (0..3) |a| {
+                inline for (0..3) |b| {
+                    var sum: f32 = 0;
+                    for (0..m.nv) |v| sum += jac[v][a] * jac[v][b];
+                    gram[a * 3 + b] = sum;
+                }
+            }
+            const ridge: f32 = 1.0e-4 * (@abs(gram[0]) + @abs(gram[4]) + @abs(gram[8]) + 1.0);
+            gram[0] += ridge;
+            gram[4] += ridge;
+            gram[8] += ridge;
+            const want: zm.Vec = ballVel(v0, meet_t);
+            var lambda: [3]f32 = .{ want[0], want[1], want[2] };
+            @memset(meet_qvel, 0);
+            if (ctl.solve3Pub(&gram, &lambda)) {
+                for (0..m.nv) |v| {
+                    meet_qvel[v] = lambda[0] * jac[v][0] + lambda[1] * jac[v][1] + lambda[2] * jac[v][2];
+                }
+            }
+        }
+
+        p("  {d:>8.2}  ", .{meet_speed});
+        for ([_]Mode{ .fixed_pd, .tracking_pd, .planner }) |mode| {
+            @memcpy(d.pos, rest);
+            @memset(d.vel, 0);
+            @memset(d.ctrl, 0);
+            // ★★★ AND THE LEAK. `PoseHold` writes `applied_force` and clears it each apply; the
+            // planner drives `ctrl` and never touches it, so it inherited the servo's last
+            // torques for the whole run — and the servo ran first, every time. Without this line
+            // every planner number in this file measured a planner fighting a stale PD.
+            @memset(d.applied_force, 0);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            @memset(plan.ctrl, 0);
+            plan.setHorizon(max_horizon);
+
+            var gap: f32 = 1.0e9;
+            var relative: f32 = 0;
+            var elapsed: f32 = 0;
+            var tick: u32 = 0;
+            while (elapsed < meet_t + 0.15) : (tick += 1) {
+                switch (mode) {
+                    .fixed_pd => (ctl.PoseHold{
+                        .target = meet_pose,
+                        .kp = 900,
+                        .kv = 60,
+                        .max_torque = 260,
+                    }).apply(&m, &d, all_act),
+                    .tracking_pd => {
+                        // ★★★ THE FAIR SERVO: aim where the ball WILL BE a short lead ahead, so
+                        // it arrives moving instead of arriving stopped. A servo is not obliged
+                        // to chase a frozen point, and pretending otherwise flatters the planner.
+                        @memcpy(live_pose, d.pos[0..m.nq]);
+                        const lead: f32 = @min(meet_t, elapsed + 0.08);
+                        _ = (ctl.Ik{ .max_iterations = 12, .max_step = 0.4 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = ballAt(p0, v0, lead) }, ik_scratch);
+                        const aim: []f32 = try gpa.dupe(f32, d.pos[0..m.nq]);
+                        defer gpa.free(aim);
+                        @memcpy(d.pos[0..m.nq], live_pose);
+                        d.stage = .stale;
+                        rbt.forward(&m, &d);
+                        (ctl.PoseHold{
+                            .target = aim,
+                            .kp = 900,
+                            .kv = 60,
+                            .max_torque = 260,
+                        }).apply(&m, &d, all_act);
+                    },
+                    .planner => {
+                        if (tick % 5 == 0) {
+                            const left: f32 = @max(0.0, meet_t - elapsed);
+                            const arrive: u32 = @min(max_horizon, zm.floori(u32, left / sim_dt));
+                            plan.setHorizon(@max(2, arrive));
+                            for (0..plan.horizon + 1) |k| {
+                                const along: f32 = if (arrive == 0) 1.0 else @min(1.0, @as(f32, @floatFromInt(k)) / @as(f32, @floatFromInt(arrive)));
+                                const blend: f32 = along * along * (3.0 - 2.0 * along);
+                                for (0..m.nq) |q| {
+                                    reference[k * nstate + q] = d.pos[q] + blend * (meet_pose[q] - d.pos[q]);
+                                }
+                                const near_end: bool = arrive > 0 and k + 10 >= arrive;
+                                for (0..m.nv) |v| {
+                                    reference[k * nstate + m.nq + v] = if (near_end) meet_qvel[v] else 0;
+                                }
+                            }
+                            const wanted: usize = (plan.horizon + 1) * nstate;
+                            _ = mpc.optimize(&m, &d, &plan, .{
+                                .state = state_w,
+                                .control = ctrl_w,
+                                .terminal = term_w,
+                                .reference = reference[0..wanted],
+                            }, .{ .iterations = 6 });
+                        }
+                        @memcpy(d.ctrl, plan.ctrl[0..m.nu]);
+                        mpc.shift(&plan);
+                    },
+                }
+                rbt.step(&m, &d);
+                elapsed += sim_dt;
+                const ball: zm.Vec = ballAt(p0, v0, elapsed);
+                const now: f32 = zm.length3(d.body_xpos[hand] - ball);
+                if (now < gap) {
+                    gap = now;
+                    relative = zm.length3(d.cvel[hand].lin - ballVel(v0, elapsed));
+                }
+            }
+            const mark: []const u8 = if (gap < 0.05 and relative < 0.5) "*" else " ";
+            p("{d:>6.3}{d:>6.2}{s}  ", .{ gap, relative, mark });
+        }
+        p("\n", .{});
+    }
+    p("\n  * = catch (gap < 5 cm and relative < 0.5 m/s)\n", .{});
+}

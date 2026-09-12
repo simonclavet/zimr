@@ -75,7 +75,7 @@ in the .fs.zig.
   it onto BOTH `exe_mod` AND `exe_mod_smoke` so smoke + prod
   builds share the same compiled GLSL (no pipeline re-run)
 
-**(d) `tools/lint_zimr.zig`** — added Class 6 carve-out to
+**(d) `tools/zimrlint.zig`** — added Class 6 carve-out to
 `isAllowlistedModuleVar` (rule 9 / module-var): files ending
 in `.fs.zig` or `.vs.zig` are exempt because their
 `extern var out_*: T addrspace(.output)` declarations are
@@ -312,7 +312,7 @@ helpers.
   }
   ```
   As S1.4 / S1.5 land more shaders, add to the inner list.
-- `tools/lint_zimr.zig` — added Class 6 carve-out to
+- `tools/zimrlint.zig` — added Class 6 carve-out to
   `isAllowlistedModuleVar`: files ending in `.fs.zig` or
   `.vs.zig` are exempt from rule 9 (module-var).  Rationale:
   `extern var name: T addrspace(.output)` is structurally
@@ -461,7 +461,7 @@ Four-stage pipeline per shader source:
 
 Build-graph: renamed the existing `lint_subbuild` →
 `tools_subbuild` (shared by lint + shader pipeline; tools/build.zig
-produces all 4 binaries — lint_zimr, spirv-opt, spirv-val,
+produces all 4 binaries — zimrlint, spirv-opt, spirv-val,
 spirv-cross — in one invocation).  All `addShader`-spawned `Run`
 steps depend on `tools_subbuild.step`, so the tools build
 happens once per `zig build`.
@@ -4737,7 +4737,7 @@ Binary verification by parsing the wasm export section:
   migration states coexist cleanly in the JS call sequence.
 
 **Lint rule 9 class 5: `zimr_app` allowlisted in any file.**
-Added a new exception class to `tools/lint_zimr.zig`:
+Added a new exception class to `tools/zimrlint.zig`:
 
 > 5. **`zimr_app` user-owned bridge** (turns 397+) — every
 >    example declares `var zimr_app: z.AppBridge = .{};` at
@@ -4786,7 +4786,7 @@ Both in `src/tests/app_bridge_test.zig`:
 - `examples/basic.zig` — migrated to canonical pattern.
 - `build.zig` — `exe.wasi_exec_model = .reactor` on the
   example builds.
-- `tools/lint_zimr.zig` — class 5 allow-list for `zimr_app`.
+- `tools/zimrlint.zig` — class 5 allow-list for `zimr_app`.
 - `src/tests/app_bridge_test.zig` — +2 dispatch tests.
 
 #### Next turn
@@ -6353,7 +6353,7 @@ Knock-on simplifications:
   always-true now, removed.
 - "First-hit print detailed note" logic: unchanged (it's a
   display feature, not a flag).
-- File header + usage print: trimmed to "lint_zimr <file.zig>
+- File header + usage print: trimmed to "zimrlint <file.zig>
   [<file2.zig> ...]" and "Exits non-zero on any issue.  No flags,
   no levels — like zig, either you pass or you don't."
 
@@ -6377,7 +6377,7 @@ when next opening `build.zig` for the imgui arc.
 |---|---|
 | `zig build test` | **1555 / 1555 PASS** ✅ |
 | `zig build lint-check` | **0 issues in 140 files** ✅ |
-| `tools/lint_zimr.zig` LOC | ~1850 (down ~130 from autofix removal) |
+| `tools/zimrlint.zig` LOC | ~1850 (down ~130 from autofix removal) |
 
 ### Turn 381 — measuring lint on critical path, decision: no
 
@@ -6464,16 +6464,16 @@ pre-commit hooks, CI, manual gates.
 
 #### Why the edit cost can't easily go below 2.4s
 
-`lint_zimr` takes all files at once and lints them in one batch.
+`zimrlint` takes all files at once and lints them in one batch.
 Step.Run caches the whole batch — ANY input file change re-runs
 the entire batch.  To get per-file caching we'd need either:
 1. **Per-file Step.Run** — 140 separate steps in the graph.
    Each fork+exec is ~20ms → 2.8s minimum just from process
    overhead, even when nothing changed.  Net loss.
-2. **Internal mtime cache in lint_zimr** — read a sidecar file
+2. **Internal mtime cache in zimrlint** — read a sidecar file
    `<file>.lint-stamp`, skip files whose mtime matches the
    stamp.  Could drop the edit case from 2.4s to ~0.2s (only
-   re-lint changed files).  Adds ~50 LOC to lint_zimr.  Worth
+   re-lint changed files).  Adds ~50 LOC to zimrlint.  Worth
    doing if Simon wants the install integration later.
 
 #### Alternative gating paths
@@ -6487,18 +6487,18 @@ For ensuring lint never breaks on commits:
 These keep dev iteration fast while still preventing un-linted
 code from being shipped.
 
-### Turn 380 — separate build for lint_zimr (subbuild)
+### Turn 380 — separate build for zimrlint (subbuild)
 
 **Problem**: `rm -rf .zig-cache` (Simon's cold-test verification
-pattern) blew away the lint_zimr binary too, forcing a ~30s
+pattern) blew away the zimrlint binary too, forcing a ~30s
 ReleaseFast rebuild on every `zig build lint` afterward.  Turn
 377 had timed this and noted it as a possible win.
 
-**Fix**: lint_zimr now has its own `tools/build.zig` +
+**Fix**: zimrlint now has its own `tools/build.zig` +
 `tools/build.zig.zon`.  The main `build.zig` invokes the
 sub-build via `b.addSystemCommand` (`zig build --build-file
 tools/build.zig`), then runs the installed binary at
-`tools/zig-out/bin/lint_zimr`.  The sub-build's
+`tools/zig-out/bin/zimrlint`.  The sub-build's
 `tools/.zig-cache/` is independent of the project root's
 `.zig-cache/` and survives `rm -rf .zig-cache`.
 
@@ -6509,7 +6509,7 @@ manages incremental compilation.  Confirmed experimentally:
 
 | Approach | Cold | Warm |
 |---|---:|---:|
-| `zig build-exe lint_zimr.zig` (no build.zig) | 29s | 29s (no cache hit) |
+| `zig build-exe zimrlint.zig` (no build.zig) | 29s | 29s (no cache hit) |
 | `zig build` from `tools/build.zig` | 33s | 0.04s |
 
 #### Implementation
@@ -6519,9 +6519,9 @@ manages incremental compilation.  Confirmed experimentally:
 const std = @import("std");
 pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
-        .name = "lint_zimr",
+        .name = "zimrlint",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("lint_zimr.zig"),
+            .root_source_file = b.path("zimrlint.zig"),
             .target = b.graph.host,
             .optimize = .ReleaseFast,
         }),
@@ -6536,7 +6536,7 @@ pub fn build(b: *std.Build) void {
 Main `build.zig`: replaced `b.addExecutable` + `b.addRunArtifact`
 with `b.addSystemCommand` for the sub-build, then
 `b.addSystemCommand` for the binary path
-`tools/zig-out/bin/lint_zimr`.  The existing arg-passing logic
+`tools/zig-out/bin/zimrlint`.  The existing arg-passing logic
 (default-scan src+examples, or `b.args` for explicit files)
 unchanged.
 
@@ -6649,7 +6649,7 @@ Resolved by reformatting into 8 values per line (64 lines × 8 =
 
 #### Removing the rule
 
-Excised from `tools/lint_zimr.zig`:
+Excised from `tools/zimrlint.zig`:
 - Header registration entry (rule 14) in the rule-notes table
 - The `try runExVariant(ctx);` call in `runChecks`
 - `fn runExVariant(...)` (28 lines)
@@ -6660,7 +6660,7 @@ Linter re-compiles clean, runs in same warm time (~2.4s).
 
 #### Flipping the linter to a hard gate
 
-Added at end of `lint_zimr.zig` main():
+Added at end of `zimrlint.zig` main():
 ```zig
 if (total_issues > 0) {
     std.process.exit(1);
@@ -6761,7 +6761,7 @@ The lint cleanup arc is closed.  Open queue items:
 - The "Future sweeps" listed in `lint-zimr-plan.md` (alias
   top-of-file imports, etc.) — these are codebase polish, not
   rules.
-- Per-file mtime caching in `lint_zimr` for faster warm passes
+- Per-file mtime caching in `zimrlint` for faster warm passes
   (~2.4s → ~0.X s).  Was timed in turn 377.
 
 ### Turn 378 — ui.zig untyped-local sweep (in progress)
@@ -6912,8 +6912,8 @@ about whether they're incremental).
 **Findings:**
 1. **Lint is NOT incremental at the file level**.  Touching one
    file produces the same ~2.4s warm time as touching nothing.
-   The `lint_zimr` binary processes all ~140 files on every run.
-2. **Cold cost is dominated by compiling `lint_zimr` in
+   The `zimrlint` binary processes all ~140 files on every run.
+2. **Cold cost is dominated by compiling `zimrlint` in
    ReleaseFast** (~28s of the 30s).  The actual lint pass is the
    ~2.4s.
 3. **`zig fmt --check` direct is shockingly fast** (~0.12s for 140
@@ -6922,7 +6922,7 @@ about whether they're incremental).
 4. `lint-check` warm = 4s = ~2.4s lint + ~1.6s build-step-wrapped
    fmt-check.
 
-**If iteration speed matters more:** changing `lint_zimr` to
+**If iteration speed matters more:** changing `zimrlint` to
 `.optimize = .Debug` would drop cold time from ~30s to maybe ~5s
 at the cost of ~5-10x slower lint passes.  For now warm time
 is fine.  A real win would be lint-side mtime caching that skips
@@ -9056,7 +9056,7 @@ number; skipped.
 #### Implementation
 
 `isSimpleUniformPrimitiveSig(ctx, proto, params)` in
-`tools/lint_zimr.zig`:
+`tools/zimrlint.zig`:
 
 ```zig
 fn isSimpleUniformPrimitiveSig(
@@ -9198,7 +9198,7 @@ choice.
 
 #### Files touched
 
-- `tools/lint_zimr.zig`: added `isSimpleUniformPrimitiveSig` (60
+- `tools/zimrlint.zig`: added `isSimpleUniformPrimitiveSig` (60
   lines), wired into `checkFnArgsMultiline`, expanded rule-note
 - `src/math.zig`: reverted vec/point/vec4/quat to single-line
   (4 fns, 12 lines saved)
@@ -9368,7 +9368,7 @@ math.zig untyped-local: **0** (was 177).
 #### Files touched
 
 - `src/math.zig`: ~50 type annotations, 3 readability rewrites, 4 fn split, removal of f32x4s/f32x16s, rename f32x8s → splat8
-- `tools/lint_zimr.zig`: added array_init* family to type-signal whitelist, updated rule-note text
+- `tools/zimrlint.zig`: added array_init* family to type-signal whitelist, updated rule-note text
 
 #### Decision noted: linter exception for stable constructors?
 

@@ -1,0 +1,218 @@
+//! Open-loop torso attitude versus a closed-loop one. One question, one file, written once.
+//!
+//! ★ THE SHIPPED DEMO IS OPEN LOOP: it IKs the legs for a wanted torso pose, hands the joint
+//! angles to a PD, and never looks at the torso again. Measured, every command undershoots by a
+//! nearly constant 0.030-0.043 rad. **Before proposing a planner, the missing feedback has to be
+//! added and measured** — otherwise the planner is beating a strawman that a few lines fix.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+const sim_dt: f32 = 1.0 / 250.0;
+
+const Rig = struct {
+    m: *rbt.Model,
+    d: *rbt.Data,
+    legs: [4]ctl.Actuation,
+    foot_body: [4]u32,
+    foot_offset: [4]zm.Vec,
+    planted: [4]zm.Vec,
+    stance: []f32,
+    rest_rot: zm.Quat,
+    rest_height: f32,
+    ik_scratch: []zm.Vec,
+};
+
+/// Solve the four legs for a wanted attitude and write the LEG angles into `out`.
+fn legAnglesFor(r: *Rig, roll: f32, pitch: f32, out: []f32) void {
+    const m = r.m;
+    const d = r.d;
+    const keep = std.heap.page_allocator.dupe(f32, d.pos) catch return;
+    defer std.heap.page_allocator.free(keep);
+    @memcpy(d.pos, r.stance);
+    const root: u32 = m.jnt_qpos_adr[0];
+    d.pos[root + 2] = r.rest_height;
+    const dq: zm.Quat = zm.qmul(
+        zm.quatFromAxisAngle(vec(0, 1, 0), pitch),
+        zm.quatFromAxisAngle(vec(1, 0, 0), roll),
+    );
+    const wq: zm.Quat = zm.qmul(dq, r.rest_rot);
+    d.pos[root + 3] = wq[0];
+    d.pos[root + 4] = wq[1];
+    d.pos[root + 5] = wq[2];
+    d.pos[root + 6] = wq[3];
+    d.stage = .stale;
+    for (0..4) |i| {
+        _ = (ctl.Ik{ .max_iterations = 30 }).solve(
+            m,
+            d,
+            r.legs[i],
+            .{ .body = r.foot_body[i], .offset = r.foot_offset[i], .goal = r.planted[i] },
+            r.ik_scratch,
+        );
+    }
+    @memcpy(out, r.stance);
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] != .hinge) continue;
+        const q: u32 = m.jnt_qpos_adr[j];
+        out[q] = d.pos[q];
+    }
+    @memcpy(d.pos, keep);
+    d.stage = .stale;
+    rbt.forward(m, d);
+}
+
+fn attitude(r: *Rig) zm.Vec {
+    return zm.quatToEulerXYZ(zm.qmul(r.d.body_xrot[1], zm.conjugate(r.rest_rot)));
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, go1_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+
+    var applied: bool = false;
+    for (robot.keyframes) |key| {
+        if (std.mem.eql(u8, key.name, "home")) applied = rmj.applyKeyframe(&m, &d, key);
+    }
+    if (!applied) @memcpy(d.pos, m.qpos0);
+    d.stage = .stale;
+    rbt.forward(&m, &d);
+
+    var world: zp.World = try .init(gpa, 256);
+    defer world.deinit(gpa);
+    world.gravity = vec(0, 0, -9.81);
+    const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(6, 6, 0.5), .convex_radius = 0.01 },
+    });
+    _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+    var bridge: rphys.Bridge = try .init(gpa, &world, &m, &d, 256);
+    defer bridge.deinit(&world);
+    bridge.listen(&world);
+
+    var act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    const home: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(home);
+    var settle: u32 = 0;
+    while (settle < 500) : (settle += 1) {
+        (ctl.PoseHold{ .target = home, .kp = 400, .kv = 12, .max_torque = 35 }).apply(&m, &d, act);
+        rbt.forward(&m, &d);
+        try bridge.sync(&world, &m, &d);
+        try zp.step(&world, sim_dt);
+        bridge.harvest(&d);
+        rbt.step(&m, &d);
+    }
+    rbt.forward(&m, &d);
+
+    var rig: Rig = .{
+        .m = &m,
+        .d = &d,
+        .legs = undefined,
+        .foot_body = undefined,
+        .foot_offset = undefined,
+        .planted = undefined,
+        .stance = try gpa.dupe(f32, d.pos),
+        .rest_rot = d.body_xrot[1],
+        .rest_height = d.pos[m.jnt_qpos_adr[0] + 2],
+        .ik_scratch = ik_scratch,
+    };
+    defer gpa.free(rig.stance);
+    const names = [_][]const u8{ "FR_calf", "FL_calf", "RR_calf", "RL_calf" };
+    for (names, 0..) |name, i| {
+        const body: u32 = imp.bodyIndex(name) orelse return error.NoFoot;
+        rig.foot_body[i] = body;
+        rig.legs[i] = try ctl.limbActuation(gpa, &m, body);
+        var offset: zm.Vec = vec(0, 0, 0);
+        for (0..m.ngeom) |g| {
+            if (m.geom_body[g] != body) continue;
+            switch (m.geom_shape[g]) {
+                .sphere => offset = m.geom_pos[g],
+                else => {},
+            }
+        }
+        rig.foot_offset[i] = offset;
+        rig.planted[i] = d.body_xpos[body] + zm.rotate(d.body_xrot[body], offset);
+    }
+    defer for (0..4) |i| rig.legs[i].deinit();
+
+    const target: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(target);
+
+    p("torso attitude: open loop versus closed loop\n\n", .{});
+    p("  feedback   axis    commanded   achieved     error   lost\n", .{});
+
+    for ([_]bool{ false, true }) |closed| {
+        for ([_][2]f32{ .{ 0.30, 0 }, .{ 0.15, 0 }, .{ 0, 0.30 }, .{ 0, 0.15 } }) |cmd| {
+            const want_roll: f32 = cmd[0];
+            const want_pitch: f32 = cmd[1];
+            var trim_roll: f32 = 0;
+            var trim_pitch: f32 = 0;
+
+            @memcpy(d.pos, rig.stance);
+            @memset(d.vel, 0);
+            @memset(d.applied_force, 0);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            bridge.teleported();
+            legAnglesFor(&rig, want_roll, want_pitch, target);
+
+            var tick: u32 = 0;
+            while (tick < 900) : (tick += 1) {
+                // ★★★ THE MISSING LOOP, IN SIX LINES. Read the torso's ACTUAL attitude, integrate
+                // the difference into a trim on the command, and re-solve. No planner involved —
+                // and this is the baseline any planner has to beat.
+                if (closed and tick > 60 and tick % 25 == 0) {
+                    const seen = attitude(&rig);
+                    trim_roll += 0.5 * (want_roll - seen[0]);
+                    trim_pitch += 0.5 * (want_pitch - seen[1]);
+                    legAnglesFor(&rig, want_roll + trim_roll, want_pitch + trim_pitch, target);
+                }
+                (ctl.PoseHold{ .target = target, .kp = 400, .kv = 12, .max_torque = 35 })
+                    .apply(&m, &d, act);
+                rbt.forward(&m, &d);
+                try bridge.sync(&world, &m, &d);
+                try zp.step(&world, sim_dt);
+                bridge.harvest(&d);
+                rbt.step(&m, &d);
+            }
+            rbt.forward(&m, &d);
+            const seen = attitude(&rig);
+            const achieved: f32 = if (want_roll != 0) seen[0] else seen[1];
+            const want: f32 = if (want_roll != 0) want_roll else want_pitch;
+            p("  {s:<9}  {s:<6}  {d:>9.4}  {d:>9.4}  {d:>8.4}  {d:>4.0}%\n", .{
+                if (closed) "CLOSED" else "open", if (want_roll != 0) "roll" else "pitch",
+                want,                             achieved,
+                want - achieved,                  100.0 * (want - achieved) / want,
+            });
+        }
+        p("\n", .{});
+    }
+}

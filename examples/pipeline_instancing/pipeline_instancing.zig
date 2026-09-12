@@ -22,7 +22,7 @@ const zm = @import("zm");
 const float = zm.float;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 const vs_io = @import("instancing_vs_io.zig");
 const fs_io = @import("pipeline_uniforms_fs_io.zig");
 
@@ -183,7 +183,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.shader.setVertex(ps, 2, s.color_vbo, @sizeOf([inst_count]Col));
     s.shader.draw(ps, tri.len, inst_count);
 
-    co.caption(f.gl, s.font, "pipeline_instancing: one draw call, 126 triangles (per-instance offset + colour)");
+    common.caption(f.gl, s.font, "pipeline_instancing: one draw call, 126 triangles (per-instance offset + colour)");
     z.endDrawing(f.gl);
 }
 

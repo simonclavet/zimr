@@ -74,7 +74,7 @@ fn makeNinePatch(gpa: Allocator) !z.Image {
         .width = @intCast(w),
         .height = @intCast(h),
         .mipmaps = 1,
-        .format = @intFromEnum(z.PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(z.PixelFormat.uncompressed_r8g8b8a8),
     };
 }
 

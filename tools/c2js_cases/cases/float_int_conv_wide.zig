@@ -3,11 +3,20 @@
 // where a float was expected) and the float->int cast produced a Number into a
 // BigInt context — both threw "Cannot mix/convert BigInt" in the emitted JS.
 var su: u64 = 0;
-fn ru(x: u64) u64 { su +%= x; return x; }
+fn ru(x: u64) u64 {
+    su +%= x;
+    return x;
+}
 var si: i64 = 0;
-fn ri(x: i64) i64 { si +%= x; return x; }
+fn ri(x: i64) i64 {
+    si +%= x;
+    return x;
+}
 var sf: f64 = 0;
-fn rf(x: f64) f64 { sf += x; return x; }
+fn rf(x: f64) f64 {
+    sf += x;
+    return x;
+}
 
 export fn run_test() i32 {
     // int -> float

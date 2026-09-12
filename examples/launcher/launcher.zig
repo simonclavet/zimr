@@ -25,10 +25,12 @@ const Color = zm.Color;
 const vec2 = zm.vec2;
 
 // The flagship roster. Order = switch order. A broad tour of the engine: 3D PBR,
-// full UI, physics, two CPU-vs-GPU side-by-sides, 2D/3D plots, two GPU fluids,
-// a warp starfield, switchable 2D post-fx, and fractals.
+// full UI, physics, robot dynamics with a live MPC planner, two CPU-vs-GPU
+// side-by-sides, 2D/3D plots, two GPU fluids, a warp starfield, switchable 2D
+// post-fx, and fractals.
 const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_helmet_sw").app), // CPU vs GPU PBR helmet
+    z.eraseApp(@import("ex_bone_socket").app), // rigged character, skeletal animation + socketed sword
     z.eraseApp(@import("ex_shadowmap_sw").app), // CPU vs GPU vs comptime shadow map
     z.eraseApp(@import("ex_decals").app), // projected decals onto geometry
     z.eraseApp(@import("ex_deferred_render").app), // MRT G-buffer deferred rendering
@@ -39,6 +41,7 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_ui_full_showcase").app), // full imgui-style UI
     z.eraseApp(@import("ex_zimrphysics_demo").app), // Jolt physics scenes
     z.eraseApp(@import("ex_zimrphysics2d_demo").app), // box2d 2D physics scenes
+    z.eraseApp(@import("ex_mpc_cartpole").app), // MPC: a cartpole planning its own swing-up
     z.eraseApp(@import("ex_mandel_sidebyside").app), // CPU vs GPU mandelbrot
     z.eraseApp(@import("ex_rt_sidebyside").app), // CPU vs GPU ray tracer
     z.eraseApp(@import("ex_plot_demo").app), // 2D plotting
@@ -49,8 +52,16 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_worker_png").app), // PNG encode on a Web Worker (off the main thread)
     z.eraseApp(@import("ex_mandel_julia").app), // fractal explorer
     z.eraseApp(@import("ex_waving_cubes").app), // animated HSV cube field
+    z.eraseApp(@import("ex_tic_tac_toe").app), // two-player tic tac toe, plain 2D shapes
+    z.eraseApp(@import("ex_langton_ant").app), // Langtons ant with pan/zoom + turn trail
+    z.eraseApp(@import("ex_snake").app), // snake: eat dots to grow, keyboard + swipe
+    z.eraseApp(@import("ex_fps_playground").app), // first-person physics: walk + jump on cubes
     z.eraseApp(@import("ex_starfield").app), // warp-speed starfield
     z.eraseApp(@import("ex_shader_effects").app), // switchable 2D post-fx
+    // ★ A Go1 with a procedurally spliced arm: the torso weaves through three incommensurate
+    // frequencies while the gripper holds a point that travels with the feet. Reports its own
+    // attitude error, gripper drift, foot slip and friction-cone occupancy.
+    z.eraseApp(@import("ex_quadruped").app), // articulated robot: gimbal + contact readouts
     z.eraseApp(@import("ex_gallery_all").app), // 2x2 grid of 4 mini-apps (launcher-in-launcher!)
 };
 const n_apps = flagships.len;

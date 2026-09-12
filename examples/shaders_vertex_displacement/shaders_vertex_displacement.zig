@@ -16,7 +16,7 @@ const zm = @import("zm");
 const Vec = zm.Vec;
 const Camera3D = zm.Camera3D;
 const pointVec = zm.pointVec;
-const co = @import("example_common");
+const common = @import("example_common");
 const float = zm.float;
 
 const vs_wgsl = @embedFile("shaders_vertex_displacement_vs.wgsl");
@@ -182,13 +182,13 @@ fn update(f: *z.Frame, s: *State) void {
     s.shader.drawIndexed(ps, @intCast(index_count), 1);
     f.gl.renderer().bindForPass(ps);
 
-    f.gl.text(.{ 16, 16 }, "Vertex Displacement", .{ .size = 24, .color = co.palette.ink, .font = &s.font });
+    f.gl.text(.{ 16, 16 }, "Vertex Displacement", .{ .size = 24, .color = common.palette.ink, .font = &s.font });
     f.gl.text(
         .{ 16, 46 },
         "a Perlin heightfield sampled in the VERTEX SHADER; normals computed there too",
-        .{ .size = 14, .color = co.palette.ink_dim, .font = &s.font },
+        .{ .size = 14, .color = common.palette.ink_dim, .font = &s.font },
     );
-    co.caption(f.gl, s.font, "GPU vertex texture fetch - drag to orbit, pinch/wheel to zoom");
+    common.caption(f.gl, s.font, "GPU vertex texture fetch - drag to orbit, pinch/wheel to zoom");
 }
 
 pub const app: z.AppSpec(State) = .{

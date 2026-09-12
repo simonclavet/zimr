@@ -1,3 +1,4 @@
+//! lint:alias shader_introspect
 // src/shader_introspect.zig - comptime schema introspection.
 // WebGPU architecture is documented centrally in src/zimr.zig
 // (the module-level `//!` doc) — read that before changing wgpu code.

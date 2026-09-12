@@ -32,7 +32,7 @@ const perspectiveFovRh = zm.perspectiveFovRh;
 const pointVec = zm.pointVec;
 const rad_per_deg = zm.rad_per_deg;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -74,7 +74,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // ---- toggle: SPACE or the on-screen button ----
     const u: z.ui_real.Ui = s.ui_host.begin(f);
@@ -126,9 +126,9 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.text(
         .{ 14, 44 },
         label,
-        .{ .size = 22, .color = if (s.ortho) co.palette.accent else co.palette.accent2, .font = &s.font },
+        .{ .size = 22, .color = if (s.ortho) common.palette.accent else common.palette.accent2, .font = &s.font },
     );
-    co.caption(f.gl, s.font, "WebGPU 3D - orthographic vs perspective (SPACE / tap to switch)");
+    common.caption(f.gl, s.font, "WebGPU 3D - orthographic vs perspective (SPACE / tap to switch)");
     s.ui_host.render(f);
 }
 

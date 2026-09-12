@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retargeting the Geno dance onto humanoid.xml — a complete account</title>
+<style>
+  :root { --ink:#1a1a1a; --dim:#666; --rule:#ddd; --code:#f4f4f2; --warn:#b3541e; --good:#2c7a3f; --bad:#a83232; --tint:#f7f6f2; }
+  body { font: 16px/1.55 Georgia, 'Times New Roman', serif; color: var(--ink); max-width: 880px; margin: 2rem auto; padding: 0 1.2rem; background:#fff; }
+  h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 .3rem; }
+  h2 { font-size: 1.45rem; margin: 2.6rem 0 .8rem; padding-top: .6rem; border-top: 2px solid var(--ink); }
+  h3 { font-size: 1.12rem; margin: 1.8rem 0 .5rem; }
+  p { margin: .7rem 0; }
+  .sub { color: var(--dim); font-style: italic; margin-bottom: 1.6rem; }
+  code, pre { font: 13.5px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+  code { background: var(--code); padding: .1em .35em; border-radius: 3px; }
+  pre { background: var(--code); padding: .9rem 1rem; overflow-x: auto; border-left: 3px solid #bbb; margin: .9rem 0; }
+  pre code { background: none; padding: 0; }
+  .math { background: var(--tint); padding: .8rem 1rem; margin: .9rem 0; border-left: 3px solid #999; font-family: ui-monospace, Menlo, monospace; font-size: 14px; white-space: pre; overflow-x:auto; }
+  .box { border: 1px solid var(--rule); padding: .9rem 1.1rem; margin: 1.1rem 0; background: var(--tint); }
+  .box.warn { border-left: 4px solid var(--warn); }
+  .box.good { border-left: 4px solid var(--good); }
+  .box.bad  { border-left: 4px solid var(--bad); }
+  .box h4 { margin: 0 0 .4rem; font-size: 1rem; }
+  table { border-collapse: collapse; margin: .9rem 0; font-size: 14.5px; width:100%; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { border-bottom: 2px solid var(--ink); }
+  td.n, th.n { text-align: right; font-family: ui-monospace, Menlo, monospace; }
+  .better { color: var(--good); font-weight: 600; }
+  .worse { color: var(--bad); font-weight: 600; }
+  ol li, ul li { margin: .35rem 0; }
+  .toc { columns: 2; column-gap: 2rem; font-size: 14.5px; }
+  .toc li { break-inside: avoid; }
+  em.k { font-style: normal; font-weight: 600; }
+  .lesson { border-left: 4px solid var(--ink); padding-left: 1rem; margin: 1.2rem 0; }
+  .lesson b { display:block; margin-bottom:.2rem; }
+  small { color: var(--dim); }
+</style>
+</head>
+<body>
+
+<h1>Retargeting the Geno dance onto <code>humanoid.xml</code></h1>
+<p class="sub">A complete account: the problem, the mathematics, what FlomoGMR does, what we built, where it went wrong, what it measures now, and the plan from here. Written 1 September 2026 after ~120 iterations.</p>
+
+<div class="box">
+<h4>Contents</h4>
+<ol class="toc">
+<li><a href="#problem">The problem, precisely</a></li>
+<li><a href="#skeletons">The two skeletons</a></li>
+<li><a href="#frames">Frames, units, conventions</a></li>
+<li><a href="#restpose">The rest pose — the root of everything</a></li>
+<li><a href="#recipe">The recipe we arrived at</a></li>
+<li><a href="#math">The mathematics, step by step</a></li>
+<li><a href="#gmr">What FlomoGMR actually does</a></li>
+<li><a href="#code">Our code — what exists and is tested</a></li>
+<li><a href="#mistakes">Mistakes in the current code</a></li>
+<li><a href="#measure">How we measure, and the numbers</a></li>
+<li><a href="#lessons">The lessons that generalise</a></li>
+<li><a href="#plan">The plan, revised</a></li>
+</ol>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="problem">1. The problem, precisely</h2>
+
+<p>We have a motion-capture take — a person dancing — recorded as a BVH file driving the <em>Geno</em> skeleton. We have a robot, <code>humanoid.xml</code> from the MuJoCo examples. We want the robot to <em>perform the dance</em>: for every frame of the capture, a joint configuration of the robot that reads as the same pose.</p>
+
+<p>Three things make this harder than it sounds, and every failure in this project traces to one of them:</p>
+
+<ol>
+<li><em class="k">The two skeletons are different shapes.</em> Different bone lengths, different joint counts (96 versus 16 bodies), different numbers of degrees of freedom (a human elbow versus one hinge), different rest poses.</li>
+<li><em class="k">The two live in different coordinate conventions.</em> Y-up centimetres versus Z-up metres, facing different directions, with joint coordinates that mean different things.</li>
+<li><em class="k">A robot body cannot be placed directly.</em> Only its root is free; everything else reaches its pose through joint angles, and a hinge can only do so much.</li>
+</ol>
+
+<p>A retarget is therefore not a copy. It is a <em>translation between two languages that don't share a vocabulary</em> — and the mistakes were, almost without exception, places where we assumed a shared word that wasn't there.</p>
+
+<!-- ===================================================================== -->
+<h2 id="skeletons">2. The two skeletons</h2>
+
+<table>
+<tr><th></th><th>Geno (source)</th><th>humanoid.xml (target)</th></tr>
+<tr><td>Format</td><td>BVH, LAFAN1 layout</td><td>MuJoCo MJCF</td></tr>
+<tr><td>Up axis</td><td>Y</td><td>Z</td></tr>
+<tr><td>Units</td><td>centimetres</td><td>metres</td></tr>
+<tr><td>Faces</td><td>+Z</td><td>+X</td></tr>
+<tr><td>Height</td><td>165 cm</td><td>1.445 m</td></tr>
+<tr><td>Hip height</td><td>84.4 cm</td><td>0.830 m</td></tr>
+<tr><td>Joints / bodies</td><td>96 joints</td><td>16 bodies</td></tr>
+<tr><td>Rest pose</td><td>T-pose (from <code>Geno_stance.bvh</code>)</td><td><b>Not a T-pose</b> — arms folded, elbows at 109.5°</td></tr>
+<tr><td>Spine</td><td>Hips → Spine → Spine1 → Spine2 → Spine3 (upward)</td><td>torso → waist_lower → pelvis (<b>downward</b>)</td></tr>
+<tr><td>Shoulder</td><td>Shoulder + Arm joints</td><td>None; <code>upper_arm</code> attaches to <code>torso</code>, 2 DOF</td></tr>
+<tr><td>Elbow / knee</td><td>Full rotational joints</td><td>Single hinge, 1 DOF</td></tr>
+<tr><td>Hands / head</td><td>Fingers, neck, head</td><td>Leaf bodies with <b>0 DOF</b></td></tr>
+<tr><td>Feet</td><td>Foot + toe</td><td>Leaf body; foot shape is a <b>geom</b>, not a body</td></tr>
+</table>
+
+<div class="box warn">
+<h4>The row that cost the most</h4>
+<p><code>humanoid.xml</code>'s <code>qpos0</code> is <em>not</em> a T-pose. Its arms fold up into a triangle. An early check compared "hand height ≈ shoulder height" and pronounced it a T-pose — but a folded arm satisfies that too. <b>Drawing the two rest poses side by side settled in one glance what a carefully chosen scalar had confirmed wrongly.</b> Every twist offset built before that point compared two different physical poses.</p>
+</div>
+
+<div class="box warn">
+<h4>The row that cost the second most</h4>
+<p>The spine runs the <b>opposite direction</b> in the two hierarchies. "Root" and "hips" are the same body on Geno and opposite ends of a chain on the robot. Every piece of code that assumed they agree — the local-rotation reference, the chain ordering, the T-pose anchor — was wrong by the height of a spine.</p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="frames">3. Frames, units, conventions</h2>
+
+<h3>Y-up to Z-up</h3>
+<div class="math">position:    (x, y, z)_Yup  →  (x, −z, y)_Zup
+quaternion:  (w, vx, vy, vz)_Yup  →  (w, vx, −vz, vy)_Zup      the imaginary part maps like a vector
+equivalently R q R⁻¹  with  R = rotation of +90° about X</div>
+<p>Both forms are equivalent; the vector form is cheaper and harder to get backwards. FlomoGMR documents exactly this map in <code>flomo_to_geno_bvh.py</code>.</p>
+
+<h3>Scale</h3>
+<div class="math">scale = cm_to_m × (robot_hip_height / geno_hip_height)
+      = 0.01 × (0.830 / 0.855)  ≈ 0.0097</div>
+<p>Two bugs lived here. A hardcoded <code>0.9</code> for the robot's hip height (it is 0.830) skewed every target by 8.5% for most of the project. And <code>hip_height</code> is stored in metres while <code>rest_positions</code> are in centimetres — applying the conversion to both drew a T-pose the size of a building. <b>Two fields of one struct in different units is a trap; the unit belongs in the name.</b></p>
+
+<h3>Facing</h3>
+<p>Geno faces +Z; the robot faces +X. In the robot's frame that is a single yaw about Z. Measured empirically at −90°; the derivation gives +90°, and the discrepancy is recorded rather than smoothed over — one of the handedness conventions is opposite to the assumption. In the final recipe the facing is absorbed by the twist offsets and needs no separate constant.</p>
+
+<!-- ===================================================================== -->
+<h2 id="restpose">4. The rest pose — the root of everything</h2>
+
+<p>Every retarget needs a <em>reference</em>: a pose in which the source and target are known to depict the same thing, so that motion can be measured as departure from it. The reference pose problem broke this project <b>five times</b>, each in a new costume:</p>
+
+<table>
+<tr><th>#</th><th>What was compared</th><th>What it should have been</th><th>Space</th></tr>
+<tr><td>1</td><td>Geno's FBX bind (an <b>A-pose</b>)</td><td>Geno's T-pose file</td><td>world</td></tr>
+<tr><td>2</td><td>Offsets summed <b>without</b> parent rotations</td><td>Rotated accumulation</td><td>world</td></tr>
+<tr><td>3</td><td>A <b>vertical</b> reference bone for the torso</td><td>A horizontal one (it cannot encode yaw)</td><td>world</td></tr>
+<tr><td>4</td><td><code>qpos0</code> treated as a T-pose</td><td>A robot pose <b>solved into</b> Geno's T-pose</td><td>world</td></tr>
+<tr><td>5</td><td><code>qpos = 0</code> treated as a straight limb</td><td><code>qpos</code> is an <b>offset from rest</b>; the elbow rests at 109.5°</td><td>joint</td></tr>
+</table>
+
+<div class="box good">
+<h4>The construction that finally holds</h4>
+<p>Don't <em>hope</em> the two rest poses match — <em>build</em> the robot's from the source's. <code>solveRestPoseFromSource</code> walks the robot's own tree, placing each body along the direction Geno's corresponding bone points, <b>at the robot's own bone length</b>. Every target is then exactly reachable, the shape is a T-pose by construction, and one translation anchors the <em>pelvis</em> (not the tree root) on Geno's hips.</p>
+</div>
+
+<div class="math">for each body, parents first:
+    target[body] = target[parent] + normalize(geno_bone) × |robot_bone|
+then shift all targets so target[pelvis] = geno_hips
+then IK the robot onto the targets (position only)
+then record qpos_tpose, and rest_flexion[j] for every 1-DOF hinge</div>
+
+<!-- ===================================================================== -->
+<h2 id="recipe">5. The recipe we arrived at</h2>
+
+<div class="box good">
+<h4>Three steps, one sentence each</h4>
+<ol>
+<li><b>Rest pose.</b> Solve the robot into the capture's T-pose using the capture's <em>directions</em> and the robot's <em>own bone lengths</em>. Once.</li>
+<li><b>Per frame, parents first:</b> for each body, decide its world orientation (twist-offset or aim), fit it onto the body's joints against the parent's <em>achieved</em> orientation, and for a 1-DOF hinge write <code>wanted − rest</code>.</li>
+<li><b>Refine.</b> A few damped-least-squares steps on weighted position targets at the feet and hands.</li>
+</ol>
+</div>
+
+<p>The recipe is understandable. Nothing in it needs two coordinate conventions held in mind at once, and every step can be checked against a drawing: does the bone point the right way, does the elbow bend in the right plane, does the foot land.</p>
+
+<p>The one genuinely open design question is which mechanism decides the per-body orientation in step 2. Two exist and both are wired:</p>
+
+<table>
+<tr><th>Mechanism</th><th>What it does</th><th>Strength</th><th>Weakness</th></tr>
+<tr><td><b>A — twist offsets</b><br><small>ported from GMR</small></td><td>Converts a <em>rotation</em> from the source frame to the robot's via a per-bone <code>R_twist</code> derived from the two rest poses; chains through <code>inv(parent_twist)</code>.</td><td>Carries twist. Wins 5 of 7 stages, legs by 2×.</td><td>Every rest-pose bug in the project was this mechanism's.</td></tr>
+<tr><td><b>B — aiming</b></td><td>Compares <em>directions</em> in world space; rotates the bone onto the target.</td><td>Structurally immune to rest-pose errors — a direction carries its own frame.</td><td>Leaves twist free. Wins only torso and elbow bend.</td></tr>
+</table>
+
+<p>Measured with everything else identical, A wins. <b>Per-body mixing of the two is worse than either</b>, because A's <code>inv(parent_twist)</code> undoes a twist B never applied.</p>
+
+<!-- ===================================================================== -->
+<h2 id="math">6. The mathematics, step by step</h2>
+
+<h3>6.1 Twist offsets (mechanism A) — the ported recipe</h3>
+<p>From FlomoGMR's <code>compute_twist_offsets</code>, with one adaptation.</p>
+
+<div class="math">Setup, once, from the two rest poses. For each body J with a child bone:
+
+    d_robot   = normalize(rest_xpos[child] − rest_xpos[J])     in the robot's LOCAL frame
+    d_src     = normalize(tpose[src_child] − tpose[src_J])     in world, converted to the robot's frame
+    j_rot     = the source joint's T-pose WORLD rotation, converted to the robot's frame
+    d_target  = j_rot⁻¹ · d_src                                the source direction, in J's local frame
+    R_twist[J] = minimumAngleRotation(d_robot → d_target)
+
+Per frame, on LOCAL rotations, walking each chain parent to child:
+
+    q_local[J] = conj(world_src[map[robot_parent(J)]]) · world_src[map[J]]
+    want[J]    = inv(R_twist[parent]) · q_local[J] · R_twist[J]
+
+Why it is exact:
+    world_robot[J] = world_src[J] · R_twist[J]
+    ⇒ world_robot[J] · d_robot = world_src[J] · d_target        the bone direction matches by construction</div>
+
+<div class="box warn">
+<h4>Two adaptations the port needed, and why</h4>
+<p><b>The <code>inv(parent)</code> factor</b> is the piece we did not have for many turns: it undoes the parent's twist so a chain does not accumulate it. Without it a correction that helps a shoulder wrecks the forearm below it — exactly the failure we saw.</p>
+<p><b><code>q_local</code> is taken relative to the human joint driving the <em>robot's</em> parent</b>, not the human's own parent. That one expression handles both a skipped joint (the arm's <code>RightShoulder</code> maps to no robot body) and the inverted spine — and gives the root the human's <em>world</em> rotation as a consequence, since its robot parent is the world. Getting this wrong cost 51° at the torso.</p>
+<p>The reference never needed either, because its Geno MJCF was <em>generated from</em> the BVH skeleton, so its robot's frames were the source's. <b>A port is only faithful if its assumptions port too.</b></p>
+</div>
+
+<h3>6.2 Aiming with chosen twist (mechanism B)</h3>
+<div class="math">swing = shortestArc(robot_bone_local → target_dir)                 constrains 2 of 3 DOF
+
+the third — rotation ABOUT the bone — is free, and a child hinge's axis rides in
+this body's frame, so a free twist bends the child in an arbitrary plane. So:
+
+    n_human   = normalize(cross(human_parent_bone, human_child_bone))     the human's bend-plane normal
+    a_hinge   = rotate(swing, child_hinge_axis_local)                      where the hinge axis points now
+    project both onto the plane ⟂ target_dir; twist = atan2 between them
+    want = quatFromAxisAngle(target_dir, twist) · swing</div>
+
+<h3>6.3 The two-bone limb — exact, no solver</h3>
+<p>An arm is shoulder (2 DOF) + elbow (1 DOF) = 3 DOF, and a hand position is 3 numbers. It is exactly determined.</p>
+<div class="math">given shoulder S, hand target H, elbow hint E, lengths L₁ L₂ (the ROBOT's own):
+
+    d       = clamp(|H − S|, |L₁ − L₂| + ε, L₁ + L₂ − ε)
+    cos(θ)  = (L₁² + L₂² − d²) / (2 L₁ L₂)          interior angle at the elbow
+    flexion = π − θ                                   departure from straight
+    cos(α)  = (L₁² + d² − L₂²) / (2 L₁ d)            angle between upper bone and S→H
+    n       = normalize(cross(H − S, E − S))          the plane, FROM THE CAPTURE'S ELBOW
+    upper   = rotate(quatFromAxisAngle(n, α), normalize(H − S))
+    elbow   = S + L₁ · upper</div>
+<p><b>The plane comes from the capture's own elbow.</b> Without it the elbow sits anywhere on a circle about the shoulder–hand axis — and that circle <em>is</em> the free-twist ambiguity that cost four experiments. The capture always knew the answer; it wasn't being asked.</p>
+
+<h3>6.4 Hinges: zero is not straight</h3>
+<div class="math">measured on a bare model, no pipeline:
+
+    qpos  −17.2° → bend  92.3°        109.5 − 17.2
+    qpos  −51.6° → bend  57.9°        109.5 − 51.6
+    qpos  −80.2° → bend  29.3°        109.5 − 80.2
+    qpos  +22.9° → bend 132.4°        109.5 + 22.9
+
+    bend = rest_bend + qpos,  exactly.   So:   qpos = wanted_flexion − rest_flexion</div>
+<p>Every flexion heuristic wrote the wanted bend straight into the coordinate. Writing −90.9 asked for 18.6 and got exactly that. Four turns of geometric explanations — cone relations, wrong bones, wrong joint indices — were all eliminated by measurement before the real cause appeared. <b>A joint coordinate is an offset from the model's rest, never an absolute angle.</b></p>
+
+<p>For completeness, a hinge whose axis is <em>not</em> perpendicular to its bone sweeps a cone, and the mapping is <code>cos(φ) = cos²γ + sin²γ·cos(qpos)</code> with maximum bend <code>2γ</code>. <code>humanoid.xml</code>'s elbow is perpendicular (γ = 90°), so this reduces to the identity here — but a real robot's hinges often are not, and <code>hingeAngleForFlexion</code> handles it.</p>
+
+<h3>6.5 The Jacobian and damped least squares</h3>
+<div class="math">jacp[:, j] = cdof[j].lin + cross(cdof[j].ang, point − subtree_com[root])
+jacr[:, j] = cdof[j].ang
+                                    for each DOF j on the path body → world (no new physics; comPos made it)
+
+(JᵀWJ + λI) dq = JᵀW e             SPD by construction, so a Cholesky solve
+qpos ← integratePos(qpos, dq)       NEVER qpos += dq: a free joint's quaternion does not add</div>
+
+<!-- ===================================================================== -->
+<h2 id="gmr">7. What FlomoGMR actually does</h2>
+
+<p>Read three times over the project; the third reading, asking the questions the project had earned, found what the first two missed.</p>
+
+<table>
+<tr><th>GMR</th><th>Us, currently</th><th>Consequence</th></tr>
+<tr><td>Sets a full <b>SE3 target</b> (position + orientation, world space) per body and solves <b>all tasks at once</b> with mink.</td><td>Analytic per-body pass, then position-only IK.</td><td>Our decomposition against a <em>desired</em> parent compounded error; fixed by fitting against the <em>achieved</em> parent.</td></tr>
+<tr><td><b>Warm-starts</b> from the previous frame; the configuration is never reset.</td><td><b>Resets to <code>qpos0</code> every frame</b> — a debugging convenience that outlived its purpose.</td><td>Measured jitter of 25–37°/frame above what the capture asks. A cold start re-picks every free twist independently.</td></tr>
+<tr><td><b>Two sequential task groups</b>, each solved to convergence: big bodies, then extremities.</td><td>One weighted solve.</td><td>Ours needs hand-tuned weights between limbs; a priority scheme removes most of that competition.</td></tr>
+<tr><td><code>ConfigurationLimit</code> as a constraint <em>in</em> the solve.</td><td>Clamp after.</td><td>GMR finds the best <em>reachable</em> answer, not the projection of an unreachable one.</td></tr>
+<tr><td>Hand-authored <code>rot_offset</code> per row — <b>five distinct values for fourteen bones</b>, all ±0.5/±0.707 axis permutations, grouped by limb.</td><td>Derived twist offsets.</td><td>Their five values are five <em>limb conventions</em> in G1's URDF, not tuning. <code>humanoid.xml</code> has one convention, so ours degenerates to fewer.</td></tr>
+<tr><td><code>human_scale_table</code> per body.</td><td>One global hip-height scale.</td><td>One ratio cannot make a leg and an arm both match.</td></tr>
+<tr><td><code>flomo_to_geno_bvh.py::compute_twist_offsets</code> — the recipe, with its reasoning in the docstring.</td><td>Ported (§6.1).</td><td>The file wasn't named "twist" or "retarget"; its <em>docstring</em> named the symptom. Grep the reference for the symptom, not the feature.</td></tr>
+</table>
+
+<div class="box good">
+<h4>What to take from GMR, in order of value</h4>
+<ol>
+<li><b>Warm start.</b> One line. Directly addresses the measured jitter and the free-twist circle.</li>
+<li><b>Sequential task groups.</b> Torso/pelvis/thighs first, then arms/feet/head. Removes weight tuning between limbs.</li>
+<li><b>Joint limits inside the step.</b> Scale <code>dq</code> so no joint crosses its range.</li>
+<li><b>Per-limb scale.</b> Only once the above are in.</li>
+</ol>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="code">8. Our code — what exists and is tested</h2>
+
+<table>
+<tr><th>Function</th><th>Does</th><th>Verified by</th></tr>
+<tr><td><code>robot.jacBody</code></td><td>Body Jacobian from <code>cdof</code></td><td>Finite differences; mutation-tested (reversed cross product, skipped body both caught)</td></tr>
+<tr><td><code>robot.ikStep</code></td><td>Damped least squares, position + orientation rows</td><td>Monotone convergence; singular case stays finite; sign flip caught</td></tr>
+<tr><td><code>robot.fitBodyRotation</code></td><td>Per-joint fit of a local rotation</td><td>Delivers a requested direction on a 2-DOF body: 1.000</td></tr>
+<tr><td><code>robot.computeTwistOffset</code>, <code>applyTwist</code></td><td>The ported recipe</td><td>Defining property asserted; <code>inv(parent)</code> pinned as load-bearing</td></tr>
+<tr><td><code>robot.computeTwistChainOffsets</code></td><td>Builds twists along named chains</td><td>Shared by example and harness — one implementation</td></tr>
+<tr><td><code>robot.poseFromRetarget</code></td><td>The per-frame loop</td><td>Shared; scorecard measures it directly</td></tr>
+<tr><td><code>robot.solveRestPoseFromSource</code></td><td>Builds the robot's T-pose from the capture's</td><td>Shared; visible in the T-pose compare view</td></tr>
+<tr><td><code>robot.solveTwoBoneLimb</code></td><td>Exact two-bone IK</td><td>Equality asserted; elbow on the hint's side; mutation-tested</td></tr>
+<tr><td><code>robot.hingeAngleForFlexion</code>, <code>maximumFlexion</code></td><td>Cone relation for non-perpendicular hinges</td><td>Round trip exact across three geometries</td></tr>
+<tr><td><code>robot.aimBoneWithTwist</code></td><td>Aim with twist from the bend plane</td><td>Used per-frame; forearm −0.196 → +0.563 when applied</td></tr>
+</table>
+
+<p>Plus three instruments: the <b>scorecard</b> (staged by dependency, metres and degrees, runs both mechanisms every time), the <b>invariant test</b> (localises the first bad body in a chain), and <b>ARM FOCUS</b> (five frames, per-joint, shoulder-relative). And three views: overlay on the character, T-pose compare with frames, real geoms.</p>
+
+<!-- ===================================================================== -->
+<h2 id="mistakes">9. Mistakes in the current code</h2>
+
+<p>Found by re-reading everything for this document. In order of consequence.</p>
+
+<div class="box bad">
+<h4>1. The example still resets to <code>qpos0</code> every frame.</h4>
+<p>The comment says "so a bad frame cannot poison the next." It was the right call while the pipeline was untrustworthy; it is now the single largest measurable defect (25–37°/frame of excess motion). GMR never resets.</p>
+</div>
+
+<div class="box bad">
+<h4>2. The <code>rest_flexion</code> fix is in the harness but <b>not yet in the example</b>.</h4>
+<p>The 33% hand-error improvement was measured on the harness. The example's <code>poseRobot</code> still writes the wanted bend straight into the coordinate. This is precisely the harness/example divergence the project spent four rounds closing — reopened by the newest fix. Wire <code>rest_flexion</code> through <code>RetargetPose</code> from <code>refreshRobotMap</code>.</p>
+</div>
+
+<div class="box bad">
+<h4>3. Three mechanisms coexist in <code>poseFromRetarget</code>: twist offsets, <code>aim_at_child</code>, and <code>two_bone</code>.</h4>
+<p>Each has a flag; the interactions are not all measured. Two-bone is off because the hand didn't respond — which turned out to be the <code>rest_flexion</code> bug, now fixed. It should be re-measured, and then <b>one of the three should go</b>.</p>
+</div>
+
+<div class="box bad">
+<h4>4. Position IK targets are built with one global scale.</h4>
+<p><code>1.315 / rest_pos[shoulder][1]</code> — the shoulder-height ratio. It puts the shoulders right and everything else proportionally wrong. GMR's per-body scale table is the fix, but only after the mechanism is settled.</p>
+</div>
+
+<div class="box warn">
+<h4>5. Dead weight that should be deleted, not kept "just in case".</h4>
+<p><code>robot_limb_correction</code>, <code>robot_rest_alignment</code>, <code>robot_human_reference</code>, <code>robot_axis_map</code>, <code>robot_desired_global</code>, <code>robot_identity_map</code>, <code>robot_identity_alignment</code>, <code>source_delta_z_up</code>, the facing yaw, <code>lafan_to_humanoid</code>'s <code>rotation_weight</code> on 0-DOF bodies (<code>head</code>, <code>hand</code>: their weights do nothing). Each was a mechanism papering over a bug in another; the bugs are fixed.</p>
+</div>
+
+<div class="box warn">
+<h4>6. The scorecard's "upper arm POSITION" is measured relative to the torso but reported as stage 2.</h4>
+<p>It is a consequence of the torso's placement and the fixed shoulder offset, not an independent quantity. Relabel or drop; a stage that cannot move independently misleads.</p>
+</div>
+
+<div class="box warn">
+<h4>7. Frame 320 got <em>worse</em> with the <code>rest_flexion</code> fix (0.190 → 0.424).</h4>
+<p>It is the frame with the longest wanted reach (0.460 of 0.624). Unexplained; the outlier to chase once two-bone is re-measured.</p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="measure">10. How we measure, and the numbers</h2>
+
+<h3>The scorecard — staged in dependency order</h3>
+<p>Each quantity alone, in the order it depends on the one before, in metres and degrees. A stage is only worth reading if every stage above it is good.</p>
+
+<table>
+<tr><th>Stage</th><th class="n">A: twist</th><th class="n">B: aim</th><th class="n">hybrid</th><th>Note</th></tr>
+<tr><td>1. torso ORIENTATION</td><td class="n">35.4°</td><td class="n">24.8°</td><td class="n">32.7°</td><td>B wins here only</td></tr>
+<tr><td>2. arm POSITION (rel. torso)</td><td class="n">0.086 m</td><td class="n">0.141</td><td class="n">0.115</td><td>a consequence of 1</td></tr>
+<tr><td>3. arm DIRECTION</td><td class="n">40.7°</td><td class="n">46.3°</td><td class="n">43.5°</td><td></td></tr>
+<tr><td>4. elbow BEND</td><td class="n">26.8°</td><td class="n">23.0°</td><td class="n">25.2°</td><td></td></tr>
+<tr><td>5. arm TWIST</td><td class="n">34.6°</td><td class="n">42.6°</td><td class="n">37.2°</td><td></td></tr>
+<tr><td>6. thigh DIRECTION</td><td class="n">12.5°</td><td class="n">28.7°</td><td class="n">42.3°</td><td>A by more than 2×</td></tr>
+<tr><td>7. knee BEND</td><td class="n">6.6°</td><td class="n">12.3°</td><td class="n">19.2°</td><td></td></tr>
+<tr><td>8. arm JITTER (excess)</td><td class="n">25.2°/f</td><td></td><td></td><td>cold start</td></tr>
+<tr><td>9. thigh JITTER (excess)</td><td class="n">36.9°/f</td><td></td><td></td><td>cold start</td></tr>
+<tr><th>sum of angles (1,3–7)</th><th class="n">156.6</th><th class="n">177.7</th><th class="n">200.1</th><th></th></tr>
+</table>
+
+<h3>ARM FOCUS — per frame, shoulder-relative, after the <code>rest_flexion</code> fix</h3>
+<table>
+<tr><th>Frame</th><th class="n">elbow (m)</th><th class="n">hand before</th><th class="n">hand after</th><th class="n">wanted reach</th><th class="n">robot max</th></tr>
+<tr><td>40</td><td class="n">0.149</td><td class="n">0.374</td><td class="n better">0.137</td><td class="n">0.340</td><td class="n">0.624</td></tr>
+<tr><td>180</td><td class="n">0.124</td><td class="n">0.396</td><td class="n better">0.206</td><td class="n">0.284</td><td class="n">0.624</td></tr>
+<tr><td>320</td><td class="n">0.072</td><td class="n">0.190</td><td class="n worse">0.424</td><td class="n">0.460</td><td class="n">0.624</td></tr>
+<tr><td>460</td><td class="n">0.157</td><td class="n">0.497</td><td class="n better">0.203</td><td class="n">0.228</td><td class="n">0.624</td></tr>
+<tr><th>mean hand</th><th></th><th class="n">0.364</th><th class="n better">0.242</th><th></th><th></th></tr>
+</table>
+<p>Every wanted reach is well inside the robot's span, so hand error is never a reach limitation.</p>
+
+<div class="box warn">
+<h4>Fake numbers this project produced, all caught</h4>
+<ul>
+<li>A "rest check" of <code>qmul(q, conj(q))</code> — identity for any q — read 0.0000 on device while proving nothing. Twice.</li>
+<li>A <code>Spine2</code>/<code>Spine3</code> mismatch between the ruler and the code.</li>
+<li>A torso position of 0.913 m: world-absolute compared against root-relative.</li>
+<li>A spine bone measured against a shoulder bone.</li>
+<li>An "irreducible 0.21 m floor" derived on a system with three known defects; later beaten by half.</li>
+<li>Numbers quoted from a harness running a <em>different implementation</em> from the example — four divergences.</li>
+<li>A "no effect" conclusion from an edit that had silently not applied.</li>
+</ul>
+<p><b>A wrong number sends work in a wrong direction, where wrong code merely fails.</b> The harness needs the same suspicion as the code, and arguably more.</p>
+</div>
+
+<!-- ===================================================================== -->
+<h2 id="lessons">11. The lessons that generalise</h2>
+
+<div class="lesson"><b>Two reference poses must match in kind, not just in pose.</b> "Both are rest poses" is not enough. Ask of both sides: what exactly does this quaternion measure, and is the other side measuring the same thing? Broken five ways here.</div>
+
+<div class="lesson"><b>Zero is not straight.</b> A joint coordinate is an offset from the model's rest configuration, never an absolute angle. Measure the rest bend once and subtract it.</div>
+
+<div class="lesson"><b>Copy angles, never lengths.</b> A robot's bone lengths are fixed. Asking it to match a human's joint positions asks for lengths it doesn't have, and a solver answers by bending a straight limb. Take the direction from the source and the magnitude from the model. Fixed the shoulder, the elbow, and the T-pose separately before it was recognised as one rule.</div>
+
+<div class="lesson"><b>Draw the two things you are comparing, before comparing them.</b> A carefully chosen scalar can be consistent with the wrong picture; a picture cannot. One drawing settled what a "hand at shoulder height" check had confirmed wrongly.</div>
+
+<div class="lesson"><b>A target is not a pose.</b> A robot body has no writable orientation; everything below the root moves only through joints. Several rounds of A/B testing compared formulas that reached exactly one body. Ask: can the thing I am varying actually reach the thing I am looking at?</div>
+
+<div class="lesson"><b>Measure the link you changed, not the end of the chain.</b> A single forearm number ranked the candidates backwards; the best formula looked worst because the forearm sits below both the shoulder and the elbow.</div>
+
+<div class="lesson"><b>One implementation, measured and shipped.</b> A harness that duplicates the code it measures is measuring a guess. Four divergences, every one invisible until a screenshot disagreed with a number.</div>
+
+<div class="lesson"><b>Everything wrong in the same way is one global error, not many local ones.</b> A per-joint framework cannot express a global constant, so the search never included "one number for all sixteen." The robot was wrong identically on every bone for many rounds before that was read correctly.</div>
+
+<div class="lesson"><b>Minimal tests crack what pipeline prints cannot.</b> <code>fitBodyRotation</code>, <code>jacBody</code>, <code>solveTwoBoneLimb</code>, and the hinge rest bend: each took one bare-model test after several in-pipeline prints had failed. Isolate the mechanism and ask the whole question at once.</div>
+
+<div class="lesson"><b>A strong argument for deleting code is still not a measurement.</b> Every rest-pose bug belonged to mechanism A and B was structurally immune — and A won by 21° when measured. Deleting would have traded a present capability for the absence of past problems.</div>
+
+<div class="lesson"><b>Identical output means the change did not happen.</b> A scripted edit whose anchor did not match left the file untouched, and the test produced numbers identical to the decimal. After any anchored edit, grep for the text just written.</div>
+
+<div class="lesson"><b>Check whether the reference already solved it.</b> <code>flomo_to_geno_bvh.py</code> contained the answer the whole time. It was not named "twist"; its docstring named the symptom. Grep the reference for the symptom.</div>
+
+<!-- ===================================================================== -->
+<h2 id="plan">12. The plan, revised</h2>
+
+<p>Ordered by expected value per unit of work, and by what the evidence supports rather than what the argument favours.</p>
+
+<div class="box good">
+<h4>Step 1 — Close the divergence the newest fix reopened. <small>(one turn)</small></h4>
+<p>Wire <code>rest_flexion</code> into the example's <code>refreshRobotMap</code> so the shipped pipeline gets the 33% hand improvement the harness measured. Then re-verify ARM FOCUS on the shared path. <em>Until this is done, no number in this document describes the example.</em></p>
+</div>
+
+<div class="box good">
+<h4>Step 2 — Re-measure two-bone IK with <code>rest_flexion</code> in. <small>(one turn)</small></h4>
+<p>It was switched off because the hand did not respond — which was the rest-bend bug, not the solve. The closed form is exact and tested; the prediction is hand error near zero on every in-reach frame. If it lands, delete <code>aim_at_child</code> for arms: one mechanism fewer.</p>
+</div>
+
+<div class="box good">
+<h4>Step 3 — Warm start. <small>(one line, then measure stages 8 and 9)</small></h4>
+<p>Keep <code>qpos</code> between frames. The jitter metric exists precisely so this can be judged: it should cut 25–37°/frame sharply while leaving the static stages roughly alone. If it does not, the free-twist story is wrong.</p>
+</div>
+
+<div class="box good">
+<h4>Step 4 — Sequential task groups. <small>(GMR's structure)</small></h4>
+<p>Group 1: torso, pelvis, thighs. Group 2: arms, feet, head. Solve each to convergence in turn. Removes the weight-tuning between limbs and directly targets the "helps arms, hurts legs" trade that ended two experiments.</p>
+</div>
+
+<div class="box good">
+<h4>Step 5 — Delete. <small>(the pass this document makes possible)</small></h4>
+<p>Everything in §9 item 5. Each was a mechanism papering over a bug in another, and the bugs are fixed. The measurement infrastructure catches any regression the deletion causes.</p>
+</div>
+
+<div class="box good">
+<h4>Step 6 — Joint limits inside the step; per-limb scale. <small>(tuning, last)</small></h4>
+<p>Only once the mechanism is settled. Tuning before that produced eleven candidate orientation formulas, of which none was the answer.</p>
+</div>
+
+<div class="box warn">
+<h4>What not to do</h4>
+<ul>
+<li>Do not add a fourth orientation mechanism. Every extra one so far was papering over a bug in the others.</li>
+<li>Do not tune weights before step 4. A priority scheme removes most of what weights arbitrate.</li>
+<li>Do not quote a harness number as a property of the example without confirming they run the same code.</li>
+<li>Do not conclude "no effect" from identical output. Grep for the edit first.</li>
+</ul>
+</div>
+
+<h3>How to explain what we have done</h3>
+<p>Honestly: the retargeting <em>mechanism</em> is now correct in its targets and measured against the code that ships. The remaining error is a mix of a real model limit (a 2-DOF shoulder cannot both aim and twist; a 1-DOF elbow bends in one plane), a cold-start artefact with a known fix, and a few concrete unfinished items in §9. The legs are good (knee 6.6°, thigh 12.5°). The arms are approximate and improving (hand 0.24 m). The torso is respectable (35° A, 25° B).</p>
+
+<p>The larger achievement is the <em>instrumentation</em>: a self-contained verification that has overturned the author's own judgement five times in five turns, on questions that would previously have been settled by argument and shipped. That is what makes the plan above executable without a screenshot after every step.</p>
+
+<p><small>Every claim in this document traces to a measurement recorded in <code>src/notes/retarget_recipe.md</code>, <code>src/notes/twist_port_plan.md</code>, or <code>src/notes/retarget_plan.md</code>, or to a test in <code>src/robot.zig</code> and <code>src/robot_mjcf.zig</code>. Where a number is a prediction rather than a result, it is marked as one.</small></p>
+
+</body>
+</html>

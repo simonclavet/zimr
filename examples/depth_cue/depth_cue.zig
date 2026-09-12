@@ -17,7 +17,7 @@ const Camera3D = zm.Camera3D;
 const Color = zm.Color;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -60,7 +60,7 @@ fn grayByDistance(px: f32, py: f32, pz: f32, cam: Camera3D) Color {
 fn update(f: *z.Frame, s: *State) void {
     const t: f32 = f.time.time;
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // Camera slowly orbits the field so the depth gradient sweeps across it.
     const orbit: f32 = t * 0.25;
@@ -94,7 +94,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.endMode3D(f.gl);
 
-    co.caption(
+    common.caption(
         f.gl,
         s.font,
         "Depth cue - cubes shaded by camera distance (near bright, far dark)",

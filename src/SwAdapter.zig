@@ -1,3 +1,4 @@
+//! lint:alias SwAdapter
 //! src/SwAdapter.zig — the raster (software rasterizer) renderer-trait adapter.
 //!
 //! Wraps `*raster.Context` behind the `gl: anytype` renderer interface so the
@@ -9,6 +10,7 @@
 
 const raster = @import("raster.zig");
 const zm = @import("zm");
+const turnsFromRad = zm.turnsFromRad;
 const Mat = zm.Mat;
 
 const Color = zm.Color;
@@ -159,7 +161,7 @@ pub fn rectRotated(
     rotation_rad: f32,
     opts: draw2d.RectOpts,
 ) void {
-    draw2d.rectRotatedFilled(self, rec, origin, rotation_rad, opts.color);
+    draw2d.rectRotatedFilled(self, rec, origin, turnsFromRad(rotation_rad), opts.color);
 }
 
 /// Gap primitive: rounded filled rectangle (loose numbers, roundness 0..1).

@@ -1,3 +1,4 @@
+//! lint:alias gpu_iface
 // src/gpu_iface.zig - the pass-based GPU trait, neither WebGL nor WebGPU shaped.
 // WebGPU architecture is documented centrally in src/zimr.zig
 // (the module-level `//!` doc) — read that before changing wgpu code.
@@ -139,8 +140,8 @@ pub fn batchFlushPipelineOk(
 
 test "batchFlushPipelineOk: catches a foreign pipeline, allows the batch owner" {
     const t: type = std.testing;
-    const shapes: wgpu.RenderPipelineHandle = @enumFromInt(1);
-    const foreign: wgpu.RenderPipelineHandle = @enumFromInt(2);
+    const shapes: wgpu.RenderPipelineHandle = @fromBackingInt(@intCast(1));
+    const foreign: wgpu.RenderPipelineHandle = @fromBackingInt(@intCast(2));
     // Owner unknown → don't guess (some other bug catches a truly-unbound draw).
     try t.expect(batchFlushPipelineOk(null, null));
     try t.expect(batchFlushPipelineOk(shapes, null));
@@ -520,7 +521,7 @@ pub const WgpuBackend = struct {
         encoder: wgpu.CommandEncoderHandle,
         desc: BeginRenderPassDesc,
     ) PassState {
-        const pass = @import("wgpu.zig").render_pass.begin(.{
+        const pass: wgpu.RenderPassEncoderHandle = wgpu.render_pass.begin(.{
             .encoder = encoder,
             .color_view = desc.color_view,
             .clear = desc.clear,
@@ -541,7 +542,7 @@ pub const WgpuBackend = struct {
         encoder: wgpu.CommandEncoderHandle,
         desc: BeginRenderPassMrtDesc,
     ) PassState {
-        const pass = @import("wgpu.zig").render_pass.beginMrt(.{
+        const pass: wgpu.RenderPassEncoderHandle = wgpu.render_pass.beginMrt(.{
             .encoder = encoder,
             .color_views = desc.color_views,
             .clear = desc.clear,
@@ -553,7 +554,7 @@ pub const WgpuBackend = struct {
     }
 
     pub fn endRenderPass(ps: *PassState) void {
-        @import("wgpu.zig").render_pass.end(ps.pass);
+        wgpu.render_pass.end(ps.pass);
         // Zero the dedup cache — a stale PassState reused without a
         // fresh beginRenderPass would otherwise silently skip the
         // first bind on the next pass.  The user is supposed to drop
@@ -572,11 +573,11 @@ pub const WgpuBackend = struct {
     pub fn beginComputePass(
         encoder: wgpu.CommandEncoderHandle,
     ) wgpu.ComputePassEncoderHandle {
-        return @import("wgpu.zig").compute_pass.begin(encoder);
+        return wgpu.compute_pass.begin(encoder);
     }
 
     pub fn endComputePass(pass: wgpu.ComputePassEncoderHandle) void {
-        @import("wgpu.zig").compute_pass.end(pass);
+        wgpu.compute_pass.end(pass);
     }
 
     /// Accumulate a quad into the user-chosen batch.  Flushes
@@ -725,7 +726,7 @@ pub const WgpuBackend = struct {
             wgpu.queueWriteBuffer(ps.queue, b.ibo, ibyte_off, padded_bytes[0..padded_len]);
         }
 
-        const rp = @import("wgpu.zig").render_pass;
+        const rp = wgpu.render_pass;
         // Pipeline binding is the consumer's responsibility (typically
         // `Renderer2D.bindForPass` at pass start) — flushBatch does
         // NOT re-bind the pipeline.  Pre-turn-2 the defensive bind
@@ -818,7 +819,7 @@ pub const WgpuBackend = struct {
                 return; // already bound — skip
             }
         }
-        @import("wgpu.zig").render_pass.setPipeline(ps.pass, pipeline.gpu_handle);
+        wgpu.render_pass.setPipeline(ps.pass, pipeline.gpu_handle);
         ps.current_pipeline = pipeline.gpu_handle;
         // Pull the SW vtable from the pipeline TYPE (comptime const,
         // no runtime cost).  Null for wgpu-only pipelines.
@@ -841,9 +842,28 @@ pub const WgpuBackend = struct {
                 return; // already bound — skip
             }
         }
-        @import("wgpu.zig").render_pass.setPipeline(ps.pass, handle);
+        wgpu.render_pass.setPipeline(ps.pass, handle);
         ps.current_pipeline = handle;
         ps.sw_dispatch = null; // a raw wgpu pipeline has no SW dispatch path
+    }
+
+    /// Forget which bind groups are believed to be bound, so the next `setBindGroup` for each
+    /// index actually emits.
+    ///
+    /// ★ WHY THIS IS NEEDED, AND WHY THE DEDUP ALONE IS WRONG ACROSS A PIPELINE SWAP.
+    ///
+    /// `setPipeline` updates `current_pipeline` but leaves `current_bind_groups` alone — yet
+    /// WebGPU INVALIDATES bind groups when a pipeline with an incompatible layout is set. So
+    /// after a foreign (3D, custom-shader) pipeline has been bound, the tracker still believes
+    /// the 2D atlas sits at `batch_reserved_group` while the device has dropped it. The next
+    /// `setBindGroup` for that index is then deduped away, the draw goes out with the group
+    /// unset, and WebGPU rejects the whole command buffer — a black canvas, no message.
+    ///
+    /// Found by the smoke runner's bind-group validator on `mocap_viewer`, which returns to
+    /// the shapes batch after drawing 3D wireframes. The trace showed `set_pipeline(shapes)`
+    /// followed by group 0 being rebound and group 1 NOT, then a `drawIndexed`.
+    pub fn invalidateBindGroups(ps: *PassState) void {
+        ps.current_bind_groups = .{ null, null, null, null };
     }
 
     pub fn setBindGroup(
@@ -858,7 +878,7 @@ pub const WgpuBackend = struct {
                 }
             }
         }
-        @import("wgpu.zig").render_pass.setBindGroup(ps.pass, group_index, bind_group);
+        wgpu.render_pass.setBindGroup(ps.pass, group_index, bind_group);
         if (group_index < ps.current_bind_groups.len) {
             ps.current_bind_groups[group_index] = bind_group;
         }

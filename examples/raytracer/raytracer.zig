@@ -38,7 +38,6 @@
 //   - No textures, area lights, or volumetrics
 
 const std = @import("std");
-const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
@@ -216,7 +215,7 @@ const Params = struct {
     samples_per_pixel: i32 = 64, // cap on accumulated samples per pixel
     max_depth: i32 = 5, // recursion cap
     vfov: f32 = 50.0,
-    sky_preset: i32 = @intFromEnum(SkyPreset.day),
+    sky_preset: i32 = @backingInt(SkyPreset.day),
 };
 
 // ============================================================================
@@ -640,7 +639,7 @@ fn scatter(
 fn skyColor(dir: Vec, preset_idx: i32) Vec {
     const unit: zm.Vec = normalize3(dir);
     const a: f32 = 0.5 * (unit[1] + 1.0);
-    const preset: SkyPreset = @enumFromInt(preset_idx);
+    const preset: SkyPreset = @fromBackingInt(@intCast(preset_idx));
     const colors: [2]zm.Vec = switch (preset) {
         .day => .{
             vec(1.0, 1.0, 1.0), // horizon - bright white
@@ -819,51 +818,6 @@ fn update(f: *z.Frame, s: *State) void {
 // ============================================================================
 // UI panel
 // ============================================================================
-
-/// Spawn one extra small sphere with random material at a random
-/// position around the origin.  Keeps the visual interesting after
-/// the default scene gets boring.
-fn addRandomSphere(s: *State) !void {
-    const r: std.Random = s.rng.random();
-    const center: Vec = vec((r.float(f32) - 0.5) * 3.0, -0.35 + r.float(f32) * 0.15, -0.5 - r.float(f32) * 1.5);
-    const radius: f32 = 0.08 + r.float(f32) * 0.12;
-    const pick = r.intRangeAtMost(u32, 0, 2);
-    const mat: Material = switch (pick) {
-        0 => .{ .lambertian = .{ .albedo = vec(r.float(f32), r.float(f32), r.float(f32)) } },
-        1 => .{ .metal = .{
-            .albedo = vec(0.5 + 0.5 * r.float(f32), 0.5 + 0.5 * r.float(f32), 0.5 + 0.5 * r.float(f32)),
-            .fuzz = r.float(f32) * 0.4,
-        } },
-        else => .{ .dielectric = .{ .ref_idx = 1.5 } },
-    };
-    try spawnSphere(s.gpa, &s.world, center, radius, mat);
-}
-
-/// Destroy every (Sphere, Material) entity and respawn the default
-/// scene.  Used by the "Reset scene" button.
-fn resetScene(s: *State) !void {
-    // Two-pass: collect entity handles in a scratch list, then
-    // destroy them.  Destroying mid-iteration would invalidate the
-    // archetype storage.
-    var to_destroy: ArrayList(ecs.Entity) = .empty;
-    defer to_destroy.deinit(s.gpa);
-
-    const Ctx = struct {
-        list: *ArrayList(ecs.Entity),
-        gpa: Allocator,
-    };
-    var ctx: Ctx = .{ .list = &to_destroy, .gpa = s.gpa };
-    s.world.forEach(struct {
-        fn cb(c: *Ctx, e: ecs.Entity, _: *Sphere) void {
-            c.list.append(c.gpa, e) catch {};
-        }
-    }.cb, &ctx);
-    for (to_destroy.items) |e| {
-        _ = e.destroyImmediate(&s.world);
-    }
-
-    try spawnDefaultScene(s.gpa, &s.world);
-}
 
 /// User-owned framework integration point.  See `examples/basic.zig`
 /// for the canonical comment block; this declaration is the

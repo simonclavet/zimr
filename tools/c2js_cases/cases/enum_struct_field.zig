@@ -25,16 +25,16 @@ export fn run_test() i32 {
     m.n = 42;
     m.col = .green; // re-store; must NOT clobber the adjacent tag
 
-    if (@intFromEnum(m.col) != 1) return 1;
+    if (@backingInt(m.col) != 1) return 1;
     if (m.tag != 222) return 2; // adjacency / corruption check
-    if (@as(i32, @bitCast(@intFromEnum(m.big))) != 2000000) return 3;
+    if (@as(i32, @bitCast(@backingInt(m.big))) != 2000000) return 3;
     if (m.n != 42) return 4;
     if (classify(m.col) != 200) return 5;
     if (classify(.blue) != 300) return 6;
 
-    var c2: Color = @enumFromInt(@as(u8, 2));
+    var c2: Color = @fromBackingInt(@intCast(@as(u8, 2)));
     c2 = c2;
-    if (@intFromEnum(c2) != 2) return 7;
+    if (@backingInt(c2) != 2) return 7;
 
     return 0;
 }

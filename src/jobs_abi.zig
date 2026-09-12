@@ -1,3 +1,4 @@
+//! lint:alias jobs_abi
 //! src/jobs_abi.zig — the names the three sides of the jobs system must agree on.
 //!
 //! THREE sides, and that is why this file exists on its own:

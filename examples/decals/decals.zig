@@ -43,7 +43,7 @@ const dot3 = zm.dot3;
 const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const bufPrint = std.fmt.bufPrint;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const bunny_obj = @embedFile("bunny.obj");
@@ -141,7 +141,7 @@ fn loadBunny(gpa: Allocator) !z.Mesh {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
-    const mesh: z.Mesh = try z.genMeshSphere(gpa, sphere_radius, 24, 32);
+    const mesh: z.Mesh = try z.genMeshSphere(gpa, sphere_radius, 32, 24);
     const sphere_model: z.Model = try z.loadModelFromMesh(f.gl, gpa, mesh);
     const bunny: z.Mesh = try loadBunny(gpa);
     const bunny_model: z.Model = try z.loadModelFromMesh(f.gl, gpa, bunny);
@@ -182,7 +182,7 @@ fn xorshift(state: *u32) u32 {
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const u: z.ui_real.Ui = s.ui_host.begin(f);
     const cam: Camera3D = s.cam.update(f, u.wantCaptureMouse(), .{
@@ -202,7 +202,7 @@ fn update(f: *z.Frame, s: *State) void {
         receiver = s.bunny_recv;
     }
     // `getRayCollisionTriangle` derives the normal from cross(edge1, edge2),
-    // whose sign depends on triangle WINDING — genMeshSphere is CW-wound, so its
+    // whose sign depends on triangle WINDING — genMeshSphereLegacy is CW-wound, so its
     // hit normal points INWARD (opposite the surface's outward vertex normals),
     // while the OBJ bunny is CCW so its points outward. That inconsistency made
     // the decal facing test reject the whole sphere. Fix winding-independently:
@@ -258,7 +258,7 @@ fn update(f: *z.Frame, s: *State) void {
         "decals: {d}/{d}   click to splat",
         .{ s.decal_count, max_decals },
     ) catch "";
-    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
 
     // ---- DEBUG: show the last hit + first decal vertex to diagnose placement ----
     if (hit.hit) {
@@ -275,7 +275,7 @@ fn update(f: *z.Frame, s: *State) void {
         );
     }
 
-    co.caption(f.gl, s.font, "WebGPU 3D - projected decals (click sphere or bunny; drag to orbit)");
+    common.caption(f.gl, s.font, "WebGPU 3D - projected decals (click sphere or bunny; drag to orbit)");
     s.ui_host.render(f);
 }
 

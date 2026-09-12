@@ -1,3 +1,4 @@
+//! lint:alias raster_shader
 //! src/raster_shader.zig — run zimr fragment shaders on the CPU.
 //!
 //! Companion to the SPIR-V/GLSL/WebGL2 pipeline.  The same shader

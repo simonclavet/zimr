@@ -143,7 +143,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.frame_count += 1;
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
-    const ptype: ParticleType = @enumFromInt(@as(u8, @intCast((s.frame_count / cycle_frames) % 3)));
+    const ptype: ParticleType = @fromBackingInt(@intCast(@as(u8, @intCast((s.frame_count / cycle_frames) % 3))));
     const emitter: Vec2 = .{ w * 0.5, h * 0.5 };
 
     var e: usize = 0;

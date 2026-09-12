@@ -1,0 +1,292 @@
+//! Is the arm actually countering, and does a foot-relative hold point stop the slow growth?
+//!
+//! ★★ A GRIPPER THAT HOLDS STILL BECAUSE THE TORSO BARELY MOVED PROVES NOTHING. The proof is the
+//! arm's own JOINT EXCURSION: large sweeps with a small gripper drift means the arm is doing the
+//! work. Small sweeps would mean something else is holding the gripper still and the whole
+//! effect is an illusion.
+//!
+//! ★ AND THE HOLD POINT IS TESTED BOTH WAYS — pinned in the world, and anchored to the foot
+//! average — over 30 s, because the world-pinned version's failure only appears with time.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+const sim_dt: f32 = 1.0 / 250.0;
+
+const arm_bodies =
+    \\      <body name="arm_base" pos="0.02 0 0.06">
+    \\        <joint name="arm_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="1.2" armature="0.02"/>
+    \\        <geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.030" density="700"/>
+    \\        <body name="arm_upper" pos="0 0 0.10">
+    \\          <joint name="arm_shoulder" type="hinge" axis="0 1 0" range="-2.4 2.4" damping="1.2" armature="0.02"/>
+    \\          <geom type="capsule" fromto="0 0 0 0 0 0.26" size="0.026" density="700"/>
+    \\          <body name="arm_fore" pos="0 0 0.26">
+    \\            <joint name="arm_elbow" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="1.0" armature="0.015"/>
+    \\            <geom type="capsule" fromto="0 0 0 0 0 0.22" size="0.022" density="700"/>
+    \\            <body name="arm_wrist" pos="0 0 0.22">
+    \\              <joint name="arm_wrist" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.8" armature="0.01"/>
+    \\              <geom type="capsule" fromto="0 0 0 0 0 0.08" size="0.019" density="700"/>
+    \\              <body name="gripper" pos="0 0 0.08">
+    \\                <geom name="gripper_g" type="sphere" size="0.060" density="1100"/>
+    \\              </body>
+    \\            </body>
+    \\          </body>
+    \\        </body>
+    \\      </body>
+    \\
+;
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    const tail: []const u8 = "    </body>\n  </worldbody>";
+    const at: usize = std.mem.indexOf(u8, go1_xml, tail) orelse return error.NoTrunkEnd;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa, go1_xml[0..at]);
+    try text.appendSlice(gpa, arm_bodies);
+    try text.appendSlice(gpa, go1_xml[at..]);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, text.items, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+
+    var adr: [4]u32 = undefined;
+    for ([_][]const u8{ "arm_yaw", "arm_shoulder", "arm_elbow", "arm_wrist" }, 0..) |name, k| {
+        for (robot.joints, 0..) |joint, j| {
+            if (std.mem.eql(u8, joint.name, name)) adr[k] = m.jnt_qpos_adr[j];
+        }
+    }
+    const grip: u32 = imp.bodyIndex("gripper") orelse return error.NoGripper;
+
+    @memcpy(d.pos, m.qpos0);
+    d.pos[2] = 0.27;
+    for ([_]f32{ 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8 }, 0..) |a, k| d.pos[7 + k] = a;
+    d.pos[adr[1]] = 1.1;
+    d.pos[adr[2]] = -1.6;
+    d.pos[adr[3]] = 0.5;
+    @memset(d.vel, 0);
+    d.stage = .stale;
+    rbt.forward(&m, &d);
+    const stance: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(stance);
+    const rest_rot: zm.Quat = d.body_xrot[1];
+    const rest_h: f32 = d.pos[2];
+
+    var act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer act.deinit();
+    var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, grip);
+    defer arm_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    var foot_body: [4]u32 = undefined;
+    var foot_offset: [4]zm.Vec = undefined;
+    var planted: [4]zm.Vec = undefined;
+    var legs: [4]ctl.Actuation = undefined;
+    for ([_][]const u8{ "FR_calf", "FL_calf", "RR_calf", "RL_calf" }, 0..) |name, i| {
+        const b: u32 = imp.bodyIndex(name) orelse return error.NoFoot;
+        foot_body[i] = b;
+        legs[i] = try ctl.limbActuation(gpa, &m, b);
+        var off: zm.Vec = vec(0, 0, 0);
+        for (0..m.ngeom) |g| {
+            if (m.geom_body[g] != b) continue;
+            switch (m.geom_shape[g]) {
+                .sphere => off = m.geom_pos[g],
+                else => {},
+            }
+        }
+        foot_offset[i] = off;
+        planted[i] = d.body_xpos[b] + zm.rotate(d.body_xrot[b], off);
+    }
+    defer for (0..4) |i| legs[i].deinit();
+
+    var foot0: zm.Vec = vec(0, 0, 0);
+    for (0..4) |i| foot0 += planted[i];
+    foot0 /= zm.splat(4.0);
+    const hold_world: zm.Vec = d.body_xpos[grip];
+    const hold_off: zm.Vec = hold_world - foot0;
+
+    const home: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(home);
+    const keep: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(keep);
+
+    p("30 s at the shipped routine (cone 0.16, roll 0.14, bob 0.025)\n\n", .{});
+    p("  preview lead    drift mean/worst    torso sweep    arm joint sweeps (rad)\n", .{});
+
+    // ── ★★★ PREVIEW WITHOUT A PLANNER ──
+    //
+    // The remaining drift should be mostly LAG: the arm is solved against where the torso IS,
+    // and by the time the torque lands the torso has moved on. The routine is closed form, so
+    // where it WILL be is exactly computable — solve the arm against the base pose a few ticks
+    // ahead and the lag should shrink.
+    //
+    // ★ **IF A LEAD CLOSES THE GAP, A PLANNER HAS NOTHING LEFT TO ADD HERE**, and that is worth
+    // knowing before building one.
+    for ([_]f32{ 0.0, 0.02, 0.05, 0.10, 0.18 }) |lead| {
+        @memcpy(d.pos, stance);
+        @memset(d.vel, 0);
+        @memset(d.applied_force, 0);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        @memcpy(home, stance[0..m.nq]);
+
+        var world: zp.World = try .init(gpa, 256);
+        defer world.deinit(gpa);
+        world.gravity = vec(0, 0, -9.81);
+        const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+            .box = .{ .half_extent = vec(6, 6, 0.5), .convex_radius = 0.01 },
+        });
+        _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+        var bridge: rphys.Bridge = try .init(gpa, &world, &m, &d, 256);
+        defer bridge.deinit(&world);
+        bridge.listen(&world);
+
+        var trim_r: f32 = 0;
+        var trim_p: f32 = 0;
+        var sum: f64 = 0;
+        var n: u32 = 0;
+        var worst: f32 = 0;
+        var arm_lo: [4]f32 = @splat(1e9);
+        var arm_hi: [4]f32 = @splat(-1e9);
+        var torso_lo: f32 = 1e9;
+        var torso_hi: f32 = -1e9;
+        var tick: u32 = 0;
+        var clock: f32 = 0;
+        while (clock < 30.0) : (clock += sim_dt) {
+            const want_roll: f32 = 0.14 * @sin(clock * 0.31 * 2.0 * zm.pi);
+            const want_pitch: f32 = 0.16 * @cos(clock * 0.55 * 2.0 * zm.pi);
+            const want_yaw: f32 = 0.16 * @sin(clock * 0.55 * 2.0 * zm.pi);
+            const want_h: f32 = 0.025 * @sin(clock * 0.19 * 2.0 * zm.pi);
+
+            // Where the gripper should be, this instant.
+            var foot_now: zm.Vec = vec(0, 0, 0);
+            for (0..4) |i| {
+                foot_now += d.body_xpos[foot_body[i]] +
+                    zm.rotate(d.body_xrot[foot_body[i]], foot_offset[i]);
+            }
+            foot_now /= zm.splat(4.0);
+            const goal: zm.Vec = foot_now + hold_off;
+            // ★ WHERE THE ROUTINE WILL HAVE PUT THE BASE, `lead` seconds from now. Closed form,
+            // so it costs one extra sine per axis — and it is the same information a planner
+            // would spend a horizon of derivatives to obtain.
+            const ahead: f32 = clock + lead;
+            const lead_roll: f32 = 0.14 * @sin(ahead * 0.31 * 2.0 * zm.pi);
+            const lead_pitch: f32 = 0.16 * @cos(ahead * 0.55 * 2.0 * zm.pi);
+            const lead_yaw: f32 = 0.16 * @sin(ahead * 0.55 * 2.0 * zm.pi);
+            const lead_h: f32 = 0.025 * @sin(ahead * 0.19 * 2.0 * zm.pi);
+
+            if (tick % 4 == 0) {
+                const seen = zm.quatToEulerXYZ(zm.qmul(d.body_xrot[1], zm.conjugate(rest_rot)));
+                trim_r = zm.clamp(trim_r + 0.5 * (want_roll - seen[0]), -0.4, 0.4);
+                trim_p = zm.clamp(trim_p + 0.5 * (want_pitch - seen[1]), -0.4, 0.4);
+
+                @memcpy(keep, d.pos[0..m.nq]);
+                @memcpy(d.pos, stance);
+                d.pos[2] = rest_h + want_h;
+                const dq: zm.Quat = zm.qmul(
+                    zm.qmul(
+                        zm.quatFromAxisAngle(vec(0, 0, 1), want_yaw),
+                        zm.quatFromAxisAngle(vec(0, 1, 0), want_pitch + trim_p),
+                    ),
+                    zm.quatFromAxisAngle(vec(1, 0, 0), want_roll + trim_r),
+                );
+                const wq: zm.Quat = zm.qmul(dq, rest_rot);
+                d.pos[3] = wq[0];
+                d.pos[4] = wq[1];
+                d.pos[5] = wq[2];
+                d.pos[6] = wq[3];
+                d.stage = .stale;
+                for (0..4) |k| {
+                    _ = (ctl.Ik{ .max_iterations = 20 }).solve(&m, &d, legs[k], .{ .body = foot_body[k], .offset = foot_offset[k], .goal = planted[k] }, ik_scratch);
+                }
+                for (0..m.njnt) |j| {
+                    if (m.jnt_type[j] != .hinge) continue;
+                    home[m.jnt_qpos_adr[j]] = d.pos[m.jnt_qpos_adr[j]];
+                }
+                @memcpy(d.pos[0..m.nq], keep);
+                d.stage = .stale;
+                rbt.forward(&m, &d);
+
+                // ★ THE ARM SOLVES AFTER THE TORSO, and against the base pose the routine
+                // will have reached by `lead` rather than the one it has now.
+                @memcpy(keep, d.pos[0..m.nq]);
+                if (lead > 0) {
+                    d.pos[2] = rest_h + lead_h;
+                    const lq: zm.Quat = zm.qmul(zm.qmul(
+                        zm.quatFromAxisAngle(vec(0, 0, 1), lead_yaw),
+                        zm.quatFromAxisAngle(vec(0, 1, 0), lead_pitch + trim_p),
+                    ), zm.quatFromAxisAngle(vec(1, 0, 0), lead_roll + trim_r));
+                    const wq2: zm.Quat = zm.qmul(lq, rest_rot);
+                    d.pos[3] = wq2[0];
+                    d.pos[4] = wq2[1];
+                    d.pos[5] = wq2[2];
+                    d.pos[6] = wq2[3];
+                    d.stage = .stale;
+                    rbt.forward(&m, &d);
+                }
+                _ = (ctl.Ik{ .max_iterations = 12, .max_step = 0.3 }).solve(&m, &d, arm_act, .{ .body = grip, .offset = vec(0, 0, 0), .goal = goal }, ik_scratch);
+                for (0..m.njnt) |j| {
+                    const v: u32 = m.jnt_dof_adr[j];
+                    if (v >= m.nv or !arm_act.powered[v]) continue;
+                    home[m.jnt_qpos_adr[j]] = d.pos[m.jnt_qpos_adr[j]];
+                }
+                @memcpy(d.pos[0..m.nq], keep);
+                d.stage = .stale;
+                rbt.forward(&m, &d);
+            }
+            (ctl.PoseHold{ .target = home, .kp = 100, .kv = 6, .max_torque = 35 }).apply(&m, &d, act);
+            rbt.forward(&m, &d);
+            try bridge.sync(&world, &m, &d);
+            try zp.step(&world, sim_dt);
+            bridge.harvest(&d);
+            rbt.step(&m, &d);
+            tick += 1;
+            if (clock > 2.0) {
+                const drift: f32 = zm.length3(d.body_xpos[grip] - goal);
+                sum += drift;
+                n += 1;
+                worst = @max(worst, drift);
+                for (0..4) |k| {
+                    arm_lo[k] = @min(arm_lo[k], d.pos[adr[k]]);
+                    arm_hi[k] = @max(arm_hi[k], d.pos[adr[k]]);
+                }
+                const e = zm.quatToEulerXYZ(zm.qmul(d.body_xrot[1], zm.conjugate(rest_rot)));
+                torso_lo = @min(torso_lo, e[1]);
+                torso_hi = @max(torso_hi, e[1]);
+            }
+        }
+        const mean: f32 = @floatCast(sum / @as(f64, @floatFromInt(@max(1, n))));
+        p("  lead {d:>5.2} s     {d:.4} / {d:.4}    {d:>9.3}    ", .{
+            lead,
+            mean,
+            worst,
+            torso_hi - torso_lo,
+        });
+        for (0..4) |k| p("{d:.3} ", .{arm_hi[k] - arm_lo[k]});
+        p("\n", .{});
+    }
+}

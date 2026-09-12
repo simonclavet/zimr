@@ -100,13 +100,13 @@ Continue the by-rule sweep order from `lint-cleanup-plan.md`:
 
 ---
 
-**[Turn 338 — AST-based style linter shipped.  `tools/lint_zimr.zig`,
+**[Turn 338 — AST-based style linter shipped.  `tools/zimrlint.zig`,
 ~1080 LOC + 489-line tutorial.  10 checks, build-step integrated.
 Self-lints clean.]**
 
 ### What lands
 
-- **`tools/lint_zimr.zig`** — single Zig program, AST-based via
+- **`tools/zimrlint.zig`** — single Zig program, AST-based via
   `std.zig.Ast.parse`.  Ten checks: `untyped-local` (rule 2),
   `module-var` (rule 9), `array-mult` (rule 5), `line-length`
   (rule 10), `c-types` (rule 11), `fn-args-multiline` (rule 1,
@@ -156,7 +156,7 @@ Self-lints clean.]**
 
 ### Self-lint results
 
-`zig build lint -- tools/lint_zimr.zig`: **0 issues**.
+`zig build lint -- tools/zimrlint.zig`: **0 issues**.
 First-pass run found 57 untyped-local + 34 branch-braces;
 cleaned via three Python regex passes + targeted manual fixes.
 The linter now lints itself clean — meta-test passed.
@@ -179,12 +179,12 @@ turn — the linter is the tool that surfaces them.
 
 - 1555/1555 native tests pass (unchanged).
 - `zig build lint` warm: ~4s full src/ scan, ~1s single file.
-- `zig run tools/lint_zimr.zig` works standalone (no build step
+- `zig run tools/zimrlint.zig` works standalone (no build step
   needed for editor integration).
 
 ### Files added/modified
 
-- `tools/lint_zimr.zig` — new, 1079 LOC.
+- `tools/zimrlint.zig` — new, 1079 LOC.
 - `src/notes/lint-zimr-tutorial.md` — new, 489 LOC.
 - `build.zig` — added lint step (~50 LOC).
 - `src/notes/PLAN.md` — sub-project entry already added turn
@@ -839,12 +839,12 @@ piece: tab close buttons.
 
 ---
 
-## Turn 339 — AST-based linter `tools/lint_zimr.zig`
+## Turn 339 — AST-based linter `tools/zimrlint.zig`
 
 Built the linter from scratch this turn (carrying state from
 turns 337-338 plans).  End state:
 
-- **`tools/lint_zimr.zig`** ~1200 LOC, self-lint clean.  Single
+- **`tools/zimrlint.zig`** ~1200 LOC, self-lint clean.  Single
   binary, host target, ReleaseFast.  10 checks live:
   `untyped-local`, `module-var`, `array-mult`, `line-length`,
   `c-types`, `fn-args-multiline`, `branch-braces`, `ex-variant`,

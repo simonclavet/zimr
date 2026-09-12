@@ -39,8 +39,8 @@ fn printUsage(io: std.Io) void {
         \\       spv2wgsl --check <input.spv>          # parse + verify, no output
         \\       spv2wgsl --strict <input.spv> <output.wgsl>  # fail on any `// ERROR:` marker
         \\
-    , .{}) catch {};
-    stderr_w.interface.flush() catch {};
+    , .{}) catch {}; // lint:off catch-suppression: stderr write, best-effort
+    stderr_w.interface.flush() catch {}; // lint:off catch-suppression: stderr flush, best-effort
 }
 
 fn printErrorLine(
@@ -96,8 +96,8 @@ fn cmdCheck(
     stdout_w.interface.print(
         "spv2wgsl: {s} OK ({d} spv bytes -> {d} wgsl bytes)\n",
         .{ input_path, bytes.len, wgsl.len },
-    ) catch {};
-    stdout_w.interface.flush() catch {};
+    ) catch {}; // lint:off catch-suppression: stdout write, best-effort
+    stdout_w.interface.flush() catch {}; // lint:off catch-suppression: stdout flush, best-effort
 }
 
 const TranslateOpts = struct {

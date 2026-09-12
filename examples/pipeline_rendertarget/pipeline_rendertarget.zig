@@ -18,7 +18,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 const zm = @import("zm");
 const float = zm.float;
 const rotationZ = zm.rotationZ;
@@ -134,7 +134,7 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    co.caption(f.gl, s.font, "pipeline_rendertarget: custom pipeline -> offscreen texture -> stamped 6x");
+    common.caption(f.gl, s.font, "pipeline_rendertarget: custom pipeline -> offscreen texture -> stamped 6x");
     z.endDrawing(f.gl);
 }
 

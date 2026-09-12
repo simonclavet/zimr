@@ -9,7 +9,12 @@
 // (markers=0, but wrong at runtime). The element stride was also taken as a
 // scalar width instead of the element struct's size.
 
-const Vec = Vec;
+// Spelled out rather than imported: this corpus is standalone Zig fed straight
+// to the C backend, with no zimr modules in scope. (A `prefer-vec` autofix pass
+// once rewrote this line to `const Vec = Vec;` — the rule exempts zimrmath's
+// canonical binding by PATH, and this file is not that path. tools/c2js_cases/
+// is carved out of the lint scan now, so the definition is safe here.)
+const Vec = @Vector(4, f32);
 const Pt = struct { x: i32, y: i32 };
 
 fn grid() i32 {

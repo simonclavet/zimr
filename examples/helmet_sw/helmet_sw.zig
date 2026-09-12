@@ -612,7 +612,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- GPU: the SAME shaders via WGSL, into the render texture ----
     z.beginTextureMode(f.gl, s.rt, .{ .r = 10, .g = 12, .b = 20, .a = 255 });
-    s.renderer.drawInApp(f.gl, f.gpu, .{
+    s.renderer.drawIntoPass(f.gl.pass, f.gpu, .{
         .camera = .{ .view = view, .proj = proj, .eye = .{ eye[0], eye[1], eye[2] } },
         .light = .{ .dir = light_dir, .color = light_color, .ambient = light_ambient },
     }, s.model, model_m);

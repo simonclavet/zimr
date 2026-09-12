@@ -1,3 +1,4 @@
+//! lint:alias ui
 //! lint:off scope-balance: ImGui provider - begin*/end* here are the API definitions/forwarders, not paired usage.
 // src/ui.zig - immediate-mode UI port, ImGui-style.
 // Adapted from Dear ImGui by Omar Cornut, MIT license. Render path
@@ -41,17 +42,22 @@ const expectEqualStrings = std.testing.expectEqualStrings;
 const expectError = std.testing.expectError;
 const meta = std.meta;
 const zm = @import("zm");
+const turnsFromRad = zm.turnsFromRad;
 const float64 = zm.float64;
 const radFromDeg = zm.radFromDeg;
-const FrameArena = @import("frame_arena.zig").FrameArena;
+pub const FrameArena = @import("frame_arena.zig").FrameArena;
 /// Ceiling for the UI per-frame arena: well above one honest frame of draw
 /// payload, far below the wasm ~2GB wall. Trips FrameArena if the per-frame
 /// reset is ever dropped (the leak that motivated this).
-const ui_frame_arena_ceiling: usize = 256 * 1024 * 1024;
+/// ★ PUB because `UiContext.frame_arena` is a pub field of type `FrameArena`: anything that
+/// constructs a context from outside this file needs both the type and a sane ceiling, and a
+/// pub field whose type cannot be named is a trap. (Found when four never-compiled UI test
+/// files were finally wired into the aggregator.)
+pub const ui_frame_arena_ceiling: usize = 256 * 1024 * 1024;
 const hsvToRgb3 = zm.hsvToRgb3;
 const rgbToHsv3 = zm.rgbToHsv3;
-const acos = zm.acos;
-const atan2 = zm.atan2;
+const acosRad = zm.acosRad;
+const atan2Rad = zm.atan2Rad;
 const clamp = zm.clamp;
 const float = zm.float;
 const floori = zm.floori;
@@ -103,9 +109,13 @@ else
 const raster = @import("raster.zig");
 const runtime = @import("runtime.zig");
 const codecs = @import("codecs.zig");
+const utils = @import("utils.zig");
+const web = @import("web.zig");
 const assertf = zm.assertf;
-const BoundedArray = @import("utils.zig").BoundedArray;
-const warnOnce = @import("utils.zig").warnOnce;
+const assertUnreachable = zm.assertUnreachable;
+const panicf = zm.panicf;
+const BoundedArray = utils.BoundedArray;
+const warnOnce = utils.warnOnce;
 
 const Allocator = std.mem.Allocator;
 
@@ -1311,7 +1321,7 @@ pub const InputSnapshot = struct {
     // use `keyEventSnapshot(.X)` to construct synthetic input.
     // Mirrors imgui's `ImGuiIO::KeysData[ImGuiKey_NamedKey_COUNT]`
     // (imgui.h:2487-2690) but with zimr's own dense KeyCode enum.
-    keys: [@intFromEnum(KeyCode.MAX)]KeyState = @splat(.{}),
+    keys: [@backingInt(KeyCode.MAX)]KeyState = @splat(.{}),
 };
 
 /// Test helper: returns an `InputSnapshot` with a single
@@ -1321,8 +1331,8 @@ pub const InputSnapshot = struct {
 /// in `beginFrame` — this helper exists only for tests.
 pub fn keyEventSnapshot(key: KeyCode) InputSnapshot {
     var s: InputSnapshot = .{};
-    s.keys[@intFromEnum(key)].pressed_this_frame = true;
-    s.keys[@intFromEnum(key)].down = true;
+    s.keys[@backingInt(key)].pressed_this_frame = true;
+    s.keys[@backingInt(key)].down = true;
     return s;
 }
 
@@ -1332,20 +1342,20 @@ pub fn keyEventSnapshot(key: KeyCode) InputSnapshot {
 /// directly — used inside widget impl code that has a `*UiContext`
 /// but no `Ui` handle. Resolves to the same array lookup.
 pub fn snapshotShiftDown(s: *const InputSnapshot) bool {
-    return s.keys[@intFromEnum(KeyCode.left_shift)].down or
-        s.keys[@intFromEnum(KeyCode.right_shift)].down;
+    return s.keys[@backingInt(KeyCode.left_shift)].down or
+        s.keys[@backingInt(KeyCode.right_shift)].down;
 }
 pub fn snapshotCtrlDown(s: *const InputSnapshot) bool {
-    return s.keys[@intFromEnum(KeyCode.left_control)].down or
-        s.keys[@intFromEnum(KeyCode.right_control)].down;
+    return s.keys[@backingInt(KeyCode.left_control)].down or
+        s.keys[@backingInt(KeyCode.right_control)].down;
 }
 pub fn snapshotAltDown(s: *const InputSnapshot) bool {
-    return s.keys[@intFromEnum(KeyCode.left_alt)].down or
-        s.keys[@intFromEnum(KeyCode.right_alt)].down;
+    return s.keys[@backingInt(KeyCode.left_alt)].down or
+        s.keys[@backingInt(KeyCode.right_alt)].down;
 }
 pub fn snapshotSuperDown(s: *const InputSnapshot) bool {
-    return s.keys[@intFromEnum(KeyCode.left_super)].down or
-        s.keys[@intFromEnum(KeyCode.right_super)].down;
+    return s.keys[@backingInt(KeyCode.left_super)].down or
+        s.keys[@backingInt(KeyCode.right_super)].down;
 }
 
 /// `Ui.isKeyPressedOrRepeat` for callers that have a `*UiContext`
@@ -1353,7 +1363,7 @@ pub fn snapshotSuperDown(s: *const InputSnapshot) bool {
 /// Initial-press case reads `keys[i].pressed_this_frame`; held-
 /// and-repeating case routes through raylib's OS-level timer.
 pub fn ctxKeyPressedOrRepeat(ctx: *UiContext, key: KeyCode) bool {
-    if (ctx.input.keys[@intFromEnum(key)].pressed_this_frame) {
+    if (ctx.input.keys[@backingInt(key)].pressed_this_frame) {
         return true;
     }
     const s: *runtime.input.InputState = ctx.input_state orelse return false;
@@ -1868,7 +1878,8 @@ pub const DrawList = struct {
         rect: Rectangle,
         col: ColorU32,
     ) void {
-        self.cmds.append(gpa, .{ .rect_filled = .{ .rect = rect, .col = col } }) catch {};
+        self.cmds.append(gpa, .{ .rect_filled = .{ .rect = rect, .col = col } }) catch
+            assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addRectOutline(
@@ -1877,7 +1888,8 @@ pub const DrawList = struct {
         rect: Rectangle,
         col: ColorU32,
     ) void {
-        self.cmds.append(gpa, .{ .rect_outline = .{ .rect = rect, .col = col } }) catch {};
+        self.cmds.append(gpa, .{ .rect_outline = .{ .rect = rect, .col = col } }) catch
+            assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addTexturedQuad(
@@ -1895,7 +1907,7 @@ pub const DrawList = struct {
             .uv0 = uv0,
             .uv1 = uv1,
             .col = col,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addSpriteQuad(
@@ -1909,7 +1921,7 @@ pub const DrawList = struct {
             .dst = dst,
             .sprite = sprite,
             .opts = opts,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Record a text command. String bytes are duplicated into
@@ -1942,7 +1954,7 @@ pub const DrawList = struct {
             .spacing = spacing,
             .line_spacing = line_spacing,
             .col = col,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     // ---- primitives
@@ -1959,7 +1971,7 @@ pub const DrawList = struct {
             .b = b,
             .col = col,
             .thickness = thickness,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Record a polyline (line strip). Points are duplicated into
@@ -1984,7 +1996,7 @@ pub const DrawList = struct {
             .col = col,
             .thickness = thickness,
             .closed = closed,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     // Arcs and polygons are emitted at submission time as
@@ -2126,7 +2138,7 @@ pub const DrawList = struct {
             .c = c,
             .col = col,
             .thickness = thickness,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addTriangleFilled(
@@ -2142,7 +2154,7 @@ pub const DrawList = struct {
             .b = b,
             .c = c,
             .col = col,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addQuadFilled(
@@ -2160,7 +2172,7 @@ pub const DrawList = struct {
             .c = c,
             .d = d,
             .col = col,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Circle outline. Pass `n_segments = 0` to let the replay
@@ -2181,7 +2193,7 @@ pub const DrawList = struct {
             .col = col,
             .thickness = thickness,
             .n_segments = n_segments,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addCircleFilled(
@@ -2197,7 +2209,7 @@ pub const DrawList = struct {
             .radius = radius,
             .col = col,
             .n_segments = n_segments,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Regular polygon outline. `sides` is explicit (no auto) since
@@ -2219,7 +2231,7 @@ pub const DrawList = struct {
             .rotation_rad = rotation_rad,
             .col = col,
             .thickness = thickness,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addNgonFilled(
@@ -2237,7 +2249,7 @@ pub const DrawList = struct {
             .sides = sides,
             .rotation_rad = rotation_rad,
             .col = col,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Cubic Bezier curve. Drawn at replay via raylib's
@@ -2259,7 +2271,7 @@ pub const DrawList = struct {
             .p4 = p4,
             .col = col,
             .thickness = thickness,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addEllipse(
@@ -2277,7 +2289,7 @@ pub const DrawList = struct {
             .radius_v = radius_v,
             .col = col,
             .thickness = thickness,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn addEllipseFilled(
@@ -2293,7 +2305,7 @@ pub const DrawList = struct {
             .radius_h = radius_h,
             .radius_v = radius_v,
             .col = col,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Four-color gradient rectangle (TL, TR, BR, BL colors).
@@ -2313,7 +2325,7 @@ pub const DrawList = struct {
             .c_tr = c_tr,
             .c_br = c_br,
             .c_bl = c_bl,
-        } }) catch {};
+        } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn pushClipRect(
@@ -2340,11 +2352,11 @@ pub const DrawList = struct {
                 "to >= 0 (e.g. `@max(0, sh - chrome)`).",
             .{ rect.x, rect.y, rect.width, rect.height },
         );
-        self.cmds.append(gpa, .{ .push_clip = .{ .rect = rect } }) catch {};
+        self.cmds.append(gpa, .{ .push_clip = .{ .rect = rect } }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn popClipRect(self: *DrawList, gpa: Allocator) void {
-        self.cmds.append(gpa, .pop_clip) catch {};
+        self.cmds.append(gpa, .pop_clip) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Pick a segment count for a circle of `radius` so the
@@ -2365,7 +2377,7 @@ pub const DrawList = struct {
             return min_segments;
         }
         const ratio: f32 = 1.0 - max_error / radius;
-        const denom: f32 = acos(ratio);
+        const denom: f32 = acosRad(ratio);
         // Huge radii drive acos(ratio) toward 0, which would send
         // n_segments to infinity. Cap explicitly.
         if (denom <= 0 or !isFinite(denom)) {
@@ -2623,7 +2635,7 @@ pub const DrawList = struct {
                     c.center,
                     @intCast(c.sides),
                     c.radius,
-                    c.rotation_rad,
+                    turnsFromRad(c.rotation_rad),
                     c.thickness,
                     Color.fromWire(c.col),
                 );
@@ -2635,7 +2647,7 @@ pub const DrawList = struct {
                     c.center,
                     @intCast(c.sides),
                     c.radius,
-                    c.rotation_rad,
+                    turnsFromRad(c.rotation_rad),
                     Color.fromWire(c.col),
                 );
             },
@@ -4483,7 +4495,7 @@ pub fn debugLogPush(
     }
     // BoundedArray.append returns error.Overflow only when at
     // capacity; we just freed a slot, so this can't fail.
-    ctx.debug_log.append(ev) catch {};
+    ctx.debug_log.append(ev) catch assertUnreachable(@src(), "OOM", .{});
 }
 
 /// Borrow the populated events as a slice in oldest-to-newest order.
@@ -5343,6 +5355,52 @@ fn dockSplitterSeamRect(node: *const DockNode) Rectangle {
     };
 }
 
+/// Is `rect` under the mouse AND actually visible?
+///
+/// ── ★ THE CLIP TEST IS THE WHOLE POINT ──
+///
+/// Widgets used to hit-test with a bare `itemHoverable(ctx, rect)`, which asks
+/// only "is the mouse where this widget WOULD be". A widget scrolled out of its window, or
+/// sitting past the window's edge, keeps its layout rect — so it stayed grabbable through the
+/// window frame and through whatever was drawn on top. Dragging in empty space moved sliders
+/// that were nowhere on screen.
+///
+/// ★ The clip stack that already existed is a DRAW-TIME structure, consulted when the draw
+/// list is replayed. Interaction ran with no clip at all, which is why the bug was invisible
+/// from the rendering side: the widget was correctly not DRAWN and incorrectly still LIVE.
+///
+/// ImGui's equivalent is `ItemHoverable` calling `IsClippedEx`; this is the same idea with one
+/// rect instead of a stack, which is all a window-scoped UI needs.
+/// Point interaction clipping at whatever window is now on top of the stack.
+///
+/// ★★ MUST BE CALLED ON BOTH PUSH AND POP. Setting it only on POP — which is how this shipped
+/// first — leaves `item_clip` holding the PREVIOUS window's rect (or null, for the first
+/// window) for the entire time a window's widgets are being submitted. Every widget then
+/// hit-tests unclipped, which is exactly the bug the clip was added to fix: sliders below a
+/// window's bottom edge stay grabbable.
+fn refreshItemClip(ctx: *UiContext) void {
+    ctx.current_window = if (ctx.window_stack.len > 0)
+        ctx.window_stack.items[ctx.window_stack.len - 1]
+    else
+        null;
+    ctx.item_clip = if (ctx.current_window) |cw| Rectangle{
+        .x = cw.pos[0],
+        .y = cw.pos[1],
+        .width = cw.size[0],
+        .height = cw.size[1],
+    } else null;
+}
+
+fn itemHoverable(ctx: *UiContext, rect: Rectangle) bool {
+    if (!pointInRect(ctx.input.mouse_pos, rect)) {
+        return false;
+    }
+    if (ctx.item_clip) |clip| {
+        return pointInRect(ctx.input.mouse_pos, clip);
+    }
+    return true;
+}
+
 fn pointInRect(p: Vec2, r: Rectangle) bool {
     return p[0] >= r.x and p[0] < r.x + r.width and
         p[1] >= r.y and p[1] < r.y + r.height;
@@ -5368,7 +5426,7 @@ fn renderDockSplittersImpl(ctx: *UiContext, node_id: Id) bool {
         // collide with normal widgetId hashes for the same u32.
         const id: Id = hashStr(node.id, "__dock_splitter");
 
-        const hovered: bool = pointInRect(ctx.input.mouse_pos, seam_rect);
+        const hovered: bool = itemHoverable(ctx, seam_rect);
         if (hovered) {
             ctx.hovered_id = id;
         }
@@ -5681,6 +5739,9 @@ pub const UiContext = struct {
     /// The window currently being submitted to (between
     /// `window(...)` and `WindowHandle.close()`). Null outside.
     current_window: ?*Window = null,
+    /// The rect interaction is confined to, or null outside any window. Set from the current
+    /// window's bounds each time the window stack changes; see `itemHoverable`.
+    item_clip: ?Rectangle = null,
 
     /// FIFO of active window pointers - supports nested
     /// `window(...)` calls (rare but allowed).
@@ -5788,6 +5849,9 @@ pub const UiContext = struct {
     next_window_pos_always: bool = true,
     /// Size override (analogous to next_window_pos).
     next_window_size: ?Vec2 = null,
+    /// Per-axis: this axis of `next_window_size` was given as zero, meaning "fit the
+    /// content" rather than "be zero pixels".
+    next_window_size_auto: [2]bool = .{ false, false },
     next_window_size_always: bool = true,
     /// Minimum-size constraint for the next window, applied at
     /// open time and every subsequent frame the window exists.
@@ -6498,7 +6562,7 @@ pub const UiContext = struct {
         // nav_id isn't in the current list (e.g. focused widget went
         // away), focus the first item. Done BEFORE clearing the list,
         // then we clear so this frame's submissions can repopulate.
-        if (self.input.keys[@intFromEnum(KeyCode.tab)].pressed_this_frame) {
+        if (self.input.keys[@backingInt(KeyCode.tab)].pressed_this_frame) {
             advanceNav(self);
         }
         self.frame_nav_items.clear();
@@ -6589,14 +6653,14 @@ pub const UiContext = struct {
                 .y = w.pos[1],
                 .width = w.size[0],
                 .height = w.size[1],
-            }) catch {};
+            }) catch assertUnreachable(@src(), "OOM", .{});
         }
         // Apply queued dock operations (drag-dock / undock / split) and sync the
         // window-side link. THIS is the only end-of-frame path the wgpu UiHost
         // takes (endFrame() is the GL/host path) — without these two lines,
         // drag-to-dock requests were enqueued by the release handler and never
         // drained, so nothing ever docked at runtime.
-        processRequests(&self.dock, self.gpa) catch {};
+        processRequests(&self.dock, self.gpa) catch assertUnreachable(@src(), "OOM", .{});
         syncDockedWindowIds(self);
         bringFocusedFloatingToFront(self);
         if (self.pending_tooltip) |t| {
@@ -7285,8 +7349,8 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
     // (`horizontal_scrollbar` flag + `scroll_max_x > 0`); falls
     // through to normal Y handling otherwise so the user doesn't
     // feel a dead key.
-    const shift_pan_active: bool = (ctx.input.keys[@intFromEnum(KeyCode.left_shift)].down or
-        ctx.input.keys[@intFromEnum(KeyCode.right_shift)].down) and
+    const shift_pan_active: bool = (ctx.input.keys[@backingInt(KeyCode.left_shift)].down or
+        ctx.input.keys[@backingInt(KeyCode.right_shift)].down) and
         w.flags.horizontal_scrollbar and
         ctx.hovered_window_id == w.id and
         ctx.input.mouse_wheel_y != 0 and
@@ -7436,10 +7500,7 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
 
     // Pop window stack.
     _ = ctx.window_stack.pop();
-    ctx.current_window = if (ctx.window_stack.len > 0)
-        ctx.window_stack.items[ctx.window_stack.len - 1]
-    else
-        null;
+    refreshItemClip(ctx);
 
     // Restore current draw list to whichever window is now top of
     // stack (or null if no window is in scope). Skip in eager
@@ -7565,8 +7626,25 @@ pub fn findOrCreateWindow(
         }
         if (ctx.next_window_size) |s| {
             if (ctx.next_window_size_always) {
-                existing.size = s;
-                existing.user_resized = true; // explicit size disables auto-fit
+                // ★ A ZERO COMPONENT MEANS "FIT THE CONTENT" on that axis (imgui's
+                // `SetNextWindowSize` semantics), so it must not overwrite the window's own
+                // size with a literal zero. Only the axes the caller actually specified are
+                // applied, and auto-fit stays enabled when either axis was left to the
+                // layout.
+                //
+                // This path runs EVERY FRAME, which is what made the first version of this
+                // fix ineffective: patching only the creation path left the per-frame
+                // override re-applying the zero on frame two, and the window collapsed to a
+                // title bar with its content clipped away.
+                if (!ctx.next_window_size_auto[0]) {
+                    existing.size[0] = s[0];
+                }
+                if (!ctx.next_window_size_auto[1]) {
+                    existing.size[1] = s[1];
+                }
+                if (!ctx.next_window_size_auto[0] and !ctx.next_window_size_auto[1]) {
+                    existing.user_resized = true; // a FULLY explicit size disables auto-fit
+                }
             }
         }
         // P5.1: re-stamp flags from the per-frame opts so
@@ -7581,7 +7659,7 @@ pub fn findOrCreateWindow(
     }
 
     // First-time submission for this title: allocate persistent state.
-    const w: *Window = ctx.gpa.create(Window) catch unreachable; // OOM = we're toast anyway
+    const w: *Window = ctx.gpa.create(Window) catch panicf(@src(), "OOM", .{});
 
     // persisted state takes precedence over
     // `opts.initial_*`. If a previous session saved this window's
@@ -7608,6 +7686,18 @@ pub fn findOrCreateWindow(
             ctx.next_default_pos = .{ p[0] + 30, p[1] + 30 };
             break :blk p;
         };
+    // A zero component means auto-fit, so drop it and let the content-derived path below
+    // supply that axis. Doing it here rather than in the setter keeps the caller's request
+    // intact for the per-frame consumer.
+    if (ctx.next_window_size) |requested| {
+        if (ctx.next_window_size_auto[0] or ctx.next_window_size_auto[1]) {
+            const fallback: Vec2 = opts.initial_size;
+            ctx.next_window_size = .{
+                if (ctx.next_window_size_auto[0]) fallback[0] else requested[0],
+                if (ctx.next_window_size_auto[1]) fallback[1] else requested[1],
+            };
+        }
+    }
     var size: Vec2 = ctx.next_window_size orelse
         (if (persisted) |p|
             // P5.2: `always_auto_resize` overrides the persisted
@@ -7646,7 +7736,7 @@ pub fn findOrCreateWindow(
     @memcpy(w.name_buf[0..cap], title[0..cap]);
     w.name_len = cap;
 
-    ctx.windows.put(ctx.gpa, id, w) catch unreachable;
+    ctx.windows.put(ctx.gpa, id, w) catch panicf(@src(), "OOM", .{});
     return w;
 }
 
@@ -7805,7 +7895,7 @@ fn renderWindowChrome(ctx: *UiContext, w: *Window) void {
                             .dir = .left,
                         } },
                     };
-                    ctx.dock.pending_requests.append(ctx.gpa, req) catch {};
+                    ctx.dock.pending_requests.append(ctx.gpa, req) catch assertUnreachable(@src(), "OOM", .{});
                 }
                 ctx.dock.dragging_window = null;
             }
@@ -7985,6 +8075,9 @@ fn openWindow(
         return null;
     };
     ctx.current_window = w;
+    // ★ Clip interaction to THIS window for the whole time its widgets are submitted. Setting
+    // this only on the pop path left every widget hit-testing unclipped.
+    refreshItemClip(ctx);
 
     // ---- Draw-list bookkeeping
     // Each window owns its own draw list, recorded fresh every
@@ -7994,7 +8087,7 @@ fn openWindow(
     // need for endFrame replay.
     if (!ctx.eager_mode) {
         w.draw_list.clear();
-        ctx.frame_windows.append(w) catch {};
+        ctx.frame_windows.append(w) catch assertUnreachable(@src(), "OOM", .{});
         ctx.current_draw_list = &w.draw_list;
     }
 
@@ -8278,7 +8371,7 @@ fn endChildImpl(ctx: *UiContext) void {
     // `endChildImpl` runs before their parent's (nesting order), so
     // the deepest scope under the pointer gets first dibs - that's
     // why we check `mouse_wheel_consumed` and set it after applying.
-    if (!ctx.mouse_wheel_consumed and ctx.input.mouse_wheel_y != 0 and pointInRect(ctx.input.mouse_pos, child_rect)) {
+    if (!ctx.mouse_wheel_consumed and ctx.input.mouse_wheel_y != 0 and itemHoverable(ctx, child_rect)) {
         const wheel_speed: f32 = 5 * ctx.style.font_size;
         child.scroll_y -= ctx.input.mouse_wheel_y * wheel_speed;
         ctx.mouse_wheel_consumed = true;
@@ -8317,7 +8410,7 @@ fn endChildImpl(ctx: *UiContext) void {
     // so `isItemHovered` works after endChild.
     parent.layout.last_item_id = 0;
     parent.layout.last_item_rect = child_rect;
-    parent.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, child_rect);
+    parent.layout.last_item_hovered = itemHoverable(ctx, child_rect);
 
     // Advance the parent's cursor past the child's outer rect.
     // This is what makes `sameLine` after `endChild` land beside
@@ -8439,7 +8532,7 @@ fn dockSpaceImpl(
 
     // Push to per-frame dockspaces list for drag-drop hit-test
     // discovery in 5.5e.
-    ctx.dock.dockspaces_this_frame.append(ctx.gpa, id) catch {};
+    ctx.dock.dockspaces_this_frame.append(ctx.gpa, id) catch assertUnreachable(@src(), "OOM", .{});
 
     // Compute layout of the entire subtree rooted here. This
     // walks every node and writes per-node pos/size; the actual
@@ -8876,7 +8969,7 @@ fn textImpl(
     const rect = Rectangle{ .x = at[0], .y = at[1], .width = sz[0], .height = sz[1] };
     w.layout.last_item_id = 0; // text isn't interactive - no stable ID
     w.layout.last_item_rect = rect;
-    w.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, rect);
+    w.layout.last_item_hovered = itemHoverable(ctx, rect);
 
     advanceLayout(w, sz, ctx.style.item_spacing, ctx.style.window_padding[0]);
 }
@@ -9091,7 +9184,7 @@ fn triggerNavActivate(ctx: *const UiContext, id: Id) bool {
     if (!is_focused) {
         return false;
     }
-    return ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame;
+    return ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame;
 }
 
 /// Per-widget post-bookkeeping: computes the activation-transition
@@ -9184,7 +9277,7 @@ fn invisibleButtonImpl(
 
     // Hit test + state machine. Same shape as buttonImpl - only the
     // draw step is omitted (that's the whole point of "invisible").
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, rect);
+    const hovered: bool = itemHoverable(ctx, rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -9314,7 +9407,7 @@ fn sliderScalar(
     const at: Vec2 = resolveCursor(w, ctx.style.item_spacing[0]);
     const bar = Rectangle{ .x = at[0], .y = at[1], .width = bar_w, .height = bar_h };
 
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, bar);
+    const hovered: bool = itemHoverable(ctx, bar);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -9563,7 +9656,7 @@ fn handleHueBar(
     h_ptr: *f32,
     changed: *bool,
 ) void {
-    if (pointInRect(ctx.input.mouse_pos, rect) and ctx.input.mouse_left_clicked) {
+    if (itemHoverable(ctx, rect) and ctx.input.mouse_left_clicked) {
         ctx.active_id = id;
     }
     if (ctx.active_id == id and !ctx.input.mouse_left_down) {
@@ -9586,7 +9679,7 @@ fn handleSvBox(
     v_ptr: *f32,
     changed: *bool,
 ) void {
-    if (pointInRect(ctx.input.mouse_pos, rect) and ctx.input.mouse_left_clicked) {
+    if (itemHoverable(ctx, rect) and ctx.input.mouse_left_clicked) {
         ctx.active_id = id;
     }
     if (ctx.active_id == id and !ctx.input.mouse_left_down) {
@@ -9626,7 +9719,7 @@ fn handleAlphaBar(
     a_ptr: *f32,
     changed: *bool,
 ) void {
-    if (pointInRect(ctx.input.mouse_pos, rect) and ctx.input.mouse_left_clicked) {
+    if (itemHoverable(ctx, rect) and ctx.input.mouse_left_clicked) {
         ctx.active_id = id;
     }
     if (ctx.active_id == id and !ctx.input.mouse_left_down) {
@@ -9690,7 +9783,7 @@ fn handleHueRing(
         ctx.active_id = 0;
     }
     if (ctx.active_id == id) {
-        var ang: f32 = atan2(dy, dx);
+        var ang: f32 = atan2Rad(dy, dx);
         if (ang < 0) {
             ang += tau;
         }
@@ -9722,7 +9815,7 @@ fn handleAlphaBarVertical(
     a_ptr: *f32,
     changed: *bool,
 ) void {
-    if (pointInRect(ctx.input.mouse_pos, rect) and ctx.input.mouse_left_clicked) {
+    if (itemHoverable(ctx, rect) and ctx.input.mouse_left_clicked) {
         ctx.active_id = id;
     }
     if (ctx.active_id == id and !ctx.input.mouse_left_down) {
@@ -10020,7 +10113,7 @@ fn dragScalar(
     const at: Vec2 = resolveCursor(w, ctx.style.item_spacing[0]);
     const bar = Rectangle{ .x = at[0], .y = at[1], .width = bar_w, .height = bar_h };
 
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, bar);
+    const hovered: bool = itemHoverable(ctx, bar);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -10246,7 +10339,7 @@ fn splitterImpl(
         },
     };
 
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, interact_rect);
+    const hovered: bool = itemHoverable(ctx, interact_rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -10533,7 +10626,7 @@ fn beginMultiSelectImpl(
     const request_select_all: bool = false;
 
     if (scope.is_focused) {
-        const escape_pressed: bool = ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame;
+        const escape_pressed: bool = ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame;
         if (flags.clear_on_escape and selection_size != 0 and escape_pressed) {
             request_clear = true;
         }
@@ -10648,7 +10741,7 @@ fn collapsingHeaderImpl(
     const row_w: f32 = inner_right - at[0];
 
     const rect = Rectangle{ .x = at[0], .y = at[1], .width = row_w, .height = row_h };
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, rect);
+    const hovered: bool = itemHoverable(ctx, rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -10935,7 +11028,7 @@ fn persistTableWidthAuto(ctx: *UiContext, ts: *const TableState) void {
     while (i < ts.n_columns) : (i += 1) {
         values[i] = ts.columns[i].width_auto_seen;
     }
-    ctx.table_width_auto_cache.put(ctx.gpa, ts.id, values) catch {};
+    ctx.table_width_auto_cache.put(ctx.gpa, ts.id, values) catch assertUnreachable(@src(), "OOM", .{});
 }
 
 fn endTableImpl(ctx: *UiContext) void {
@@ -10994,7 +11087,7 @@ fn endTableImpl(ctx: *UiContext) void {
 
             // Handle mouse-wheel input if the cursor is over the
             // outer rect. Match the window-scroll wheel speed.
-            if (pointInRect(ctx.input.mouse_pos, ts.outer_rect) and ctx.input.mouse_wheel_y != 0) {
+            if (itemHoverable(ctx, ts.outer_rect) and ctx.input.mouse_wheel_y != 0) {
                 const wheel_speed: f32 = 24;
                 ts.scroll_y -= ctx.input.mouse_wheel_y * wheel_speed;
             }
@@ -11005,7 +11098,7 @@ fn endTableImpl(ctx: *UiContext) void {
                 ts.scroll_y = max_scroll;
             }
             // Persist for next frame.
-            ctx.table_scroll_state.put(ctx.gpa, ts.id, ts.scroll_y) catch {};
+            ctx.table_scroll_state.put(ctx.gpa, ts.id, ts.scroll_y) catch assertUnreachable(@src(), "OOM", .{});
 
             // Optional 4px-wide scrollbar on the right edge - purely
             // a visual hint; click-to-drag is polish.
@@ -11086,12 +11179,7 @@ fn endTableImpl(ctx: *UiContext) void {
     // into the saved target.
     ctx.current_draw_list = ts.saved_draw_list;
     const target_dl: *DrawList = if (ts.saved_draw_list) |dl| dl else &w.draw_list;
-    ts.splitter.merge(arena, target_dl) catch {
-        // Allocation failure on merge — silently drop the table's
-        // commands rather than crash. UI degrades gracefully under
-        // memory pressure (same convention as the rest of zimr's
-        // DrawList add* methods).
-    };
+    ts.splitter.merge(arena, target_dl) catch assertUnreachable(@src(), "OOM", .{});
 
     // P8.4: persist this frame's per-column measured
     // widths into the context-level cache so the NEXT frame's
@@ -11249,7 +11337,7 @@ fn tableSetupColumnImpl(
             var ss: TableSortSpecs = .{};
             ss.specs[0] = .{ .column_index = ts.columns_set_up, .direction = dir };
             ss.len = 1;
-            ctx.table_sort_state.put(ctx.gpa, ts.id, ss) catch {};
+            ctx.table_sort_state.put(ctx.gpa, ts.id, ss) catch assertUnreachable(@src(), "OOM", .{});
         }
     }
 
@@ -11387,7 +11475,7 @@ fn beginDragDropSourceImpl(ctx: *UiContext, flags: DragDropFlags) bool {
     }
 
     // Hovered? Reuse the last-item rect from the just-submitted widget.
-    const item_hovered: bool = pointInRect(ctx.input.mouse_pos, w.layout.last_item_rect);
+    const item_hovered: bool = itemHoverable(ctx, w.layout.last_item_rect);
 
     // Start tracking when the user clicks on a draggable item.
     if (ctx.drag_drop.phase == .idle and item_hovered and ctx.input.mouse_left_clicked) {
@@ -11471,7 +11559,7 @@ fn beginDragDropTargetImpl(ctx: *UiContext, flags: DragDropFlags) bool {
     }
 
     // Cursor must be over the just-submitted widget.
-    if (!pointInRect(ctx.input.mouse_pos, w.layout.last_item_rect)) {
+    if (!itemHoverable(ctx, w.layout.last_item_rect)) {
         return false;
     }
 
@@ -11627,7 +11715,7 @@ fn imageImpl(
 
     w.layout.last_item_id = 0;
     w.layout.last_item_rect = rect;
-    w.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, rect);
+    w.layout.last_item_hovered = itemHoverable(ctx, rect);
 
     advanceLayout(w, size, ctx.style.item_spacing, ctx.style.window_padding[0]);
 }
@@ -11970,7 +12058,7 @@ fn comboImpl(
     );
 
     const closed_box = Rectangle{ .x = at[0], .y = at[1], .width = box_w, .height = row_h };
-    const hovered_closed: bool = pointInRect(ctx.input.mouse_pos, closed_box);
+    const hovered_closed: bool = itemHoverable(ctx, closed_box);
     if (hovered_closed) {
         ctx.hovered_id = id;
     }
@@ -12066,7 +12154,7 @@ fn comboImpl(
         for (items, 0..) |_, i| {
             const item_y: f32 = dropdown_top + float(i) * row_h;
             const item_rect = Rectangle{ .x = closed_box.x, .y = item_y, .width = closed_box.width, .height = row_h };
-            if (pointInRect(ctx.input.mouse_pos, item_rect) and ctx.input.mouse_left_clicked) {
+            if (itemHoverable(ctx, item_rect) and ctx.input.mouse_left_clicked) {
                 current_index.* = @intCast(i);
                 ctx.combo_open_id = 0;
                 changed = true;
@@ -12074,7 +12162,7 @@ fn comboImpl(
         }
         // Click outside both the closed row AND the dropdown closes.
         if (ctx.input.mouse_left_clicked and !hovered_closed and
-            !pointInRect(ctx.input.mouse_pos, dropdown_rect))
+            !itemHoverable(ctx, dropdown_rect))
         {
             ctx.combo_open_id = 0;
         }
@@ -12100,7 +12188,7 @@ fn comboImpl(
         for (items, 0..) |item, i| {
             const item_y: f32 = dropdown_top + float(i) * row_h;
             const item_rect = Rectangle{ .x = closed_box.x, .y = item_y, .width = closed_box.width, .height = row_h };
-            const item_hovered: bool = pointInRect(ctx.input.mouse_pos, item_rect);
+            const item_hovered: bool = itemHoverable(ctx, item_rect);
             const is_selected = current_index.* == @as(i32, @intCast(i));
 
             if (item_hovered or is_selected) {
@@ -12194,7 +12282,7 @@ fn beginComboImpl(
     );
 
     const closed_box = Rectangle{ .x = at[0], .y = at[1], .width = box_w, .height = row_h };
-    const hovered_closed: bool = pointInRect(ctx.input.mouse_pos, closed_box);
+    const hovered_closed: bool = itemHoverable(ctx, closed_box);
     if (hovered_closed) {
         ctx.hovered_id = id;
     }
@@ -12285,7 +12373,7 @@ fn beginComboImpl(
     const saved_dl: ?*DrawList = ctx.current_draw_list;
     if (!ctx.eager_mode) {
         popup_w.draw_list.clear();
-        ctx.frame_popups.append(popup_w) catch {};
+        ctx.frame_popups.append(popup_w) catch assertUnreachable(@src(), "OOM", .{});
         ctx.current_draw_list = &popup_w.draw_list;
         // Background panel using LAST frame's size (one-frame lag,
         // tolerable for dropdowns). Both fill + border drawn here so
@@ -12339,18 +12427,15 @@ fn endComboImpl(ctx: *UiContext) void {
             .width = scope.dropdown_width,
             .height = ctx.style.font_size + 2 * ctx.style.frame_padding[1],
         };
-        const click_in_dropdown: bool = pointInRect(ctx.input.mouse_pos, dropdown_rect);
-        const click_on_closed: bool = pointInRect(ctx.input.mouse_pos, closed_above);
+        const click_in_dropdown: bool = itemHoverable(ctx, dropdown_rect);
+        const click_on_closed: bool = itemHoverable(ctx, closed_above);
         if (!click_in_dropdown and !click_on_closed) {
             ctx.combo_open_id = 0;
         }
     }
 
     _ = ctx.window_stack.pop();
-    ctx.current_window = if (ctx.window_stack.len > 0)
-        ctx.window_stack.items[ctx.window_stack.len - 1]
-    else
-        null;
+    refreshItemClip(ctx);
     if (!ctx.eager_mode) {
         ctx.current_draw_list = scope.saved_dl;
     }
@@ -12384,7 +12469,7 @@ fn treeNodeExImpl(
         if (ctx.next_item_open) |forced| {
             ctx.next_item_open = null;
             // Persist so subsequent frames see it.
-            ctx.tree_open_state.put(ctx.gpa, id, forced) catch {};
+            ctx.tree_open_state.put(ctx.gpa, id, forced) catch assertUnreachable(@src(), "OOM", .{});
             break :blk forced;
         }
         if (ctx.tree_open_state.get(id)) |stored| {
@@ -12393,7 +12478,7 @@ fn treeNodeExImpl(
         // First encounter: apply default_open, persist immediately
         // so toggling from open → closed on first click sticks.
         if (opts.default_open) {
-            ctx.tree_open_state.put(ctx.gpa, id, true) catch {};
+            ctx.tree_open_state.put(ctx.gpa, id, true) catch assertUnreachable(@src(), "OOM", .{});
             break :blk true;
         }
         break :blk false;
@@ -12440,7 +12525,7 @@ fn treeNodeExImpl(
         .click_arrow => .{ .x = at[0], .y = at[1], .width = indicator_w, .height = total_h },
     };
 
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, interact_rect);
+    const hovered: bool = itemHoverable(ctx, interact_rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -12454,7 +12539,7 @@ fn treeNodeExImpl(
     if (ctx.active_id == id and ctx.input.mouse_left_released) {
         if (hovered and !opts.leaf) {
             is_open = !is_open;
-            ctx.tree_open_state.put(ctx.gpa, id, is_open) catch {};
+            ctx.tree_open_state.put(ctx.gpa, id, is_open) catch assertUnreachable(@src(), "OOM", .{});
             toggled = true;
         }
         ctx.active_id = 0;
@@ -12635,6 +12720,14 @@ fn closePopupScope(ctx: *UiContext) void {
         ctx.window_stack.items[ctx.window_stack.len - 1]
     else
         null;
+    // ★ Interaction is clipped to the window that owns it. Outside any window (an overlay
+    // drawn straight to the viewport) there is nothing to clip against.
+    ctx.item_clip = if (ctx.current_window) |cw| Rectangle{
+        .x = cw.pos[0],
+        .y = cw.pos[1],
+        .width = cw.size[0],
+        .height = cw.size[1],
+    } else null;
     if (!ctx.eager_mode) {
         if (ctx.current_window) |outer| {
             ctx.current_draw_list = &outer.draw_list;
@@ -12686,7 +12779,7 @@ fn openMainMenuBar(ctx: *UiContext) bool {
     // beginMenu will append later; bar appears first → menus on top.
     if (!ctx.eager_mode) {
         bar.draw_list.clear();
-        ctx.frame_popups.append(bar) catch {};
+        ctx.frame_popups.append(bar) catch assertUnreachable(@src(), "OOM", .{});
         ctx.current_draw_list = &bar.draw_list;
     }
 
@@ -12706,10 +12799,7 @@ fn closeMainMenuBar(ctx: *UiContext) void {
     ctx.in_menu_bar = false;
     ctx.active_menu_bar_win = null;
     _ = ctx.window_stack.pop();
-    ctx.current_window = if (ctx.window_stack.len > 0)
-        ctx.window_stack.items[ctx.window_stack.len - 1]
-    else
-        null;
+    refreshItemClip(ctx);
     if (!ctx.eager_mode) {
         if (ctx.current_window) |outer| {
             ctx.current_draw_list = &outer.draw_list;
@@ -12805,7 +12895,7 @@ fn openMenu(
         .width = button_w,
         .height = button_h,
     };
-    const hovered: bool = enabled and pointInRect(ctx.input.mouse_pos, button_rect);
+    const hovered: bool = enabled and itemHoverable(ctx, button_rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -12826,7 +12916,8 @@ fn openMenu(
     }
     // 1) Tracking: once a menu is open, hovering a DIFFERENT label switches to it.
     if (ctx.bar_open_menu != null and hovered and ctx.bar_open_menu.? != popup_id) {
-        ctx.popup_open.put(ctx.gpa, popup_id, .{ .anchor = anchor, .opened_at_frame = ctx.frame_count }) catch {};
+        ctx.popup_open.put(ctx.gpa, popup_id, .{ .anchor = anchor, .opened_at_frame = ctx.frame_count }) catch
+            assertUnreachable(@src(), "OOM", .{});
         ctx.bar_open_menu = popup_id;
     }
     // 2) Click toggles this menu (open when closed, close when already open).
@@ -12835,7 +12926,8 @@ fn openMenu(
             _ = ctx.popup_open.remove(popup_id);
             ctx.bar_open_menu = null;
         } else {
-            ctx.popup_open.put(ctx.gpa, popup_id, .{ .anchor = anchor, .opened_at_frame = ctx.frame_count }) catch {};
+            ctx.popup_open.put(ctx.gpa, popup_id, .{ .anchor = anchor, .opened_at_frame = ctx.frame_count }) catch
+                assertUnreachable(@src(), "OOM", .{});
             ctx.bar_open_menu = popup_id;
         }
     }
@@ -12913,7 +13005,7 @@ fn menuItemImpl(
         .height = row_h,
     };
 
-    const ptr_in_rect: bool = pointInRect(ctx.input.mouse_pos, rect);
+    const ptr_in_rect: bool = itemHoverable(ctx, rect);
     const hovered: bool = opts.enabled and ptr_in_rect;
     if (hovered) {
         ctx.hovered_id = id;
@@ -13217,7 +13309,7 @@ fn closeListBox(ctx: *UiContext) void {
     const viewport_h: f32 = @max(0, list_box.layout.work_rect_max[1] - inner_origin_y);
     list_box.scroll_max_y = @max(0, content_h_natural - viewport_h);
 
-    if (!ctx.mouse_wheel_consumed and ctx.input.mouse_wheel_y != 0 and pointInRect(ctx.input.mouse_pos, box_rect)) {
+    if (!ctx.mouse_wheel_consumed and ctx.input.mouse_wheel_y != 0 and itemHoverable(ctx, box_rect)) {
         const wheel_speed: f32 = 5 * ctx.style.font_size;
         list_box.scroll_y -= ctx.input.mouse_wheel_y * wheel_speed;
         ctx.mouse_wheel_consumed = true;
@@ -13250,7 +13342,7 @@ fn closeListBox(ctx: *UiContext) void {
     // hangs off it.
     parent.layout.last_item_id = list_box.id;
     parent.layout.last_item_rect = box_rect;
-    parent.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, box_rect);
+    parent.layout.last_item_hovered = itemHoverable(ctx, box_rect);
 
     // Advance the parent's cursor past the box's outer size.
     advanceLayout(parent, .{ box_rect.width, box_rect.height }, ctx.style.item_spacing, ctx.style.window_padding[0]);
@@ -13330,7 +13422,7 @@ fn progressBarImpl(
     // Item-state record + cursor advance.
     w.layout.last_item_id = 0;
     w.layout.last_item_rect = bar;
-    w.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, bar);
+    w.layout.last_item_hovered = itemHoverable(ctx, bar);
     markItemPost(ctx, w, false);
     advanceLayout(
         w,
@@ -13364,7 +13456,7 @@ fn vSliderScalar(
         .height = bar_h,
     };
 
-    const ptr_in_bar: bool = pointInRect(ctx.input.mouse_pos, bar);
+    const ptr_in_bar: bool = itemHoverable(ctx, bar);
     if (ptr_in_bar) {
         ctx.hovered_id = id;
     }
@@ -13500,7 +13592,7 @@ fn inputScalarInRect(
     opts: InputScalarOpts,
 ) bool {
     const padding: Vec2 = ctx.style.frame_padding;
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, box);
+    const hovered: bool = itemHoverable(ctx, box);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -13531,11 +13623,11 @@ fn inputScalarInRect(
         ctx.active_id = 0;
     }
     // Enter commits. Escape cancels (just clears focus, no write).
-    if (is_focused and ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame) {
+    if (is_focused and ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame) {
         commit_now = true;
         ctx.active_id = 0;
     }
-    if (is_focused and ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame) {
+    if (is_focused and ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame) {
         ctx.active_id = 0;
         ctx.scalar_edit_len = 0;
     }
@@ -13702,7 +13794,7 @@ fn colorButtonImpl(
         .height = sw_h,
     };
 
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, swatch);
+    const hovered: bool = itemHoverable(ctx, swatch);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -13827,7 +13919,7 @@ fn imageButtonImpl(
         .height = eff_size[1],
     };
 
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, button_rect);
+    const hovered: bool = itemHoverable(ctx, button_rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -13945,7 +14037,7 @@ fn editArrayListImplOpts(
     const add_clicked: bool = ui.button("+ Add", .{});
     if (add_clicked) {
         const default_item: T = std.mem.zeroes(T);
-        list_ptr.append(ctx.gpa, default_item) catch {};
+        list_ptr.append(ctx.gpa, default_item) catch assertUnreachable(@src(), "OOM", .{});
         any_changed = true;
     }
 
@@ -15566,6 +15658,49 @@ pub const Ui = struct {
         return &self.ctx.style;
     }
 
+    /// Scale the whole UI to the viewport, in one call.
+    ///
+    /// ── ★★ WHY THIS EXISTS ──
+    ///
+    /// zimr ships in a browser tab, so "the window" is anything from a 360 px phone to a 4K
+    /// desktop, and a UI sized in fixed pixels is unreadable at one end and comical at the
+    /// other. **151 of the examples already scale by hand and 63 do not** — and the 151 do it
+    /// with at least four different formulas (`/16`, `/26`, `/30`, `/46`, each with its own
+    /// clamps) around an otherwise IDENTICAL block of padding and spacing. That block was
+    /// copy-pasted verbatim: every one of them uses 0.35/0.3, 0.4, 0.5 and 1.6.
+    ///
+    /// ★ SO THE VARYING PART IS ONE NUMBER and the rest is duplication. `characters_across` is
+    /// that number, named for what it actually controls: roughly how many characters of body
+    /// text fit across the region the UI occupies. A full-width panel wants ~30; a half-width
+    /// one wants ~16, which is the same text at the same size in half the space.
+    ///
+    /// ★ IT IS ADDITIVE, and deliberately so. Applying this from `UiHost.begin` instead would
+    /// fix all 63 stragglers at once and DOUBLE-SCALE the 151 that already do it by hand.
+    ///
+    /// Returns the font size it chose, since callers size their own plots and images from it.
+    pub fn scaleToViewport(self: Ui, viewport_width: f32, characters_across: f32) f32 {
+        // ★ THE CLAMPS ARE NOT DECORATION. Without a floor, a narrow phone gets text no one can
+        // read; without a ceiling, a wide desktop gets a panel that looks like a warning sign.
+        // 12 and 26 are the range the hand-rolled versions converged on between them.
+        const font_size: f32 = clamp(viewport_width / @max(1.0, characters_across), 12.0, 26.0);
+        const s: *Style = self.style();
+        s.font_size = font_size;
+        s.frame_padding = .{ font_size * 0.35, font_size * 0.3 };
+        s.item_spacing = .{ font_size * 0.4, font_size * 0.4 };
+        s.window_padding = .{ font_size * 0.5, font_size * 0.5 };
+        s.title_bar_height = font_size * 1.6;
+        return font_size;
+    }
+
+    /// Whether the viewport is narrow enough to want a phone layout.
+    ///
+    /// ★ ONE THRESHOLD, NAMED ONCE. Demos that branch on width were each picking their own —
+    /// and a demo that disagrees with its neighbour about what counts as a phone is a demo
+    /// whose layout changes when you tab between them.
+    pub fn isNarrow(viewport_width: f32) bool {
+        return viewport_width < 620.0;
+    }
+
     /// Temporarily override one field of `Style` until the matching
     /// `popStyle()`. Reflection-based: `field_name` is a comptime
     /// string that must name an actual field of `Style`; `value`
@@ -16099,7 +16234,7 @@ pub const Ui = struct {
     /// lookup, just an array index. Stable across the whole frame.
     /// Mirrors imgui's `IsKeyDown` (imgui.h:1097).
     pub fn isKeyDown(self: Ui, key: KeyCode) bool {
-        return self.ctx.input.keys[@intFromEnum(key)].down;
+        return self.ctx.input.keys[@backingInt(key)].down;
     }
 
     /// True for exactly one frame: the frame `key` transitioned
@@ -16107,22 +16242,22 @@ pub const Ui = struct {
     /// (imgui.h:1098). This is one-shot only; for key-repeat
     /// firing, use `isKeyPressedOrRepeat`.
     pub fn isKeyPressed(self: Ui, key: KeyCode) bool {
-        return self.ctx.input.keys[@intFromEnum(key)].pressed_this_frame;
+        return self.ctx.input.keys[@backingInt(key)].pressed_this_frame;
     }
 
     /// True for exactly one frame: the frame `key` transitioned
     /// down→up. Edge event. Mirrors imgui's `IsKeyReleased`
     /// (imgui.h:1099).
     pub fn isKeyReleased(self: Ui, key: KeyCode) bool {
-        return self.ctx.input.keys[@intFromEnum(key)].released_this_frame;
+        return self.ctx.input.keys[@backingInt(key)].released_this_frame;
     }
 
     /// True if either left or right Shift is currently held.
     /// Convenience for the very common case of testing a modifier
     /// without caring which side. Mirrors imgui's `io.KeyShift`.
     pub fn isShiftDown(self: Ui) bool {
-        return self.ctx.input.keys[@intFromEnum(KeyCode.left_shift)].down or
-            self.ctx.input.keys[@intFromEnum(KeyCode.right_shift)].down;
+        return self.ctx.input.keys[@backingInt(KeyCode.left_shift)].down or
+            self.ctx.input.keys[@backingInt(KeyCode.right_shift)].down;
     }
 
     /// True if either left or right Control is currently held.
@@ -16132,20 +16267,20 @@ pub const Ui = struct {
     /// "command-or-control" should check both `isCtrlDown` and
     /// `isSuperDown`.
     pub fn isCtrlDown(self: Ui) bool {
-        return self.ctx.input.keys[@intFromEnum(KeyCode.left_control)].down or
-            self.ctx.input.keys[@intFromEnum(KeyCode.right_control)].down;
+        return self.ctx.input.keys[@backingInt(KeyCode.left_control)].down or
+            self.ctx.input.keys[@backingInt(KeyCode.right_control)].down;
     }
 
     /// True if either left or right Alt is currently held.
     pub fn isAltDown(self: Ui) bool {
-        return self.ctx.input.keys[@intFromEnum(KeyCode.left_alt)].down or
-            self.ctx.input.keys[@intFromEnum(KeyCode.right_alt)].down;
+        return self.ctx.input.keys[@backingInt(KeyCode.left_alt)].down or
+            self.ctx.input.keys[@backingInt(KeyCode.right_alt)].down;
     }
 
     /// True if either left or right Super (Windows / Command) is held.
     pub fn isSuperDown(self: Ui) bool {
-        return self.ctx.input.keys[@intFromEnum(KeyCode.left_super)].down or
-            self.ctx.input.keys[@intFromEnum(KeyCode.right_super)].down;
+        return self.ctx.input.keys[@backingInt(KeyCode.left_super)].down or
+            self.ctx.input.keys[@backingInt(KeyCode.right_super)].down;
     }
 
     /// `isKeyPressed` plus key-repeat: fires on initial press AND
@@ -16401,7 +16536,7 @@ pub const Ui = struct {
         opts: ButtonBehaviorOpts,
     ) ButtonResult {
         const ctx: *UiContext = self.ctx;
-        const hovered: bool = pointInRect(ctx.input.mouse_pos, rect);
+        const hovered: bool = itemHoverable(ctx, rect);
         var pressed: bool = false;
         var just_activated: bool = false;
         var just_deactivated: bool = false;
@@ -17357,12 +17492,24 @@ pub const Ui = struct {
     /// Set the size the next `window(...)` call applies. See
     /// `setNextWindowPos` for the once-vs-always distinction.
     /// ImGui: `SetNextWindowSize(size, cond)`.
+    /// Size the next window.
+    ///
+    /// ★ A ZERO COMPONENT MEANS "FIT THE CONTENT ON THAT AXIS", matching Dear ImGui's
+    /// `SetNextWindowSize`. Passing `.{ 380, 0 }` is the natural way to say "this wide, as
+    /// tall as it needs to be", and taking the zero literally produced a window one pixel
+    /// tall whose every control was clipped away — a panel that looked like it had simply
+    /// failed to render, which is a bad way for a UI toolkit to answer a reasonable request.
+    ///
+    /// Auto-fit is deferred to the layout: a zero simply leaves that axis unset, so the
+    /// window falls through to its content-derived size the same way an unspecified size
+    /// does.
     pub fn setNextWindowSize(
         self: Ui,
         size: Vec2,
         opts: SetNextWindowOpts,
     ) void {
         self.ctx.next_window_size = size;
+        self.ctx.next_window_size_auto = .{ size[0] == 0, size[1] == 0 };
         self.ctx.next_window_size_always = !opts.once;
     }
 
@@ -17565,7 +17712,7 @@ pub const Ui = struct {
     /// nested `pushItemWidth` calls compose. ImGui:
     /// `PushItemWidth(width)`.
     pub fn pushItemWidth(self: Ui, width: f32) void {
-        self.ctx.item_width_stack.append(width) catch {};
+        self.ctx.item_width_stack.append(width) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     /// Pop the most-recent `pushItemWidth` value. Symmetric - call
@@ -17675,7 +17822,7 @@ pub const Ui = struct {
     pub fn beginDisabled(self: Ui, disabled: bool) void {
         // Push the marker first so endDisabled can pop symmetrically
         // regardless of whether THIS scope contributed.
-        self.ctx.disabled_marker_stack.append(disabled) catch {};
+        self.ctx.disabled_marker_stack.append(disabled) catch assertUnreachable(@src(), "OOM", .{});
         if (!disabled) {
             return;
         }
@@ -17735,7 +17882,7 @@ pub const Ui = struct {
         const ctx: *UiContext = self.ctx;
         const parent: ItemFlags = currentItemFlagsImpl(ctx);
         const merged: ItemFlags = mergeItemFlags(parent, flags);
-        ctx.item_flags_stack.append(merged) catch {};
+        ctx.item_flags_stack.append(merged) catch assertUnreachable(@src(), "OOM", .{});
         // If this push turned.disabled true and we weren't already
         // disabled, mirror through beginDisabled's machinery so the
         // input-suppression + alpha-mul side effects fire too.
@@ -17798,7 +17945,7 @@ pub const Ui = struct {
             .saved_cursor_max = w.layout.cursor_max,
             .saved_line_height = w.layout.line_height,
         };
-        self.ctx.group_stack.append(state) catch {};
+        self.ctx.group_stack.append(state) catch assertUnreachable(@src(), "OOM", .{});
         // Reset row-level state inside the group so a sameLine
         // outside the group doesn't accidentally cross into it.
         w.layout.line_height = 0;
@@ -17874,7 +18021,7 @@ pub const Ui = struct {
         self.ctx.popup_open.put(self.ctx.gpa, id, .{
             .anchor = self.ctx.input.mouse_pos,
             .opened_at_frame = self.ctx.frame_count,
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
         debugLogPush(self.ctx, .popup_opened, "id={x} str='{s}'", .{ id, str_id });
     }
 
@@ -18616,7 +18763,7 @@ pub const Ui = struct {
     /// a no-op. ImGui: `SetClipboardText(text)`.
     pub fn setClipboardText(self: Ui, s: []const u8) void {
         _ = self;
-        @import("runtime.zig").core.setClipboardText(s);
+        runtime.core.setClipboardText(s);
     }
 
     /// Return the most recently read clipboard text, or "" if no
@@ -19470,12 +19617,12 @@ pub const InputTextCallback = *const fn (data: *InputTextCallbackData) void;
 // ============================================================================
 
 test "Q1: KeyCode.MAX is the count sentinel, every other variant indexes a slot" {
-    const max_idx: usize = @intFromEnum(KeyCode.MAX);
+    const max_idx: usize = @backingInt(KeyCode.MAX);
     // sanity: a few key positions
-    try expect(@intFromEnum(KeyCode.a) < max_idx);
-    try expect(@intFromEnum(KeyCode.enter) < max_idx);
-    try expect(@intFromEnum(KeyCode.left_shift) < max_idx);
-    try expect(@intFromEnum(KeyCode.kp_equal) < max_idx);
+    try expect(@backingInt(KeyCode.a) < max_idx);
+    try expect(@backingInt(KeyCode.enter) < max_idx);
+    try expect(@backingInt(KeyCode.left_shift) < max_idx);
+    try expect(@backingInt(KeyCode.kp_equal) < max_idx);
 }
 
 test "Q1: KeyCode.fromRaylib round-trips for the keys zimr surfaces" {
@@ -19510,11 +19657,11 @@ test "Q1: KeyState default = all-false / duration 0" {
 
 test "Q1: InputSnapshot.keys defaults to MAX-sized array of zero KeyStates" {
     const s: InputSnapshot = .{};
-    try expectEqual(@as(usize, @intFromEnum(KeyCode.MAX)), s.keys.len);
+    try expectEqual(@as(usize, @backingInt(KeyCode.MAX)), s.keys.len);
     // Spot-check several slots are zeroed
-    try expect(!s.keys[@intFromEnum(KeyCode.a)].down);
-    try expect(!s.keys[@intFromEnum(KeyCode.enter)].down);
-    try expectEqual(@as(u32, 0), s.keys[@intFromEnum(KeyCode.space)].down_duration_frames);
+    try expect(!s.keys[@backingInt(KeyCode.a)].down);
+    try expect(!s.keys[@backingInt(KeyCode.enter)].down);
+    try expectEqual(@as(u32, 0), s.keys[@backingInt(KeyCode.space)].down_duration_frames);
 }
 
 test "Q1: edge-event logic (was_down/is_down → pressed/released combinations)" {
@@ -19556,12 +19703,12 @@ test "Q1: KeyCode.toRaylib is the inverse of fromRaylib for every surfaced key" 
 
 test "Q1: keyEventSnapshot builds a snapshot with one key fully primed" {
     const s: InputSnapshot = keyEventSnapshot(.space);
-    const sp: KeyState = s.keys[@intFromEnum(KeyCode.space)];
+    const sp: KeyState = s.keys[@backingInt(KeyCode.space)];
     try expect(sp.down);
     try expect(sp.pressed_this_frame);
     try expect(!sp.released_this_frame);
     // No other key should be touched.
-    const a: KeyState = s.keys[@intFromEnum(KeyCode.a)];
+    const a: KeyState = s.keys[@backingInt(KeyCode.a)];
     try expect(!a.down);
     try expect(!a.pressed_this_frame);
 }
@@ -19572,24 +19719,24 @@ test "Q1: snapshot modifier helpers aggregate left+right sides" {
     try expect(!snapshotCtrlDown(&s));
 
     // Right-shift alone counts.
-    s.keys[@intFromEnum(KeyCode.right_shift)].down = true;
+    s.keys[@backingInt(KeyCode.right_shift)].down = true;
     try expect(snapshotShiftDown(&s));
     try expect(!snapshotCtrlDown(&s));
 
     // Both sides also counts.
-    s.keys[@intFromEnum(KeyCode.left_shift)].down = true;
+    s.keys[@backingInt(KeyCode.left_shift)].down = true;
     try expect(snapshotShiftDown(&s));
 
     // Ctrl independent.
-    s.keys[@intFromEnum(KeyCode.left_control)].down = true;
+    s.keys[@backingInt(KeyCode.left_control)].down = true;
     try expect(snapshotCtrlDown(&s));
 
     // Releasing right side leaves left side still active.
-    s.keys[@intFromEnum(KeyCode.right_shift)].down = false;
+    s.keys[@backingInt(KeyCode.right_shift)].down = false;
     try expect(snapshotShiftDown(&s));
 
     // Releasing left side too clears it.
-    s.keys[@intFromEnum(KeyCode.left_shift)].down = false;
+    s.keys[@backingInt(KeyCode.left_shift)].down = false;
     try expect(!snapshotShiftDown(&s));
 }
 
@@ -20761,7 +20908,7 @@ test "InputMode: every enum variant maps to a non-empty attr string" {
     // compile.  This test reinforces that — every variant goes
     // through `toAttr` with a non-empty result.
     inline for (@typeInfo(InputMode).@"enum".field_values) |f_value| {
-        const v: InputMode = @enumFromInt(f_value);
+        const v: InputMode = @fromBackingInt(@intCast(f_value));
         const s: []const u8 = v.toAttr();
         try expect(s.len > 0);
     }
@@ -21062,7 +21209,7 @@ test "P9.2: P9.2 flags default to false on InputTextOpts" {
 /// the editor and wasm only polls the final value.
 fn packCharFilterFlags(opts: InputTextOpts) u32 {
     var flags: u32 = 0;
-    const dom = @import("web.zig").dom;
+    const dom = web.dom;
     if (opts.chars_decimal) {
         flags |= dom.CHAR_FILTER_DECIMAL;
     }
@@ -21085,7 +21232,7 @@ test "P9.1 web: packCharFilterFlags bitmask matches CHAR_FILTER_* constants" {
     // The JS-side 'input' event listener relies on this exact bit
     // layout.  If the bits drift here, web-path filtering goes
     // silently wrong.  Lock the mapping.
-    const dom = @import("web.zig").dom;
+    const dom = web.dom;
     try expectEqual(@as(u32, 0), packCharFilterFlags(.{}));
     try expectEqual(dom.CHAR_FILTER_DECIMAL, packCharFilterFlags(.{ .chars_decimal = true }));
     try expectEqual(dom.CHAR_FILTER_HEXADECIMAL, packCharFilterFlags(.{ .chars_hexadecimal = true }));
@@ -21125,7 +21272,7 @@ test "P9.2 multiline: default Enter inserts \\n" {
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
     ctx.input_text_state.cursor_pos = 2;
-    ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..2].* = "hi".*;
@@ -21150,7 +21297,7 @@ test "P9.2 multiline: ctrl_enter_for_newline + plain Enter commits, no insert" {
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
     ctx.input_text_state.cursor_pos = 5;
-    ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..5].* = "hello".*;
@@ -21178,8 +21325,8 @@ test "P9.2 multiline: ctrl_enter_for_newline + Ctrl+Enter inserts \\n" {
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
     ctx.input_text_state.cursor_pos = 5;
-    ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame = true;
-    ctx.input.keys[@intFromEnum(KeyCode.left_control)].down = true;
+    ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.left_control)].down = true;
 
     var buf: [32]u8 = undefined;
     buf[0..5].* = "hello".*;
@@ -21203,7 +21350,7 @@ test "P9.2 multiline: read_only blocks newline insertion" {
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
     ctx.input_text_state.cursor_pos = 2;
-    ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..2].* = "hi".*;
@@ -21327,7 +21474,7 @@ test "P9.3: completion callback fires on Tab when set" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.tab)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.tab)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..3].* = "hel".*;
@@ -21353,7 +21500,7 @@ test "P9.3: completion callback does NOT fire when allow_tab_input is set" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.tab)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.tab)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     var len: usize = 0;
@@ -21379,7 +21526,7 @@ test "P9.3: history callback fires on Up with .up direction" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.up)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.up)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     var len: usize = 0;
@@ -21402,7 +21549,7 @@ test "P9.3: history callback fires on Down with .down direction" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.down)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.down)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     var len: usize = 0;
@@ -21459,7 +21606,7 @@ test "P9.3: read_only blocks history callback (no edit happens)" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.up)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.up)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     var len: usize = 0;
@@ -21594,7 +21741,7 @@ test "P9.2: read_only blocks backspace" {
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
     ctx.input_text_state.cursor_pos = 5;
-    ctx.input.keys[@intFromEnum(KeyCode.backspace)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.backspace)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..5].* = "hello".*;
@@ -21615,7 +21762,7 @@ test "P9.2: allow_tab_input inserts tab character at cursor" {
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
     ctx.input_text_state.cursor_pos = 2; // between 'h' and 'i'
-    ctx.input.keys[@intFromEnum(KeyCode.tab)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.tab)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..2].* = "hi".*;
@@ -21640,7 +21787,7 @@ test "P9.2: allow_tab_input takes precedence over completion callback" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.tab)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.tab)].pressed_this_frame = true;
 
     const State = struct {
         var called: bool = false;
@@ -21670,7 +21817,7 @@ test "P9.2: escape without escape_clears leaves buffer intact + defocuses" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..5].* = "hello".*;
@@ -21693,7 +21840,7 @@ test "P9.2: escape_clears zeros buffer + cursor + defocuses" {
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
     ctx.input_text_state.cursor_pos = 3;
-    ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..5].* = "hello".*;
@@ -21750,7 +21897,7 @@ test "P9.2: enter_returns_true on → typing doesn't return true; Enter does" {
 
     // Frame 2: Enter pressed.  Returns true; widget defocuses.
     ctx.input.chars_typed_count = 0; // clear typed queue
-    ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame = true;
     const r2: bool = u.inputText("field", &buf, &len, .{ .enter_returns_true = true });
     try expect(r2);
     try expectEqual(@as(Id, 0), ctx.active_id);
@@ -21767,7 +21914,7 @@ test "P9.2: enter_returns_true + escape_clears: Esc cancels (returns false, buf 
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame = true;
 
     var buf: [32]u8 = undefined;
     buf[0..5].* = "hello".*;
@@ -22059,7 +22206,7 @@ test "miniPlot: R-key press clears fitted, returns true that frame" {
     // and then refit (so next frame sees fitted = true again).
     {
         var snap: InputSnapshot = .{};
-        snap.keys[@intFromEnum(KeyCode.r)] = .{
+        snap.keys[@backingInt(KeyCode.r)] = .{
             .down = true,
             .pressed_this_frame = true,
             .released_this_frame = false,
@@ -22290,7 +22437,7 @@ pub fn apply(
             const buf: [:0]u8 = gpa.allocSentinel(u8, e.payload.len, 0) catch break;
             defer gpa.free(buf);
             @memcpy(buf, e.payload);
-            de_fn(slot.map, gpa, buf) catch {};
+            de_fn(slot.map, gpa, buf) catch {}; // lint:off catch-suppression: bad persisted ext payload skipped
             break; // matched + handled
         }
     }
@@ -22609,7 +22756,7 @@ test "Q8: version mismatch discards ext_state along with rest of payload" {
         std.testing.allocator,
         "version = {d}",
         .{current_version},
-    ) catch unreachable;
+    ) catch panicf(@src(), "OOM", .{});
     defer std.testing.allocator.free(version_str);
     if (std.mem.indexOf(u8, mut, version_str)) |idx| {
         // Replace the trailing digit with '9' to bump beyond current.
@@ -22617,7 +22764,7 @@ test "Q8: version mismatch discards ext_state along with rest of payload" {
             std.testing.allocator,
             "version = {d}",
             .{current_version + 100},
-        ) catch unreachable;
+        ) catch panicf(@src(), "OOM", .{});
         defer std.testing.allocator.free(replacement);
         if (replacement.len == version_str.len) {
             @memcpy(mut[idx..][0..replacement.len], replacement);
@@ -22722,7 +22869,7 @@ fn findOrCreateChildWindow(ctx: *UiContext, child_id: Id) *Window {
     if (ctx.windows.get(child_id)) |existing| {
         return existing;
     }
-    const w: *Window = ctx.gpa.create(Window) catch unreachable;
+    const w: *Window = ctx.gpa.create(Window) catch panicf(@src(), "OOM", .{});
     w.* = .{
         .id = child_id,
         .pos = .{ 0, 0 },
@@ -22734,7 +22881,7 @@ fn findOrCreateChildWindow(ctx: *UiContext, child_id: Id) *Window {
     // 128-byte name_buf, but the prefix + 8 hex chars fits easily.
     const formatted: []u8 = bufPrint(&w.name_buf, "child:{x}", .{child_id}) catch w.name_buf[0..0];
     w.name_len = formatted.len;
-    ctx.windows.put(ctx.gpa, child_id, w) catch unreachable;
+    ctx.windows.put(ctx.gpa, child_id, w) catch panicf(@src(), "OOM", .{});
     return w;
 }
 
@@ -22819,14 +22966,14 @@ fn openPopupScope(ctx: *UiContext, str_id: []const u8) bool {
         return false;
     };
     ctx.current_window = popup_w;
-    ctx.popup_stack.append(id) catch {};
+    ctx.popup_stack.append(id) catch assertUnreachable(@src(), "OOM", .{});
 
     // Append to per-frame replay list (popups render AFTER regular
     // windows). Eager mode bypassed - popups don't make sense
     // inside an RT scope.
     if (!ctx.eager_mode) {
         popup_w.draw_list.clear();
-        ctx.frame_popups.append(popup_w) catch {};
+        ctx.frame_popups.append(popup_w) catch assertUnreachable(@src(), "OOM", .{});
         ctx.current_draw_list = &popup_w.draw_list;
     }
 
@@ -22902,7 +23049,7 @@ fn markItemNavigable(
     // frame's input advances within THIS frame's set. Past the
     // bounded cap we silently stop appending - overflow is a
     // UX-design issue not a correctness one.
-    ctx.frame_nav_items.append(id) catch {};
+    ctx.frame_nav_items.append(id) catch assertUnreachable(@src(), "OOM", .{});
 
     // Draw the focus border ONLY if this widget is focused. We use
     // the widget's last_item_rect (just recorded by the widget's
@@ -22969,7 +23116,7 @@ fn dismissPopupsOnClickOutside(ctx: *UiContext) void {
                 .height = default_popup_size[1],
             };
         if (!pointInRect(mp, rect)) {
-            to_remove.append(id) catch {};
+            to_remove.append(id) catch assertUnreachable(@src(), "OOM", .{});
         }
     }
     var i: usize = 0;
@@ -23154,7 +23301,7 @@ fn openTabItem(
     // inline at beginTabItem; significant refactor, not blocking.
     // See `src/notes/zimr-vs-imgui-divergence-audit.md` §1.2.
     const is_active: bool = state.selected_id == id;
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, button_rect);
+    const hovered: bool = itemHoverable(ctx, button_rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -23273,7 +23420,7 @@ fn openTabItem(
             .width = tab_close_x_w,
             .height = x_size,
         };
-        const x_hovered: bool = pointInRect(ctx.input.mouse_pos, x_rect);
+        const x_hovered: bool = itemHoverable(ctx, x_rect);
         if (x_hovered) {
             drawRectFilled(ctx, x_rect, Color.toWire(ctx.style.button_hovered));
         }
@@ -23294,7 +23441,7 @@ fn openTabItem(
     // so per-id state like active_id, input-text edit state, etc.
     // doesn't bleed across tabs). Pop happens in closeTabItem.
     if (is_active and !flags.no_push_id) {
-        ctx.id_stack.append(id) catch {};
+        ctx.id_stack.append(id) catch assertUnreachable(@src(), "OOM", .{});
         frame.pushed_tab_id_this_item = true;
     } else {
         frame.pushed_tab_id_this_item = false;
@@ -23387,7 +23534,7 @@ fn openListBox(
         // any selectable submission still see "the list box."
         .last_item_id = list_box_id,
         .last_item_rect = box,
-        .last_item_hovered = pointInRect(ctx.input.mouse_pos, box),
+        .last_item_hovered = itemHoverable(ctx, box),
     };
 
     // Push content clip rect AFTER the window-stack flip so the
@@ -23488,7 +23635,7 @@ fn inputArray(
     // overwrote last_item with their own rects).
     w.layout.last_item_id = parent_id;
     w.layout.last_item_rect = .{ .x = at[0], .y = at[1], .width = total_w + gaps + reserve_label, .height = box_h };
-    w.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, w.layout.last_item_rect);
+    w.layout.last_item_hovered = itemHoverable(ctx, w.layout.last_item_rect);
     markItemPost(ctx, w, any_changed);
     markItemNavigable(ctx, w, parent_id);
 
@@ -25175,7 +25322,7 @@ fn renderDockLeafTabBars(ctx: *UiContext, root_id: Id) void {
     if (pending_reorder) |r| {
         if (leaf.indexOf(r.wid)) |cur_idx| {
             _ = leaf.window_ids.orderedRemove(cur_idx);
-            leaf.window_ids.insert(ctx.gpa, r.target_idx, r.wid) catch {};
+            leaf.window_ids.insert(ctx.gpa, r.target_idx, r.wid) catch assertUnreachable(@src(), "OOM", .{});
             node.generation +%= 1;
         }
     }
@@ -25361,7 +25508,7 @@ fn textLinkImpl(ctx: *UiContext, label: []const u8) bool {
     const rect: Rectangle = .{ .x = at[0], .y = at[1], .width = sz[0], .height = sz[1] };
 
     // Hit test + state machine (mirrors buttonImpl).
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, rect);
+    const hovered: bool = itemHoverable(ctx, rect);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -25476,7 +25623,7 @@ fn valueImpl(
 
     w.layout.last_item_id = 0; // Read-only display - no ID, not interactive.
     w.layout.last_item_rect = .{ .x = at[0], .y = at[1], .width = sz[0], .height = sz[1] };
-    w.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, w.layout.last_item_rect);
+    w.layout.last_item_hovered = itemHoverable(ctx, w.layout.last_item_rect);
 
     advanceLayout(w, sz, ctx.style.item_spacing, ctx.style.window_padding[0]);
 }
@@ -25623,7 +25770,7 @@ fn sliderArray(
         const x: f32 = start[0] + (bar_w + inner_spacing) * float(i);
         const bar: Rectangle = .{ .x = x, .y = start[1], .width = bar_w, .height = bar_h };
 
-        const hovered: bool = pointInRect(ctx.input.mouse_pos, bar);
+        const hovered: bool = itemHoverable(ctx, bar);
         if (hovered) {
             ctx.hovered_id = id;
             any_hovered = true;
@@ -25737,7 +25884,7 @@ fn colorEditNFloat(
     inline for (0..N) |i| {
         const ch_id: Id = hashInt(ctx.id_stack.top() orelse w.id, @intCast(i));
         const ch_rect = Rectangle{ .x = x, .y = at[1], .width = slider_w, .height = bar_h };
-        const ch_hovered: bool = pointInRect(ctx.input.mouse_pos, ch_rect);
+        const ch_hovered: bool = itemHoverable(ctx, ch_rect);
         if (ch_hovered) {
             ctx.hovered_id = ch_id;
         }
@@ -25846,7 +25993,7 @@ fn colorEditNFloat(
     const consumed = Vec2{ inner_right - at[0], bar_h };
     w.layout.last_item_id = widgetId(ctx, w, label);
     w.layout.last_item_rect = .{ .x = at[0], .y = at[1], .width = consumed[0], .height = consumed[1] };
-    w.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, w.layout.last_item_rect);
+    w.layout.last_item_hovered = itemHoverable(ctx, w.layout.last_item_rect);
     markItemPost(ctx, w, any_changed);
 
     advanceLayout(w, consumed, ctx.style.item_spacing, ctx.style.window_padding[0]);
@@ -25982,7 +26129,7 @@ fn plotImpl(
         // the sample under the cursor and emit a tooltip via
         // `pending_tooltip`. This piggybacks on the existing
         // setTooltip path so styling stays consistent.
-        if (pointInRect(ctx.input.mouse_pos, frame)) {
+        if (itemHoverable(ctx, frame)) {
             const rel: f32 = clamp((ctx.input.mouse_pos[0] - inner_x) / inner_w, 0, 1);
             const idx: usize = @min(
                 values.len - 1,
@@ -26022,7 +26169,7 @@ fn plotImpl(
         .width = frame.width + label_reserve,
         .height = frame.height,
     };
-    w.layout.last_item_hovered = pointInRect(ctx.input.mouse_pos, frame);
+    w.layout.last_item_hovered = itemHoverable(ctx, frame);
     markItemPost(ctx, w, false);
 
     advanceLayout(
@@ -26527,7 +26674,7 @@ fn tableHeadersRowImpl(ctx: *UiContext) void {
         // to cycle to).
         const blocked_all: bool = col.no_sort_ascending and col.no_sort_descending;
         if (!col.no_sort and !blocked_all) {
-            const hovered: bool = pointInRect(ctx.input.mouse_pos, cell);
+            const hovered: bool = itemHoverable(ctx, cell);
             if (hovered and ctx.input.mouse_left_clicked) {
                 cycleTableSort(ctx, ts.id, i, snapshotShiftDown(&ctx.input), col);
             }
@@ -26722,23 +26869,6 @@ pub fn uiRenderNow(
     renderDragPreview(ctx, gl, window, shapes_state, font_cache);
 }
 
-fn uiContextDeferredRender(data: *anyopaque, _: *Gl) void {
-    const ctx: *UiContext = @ptrCast(@alignCast(data));
-    const gl: *Gl = ctx.frame_gl orelse return;
-    const win: *const runtime.core.WindowState = ctx.frame_window orelse return;
-    const shapes_state: *const shapes2d.ShapesTextureState = ctx.frame_shapes_state orelse return;
-    const font_cache: *const text2d.FontCache = ctx.frame_font_cache orelse return;
-
-    ctx.background_dl.render(gl, win, shapes_state, font_cache);
-    replayWindowsAndTabs(ctx, gl, win, shapes_state, font_cache);
-    for (ctx.frame_popups.items[0..ctx.frame_popups.len]) |p| {
-        p.draw_list.render(gl, win, shapes_state, font_cache);
-    }
-    ctx.foreground_dl.render(gl, win, shapes_state, font_cache);
-    renderTooltipBlock(ctx, gl, win, shapes_state, font_cache);
-    renderDragPreview(ctx, gl, win, shapes_state, font_cache);
-}
-
 // ============================================================================
 //  drag-drop source side
 // ============================================================================
@@ -26796,7 +26926,7 @@ fn dragArray(
         const x: f32 = start[0] + (bar_w + inner_spacing) * float(i);
         const bar: Rectangle = .{ .x = x, .y = start[1], .width = bar_w, .height = bar_h };
 
-        const hovered: bool = pointInRect(ctx.input.mouse_pos, bar);
+        const hovered: bool = itemHoverable(ctx, bar);
         if (hovered) {
             ctx.hovered_id = id;
             any_hovered = true;
@@ -27373,7 +27503,7 @@ fn showOverlayInput(
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return;
     }
-    const dom = @import("web.zig").dom;
+    const dom = web.dom;
     dom.show_overlay_input(
         box.x,
         box.y,
@@ -27401,7 +27531,7 @@ fn hideOverlayInput() void {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return;
     }
-    @import("web.zig").dom.hide_overlay_input();
+    web.dom.hide_overlay_input();
 }
 
 // Reposition the DOM overlay to a new rect without re-focusing /
@@ -27412,7 +27542,7 @@ fn updateOverlayInputRect(box: Rectangle) void {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return;
     }
-    @import("web.zig").dom.update_overlay_input_rect(box.x, box.y, box.width, box.height);
+    web.dom.update_overlay_input_rect(box.x, box.y, box.width, box.height);
 }
 
 // Intersect a widget box with its parent window's content-clip rect
@@ -27470,7 +27600,7 @@ fn overlayInputIsVisible() bool {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return false;
     }
-    return @import("web.zig").dom.overlay_input_is_visible();
+    return web.dom.overlay_input_is_visible();
 }
 
 // Returns the byte length written into `out`. On host build,
@@ -27479,7 +27609,7 @@ fn getOverlayInputText(out: []u8) usize {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return 0;
     }
-    return @import("web.zig").dom.get_overlay_input_text(out);
+    return web.dom.get_overlay_input_text(out);
 }
 
 // ============================================================================
@@ -27502,7 +27632,7 @@ fn showOverlayTextarea(
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return;
     }
-    const dom = @import("web.zig").dom;
+    const dom = web.dom;
     dom.show_overlay_textarea(
         box.x,
         box.y,
@@ -27529,28 +27659,28 @@ fn hideOverlayTextarea() void {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return;
     }
-    @import("web.zig").dom.hide_overlay_textarea();
+    web.dom.hide_overlay_textarea();
 }
 
 fn updateOverlayTextareaRect(box: Rectangle) void {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return;
     }
-    @import("web.zig").dom.update_overlay_textarea_rect(box.x, box.y, box.width, box.height);
+    web.dom.update_overlay_textarea_rect(box.x, box.y, box.width, box.height);
 }
 
 fn overlayTextareaIsVisible() bool {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return false;
     }
-    return @import("web.zig").dom.overlay_textarea_is_visible();
+    return web.dom.overlay_textarea_is_visible();
 }
 
 fn getOverlayTextareaText(out: []u8) usize {
     if (comptime !builtin.target.cpu.arch.isWasm()) {
         return 0;
     }
-    return @import("web.zig").dom.get_overlay_textarea_text(out);
+    return web.dom.get_overlay_textarea_text(out);
 }
 
 fn cursorIndexFromX(
@@ -27598,7 +27728,7 @@ fn inputTextImpl(
     );
 
     const box = Rectangle{ .x = at[0], .y = at[1], .width = box_w, .height = box_h };
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, box);
+    const hovered: bool = itemHoverable(ctx, box);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -27811,11 +27941,11 @@ fn inputTextImpl(
                 ctx.input_text_state.cursor_pos += 1;
                 ctx.input_text_state.blink_t = 0;
             }
-            if (ctx.input.keys[@intFromEnum(KeyCode.home)].pressed_this_frame) {
+            if (ctx.input.keys[@backingInt(KeyCode.home)].pressed_this_frame) {
                 ctx.input_text_state.cursor_pos = 0;
                 ctx.input_text_state.blink_t = 0;
             }
-            if (ctx.input.keys[@intFromEnum(KeyCode.end)].pressed_this_frame) {
+            if (ctx.input.keys[@backingInt(KeyCode.end)].pressed_this_frame) {
                 ctx.input_text_state.cursor_pos = len.*;
                 ctx.input_text_state.blink_t = 0;
             }
@@ -27867,7 +27997,7 @@ fn inputTextImpl(
             //   2. `completion` callback set → fire it.
             //   3. neither → no-op (browser-tab focus advance handles
             //      itself on web; host-only Tab is just dropped).
-            const tab_pressed: bool = ctx.input.keys[@intFromEnum(KeyCode.tab)].pressed_this_frame;
+            const tab_pressed: bool = ctx.input.keys[@backingInt(KeyCode.tab)].pressed_this_frame;
             if (tab_pressed) {
                 if (opts.allow_tab_input and !opts.read_only) {
                     const has_room: bool = len.* < buf.len;
@@ -27909,8 +28039,8 @@ fn inputTextImpl(
         // `overlayInputIsVisible` check above). Advance the blink
         // timer regardless (only matters on host where wasm renders
         // the cursor).
-        const enter_pressed: bool = ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame;
-        const escape_pressed: bool = ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame;
+        const enter_pressed: bool = ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame;
+        const escape_pressed: bool = ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame;
         if (!on_web) {
             if (enter_pressed) {
                 // Enter is a commit on host.  Defocus + flag
@@ -28149,7 +28279,7 @@ fn inputTextMultilineImpl(
     }
 
     const box: Rectangle = .{ .x = at[0], .y = at[1], .width = actual_w, .height = actual_h };
-    const hovered: bool = pointInRect(ctx.input.mouse_pos, box);
+    const hovered: bool = itemHoverable(ctx, box);
     if (hovered) {
         ctx.hovered_id = id;
     }
@@ -28289,7 +28419,7 @@ fn inputTextMultilineImpl(
             // Char insertion is gated on `!read_only`; commit branch
             // runs regardless (a read-only multiline can still be
             // "submitted" via Enter for accessibility navigation).
-            const enter_pressed: bool = ctx.input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame;
+            const enter_pressed: bool = ctx.input.keys[@backingInt(KeyCode.enter)].pressed_this_frame;
             if (enter_pressed) {
                 const ctrl_down: bool = snapshotCtrlDown(&ctx.input);
                 const should_commit: bool = opts.ctrl_enter_for_newline and !ctrl_down;
@@ -28312,7 +28442,7 @@ fn inputTextMultilineImpl(
             // the buffer + cursor before defocus.  Esc is NEVER a
             // commit on host — caller distinguishes commit-vs-cancel
             // via `commit_pressed`.
-            const escape_pressed: bool = ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame;
+            const escape_pressed: bool = ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame;
             if (escape_pressed) {
                 if (opts.escape_clears) {
                     len.* = 0;
@@ -28373,12 +28503,12 @@ fn inputTextMultilineImpl(
             }
 
             // Home / End: line-aware.
-            if (ctx.input.keys[@intFromEnum(KeyCode.home)].pressed_this_frame) {
+            if (ctx.input.keys[@backingInt(KeyCode.home)].pressed_this_frame) {
                 const lc: LineCol = byteToLineCol(buf[0..len.*], cursor_pos);
                 ctx.input_text_state.cursor_pos = lineColToByte(buf[0..len.*], .{ .line = lc.line, .col = 0 });
                 ctx.input_text_state.blink_t = 0;
             }
-            if (ctx.input.keys[@intFromEnum(KeyCode.end)].pressed_this_frame) {
+            if (ctx.input.keys[@backingInt(KeyCode.end)].pressed_this_frame) {
                 const lc: LineCol = byteToLineCol(buf[0..len.*], cursor_pos);
                 // Use a very large col; lineColToByte clamps to line length.
                 ctx.input_text_state.cursor_pos = lineColToByte(
@@ -28947,7 +29077,7 @@ test "UiContext: beginFrame resets draw list state" {
     ctx.eager_mode = true;
     // Synthesize a window pointer for frame_windows (don't dereference it).
     const fake_w_storage: *Window = @ptrFromInt(@alignOf(Window));
-    ctx.frame_windows.append(fake_w_storage) catch {};
+    ctx.frame_windows.append(fake_w_storage) catch assertUnreachable(@src(), "OOM", .{});
 
     var gl_dummy: Gl = .{};
     const shapes_dummy: shapes2d.ShapesTextureState = .{};
@@ -32952,7 +33082,7 @@ test " effectiveItemWidth priority - next > stack > opts > default" {
     // opts wins over default.
     try expectEqual(@as(f32, 50), effectiveItemWidth(&ctx, 50, 100));
     // Stack wins over opts.
-    ctx.item_width_stack.append(75) catch unreachable;
+    ctx.item_width_stack.append(75) catch panicf(@src(), "OOM", .{});
     try expectEqual(@as(f32, 75), effectiveItemWidth(&ctx, 50, 100));
     // next_item_width wins over stack - and gets cleared on read.
     ctx.next_item_width = 200;
@@ -34562,7 +34692,7 @@ test " inputInt commits parsed value on Enter" {
         var inp: InputSnapshot = .{
             .mouse_pos = .{ box.x + box.width / 2, box.y + box.height / 2 },
         };
-        inp.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame = true;
+        inp.keys[@backingInt(KeyCode.enter)].pressed_this_frame = true;
         const ui: Ui = ctx.beginFrameRaw(inp, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
         const h: WindowHandle = ui.window("host", wopts) orelse unreachable;
         const changed: bool = ui.inputInt("count", &v, .{ .fmt = "{d}" });
@@ -34692,7 +34822,7 @@ test " inputFloat on commit rejects garbage + keeps prior value" {
             .chars_typed = typed,
             .chars_typed_count = 4,
         };
-        type_input.keys[@intFromEnum(KeyCode.enter)].pressed_this_frame = true;
+        type_input.keys[@backingInt(KeyCode.enter)].pressed_this_frame = true;
         const ui: Ui = ctx.beginFrameRaw(type_input, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
         const h: WindowHandle = ui.window("host", wopts) orelse unreachable;
         const changed: bool = ui.inputFloat("x", &v, .{});
@@ -35059,7 +35189,7 @@ test "P2.1: debugLog ring drops oldest event when at cap" {
         &expected_tail_buf,
         "evt-{d}",
         .{debug_log_cap - 1},
-    ) catch unreachable;
+    ) catch panicf(@src(), "OOM", .{});
     try expectEqualStrings(
         expected_tail,
         ring[debug_log_cap - 1].messageSlice(),
@@ -35357,7 +35487,6 @@ test "#5: warnOnce dedup mechanism (same call site fires once)" {
     // we CAN verify is that calling the same site repeatedly doesn't
     // crash and behavior is otherwise stable. This is a smoke test
     // for the helper itself.
-    const utils = @import("utils.zig");
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
         utils.warnOnce(@src(), "smoke-test iteration {d}", .{i});
@@ -36527,7 +36656,7 @@ test "P8.5: shift+wheel-y routes to scroll_x when horizontal_scrollbar set" {
         .mouse_pos = .{ 100, 100 },
         .mouse_wheel_y = -2.0,
     };
-    snap.keys[@intFromEnum(KeyCode.left_shift)] = .{
+    snap.keys[@backingInt(KeyCode.left_shift)] = .{
         .down = true,
         .pressed_this_frame = true,
         .released_this_frame = false,
@@ -36577,7 +36706,7 @@ test "P8.5: shift+wheel-y falls through to scroll_y when no h-scrollbar" {
         .mouse_pos = .{ 100, 100 },
         .mouse_wheel_y = -2.0,
     };
-    snap.keys[@intFromEnum(KeyCode.left_shift)] = .{
+    snap.keys[@backingInt(KeyCode.left_shift)] = .{
         .down = true,
         .pressed_this_frame = true,
         .released_this_frame = false,
@@ -36618,7 +36747,7 @@ test "P8.5: shift+wheel-y also requires hovered_window_id match" {
         .mouse_pos = .{ 700, 500 },
         .mouse_wheel_y = 2.0,
     };
-    snap.keys[@intFromEnum(KeyCode.left_shift)] = .{
+    snap.keys[@backingInt(KeyCode.left_shift)] = .{
         .down = true,
         .pressed_this_frame = true,
         .released_this_frame = false,
@@ -37152,7 +37281,7 @@ test " applyLayout accepts ZON with empty windows array" {
         &ver_buf,
         ".{{ .version = {d}, .windows = .{{}} }}",
         .{layout_schema_version},
-    ) catch unreachable;
+    ) catch panicf(@src(), "OOM", .{});
     try applyLayoutImpl(&ctx, empty_zon);
     try expectEqual(@as(usize, 0), ctx.windows.count());
 }
@@ -37184,7 +37313,7 @@ test " applyLayout creates stub windows for titles not yet known" {
         \\        }},
         \\    }},
         \\}}
-    , .{layout_schema_version}) catch unreachable;
+    , .{layout_schema_version}) catch panicf(@src(), "OOM", .{});
 
     try expectEqual(@as(usize, 0), ctx.windows.count());
     try applyLayoutImpl(&ctx, src);
@@ -37352,7 +37481,7 @@ test " Shift+Tab steps backward through the list" {
     ctx.nav_id = middle_id;
     {
         var shift_tab: InputSnapshot = keyEventSnapshot(.tab);
-        shift_tab.keys[@intFromEnum(KeyCode.left_shift)].down = true;
+        shift_tab.keys[@backingInt(KeyCode.left_shift)].down = true;
         const ui: Ui = ctx.beginFrameRaw(
             shift_tab,
             null,
@@ -38326,13 +38455,13 @@ test "SelectionBasicStorage.applyRequests: Ctrl-click toggle pattern (no clear)"
 // `is_focused = (focused_window_id == w.id)` succeeds without
 // having to drive a real frame.
 fn msTestSetup(ctx: *UiContext) *Window {
-    const w = ctx.gpa.create(Window) catch unreachable;
+    const w = ctx.gpa.create(Window) catch panicf(@src(), "OOM", .{});
     w.* = .{
         .id = 1234,
         .pos = .{ 0, 0 },
         .size = .{ 400, 800 },
     };
-    ctx.windows.put(ctx.gpa, w.id, w) catch unreachable;
+    ctx.windows.put(ctx.gpa, w.id, w) catch panicf(@src(), "OOM", .{});
     ctx.current_window = w;
     ctx.focused_window_id = w.id;
     return w;
@@ -38363,7 +38492,7 @@ test "MultiSelect: Ctrl-click on unselected → SetRange(item..item, true) only"
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
-    ctx.input.keys[@intFromEnum(KeyCode.left_control)].down = true;
+    ctx.input.keys[@backingInt(KeyCode.left_control)].down = true;
 
     _ = beginMultiSelectImpl(&ctx, .{}, 0, 10);
     ctx.next_item_selection_user_data = 7;
@@ -38382,7 +38511,7 @@ test "MultiSelect: Ctrl-click on selected → SetRange(item..item, false) only (
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
-    ctx.input.keys[@intFromEnum(KeyCode.left_control)].down = true;
+    ctx.input.keys[@backingInt(KeyCode.left_control)].down = true;
 
     _ = beginMultiSelectImpl(&ctx, .{}, 1, 10);
     ctx.next_item_selection_user_data = 7;
@@ -38410,7 +38539,7 @@ test "MultiSelect: Shift-click → SetAll(false) + SetRange(anchor..item, true)"
     try expectEqual(@as(?u64, 3), stored.range_src_item);
 
     // Next frame: shift-click item 7.
-    ctx.input.keys[@intFromEnum(KeyCode.left_shift)].down = true;
+    ctx.input.keys[@backingInt(KeyCode.left_shift)].down = true;
     _ = beginMultiSelectImpl(&ctx, .{}, 1, 10);
     ctx.next_item_selection_user_data = 7;
     multiSelectItemFooter(&ctx, 999, false, true);
@@ -38430,7 +38559,7 @@ test "MultiSelect: Escape with clear_on_escape → SetAll(false) from Begin" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
-    ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame = true;
 
     // selection_size > 0 is required to trigger the shortcut.
     const io: *const MultiSelectIO = beginMultiSelectImpl(&ctx, .{ .clear_on_escape = true }, 3, 10);
@@ -38454,7 +38583,7 @@ test "MultiSelect: Escape ignored when clear_on_escape is false" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
-    ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame = true;
 
     const io: *const MultiSelectIO = beginMultiSelectImpl(&ctx, .{}, 3, 10);
     try expectEqual(@as(usize, 0), io.requests.len);
@@ -38465,7 +38594,7 @@ test "MultiSelect: Escape ignored when selection is empty" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
-    ctx.input.keys[@intFromEnum(KeyCode.escape)].pressed_this_frame = true;
+    ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame = true;
 
     // selection_size == 0 → no clear shortcut (imgui parity).
     const io: *const MultiSelectIO = beginMultiSelectImpl(&ctx, .{ .clear_on_escape = true }, 0, 10);
@@ -38519,7 +38648,7 @@ test "MultiSelect: no_range_select disables Shift behavior" {
     _ = endMultiSelectImpl(&ctx);
 
     // Shift+click at 7 - with no_range_select, behaves as plain click.
-    ctx.input.keys[@intFromEnum(KeyCode.left_shift)].down = true;
+    ctx.input.keys[@backingInt(KeyCode.left_shift)].down = true;
     _ = beginMultiSelectImpl(&ctx, .{ .no_range_select = true }, 1, 10);
     ctx.next_item_selection_user_data = 7;
     multiSelectItemFooter(&ctx, 999, false, true);
@@ -38546,7 +38675,7 @@ test "MultiSelect: no_range_select disables Shift behavior" {
 //   - Released (mouse_left_released) clears active_id.
 
 fn splitterTestSetup(ctx: *UiContext) *Window {
-    const w = ctx.gpa.create(Window) catch unreachable;
+    const w = ctx.gpa.create(Window) catch panicf(@src(), "OOM", .{});
     w.* = .{
         .id = 5555,
         .pos = .{ 0, 0 },
@@ -38558,7 +38687,7 @@ fn splitterTestSetup(ctx: *UiContext) *Window {
             .cursor_pos = .{ 8, 8 },
         },
     };
-    ctx.windows.put(ctx.gpa, w.id, w) catch unreachable;
+    ctx.windows.put(ctx.gpa, w.id, w) catch panicf(@src(), "OOM", .{});
     ctx.current_window = w;
     return w;
 }
@@ -38776,14 +38905,14 @@ test "setWindow*-by-name: setWindowPos mutates the named window" {
 
     // Pre-populate the windows map with a Workspace window the
     // same way openWindow would have on first call.
-    const w = ctx.gpa.create(Window) catch unreachable;
+    const w = ctx.gpa.create(Window) catch panicf(@src(), "OOM", .{});
     const id: Id = hashStr(0, "Workspace");
     w.* = .{
         .id = id,
         .pos = .{ 0, 0 },
         .size = .{ 400, 800 },
     };
-    ctx.windows.put(ctx.gpa, id, w) catch unreachable;
+    ctx.windows.put(ctx.gpa, id, w) catch panicf(@src(), "OOM", .{});
 
     const ui_ = Ui{ .ctx = &ctx };
     ui_.setWindowPos("Workspace", .{ 100, 50 });
@@ -38793,7 +38922,7 @@ test "setWindow*-by-name: setWindowPos mutates the named window" {
 test "setWindow*-by-name: setWindowSize mutates + marks user_resized" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
-    const w = ctx.gpa.create(Window) catch unreachable;
+    const w = ctx.gpa.create(Window) catch panicf(@src(), "OOM", .{});
     const id: Id = hashStr(0, "Workspace");
     w.* = .{
         .id = id,
@@ -38801,7 +38930,7 @@ test "setWindow*-by-name: setWindowSize mutates + marks user_resized" {
         .size = .{ 400, 800 },
         .user_resized = false,
     };
-    ctx.windows.put(ctx.gpa, id, w) catch unreachable;
+    ctx.windows.put(ctx.gpa, id, w) catch panicf(@src(), "OOM", .{});
 
     const ui_ = Ui{ .ctx = &ctx };
     ui_.setWindowSize("Workspace", .{ 500, 900 });
@@ -38812,14 +38941,14 @@ test "setWindow*-by-name: setWindowSize mutates + marks user_resized" {
 test "setWindow*-by-name: setWindowFocus sets focused_window_id" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
-    const w = ctx.gpa.create(Window) catch unreachable;
+    const w = ctx.gpa.create(Window) catch panicf(@src(), "OOM", .{});
     const id: Id = hashStr(0, "Workspace");
     w.* = .{
         .id = id,
         .pos = .{ 0, 0 },
         .size = .{ 400, 800 },
     };
-    ctx.windows.put(ctx.gpa, id, w) catch unreachable;
+    ctx.windows.put(ctx.gpa, id, w) catch panicf(@src(), "OOM", .{});
     try expectEqual(@as(Id, 0), ctx.focused_window_id);
 
     const ui_ = Ui{ .ctx = &ctx };
@@ -40535,11 +40664,13 @@ pub fn processRequests(ctx: *DockContext, gpa: Allocator) Allocator.Error!void {
     for (reqs) |req| {
         switch (req) {
             .dock_as_tab => |r| {
-                _ = dockWindowAsTab(ctx, gpa, r.target_node, r.source_window) catch {};
+                _ = dockWindowAsTab(ctx, gpa, r.target_node, r.source_window) catch
+                    assertUnreachable(@src(), "OOM", .{});
             },
             .dock_as_split => |r| {
                 if (r.dir == .center) {
-                    _ = dockWindowAsTab(ctx, gpa, r.target_node, r.source_window) catch {};
+                    _ = dockWindowAsTab(ctx, gpa, r.target_node, r.source_window) catch
+                        assertUnreachable(@src(), "OOM", .{});
                 } else {
                     const result: SplitResult = splitNode(
                         ctx,
@@ -40549,7 +40680,8 @@ pub fn processRequests(ctx: *DockContext, gpa: Allocator) Allocator.Error!void {
                         default_split_ratio,
                     ) catch continue;
                     const target_child: Id = if (r.dir.isFirstChild()) result.a else result.b;
-                    _ = dockWindowAsTab(ctx, gpa, target_child, r.source_window) catch {};
+                    _ = dockWindowAsTab(ctx, gpa, target_child, r.source_window) catch
+                        assertUnreachable(@src(), "OOM", .{});
                 }
             },
             .undock => |r| {
@@ -41382,7 +41514,7 @@ pub fn serialize(gpa: Allocator, ctx: *const UiContext) ![]u8 {
                     .parent_id = parent_id,
                     .flags = flags_bits,
                     .is_split = true,
-                    .split_axis = @intFromEnum(s.axis),
+                    .split_axis = @backingInt(s.axis),
                     .split_ratio = s.ratio,
                     .split_child_a = s.child_ids[0],
                     .split_child_b = s.child_ids[1],
@@ -41558,7 +41690,7 @@ pub fn tryRestoreDockTree(gpa: Allocator, ctx: *UiContext) bool {
             if (!a_ok or !b_ok) {
                 continue;
             } // dangling - skip
-            const axis: SplitAxis = @enumFromInt(pn.split_axis);
+            const axis: SplitAxis = @fromBackingInt(@intCast(pn.split_axis));
             node.split = .{
                 .axis = axis,
                 .ratio = pn.split_ratio,
@@ -41676,8 +41808,8 @@ pub fn tryAutoLoad(ctx: *UiContext) void {
 
     // Web module is wasm-only by file - import it inside the
     // is_wasm gate so host builds don't try to resolve it.
-    const web = @import("web.zig").dom;
-    const loaded: ?[]u8 = web.persistence_load(ctx.gpa, key) catch null;
+    const dom = web.dom;
+    const loaded: ?[]u8 = dom.persistence_load(ctx.gpa, key) catch null;
     const bytes: []u8 = loaded orelse return;
     defer ctx.gpa.free(bytes);
 
@@ -41686,7 +41818,7 @@ pub fn tryAutoLoad(ctx: *UiContext) void {
     defer ctx.gpa.free(sentinel);
     @memcpy(sentinel, bytes);
 
-    apply(ctx.gpa, ctx, sentinel) catch {
+    apply(ctx.gpa, ctx, sentinel) catch { // lint:off catch-suppression: bad payload -> fresh start
         // Bad payload - fresh start. Same recovery as a missing
         // key. Log eventually; for now silent.
     };
@@ -41707,11 +41839,11 @@ pub fn tryAutoSave(ctx: *const UiContext) void {
     const bytes: []u8 = serialize(ctx.gpa, ctx) catch return;
     defer ctx.gpa.free(bytes);
 
-    const web = @import("web.zig").dom;
+    const dom = web.dom;
     // Status code 1 = quota exceeded, 2 = unavailable. We don't
     // surface these today - silently best-effort. Future: route
     // through a UiContext callback so demos can log/notify.
-    _ = web.persistence_save(key, bytes);
+    _ = dom.persistence_save(key, bytes);
 }
 
 // ============================================================================
@@ -42739,7 +42871,7 @@ test "wantCaptureMouse: answers correctly when queried BEFORE this frame's windo
         .pos = .{ 100, 50 },
         .size = .{ 200, 120 }, // covers x 100..300, y 50..170
     };
-    ctx.frame_windows.append(&w) catch unreachable;
+    ctx.frame_windows.append(&w) catch panicf(@src(), "OOM", .{});
 
     // End of frame N: the rect is snapshotted while the window is alive.
     ctx.endFrameNoRender();
@@ -42763,4 +42895,81 @@ test "wantCaptureMouse: answers correctly when queried BEFORE this frame's windo
     // swallow every drag on the world.
     ctx.input.mouse_pos = .{ 600, 400 };
     try expect(!u.wantCaptureMouse());
+}
+
+test "setNextWindowSize: a zero component means auto-fit, not zero pixels" {
+    // ★ A REAL FIELD BUG, pinned.
+    //
+    // `setNextWindowSize(.{ 380, 0 })` is the natural way to say "this wide, as tall as the
+    // content needs" — it is exactly what Dear ImGui's SetNextWindowSize means. Taking the
+    // zero literally created a window ONE PIXEL tall with every control clipped away, which
+    // looks like the UI failed to render rather than like a size request being honoured.
+    //
+    // Found on a phone, where the panel was simply absent. zimr's own runtime UI lint
+    // diagnosed it precisely — *content (216px) is >3x its viewport (1px)* — which is the
+    // only reason it took minutes rather than an evening.
+    var ctx = UiContext.init(std.testing.allocator);
+    defer ctx.deinit();
+    const u: Ui = .{ .ctx = &ctx };
+
+    // Height zero: the width is a request, the height is "fit".
+    u.setNextWindowSize(.{ 380, 0 }, .{});
+    try expect(ctx.next_window_size_auto[0] == false);
+    try expect(ctx.next_window_size_auto[1] == true);
+
+    // Width zero, symmetrically.
+    u.setNextWindowSize(.{ 0, 200 }, .{});
+    try expect(ctx.next_window_size_auto[0] == true);
+    try expect(ctx.next_window_size_auto[1] == false);
+
+    // Both given: neither axis is auto, and the values are kept verbatim — a caller who
+    // asks for an exact size still gets one.
+    u.setNextWindowSize(.{ 320, 240 }, .{});
+    try expect(ctx.next_window_size_auto[0] == false);
+    try expect(ctx.next_window_size_auto[1] == false);
+    try expect(ctx.next_window_size.?[0] == 320);
+    try expect(ctx.next_window_size.?[1] == 240);
+}
+
+test "itemHoverable: a widget outside its window's bounds is not grabbable" {
+    // ★★ THE BUG THIS PINS: widgets hit-tested with a bare `pointInRect` against their own
+    // layout rect, with no clip. A slider scrolled out of its window — or laid out past the
+    // window's edge — kept that rect, so it stayed LIVE while not being DRAWN. Dragging in
+    // empty space moved sliders that were nowhere on screen.
+    //
+    // The clip stack that already existed is a DRAW-TIME structure consulted during draw-list
+    // replay. Interaction had none, which is exactly why the fault was invisible from the
+    // rendering side: correctly not drawn, incorrectly still interactive.
+    // ★★ THIS TEST SETS `item_clip` BY HAND, AND THAT IS ITS LIMIT. It proves the PREDICATE is
+    // right; it proves nothing about whether the predicate's input is ever populated. The
+    // first version of this fix set `item_clip` only on the window POP path — so every widget
+    // was submitted while it still held the previous window's rect, or null — and this test
+    // passed the whole time. ★ A test that constructs the state under test, rather than
+    // exercising the code that produces it, says nothing about the producer.
+    // `refreshItemClip` is now called from BOTH push and pop for that reason.
+    // A bare context: this test only exercises the hit-test predicate, so the allocator-backed
+    // fields go unused. Constructed with  for those rather than a real arena,
+    // because touching them here would be testing something else.
+    var ctx: UiContext = undefined;
+    ctx.input = .{};
+    const window_rect: Rectangle = .{ .x = 100, .y = 100, .width = 200, .height = 150 };
+    ctx.item_clip = window_rect;
+
+    // A widget INSIDE the window, with the mouse on it: hoverable.
+    const inside: Rectangle = .{ .x = 120, .y = 120, .width = 100, .height = 20 };
+    ctx.input.mouse_pos = .{ 150, 130 };
+    try expect(itemHoverable(&ctx, inside));
+
+    // ★ The same widget, mouse still on it — but the widget now sits BELOW the window's
+    // bottom edge, where a scroll region would have clipped it away. Its own rect still
+    // contains the mouse, which is precisely why the bare test said yes.
+    const clipped: Rectangle = .{ .x = 120, .y = 400, .width = 100, .height = 20 };
+    ctx.input.mouse_pos = .{ 150, 410 };
+    try expect(pointInRect(ctx.input.mouse_pos, clipped)); // the old test passed
+    try expect(!itemHoverable(&ctx, clipped)); // the new one does not
+
+    // With no window in scope (an overlay drawn straight to the viewport) there is nothing to
+    // clip against, and the item stays hoverable.
+    ctx.item_clip = null;
+    try expect(itemHoverable(&ctx, clipped));
 }

@@ -1,0 +1,296 @@
+//! Catching a thrown ball — a clean probe, written once.
+//!
+//! Everything below rests on facts already established and not re-derived here:
+//!   * the invented arm imports with `nu 5` and costs ~14.7 us per knot of derivatives;
+//!   * a HORIZON IS IN KNOTS OF THE MODEL'S TIMESTEP — 1/250 s, so 220 knots is 0.88 s;
+//!   * `Ik.Result.reached` is an honest reachability test;
+//!   * IK + PD swats: 7-11 mm of position, 5-7 m/s of relative speed, zero catches;
+//!   * a reference must be a TRAJECTORY the horizon can follow, not a destination copied into
+//!     every knot.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const keeper_xml = @embedFile("tests/fixtures/robot/keeper.xml");
+
+const gravity: f32 = 9.81;
+const sim_dt: f32 = 1.0 / 250.0;
+const horizon: u32 = 220;
+
+fn ballAt(p0: zm.Vec, v0: zm.Vec, t: f32) zm.Vec {
+    return p0 + v0 * zm.splat(t) + vec(0, 0, -0.5 * gravity * t * t);
+}
+fn ballVel(v0: zm.Vec, t: f32) zm.Vec {
+    return v0 + vec(0, 0, -gravity * t);
+}
+
+const Throw = struct { p0: zm.Vec, v0: zm.Vec };
+const throws = [_]Throw{
+    .{ .p0 = vec(-2.6, 0.0, 1.0), .v0 = vec(3.4, 0.0, 3.0) },
+    .{ .p0 = vec(-2.4, -0.9, 0.9), .v0 = vec(3.2, 1.1, 3.3) },
+    .{ .p0 = vec(-2.8, 0.7, 1.2), .v0 = vec(3.6, -0.9, 2.7) },
+    .{ .p0 = vec(-2.2, 0.4, 0.8), .v0 = vec(3.0, -0.5, 3.6) },
+};
+
+const Outcome = struct { gap: f32, relative: f32 };
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, keeper_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 16,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -gravity),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+    rbt.forward(&m, &d);
+
+    const hand: u32 = imp.bodyIndex("hand") orelse return error.NoHand;
+    const rest: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(rest);
+
+    var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, hand);
+    defer arm_act.deinit();
+    var all_act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer all_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    // Per-throw: when to meet the ball, and the pose that does it.
+    var meet_time: [throws.len]f32 = undefined;
+    const meet_pose: [][]f32 = try gpa.alloc([]f32, throws.len);
+    defer {
+        for (meet_pose) |pose| gpa.free(pose);
+        gpa.free(meet_pose);
+    }
+    const meet_qvel: [][]f32 = try gpa.alloc([]f32, throws.len);
+    defer {
+        for (meet_qvel) |qv| gpa.free(qv);
+        gpa.free(meet_qvel);
+    }
+
+    p("interception search\n  throw    t*     ball at meet          reachable\n", .{});
+    for (throws, 0..) |thrown, index| {
+        meet_pose[index] = try gpa.alloc(f32, m.nq);
+        meet_qvel[index] = try gpa.alloc(f32, m.nv);
+        @memset(meet_qvel[index], 0);
+
+        var best: f32 = -1;
+        var t: f32 = 0.15;
+        while (t < 1.4) : (t += 0.02) {
+            const at: zm.Vec = ballAt(thrown.p0, thrown.v0, t);
+            if (at[2] < 0.3) break;
+            @memcpy(d.pos, rest);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            const r: ctl.Ik.Result = (ctl.Ik{ .max_iterations = 60 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = at }, ik_scratch);
+            if (r.reached) best = t;
+        }
+        meet_time[index] = best;
+        if (best <= 0) {
+            p("  {d:>5}   none\n", .{index});
+            continue;
+        }
+
+        // The pose at the interception, and the joint velocities that put the hand on the
+        // ball's velocity there. Least-norm through the hand Jacobian.
+        @memcpy(d.pos, rest);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        const at: zm.Vec = ballAt(thrown.p0, thrown.v0, best);
+        _ = (ctl.Ik{ .max_iterations = 80 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = at }, ik_scratch);
+        @memcpy(meet_pose[index], d.pos[0..m.nq]);
+
+        const jac: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+        defer gpa.free(jac);
+        rbt.jacPoint(&m, &d, hand, d.body_xpos[hand], jac, null);
+        var gram: [9]f32 = @splat(0);
+        inline for (0..3) |a| {
+            inline for (0..3) |b| {
+                var sum: f32 = 0;
+                for (0..m.nv) |v| sum += jac[v][a] * jac[v][b];
+                gram[a * 3 + b] = sum;
+            }
+        }
+        const ridge: f32 = 1.0e-4 * (@abs(gram[0]) + @abs(gram[4]) + @abs(gram[8]) + 1.0);
+        gram[0] += ridge;
+        gram[4] += ridge;
+        gram[8] += ridge;
+        const want: zm.Vec = ballVel(thrown.v0, best);
+        var lambda: [3]f32 = .{ want[0], want[1], want[2] };
+        if (ctl.solve3Pub(&gram, &lambda)) {
+            for (0..m.nv) |v| {
+                meet_qvel[index][v] = lambda[0] * jac[v][0] + lambda[1] * jac[v][1] + lambda[2] * jac[v][2];
+            }
+        }
+        p("  {d:>5}  {d:>5.2}   ({d:>6.2},{d:>6.2},{d:>6.2})   yes\n", .{ index, best, at[0], at[1], at[2] });
+    }
+
+    // ── THE TWO CONTROLLERS ──
+    var plan: mpc.Plan = try mpc.Plan.init(gpa, &m, horizon);
+    defer plan.deinit();
+    // ── ★★★ THE CONTROL BOX. IT EXISTED ALL ALONG AND WAS NEVER SWITCHED ON ──
+    //
+    // Without this the plan is UNCONSTRAINED and the model clamps `d.ctrl` to its ctrlrange on
+    // the way in — so the plan believes it will get a torque it never receives. Measured, it was
+    // asking for **357, 263, 267, 263 N·m** against a ±260 limit: every throw at or over the
+    // bound, planning a trajectory the arm cannot fly.
+    //
+    // `readLimits` reads the model's own actuator ranges into the plan, and `optimize` then
+    // routes them to the same `boxQP` every other planner in this file already uses. The
+    // capability was built, documented, and simply not called.
+    plan.readLimits(&m);
+    const nstate: u32 = m.nq + m.nv;
+    const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * nstate);
+    defer gpa.free(reference);
+    const state_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(state_w);
+    const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(term_w);
+    const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+    defer gpa.free(ctrl_w);
+    // ★ POSITION AND VELOCITY BLOCKS SEPARATELY. `ndx` is nv positions THEN nv velocities, and
+    // the joint speeds that match 4.7 m/s of hand travel are large — one number for both makes
+    // the velocity term swamp everything.
+    for (0..m.nv) |i| {
+        state_w[i] = 0.5;
+        state_w[m.nv + i] = 0.02;
+        term_w[i] = 60.0;
+        term_w[m.nv + i] = 4.0;
+    }
+    @memset(ctrl_w, 1.0e-4);
+
+    p("\n  controller   throw   closest gap   relative speed   peak Nm   verdict\n", .{});
+    var mpc_catches: u32 = 0;
+    var pd_catches: u32 = 0;
+
+    for ([_]bool{ false, true }) |planned| {
+        for (throws, 0..) |thrown, index| {
+            if (meet_time[index] <= 0) continue;
+            @memcpy(d.pos, rest);
+            @memset(d.vel, 0);
+            @memset(d.ctrl, 0);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+
+            if (planned) {
+                @memset(plan.ctrl, 0);
+            }
+
+            var best: Outcome = .{ .gap = 1.0e9, .relative = 0 };
+            var worst_torque: f32 = 0;
+            var elapsed: f32 = 0;
+            var tick: u32 = 0;
+            while (elapsed < meet_time[index] + 0.15) : (tick += 1) {
+                if (planned) {
+                    if (tick % 5 == 0) {
+                        // ── ★★★ THE REFERENCE IS REBUILT FROM *NOW*, EVERY REPLAN ──
+                        //
+                        // `mpc.shift` slides the control sequence forward a knot each tick. Built
+                        // once at the start, the reference does NOT slide — so after N shifts the
+                        // plan's knot k is at time `elapsed + k·dt` while the reference's knot k
+                        // is still at `k·dt`, and they drift apart by a knot per tick.
+                        //
+                        // That is the cartpole's shift bug wearing a different hat: everything
+                        // the plan carries per knot has to move together, or none of it should.
+                        // Rebuilding from the CURRENT pose and the REMAINING time keeps them in
+                        // step by construction, and costs a loop.
+                        const left: f32 = @max(0.0, meet_time[index] - elapsed);
+                        const arrive: u32 = @min(horizon, @as(u32, @intFromFloat(left / sim_dt)));
+                        for (0..horizon + 1) |k| {
+                            const along: f32 = if (arrive == 0) 1.0 else @min(
+                                1.0,
+                                @as(f32, @floatFromInt(k)) / @as(f32, @floatFromInt(arrive)),
+                            );
+                            // Smoothstep: zero slope at both ends, so the plan does not open by
+                            // demanding a step change in joint velocity it cannot deliver.
+                            const blend: f32 = along * along * (3.0 - 2.0 * along);
+                            for (0..m.nq) |q| {
+                                reference[k * nstate + q] = d.pos[q] +
+                                    blend * (meet_pose[index][q] - d.pos[q]);
+                            }
+                            // ★ AND THE VELOCITY TARGET ONLY NEAR THE MEETING, because asking the
+                            // hand to be moving with the ball at knot zero is asking it to
+                            // already be catching.
+                            const near_end: bool = arrive > 0 and k + 10 >= arrive;
+                            for (0..m.nv) |v| {
+                                reference[k * nstate + m.nq + v] =
+                                    if (near_end) meet_qvel[index][v] else 0;
+                            }
+                        }
+                        // ★ ASK THE SOLVER WHAT IT THINKS IT IS DOING. `Result` carries the
+                        // cost before and after, whether it converged, and where regularisation
+                        // ended up — "a large value means the problem was fighting back". That
+                        // distinguishes a solver that is failing from a problem that is wrong,
+                        // and guessing between those two has cost this example three turns.
+                        const r: mpc.Result = mpc.optimize(&m, &d, &plan, .{
+                            .state = state_w,
+                            .control = ctrl_w,
+                            .terminal = term_w,
+                            .reference = reference,
+                        }, .{ .iterations = 6 });
+                        if (tick == 0 or tick == 50 or tick == 120) {
+                            p("      t{d:>4}  cost {e:>10.3} -> {e:>10.3}  iters {d:>2}  conv {any}  reg {e:.1}\n", .{
+                                tick, r.initial_cost, r.cost, r.iterations, r.converged, r.regularization,
+                            });
+                        }
+                    }
+                    // ★ WHAT IS THE PLAN ACTUALLY ASKING FOR? `mpc.Options` has no
+                    // control-limit field, so `optimize` plans unconstrained and the model
+                    // clamps `d.ctrl` to its ctrlrange on the way in. If the plan wants far more
+                    // torque than the motors have, the realised motion is nothing like the
+                    // planned one — and the plan has no way to find out.
+                    for (0..m.nu) |j| {
+                        worst_torque = @max(worst_torque, @abs(plan.ctrl[j]));
+                    }
+                    @memcpy(d.ctrl, plan.ctrl[0..m.nu]);
+                    mpc.shift(&plan);
+                } else {
+                    (ctl.PoseHold{
+                        .target = meet_pose[index],
+                        .kp = 900,
+                        .kv = 60,
+                        .max_torque = 260,
+                    }).apply(&m, &d, all_act);
+                }
+                rbt.step(&m, &d);
+                elapsed += sim_dt;
+
+                const ball: zm.Vec = ballAt(thrown.p0, thrown.v0, elapsed);
+                const gap: f32 = zm.length3(d.body_xpos[hand] - ball);
+                if (gap < best.gap) {
+                    best = .{
+                        .gap = gap,
+                        .relative = zm.length3(d.cvel[hand].lin - ballVel(thrown.v0, elapsed)),
+                    };
+                }
+            }
+
+            const caught: bool = best.gap < 0.05 and best.relative < 0.5;
+            if (caught) {
+                if (planned) mpc_catches += 1 else pd_catches += 1;
+            }
+            p("  {s:<11}  {d:>5}   {d:>11.4}   {d:>14.2}   {d:>9.0}   {s}\n", .{
+                if (planned) "MPC" else "IK + PD",                                index, best.gap, best.relative, worst_torque,
+                if (caught) "CATCH" else if (best.gap < 0.05) "swat" else "miss",
+            });
+        }
+    }
+    p("\n  IK + PD caught {d} of {d}   |   MPC caught {d} of {d}\n", .{ pd_catches, throws.len, mpc_catches, throws.len });
+}

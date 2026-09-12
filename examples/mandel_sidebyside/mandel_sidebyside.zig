@@ -46,7 +46,6 @@ const height: u32 = 600;
 // the live canvas aspect each frame at this constant pixel budget.
 const sw_w: u32 = width / 5;
 const sw_h: u32 = height / 5;
-const cpu_pixel_budget: f32 = float(sw_w * sw_h);
 
 const max_iter: f32 = 100;
 const zoom_step: f32 = 1.15;
@@ -188,22 +187,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             "mandel_sbs_corner",
         ),
     };
-}
-
-/// Keep the CPU half at a CONSTANT pixel budget shaped to the live canvas
-/// aspect (the helmet recipe, t1168): rotation never stretches the pixels
-/// and never changes the per-frame CPU cost.
-fn ensureCpuTarget(f: *z.Frame, s: *State) void {
-    const vw: f32 = @max(f.window.widthf(), 1);
-    const vh: f32 = @max(f.window.heightf(), 1);
-    const aspect: f32 = vw / vh;
-    const want_w: i32 = @trunc(@max(@round(@sqrt(cpu_pixel_budget * aspect)), 16));
-    const want_h: i32 = @trunc(@max(@round(float(want_w) / aspect), 16));
-    const dims: Vec2i = s.sw.colorBufferDims();
-    if (dims[0] != want_w or dims[1] != want_h) {
-        s.sw.resize(s.gpa, want_w, want_h) catch return;
-        s.sw_fb.resize(f.gl, @intCast(want_w), @intCast(want_h), s.sw.colorBufferBytes(), "sbs_sw");
-    }
 }
 
 /// Map a screen pixel (logical px) to a complex-plane point for the CURRENT

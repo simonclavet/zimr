@@ -1,0 +1,199 @@
+//! Does a TASK cost beat IK + a servo at catching? One question, one file.
+//!
+//! ★ THE POINT OF THE WHOLE EXERCISE. Until now the planner was handed IK's answer — a specific
+//! joint pose and specific joint velocities — and asked to track it, which throws away the null
+//! space of a redundant arm and can at best tie the servo. `Cost.task` lets it be given the JOB:
+//! the hand should be where the ball is, moving how the ball moves. Everything else is free.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const keeper_xml = @embedFile("tests/fixtures/robot/keeper.xml");
+
+const gravity: f32 = 9.81;
+const sim_dt: f32 = 1.0 / 250.0;
+const max_horizon: u32 = 220;
+
+fn ballAt(p0: zm.Vec, v0: zm.Vec, t: f32) zm.Vec {
+    return p0 + v0 * zm.splat(t) + vec(0, 0, -0.5 * gravity * t * t);
+}
+fn ballVel(v0: zm.Vec, t: f32) zm.Vec {
+    return v0 + vec(0, 0, -gravity * t);
+}
+
+const throws = [_]struct { p0: zm.Vec, v0: zm.Vec }{
+    .{ .p0 = vec(-2.6, 0.0, 1.0), .v0 = vec(3.4, 0.0, 3.0) },
+    .{ .p0 = vec(-2.4, -0.9, 0.9), .v0 = vec(3.2, 1.1, 3.3) },
+    .{ .p0 = vec(-2.8, 0.7, 1.2), .v0 = vec(3.6, -0.9, 2.7) },
+    .{ .p0 = vec(-2.2, 0.4, 0.8), .v0 = vec(3.0, -0.5, 3.6) },
+    .{ .p0 = vec(-2.5, -0.5, 1.1), .v0 = vec(3.3, 0.6, 3.1) },
+    .{ .p0 = vec(-2.7, 0.2, 0.95), .v0 = vec(3.5, -0.3, 3.4) },
+    .{ .p0 = vec(-2.3, 0.8, 1.05), .v0 = vec(3.1, -1.0, 3.2) },
+    .{ .p0 = vec(-2.9, -0.3, 1.15), .v0 = vec(3.7, 0.4, 2.9) },
+};
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, keeper_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 16,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -gravity),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+    rbt.forward(&m, &d);
+    const hand: u32 = imp.bodyIndex("hand") orelse return error.NoHand;
+    const rest: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(rest);
+
+    var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, hand);
+    defer arm_act.deinit();
+    var all_act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer all_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+
+    var plan: mpc.Plan = try mpc.Plan.init(gpa, &m, max_horizon);
+    defer plan.deinit();
+    const nstate: u32 = m.nq + m.nv;
+    const reference: []f32 = try gpa.alloc(f32, (max_horizon + 1) * nstate);
+    defer gpa.free(reference);
+    const task_pos: []f32 = try gpa.alloc(f32, 3 * (max_horizon + 1));
+    defer gpa.free(task_pos);
+    const task_vel: []f32 = try gpa.alloc(f32, 3 * (max_horizon + 1));
+    defer gpa.free(task_vel);
+    const state_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(state_w);
+    const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(term_w);
+    const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+    defer gpa.free(ctrl_w);
+    const meet_pose: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(meet_pose);
+
+    p("catching: a TASK cost against IK + a servo, over {d} throws\n", .{throws.len});
+    p("  bar: gap < 5 cm AND relative speed < 0.5 m/s\n\n", .{});
+    p("  controller   throw    gap      relative   verdict\n", .{});
+
+    var task_catches: u32 = 0;
+    var servo_catches: u32 = 0;
+
+    for ([_]bool{ false, true }) |use_task| {
+        for (throws, 0..) |thrown, index| {
+            // The interception: latest instant Ik agrees is reachable.
+            var meet_t: f32 = -1;
+            var t: f32 = 0.15;
+            while (t < 1.4) : (t += 0.03) {
+                const at: zm.Vec = ballAt(thrown.p0, thrown.v0, t);
+                if (at[2] < 0.3) break;
+                @memcpy(d.pos, rest);
+                d.stage = .stale;
+                rbt.forward(&m, &d);
+                const r: ctl.Ik.Result = (ctl.Ik{ .max_iterations = 50 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = at }, ik_scratch);
+                if (r.reached) meet_t = t;
+            }
+            if (meet_t <= 0) {
+                p("  {s:<11}  {d:>5}   unreachable\n", .{ if (use_task) "TASK MPC" else "IK + PD", index });
+                continue;
+            }
+            // The servo still needs a pose; the task planner does NOT.
+            @memcpy(d.pos, rest);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            _ = (ctl.Ik{ .max_iterations = 70 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = ballAt(thrown.p0, thrown.v0, meet_t) }, ik_scratch);
+            @memcpy(meet_pose, d.pos[0..m.nq]);
+
+            @memcpy(d.pos, rest);
+            @memset(d.vel, 0);
+            @memset(d.ctrl, 0);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            @memset(plan.ctrl, 0);
+            plan.setHorizon(max_horizon);
+            // ★ NOTHING IN JOINT SPACE IS WANTED. No pose to hold, no velocity to reach — the
+            // task is the whole objective, and the arm may use any configuration that serves it.
+            @memset(reference, 0);
+            @memset(state_w, 0);
+            @memset(term_w, 0);
+            @memset(ctrl_w, 1.0e-5);
+
+            var gap: f32 = 1.0e9;
+            var relative: f32 = 0;
+            var elapsed: f32 = 0;
+            var tick: u32 = 0;
+            while (elapsed < meet_t + 0.15) : (tick += 1) {
+                if (use_task) {
+                    if (tick % 5 == 0) {
+                        const left: f32 = @max(0.0, meet_t - elapsed);
+                        const arrive: u32 = @min(max_horizon, zm.floori(u32, left / sim_dt));
+                        plan.setHorizon(@max(2, arrive));
+                        // ★★★ THE TASK IS THE BALL'S OWN TRAJECTORY. Each knot gets where the
+                        // ball will be at that knot's time, and how fast — so the plan is
+                        // matching a moving object rather than aiming at a frozen point.
+                        for (0..plan.horizon + 1) |k| {
+                            const when: f32 = elapsed + @as(f32, @floatFromInt(k)) * sim_dt;
+                            const at: zm.Vec = ballAt(thrown.p0, thrown.v0, @min(when, meet_t));
+                            const vl: zm.Vec = ballVel(thrown.v0, @min(when, meet_t));
+                            inline for (0..3) |axis| {
+                                task_pos[k * 3 + axis] = at[axis];
+                                task_vel[k * 3 + axis] = vl[axis];
+                            }
+                        }
+                        const wanted: usize = (plan.horizon + 1) * nstate;
+                        _ = mpc.optimize(&m, &d, &plan, .{
+                            .state = state_w,
+                            .control = ctrl_w,
+                            .terminal = term_w,
+                            .reference = reference[0..wanted],
+                            .task = .{
+                                .body = hand,
+                                .position = task_pos[0 .. 3 * (plan.horizon + 1)],
+                                .velocity = task_vel[0 .. 3 * (plan.horizon + 1)],
+                                .w_position = 2.0,
+                                .w_position_terminal = 600.0,
+                                .w_velocity = 0.5,
+                                .w_velocity_terminal = 120.0,
+                            },
+                        }, .{ .iterations = 6 });
+                    }
+                    @memcpy(d.ctrl, plan.ctrl[0..m.nu]);
+                    mpc.shift(&plan);
+                } else {
+                    (ctl.PoseHold{ .target = meet_pose, .kp = 900, .kv = 60, .max_torque = 260 })
+                        .apply(&m, &d, all_act);
+                }
+                rbt.step(&m, &d);
+                elapsed += sim_dt;
+                const ball: zm.Vec = ballAt(thrown.p0, thrown.v0, elapsed);
+                const now: f32 = zm.length3(d.body_xpos[hand] - ball);
+                if (now < gap) {
+                    gap = now;
+                    relative = zm.length3(d.cvel[hand].lin - ballVel(thrown.v0, elapsed));
+                }
+            }
+            const caught: bool = gap < 0.05 and relative < 0.5;
+            if (caught) {
+                if (use_task) task_catches += 1 else servo_catches += 1;
+            }
+            p("  {s:<11}  {d:>5}   {d:>6.4}   {d:>8.2}   {s}\n", .{ if (use_task) "TASK MPC" else "IK + PD", index, gap, relative, if (caught) "CATCH" else if (gap < 0.05) "swat" else "miss" });
+        }
+        p("\n", .{});
+    }
+    p("  IK + PD caught {d} of {d}   |   TASK MPC caught {d} of {d}\n", .{ servo_catches, throws.len, task_catches, throws.len });
+}

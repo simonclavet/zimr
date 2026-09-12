@@ -1,3 +1,4 @@
+//! lint:alias zimrphysics
 //! physics.zig — a single-file, single-threaded rigid-body engine.
 //!
 //! v2: the contact solver, friction model, restitution bias, and integration are
@@ -54,8 +55,10 @@
 
 const std = @import("std");
 const zm = @import("zm");
+const turnsFromRad = zm.turnsFromRad;
+const radFromTurns = zm.radFromTurns;
 const profiler = @import("profiler.zig");
-const ent = @import("entities.zig");
+const entities = @import("entities.zig");
 const physics_common = @import("physics_common.zig");
 
 // zm bindings (no-qualified-zm: bind once, use bare in bodies).
@@ -63,9 +66,9 @@ const Quat = zm.Quat;
 const quat = zm.quat;
 const Vec = zm.Vec;
 const abs = zm.abs;
-const acos = zm.acos;
-const asin = zm.asin;
-const atan2 = zm.atan2;
+const acosRad = zm.acosRad;
+const asinRad = zm.asinRad;
+const atan2Rad = zm.atan2Rad;
 const clamp = zm.clamp;
 const conjugate = zm.conjugate;
 const cross = zm.cross;
@@ -88,7 +91,7 @@ const radFromDeg = zm.radFromDeg;
 const rotate = zm.rotate;
 const safeNormalize3 = zm.safeNormalize3;
 const splat = zm.splat;
-const tan = zm.tan;
+const tanRad = zm.tanRad;
 const vec = zm.vec;
 const vec_zero = zm.vec_zero;
 
@@ -123,6 +126,18 @@ pub const Body = struct {
     motion_type: MotionType,
     motion_quality: MotionQuality,
     is_sensor: bool,
+    /// Report this body's contacts to the listener even when NEITHER body can respond.
+    ///
+    /// The narrow phase normally drops static/static, static/kinematic and
+    /// kinematic/kinematic pairs, because no impulse this solver could compute would go
+    /// anywhere. That reasoning is about THIS solver. A body whose motion is decided
+    /// elsewhere — driven by an external integrator, an animation, another simulation —
+    /// still needs to know what it is touching, and the impulse is that owner's business.
+    ///
+    /// Distinct from `is_sensor`, which also bypasses the gate but additionally suppresses
+    /// the collision response against dynamic bodies. This flag changes only what is
+    /// REPORTED; a kinematic body with it set still pushes crates exactly as before.
+    report_immovable_contacts: bool,
     // Collision filtering. `category` is this body's bits; `mask` is which categories it hits
     // of categories it will touch. Two bodies sharing a nonzero `group_id` never
     // collide (ragdoll bones, parts of one assembly). See bodiesShouldCollide.
@@ -137,8 +152,8 @@ pub const Body = struct {
     material: u16, // opaque surface id (footstep sounds, friction lookups, etc.); see World.materialAt
 };
 
-const Bodies = ent.Entities(Body);
-pub const BodyHandle = ent.Handle(Body);
+const Bodies = entities.Entities(Body);
+pub const BodyHandle = entities.Handle(Body);
 
 /// Pack a raw body index into its generation-checked handle. For the few internal builders that
 /// work in raw indices but call the public, handle-taking joint constructors.
@@ -499,7 +514,7 @@ fn jacobiEigenSymmetric3(m_in: Mat3) EigenResult {
 /// relative rotation is locked to the hinge axis: theta = 2*atan2(q.xyz . axis, q.w).
 fn quatAngleAbout(q: Quat, axis: Vec) f32 {
     const xyz: Vec = vec(q[0], q[1], q[2]);
-    return 2.0 * atan2(dot3(xyz, axis), q[3]);
+    return 2.0 * atan2Rad(dot3(xyz, axis), q[3]);
 }
 /// Normalize a quaternion; returns identity for a zero quaternion.
 fn quatNormalize(q: Quat) Quat {
@@ -523,7 +538,7 @@ fn quatGetAngularVelocity(q: Quat, dt: f32) Vec {
     if (xyz_len_sq < 4.0e-4) {
         return xyz * splat(2.0 / dt);
     }
-    const angle: f32 = 2.0 * acos(clamp(w_pos[3], -1.0, 1.0));
+    const angle: f32 = 2.0 * acosRad(clamp(w_pos[3], -1.0, 1.0));
     return xyz * splat(angle / (@sqrt(xyz_len_sq) * dt));
 }
 
@@ -1449,7 +1464,7 @@ pub fn buildConvexHull(gpa: std.mem.Allocator, input_points: []const Vec) !Conve
         angles.clearRetainingCapacity();
         for (on_plane.items) |vi| {
             const rel: Vec = pts.items[vi] - face_center;
-            try angles.append(gpa, atan2(dot3(rel, v_axis), dot3(rel, u_axis)));
+            try angles.append(gpa, atan2Rad(dot3(rel, v_axis), dot3(rel, u_axis)));
         }
         // Insertion sort the vertex indices by angle (faces are small).
         var a_idx: usize = 1;
@@ -2472,9 +2487,6 @@ pub const MotorSettings = struct {
 /// (in which case it may still apply bounded friction torque).
 pub const MotorState = enum { off, velocity, position, position_and_velocity };
 
-fn isVelocityMotor(s: MotorState) bool {
-    return s == .velocity or s == .position_and_velocity;
-}
 fn isPositionMotor(s: MotorState) bool {
     return s == .position or s == .position_and_velocity;
 }
@@ -4033,8 +4045,8 @@ pub const SwingTwistPart = struct {
             } else {
                 // Pyramid: q.y = sin(y/2) cos(z/2), q.z = cos(y/2) sin(z/2), so the half
                 // angles are atan2(q.y, q.w) and atan2(q.z, q.w). Clamp each and rebuild.
-                const half_y: f32 = atan2(swing.*[1], swing.*[3]);
-                const half_z: f32 = atan2(swing.*[2], swing.*[3]);
+                const half_y: f32 = atan2Rad(swing.*[1], swing.*[3]);
+                const half_z: f32 = atan2Rad(swing.*[2], swing.*[3]);
                 const clamped_y: f32 = clamp(half_y, part.swing_y_half_min, part.swing_y_half_max);
                 const clamped_z: f32 = clamp(half_z, part.swing_z_half_min, part.swing_z_half_max);
                 if (clamped_y != half_y or clamped_z != half_z) {
@@ -6720,7 +6732,7 @@ pub const Vehicle = struct {
         const lean_cross_up: Vec = cross(lean.target_lean, adjusted_world_up);
         const lean_dir_sign: f32 = -signNonZero(dot3(lean_cross_up, forward));
         const lean_cos: f32 = clamp(dot3(lean.target_lean, adjusted_world_up), -1.0, 1.0);
-        const w_angle: f32 = lean_dir_sign * acos(lean_cos);
+        const w_angle: f32 = lean_dir_sign * acosRad(lean_cos);
         if (@abs(w_angle) > lean.max_lean_angle) {
             const lean_angle: f32 = signNonZero(w_angle) * lean.max_lean_angle;
             const lean_rot: Quat = quatFromAxisAngle(forward, lean_angle);
@@ -6732,12 +6744,12 @@ pub const Vehicle = struct {
         const lean_cross_up_i: Vec = cross(lean.target_lean, up);
         const lean_dir_sign_i: f32 = -signNonZero(dot3(lean_cross_up_i, forward));
         const lean_cos_i: f32 = clamp(dot3(lean.target_lean, up), -1.0, 1.0);
-        const d_angle: f32 = lean_dir_sign_i * acos(lean_cos_i);
+        const d_angle: f32 = lean_dir_sign_i * acosRad(lean_cos_i);
         lean.integrated_delta_angle += d_angle * dt;
 
         // Limit the steer angle so the requested turn does not demand more than the max lean.
         if (lean.enable_steering_limit) {
-            const max_steer_factor: f32 = self.computeWheelBase() * tan(lean.max_lean_angle) * glen;
+            const max_steer_factor: f32 = self.computeWheelBase() * tanRad(lean.max_lean_angle) * glen;
             const velocity: f32 = dot3(world.motion[self.body].lin_vel, forward);
             const velocity_sq: f32 = velocity * velocity;
             const steer_strength: f32 = @abs(self.right_input);
@@ -6752,7 +6764,7 @@ pub const Vehicle = struct {
                     if (velocity_sq > 1.0e-6 and cos_caster_angle > 1.0e-6) {
                         const ratio: f32 = max_steer_factor / (velocity_sq * cos_caster_angle);
                         if (ratio < 1.0) {
-                            steer_angle = @min(steer_angle, asin(ratio));
+                            steer_angle = @min(steer_angle, asinRad(ratio));
                         }
                     }
                     w.steer_angle = steer_sign * steer_angle;
@@ -6800,7 +6812,7 @@ pub const Vehicle = struct {
         const lean_cross_up: Vec = cross(lean.target_lean, up);
         const lean_dir_sign: f32 = -signNonZero(dot3(lean_cross_up, forward));
         const lean_cos: f32 = clamp(dot3(lean.target_lean, up), -1.0, 1.0);
-        const d_angle: f32 = lean_dir_sign * acos(lean_cos);
+        const d_angle: f32 = lean_dir_sign * acosRad(lean_cos);
         const ddt_angle: f32 = dot3(chassis_motion.ang_vel, forward);
         const total_impulse: f32 = (lean.spring_constant * d_angle -
             lean.spring_damping * ddt_angle +
@@ -6860,7 +6872,7 @@ pub const Vehicle = struct {
                 w.lateral_slip = if (rel_len < 1.0e-3)
                     0.0
                 else
-                    acos(@min(1.0, @abs(rel_long) / rel_len));
+                    acosRad(@min(1.0, @abs(rel_long) / rel_len));
                 const lat_friction: f32 = s.lateral_friction.getValue(w.lateral_slip * 180.0 / pi);
 
                 // Combine tire friction with the terrain friction: sqrt(tire * terrain).
@@ -8667,6 +8679,9 @@ pub const World = struct {
         apply_gyroscopic: bool = false,
         allowed_dofs: AllowedDofs = .{}, // dynamic bodies only; locks world-space axes
         is_sensor: bool = false,
+        /// See `Body.report_immovable_contacts`. Off by default: reporting a pair that can
+        /// carry no impulse is wasted work unless someone outside is going to act on it.
+        report_immovable_contacts: bool = false,
         category: u32 = 0x0000_0001, // one category bit by default
         mask: u32 = 0xFFFF_FFFF, // collides with everything by default
         group_id: u32 = 0, // 0 = ungrouped (no group exclusion)
@@ -8698,6 +8713,7 @@ pub const World = struct {
             .motion_type = def.motion_type,
             .motion_quality = def.motion_quality,
             .is_sensor = def.is_sensor,
+            .report_immovable_contacts = def.report_immovable_contacts,
             .category = def.category,
             .mask = def.mask,
             .group_id = def.group_id,
@@ -10272,7 +10288,15 @@ fn collideSphereBox(
         return null;
     }
 
-    var local_normal: Vec = undefined; // box surface -> sphere centre, local
+    // ★★ THE POINT ON THE BOX, WHICH FOR AN INTERIOR CENTRE IS NOT `clamped`.
+    //
+    // `clamp` leaves a point already inside the box exactly where it was, so `point_on_box`
+    // came out AT the sphere's own centre and the reported depth was a constant **−radius**
+    // however deep it had sunk. Invisible while only spheres used this path — a sphere fully
+    // inside a box is rare — and load-bearing the moment `collideCapsuleBox` began asking about
+    // segment points that routinely are. Projecting onto the nearest FACE makes the depth true.
+    var surface: Vec = clamped;
+    var local_normal: Vec = undefined;
     if (dist > 1.0e-6) {
         local_normal = to_center / splat(dist);
     } else {
@@ -10281,15 +10305,18 @@ fn collideSphereBox(
         const dz: f32 = he[2] - @abs(local_center[2]);
         if (dx <= dy and dx <= dz) {
             local_normal = vec(std.math.sign(local_center[0]), 0, 0);
+            surface[0] = std.math.sign(local_center[0]) * he[0];
         } else if (dy <= dz) {
             local_normal = vec(0, std.math.sign(local_center[1]), 0);
+            surface[1] = std.math.sign(local_center[1]) * he[1];
         } else {
             local_normal = vec(0, 0, std.math.sign(local_center[2]));
+            surface[2] = std.math.sign(local_center[2]) * he[2];
         }
     }
 
     const box_to_sphere: Vec = rotate(box_rot, local_normal); // world, box -> sphere
-    const point_on_box: Vec = box_pos + rotate(box_rot, clamped);
+    const point_on_box: Vec = box_pos + rotate(box_rot, surface);
     const point_on_sphere: Vec = sphere_pos - box_to_sphere * splat(r);
 
     // Output in terms of the ORIGINAL A, B with the normal along A -> B.
@@ -11189,6 +11216,383 @@ fn faceManifold(
     return m;
 }
 
+/// Closest point between a segment and a solid box, in the box's local frame.
+///
+/// ── ★★ TERNARY SEARCH, because the distance is CONVEX along the segment ──
+///
+/// Point-to-box distance is a convex function of the point, so along a segment it is convex in
+/// the parameter `t` — and ternary search on a convex function is guaranteed to reach the global
+/// minimum. Sixty halvings take the bracket below f32's resolution.
+///
+/// ★ A FIRST VERSION USED ALTERNATING PROJECTION — clamp into the box, project back onto the
+/// segment, repeat — which converges for two convex sets in general and **stalls at a
+/// non-optimal fixed point when the segment runs nearly tangent to a face**. Measured against
+/// brute force, every failure sat on a box EDGE, off by up to 2 cm. Convexity in one variable
+/// is a stronger property than convexity in two sets, and it is the one worth using here.
+///
+/// ★ AND WHY THE SEGMENT AT ALL, not the two end-caps: a capsule standing against a wall
+/// touches on its SHAFT. A previous attempt tested only the end-caps, returned "no contact" for
+/// exactly that, and walked the character controller through walls.
+/// Where along a segment the closest approach to a box happens, and how far away it is.
+const SegmentBoxHit = struct {
+    /// Parameter along the segment, 0 at `p0` and 1 at `p1`.
+    t: f32,
+    on_box: Vec,
+    /// Signed: negative when that point is INSIDE the box.
+    dist: f32,
+};
+
+fn segmentBoxClosest(
+    p0: Vec,
+    p1: Vec,
+    he: Vec,
+) SegmentBoxHit {
+    const d: Vec = p1 - p0;
+    // ★★ SIGNED distance, negative inside. Using the UNSIGNED one made every interior point
+    // look identical at zero, so the search could not tell a graze from a deep embed and the
+    // code below had to fall back to a whole-capsule MTV — which reported 17 cm of penetration
+    // for a capsule barely touching. Signed distance is still convex, so the same search
+    // handles both cases and the depth is measured AT the deepest point, which is what a
+    // contact's depth means.
+    const distanceAt = struct {
+        fn go(a: Vec, delta: Vec, extent: Vec, t: f32) f32 {
+            const point: Vec = a + delta * splat(t);
+            const outside: Vec = point - clamp(point, -extent, extent);
+            const away: f32 = length3(outside);
+            if (away > 0) {
+                return away;
+            }
+            var deepest: f32 = std.math.floatMax(f32);
+            inline for (0..3) |axis| {
+                deepest = @min(deepest, extent[axis] - @abs(point[axis]));
+            }
+            return -deepest;
+        }
+    }.go;
+
+    var lo: f32 = 0;
+    var hi: f32 = 1;
+    var iteration: usize = 0;
+    while (iteration < 60) : (iteration += 1) {
+        const third: f32 = (hi - lo) / 3.0;
+        const m1: f32 = lo + third;
+        const m2: f32 = hi - third;
+        if (distanceAt(p0, d, he, m1) < distanceAt(p0, d, he, m2)) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    const t: f32 = 0.5 * (lo + hi);
+    const on_seg: Vec = p0 + d * splat(t);
+    const on_box: Vec = clamp(on_seg, -he, he);
+    return .{ .t = t, .on_box = on_box, .dist = distanceAt(p0, d, he, t) };
+}
+
+/// Capsule against box, without GJK or EPA.
+///
+/// ── ★★★ WHY THIS PAIR EARNS ITS OWN ROUTINE ──
+///
+/// MuJoCo dispatches a closed-form function for every primitive pair and sends only ellipsoids
+/// and meshes to an iterative solver. We special-cased four pairs and sent the rest to GJK/EPA
+/// — including **capsule against box, which is every foot, shin and forearm contact a humanoid
+/// makes with the ground**.
+///
+/// ★ AND EPA IS WRONG AT DEPTH. Measured, lowering a foot-sized capsule through a 12 m floor:
+///
+///     lowest point -0.2670   EPA depth -0.2670    exact
+///     lowest point -0.2870   EPA depth -8.5449    *** out through the SIDE of the floor
+///
+/// Past about 27 cm of overlap the nearest face is no longer the one EPA's polytope grew
+/// toward. A humanoid landing on its side reaches those depths and gets a sideways shove.
+///
+/// ── ★★ THE TWO CASES, EACH EXACT ──
+///
+/// **Separated or shallow:** the closest point between the SEGMENT and the box gives the normal
+/// and the distance directly. No iteration over a polytope, and it sees shaft contacts.
+///
+fn collideCapsuleBox(
+    half_height: f32,
+    radius: f32,
+    capsule_pos: Vec,
+    capsule_rot: Quat,
+    he: Vec,
+    box_pos: Vec,
+    box_rot: Quat,
+    speculative_distance: f32,
+    flip: bool,
+) ?Manifold {
+    const box_rot_inv: Quat = conjugate(box_rot);
+    // ★★ THE CAPSULE'S AXIS IS LOCAL **Y**, which the `Shape` declaration states outright:
+    // "segment along local Y + radius". A first version assumed Z — MuJoCo's convention, and
+    // the natural guess when porting its `mjc_PlaneCapsule` — and every result was wrong by a
+    // rotation. **The randomised harness reported 1678 existence mismatches on the first run,
+    // before any of this reached the dispatch.**
+    const axis_world: Vec = rotate(capsule_rot, vec(0, 1, 0));
+    const centre_local: Vec = rotate(box_rot_inv, capsule_pos - box_pos);
+    const axis_local: Vec = rotate(box_rot_inv, axis_world);
+    const p0: Vec = centre_local + axis_local * splat(half_height);
+    const p1: Vec = centre_local - axis_local * splat(half_height);
+
+    const closest: SegmentBoxHit = segmentBoxClosest(p0, p1, he);
+    const axis_local_unit: Vec = axis_local;
+
+    var local_normal: Vec = undefined; // box surface -> capsule axis, local
+    var separation: f32 = undefined;
+    var on_box_local: Vec = undefined;
+    var on_seg_local: Vec = undefined;
+
+    if (closest.dist > 1.0e-6) {
+        // Outside: the closest pair is the answer, and it sees shaft contacts.
+        on_seg_local = p0 + (p1 - p0) * splat(closest.t);
+        on_box_local = closest.on_box;
+        local_normal = (on_seg_local - on_box_local) / splat(closest.dist);
+        separation = closest.dist - radius;
+    } else {
+        // ★ INSIDE at the deepest point: a box has three face normals, so the way out is
+        // whichever face that point is nearest — exact, and the step EPA has to discover.
+        on_seg_local = p0 + (p1 - p0) * splat(closest.t);
+        var best_axis: usize = 0;
+        var best_sign: f32 = 1;
+        var best_gap: f32 = floatMax(f32);
+        inline for (0..3) |axis| {
+            const gap: f32 = he[axis] - @abs(on_seg_local[axis]);
+            if (gap < best_gap) {
+                best_gap = gap;
+                best_axis = axis;
+                best_sign = if (on_seg_local[axis] >= 0) 1 else -1;
+            }
+        }
+        local_normal = vec_zero;
+        on_box_local = on_seg_local;
+        inline for (0..3) |axis| {
+            if (axis == best_axis) {
+                local_normal[axis] = best_sign;
+                on_box_local[axis] = best_sign * he[axis];
+            }
+        }
+        separation = -best_gap - radius;
+    }
+
+    if (separation > speculative_distance) {
+        return null;
+    }
+
+    const normal_world: Vec = rotate(box_rot, local_normal); // box -> capsule
+    // ── ★★★ TWO POINTS WHEN THE CAPSULE LIES ALONG THE FACE ──
+    //
+    // A single contact under a capsule lets it PIVOT. Wired in with one point, this routine was
+    // exact to 89 microns against brute force and the humanoid still collapsed — torso 0.269 m
+    // against 1.282 — because a foot resting on one point is a foot on a knife edge.
+    //
+    // MuJoCo's `mjc_PlaneCapsule` returns two for the same reason: it runs a sphere-plane test
+    // at each end of the capsule. Here the second point is only added when the capsule is
+    // roughly PARALLEL to the contact face — if it is standing on one end, one point is the
+    // honest answer and a second would be invented.
+    var m: Manifold = .{ .normal = undefined, .count = 0, .points = undefined };
+    const along_face: f32 = 1.0 - @abs(dot3(axis_local_unit, local_normal));
+
+    // Candidate parameters: the closest point always, plus both ends when lying along the face.
+    const params: [3]f32 = .{ closest.t, 0, 1 };
+    var param_count: usize = 1;
+    if (along_face > 0.15) {
+        param_count = 3;
+    }
+
+    for (0..param_count) |i| {
+        const t: f32 = params[i];
+        const seg_pt: Vec = p0 + (p1 - p0) * splat(t);
+        // Depth of THIS point along the shared normal.
+        const face_coord: f32 = dot3(seg_pt, local_normal);
+        const face_extent: f32 = dot3(he, @abs(local_normal));
+        const point_separation: f32 = face_coord - face_extent - radius;
+        if (point_separation > speculative_distance) {
+            continue;
+        }
+        // Skip a duplicate of one already emitted.
+        var duplicate: bool = false;
+        for (0..m.count) |k| {
+            _ = k;
+            if (i > 0 and @abs(t - closest.t) < 1.0e-3) {
+                duplicate = true;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+        const box_pt_local: Vec = seg_pt - local_normal * splat(face_coord - face_extent);
+        const world_box: Vec = box_pos + rotate(box_rot, box_pt_local);
+        const world_cap: Vec = box_pos + rotate(box_rot, seg_pt) - normal_world * splat(radius);
+        if (!flip) {
+            m.points[m.count] = .{ .point_on_a = world_cap, .point_on_b = world_box, .feature_id = @intCast(i) };
+        } else {
+            m.points[m.count] = .{ .point_on_a = world_box, .point_on_b = world_cap, .feature_id = @intCast(i) };
+        }
+        m.count += 1;
+        if (m.count == m.points.len) {
+            break;
+        }
+    }
+    if (m.count == 0) {
+        return null;
+    }
+    m.normal = if (!flip) -normal_world else normal_world;
+    return m;
+}
+
+/// Closest approach between two segments, as parameters along each.
+///
+/// ── ★★ THE PARALLEL CASE IS THE WHOLE DIFFICULTY ──
+///
+/// For skew segments the closest pair is a single point on each, found by solving a 2×2 system.
+/// When the axes are PARALLEL that system is singular — its determinant is zero — and there is
+/// no unique answer: every point of the overlapping span is equally close.
+///
+/// ★ THAT IS EXACTLY HOW TWO LEGS REST AGAINST EACH OTHER, and it is where GJK gives up. Two
+/// coincident capsule axes make a degenerate simplex, and `collideConvexGeneric` measured
+/// **9.8 cm of overlap and returned no contact at all** — the legs pass through one another.
+///
+/// Handled by picking the MIDDLE of the overlapping span, which is stable frame to frame and
+/// is what a pair of parallel capsules physically touches along.
+/// Closest approach between two segments, as a parameter along each.
+const SegmentPair = struct {
+    /// Along the first segment, 0 at `p0` and 1 at `p1`.
+    s: f32,
+    /// Along the second.
+    t: f32,
+};
+
+fn segmentSegmentClosest(p0: Vec, p1: Vec, q0: Vec, q1: Vec) SegmentPair {
+    const d1: Vec = p1 - p0;
+    const d2: Vec = q1 - q0;
+    const r: Vec = p0 - q0;
+    const a: f32 = dot3(d1, d1);
+    const e: f32 = dot3(d2, d2);
+    const f: f32 = dot3(d2, r);
+
+    // Degenerate segments — a capsule with zero half-height is a sphere.
+    if (a <= 1.0e-12 and e <= 1.0e-12) {
+        return .{ .s = 0, .t = 0 };
+    }
+    if (a <= 1.0e-12) {
+        return .{ .s = 0, .t = clamp(f / e, 0, 1) };
+    }
+    const c: f32 = dot3(d1, r);
+    if (e <= 1.0e-12) {
+        return .{ .s = clamp(-c / a, 0, 1), .t = 0 };
+    }
+
+    const b: f32 = dot3(d1, d2);
+    const denom: f32 = a * e - b * b;
+    var s: f32 = 0;
+    if (denom > 1.0e-12) {
+        s = clamp((b * f - c * e) / denom, 0, 1);
+    } else {
+        // ★ PARALLEL. Project each of the other segment's ends onto this one and take the
+        // midpoint of the overlap, so the contact sits along the shared span rather than at an
+        // arbitrary end — which is what keeps it stable as the legs shift.
+        const t0: f32 = clamp(-c / a, 0, 1);
+        const t1: f32 = clamp((dot3(d1, q1 - p0)) / a, 0, 1);
+        s = (t0 + t1) * 0.5;
+    }
+    var t: f32 = (b * s + f) / e;
+    if (t < 0) {
+        t = 0;
+        s = clamp(-c / a, 0, 1);
+    } else if (t > 1) {
+        t = 1;
+        s = clamp((b - c) / a, 0, 1);
+    }
+    return .{ .s = s, .t = t };
+}
+
+/// Capsule against capsule, analytically — the second pair a humanoid makes constantly.
+///
+/// ── ★ WHY THIS PAIR NEEDS ITS OWN ROUTINE ──
+///
+/// After capsule×ground, capsule×capsule is what a walking robot collides most: thigh against
+/// thigh, forearm against torso. It was reaching `collideConvexGeneric`, which **fails exactly
+/// where two legs press together**:
+///
+///     gap  0.010   depth -0.0880   2 points   correct
+///     gap  0.000   depth -0.0980   NONE       *** 9.8 cm of overlap, no contact
+///     gap -0.010   depth -0.1080   2 points   correct
+///
+/// At zero gap the axes are coincident, the GJK simplex is degenerate, and nothing comes back.
+/// MuJoCo has `mjc_CapsuleCapsule` in its table for the same reason it has every other
+/// primitive pair: an iterative solver has no answer for a configuration with no unique one.
+///
+/// ★ ONCE THE CLOSEST PAIR OF POINTS IS KNOWN THIS IS A SPHERE-SPHERE TEST, which is closed
+/// form and cannot fail.
+fn collideCapsuleCapsule(
+    half_a: f32,
+    radius_a: f32,
+    pos_a: Vec,
+    rot_a: Quat,
+    half_b: f32,
+    radius_b: f32,
+    pos_b: Vec,
+    rot_b: Quat,
+    speculative_distance: f32,
+) ?Manifold {
+    // ★★ A CAPSULE'S AXIS IS ITS LOCAL +Y, not +Z — `supportPoint` returns `vec(0, up, 0)`.
+    //
+    // Written as +Z first, this put both thighs lying ACROSS the body instead of down it, and
+    // the two then overlapped by 12 cm in a pose where MuJoCo measures them 6 cm apart. The
+    // centres were right, so the robot still LOOKED correct; only the collision axis was
+    // turned ninety degrees, which is the kind of error that hides until something starts
+    // reporting contacts from it.
+    const axis_a: Vec = rotate(rot_a, vec(0, 1, 0)) * splat(half_a);
+    const axis_b: Vec = rotate(rot_b, vec(0, 1, 0)) * splat(half_b);
+    const p0: Vec = pos_a - axis_a;
+    const p1: Vec = pos_a + axis_a;
+    const q0: Vec = pos_b - axis_b;
+    const q1: Vec = pos_b + axis_b;
+
+    const near: SegmentPair = segmentSegmentClosest(p0, p1, q0, q1);
+    const on_a: Vec = p0 + (p1 - p0) * splat(near.s);
+    const on_b: Vec = q0 + (q1 - q0) * splat(near.t);
+
+    const delta: Vec = on_b - on_a;
+    const dist: f32 = length3(delta);
+    const separation: f32 = dist - radius_a - radius_b;
+    if (separation > speculative_distance) {
+        return null;
+    }
+
+    // ★ A FALLBACK DIRECTION FOR COINCIDENT AXES, where `delta` is zero and has no direction to
+    // normalise. Any axis perpendicular to the capsules separates them; the cross product gives
+    // one, and when even that degenerates the capsules are collinear and any perpendicular does.
+    var normal: Vec = if (dist > 1.0e-6) delta / splat(dist) else blk: {
+        const cross_axes: Vec = cross(p1 - p0, q1 - q0);
+        const cross_len: f32 = length3(cross_axes);
+        if (cross_len > 1.0e-6) {
+            break :blk cross_axes / splat(cross_len);
+        }
+        break :blk perpendicularTo(p1 - p0);
+    };
+    if (dot3(normal, normal) < 0.5) {
+        normal = vec(0, 1, 0);
+    }
+
+    var m: Manifold = .{ .normal = normal, .count = 1, .points = undefined };
+    m.points[0] = .{
+        .point_on_a = on_a + normal * splat(radius_a),
+        .point_on_b = on_b - normal * splat(radius_b),
+        .feature_id = 0,
+    };
+    return m;
+}
+
+/// Any unit vector perpendicular to `v`.
+fn perpendicularTo(v: Vec) Vec {
+    // Cross with whichever axis `v` is least aligned to, so the result never degenerates.
+    const helper: Vec = if (@abs(v[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
+    const out: Vec = cross(v, helper);
+    const len: f32 = length3(out);
+    return if (len > 1.0e-9) out / splat(len) else vec(0, 1, 0);
+}
+
 fn collideConvexGeneric(
     shape_a: *const Shape,
     pos_a: Vec,
@@ -11301,6 +11705,59 @@ fn collide(
     }
 
     // --- everything else: generic convex (GJK/EPA) ---
+    // ★★ CAPSULE AGAINST BOX, BOTH ORDERS — the pair a walking robot makes constantly, and the
+    // one where EPA returns a depth of 8.5 m once the overlap passes 27 cm. See
+    // `collideCapsuleBox`.
+    // ★★ CAPSULE AGAINST CAPSULE. Thigh against thigh, forearm against torso — the pair a
+    // humanoid makes most after capsule×ground, and the generic path returns NOTHING when the
+    // two axes are coincident, which is exactly how legs rest together. See
+    // `collideCapsuleCapsule`.
+    if (shape_a.* == .capsule and shape_b.* == .capsule) {
+        return collideCapsuleCapsule(
+            shape_a.capsule.half_height,
+            shape_a.capsule.radius,
+            pos_a,
+            rot_a,
+            shape_b.capsule.half_height,
+            shape_b.capsule.radius,
+            pos_b,
+            rot_b,
+            speculative_distance,
+        );
+    }
+
+    if (shape_a.* == .capsule and shape_b.* == .box) {
+        return collideCapsuleBox(
+            shape_a.capsule.half_height,
+            shape_a.capsule.radius,
+            pos_a,
+            rot_a,
+            shape_b.box.half_extent,
+            pos_b,
+            rot_b,
+            speculative_distance,
+            false,
+        );
+    }
+    if (shape_a.* == .box and shape_b.* == .capsule) {
+        return collideCapsuleBox(
+            shape_b.capsule.half_height,
+            shape_b.capsule.radius,
+            pos_b,
+            rot_b,
+            shape_a.box.half_extent,
+            pos_a,
+            rot_a,
+            speculative_distance,
+            true,
+        );
+    }
+
+    // ★★ CAPSULE AGAINST BOX, BOTH ORDERS — the pair a walking robot makes constantly, and the
+    // one where GJK/EPA reports a depth of 8.5 m once the overlap passes about 27 cm. See
+    // `collideCapsuleBox`, and the randomised test at the bottom of this file that checks it
+    // against brute-force ground truth rather than against the path it replaces.
+
     return collideConvexGeneric(shape_a, pos_a, rot_a, shape_b, pos_b, rot_b, speculative_distance);
 }
 
@@ -12653,14 +13110,33 @@ pub fn materialAt(world: *const World, body_idx: BodyIndex, sub: u32) u16 {
 // classifier (UpdateSupportingContact, incl. the wedged-between-steep-slopes solve), and
 // the stair-walk / stick-to-floor maneuvers (WalkStairs / StickToFloor / ExtendedUpdate).
 //
-// Faithful to Jolt except where our engine lacks the underlying feature, all documented at
-// the call site: we have a single collision normal (no separate geometry "surface normal",
-// so back-facing / active-edge / enhanced-internal-edge handling is absent); the swept
-// padding correction uses Jolt's simple fraction pull-back rather than the GJK face-inflation
-// path; and character-vs-character collision, the inner rigid body, ScaledShape, materials,
-// and SaveState/RestoreState are not ported. The contact listener supports the simulation-
-// affecting hooks (validate, added/settings, solve, adjust-body-velocity) plus added/removed
-// events via a per-update key diff.
+// DIVERGENCES FROM JOLT, audited function-by-function against CharacterVirtual.cpp.
+// Split by verdict, because the two kinds want opposite treatment: the justified ones
+// should be left alone, the open ones are bugs waiting for a symptom.
+//
+// JUSTIFIED (our engine lacks the underlying feature; leave them):
+//   * single collision normal — no separate geometry "surface normal", so back-facing /
+//     active-edge / enhanced-internal-edge handling is absent;
+//   * the swept padding correction uses Jolt's simple fraction pull-back instead of the
+//     GJK face-inflation path (sCorrectFractionForCharacterPadding). Note Jolt itself
+//     takes this same fallback whenever the hit face has fewer than 2 vertices;
+//   * character-vs-character collision, the inner rigid body, ScaledShape, materials and
+//     SaveState/RestoreState are not ported;
+//   * a sweep skips a whole body when its earliest hit is an ignored sub-shape rather
+//     than probing the next sub (Jolt's collector is per-sub).
+// The contact listener DOES support the simulation-affecting hooks (validate,
+// added/settings, solve, adjust-body-velocity) plus added/removed events via a key diff.
+//
+// OPEN — known-unjustified, fix when a symptom appears:
+//   * cvGetContactsAtPosition takes no movement direction, so Jolt's
+//     mActiveEdgeMovementDirection never reaches active-edge detection. We HAVE that
+//     machinery, so this is a real gap rather than an absent feature.
+//   * the cast collector never calls cvValidateContact; Jolt validates cast hits as well
+//     as collide hits. Ours only consults the ignored list.
+//   * Jolt's cast filter is `distance + normal·displacement < -collision_tolerance`. Our
+//     cast reports no penetration depth, so distance is 0 and we apply the reduced form.
+//
+// Regression coverage for the move loop: src/tests/character_walk_test.zig.
 //
 // active_contacts and the listener key set are owned by the character and allocated from the
 // world allocator; call char.deinit(world.allocator) when done.
@@ -13203,8 +13679,8 @@ fn cvConstraintLess(ctx: CvSortCtx, lhs_idx: usize, rhs_idx: usize) bool {
     if (l.toi != r.toi) {
         return l.toi < r.toi;
     }
-    const lmt: u8 = @intFromEnum(ctx.contacts[l.contact].motion_type);
-    const rmt: u8 = @intFromEnum(ctx.contacts[r.contact].motion_type);
+    const lmt: u8 = @backingInt(ctx.contacts[l.contact].motion_type);
+    const rmt: u8 = @backingInt(ctx.contacts[r.contact].motion_type);
     return lmt > rmt;
 }
 
@@ -13400,6 +13876,20 @@ fn cvSolveConstraints(
 /// first contact (skipping `ignored` bodies), with the fraction pulled back by the character
 /// padding. Uses our shapeCastCoresContact per candidate body (we omit Jolt's GJK face-inflation
 /// padding correction and use its simple fraction pull-back fallback).
+/// Sweep the character shape along `displacement` and return the first blocking hit.
+///
+/// Jolt has TWO functions here and the distinction is load-bearing:
+///   * `ValidateMovement`  (MoveShape)              -> ContactCastCollector<true>
+///   * `GetFirstContactForSweep` (StickToFloor,
+///                                WalkStairs)       -> ContactCastCollector<false>
+/// The template parameter is `IgnoreInitialOverlap`. For MOVEMENT it is true, so
+/// hits at fraction 0 are discarded: the ground you are already resting on must
+/// not clamp a horizontal step to nothing. For the stair/floor probes it is
+/// false, because those sweeps EXIST to find the surface you are touching.
+///
+/// This port had collapsed both into one function with the movement semantics
+/// missing, so a character walked normally in the air and froze solid the
+/// instant it landed. `ignore_initial_overlap` restores the distinction.
 fn cvGetFirstContactForSweep(
     world: *const World,
     char: *const CharacterVirtual,
@@ -13407,6 +13897,7 @@ fn cvGetFirstContactForSweep(
     pos: Vec,
     displacement: Vec,
     ignored: []const CharContactKey,
+    ignore_initial_overlap: bool,
 ) !?CharacterContact {
     const disp_len_sq: f32 = lengthSq3(displacement);
     if (disp_len_sq < 1.0e-8) {
@@ -13466,6 +13957,24 @@ fn cvGetFirstContactForSweep(
             }
         }
         if (skip) {
+            continue;
+        }
+        // Jolt ContactCastCollector::AddHit, in order.
+        // (a) Ignore collisions at fraction 0 when this is a MOVEMENT sweep --
+        //     that is the surface we are already standing on.
+        if (ignore_initial_overlap and hit.fraction <= 0.0) {
+            continue;
+        }
+        // (b) "Ignore penetrations that we're moving away from": Jolt tests
+        //     `penetration_axis · displacement > 0`, and its contact normal is
+        //     `-penetration_axis`, so the equivalent test on the normal is
+        //     `normal · displacement < 0`. Jolt then also requires the approach
+        //     to exceed the collision tolerance
+        //     (`distance + normal·displacement < -collision_tolerance`); our cast
+        //     does not report a penetration depth, so `distance` is 0 here and
+        //     that check reduces to the tolerance-strengthened form below.
+        //     Perpendicular contact cannot block, so this must be strict.
+        if (dot3(hit.normal, displacement) >= -char.collision_tolerance) {
             continue;
         }
         if (hit.fraction < best_fraction) {
@@ -13554,7 +14063,7 @@ fn cvMoveShape(
 
         var displacement: Vec = solve.displacement;
         var time_simulated: f32 = solve.time_simulated;
-        if (try cvGetFirstContactForSweep(world, char, scratch, pos.*, displacement, ignored.items)) |cast| {
+        if (try cvGetFirstContactForSweep(world, char, scratch, pos.*, displacement, ignored.items, true)) |cast| {
             displacement *= splat(cast.fraction);
             time_simulated *= cast.fraction;
         }
@@ -13914,7 +14423,7 @@ fn cvStickToFloor(
 ) !bool {
     const ignored: [0]CharContactKey = .{};
     const maybe_floor: ?CharacterContact =
-        try cvGetFirstContactForSweep(world, char, scratch, char.position, step_down, ignored[0..]);
+        try cvGetFirstContactForSweep(world, char, scratch, char.position, step_down, ignored[0..], false);
     const contact: CharacterContact = maybe_floor orelse return false;
     const new_position: Vec = char.position + step_down * splat(contact.fraction);
     try cvMoveToContact(world, char, new_position, contact, scratch);
@@ -13943,7 +14452,7 @@ fn cvWalkStairs(
 
     // Move up.
     var up: Vec = in_step_up;
-    if (try cvGetFirstContactForSweep(world, char, scratch, char.position, up, ignored[0..])) |contact| {
+    if (try cvGetFirstContactForSweep(world, char, scratch, char.position, up, ignored[0..], false)) |contact| {
         if (contact.fraction < 1.0e-6) {
             return false;
         }
@@ -13994,7 +14503,7 @@ fn cvWalkStairs(
     // Move down to the floor.
     var down: Vec = (vec_zero - up) + step_down_extra;
     const maybe_down: ?CharacterContact =
-        try cvGetFirstContactForSweep(world, char, scratch, new_position, down, ignored[0..]);
+        try cvGetFirstContactForSweep(world, char, scratch, new_position, down, ignored[0..], false);
     var contact: CharacterContact = maybe_down orelse return false;
     var too_steep: bool = cvSlopeTooSteep(char, contact.surface_normal);
 
@@ -14019,7 +14528,7 @@ fn cvWalkStairs(
             return false;
         }
         const maybe_test: ?CharacterContact =
-            try cvGetFirstContactForSweep(world, char, scratch, test_position, down, ignored[0..]);
+            try cvGetFirstContactForSweep(world, char, scratch, test_position, down, ignored[0..], false);
         const test_contact: CharacterContact = maybe_test orelse return false;
         too_steep = cvSlopeTooSteep(char, test_contact.surface_normal);
         if (too_steep) {
@@ -14085,18 +14594,47 @@ pub fn characterExtendedUpdate(
             const achieved_len: f32 = along; // achieved projected onto the forward direction
 
             if (achieved_len + 1.0e-4 < desired_len and cvCanWalkStairs(char, desired_velocity)) {
-                const fwd_mag: f32 = @max(settings.walk_stairs_min_step_forward, desired_len - achieved_len);
-                const step_forward: Vec = forward_normalized * splat(fwd_mag);
-
-                // Forward-test direction: the horizontal ground normal, falling back to forward.
-                var step_forward_test: Vec = vec_zero - char.ground_normal;
-                step_forward_test -= char.up * splat(dot3(step_forward_test, char.up));
-                step_forward_test = cvNorm(step_forward_test, forward_normalized);
-                const fwd_dot: f32 = dot3(step_forward_test, forward_normalized);
-                if (fwd_dot < settings.walk_stairs_cos_angle_forward_contact) {
-                    step_forward_test = forward_normalized;
+                // Pick the stair direction from the contact most OPPOSING the
+                // movement, not from the averaged ground normal. Jolt scans the
+                // active contacts for the steepest surface we are pushing into
+                // and walks perpendicular to it, "so we can step up stairs if
+                // we're moving at a big angle along the stairs" -- approaching a
+                // step diagonally, the averaged normal points somewhere between
+                // the step and the floor and aims the probe badly. The scan
+                // falls back to the movement direction when nothing qualifies,
+                // which is the case our averaged-normal version always took.
+                var walk_dir: Vec = forward_normalized;
+                var max_dot: f32 = settings.walk_stairs_cos_angle_forward_contact;
+                for (char.active_contacts.items) |c| {
+                    if (!c.had_collision or c.was_discarded) {
+                        continue;
+                    }
+                    // Only contacts we are pushing INTO, and only steep ones.
+                    if (dot3(c.surface_normal, desired_velocity - c.linear_velocity) >= 0.0) {
+                        continue;
+                    }
+                    if (!cvSlopeTooSteep(char, c.surface_normal)) {
+                        continue;
+                    }
+                    // Strip the vertical component and negate, so it points the
+                    // way we are trying to travel.
+                    var test_dir: Vec = char.up * splat(dot3(c.surface_normal, char.up)) - c.surface_normal;
+                    const test_len: f32 = length3(test_dir);
+                    if (test_len <= 1.0e-6) {
+                        continue;
+                    }
+                    test_dir /= splat(test_len);
+                    const d: f32 = dot3(test_dir, forward_normalized);
+                    if (d > max_dot) {
+                        walk_dir = test_dir;
+                        max_dot = d;
+                    }
                 }
-                step_forward_test *= splat(settings.walk_stairs_step_forward_test);
+
+                const fwd_mag: f32 = @max(settings.walk_stairs_min_step_forward, desired_len - achieved_len);
+                // Jolt uses the SAME chosen direction for the step and its probe.
+                const step_forward: Vec = walk_dir * splat(fwd_mag);
+                const step_forward_test: Vec = walk_dir * splat(settings.walk_stairs_step_forward_test);
 
                 _ = try cvWalkStairs(
                     world,
@@ -16131,7 +16669,7 @@ fn softBodyBendAngle(
     }
     const d: f32 = clamp(dot3(n1, n2) / denom, -1.0, 1.0);
     const sign: f32 = if (dot3(cross(n2, n1), e) < 0.0) -1.0 else 1.0;
-    return sign * acos(d);
+    return sign * acosRad(d);
 }
 
 /// Build a shareable soft-body asset, copying the inputs into allocator-owned arrays and computing
@@ -17212,12 +17750,11 @@ pub fn softBodyUpdate(
             }
             const sign: f32 = if (dot3(cross(n2, n1), edge_vec) < 0.0) -1.0 else 1.0;
             const dval: f32 = @max(-1.0, @min(1.0, dot3(n1, n2) / @sqrt(prod)));
-            var c: f32 = sign * acos(dval) - b.initial_angle;
-            if (c > pi) {
-                c -= 2.0 * pi;
-            } else if (c < -pi) {
-                c += 2.0 * pi;
-            }
+            // Fold onto half a turn either side. One subtraction of the nearest whole turn,
+            // exact and branchless - and unlike the two-branch radian form it is correct however
+            // far out `initial_angle` puts the difference, rather than for one turn only.
+            const c_turns: f32 = turnsFromRad(sign * acosRad(dval) - b.initial_angle);
+            const c: f32 = radFromTurns(c_turns - @round(c_turns));
             n1 = n1 * splat(1.0 / n1_len_sq);
             n2 = n2 * splat(1.0 / n2_len_sq);
             const d0c: Vec = (n1 * splat(dot3(x1x2, edge_vec)) +
@@ -17470,9 +18007,17 @@ pub fn step(world: *World, dt: f32) !void {
             const mb: *const Motion = &world.motion[b];
             // At least one body must be able to respond (have finite mass). This drops
             // static/static, static/kinematic and kinematic/kinematic pairs that the
-            // tree reports but that can carry no impulse. Sensor pairs skip this gate so
-            // an overlap between otherwise-immovable bodies is still reported.
-            if (!is_sensor_pair and ma.inv_mass == 0.0 and mb.inv_mass == 0.0) {
+            // tree reports but that this solver could carry no impulse across.
+            //
+            // Two opt-outs. Sensor pairs skip it so an overlap between otherwise-immovable
+            // bodies is still reported. And so does `report_immovable_contacts`, for a body
+            // whose motion is owned by something outside this engine: the pair carries no
+            // impulse HERE, but its owner still has to know about it, and only they can
+            // decide what to do. Unlike a sensor, such a body keeps its normal response
+            // against dynamic bodies.
+            const report_immovable: bool =
+                body_a.report_immovable_contacts or body_b.report_immovable_contacts;
+            if (!is_sensor_pair and !report_immovable and ma.inv_mass == 0.0 and mb.inv_mass == 0.0) {
                 continue;
             }
 

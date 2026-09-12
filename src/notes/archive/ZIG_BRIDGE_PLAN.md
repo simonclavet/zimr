@@ -109,13 +109,13 @@ the other side.
 ## 3. Integration architecture (integrated, not vendored)
 
 webzig's infra files move INTO zimr's tree, renamed into our namespace,
-linted by lint_zimr, covered by `zig build test`, and evolved as zimr code:
+linted by zimrlint, covered by `zig build test`, and evolved as zimr code:
 
 ```
 webzig/wz.zig              → ABSORBED into src/bridge.zig (one-file rule)
 webzig/wz_mod.zig          → absorbed: zimr already has module-side runtime;
                               take the panic/log console sink + allocator notes
-webzig/wz_c2js.zig         → tools/c2js.zig          (built like lint_zimr)
+webzig/wz_c2js.zig         → tools/c2js.zig          (built like zimrlint)
 webzig/wz_build_helper.zig → absorbed into build.zig (the C→JS→HTML chain
                               as a generic registration; one chain, all examples)
 webzig/wz_serve.zig        → tools/serve.zig         (replaces bun dev server)
@@ -268,7 +268,7 @@ PHASE 1 — DONE (t1178, same session). src/bridge.zig seeded (wz.zig
   in the lint skip ledger; tests.zig inclusion deferred to the cleanup
   pass (the monolith's native-target analysis is not yet a goal).
   ORIGINAL SCOPE — the monolith seed + hello parity. tools/c2js.zig built like
-  lint_zimr; src/bridge.zig created by absorbing wz.zig (zimr header,
+  zimrlint; src/bridge.zig created by absorbing wz.zig (zimr header,
   section banners, temporary `start()` smoke); a `bridge-hello` build step
   runs the full chain (build-obj -ofmt=c → c2js --html → page +
   standalone); the generated JS is smoke-run under the webzig DOM-mock

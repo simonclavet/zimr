@@ -122,7 +122,7 @@ walker-dispatch bug that's been silently hiding 442 lint issues.
 
 #### Three threads landed
 
-##### 1. New `anon-return` survey rule (`tools/lint_zimr.zig`)
+##### 1. New `anon-return` survey rule (`tools/zimrlint.zig`)
 
 Walks every `fn_proto` declaration, checks if the return type is
 a `container_decl` (anonymous `struct { ... }` / `union { ... }`
@@ -215,7 +215,7 @@ Tag breakdown:
 
 - **Anon-return default OFF** so the warn-only lint output stays
   focused on the current cleanup arc.  Surveys are pulled on
-  demand: `zig run tools/lint_zimr.zig -- --only=anon-return src/...`
+  demand: `zig run tools/zimrlint.zig -- --only=anon-return src/...`
 - **`anon-return` rule 0** (bonus tier).  Not assigned a rule
   number in claude.md because the "ban or not" decision is pending.
   If it graduates to a hard rule it gets a number (rule 16).
@@ -227,7 +227,7 @@ Tag breakdown:
 
 #### Files touched
 
-- `tools/lint_zimr.zig`: +60 LOC (checkAnonReturn + rule note +
+- `tools/zimrlint.zig`: +60 LOC (checkAnonReturn + rule note +
   walker fix)
 - `src/notes/lint-zimr-plan.md`: +90 LOC (future-sweeps section)
 - `src/notes/changelogs/changelog340-349.md`: this entry
@@ -334,7 +334,7 @@ errors and NOBODY NOTICED for 5 turns, because:
 
 Two fixes:
 
-#### 1. Linter no longer silently skips parse errors (`lint_zimr.zig`)
+#### 1. Linter no longer silently skips parse errors (`zimrlint.zig`)
 
 Replaced the `parse errors, skipping` path with a counted `parse-
 error` issue per file.  Now if `zig build lint-check` shows
@@ -390,7 +390,7 @@ from turn 345 + this turn.
 
 #### Files touched
 
-- `tools/lint_zimr.zig`: parse-error becomes an issue not a
+- `tools/zimrlint.zig`: parse-error becomes an issue not a
   skip (~50 LOC change); rule-note added.  +60, -10 LOC net.
 - `src/notes/claude.md`: audit gate gets the mid-turn rule
   + parse-error caveat; known-dirty updated.  +35, -15 LOC.
@@ -484,7 +484,7 @@ resets during fix iteration.]**
 
 ### What lands
 
-- **`tools/lint_zimr.zig` — `--fix=branch-braces` mode.**  AST-based
+- **`tools/zimrlint.zig` — `--fix=branch-braces` mode.**  AST-based
   autofixer that solves the corruption class the turn-341 Python
   regex script hit (else-if chain semi-balance, body-spans-past-
   else, structural ambiguity).  Reuses the existing `runChecks`
@@ -573,7 +573,7 @@ resets during fix iteration.]**
 
 ### Files touched
 
-- `tools/lint_zimr.zig`: +180 LOC (Edit/EditsCollector/
+- `tools/zimrlint.zig`: +180 LOC (Edit/EditsCollector/
   applyEdits/addBraceEditForBody + --fix CLI plumbing + collector
   field on Ctx + the 4 branches of checkBranchBraces routing
   through the collector)
@@ -621,7 +621,7 @@ clarified.  No lint-count change.  Tests 1555/1555.]**
 
 ### What lands
 
-- **`tools/lint_zimr.zig` rule-notes feature.**  Adds a
+- **`tools/zimrlint.zig` rule-notes feature.**  Adds a
   `RuleNote { tag, title, body }` table with 11 entries covering
   every tag the linter emits (`fn-args-multiline`, `untyped-local`,
   `branch-braces`, `array-mult`, `module-var`, `line-length`,
@@ -701,7 +701,7 @@ clarified.  No lint-count change.  Tests 1555/1555.]**
 
 ### Files touched
 
-- `tools/lint_zimr.zig`: +180 LOC (rule_notes table, lookup
+- `tools/zimrlint.zig`: +180 LOC (rule_notes table, lookup
   fn, seen_tags + note-print integration in main)
 - `src/notes/claude_long.md`: 1167 → 1316 lines.  R14 + R15
   added (~70 lines).  Audit gate rewritten (~25 lines).  R9
@@ -713,7 +713,7 @@ clarified.  No lint-count change.  Tests 1555/1555.]**
 
 Same queue.  Cleanup options:
 
-1. **AST `--fix` mode in `lint_zimr.zig`** (~200 LOC) - handles
+1. **AST `--fix` mode in `zimrlint.zig`** (~200 LOC) - handles
    branch-braces edge cases the text autofixer broke on; would
    clear the 348 remaining sites (336 in codecs.zig + ui.zig).
 2. **OR:** hand-do branch-braces in codecs.zig + ui.zig.
@@ -836,7 +836,7 @@ lint-count change this turn; tests 1555/1555, fmt clean.]**
 
 Same queue as turn 341's end:
 
-1. **AST-based `--fix` mode for `lint_zimr.zig`** (~200 LOC).
+1. **AST-based `--fix` mode for `zimrlint.zig`** (~200 LOC).
    Handles branch-braces edge cases the text autofixer broke
    on.  With pre-sweep snapshot now mandatory, the failure
    mode is contained.
@@ -906,7 +906,7 @@ edge cases in smaller files).  Tests 1555/1555, fmt clean.]**
   pattern matching breaks on the inherent ambiguity of
   unbraced `if-else` chains and unbraced expression-context
   bodies.  The linter already has the AST; the autofixer
-  should reuse it.  Single `tools/lint_zimr.zig --fix` mode
+  should reuse it.  Single `tools/zimrlint.zig --fix` mode
   would be ~200 LOC additional and would handle all 348
   remaining sites cleanly.
 
@@ -918,7 +918,7 @@ edge cases in smaller files).  Tests 1555/1555, fmt clean.]**
 
 ### Next-turn scope
 
-1. **Build the `--fix` mode into `tools/lint_zimr.zig`** (~200 LOC).
+1. **Build the `--fix` mode into `tools/zimrlint.zig`** (~200 LOC).
    AST-based, handles all branch-braces edge cases correctly.
    Run it on codecs.zig + ui.zig + the 12 stragglers → 348 → 0.
 2. **OR:** do branch-braces in codecs.zig + ui.zig by hand

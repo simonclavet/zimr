@@ -47,7 +47,7 @@ const pi = zm.pi;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
 const vec4 = zm.vec4;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -236,7 +236,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- composite ----
     z.beginDrawing(f.gl);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const obs: z.Rectangle = lay.observer;
     const sub: z.Rectangle = lay.subject;
@@ -269,8 +269,8 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     const hint: []const u8 = "drag or pinch a pane to steer THAT camera";
-    f.gl.text(.{ 14, 40 }, hint, .{ .size = 18, .color = co.palette.ink_dim, .font = &s.font });
-    co.caption(f.gl, s.font, "two render textures - one world, two cameras, a cropped viewfinder");
+    f.gl.text(.{ 14, 40 }, hint, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+    common.caption(f.gl, s.font, "two render textures - one world, two cameras, a cropped viewfinder");
 
     // ---- UI (inside the open frame), then input ----
     const u: z.ui_real.Ui = s.ui_host.begin(f);

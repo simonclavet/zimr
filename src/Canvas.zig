@@ -1,3 +1,4 @@
+//! lint:alias Canvas
 //! `Canvas` — a pure-Zig, native, anti-aliased 2D drawing surface that
 //! exports PNG with zero third-party code. It renders into a supersampled
 //! RGBA8 buffer using zimr's own `imageDraw*` rasterizers + truetype text, then
@@ -16,7 +17,7 @@
 const std = @import("std");
 const zm = @import("zm");
 const float = zm.float;
-const img = @import("image.zig");
+const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
 const text2d = @import("text2d.zig");
 const codecs = @import("codecs.zig");
 const types = @import("types.zig");
@@ -123,7 +124,7 @@ clip_top: usize = 0,
 
 pub fn init(gpa: Allocator, width: i32, height: i32, opts: Options) !Canvas {
     const ss: i32 = @intCast(clamp(opts.ss, 1, 4));
-    const buf: Image = try img.genImageColor(gpa, width * ss, height * ss, opts.background);
+    const buf: Image = try image_mod.genImageColor(gpa, width * ss, height * ss, opts.background);
     return .{
         .gpa = gpa,
         .w = width,
@@ -134,8 +135,16 @@ pub fn init(gpa: Allocator, width: i32, height: i32, opts: Options) !Canvas {
     };
 }
 
+fn activeClip(self: *const Canvas) ?Rect {
+    return if (self.clip_top == 0) null else self.clip_stack[self.clip_top - 1];
+}
+
+fn ssf(self: *const Canvas) f32 {
+    return @floatFromInt(self.ss);
+}
+
 pub fn deinit(self: *Canvas) void {
-    img.unloadImage(self.gpa, self.buf);
+    image_mod.unloadImage(self.gpa, self.buf);
     if (self.atlas) |*a| {
         a.deinit(self.gpa);
     }
@@ -158,20 +167,12 @@ pub fn useFont(self: *Canvas, ttf_bytes: []const u8) !void {
     self.atlas = atlas;
 }
 
-fn ssf(self: *const Canvas) f32 {
-    return @floatFromInt(self.ss);
-}
-
-fn activeClip(self: *const Canvas) ?Rect {
-    return if (self.clip_top == 0) null else self.clip_stack[self.clip_top - 1];
-}
-
 // ---- sink interface (logical coords; scaled to the SS buffer) ----------
 
 pub fn fillRect(self: *Canvas, r: Rect, col: Color) void {
     const c: Rect = clipRect(r, self.activeClip()) orelse return;
     const k: f32 = self.ssf();
-    img.imageDrawRectangleRec(&self.buf, .{
+    image_mod.imageDrawRectangleRec(&self.buf, .{
         .x = c.x * k,
         .y = c.y * k,
         .width = c.w * k,
@@ -225,7 +226,7 @@ pub fn line(
     const k: f32 = self.ssf();
     const tr: i32 = @round(thickness * k);
     const t: i32 = @max(1, tr);
-    img.imageDrawLineThick(&self.buf, .{ p0[0] * k, p0[1] * k }, .{ p1[0] * k, p1[1] * k }, t, col);
+    image_mod.imageDrawLineThick(&self.buf, .{ p0[0] * k, p0[1] * k }, .{ p1[0] * k, p1[1] * k }, t, col);
 }
 
 pub fn polyline(
@@ -252,7 +253,7 @@ pub fn circleFilled(self: *Canvas, c: Vec2, radius: f32, col: Color) void {
     const cx: i32 = @round(c[0] * k);
     const cy: i32 = @round(c[1] * k);
     const r: i32 = @round(radius * k);
-    img.imageDrawCircle(&self.buf, cx, cy, r, col);
+    image_mod.imageDrawCircle(&self.buf, cx, cy, r, col);
 }
 
 /// Unified primitive: fill a circle (see notes/drawing_api.md). `circleFilled`
@@ -282,7 +283,7 @@ pub fn triangleFilled(
     col: Color,
 ) void {
     const k: f32 = self.ssf();
-    img.imageDrawTriangle(
+    image_mod.imageDrawTriangle(
         &self.buf,
         .{ a[0] * k, a[1] * k },
         .{ b[0] * k, b[1] * k },
@@ -327,7 +328,7 @@ pub fn image(self: *Canvas, dst: Rectangle, sprite: Sprite, opts: draw2d.ImageOp
         .width = dst.width * k,
         .height = dst.height * k,
     };
-    img.imageDraw(&self.buf, src, source, dst_scaled, opts.tint);
+    image_mod.imageDraw(&self.buf, src, source, dst_scaled, opts.tint);
 }
 
 /// `image` twin taking loose numbers for the destination.
@@ -394,7 +395,7 @@ pub fn text(
                 .width = rec.width * gscale,
                 .height = rec.height * gscale,
             };
-            img.imageDraw(&self.buf, atlas.image, rec, dst_rec, col);
+            image_mod.imageDraw(&self.buf, atlas.image, rec, dst_rec, col);
         }
         pen_x += float(g.advanceX) * gscale;
     }
@@ -406,7 +407,7 @@ pub fn text(
 /// `Image` (caller frees with `unloadImage`). Averaging is premultiplied so
 /// translucent edges resolve correctly.
 pub fn resolve(self: *const Canvas) !Image {
-    const out: Image = try img.genImageColor(self.gpa, self.w, self.h, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    const out: Image = try image_mod.genImageColor(self.gpa, self.w, self.h, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
     const ss: usize = @intCast(self.ss);
     const sw: usize = @intCast(self.w * self.ss);
     const ow: usize = @intCast(self.w);
@@ -451,8 +452,8 @@ pub fn resolve(self: *const Canvas) !Image {
 /// Resolve + encode to PNG bytes (caller frees the returned slice).
 pub fn writePngToMemory(self: *const Canvas) ![]u8 {
     const out: Image = try self.resolve();
-    defer img.unloadImage(self.gpa, out);
-    return img.exportImageToMemory(self.gpa, out, ".png");
+    defer image_mod.unloadImage(self.gpa, out);
+    return image_mod.exportImageToMemory(self.gpa, out, ".png");
 }
 
 /// Resolve, encode, and write `path`. Takes the application's `io` (the

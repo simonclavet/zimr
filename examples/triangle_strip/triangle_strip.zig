@@ -8,10 +8,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const cos = zm.cos;
-const sin = zm.sin;
+const cosRad = zm.cosRad;
+const sinRad = zm.sinRad;
 const tau = zm.tau;
 const clamp = zm.clamp;
 const distance = zm.distance;
@@ -45,7 +45,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.frame_count += 1;
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // --- input: drag sets the segment count, a tap (press without drag) toggles outline ---
     const down: bool = z.isMouseButtonDown(f.input, .left);
@@ -75,7 +75,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // --- build the strip points (inside/outside radius alternating) ---
     const n: usize = @floor(s.segments);
-    const center: Vec2 = co.center(w, h);
+    const center: Vec2 = common.center(w, h);
     const out_r: f32 = @min(w, h) * 0.40;
     const in_r: f32 = out_r * 0.62;
     const step: f32 = tau / float(n);
@@ -84,9 +84,9 @@ fn update(f: *z.Frame, s: *State) void {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const a1: f32 = float(i) * step + s.rotation;
-        pts[i * 2] = .{ center[0] + cos(a1) * in_r, center[1] + sin(a1) * in_r };
+        pts[i * 2] = .{ center[0] + cosRad(a1) * in_r, center[1] + sinRad(a1) * in_r };
         const a2: f32 = a1 + step * 0.5;
-        pts[i * 2 + 1] = .{ center[0] + cos(a2) * out_r, center[1] + sin(a2) * out_r };
+        pts[i * 2 + 1] = .{ center[0] + cosRad(a2) * out_r, center[1] + sinRad(a2) * out_r };
     }
     pts[n * 2] = pts[0];
     pts[n * 2 + 1] = pts[1];
@@ -109,7 +109,7 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    co.caption(f.gl, s.font, "triangle strip: drag to set segments, tap to toggle outline");
+    common.caption(f.gl, s.font, "triangle strip: drag to set segments, tap to toggle outline");
     z.endDrawing(f.gl);
 }
 

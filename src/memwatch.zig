@@ -1,3 +1,4 @@
+//! lint:alias memwatch
 //! MemWatch — a per-frame wasm-linear-memory growth watchdog.
 //!
 //! Wasm linear memory only ever grows; an unbounded per-frame leak therefore
@@ -20,7 +21,7 @@ const build_options = @import("build_options");
 
 const is_wasm: bool = builtin.target.cpu.arch == .wasm32;
 /// On in debug / release-with-asserts; compiled out in ship (matches assertf).
-const active: bool = builtin.mode == .Debug or
+const active: bool = builtin.mode == .debug or
     (@hasDecl(build_options, "assert_log") and build_options.assert_log);
 
 pub const MemWatch = struct {

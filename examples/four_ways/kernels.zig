@@ -21,14 +21,14 @@
 //! comptime) and into a separate freestanding kernel wasm with ZERO imports, which the Web
 //! Workers instantiate with `{}`. The build ASSERTS that import section is empty, so a
 //! kernel that reaches for the DOM fails to build rather than failing on a phone.
-const zimr = @import("zimr");
+const z = @import("zimr");
 
 /// The kompute module. Note it is the SAME file the GPU path compiles to SPIR-V — one
 /// module, three runtime machines.
 pub const module = @import("escape_kernel.zig");
 
 /// Everything below is derived. There is nothing to configure and nothing to keep in sync.
-pub const registry = zimr.komputeRegistry(module);
+pub const registry = z.komputeRegistry(module);
 
 /// Exposed so registries COMPOSE: the launcher bundles many examples into one kernel wasm
 /// and needs a single table.
@@ -37,4 +37,4 @@ pub const registry = zimr.komputeRegistry(module);
 ///
 /// This works only because the wasm exports are keyed by NAME rather than an index or a
 /// hash — a merged kernel wasm satisfies every example's `submit` with nobody renumbering.
-pub const job_kernels = zimr.komputeTable(module);
+pub const job_kernels = z.komputeTable(module);

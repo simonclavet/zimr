@@ -1,3 +1,4 @@
+//! lint:alias spv2wgsl
 // spv2wgsl.zig — minimal SPIR-V to WGSL converter.
 //
 // =============================================================================
@@ -392,6 +393,10 @@ pub const types = struct {
         SRem = 138,
         SMod = 139,
         FRem = 140,
+        /// ★ FLOOR-based modulo, as distinct from `FRem`'s TRUNC-based remainder. Zig's
+        /// `@mod` lowers to this and `@rem` lowers to `FRem`; the two differ whenever the
+        /// operands' signs differ, which for a shader means any angle wrap around zero.
+        FMod = 141,
         VectorTimesScalar = 142,
         MatrixTimesScalar = 143,
         VectorTimesMatrix = 144,
@@ -568,16 +573,16 @@ pub const types = struct {
     // -- Tests ------------------------------------------------------------
 
     test "Op enum has expected core values" {
-        try expectEqual(@as(u32, 248), @intFromEnum(Op.Label));
-        try expectEqual(@as(u32, 249), @intFromEnum(Op.Branch));
-        try expectEqual(@as(u32, 250), @intFromEnum(Op.BranchConditional));
-        try expectEqual(@as(u32, 245), @intFromEnum(Op.Phi));
-        try expectEqual(@as(u32, 246), @intFromEnum(Op.LoopMerge));
-        try expectEqual(@as(u32, 247), @intFromEnum(Op.SelectionMerge));
+        try expectEqual(@as(u32, 248), @backingInt(Op.Label));
+        try expectEqual(@as(u32, 249), @backingInt(Op.Branch));
+        try expectEqual(@as(u32, 250), @backingInt(Op.BranchConditional));
+        try expectEqual(@as(u32, 245), @backingInt(Op.Phi));
+        try expectEqual(@as(u32, 246), @backingInt(Op.LoopMerge));
+        try expectEqual(@as(u32, 247), @backingInt(Op.SelectionMerge));
     }
 
     test "Op enum is non-exhaustive (default case works on unknown values)" {
-        const unknown: Op = @enumFromInt(9999);
+        const unknown: Op = @fromBackingInt(@intCast(9999));
         switch (unknown) {
             .Nop => unreachable,
             else => {}, // the `_` variant means this default works
@@ -585,14 +590,14 @@ pub const types = struct {
     }
 
     test "StorageClass values match SPIR-V spec" {
-        try expectEqual(@as(u32, 0), @intFromEnum(StorageClass.UniformConstant));
-        try expectEqual(@as(u32, 3), @intFromEnum(StorageClass.Output));
-        try expectEqual(@as(u32, 7), @intFromEnum(StorageClass.Function));
+        try expectEqual(@as(u32, 0), @backingInt(StorageClass.UniformConstant));
+        try expectEqual(@as(u32, 3), @backingInt(StorageClass.Output));
+        try expectEqual(@as(u32, 7), @backingInt(StorageClass.Function));
     }
 
     test "BuiltIn values match SPIR-V spec" {
-        try expectEqual(@as(u32, 0), @intFromEnum(BuiltIn.Position));
-        try expectEqual(@as(u32, 15), @intFromEnum(BuiltIn.FragCoord));
+        try expectEqual(@as(u32, 0), @backingInt(BuiltIn.Position));
+        try expectEqual(@as(u32, 15), @backingInt(BuiltIn.FragCoord));
     }
 
     // =============================================================================
@@ -687,7 +692,7 @@ fn lookupId(s: *const State, id: u32) *const IdInfo {
             .kind = .value,
             .wgsl_name = name,
         };
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.log.warn(
                 "spv2wgsl: id %{d} referenced before declaration; using placeholder {s}",
                 .{ id, name },
@@ -728,7 +733,7 @@ fn hasEntryOutputs(s: *State) bool {
         if (s.ids[vid].kind != .variable) {
             continue;
         }
-        if (s.ids[vid].extra_a == @intFromEnum(types.StorageClass.Output)) {
+        if (s.ids[vid].extra_a == @backingInt(types.StorageClass.Output)) {
             return true;
         }
     }
@@ -900,7 +905,7 @@ const State = struct {
             if (v.kind != .variable) {
                 continue;
             }
-            if (v.extra_a != @intFromEnum(types.StorageClass.Output)) {
+            if (v.extra_a != @backingInt(types.StorageClass.Output)) {
                 continue;
             }
             try bprint(out, arena, "outputs.{s} = {s};\n", .{ v.wgsl_name, v.wgsl_name });
@@ -1028,7 +1033,7 @@ fn setId(
     if (@as(usize, id) >= s.ids.len) {
         std.debug.panic("spv2wgsl: setId out of bounds: id {d} bound {d}", .{ id, s.ids.len });
     }
-    if (s.ids[id].kind != .unknown and builtin.mode == .Debug) {
+    if (s.ids[id].kind != .unknown and builtin.mode == .debug) {
         std.log.warn(
             "spv2wgsl: id %{d} redefined (was {s}, now {s})",
             .{ id, @tagName(s.ids[id].kind), @tagName(info.kind) },
@@ -1043,7 +1048,7 @@ fn warnUnhandled(
     op: u32,
     word_offset: u32,
 ) void {
-    if (builtin.mode != .Debug) {
+    if (builtin.mode != .debug) {
         return;
     }
     const bucket: u32 = op % 256;
@@ -1185,7 +1190,7 @@ fn findMemberDeco(
 }
 
 fn builtinName(b: u32) []const u8 {
-    return switch (@as(types.BuiltIn, @enumFromInt(b))) {
+    return switch (@as(types.BuiltIn, @fromBackingInt(@intCast(b)))) {
         .Position, .FragCoord => "position",
         .PointSize => "point_size",
         .FrontFacing => "front_facing",
@@ -1204,7 +1209,7 @@ fn builtinName(b: u32) []const u8 {
 }
 
 fn glslExtName(n: u32) []const u8 {
-    return switch (@as(types.Glsl, @enumFromInt(n))) {
+    return switch (@as(types.Glsl, @fromBackingInt(@intCast(n)))) {
         .Round, .RoundEven => "round",
         .Trunc => "trunc",
         .FAbs, .SAbs => "abs",
@@ -1339,7 +1344,7 @@ fn pass1_walk(s: *State) !void {
 fn applyMemberDecoration(s: *State, ops: []const u32) !void {
     const struct_id: u32 = ops[0];
     const member: u32 = ops[1];
-    const kind: types.Deco = @enumFromInt(ops[2]);
+    const kind: types.Deco = @fromBackingInt(@intCast(ops[2]));
 
     var d: DecoInfo = .{};
     var existing_idx: ?usize = null;
@@ -1382,7 +1387,7 @@ fn applyMemberDecoration(s: *State, ops: []const u32) !void {
 fn pass2_decorations(s: *State) !void {
     for (s.inst_off.items) |off| {
         const w0: u32 = s.spirv[off];
-        const op: types.Op = @enumFromInt(types.opcodeOf(w0));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
         const ops: []const u32 = types.operandsAt(s.spirv, off);
 
         switch (op) {
@@ -1423,7 +1428,7 @@ fn pass2_decorations(s: *State) !void {
                 if (@as(usize, target) >= s.decos.len) {
                     continue;
                 }
-                const kind: types.Deco = @enumFromInt(ops[1]);
+                const kind: types.Deco = @fromBackingInt(@intCast(ops[1]));
                 const d: *DecoInfo = &s.decos[target];
                 switch (kind) {
                     .Location => {
@@ -1714,6 +1719,27 @@ fn resolveBinding(s: *State, d: DecoInfo) u32 {
     return b;
 }
 
+/// The WGSL type a storage binding's array takes: RUNTIME-SIZED, because its length
+/// comes from the bound buffer and large fixed arrays misbehaved on Adreno (t1178),
+/// and wrapped in `atomic<>` when an atomic helper targets it, because WGSL requires
+/// the wrapper on the ELEMENT type and rejects `atomicStore` on a plain `u32`.
+/// Null when `t` needs neither, so a caller can leave the type exactly as it was.
+fn storageArrayType(arena: Allocator, t: []const u8, is_atomic: bool) !?[]const u8 {
+    if (!startsWith(u8, t, "array<")) {
+        return null;
+    }
+    const size_comma: ?usize = std.mem.lastIndexOfScalar(u8, t, ',');
+    if (is_atomic) {
+        const elem_end: usize = size_comma orelse (t.len - 1);
+        const elem: []const u8 = std.mem.trim(u8, t["array<".len..elem_end], " ");
+        return try allocPrint(arena, "array<atomic<{s}>>", .{elem});
+    }
+    if (size_comma) |comma| {
+        return try allocPrint(arena, "{s}>", .{t[0..comma]});
+    }
+    return null;
+}
+
 fn emitModuleVariable(s: *State, ops: []const u32) !void {
     // Layout: ptr_type, result_id, storage_class[, initializer]
     const ptr_tid: u32 = ops[0];
@@ -1721,7 +1747,7 @@ fn emitModuleVariable(s: *State, ops: []const u32) !void {
     const storage: u32 = ops[2];
 
     // Function-scope OpVariable belongs to pass 4; skip here.
-    if (storage == @intFromEnum(types.StorageClass.Function)) {
+    if (storage == @backingInt(types.StorageClass.Function)) {
         return;
     }
 
@@ -1743,7 +1769,7 @@ fn emitModuleVariable(s: *State, ops: []const u32) !void {
     });
 
     const d: DecoInfo = s.decos[result];
-    const sc: types.StorageClass = @enumFromInt(storage);
+    const sc: types.StorageClass = @fromBackingInt(@intCast(storage));
     switch (sc) {
         // SPIR-V Input/Output variables are module-scope: any function
         // (not just the entry) may load an Input or store an Output.
@@ -1798,7 +1824,8 @@ fn emitModuleVariable(s: *State, ops: []const u32) !void {
             // be `read`. A vertex shader reading a compute-written storage buffer
             // (the zero-copy particle render path) hits this. Emit `read` for
             // vertex entries; `read_write` for compute/fragment.
-            const access: []const u8 = if (@as(types.ExecModel, @enumFromInt(s.entry.exec_model)) == .Vertex)
+            const exec_model: types.ExecModel = @fromBackingInt(@intCast(s.entry.exec_model));
+            const access: []const u8 = if (exec_model == .Vertex)
                 "read"
             else
                 "read_write";
@@ -1807,24 +1834,47 @@ fn emitModuleVariable(s: *State, ops: []const u32) !void {
             // form proven stable on Adreno (the megastruct + large fixed
             // arrays misbehaved there). Indexing code is unchanged; the
             // length comes from the bound buffer size.
+            const is_atomic: bool = result < s.atomic_var.len and s.atomic_var[result];
             const root_type: []const u8 = blk: {
                 const t: []const u8 = pointee.wgsl_name;
                 // Atomic taint: a storage array targeted by an atomic helper
                 // must be `array<atomic<ELEM>>` (WGSL requires the atomic<>
                 // wrapper on the element type; all accesses then go through
                 // atomic builtins — see emitLoad/emitStore/emitFunctionCall).
-                const atomic: bool = result < s.atomic_var.len and s.atomic_var[result];
-                if (startsWith(u8, t, "array<")) {
-                    if (std.mem.lastIndexOfScalar(u8, t, ',')) |comma| {
-                        if (atomic) {
-                            // array<ELEM, N>  ->  array<atomic<ELEM>>
-                            const elem: []const u8 = std.mem.trim(u8, t["array<".len..comma], " ");
-                            break :blk try allocPrint(s.arena, "array<atomic<{s}>>", .{elem});
-                        }
-                        break :blk try allocPrint(s.arena, "{s}>", .{t[0..comma]});
-                    }
+                if (try storageArrayType(s.arena, t, is_atomic)) |direct| {
+                    break :blk direct;
                 }
-                break :blk t;
+                // A one-field BLOCK struct hides that array one level down. That is
+                // the shape an `@extern` in the storage_buffer address space is
+                // required to take, and neither the runtime-sizing nor the atomic
+                // wrapper above reaches a struct MEMBER — so emit a block of our own
+                // carrying both, and leave every `x.field_0[i]` access untouched.
+                // PER BINDING, because the deduped struct is shared by every buffer
+                // of the same shape while only some of them are atomic.
+                if (pointee.kind != .type_struct) {
+                    break :blk t;
+                }
+                const member_tid: u32 = advanceStructMember(s, pointee_tid, 0) orelse break :blk t;
+                const has_second_member: bool = advanceStructMember(s, pointee_tid, 1) != null;
+                if (has_second_member) {
+                    break :blk t;
+                }
+                const member_t: []const u8 = lookupType(s, member_tid).wgsl_name;
+                const member: []const u8 = (try storageArrayType(s.arena, member_t, is_atomic)) orelse
+                    break :blk t;
+                // Through the SAME body map `emitTypeStruct` uses: two structs with
+                // identical bodies are a nominal-type mismatch Tint rejects, and the
+                // corpus checker fails the build on it. Bindings that differ only by
+                // name share one block; the atomic ones do not collide with the plain
+                // ones because `atomic<>` is already part of the member type.
+                const body: []const u8 = try allocPrint(s.arena, "  field_0: {s},\n", .{member});
+                if (s.struct_bodies.get(body)) |existing_name| {
+                    break :blk existing_name;
+                }
+                const block_name: []const u8 = try allocPrint(s.arena, "{s}_block", .{var_name});
+                try s.struct_bodies.put(s.arena, body, block_name);
+                try bprint(&s.header_buf, s.arena, "struct {s} {{\n{s}}};\n", .{ block_name, body });
+                break :blk block_name;
             };
             try bprint(&s.header_buf, s.arena, "@group({d}) @binding({d}) var<storage, {s}> {s}: {s};\n", .{
                 group, bind_idx, access, var_name, root_type,
@@ -1843,7 +1893,7 @@ fn emitModuleVariable(s: *State, ops: []const u32) !void {
 fn pass3_types_globals(s: *State) !void {
     for (s.inst_off.items) |off| {
         const w0: u32 = s.spirv[off];
-        const op: types.Op = @enumFromInt(types.opcodeOf(w0));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
         const ops: []const u32 = types.operandsAt(s.spirv, off);
 
         switch (op) {
@@ -1954,7 +2004,7 @@ fn rootVariableOf(s: *State, def_off: []const u32, start_id: u32) u32 {
         if (off == 0) {
             return 0;
         }
-        const op: types.Op = @enumFromInt(types.opcodeOf(s.spirv[off]));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(s.spirv[off])));
         const ops: []const u32 = types.operandsAt(s.spirv, off);
         switch (op) {
             .Variable => return id, // the root
@@ -1988,7 +2038,7 @@ fn checkBarrierUniformity(s: *State) !void {
     var saw_return: bool = false;
     while (i < s.inst_off.items.len) : (i += 1) {
         const off: u32 = s.inst_off.items[i];
-        const op: types.Op = @enumFromInt(types.opcodeOf(s.spirv[off]));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(s.spirv[off])));
         switch (op) {
             .Function => {
                 in_func = true;
@@ -2040,7 +2090,7 @@ fn markAtomicBindings(s: *State) !void {
     @memset(def_off, 0);
     for (s.inst_off.items) |off| {
         const w0: u32 = s.spirv[off];
-        const op: types.Op = @enumFromInt(types.opcodeOf(w0));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
         // Every op that produces a result id has it at operand[1] EXCEPT a
         // handful where it's operand[0] (the type-less producers we care
         // about here all use the [result-type, result-id, ...] shape).  We
@@ -2067,7 +2117,7 @@ fn markAtomicBindings(s: *State) !void {
     // arg0's root variable.
     for (s.inst_off.items) |off| {
         const w0: u32 = s.spirv[off];
-        if (@as(types.Op, @enumFromInt(types.opcodeOf(w0))) != .FunctionCall) {
+        if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(w0)))) != .FunctionCall) {
             continue;
         }
         const ops: []const u32 = types.operandsAt(s.spirv, off);
@@ -2104,7 +2154,7 @@ fn computeReachableFunctions(s: *State) ![]const bool {
     var callees: std.AutoHashMapUnmanaged(u32, ArrayList(u32)) = .empty;
     var cur_fn: u32 = 0;
     for (s.inst_off.items) |off| {
-        const op: types.Op = @enumFromInt(types.opcodeOf(s.spirv[off]));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(s.spirv[off])));
         switch (op) {
             .Function => cur_fn = types.operandsAt(s.spirv, off)[1],
             .FunctionCall => {
@@ -2192,7 +2242,7 @@ fn emitIoField(
 /// original variable. The function epilogue (in emitOneFunction) emits
 /// `return outputs;` if there were any outputs.
 fn emitEntrySignature(s: *State) !void {
-    const stage_attr: []const u8 = switch (@as(types.ExecModel, @enumFromInt(s.entry.exec_model))) {
+    const stage_attr: []const u8 = switch (@as(types.ExecModel, @fromBackingInt(@intCast(s.entry.exec_model)))) {
         .Vertex => "@vertex",
         .Fragment => "@fragment",
         .GLCompute => blk: {
@@ -2219,7 +2269,7 @@ fn emitEntrySignature(s: *State) !void {
         if (v.kind != .variable) {
             continue;
         }
-        const sc: types.StorageClass = @enumFromInt(v.extra_a);
+        const sc: types.StorageClass = @fromBackingInt(@intCast(v.extra_a));
         switch (sc) {
             .Input => try inputs.append(s.arena, vid),
             .Output => try outputs.append(s.arena, vid),
@@ -2871,7 +2921,7 @@ pub const block_table = struct {
         var k: usize = fn_k + 1;
         while (k < end_k) {
             const off: u32 = inst_off[k];
-            const op: types.Op = @enumFromInt(types.opcodeOf(spirv[off]));
+            const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(spirv[off])));
 
             if (op != .Label) {
                 k += 1;
@@ -2894,7 +2944,7 @@ pub const block_table = struct {
 
             while (t_idx < end_k) : (t_idx += 1) {
                 const t_off: u32 = inst_off[t_idx];
-                const t_op: types.Op = @enumFromInt(types.opcodeOf(spirv[t_off]));
+                const t_op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(spirv[t_off])));
                 const t_ops: []const u32 = types.operandsAt(spirv, t_off);
 
                 switch (t_op) {
@@ -2940,7 +2990,7 @@ pub const block_table = struct {
                         // the SPIR-V spec.  No enum variant in `types.zig`
                         // for it (the linear emitter never needed special
                         // handling).  Check the raw value.
-                        if (@intFromEnum(t_op) == 255) break; // OpUnreachable
+                        if (@backingInt(t_op) == 255) break; // OpUnreachable
                         // Ordinary body instruction; skip.
                     },
                 }
@@ -3015,7 +3065,7 @@ pub const block_table = struct {
             const off: u32 = @intCast(words.items.len);
             try offs.append(arena, off);
             const wc: u32 = @intCast(1 + i.operands.len);
-            const w0: u32 = @intFromEnum(i.op) | (wc << 16);
+            const w0: u32 = @backingInt(i.op) | (wc << 16);
             try words.append(arena, w0);
             for (i.operands) |o| {
                 try words.append(arena, o);
@@ -3339,7 +3389,7 @@ pub const block_table = struct {
         var fn_k: ?usize = null;
         var end_k: ?usize = null;
         for (inst_off.items, 0..) |off, k| {
-            const op: types.Op = @enumFromInt(types.opcodeOf(words_aligned[off]));
+            const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(words_aligned[off])));
             if (op == .Function and fn_k == null) {
                 fn_k = k;
             }
@@ -3810,7 +3860,7 @@ pub const ir_build = struct {
             const t_op: u32 = types.opcodeOf(self.spirv[t_off]);
             // We only handle the structured `if` (OpBranchConditional).
             // OpSwitch under a SelectionMerge is the switch increment.
-            if (t_op != @intFromEnum(types.Op.BranchConditional)) {
+            if (t_op != @backingInt(types.Op.BranchConditional)) {
                 return error.IrBuildUnsupported;
             }
             const t_ops: []const u32 = types.operandsAt(self.spirv, t_off);
@@ -3937,8 +3987,8 @@ pub const ir_build = struct {
             //       real `exit_loop`, so loop-merge phis attach to it.
             const t_off: u32 = self.inst_off[header.terminator_inst_idx];
             const t_op: u32 = types.opcodeOf(self.spirv[t_off]);
-            const header_cond: bool = (t_op == @intFromEnum(types.Op.BranchConditional));
-            if (t_op != @intFromEnum(types.Op.Branch) and !header_cond) {
+            const header_cond: bool = (t_op == @backingInt(types.Op.BranchConditional));
+            if (t_op != @backingInt(types.Op.Branch) and !header_cond) {
                 return error.IrBuildUnsupported;
             }
 
@@ -4144,7 +4194,7 @@ pub const ir_build = struct {
 
             const cont_blk: *ir.Block = try self.arena.create(ir.Block);
 
-            if (t_op == @intFromEnum(types.Op.Branch)) {
+            if (t_op == @backingInt(types.Op.Branch)) {
                 const tgt: u32 = types.operandsAt(self.spirv, t_off)[0];
                 if (tgt != header.id) {
                     return error.IrBuildUnsupported;
@@ -4152,7 +4202,7 @@ pub const ir_build = struct {
                 // Unconditional self-branch: no exit condition → empty
                 // continuing (infinite loop unless a break exists elsewhere).
                 cont_blk.* = .{ .items = &.{}, .term = .{ .branch = header.id } };
-            } else if (t_op == @intFromEnum(types.Op.BranchConditional)) {
+            } else if (t_op == @backingInt(types.Op.BranchConditional)) {
                 const ops: []const u32 = types.operandsAt(self.spirv, t_off);
                 const cond_id: u32 = ops[0];
                 const true_t: u32 = ops[1];
@@ -4250,7 +4300,7 @@ pub const ir_build = struct {
         ) BuildError!*ir.Construct {
             const t_off: u32 = self.inst_off[header.terminator_inst_idx];
             const t_op: u32 = types.opcodeOf(self.spirv[t_off]);
-            if (t_op != @intFromEnum(types.Op.Switch)) {
+            if (t_op != @backingInt(types.Op.Switch)) {
                 return error.IrBuildUnsupported;
             }
             const t_ops: []const u32 = types.operandsAt(self.spirv, t_off);
@@ -4349,7 +4399,7 @@ pub const ir_build = struct {
             var k: usize = merge_info.label_inst_idx + 1;
             while (k < merge_info.terminator_inst_idx) : (k += 1) {
                 const off: u32 = self.inst_off[k];
-                if (types.opcodeOf(self.spirv[off]) != @intFromEnum(types.Op.Phi)) {
+                if (types.opcodeOf(self.spirv[off]) != @backingInt(types.Op.Phi)) {
                     continue;
                 }
                 const ops: []const u32 = types.operandsAt(self.spirv, off);
@@ -4402,7 +4452,7 @@ pub const ir_build = struct {
             var k: usize = header.label_inst_idx + 1;
             while (k < header.terminator_inst_idx) : (k += 1) {
                 const off: u32 = self.inst_off[k];
-                if (types.opcodeOf(self.spirv[off]) != @intFromEnum(types.Op.Phi)) {
+                if (types.opcodeOf(self.spirv[off]) != @backingInt(types.Op.Phi)) {
                     continue;
                 }
                 const ops: []const u32 = types.operandsAt(self.spirv, off);
@@ -4469,7 +4519,7 @@ pub const ir_build = struct {
         ) bool {
             const info: BlockInfo = self.table.get(bid) orelse return false;
             const off: u32 = self.inst_off[info.terminator_inst_idx];
-            if (types.opcodeOf(self.spirv[off]) != @intFromEnum(types.Op.Branch)) {
+            if (types.opcodeOf(self.spirv[off]) != @backingInt(types.Op.Branch)) {
                 return false;
             }
             return types.operandsAt(self.spirv, off)[0] == target;
@@ -4534,7 +4584,7 @@ pub const ir_build = struct {
             var k: usize = merge_info.label_inst_idx + 1;
             while (k < merge_info.terminator_inst_idx) : (k += 1) {
                 const off: u32 = self.inst_off[k];
-                if (types.opcodeOf(self.spirv[off]) != @intFromEnum(types.Op.Phi)) {
+                if (types.opcodeOf(self.spirv[off]) != @backingInt(types.Op.Phi)) {
                     continue;
                 }
                 const ops: []const u32 = types.operandsAt(self.spirv, off);
@@ -4765,7 +4815,7 @@ pub const ir_build = struct {
             var k: usize = merge_info.label_inst_idx + 1;
             while (k < merge_info.terminator_inst_idx) : (k += 1) {
                 const off: u32 = self.inst_off[k];
-                if (types.opcodeOf(self.spirv[off]) != @intFromEnum(types.Op.Phi)) {
+                if (types.opcodeOf(self.spirv[off]) != @backingInt(types.Op.Phi)) {
                     continue;
                 }
                 const ops: []const u32 = types.operandsAt(self.spirv, off);
@@ -4879,13 +4929,13 @@ pub const ir_build = struct {
             const off: u32 = self.inst_off[info.terminator_inst_idx];
             const op: u32 = types.opcodeOf(self.spirv[off]);
             return switch (op) {
-                @intFromEnum(types.Op.Return) => .ret,
-                @intFromEnum(types.Op.ReturnValue) => .ret_value,
-                @intFromEnum(types.Op.Kill) => .kill,
-                @intFromEnum(types.Op.Branch) => .branch,
-                @intFromEnum(types.Op.BranchConditional) => .branch_cond,
-                @intFromEnum(types.Op.Switch) => .switch_,
-                @intFromEnum(types.Op.Unreachable) => .unreach,
+                @backingInt(types.Op.Return) => .ret,
+                @backingInt(types.Op.ReturnValue) => .ret_value,
+                @backingInt(types.Op.Kill) => .kill,
+                @backingInt(types.Op.Branch) => .branch,
+                @backingInt(types.Op.BranchConditional) => .branch_cond,
+                @backingInt(types.Op.Switch) => .switch_,
+                @backingInt(types.Op.Unreachable) => .unreach,
                 else => .branch, // treat unknown as a passthrough branch
             };
         }
@@ -4984,7 +5034,7 @@ pub const ir_build = struct {
         var k: usize = fn_k + 1;
         while (k < end_k) : (k += 1) {
             const off: u32 = inst_off[k];
-            if (types.opcodeOf(spirv[off]) == @intFromEnum(types.Op.Label)) {
+            if (types.opcodeOf(spirv[off]) == @backingInt(types.Op.Label)) {
                 return types.operandsAt(spirv, off)[0];
             }
         }
@@ -5002,13 +5052,13 @@ pub const ir_build = struct {
     ) BuildError!ir.Terminator {
         const off: u32 = inst_off[info.terminator_inst_idx];
         const op: u32 = types.opcodeOf(spirv[off]);
-        if (op == @intFromEnum(types.Op.Return)) {
+        if (op == @backingInt(types.Op.Return)) {
             return .ret;
-        } else if (op == @intFromEnum(types.Op.ReturnValue)) {
+        } else if (op == @backingInt(types.Op.ReturnValue)) {
             return .{ .ret_value = types.operandsAt(spirv, off)[0] };
-        } else if (op == @intFromEnum(types.Op.Kill)) {
+        } else if (op == @backingInt(types.Op.Kill)) {
             return .kill;
-        } else if (op == @intFromEnum(types.Op.Unreachable)) {
+        } else if (op == @backingInt(types.Op.Unreachable)) {
             // SPIR-V "statically unreachable" — Zig emits it after a chain
             // of returning branches.  No WGSL terminator needed (the block
             // is never reached; `ir_emit` lowers `.unreach` to nothing and
@@ -5049,7 +5099,7 @@ pub const ir_build = struct {
     }
 
     inline fn inst(word_count: u32, op: types.Op) u32 {
-        return (word_count << 16) | @intFromEnum(op);
+        return (word_count << 16) | @backingInt(op);
     }
 
     test "build lowers a single-block void function to FnBody{ret}" {
@@ -6634,7 +6684,7 @@ fn advanceStructMember(
 ) ?u32 {
     for (s.inst_off.items) |io| {
         const w0: u32 = s.spirv[io];
-        if (@as(types.Op, @enumFromInt(types.opcodeOf(w0))) != .TypeStruct) {
+        if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(w0)))) != .TypeStruct) {
             continue;
         }
         const t_ops: []const u32 = types.operandsAt(s.spirv, io);
@@ -6842,7 +6892,7 @@ fn emitSampledImage(
     s: *State,
     out: *ArrayList(u8),
     ops: []const u32,
-) !void {
+) !void { // lint:off useless-error-return: shape uniform with the 18-arm emit* dispatch
     // OpSampledImage doesn't emit a statement — it pairs an image with
     // a sampler.  We stash both ids on the result and let emitImageSample
     // read them.  `out` kept for walker uniformity (see emitAccessChain).
@@ -7057,6 +7107,33 @@ fn emitFunctionCall(
         try bstr(out, s.arena, lookupId(s, aid).wgsl_name);
     }
     try bstr(out, s.arena, ");\n");
+}
+
+/// `OpFMod` — floor-based modulo, lowered as `a - b * floor(a / b)`.
+///
+/// ★ WHY NOT `%`: WGSL's `%` on floats is the TRUNC-based remainder, which is `OpFRem`. The
+/// two agree only when both operands share a sign. Zig's `@mod` emits `OpFMod` and its
+/// contract is that the result takes the sign of the DIVISOR — `@mod(-1.0, 6.28)` is ~5.28.
+/// Angle wrapping in a shader depends on that, and emitting `%` would silently return a
+/// negative angle instead.
+///
+/// ★ This opcode was UNHANDLED until an SSAO shader became the first in the tree to call
+/// `@mod` — 161 corpus shaders had never exercised it, so the gap sat invisible. The
+/// fallback emitted `f32()`, i.e. ZERO, with only a `// UNHANDLED` comment in the output.
+fn emitFloorMod(
+    s: *State,
+    out: *ArrayList(u8),
+    ops: []const u32,
+) !void {
+    const tid: u32 = ops[0];
+    const result: u32 = ops[1];
+    const a: []const u8 = lookupId(s, ops[2]).wgsl_name;
+    const b: []const u8 = lookupId(s, ops[3]).wgsl_name;
+    const t: *const IdInfo = lookupType(s, tid);
+    const name: []const u8 = try tempName(s.arena, result);
+    setId(s, result, .{ .kind = .value, .type_id = tid, .wgsl_name = name });
+    try bindLhs(out, s, result, name, t.wgsl_name);
+    try bprint(out, s.arena, "{s} - {s} * floor({s} / {s});\n", .{ a, b, a, b });
 }
 
 fn emitBinOp(
@@ -7447,6 +7524,11 @@ fn emitOnePerOpcode(
         .SDiv => try emitIntBin(s, out, ops, "/", .signed, false),
         .UDiv => try emitIntBin(s, out, ops, "/", .unsigned, false),
         .FRem => try emitBinOp(s, out, ops, "%"),
+        // ★ OpFMod IS NOT `%`. WGSL's `%` on floats is TRUNC-based, matching OpFRem; OpFMod
+        // is FLOOR-based and takes the sign of the SECOND operand. `@mod(-1.0, 6.28)` must
+        // give ~5.28, not -1.0, and a shader wrapping an angle relies on exactly that.
+        // Lowered as `a - b * floor(a / b)`, the standard identity.
+        .FMod => try emitFloorMod(s, out, ops),
         .SRem => try emitIntBin(s, out, ops, "%", .signed, false),
         // OpSMod: emit `%` (WGSL remainder). Correct for non-negative operands
         // (the common shader case); differs from true modulo only when operand
@@ -7497,7 +7579,7 @@ fn emitOnePerOpcode(
 
         .ExtInst => try emitExtInst(s, out, ops),
 
-        else => try emitUnhandledPlaceholder(s, out, @intFromEnum(op), off, ops),
+        else => try emitUnhandledPlaceholder(s, out, @backingInt(op), off, ops),
     }
 }
 
@@ -7535,7 +7617,7 @@ fn emitBlockBodyOnly(
     var label_idx: ?usize = null;
     for (s.inst_off.items, 0..) |off, k| {
         const w: u32 = s.spirv[off];
-        if (types.opcodeOf(w) != @intFromEnum(types.Op.Label)) {
+        if (types.opcodeOf(w) != @backingInt(types.Op.Label)) {
             continue;
         }
         const ops: []const u32 = types.operandsAt(s.spirv, off);
@@ -7553,10 +7635,10 @@ fn emitBlockBodyOnly(
     while (idx < s.inst_off.items.len) : (idx += 1) {
         const off: u32 = s.inst_off.items[idx];
         const w0: u32 = s.spirv[off];
-        const op: types.Op = @enumFromInt(types.opcodeOf(w0));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
         const ops: []const u32 = types.operandsAt(s.spirv, off);
 
-        s.debug_current_opcode = @intFromEnum(op);
+        s.debug_current_opcode = @backingInt(op);
         s.debug_current_offset = off;
 
         // Skip declaration-sweep and metadata-only opcodes (same as
@@ -7589,7 +7671,7 @@ fn emitBlockBodyOnly(
                 // OpUnreachable (255) is also a terminator.  We don't have
                 // an enum variant for it (since the linear emitter never
                 // needed to handle it explicitly), so check the raw value.
-                if (@intFromEnum(op) == 255) {
+                if (@backingInt(op) == 255) {
                     return;
                 }
             },
@@ -7751,6 +7833,7 @@ fn opShape(op: types.Op) OpShape {
         .SRem,
         .SMod,
         .FRem,
+        .FMod,
         .IEqual,
         .INotEqual,
         .FOrdEqual,
@@ -7923,7 +8006,7 @@ fn markHoistedResults(
     var idx: usize = fn_k;
     while (idx < end_k) : (idx += 1) {
         const off: u32 = s.inst_off.items[idx];
-        const op: types.Op = @enumFromInt(types.opcodeOf(s.spirv[off]));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(s.spirv[off])));
         const ops: []const u32 = types.operandsAt(s.spirv, off);
         if (op == .Label) {
             cur_block = ops[0];
@@ -7944,7 +8027,7 @@ fn markHoistedResults(
     idx = fn_k;
     while (idx < end_k) : (idx += 1) {
         const off: u32 = s.inst_off.items[idx];
-        const op: types.Op = @enumFromInt(types.opcodeOf(s.spirv[off]));
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(s.spirv[off])));
         const ops: []const u32 = types.operandsAt(s.spirv, off);
         if (op == .Label) {
             cur_block = ops[0];
@@ -8025,7 +8108,7 @@ fn emitOneFunction(
         while (p_idx < end_k) : (p_idx += 1) {
             const po: u32 = s.inst_off.items[p_idx];
             const pw0: u32 = s.spirv[po];
-            const pop: types.Op = @enumFromInt(types.opcodeOf(pw0));
+            const pop: types.Op = @fromBackingInt(@intCast(types.opcodeOf(pw0)));
             const popnds: []const u32 = types.operandsAt(s.spirv, po);
             switch (pop) {
                 .FunctionParameter => {
@@ -8121,7 +8204,7 @@ fn emitOneFunction(
             } else {
                 try bprint(&s.body_buf, s.arena, "{s}: {s}", .{ pi_info.wgsl_name, pt.wgsl_name });
             }
-            used_local_names.put(pi_info.wgsl_name, {}) catch {};
+            used_local_names.put(pi_info.wgsl_name, {}) catch @panic("OOM");
         }
         try bstr(&s.body_buf, s.arena, ")");
         if (ret_info.kind != .type_void) {
@@ -8150,7 +8233,7 @@ fn emitOneFunction(
         if (pt.wgsl_name.len != 0) {
             try bprint(&s.body_buf, s.arena, "  var {s}: {s};\n", .{ ph.wgsl_name, pt.wgsl_name });
         }
-        used_local_names.put(ph.wgsl_name, {}) catch {};
+        used_local_names.put(ph.wgsl_name, {}) catch @panic("OOM");
     }
 
     // Declare hoisted-value variables at function entry (results used
@@ -8179,11 +8262,11 @@ fn emitOneFunction(
         while (v_idx < end_k) : (v_idx += 1) {
             const vo: u32 = s.inst_off.items[v_idx];
             const vw0: u32 = s.spirv[vo];
-            if (@as(types.Op, @enumFromInt(types.opcodeOf(vw0))) != .Variable) {
+            if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(vw0)))) != .Variable) {
                 continue;
             }
             const vopnds: []const u32 = types.operandsAt(s.spirv, vo);
-            if (vopnds[2] != @intFromEnum(types.StorageClass.Function)) {
+            if (vopnds[2] != @backingInt(types.StorageClass.Function)) {
                 continue;
             }
             const ptr_tid: u32 = vopnds[0];
@@ -8241,7 +8324,7 @@ fn pass4_functions(s: *State) !void {
         while (k < s.inst_off.items.len) : (k += 1) {
             const off = s.inst_off.items[k];
             const w0 = s.spirv[off];
-            const op: types.Op = @enumFromInt(types.opcodeOf(w0));
+            const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
             switch (op) {
                 .Function => {
                     const ops = types.operandsAt(s.spirv, off);
@@ -8282,7 +8365,7 @@ fn pass4_functions(s: *State) !void {
     while (k < s.inst_off.items.len) {
         const off: u32 = s.inst_off.items[k];
         const w0: u32 = s.spirv[off];
-        if (@as(types.Op, @enumFromInt(types.opcodeOf(w0))) != .Function) {
+        if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(w0)))) != .Function) {
             k += 1;
             continue;
         }
@@ -8291,7 +8374,7 @@ fn pass4_functions(s: *State) !void {
         var end_k: usize = k + 1;
         while (end_k < s.inst_off.items.len) : (end_k += 1) {
             const eo: u32 = s.inst_off.items[end_k];
-            if (@as(types.Op, @enumFromInt(types.opcodeOf(s.spirv[eo]))) == .FunctionEnd) {
+            if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(s.spirv[eo])))) == .FunctionEnd) {
                 break;
             }
         }
@@ -8314,20 +8397,6 @@ fn pass4_functions(s: *State) !void {
             try emitOneFunction(s, k, end_k);
         }
         k = end_k + 1;
-    }
-}
-
-fn emitReturn(
-    s: *State,
-    out: *ArrayList(u8),
-    is_entry: bool,
-) !void {
-    // Entry points with outputs must return the outputs struct rather than
-    // a bare return (the WGSL function's return type is the outputs struct).
-    if (is_entry and hasEntryOutputs(s)) {
-        try bstr(out, s.arena, "  return outputs;\n");
-    } else {
-        try bstr(out, s.arena, "  return;\n");
     }
 }
 
@@ -10481,8 +10550,17 @@ fn checkBufferAccessSurvival(
             continue; // this entry genuinely does not use it — fine.
         }
         const nm: []const u8 = e.value_ptr.*;
-        const needle: []const u8 = try allocPrint(arena, "{s}[", .{nm});
-        if (std.mem.indexOf(u8, body, needle) == null) {
+        // A binding is reached one of two ways: indexed directly (`kbuf_pos[i]`) when
+        // its Zig type is an array, or through its block member (`kbuf_pos.field_0[i]`)
+        // when the type is a struct — which is the shape a storage buffer takes. Both
+        // are accesses. A dropped block removes EVERY mention of the buffer from the
+        // body, so it still trips on neither being found, and neither needle can match
+        // a longer name by prefix (`[` and `.` cannot appear inside an identifier).
+        const indexed_directly: []const u8 = try allocPrint(arena, "{s}[", .{nm});
+        const through_block: []const u8 = try allocPrint(arena, "{s}.", .{nm});
+        const is_accessed: bool = std.mem.indexOf(u8, body, indexed_directly) != null or
+            std.mem.indexOf(u8, body, through_block) != null;
+        if (!is_accessed) {
             std.log.err(
                 "spv2wgsl [{s}]: `{s}` is ACCESSED in the SPIR-V but never in the emitted WGSL.\n" ++
                     "  A block was dropped, and its loads and stores went with it. The output is\n" ++
@@ -10647,7 +10725,7 @@ pub fn convertSpirvToWgslEntry(
     // will reject the bad output if it actually matters at runtime.  The
     // function itself still returns the error for callers (like tests) that
     // want the strict behavior.
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         var missing: u32 = 0;
         checkOutputClosure(arena, out, &missing) catch {
             // An undeclared `_N` DOWNSTREAM of an emitted `// ERROR:`
@@ -10759,7 +10837,7 @@ test "minimal module with just void type" {
     var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     // magic, version 1.0, generator, bound=3, schema=0, then OpTypeVoid %1.
-    const word0 = (@as(u32, 2) << 16) | @intFromEnum(types.Op.TypeVoid);
+    const word0 = (@as(u32, 2) << 16) | @backingInt(types.Op.TypeVoid);
     const mod = [_]u32{
         0x07230203, 0x00010000, 0, 3, 0,
         word0,      1,

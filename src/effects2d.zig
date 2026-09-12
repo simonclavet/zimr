@@ -1,3 +1,4 @@
+//! lint:alias effects2d
 //! src/effects2d.zig — the 2D fullscreen fragment-effect runner.
 //!
 //! raylib does post-processing like this:

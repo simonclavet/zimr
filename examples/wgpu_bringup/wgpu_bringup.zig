@@ -90,7 +90,37 @@ const State = struct {
     julia_shader: z.shader.LoadedShader(julia_fs_io) = undefined,
     mandel_julia_shader: z.shader.LoadedShader(mandel_julia_fs_io) = undefined,
 
+    /// Dedicated vertex buffer for the fullscreen fractal triangle.
+    ///
+    /// WHY THIS EXISTS (and why the triangle is NOT drawn through the 2D shapes
+    /// batch, which is how this file used to do it): `flushBatch` binds the
+    /// batch's texture atlas at `gpu_iface.batch_reserved_group` (== 1) under
+    /// WHATEVER pipeline is currently bound. Under the mandelbrot pipeline that
+    /// group is an `empty_bgl` — `loadShader` mints one for every group below
+    /// the highest group the schema uses, and this FS schema uses only group 2 —
+    /// so the batch's flush hands WebGPU a bind group the bound layout does not
+    /// declare, and WebGPU rejects the WHOLE command buffer at submit. Nothing
+    /// renders, not even the pass clear: a black canvas.
+    ///
+    /// The engine's own answer to this is `wgpu_app.drawFullscreenShader`, which
+    /// draws through the shader's OWN pipeline and an engine-owned fullscreen
+    /// VBO and never lets the batch flush under a foreign pipeline. This demo
+    /// drives `Backend` directly and never builds an `App`, so it cannot call
+    /// that helper — it keeps its own equivalent buffer here instead.
+    fullscreen_vbo: z.wgpu.BufferHandle = .invalid,
+
     frame_count: u32 = 0,
+};
+
+/// One clip-space triangle covering the viewport, in the default 2D vertex
+/// layout (`pos: vec2, uv: vec2, color: u8x4_unorm` — the layout
+/// `loadShader` builds its pipeline with). `trivial_vs` is pass-through, so
+/// these positions ARE clip space; uv runs 0..2 so the inscribed 0..1 window
+/// maps across the canvas. Identical to `wgpu_app.fullscreen_verts`.
+const fullscreen_verts = [_]z.Vertex2D{
+    .{ .pos = .{ -1, -1 }, .uv = .{ 0, 0 }, .color = .{ 255, 255, 255, 255 } },
+    .{ .pos = .{ 3, -1 }, .uv = .{ 2, 0 }, .color = .{ 255, 255, 255, 255 } },
+    .{ .pos = .{ -1, 3 }, .uv = .{ 0, 2 }, .color = .{ 255, 255, 255, 255 } },
 };
 
 // lint:off module-var: wasm app state must outlive each JS-driven frame tick
@@ -108,13 +138,36 @@ pub fn main() !void {
     const surface: z.wgpu.SurfaceHandle = z.wgpu.getSurface();
     const fmt: z.wgpu.TextureFormat = z.wgpu.getSurfaceFormat(surface);
 
-    var s: State = .{
+    // ★ BUILD `State` IN PLACE IN THE GLOBAL — never as a stack local that is
+    // copied out at the end.
+    //
+    // `State` is SELF-REFERENTIAL: `GpuFrame.init` stores `&s.pipeline_cache`
+    // and `&s.bind_group_cache`, `Renderer2D.init` stores `&s.gpu_frame`, and
+    // every `loadShader(.{ .f = &s.gpu_frame })` keeps that pointer for the
+    // program's life. Building into a local `var s: State` and then doing
+    // `state = s;` copies the BYTES but leaves all of those pointers aimed at
+    // the dead stack frame.
+    //
+    // It does not crash, which is what makes it nasty: the abandoned stack still
+    // holds plausible values, so reads return whatever init left there. Concretely
+    // it broke the one-write-per-frame UBO guard — `noteUboWrite` uses
+    // `self.f.encoder` as its frame token, `beginFrame` updates that field on the
+    // REAL GpuFrame, and the dangling `self.f` kept reading the stale `.invalid`
+    // from the dead frame. The token never changed, so the per-frame counter
+    // never reset and the assert fired on frame 2, then 3, then 4 — a counter
+    // climbing with the frame number is the signature of this bug, not of a
+    // genuine double write.
+    //
+    // Assigning the global FIRST and taking `s` as a pointer into it makes every
+    // captured pointer permanent.
+    state = .{
         .gpa = gpa,
         .gpu_frame = undefined,
         .pipeline_cache = z.PipelineCache.init(gpa, device),
         .bind_group_cache = z.BindGroupCache.init(gpa, device),
         .renderer = undefined,
     };
+    const s: *State = &(state.?);
     s.gpu_frame = z.GpuFrame.init(
         device,
         queue,
@@ -176,7 +229,20 @@ pub fn main() !void {
         .label = "mandelbrot",
     });
 
-    state = s;
+    // The fullscreen triangle's own vertex buffer — see `State.fullscreen_vbo`
+    // for why this demo must not route that triangle through the 2D shapes
+    // batch. Uploaded once; the geometry is static in clip space.
+    s.fullscreen_vbo = z.wgpu.createBufferInit(
+        s.gpu_frame.device,
+        s.gpu_frame.queue,
+        std.mem.sliceAsBytes(&fullscreen_verts),
+        .{ .vertex = true, .copy_dst = true },
+        "bringup_fullscreen_vbo",
+    );
+
+    // NOTE: no `state = s;` here. `state` was assigned at the TOP of this
+    // function and `s` points INTO it — see the comment there. Copying a
+    // finished `State` out of a local is exactly the bug that comment describes.
 }
 
 // ============================================================================
@@ -287,17 +353,31 @@ export fn update(dt_seconds: f32) void {
     // for pixel coords, so this maps to 0..1600 horizontally and
     // 0..1200 vertically.  The mandelbrot center+zoom math handles
     // the rest.
+    //
+    // ★ DRAWN THROUGH THE SHADER'S OWN PIPELINE, NOT THE 2D SHAPES BATCH.
+    // This used to be `drawTriangleBatched` + `flushBatch`, which put a batch
+    // flush under a foreign pipeline: the flush binds the batch atlas at
+    // `batch_reserved_group` (== 1), where the mandelbrot layout has an
+    // `empty_bgl`, and WebGPU then rejects the ENTIRE command buffer at submit —
+    // a black canvas, pass clear included. `flushBatch`'s assert names exactly
+    // this and it was firing on frame 1. The step-5 `flushBatch` above still
+    // runs, and correctly: it drains the 2D shapes while the 2D pipeline is
+    // still bound, BEFORE the swap below.
+    //
+    // This mirrors `wgpu_app.drawFullscreenShader` — bind, set the shader's own
+    // vertex buffer, draw non-indexed — which is the engine's general (and
+    // documented "strictly safe") fullscreen path. This demo drives `Backend`
+    // directly and never builds an `App`, so it cannot call that helper.
     s.mandelbrot_shader.bindForDraw(&ps);
-    Backend.drawTriangleBatched(&ps, .{
-        .p0 = .{ -1, -1 },
-        .p1 = .{ 3, -1 },
-        .p2 = .{ -1, 3 },
-        .uv0 = .{ 0, 0 },
-        .uv1 = .{ 2, 0 },
-        .uv2 = .{ 0, 2 },
-        .colors = z.uniformColor(.{ 255, 255, 255, 255 }),
-    });
-    Backend.flushBatch(&ps);
+    s.mandelbrot_shader.setVertex(&ps, 0, s.fullscreen_vbo, @sizeOf(@TypeOf(fullscreen_verts)));
+    s.mandelbrot_shader.draw(&ps, 3, 1);
+
+    // Restore the 2D shapes pipeline (and, with it, the batch's ownership
+    // record) so any later 2D drawing in this pass is correctly owned and the
+    // flush guard keeps its teeth. Nothing draws after this today; doing it
+    // anyway keeps the bracket symmetric, exactly as `drawFullscreenShader`
+    // ends with `bindForPass`.
+    s.renderer.bindForPass(&ps);
 
     Backend.endRenderPass(&ps);
     Backend.endFrame(f);

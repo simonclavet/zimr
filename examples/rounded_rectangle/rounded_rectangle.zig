@@ -8,7 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Color = zm.Color;
 const bufPrint = std.fmt.bufPrint;
@@ -38,8 +38,8 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     if (z.isMouseButtonPressed(f.input, .left)) {
         s.mode = (s.mode + 1) % mode_count;
@@ -80,7 +80,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var buf: [64]u8 = undefined;
     const mode_line: []const u8 = bufPrint(&buf, "mode: {s}", .{mode_names[s.mode]}) catch "mode: ?";
-    f.gl.text(.{ 22, 52 }, mode_line, .{ .size = 14, .color = co.palette.accent, .font = &s.font });
+    f.gl.text(.{ 22, 52 }, mode_line, .{ .size = 14, .color = common.palette.accent, .font = &s.font });
 
     var buf2: [80]u8 = undefined;
     const manual: bool = segments >= 4;
@@ -89,14 +89,14 @@ fn update(f: *z.Frame, s: *State) void {
         "roundness: {d:.2}  segs: {d} ({s})",
         .{ roundness, segments, if (manual) "MANUAL" else "AUTO" },
     ) catch "roundness: --";
-    f.gl.text(.{ 22, 74 }, par_line, .{ .size = 13, .color = co.palette.ink, .font = &s.font });
+    f.gl.text(.{ 22, 74 }, par_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
 
     var buf3: [48]u8 = undefined;
     const thick_line: []const u8 = bufPrint(&buf3, "thickness: {d:.1}", .{thick}) catch "thickness: --";
-    f.gl.text(.{ 22, 96 }, thick_line, .{ .size = 13, .color = co.palette.ink, .font = &s.font });
-    f.gl.text(.{ 22, 116 }, "tap: cycle mode", .{ .size = 13, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.text(.{ 22, 96 }, thick_line, .{ .size = 13, .color = common.palette.ink, .font = &s.font });
+    f.gl.text(.{ 22, 116 }, "tap: cycle mode", .{ .size = 13, .color = common.palette.ink_dim, .font = &s.font });
 
-    co.caption(f.gl, s.font, "rounded rectangle");
+    common.caption(f.gl, s.font, "rounded rectangle");
     z.endDrawing(f.gl);
 }
 

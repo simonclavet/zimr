@@ -1,4 +1,4 @@
-# lint_zimr autofix — design & plan
+# zimrlint autofix — design & plan
 
 Status: **P1 SHIPPED (turn 446).** `--fix` mode is live with three unambiguous
 rules wired and verified end-to-end (detection + rewrite + idempotence + parse
@@ -115,7 +115,7 @@ edit and gate.
   fix to re-examine).
 - File-writing already exists for stamps (`writeStamp` → `Dir.writeFile`), and
   byte spans are trivial: `ast.tokenStart(tok)` for the start, `tokenStart(last)
-  + tokenSlice(last).len` for the end (see lint_zimr.zig:2112-2114).
+  + tokenSlice(last).len` for the end (see zimrlint.zig:2112-2114).
 
 ## 3. The core change — Issue carries an optional Fix
 
@@ -137,7 +137,7 @@ with no extra code.
 
 A prior *external* autofixer once left `} };` shapes after struct-init returns,
 producing parse errors that silently un-linted 5 files for ~5 turns
-(lint_zimr.zig:3510-3513). The non-negotiable rule that prevents a repeat:
+(zimrlint.zig:3510-3513). The non-negotiable rule that prevents a repeat:
 
 > After applying edits, RE-PARSE the result. If it has more parse errors than
 > the input did, roll the whole file back and report — never persist a file that
@@ -199,12 +199,12 @@ that is a **build-gate dependency** (every standalone build runs whole-tree lint
 as a gate step), a default that mutates source on every build is hazardous.
 Recommendation:
 
-- `lint_zimr <files>` → **check** (default, unchanged, gate-safe).
-- `lint_zimr --fix <files>` → apply autofixes, re-check, exit 0 iff no *unfixable*
+- `zimrlint <files>` → **check** (default, unchanged, gate-safe).
+- `zimrlint --fix <files>` → apply autofixes, re-check, exit 0 iff no *unfixable*
   issues remain. Cache lookups stay disabled under `--fix`.
-- `lint_zimr --fix --dry-run <files>` → print a unified diff, write nothing
+- `zimrlint --fix --dry-run <files>` → print a unified diff, write nothing
   (optional, nice for reviewing before committing).
-- `lint_zimr --check <files>` → explicit alias of the default, for fmt muscle
+- `zimrlint --check <files>` → explicit alias of the default, for fmt muscle
   memory.
 
 Open question for Simon: accept the divergence (default = check), or match fmt

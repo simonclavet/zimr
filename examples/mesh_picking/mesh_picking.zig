@@ -306,7 +306,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .ibo_bytes = @sizeOf(@TypeOf(cube_indices)),
         .icount = cube_indices.len,
     };
-    const sphere_cpu: z.Mesh = try z.genMeshSphere(gpa, 1.0, 20, 24);
+    const sphere_cpu: z.Mesh = try z.genMeshSphere(gpa, 1.0, 24, 20);
     defer z.unloadMesh(gpa, sphere_cpu);
     const sphere: GpuMesh = try uploadMesh(gpa, device, queue, sphere_cpu, "pick_sphere");
     // Torus CPU mesh outlives init — it's the pick target.
@@ -662,7 +662,7 @@ fn update(f: *z.Frame, s: *State) void {
         if (s.picked == .marker) {
             u.text("picked: nothing yet", .{});
         } else {
-            u.text("picked: {s}  ({d:.2} away)", .{ pick_names[@intFromEnum(s.picked)], s.hit_distance });
+            u.text("picked: {s}  ({d:.2} away)", .{ pick_names[@backingInt(s.picked)], s.hit_distance });
         }
     }
     handleInput(f, s, u.wantCaptureMouse(), cam3d, vw, vh, torus_model);

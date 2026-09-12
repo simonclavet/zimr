@@ -7,10 +7,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
-const cos = zm.cos;
+const sinRad = zm.sinRad;
+const cosRad = zm.cosRad;
 const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
@@ -116,8 +116,8 @@ fn drawPenrose(f: *z.Frame, s: *State) void {
                     const start: Vec2 = turtle.origin;
                     const rad: f32 = turtle.angle * rad_per_deg;
                     turtle.origin = .{
-                        turtle.origin[0] + s.draw_length * cos(rad),
-                        turtle.origin[1] + s.draw_length * sin(rad),
+                        turtle.origin[0] + s.draw_length * cosRad(rad),
+                        turtle.origin[1] + s.draw_length * sinRad(rad),
                     };
                     const a: Vec2 = .{ start[0] + center[0], start[1] + center[1] };
                     const b: Vec2 = .{ turtle.origin[0] + center[0], turtle.origin[1] + center[1] };
@@ -152,7 +152,7 @@ fn drawPenrose(f: *z.Frame, s: *State) void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // tap cycles generations 1..max (each rebuild re-animates the reveal)
     const down: bool = z.isMouseButtonDown(f.input, .left);
@@ -180,7 +180,7 @@ fn update(f: *z.Frame, s: *State) void {
         "penrose l-system - generation {d} (tap to advance)",
         .{s.generations},
     ) catch "";
-    co.caption(f.gl, s.font, line);
+    common.caption(f.gl, s.font, line);
     z.endDrawing(f.gl);
 }
 

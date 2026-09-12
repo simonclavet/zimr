@@ -32,7 +32,7 @@ fn refRev(x: u64) u64 {
 export fn run_test() i32 {
     const xs = [_]u64{
         0x0102030405060708, 0xF0F0DEAD0000CAFE, 0x1,
-        0xFF, 0x8000000000000000, 0xFFFFFFFFFFFFFFFF,
+        0xFF,               0x8000000000000000, 0xFFFFFFFFFFFFFFFF,
     };
     var code: i32 = 1;
     for (xs) |x| {

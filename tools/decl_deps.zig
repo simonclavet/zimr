@@ -81,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
     // token span (roots are source-ordered, so ftok is strictly increasing).
     var i: usize = 0;
     while (i < ast.nodes.len) : (i += 1) {
-        const node: Index = @enumFromInt(i);
+        const node: Index = @fromBackingInt(@intCast(i));
         if (ast.nodeTag(node) != .identifier) continue;
         const use_tok: u32 = ast.nodeMainToken(node);
         const nm: []const u8 = ast.tokenSlice(use_tok);

@@ -12,7 +12,7 @@ const radFromDeg = zm.radFromDeg;
 const angle2 = zm.angle2;
 const lineAngle2 = zm.lineAngle2;
 const degFromRad = zm.degFromRad;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -50,26 +50,26 @@ fn update(f: *z.Frame, s: *State) void {
     const wedge_start: f32 = if (mode == 0) degFromRad(lineAngle2(v0, v1)) else 0.0;
     const wr: f32 = r * 0.32;
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     const ws_rad: f32 = radFromDeg(wedge_start);
     const we_rad: f32 = radFromDeg(wedge_start + angle);
-    f.gl.circleSector(v0, wr, ws_rad, we_rad, 48, .{ .color = co.palette.good.fade(0.5) });
+    f.gl.circleSector(v0, wr, ws_rad, we_rad, 48, .{ .color = common.palette.good.fade(0.5) });
     if (mode == 1) {
-        f.gl.line(.{ 0, v0[1] }, .{ w, v0[1] }, .{ .color = co.palette.ink_dim, .thickness = 1.0 });
+        f.gl.line(.{ 0, v0[1] }, .{ w, v0[1] }, .{ .color = common.palette.ink_dim, .thickness = 1.0 });
     } else {
-        f.gl.line(v0, v1, .{ .color = co.palette.ink, .thickness = 3.0 });
-        f.gl.text(.{ v1[0] + 6, v1[1] - 6 }, "v1", .{ .size = 14, .color = co.palette.ink_dim, .font = &s.font });
+        f.gl.line(v0, v1, .{ .color = common.palette.ink, .thickness = 3.0 });
+        f.gl.text(.{ v1[0] + 6, v1[1] - 6 }, "v1", .{ .size = 14, .color = common.palette.ink_dim, .font = &s.font });
     }
-    f.gl.line(v0, v2, .{ .color = co.palette.accent2, .thickness = 3.0 });
-    f.gl.circle(v0, 5.0, .{ .color = co.palette.ink, .segments = 16 });
-    f.gl.text(.{ v2[0] + 6, v2[1] - 6 }, "v2", .{ .size = 14, .color = co.palette.ink_dim, .font = &s.font });
+    f.gl.line(v0, v2, .{ .color = common.palette.accent2, .thickness = 3.0 });
+    f.gl.circle(v0, 5.0, .{ .color = common.palette.ink, .segments = 16 });
+    f.gl.text(.{ v2[0] + 6, v2[1] - 6 }, "v2", .{ .size = 14, .color = common.palette.ink_dim, .font = &s.font });
 
     var buf: [56]u8 = undefined;
     const msg: []const u8 = bufPrint(&buf, "vector angle - MODE {d} - {d:.1} deg", .{ mode, angle }) catch
         "vector angle";
-    co.caption(f.gl, s.font, msg);
+    common.caption(f.gl, s.font, msg);
     z.endDrawing(f.gl);
 }
 

@@ -1,3 +1,4 @@
+//! lint:alias raster
 //! src/raster.zig - software rasterizer.
 //!
 //! A pure-CPU implementation of OpenGL 1.1 fixed-function rendering:
@@ -51,6 +52,7 @@ const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
+const radFromTurns = zm.radFromTurns;
 const Color = zm.Color;
 const Mat = zm.Mat;
 
@@ -74,7 +76,6 @@ const matrixFrustum = zm.matrixFrustum;
 const mulMat = zm.mulMat;
 const nan = zm.nan;
 const orthographicOffCenterRhGl = zm.orthographicOffCenterRhGl;
-const pi = zm.pi;
 const scaling = zm.scaling;
 const splat2i = zm.splat2i;
 const translation = zm.translation;
@@ -2015,11 +2016,20 @@ pub const Context = struct {
         self.markMvpDirty();
     }
 
-    /// Pre-multiply the active matrix by an axis-angle rotation.
-    /// `angle_rad` is in radians. Donor: `swRotatef`.
+    /// Pre-multiply the active matrix by an axis-angle rotation of `angle_turns`.
+    ///
+    /// TURNS, TO MATCH `WgpuGl.rotate` - TWO `rotate`s IN ONE ENGINE MUST AGREE
+    ///
+    /// This is the software rasteriser's twin of `WgpuGl.rotate`, and they are chosen between at
+    /// the call site by which backend is live. When only one of them took turns, a caller that
+    /// worked on the GPU path silently rotated by a sixth of the intended amount on the software
+    /// one - and a test asserting the matrix is what caught it, not the compiler.
+    ///
+    /// `matFromAxisAngle` is zimrmath's and takes radians, which is right: a rotation matrix is
+    /// built from a sine and a cosine. The conversion is here, at the edge.
     pub fn rotate(
         self: *Context,
-        angle_rad: f32,
+        angle_turns: f32,
         x: f32,
         y: f32,
         z: f32,
@@ -2029,7 +2039,7 @@ pub const Context = struct {
         // reversed for zmath's row-vector `mul` (see `translate`).
         cur.* = mulMat(
             cur.*,
-            matFromAxisAngle(f32x4(x, y, z, 0.0), angle_rad),
+            matFromAxisAngle(f32x4(x, y, z, 0.0), radFromTurns(angle_turns)),
         );
         self.markMvpDirty();
     }
@@ -3851,17 +3861,17 @@ test "era I: PixelFormat is densely numbered for array indexing" {
     // The internal pixel-format dispatch tables use this
     // enum as an array index.  Catch any accidental sparse numbering
     // that would break that pattern.
-    try expectEqual(@as(u8, 0), @intFromEnum(PixelFormat.unknown));
-    try expectEqual(@as(u8, 1), @intFromEnum(PixelFormat.color_grayscale));
-    try expectEqual(@as(u8, 8), @intFromEnum(PixelFormat.color_r8g8b8a8));
-    try expectEqual(@as(u8, 17), @intFromEnum(PixelFormat.depth_d32));
+    try expectEqual(@as(u8, 0), @backingInt(PixelFormat.unknown));
+    try expectEqual(@as(u8, 1), @backingInt(PixelFormat.color_grayscale));
+    try expectEqual(@as(u8, 8), @backingInt(PixelFormat.color_r8g8b8a8));
+    try expectEqual(@as(u8, 17), @backingInt(PixelFormat.depth_d32));
     try expectEqual(@as(usize, 18), PixelFormat.count);
 }
 
 test "era I: PixelAlpha is densely numbered" {
-    try expectEqual(@as(u8, 0), @intFromEnum(PixelAlpha.none));
-    try expectEqual(@as(u8, 1), @intFromEnum(PixelAlpha.bin));
-    try expectEqual(@as(u8, 2), @intFromEnum(PixelAlpha.yes));
+    try expectEqual(@as(u8, 0), @backingInt(PixelAlpha.none));
+    try expectEqual(@as(u8, 1), @backingInt(PixelAlpha.bin));
+    try expectEqual(@as(u8, 2), @backingInt(PixelAlpha.yes));
 }
 
 // ============================================================================
@@ -4795,14 +4805,14 @@ test "era II: scale on identity yields a scaling matrix" {
     try expectEqual(@as(f32, 1.0), cur[3][3]);
 }
 
-test "era II: rotate by pi/2 around Z yields a Z rotation" {
+test "era II: rotate by a quarter turn around Z yields a Z rotation" {
     var ctx = try Context.init(std.testing.allocator, 8, 8);
     defer ctx.deinit(std.testing.allocator);
 
-    ctx.rotate(pi / 2.0, 0, 0, 1);
+    ctx.rotate(0.25, 0, 0, 1);
     const cur: Matrix = ctx.currentMatrix().*;
 
-    // Rodrigues with axis (0,0,1) and angle pi/2: cos=0, sin=1, t=1.
+    // Rodrigues with axis (0,0,1) and a QUARTER TURN: cos=0, sin=1, t=1.
     // Result: m0 = z*z*t + cos = 0 (with axis Z, x=y=0); etc.  The
     // rotation now goes through `zm.matFromAxisAngle` - a 90° Z
     // rotation turns the X axis into +Y and Y into -X.

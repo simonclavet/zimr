@@ -415,7 +415,7 @@ The README is right that this flushes the unknowns. Reconcile against real
 - Residual signature/idiom fixups (likely: `@ptrCast` stride slicing,
   `bufPrintZ` label lifetimes, the `@bitCast` flag paths, `std.ArrayList`
   unmanaged calls, `@Vector` component access).
-- **Lint conformance** to zimr's `lint_zimr` rules (typed locals, braced ifs,
+- **Lint conformance** to zimr's `zimrlint` rules (typed locals, braced ifs,
   `no-qualified-zm` → bind `const X = zm.X` at file scope, `[std-math]` →
   route through `zm` not `std.math`, multiline 5+-param fns, `@round`→int
   directly). `plot_core.niceNum/orderOfMagnitude` use `std.math.*` — must move

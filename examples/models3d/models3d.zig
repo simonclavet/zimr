@@ -15,7 +15,7 @@ const Vec = zm.Vec;
 const pi = zm.pi;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -36,7 +36,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn update(f: *z.Frame, s: *State) void {
     s.angle += f.time.delta_time * 20.0; // 20°/sec orbit
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // Camera orbits at radius 10, height 5, looking at the scene centre.
     const rad: f32 = s.angle * pi / 180.0;
@@ -75,7 +75,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "WebGPU 3D primitives - sphere, cube, cylinder, capsule, cone (+ AABBs)");
+    common.caption(f.gl, s.font, "WebGPU 3D primitives - sphere, cube, cylinder, capsule, cone (+ AABBs)");
     z.endDrawing(f.gl);
 }
 

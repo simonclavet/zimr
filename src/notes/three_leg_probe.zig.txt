@@ -1,0 +1,241 @@
+//! Shift the TORSO with the feet pinned, then lift. The corrected implementation.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+fn footAt(model: *const rbt.Model, d: *const rbt.Data, geom: u32) zm.Vec {
+    const body: u32 = model.geom_body[geom];
+    return d.body_xpos[body] + zm.rotate(d.body_xrot[body], model.geom_pos[geom]);
+}
+
+fn plantFeet(model: *const rbt.Model, d: *rbt.Data, foot_geom: [4]u32, lifted: i32) void {
+    d.clearContacts();
+    for (0..4) |leg| {
+        if (@as(i32, @intCast(leg)) == lifted) continue;
+        const g: u32 = foot_geom[leg];
+        const radius: f32 = switch (model.geom_shape[g]) {
+            .sphere => |sp| sp.radius,
+            else => continue,
+        };
+        const at: zm.Vec = footAt(model, d, g);
+        const gap: f32 = at[2] - radius;
+        if (gap > 0.02) continue;
+        d.pushContact(.{
+            .position = vec(at[0], at[1], 0),
+            .normal = vec(0, 0, 1),
+            .tangent = .{ vec(1, 0, 0), vec(0, 1, 0) },
+            .distance = gap,
+            .friction = .{ 0.8, 0.8 },
+            .body_a = rbt.world_body,
+            .body_b = model.geom_body[g],
+            .id = g,
+        });
+    }
+}
+
+fn triangleMargin(tri: [3]zm.Vec, point: zm.Vec) f32 {
+    var worst: f32 = 1.0e9;
+    for (0..3) |i| {
+        const a = tri[i];
+        const b = tri[(i + 1) % 3];
+        const c = tri[(i + 2) % 3];
+        const ex = b[0] - a[0];
+        const ey = b[1] - a[1];
+        const len = @sqrt(ex * ex + ey * ey);
+        var nx = -ey / len;
+        var ny = ex / len;
+        if (nx * (c[0] - a[0]) + ny * (c[1] - a[1]) < 0) {
+            nx = -nx;
+            ny = -ny;
+        }
+        worst = @min(worst, nx * (point[0] - a[0]) + ny * (point[1] - a[1]));
+    }
+    return worst;
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, go1_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    const options: rbt.Options = .{ .max_contacts = 64, .timestep = 1.0 / 500.0, .gravity = vec(0, 0, -9.81) };
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, options);
+    defer imp.deinit();
+    const model: *const rbt.Model = &imp.model;
+
+    var foot_geom: [4]u32 = undefined;
+    var n: usize = 0;
+    for (0..model.ngeom) |g| {
+        if (model.geom_shape[g] == .sphere and n < 4) {
+            foot_geom[n] = @intCast(g);
+            n += 1;
+        }
+    }
+    // Per-leg actuation, so IK on one leg cannot contort the others.
+    var leg_act: [4]ctl.Actuation = undefined;
+    for (0..4) |leg| leg_act[leg] = try ctl.limbActuation(gpa, model, model.geom_body[foot_geom[leg]]);
+    defer for (0..4) |leg| leg_act[leg].deinit();
+    var all_act: ctl.Actuation = try ctl.Actuation.init(gpa, model);
+    defer all_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(model));
+    defer gpa.free(ik_scratch);
+
+    // ★★★ `applyKeyframe` IS NOT A MEMCPY. The raw keyframe array is in the FILE's layout;
+    // the model's differs in the free joint's quaternion. Copying it directly put the robot
+    // upside down — feet at z = 0.535, above a trunk at 0.27 — and every number downstream
+    // described an inverted machine without anything complaining.
+    const home: []f32 = blk: {
+        var seed: rbt.Data = try rbt.Data.init(gpa, model);
+        defer seed.deinit();
+        _ = rmj.applyKeyframe(model, &seed, robot.keyframes[0]);
+        rbt.forward(model, &seed);
+        break :blk try gpa.dupe(f32, seed.pos);
+    };
+    defer gpa.free(home);
+    const trunk: u32 = imp.bodyIndex("trunk") orelse 1;
+    const root: u32 = model.jnt_qpos_adr[0];
+
+    p("torso-shift then lift. front feet are 0,1; rear are 2,3\n", .{});
+    p("  lift  shift(x,y)    margin   trunk z   roll    pitch   foot lift   verdict\n", .{});
+
+    for ([_]f32{ 0.002, 0.005, 0.01 }) |rate| {
+        const phase_limit: u32 = 2;
+        p("  --- closed loop on the CM, rate {d:.3} ---\n", .{rate});
+
+        for ([_]i32{ 0, 1, 2, 3 }) |lifted| {
+            var d: rbt.Data = try rbt.Data.init(gpa, model);
+            defer d.deinit();
+            _ = rmj.applyKeyframe(model, &d, robot.keyframes[0]);
+            rbt.forward(model, &d);
+            for (0..600) |_| {
+                plantFeet(model, &d, foot_geom, -1);
+                (ctl.PoseHold{ .target = home, .kp = 100, .kv = 4 }).apply(model, &d, all_act);
+                rbt.step(model, &d);
+            }
+
+            // Capture the settled stance: foot world positions and the torso pose.
+            var pinned: [4]zm.Vec = undefined;
+            for (0..4) |leg| pinned[leg] = footAt(model, &d, foot_geom[leg]);
+            const captured: []f32 = try gpa.dupe(f32, d.pos);
+            defer gpa.free(captured);
+
+            var support: [3]zm.Vec = undefined;
+            var goal: [2]f32 = .{ 0, 0 };
+            var k: usize = 0;
+            for (0..4) |leg| {
+                if (@as(i32, @intCast(leg)) == lifted) continue;
+                support[k] = pinned[leg];
+                goal[0] += pinned[leg][0];
+                goal[1] += pinned[leg][1];
+                k += 1;
+            }
+            goal[0] /= 3.0;
+            goal[1] /= 3.0;
+
+            // ★ THE SHIFT IS ON THE TORSO. Move the commanded torso by (CM goal − CM now), pin every
+            // foot, and let per-leg IK find the angles. Both ends of each leg are fixed, so the
+            // answer is determined rather than searched for.
+            const com_now: zm.Vec = blk: {
+                const live: []f32 = try gpa.dupe(f32, d.pos);
+                defer gpa.free(live);
+                @memcpy(d.pos, home);
+                d.stage = .stale;
+                rbt.forward(model, &d);
+                const c: zm.Vec = d.subtree_com[rbt.world_body];
+                @memcpy(d.pos, live);
+                d.stage = .stale;
+                rbt.forward(model, &d);
+                break :blk c;
+            };
+            const shift = [2]f32{ goal[0] - com_now[0], goal[1] - com_now[1] };
+
+            const target_pose: []f32 = try gpa.dupe(f32, captured);
+            defer gpa.free(target_pose);
+
+            var torso_offset = [2]f32{ 0, 0 };
+            var lift_height: f32 = 0;
+            for (0..2500) |step_index| {
+                // Ramp the shift over 1 s, then raise the foot over the next 1 s.
+                const shift_frac: f32 = if (phase_limit == 0) 0 else @min(1.0, @as(f32, @floatFromInt(step_index)) / 500.0);
+                lift_height = if (phase_limit >= 2 and step_index > 1000)
+                    @min(0.05, 0.05 * (@as(f32, @floatFromInt(step_index - 1000)) / 500.0))
+                else
+                    0;
+
+                // Solve from the CAPTURED stance, never the live robot — see solveBodyPose.
+                const live_com: zm.Vec = d.subtree_com[rbt.world_body];
+                const saved: []f32 = try gpa.dupe(f32, d.pos);
+                defer gpa.free(saved);
+                @memcpy(d.pos, captured);
+                // ── ★★★ CLOSED LOOP ON THE MEASURED CM, NOT AN OPEN-LOOP RATIO ──
+                //
+                // Shifting the torso by d does NOT move the centre of mass by d: the legs carry
+                // about half the robot and largely stay put, so the CM follows roughly half way.
+                // An open-loop shift therefore needs a fudge factor — and measured, no single
+                // factor works: front feet need x1.0 and fall at x2.0, rear feet need x2.0 and
+                // fall at x1.0. The required factor depends on which foot is coming up.
+                //
+                // Integrating the measured error removes the constant entirely. It converges to
+                // whatever displacement the geometry actually needs.
+                if (shift_frac > 0) {
+                    torso_offset[0] += rate * (goal[0] - live_com[0]);
+                    torso_offset[1] += rate * (goal[1] - live_com[1]);
+                    torso_offset[0] = zm.clamp(torso_offset[0], -0.25, 0.25);
+                    torso_offset[1] = zm.clamp(torso_offset[1], -0.25, 0.25);
+                }
+                d.pos[root + 0] = captured[root + 0] + torso_offset[0];
+                d.pos[root + 1] = captured[root + 1] + torso_offset[1];
+                d.stage = .stale;
+                rbt.forward(model, &d);
+                for (0..4) |leg| {
+                    var goal_point: zm.Vec = pinned[leg];
+                    if (@as(i32, @intCast(leg)) == lifted) goal_point[2] += lift_height;
+                    _ = (ctl.Ik{ .max_iterations = 12, .max_step = 0.15 }).solve(
+                        model,
+                        &d,
+                        leg_act[leg],
+                        .{ .body = model.geom_body[foot_geom[leg]], .offset = model.geom_pos[foot_geom[leg]], .goal = goal_point },
+                        ik_scratch,
+                    );
+                }
+                @memcpy(target_pose, d.pos);
+                @memcpy(d.pos, saved);
+                d.stage = .stale;
+                // ★★★ AND RECOMPUTE THE KINEMATICS. `plantFeet` reads `body_xpos` to decide
+                // where each contact goes and how deep it is. Marking the pose stale is not
+                // enough: without this the contacts are placed from the IK-solve configuration,
+                // centimetres from where the robot's feet actually are, so it is held up by
+                // contacts that are not under it.
+                rbt.forward(model, &d);
+
+                plantFeet(model, &d, foot_geom, if (phase_limit >= 2 and step_index > 1000) lifted else -1);
+                (ctl.PoseHold{ .target = target_pose, .kp = 100, .kv = 4 }).apply(model, &d, all_act);
+                rbt.step(model, &d);
+            }
+
+            const com: zm.Vec = d.subtree_com[rbt.world_body];
+            const margin: f32 = triangleMargin(support, com);
+            const rpy: zm.Vec = zm.quatToEulerXYZ(.{ d.pos[root + 3], d.pos[root + 4], d.pos[root + 5], d.pos[root + 6] });
+            const z: f32 = d.body_xpos[trunk][2];
+            const raised: f32 = footAt(model, &d, foot_geom[@intCast(lifted)])[2];
+            const ok: bool = z > 0.22 and @abs(rpy[0]) < 0.3 and @abs(rpy[1]) < 0.3 and
+                (phase_limit < 2 or raised > 0.02);
+            p("  {d:>4}  ({d:>5.3},{d:>6.3})  {d:>7.4}  {d:>7.3}  {d:>6.3}  {d:>6.3}  {d:>9.3}   {s}\n", .{
+                lifted,                    shift[0], shift[1], margin, z, rpy[0], rpy[1], raised,
+                if (ok) "OK" else "falls",
+            });
+        }
+    }
+}

@@ -1,11 +1,11 @@
 # Adding the `scope-balance` lint rule (begin*/end* pairing check)
 
-Goal: a `lint_zimr` rule that flags, per function, any `begin{X}` scope-open
+Goal: a `zimrlint` rule that flags, per function, any `begin{X}` scope-open
 without a matching `end{X}` in the same function. Catches "forgot end" (e.g. an
 `update()` that opens `beginDrawing` but never `endDrawing` — the helmet_sw class),
 statically, regardless of whether the example uses `defer` or a manual `end()`.
 
-## lint_zimr.zig framework facts (verified this session)
+## zimrlint.zig framework facts (verified this session)
 
 - **Rules** are `fn runX(ctx: Ctx) !void` functions, registered by adding
   `try runX(ctx);` inside `fn runChecks(ctx)` (~line 3674–3692; `runChecks` is
@@ -34,11 +34,11 @@ statically, regardless of whether the example uses `defer` or a manual `end()`.
   descend into blocks/statements (only expression wrappers + call args), so it
   would miss the calls inside a function body. Use the **token-range approach**
   instead (below).
-- **CRITICAL BUILD NOTE**: this dev Zig miscompiles `lint_zimr` under
+- **CRITICAL BUILD NOTE**: this dev Zig miscompiles `zimrlint` under
   `ReleaseFast` → SIGILL on every input. build.zig now compiles it `.ReleaseSafe`
   (fixed). To test the rule standalone:
-  `tools/zig-.../zig build-exe tools/lint_zimr.zig -O ReleaseSafe -femit-bin=/tmp/lint_safe`
-  then `/tmp/lint_safe <file.zig>`. (The cached `.zig-cache/o/*/lint_zimr` may be
+  `tools/zig-.../zig build-exe tools/zimrlint.zig -O ReleaseSafe -femit-bin=/tmp/lint_safe`
+  then `/tmp/lint_safe <file.zig>`. (The cached `.zig-cache/o/*/zimrlint` may be
   a stale ReleaseFast crasher — don't trust it; build fresh ReleaseSafe.)
 
 ## Algorithm (token-range, avoids the childNodes gap)

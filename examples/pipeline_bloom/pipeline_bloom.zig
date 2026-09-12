@@ -26,7 +26,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 const zm = @import("zm");
 const Vec = zm.Vec;
 const float = zm.float;
@@ -288,7 +288,7 @@ fn update(f: *z.Frame, s: *State) void {
     // 4) Composite scene + blurred highlights -> backbuffer.
     z.drawFullscreenShader(f.gl, CompositeSchema, &s.composite);
 
-    co.caption(f.gl, s.font, "pipeline_bloom: glowing orbs -> bright -> separable blur -> composite (typed)");
+    common.caption(f.gl, s.font, "pipeline_bloom: glowing orbs -> bright -> separable blur -> composite (typed)");
     z.endDrawing(f.gl);
 }
 

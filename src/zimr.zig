@@ -1,3 +1,4 @@
+//! lint:alias z
 //! ============================================================================
 //! zimr WebGPU architecture — THE reference doc for the wgpu stack
 //! ============================================================================
@@ -87,7 +88,7 @@
 //! MUST mirror this grouping.
 //!
 //! ---- 4. The two host binding paths ------------------------------------
-//! (a) Resources(Schema)  [shader_runtime_wgpu.zig] — the easy path for
+//! (a) Resources(Schema)  [shader_runtime.zig] — the easy path for
 //!     SINGLE-UBO, SINGLE-GROUP shaders: one uniform buffer at group 0
 //!     binding 0, samplers at group 1.  `Renderer2D` and the unlit
 //!     `cube_demo` use it.  LIMITATION: it models exactly ONE ubo
@@ -113,7 +114,7 @@
 //!                           the byte blobs the JS side decodes.
 //!     pipeline_cache      — StateCombo.fromParts(topology, blend, DEPTH,
 //!                           CULL, color_fmt, depth_fmt, samples) keying.
-//!     shader_runtime_wgpu — loadShader, Resources(Schema), RenderPipeline.
+//!     shader_runtime — loadShader, Resources(Schema), RenderPipeline.
 //!     gpu_iface           — WgpuBackend (setPipeline/setBindGroup/begin*).
 //!     WgpuTexture         — texture+view+sampler bundle.
 //!
@@ -143,11 +144,11 @@
 
 pub const wgpu = @import("wgpu.zig");
 pub const wgpu_app = @import("wgpu_app.zig");
-pub const dom = @import("web.zig").dom;
-pub const DateTime = @import("web.zig").dom.DateTime;
-pub const localTime = @import("web.zig").dom.localNow;
-pub const epochMillis = @import("web.zig").dom.epochMillis;
-pub const timezoneOffsetMinutes = @import("web.zig").dom.tz_offset_min;
+pub const dom = web.dom;
+pub const DateTime = web.dom.DateTime;
+pub const localTime = web.dom.localNow;
+pub const epochMillis = web.dom.epochMillis;
+pub const timezoneOffsetMinutes = web.dom.tz_offset_min;
 
 // Software rasterizer (pure-Zig) + its per-pixel fragment-shader dispatcher, so
 // WGPU examples can run the SAME shaderMain on the CPU for side-by-side
@@ -180,7 +181,7 @@ pub const checkCollisionCircleRec = @import("shapes2d.zig").checkCollisionCircle
 pub const checkCollisionCircles = @import("shapes2d.zig").checkCollisionCircles;
 pub const colorFromHSV = wgpu_app.colorFromHSV;
 pub const beginMode2D = wgpu_app.beginMode2D;
-pub const BlendMode = @import("wgpu.zig").BlendMode;
+pub const BlendMode = wgpu.BlendMode;
 pub const beginBlendMode = wgpu_app.beginBlendMode;
 
 /// raylib's `BeginShaderMode` / `EndShaderMode`: a user fragment shader over the ORDINARY 2D
@@ -240,13 +241,63 @@ pub const BoundingBox = wgpu_app.BoundingBox;
 pub const Mesh = wgpu_app.Mesh;
 pub const Model = wgpu_app.Model;
 pub const genMeshCube = wgpu_app.genMeshCube;
-pub const genMeshSphere = wgpu_app.genMeshSphere;
-pub const genMeshTorus = wgpu_app.genMeshTorus;
+pub const genMeshTangents = wgpu_app.genMeshTangents;
+// New parametric-spine shape generators (reclaim the freed genMesh* names).
+/// BVH skeletal animation: `bvh.Data` -> `ModelSkeleton` + `ModelAnimation`, plus forward
+/// kinematics. Exposed as a namespace rather than flattened because the three verbs are only
+/// meaningful together — and `unloadBvhSkeletalClip` must never be confused with `unloadModel`.
+pub const draw3d = struct {
+    pub const BvhSkeletalClip = @import("draw3d.zig").BvhSkeletalClip;
+    pub const loadBvhSkeletalClip = @import("draw3d.zig").loadBvhSkeletalClip;
+    pub const unloadBvhSkeletalClip = @import("draw3d.zig").unloadBvhSkeletalClip;
+    pub const bvhForwardKinematics = @import("draw3d.zig").bvhForwardKinematics;
+
+    /// FBX -> a skinned `Model` plus its skeleton and clip, in one call. See `loadFbxModel`
+    /// for why assembling these together is the point rather than a convenience.
+    pub const FbxModel = @import("draw3d.zig").FbxModel;
+    pub const LoadFbxModelOptions = @import("draw3d.zig").LoadFbxModelOptions;
+    pub const loadFbxModel = @import("draw3d.zig").loadFbxModel;
+    pub const unloadFbxModel = @import("draw3d.zig").unloadFbxModel;
+    pub const computeMeshNormals = @import("draw3d.zig").computeMeshNormals;
+    pub const scaleBvhSkeletalClip = @import("draw3d.zig").scaleBvhSkeletalClip;
+    pub const bvhForwardKinematicsFromRotations = @import("draw3d.zig").bvhForwardKinematicsFromRotations;
+    pub const fbxBindOrientations = @import("draw3d.zig").fbxBindOrientations;
+
+    /// CPU skinning, with zm's two easily-inverted conventions handled in one place. Use these
+    /// rather than hand-rolling the matrix math — see `poseSkinMatrices`' doc.
+    pub const poseSkinMatrices = @import("draw3d.zig").poseSkinMatrices;
+    pub const skinMeshCpu = @import("draw3d.zig").skinMeshCpu;
+};
+pub const parametricMesh = @import("draw3d.zig").parametricMesh;
+pub const ParametricFn = @import("draw3d.zig").ParametricFn;
+pub const genMeshSphere = @import("draw3d.zig").genMeshSphere;
+pub const genMeshHemiSphere = @import("draw3d.zig").genMeshHemiSphere;
 pub const genMeshCylinder = @import("draw3d.zig").genMeshCylinder;
 pub const genMeshCone = @import("draw3d.zig").genMeshCone;
+pub const genMeshTorus = @import("draw3d.zig").genMeshTorus;
 pub const genMeshKnot = @import("draw3d.zig").genMeshKnot;
 pub const genMeshPlane = @import("draw3d.zig").genMeshPlane;
-pub const genMeshHemiSphere = @import("draw3d.zig").genMeshHemiSphere;
+pub const genMeshKlein = @import("draw3d.zig").genMeshKlein;
+// Platonic solids (flat-shaded).
+pub const genMeshTetrahedron = @import("draw3d.zig").genMeshTetrahedron;
+pub const genMeshOctahedron = @import("draw3d.zig").genMeshOctahedron;
+pub const genMeshIcosahedron = @import("draw3d.zig").genMeshIcosahedron;
+pub const genMeshDodecahedron = @import("draw3d.zig").genMeshDodecahedron;
+pub const genMeshIcosphere = @import("draw3d.zig").genMeshIcosphere;
+pub const genMeshRock = @import("draw3d.zig").genMeshRock;
+pub const serialize = @import("serialize.zig");
+// Mesh-ops toolkit (compose + edit any types.Mesh).
+pub const meshMerge = @import("draw3d.zig").meshMerge;
+pub const meshTranslate = @import("draw3d.zig").meshTranslate;
+pub const meshScale = @import("draw3d.zig").meshScale;
+pub const meshRotate = @import("draw3d.zig").meshRotate;
+pub const meshInvert = @import("draw3d.zig").meshInvert;
+pub const meshComputeAabb = @import("draw3d.zig").meshComputeAabb;
+pub const meshClone = @import("draw3d.zig").meshClone;
+pub const meshUnweld = @import("draw3d.zig").meshUnweld;
+pub const meshWeld = @import("draw3d.zig").meshWeld;
+pub const meshRemoveDegenerate = @import("draw3d.zig").meshRemoveDegenerate;
+pub const genMeshDisk = @import("draw3d.zig").genMeshDisk;
 pub const unloadMesh = @import("draw3d.zig").unloadMesh;
 pub const unloadModel = @import("draw3d.zig").unloadModel;
 pub const getScreenToWorldRay = @import("draw3d.zig").getScreenToWorldRay;
@@ -264,6 +315,7 @@ pub const genMeshHeightmap = @import("draw3d.zig").genMeshHeightmap;
 pub const genMeshCubicmap = @import("draw3d.zig").genMeshCubicmap;
 pub const loadModelFromMesh = wgpu_app.loadModelFromMesh;
 pub const drawModel = wgpu_app.drawModel;
+pub const drawModel3D = wgpu_app.drawModel3D;
 pub const drawModelWires = wgpu_app.drawModelWires;
 pub const drawMeshInstanced = wgpu_app.drawMeshInstanced;
 
@@ -274,28 +326,39 @@ pub const Image = @import("types.zig").Image;
 pub const PixelFormat = @import("types.zig").PixelFormat;
 /// Decode PNG bytes into an Image (CPU only — no GPU). Agnostic (codecs).
 pub const loadImageFromMemory = wgpu_app.loadImageFromMemory;
+/// A decoded GIF animation (raylib's `LoadImageAnim`): N fully-composited
+/// RGBA8 canvases (one per frame) + each frame's delay in ms. Frame `i` is
+/// `anim.frame(i)`; release with `anim.deinit(gpa)`. Play by uploading the
+/// current frame into a `CpuFramebuffer` each time it changes.
+pub const GifAnim = codecs.gif.Anim;
+/// Decode animated (or single-frame) GIF bytes into a `GifAnim`. CPU only —
+/// no GPU. The frames are already composited (disposal + transparency
+/// applied), so a player just blits `anim.frame(i)`.
+pub fn loadGifAnim(gpa: std.mem.Allocator, bytes: []const u8) codecs.gif.Error!GifAnim {
+    return codecs.gif.decode(gpa, bytes);
+}
 /// Procedural CPU image generation (backend-agnostic; src/image.zig). Each
 /// returns an Image to upload with loadTextureFromImage. genImageWhiteNoise
 /// takes an `rng` (e.g. `z.rng.Seeded.init(seed).rng()`).
-const image_gen = @import("image.zig");
-pub const genImageColor = image_gen.genImageColor;
-pub const genImageChecked = image_gen.genImageChecked;
-pub const genImageWhiteNoise = image_gen.genImageWhiteNoise;
-pub const genImagePerlinNoise = image_gen.genImagePerlinNoise;
-pub const genImageCellular = image_gen.genImageCellular;
+const image = @import("image.zig");
+pub const genImageColor = image.genImageColor;
+pub const genImageChecked = image.genImageChecked;
+pub const genImageWhiteNoise = image.genImageWhiteNoise;
+pub const genImagePerlinNoise = image.genImagePerlinNoise;
+pub const genImageCellular = image.genImageCellular;
 /// CPU image manipulation (backend-agnostic; src/image.zig). In-place / copy
 /// ops on RGBA8 Images; pair with updateTexture to push edits to the GPU.
-pub const imageColorInvert = image_gen.imageColorInvert;
-pub const imageCopy = image_gen.imageCopy;
-pub const imageRotateCW = image_gen.imageRotateCW;
-pub const imageRotate = image_gen.imageRotate;
-pub const imageResize = image_gen.imageResize;
-pub const imageFromChannel = image_gen.imageFromChannel;
-pub const imageFormat = image_gen.imageFormat;
-pub const imageAlphaMask = image_gen.imageAlphaMask;
-pub const imageRotateCCW = image_gen.imageRotateCCW;
-pub const imageBlurGaussian = image_gen.imageBlurGaussian;
-pub const unloadImage = image_gen.unloadImage;
+pub const imageColorInvert = image.imageColorInvert;
+pub const imageCopy = image.imageCopy;
+pub const imageRotateCW = image.imageRotateCW;
+pub const imageRotate = image.imageRotate;
+pub const imageResize = image.imageResize;
+pub const imageFromChannel = image.imageFromChannel;
+pub const imageFormat = image.imageFormat;
+pub const imageAlphaMask = image.imageAlphaMask;
+pub const imageRotateCCW = image.imageRotateCCW;
+pub const imageBlurGaussian = image.imageBlurGaussian;
+pub const unloadImage = image.unloadImage;
 /// Reproducible RNG (`rng.Seeded.init(seed)`), re-exported from the runtime.
 pub const rng = @import("runtime.zig").effects.rng;
 
@@ -303,22 +366,22 @@ pub const rng = @import("runtime.zig").effects.rng;
 // Call `z.audio_device.init(f.audio_device)` once (that's what reaches the
 // `extern "audio"` JS bridge), then synthesize with z.composer / z.waves and
 // play via z.sounds. Keep an AudioState on your app State for the pools.
-pub const audio_device = @import("sound.zig").audio_device;
-pub const waves = @import("sound.zig").waves;
-pub const sounds = @import("sound.zig").sounds;
-pub const composer = @import("sound.zig").composer;
-pub const analyser = @import("sound.zig").analyser;
-pub const AudioState = @import("sound.zig").AudioState;
+pub const audio_device = sound.audio_device;
+pub const waves = sound.waves;
+pub const sounds = sound.sounds;
+pub const composer = sound.composer;
+pub const analyser = sound.analyser;
+pub const AudioState = sound.AudioState;
 pub const Sound = @import("types.zig").Sound;
 pub const Wave = @import("types.zig").Wave;
 /// AudioStream: gapless real-time PCM streaming (3-buffer rotation scheduled
 /// via playBufferAt). `z.streams.load/update/isProcessed/...`.
 pub const AudioStream = @import("types.zig").AudioStream;
-pub const streams = @import("sound.zig").streams;
+pub const streams = sound.streams;
 /// Music: streamed/decoded playback (OGG via the bridge's async decodeAudioData),
 /// looping + seek + position. `z.music.loadFromMemory/play/update/isReady/...`.
 pub const Music = @import("types.zig").Music;
-pub const music = @import("sound.zig").music;
+pub const music = sound.music;
 /// S4: canonical impl lives in wgpu_app; the umbrella re-exports.
 pub const loadTextureFromImage = wgpu_app.loadTextureFromImage;
 /// Re-upload an Image into an existing texture in place (raylib UpdateTexture).
@@ -355,6 +418,26 @@ pub const entities = @import("entities.zig");
 pub const ecs = @import("entities.zig");
 pub const zimrphysics = @import("zimrphysics.zig");
 pub const zimrphysics2d = @import("zimrphysics2d.zig");
+/// Reduced-coordinate articulated-body dynamics, in the style of MuJoCo. Complements
+/// zimrphysics: that one is for many loose bodies, this one is for machines with joints.
+pub const robot = @import("robot.zig");
+/// The seam between `robot` and `zimrphysics`: kinematic proxies out, contacts back.
+/// A separate module from `robot` on purpose — robot.zig depends only on zimrmath, so a
+/// headless rollout or a batched GPU job does not drag a collision engine along with it.
+pub const robot_physics = @import("robot_physics.zig");
+/// Compose a robot spec with free bodies — and with other robots — into ONE `robot.Model`.
+///
+/// The answer to bidirectional coupling (§4k): a contact between an arm and a crate is one
+/// constraint between two inertias, and resolving it in two engines is not an approximation
+/// of resolving it once. Put the crate in the tree and there is nothing to couple.
+pub const robot_scene = @import("robot_scene.zig");
+/// Read MuJoCo's own model format — the one Menagerie's robots are written in.
+pub const mjcf = @import("mjcf.zig");
+/// Turn a parsed MJCF robot into a simulable `robot.Model`.
+pub const robot_mjcf = @import("robot_mjcf.zig");
+/// Pose holding and inverse kinematics — the control layer every demo needs.
+pub const robot_control = @import("robot_control.zig");
+pub const robot_mpc = @import("robot_mpc.zig");
 pub const physics_common = @import("physics_common.zig");
 
 // Enforce the cross-engine API contract at compile time: the 2D and 3D physics engines
@@ -364,6 +447,7 @@ comptime {
 }
 pub const sound = @import("sound.zig");
 pub const web = @import("web.zig");
+pub const net = @import("net.zig");
 
 // ---- std.log -> on-page console (the proper logging fix) -------------------
 //
@@ -379,13 +463,12 @@ pub const web = @import("web.zig");
 // Each line is formatted with its scope/level prefix and routed through
 // web.dom.log (which targets js_log on wasm, stderr on host).
 fn zimrLogFn(
-    comptime level: @import("std").log.Level,
+    comptime level: std.log.Level,
     comptime scope: @TypeOf(.enum_literal),
     comptime fmt: []const u8,
     args: anytype,
 ) void {
     // lint:off import-at-top: logFn callback; module has no file-scope std
-    const std = @import("std");
     const dom_level: web.dom.LogLevel = switch (level) {
         .err => .err,
         .warn => .warn,
@@ -402,7 +485,7 @@ fn zimrLogFn(
     // find where real content ends (log text never contains a NUL).
     var buf: [16384]u8 = @splat(0);
     const marker: []const u8 = " [...truncated]";
-    const msg: []const u8 = std.fmt.bufPrint(buf[0 .. buf.len - marker.len], prefix ++ fmt, args) catch trunc: {
+    const msg: []const u8 = bufPrint(buf[0 .. buf.len - marker.len], prefix ++ fmt, args) catch trunc: {
         const cut: usize = std.mem.indexOfScalar(u8, buf[0 .. buf.len - marker.len], 0) orelse (buf.len - marker.len);
         @memcpy(buf[cut .. cut + marker.len], marker);
         break :trunc buf[0 .. cut + marker.len];
@@ -412,7 +495,7 @@ fn zimrLogFn(
 
 /// Root-module std options that route std.log to the on-page console.
 /// `pub const std_options = z.std_options;` in your example's main file.
-pub const std_options: @import("std").Options = .{ .logFn = zimrLogFn };
+pub const std_options: std.Options = .{ .logFn = zimrLogFn };
 pub const utils = @import("utils.zig");
 
 /// The integrated, in-process profiler (Tracy-inspired). Comptime-gated by
@@ -424,8 +507,8 @@ pub const profiler = @import("profiler.zig");
 pub const profiler_ui = @import("profiler_ui.zig");
 
 // Core lifecycle types
-pub const GpuFrame = @import("gpu.zig").GpuFrame;
-pub const PipelineCache = @import("gpu.zig").PipelineCache;
+pub const GpuFrame = gpu.GpuFrame;
+pub const PipelineCache = gpu.PipelineCache;
 pub const BindGroupCache = @import("BindGroupCache.zig");
 
 // Drawing layer
@@ -467,8 +550,8 @@ pub const UiHost = wgpu_app.UiHost;
 pub const ui = @import("ui.zig");
 /// Comptime feature flags + the todo() marker (re-exports of utils.*),
 /// at the public paths example authors use.
-pub const features = @import("utils.zig").features;
-pub const todo = @import("utils.zig").todo;
+pub const features = utils.features;
+pub const todo = utils.todo;
 pub const CpuFramebuffer = wgpu_app.CpuFramebuffer;
 pub const WgpuRenderTexture = @import("wgpu_texture.zig").WgpuRenderTexture;
 
@@ -478,6 +561,11 @@ pub const uniformColor = @import("gpu_iface.zig").uniformColor;
 pub const SwBackend = @import("gpu_iface.zig").SwBackend;
 pub const PassState = @import("gpu_iface.zig").PassState;
 pub const FrameContext = @import("gpu_iface.zig").FrameContext;
+/// The default 2D vertex (`pos: vec2, uv: vec2, color: u8x4_unorm`) — the
+/// layout `loadShader` builds its pipelines with. Exported so an app that owns
+/// its own vertex buffer (a fullscreen triangle drawn through a shader's own
+/// pipeline rather than the 2D shapes batch) can spell the type it uploads.
+pub const Vertex2D = @import("gpu_iface.zig").Vertex2D;
 
 // Shader loading.  `shader_compile.zig` (runtime SPIR-V→WGSL) is
 // NOT re-exposed at this surface as of Phase D1 of the wgpu plan
@@ -486,8 +574,8 @@ pub const FrameContext = @import("gpu_iface.zig").FrameContext;
 pub const shader = @import("shader_runtime_wgpu.zig");
 
 // Render / compute passes
-pub const render_pass = @import("wgpu.zig").render_pass;
-pub const compute_pass = @import("wgpu.zig").compute_pass;
+pub const render_pass = wgpu.render_pass;
+pub const compute_pass = wgpu.compute_pass;
 
 // Internals for advanced users (typically not needed).
 // `spv2wgsl.zig` is BUILD-TIME ONLY (Phase D1 of the wgpu plan);
@@ -529,7 +617,7 @@ pub const FluidDiscs = @import("draw3d.zig").draw_points.FluidDiscs;
 /// `z.BufRegion` — a buffer region (handle/offset/size) for renderer bindings.
 pub const BufRegion = @import("draw3d.zig").draw_points.BufRegion;
 pub const FluidDiscOptions = @import("draw3d.zig").draw_points.FluidOptions;
-pub const StorageBuffer = @import("wgpu.zig").storage_buffer.StorageBuffer;
+pub const StorageBuffer = wgpu.storage_buffer.StorageBuffer;
 
 // Asset codecs (glTF parsing + JPEG/PNG decode), re-exported so wgpu
 // consumers can load models/textures.  Lives in this module (rather than a
@@ -694,6 +782,37 @@ pub const loadRenderTexture = wgpu_app.loadRenderTexture;
 pub const loadRenderTextureEx = wgpu_app.loadRenderTextureEx;
 pub const loadRenderTextureDepthTex = wgpu_app.loadRenderTextureDepthTex;
 pub const unloadRenderTexture = wgpu_app.unloadRenderTexture;
+pub const updateMeshGpu = wgpu_app.updateMeshGpu;
+pub const skeletonToModel = robot.skeletonToModel;
+pub const poseFromLocalRotations = robot.poseFromLocalRotations;
+pub const fitLocalRotations = robot.fitLocalRotations;
+pub const fitBodyRotation = robot.fitBodyRotation;
+pub const jacBody = robot.jacBody;
+pub const ikStep = robot.ikStep;
+pub const IkTask = robot.IkTask;
+pub const IkOptions = robot.IkOptions;
+pub const ikScratchSize = robot.ikScratchSize;
+pub const computeTwistOffset = robot.computeTwistOffset;
+pub const applyTwist = robot.applyTwist;
+pub const computeTwistChainOffsets = robot.computeTwistChainOffsets;
+pub const poseFromRetarget = robot.poseFromRetarget;
+pub const PointSample = robot.PointSample;
+pub const PointCloudOptions = robot.PointCloudOptions;
+pub const SampleBuildInputs = robot.SampleBuildInputs;
+pub const buildPointSamples = robot.buildPointSamples;
+pub const solvePointCloud = robot.solvePointCloud;
+pub const captureScale = robot.captureScale;
+pub const CaptureFrame = robot.CaptureFrame;
+pub const solveTwoBoneLimb = robot.solveTwoBoneLimb;
+pub const hingeAngleForFlexion = robot.hingeAngleForFlexion;
+pub const rotationBetweenDirectionPairs = robot.rotationBetweenDirectionPairs;
+pub const maximumFlexion = robot.maximumFlexion;
+pub const TwoBoneSolution = robot.TwoBoneSolution;
+pub const RetargetPose = robot.RetargetPose;
+pub const SkeletonToModelOptions = robot.SkeletonToModelOptions;
+pub const meshGpuBuffers = wgpu_app.meshGpuBuffers;
+pub const uploadMeshGpu = wgpu_app.uploadMeshGpu;
+pub const MeshGpu = @import("draw3d.zig").MeshGpu;
 pub const registerTexture = wgpu_app.registerTexture;
 pub const setTextureFilter = wgpu_app.setTextureFilter;
 pub const TextureFilter = wgpu_app.TextureFilter;
@@ -706,6 +825,14 @@ pub const endTextureMode = wgpu_app.endTextureMode;
 pub const Font = wgpu_app.Font;
 pub const loadFont = wgpu_app.loadFont;
 pub const loadFontEx = wgpu_app.loadFontEx;
+/// raylib `LoadFontData(..., FONT_SDF, ...)` — bake a font as a signed distance
+/// field (crisp when magnified). Draw inside `beginShaderMode(sdf_shader)`.
+pub const loadFontSdf = wgpu_app.loadFontSdf;
+/// raylib's `LoadFontFromImage` — a BITMAP (sprite) font from an image whose
+/// glyphs sit on a `key`-coloured background. `first_char` is the codepoint of
+/// the first glyph (raylib uses 32). Decode the PNG with `z.loadImageFromMemory`,
+/// pass the Image here (not consumed — free it yourself). See wgpu_app.
+pub const loadFontFromImage = wgpu_app.loadFontFromImage;
 /// CPU-side unload (glyph/rec arrays). Safe in `deinit`, which has no `gl`:
 /// the GPU atlas is engine-owned and reclaimed by the registry reset at teardown.
 pub const unloadFont = @import("text2d.zig").unloadFontOwned;
@@ -714,6 +841,9 @@ pub const unloadFont = @import("text2d.zig").unloadFontOwned;
 pub const releaseFont = wgpu_app.releaseFont;
 pub const imageDrawTextWithFont = @import("text2d.zig").imageDrawTextWithFont;
 pub const measureText = wgpu_app.measureText;
+/// raylib `MeasureTextEx` — measure text with explicit inter-glyph spacing
+/// (draw with `gl.text(pos, s, .{ .spacing = ... })`).
+pub const measureTextEx = wgpu_app.measureTextEx;
 pub const beginScissorMode = wgpu_app.beginScissorMode;
 pub const endScissorMode = wgpu_app.endScissorMode;
 // Multi-app viewport scoping (launcher-side; an example body never calls these).
@@ -748,6 +878,8 @@ const input_ns = @import("runtime.zig").input;
 pub const hideCursor = input_ns.hideCursor;
 pub const showCursor = input_ns.showCursor;
 pub const isCursorHidden = input_ns.isCursorHidden;
+pub const disableCursor = input_ns.disableCursor;
+pub const enableCursor = input_ns.enableCursor;
 pub const setMouseCursor = input_ns.setMouseCursor;
 pub const getTouchPointId = input_ns.getTouchPointId;
 
@@ -794,25 +926,27 @@ pub const isMouseButtonReleased = wgpu_app.isMouseButtonReleased;
 // GlAdapter + raster's SwAdapter): immediate-mode scene code drives Renderer2D's
 // batch through it, so one `fn drawX(gl: anytype)` runs on all three backends.
 pub const WgpuGl = @import("WgpuGl.zig");
+const std = @import("std");
+const bufPrint = std.fmt.bufPrint;
 
 test {
     // Pull all module tests into one place.  `zig test
     // src/zimr.zig` runs everything reachable from the umbrella.
-    _ = @import("wgpu.zig");
-    _ = @import("gpu.zig");
-    _ = @import("BindGroupCache.zig");
+    _ = wgpu;
+    _ = gpu;
+    _ = BindGroupCache;
     _ = @import("renderer_2d.zig");
     _ = @import("wgpu_texture.zig");
     _ = @import("gpu_iface.zig");
-    _ = @import("shader_runtime_wgpu.zig").shader_compile;
-    _ = @import("shader_runtime_wgpu.zig");
-    _ = @import("wgpu.zig").render_pass;
-    _ = @import("wgpu.zig").compute_pass;
-    _ = @import("shader_introspect.zig");
+    _ = shader.shader_compile;
+    _ = shader;
+    _ = wgpu.render_pass;
+    _ = wgpu.compute_pass;
+    _ = shader_introspect;
     _ = @import("compute_host.zig");
     _ = @import("draw3d.zig").draw_points;
     _ = @import("spv2wgsl.zig");
-    _ = @import("wgpu.zig").storage_buffer;
-    _ = @import("wgpu_app.zig");
-    _ = @import("WgpuGl.zig");
+    _ = wgpu.storage_buffer;
+    _ = wgpu_app;
+    _ = WgpuGl;
 }

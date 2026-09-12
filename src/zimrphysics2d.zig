@@ -1,3 +1,4 @@
+//! lint:alias zimrphysics2d
 //! zimrphysics2d.zig — a single-file, single-threaded 2D rigid-body engine.
 //!
 //! This is a faithful port of Box2D v3.1 (Erin Catto's data-oriented C rewrite, the
@@ -55,8 +56,9 @@
 
 const std = @import("std");
 const zm = @import("zm");
+const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
-const ent = @import("entities.zig");
+const entities = @import("entities.zig");
 const physics_common = @import("physics_common.zig");
 const profiler = @import("profiler.zig");
 const FrameArena = @import("frame_arena.zig").FrameArena;
@@ -4597,13 +4599,13 @@ fn partitionMid(indices: []i32, centers: []Vec2, count: usize) usize {
 /// Pack a tree-local proxy id and a body type into a broad-phase key.
 /// box2d: B2_PROXY_KEY  broad_phase.h:20
 inline fn makeProxyKey(id: i32, body_type: MotionType) u32 {
-    return (@as(u32, @intCast(id)) << 2) | @intFromEnum(body_type);
+    return (@as(u32, @intCast(id)) << 2) | @backingInt(body_type);
 }
 inline fn proxyKeyId(key: u32) i32 {
     return @intCast(key >> 2);
 }
 inline fn proxyKeyType(key: u32) MotionType {
-    return @enumFromInt(key & 3);
+    return @fromBackingInt(@intCast(key & 3));
 }
 
 /// Order-independent 64-bit key for a pair of shapes (used to dedup contacts).
@@ -4790,7 +4792,7 @@ pub const BroadPhase = struct {
     /// Mark a proxy as moved and queue it for pair-finding (idempotent per step).
     /// box2d: b2BufferMove  broad_phase.h:70
     fn bufferMove(self: *BroadPhase, gpa: Allocator, key: u32) !void {
-        const tree_index: usize = @intFromEnum(proxyKeyType(key));
+        const tree_index: usize = @backingInt(proxyKeyType(key));
         const proxy_id: usize = @intCast(proxyKeyId(key));
         var moved: *std.ArrayListUnmanaged(bool) = &self.moved[tree_index];
         while (moved.items.len <= proxy_id) {
@@ -4805,7 +4807,7 @@ pub const BroadPhase = struct {
     /// Remove a proxy from the move buffer (e.g. when it is destroyed).
     /// box2d: b2UnBufferMove  broad_phase.c
     fn unBufferMove(self: *BroadPhase, key: u32) void {
-        const tree_index: usize = @intFromEnum(proxyKeyType(key));
+        const tree_index: usize = @backingInt(proxyKeyType(key));
         const proxy_id: usize = @intCast(proxyKeyId(key));
         var moved: *std.ArrayListUnmanaged(bool) = &self.moved[tree_index];
         if (proxy_id < moved.items.len and moved.items[proxy_id]) {
@@ -4833,7 +4835,7 @@ pub const BroadPhase = struct {
         shape_index: u32,
         force_pair_creation: bool,
     ) !u32 {
-        const tree_index: usize = @intFromEnum(body_type);
+        const tree_index: usize = @backingInt(body_type);
         const proxy_id: i32 =
             try self.trees[tree_index].createProxy(gpa, aabb, category_bits, shape_index);
         const key: u32 = makeProxyKey(proxy_id, body_type);
@@ -4846,7 +4848,7 @@ pub const BroadPhase = struct {
     /// Destroy a proxy. box2d: b2BroadPhase_DestroyProxy  broad_phase.c:117
     pub fn destroyProxy(self: *BroadPhase, key: u32) void {
         self.unBufferMove(key);
-        const tree_index: usize = @intFromEnum(proxyKeyType(key));
+        const tree_index: usize = @backingInt(proxyKeyType(key));
         self.trees[tree_index].destroyProxy(proxyKeyId(key));
     }
 
@@ -4857,7 +4859,7 @@ pub const BroadPhase = struct {
         key: u32,
         aabb: Aabb2,
     ) !void {
-        const tree_index: usize = @intFromEnum(proxyKeyType(key));
+        const tree_index: usize = @backingInt(proxyKeyType(key));
         try self.trees[tree_index].moveProxy(gpa, proxyKeyId(key), aabb);
         try self.bufferMove(gpa, key);
     }
@@ -4870,8 +4872,8 @@ pub const BroadPhase = struct {
         key: u32,
         aabb: Aabb2,
     ) !void {
-        const tree_index: usize = @intFromEnum(proxyKeyType(key));
-        assert(tree_index != @intFromEnum(MotionType.static), @src());
+        const tree_index: usize = @backingInt(proxyKeyType(key));
+        assert(tree_index != @backingInt(MotionType.static), @src());
         self.trees[tree_index].enlargeProxy(proxyKeyId(key), aabb);
         try self.bufferMove(gpa, key);
     }
@@ -4879,14 +4881,14 @@ pub const BroadPhase = struct {
     /// The shape index stored in a proxy's user data.
     /// box2d: b2BroadPhase_GetShapeIndex  broad_phase.c:543
     pub fn shapeIndexOf(self: *BroadPhase, key: u32) u32 {
-        const tree_index: usize = @intFromEnum(proxyKeyType(key));
+        const tree_index: usize = @backingInt(proxyKeyType(key));
         return @intCast(self.trees[tree_index].proxyUserData(proxyKeyId(key)));
     }
 
     /// Do two proxies' fat AABBs overlap? box2d: b2BroadPhase_TestOverlap  broad_phase.c
     pub fn testOverlap(self: *BroadPhase, key_a: u32, key_b: u32) bool {
-        const tree_a: usize = @intFromEnum(proxyKeyType(key_a));
-        const tree_b: usize = @intFromEnum(proxyKeyType(key_b));
+        const tree_a: usize = @backingInt(proxyKeyType(key_a));
+        const tree_b: usize = @backingInt(proxyKeyType(key_b));
         const box_a: Aabb2 = self.trees[tree_a].proxyAabb(proxyKeyId(key_a));
         const box_b: Aabb2 = self.trees[tree_b].proxyAabb(proxyKeyId(key_b));
         return Aabb2.overlaps(box_a, box_b);
@@ -7523,22 +7525,6 @@ fn makeRelativeSweep(body: *const Body, base: Vec2) Sweep2 {
     };
 }
 
-/// Whether a dynamic body moved far enough this step to risk tunneling and therefore
-/// needs a continuous sweep. Compares the farthest distance it could have travelled
-/// (linear plus the larger of true velocity over the step) against half its smallest
-/// extent — once motion approaches the thinnest part of the shape, discrete collision
-/// can miss it. box2d uses safetyFactor 0.5. (solver.c:639)
-fn needsContinuous(
-    max_velocity: f32,
-    max_delta_position: f32,
-    dt: f32,
-    min_extent: f32,
-) bool {
-    const safety_factor: f32 = 0.5;
-    const max_motion: f32 = @max(max_delta_position, max_velocity * dt);
-    return max_motion > safety_factor * min_extent;
-}
-
 /// The fraction of a body's core extent used as the fallback TOI radius when a sweep
 /// reports an immediate (t == 0) impact. box2d: B2_CORE_FRACTION  solver.c:180
 pub const core_fraction: f32 = 0.25;
@@ -7738,13 +7724,13 @@ pub const Shape = struct {
 
 /// Stable-index pools. A pool slot index doubles as the entity's stable id, which the
 /// intrusive edge lists (contacts/joints) and the broad-phase proxies refer to.
-pub const Bodies = ent.Entities(Body);
-pub const Shapes = ent.Entities(Shape);
-pub const Joints = ent.Entities(Joint);
+pub const Bodies = entities.Entities(Body);
+pub const Shapes = entities.Entities(Shape);
+pub const Joints = entities.Entities(Joint);
 
-pub const BodyHandle = ent.Handle(Body);
-pub const ShapeHandle = ent.Handle(Shape);
-pub const JointHandle = ent.Handle(Joint);
+pub const BodyHandle = entities.Handle(Body);
+pub const ShapeHandle = entities.Handle(Shape);
+pub const JointHandle = entities.Handle(Joint);
 
 /// A plain growable pool of contacts with a manual free list — no generational handles and no
 /// parallel ECS archetype. Contacts are referenced only by integer id (never by a handle held
@@ -8720,7 +8706,7 @@ fn destroyContact(world: *World, contact_id: u32) void {
             .shape_a = shape_a,
             .shape_b = shape_b,
             .contact_id = contact_id,
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     unlinkContactEdge(world, body_a, &c.edge_a);
@@ -8748,7 +8734,7 @@ const PairQueryContext = struct {
 
 /// Whether a proxy in tree `tree_type` with id `proxy_id` is itself queued for a move.
 fn proxyIsMoved(bp: *const BroadPhase, tree_type: MotionType, proxy_id: i32) bool {
-    const t: usize = @intFromEnum(tree_type);
+    const t: usize = @backingInt(tree_type);
     const id: usize = @intCast(proxy_id);
     return id < bp.moved[t].items.len and bp.moved[t].items[id];
 }
@@ -8862,21 +8848,21 @@ fn updateBroadPhasePairs(world: *World) !void {
             }
             const query_type: MotionType = proxyKeyType(query_key);
             const query_id: i32 = proxyKeyId(query_key);
-            const base: usize = @intFromEnum(query_type);
+            const base: usize = @backingInt(query_type);
             const fat: Aabb2 = bp.trees[base].proxyAabb(query_id);
             ctx.query_key = query_key;
             ctx.query_shape = @intCast(bp.trees[base].proxyUserData(query_id));
 
             if (query_type == .dynamic) {
                 ctx.query_tree_type = .kinematic;
-                bp.trees[@intFromEnum(MotionType.kinematic)]
+                bp.trees[@backingInt(MotionType.kinematic)]
                     .query(fat, default_mask_bits, pairQueryCallback, &ctx);
                 ctx.query_tree_type = .static;
-                bp.trees[@intFromEnum(MotionType.static)]
+                bp.trees[@backingInt(MotionType.static)]
                     .query(fat, default_mask_bits, pairQueryCallback, &ctx);
             }
             ctx.query_tree_type = .dynamic;
-            bp.trees[@intFromEnum(MotionType.dynamic)].query(fat, default_mask_bits, pairQueryCallback, &ctx);
+            bp.trees[@backingInt(MotionType.dynamic)].query(fat, default_mask_bits, pairQueryCallback, &ctx);
         }
     }
 
@@ -8896,7 +8882,7 @@ fn updateBroadPhasePairs(world: *World) !void {
         if (key == null_index) {
             continue;
         }
-        const t: usize = @intFromEnum(proxyKeyType(key));
+        const t: usize = @backingInt(proxyKeyType(key));
         const id: usize = @intCast(proxyKeyId(key));
         if (id < bp.moved[t].items.len) {
             bp.moved[t].items[id] = false;
@@ -9288,12 +9274,12 @@ fn solveContinuous(world: *World, body_index: BodyIndex) void {
         const box2: Aabb2 = computeShapeAabb(shape.geom, world_xf2);
         const swept: Aabb2 = Aabb2.combine(box1, box2);
 
-        bp.trees[@intFromEnum(MotionType.static)]
+        bp.trees[@backingInt(MotionType.static)]
             .query(swept, default_mask_bits, continuousQueryCallback, &ctx);
         if (is_bullet) {
-            bp.trees[@intFromEnum(MotionType.kinematic)]
+            bp.trees[@backingInt(MotionType.kinematic)]
                 .query(swept, default_mask_bits, continuousQueryCallback, &ctx);
-            bp.trees[@intFromEnum(MotionType.dynamic)]
+            bp.trees[@backingInt(MotionType.dynamic)]
                 .query(swept, default_mask_bits, continuousQueryCallback, &ctx);
         }
     }
@@ -9476,7 +9462,7 @@ fn emitSensorBegin(
     world.events.sensor_begin.append(world.allocator, .{
         .sensor_shape = sensor_shape,
         .visitor_shape = visitor_shape,
-    }) catch {};
+    }) catch assertUnreachable(@src(), "OOM", .{});
 }
 
 /// Queue a sensor end-touch event into the double-buffered end-event list.
@@ -9488,7 +9474,7 @@ fn emitSensorEnd(
     world.events.sensorEnd().append(world.allocator, .{
         .sensor_shape = sensor_shape,
         .visitor_shape = visitor_shape,
-    }) catch {};
+    }) catch assertUnreachable(@src(), "OOM", .{});
 }
 
 // -- The step --------------------------------------------------------------------
@@ -9608,7 +9594,7 @@ fn emitJointEvents(world: *World, active_joints: []const u32) void {
             world.events.joint_events.append(world.allocator, .{
                 .joint = joint_id,
                 .user_data = j.user_data,
-            }) catch {};
+            }) catch assertUnreachable(@src(), "OOM", .{});
         }
     }
 }
@@ -9659,7 +9645,7 @@ fn narrowPhase(world: *World) !void {
                     .shape_a = contact.shape_a,
                     .shape_b = contact.shape_b,
                     .contact_id = contact_id,
-                }) catch {};
+                }) catch assertUnreachable(@src(), "OOM", .{});
             }
         } else if (touching == false and was_touching) {
             contact.flags.touching = false;
@@ -9668,7 +9654,7 @@ fn narrowPhase(world: *World) !void {
                     .shape_a = contact.shape_a,
                     .shape_b = contact.shape_b,
                     .contact_id = contact_id,
-                }) catch {};
+                }) catch assertUnreachable(@src(), "OOM", .{});
             }
         }
     }
@@ -9803,7 +9789,7 @@ fn refitActiveBodyAabbs(world: *World) !void {
 /// been below the sleep thresholds for `time_to_sleep`, emit move events, then remove the
 /// sleepers from the active list. An island sleeps together so a resting stack doesn't have
 /// one box twitch awake. box2d: the island sleep pass of b2World_Step (simplified)
-fn sleepIslands(world: *World) !void {
+fn sleepIslands(world: *World) void {
     const gpa: Allocator = world.allocator;
 
     // A body can only sleep once its own sleep_time has reached time_to_sleep, and that resets to 0
@@ -9868,7 +9854,7 @@ fn sleepIslands(world: *World) !void {
             .body = body_index,
             .user_data = body.user_data,
             .fell_asleep = world.body_sleep[body_index],
-        }) catch {};
+        }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     var i: usize = 0;
@@ -10077,19 +10063,19 @@ pub fn step(world: *World, dt: f32) !void {
             try refitActiveBodyAabbs(world);
             // Re-tighten the dynamic tree's internal AABBs (cheap O(n)) to undo the bloat that
             // enlargeProxy leaves behind, keeping queries tight between structural rebuilds.
-            try world.broadphase.trees[@intFromEnum(MotionType.dynamic)].refitTight(gpa);
+            try world.broadphase.trees[@backingInt(MotionType.dynamic)].refitTight(gpa);
         }
         {
             const zsleep: profiler.Zone = profiler.zoneNamed(@src(), "p2d.sleep");
             defer zsleep.end();
-            try sleepIslands(world);
+            sleepIslands(world);
         }
     }
 
     // Periodically rebuild the dynamic tree to recover query quality.
     world.step_count += 1;
     if (world.tree_rebuild_interval > 0 and world.step_count % world.tree_rebuild_interval == 0) {
-        try world.broadphase.trees[@intFromEnum(MotionType.dynamic)].rebuild(gpa);
+        try world.broadphase.trees[@backingInt(MotionType.dynamic)].rebuild(gpa);
     }
 
     {
@@ -12814,7 +12800,7 @@ pub fn explode(world: *World, def: ExplosionDef) void {
     const aabb: Aabb2 = .{ .lower = def.position - reach, .upper = def.position + reach };
     var ctx: ExplosionContext = .{ .world = world, .def = def };
     // Explosions only affect dynamic bodies.
-    world.broadphase.trees[@intFromEnum(MotionType.dynamic)].query(aabb, def.mask, explosionCallback, &ctx);
+    world.broadphase.trees[@backingInt(MotionType.dynamic)].query(aabb, def.mask, explosionCallback, &ctx);
 }
 
 // -- Public API: debug draw ------------------------------------------------------

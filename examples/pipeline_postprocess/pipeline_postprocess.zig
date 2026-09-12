@@ -22,7 +22,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 const zm = @import("zm");
 
 const mulMat = zm.mulMat;
@@ -153,7 +153,7 @@ fn update(f: *z.Frame, s: *State) void {
     //    so the batch's atlas can't clobber the sampler.
     z.drawFullscreenShader(f.gl, post_fs_io, &s.post);
 
-    co.caption(f.gl, s.font, "pipeline_postprocess: scene -> texture -> fullscreen sampler (chromatic + vignette)");
+    common.caption(f.gl, s.font, "pipeline_postprocess: scene -> texture -> fullscreen sampler (chromatic + vignette)");
     z.endDrawing(f.gl);
 }
 

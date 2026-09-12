@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -29,7 +29,7 @@ fn tri(
     cx: f32,
     cy: f32,
     r: f32,
-    cols: [3]co.Color,
+    cols: [3]common.Color,
 ) void {
     const top: Vec2 = .{ cx, cy - r };
     const ll: Vec2 = .{ cx - r * 0.866, cy + r * 0.5 };
@@ -48,8 +48,8 @@ fn update(f: *z.Frame, s: *State) void {
     const pb: u8 = @round(128.0 + 127.0 * @sin(t * 2.3 + 1.0));
     const pc: u8 = @round(128.0 + 127.0 * @sin(t * 1.1 + 2.0));
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     tri(f.gl, w * 0.25, cy, r, .{
         .{ .r = pa, .g = 40, .b = 40, .a = 255 },
@@ -67,7 +67,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .r = 0, .g = 255, .b = pc, .a = 255 },
     });
 
-    co.caption(f.gl, s.font, "triangle gradient: per-vertex colour, GPU-interpolated");
+    common.caption(f.gl, s.font, "triangle gradient: per-vertex colour, GPU-interpolated");
     z.endDrawing(f.gl);
 }
 

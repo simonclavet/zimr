@@ -17,7 +17,7 @@ const Color = zm.Color;
 const Vec = zm.Vec;
 const pointVec = zm.pointVec;
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson = @embedFile("atkinson_mono_ttf");
 
@@ -52,13 +52,13 @@ const State = struct {
 fn genShape(gpa: Allocator, i: usize) !z.Mesh {
     return switch (i) {
         0 => z.genMeshCube(gpa, 1.4, 1.4, 1.4),
-        1 => z.genMeshSphere(gpa, 0.85, 16, 24),
-        2 => z.genMeshCylinder(gpa, 0.72, 1.5, 24),
-        3 => z.genMeshCone(gpa, 0.85, 1.5, 24),
+        1 => z.genMeshSphere(gpa, 0.85, 24, 16),
+        2 => z.genMeshCylinder(gpa, 0.72, 1.5, 24, 2),
+        3 => z.genMeshCone(gpa, 0.85, 1.5, 24, 2),
         4 => z.genMeshTorus(gpa, 0.3, 0.9, 24, 16),
         5 => z.genMeshKnot(gpa, 0.35, 0.8, 128, 12),
         6 => z.genMeshPlane(gpa, 1.6, 1.6, 2, 2),
-        else => z.genMeshHemiSphere(gpa, 0.9, 16, 24),
+        else => z.genMeshHemiSphere(gpa, 0.9, 24, 16),
     };
 }
 
@@ -105,7 +105,7 @@ fn modeLabel(mode: Mode) []const u8 {
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // UI first so wantCaptureMouse reflects this frame before the camera reads it.
     const u: z.ui_real.Ui = s.ui_host.begin(f);
@@ -150,14 +150,18 @@ fn update(f: *z.Frame, s: *State) void {
     z.endMode3D(f.gl);
 
     // HUD: title, the recognisable primitive names, and the gesture hint.
-    const ink_dim = co.palette.ink_dim;
-    f.gl.text(.{ 16, 16 }, "Mesh Gallery", .{ .size = 24, .color = co.palette.ink, .font = &s.font });
+    const ink_dim = common.palette.ink_dim;
+    f.gl.text(.{ 16, 16 }, "Mesh Gallery", .{ .size = 24, .color = common.palette.ink, .font = &s.font });
     f.gl.text(
         .{ 16, 46 },
         "cube . sphere . cylinder . cone . torus . knot . plane . hemisphere",
         .{ .size = 14, .color = ink_dim, .font = &s.font },
     );
-    co.caption(f.gl, s.font, "GenMesh* primitives - drag to orbit, pinch to zoom, toggle wireframe for the triangles");
+    common.caption(
+        f.gl,
+        s.font,
+        "GenMesh* primitives - drag to orbit, pinch to zoom, toggle wireframe for the triangles",
+    );
     s.ui_host.render(f);
 }
 

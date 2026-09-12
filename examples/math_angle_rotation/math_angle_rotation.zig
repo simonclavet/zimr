@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const radFromDeg = zm.radFromDeg;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -40,14 +40,14 @@ fn update(f: *z.Frame, s: *State) void {
     const cy: f32 = h * 0.5;
     const len: f32 = @min(w, h) * 0.32;
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     for (fixed) |e| {
         const rad: f32 = radFromDeg(e.angle);
         const ex: f32 = cx + @cos(rad) * len;
         const ey: f32 = cy + @sin(rad) * len;
-        const col: co.Color = co.palette.ramp(e.angle * 3.0);
+        const col: common.Color = common.palette.ramp(e.angle * 3.0);
         f.gl.line(.{ cx, cy }, .{ ex, ey }, .{ .color = col, .thickness = 5.0 });
         const lx: f32 = cx + @cos(rad) * (len + 22.0);
         const ly: f32 = cy + @sin(rad) * (len + 22.0);
@@ -57,11 +57,11 @@ fn update(f: *z.Frame, s: *State) void {
     const arad: f32 = radFromDeg(s.angle);
     const aex: f32 = cx + @cos(arad) * len;
     const aey: f32 = cy + @sin(arad) * len;
-    f.gl.line(.{ cx, cy }, .{ aex, aey }, .{ .color = co.palette.ramp(s.angle), .thickness = 5.0 });
-    f.gl.circle(.{ cx, cy }, 6.0, .{ .color = co.palette.ink, .segments = 16 });
-    f.gl.circle(.{ aex, aey }, 7.0, .{ .color = co.palette.ramp(s.angle), .segments = 16 });
+    f.gl.line(.{ cx, cy }, .{ aex, aey }, .{ .color = common.palette.ramp(s.angle), .thickness = 5.0 });
+    f.gl.circle(.{ cx, cy }, 6.0, .{ .color = common.palette.ink, .segments = 16 });
+    f.gl.circle(.{ aex, aey }, 7.0, .{ .color = common.palette.ramp(s.angle), .segments = 16 });
 
-    co.caption(f.gl, s.font, "math angle rotation: fixed refs + a sweeping line");
+    common.caption(f.gl, s.font, "math angle rotation: fixed refs + a sweeping line");
     z.endDrawing(f.gl);
 }
 

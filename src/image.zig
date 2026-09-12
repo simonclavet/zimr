@@ -1,3 +1,4 @@
+//! lint:alias image
 //! image — Image (CPU pixel buffer) type helpers + the full CPU
 //! image-processing library (merged from drawing.textures in
 //! GL-retirement P5): generators (color/checked/gradients/noise/
@@ -12,6 +13,7 @@ const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
+const turnsFromRad = zm.turnsFromRad;
 const float = zm.float;
 const ceilPowerOfTwo = zm.ceilPowerOfTwo;
 const clamp = zm.clamp;
@@ -26,13 +28,14 @@ const radFromDeg = zm.radFromDeg;
 const roundi = zm.roundi;
 const signbit = zm.signbit;
 const sqrt = zm.sqrt;
-const types = @import("types.zig");
+pub const types = @import("types.zig");
 const errors = @import("errors.zig");
 
 const Color = zm.Color;
 pub const colorFromHSV = types.colorFromHSV;
-const Image = types.Image;
+pub const Image = types.Image;
 const Rng = @import("runtime.zig").effects.rng.Rng;
+const codecs = @import("codecs.zig");
 
 const white: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
 const black: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
@@ -43,7 +46,7 @@ fn rgba8Image(data: ?*anyopaque, width: i32, height: i32) Image {
         .width = width,
         .height = height,
         .mipmaps = 1,
-        .format = @intFromEnum(types.PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
     };
 }
 
@@ -325,7 +328,7 @@ inline fn imagePixelCount(image: *const Image) usize {
 }
 
 inline fn bytesPerPixel(format: i32) i32 {
-    return switch (@as(types.PixelFormat, @enumFromInt(format))) {
+    return switch (@as(types.PixelFormat, @fromBackingInt(@intCast(format)))) {
         .uncompressed_grayscale => 1,
         .uncompressed_gray_alpha => 2,
         .uncompressed_r5g6b5 => 2,
@@ -377,6 +380,354 @@ pub fn imageColorInvert(image: *Image) void {
         data[i * 4 + 1] = 255 - data[i * 4 + 1];
         data[i * 4 + 2] = 255 - data[i * 4 + 2];
     }
+}
+
+/// A grid cell's offset (in cells) to the nearest seed, for the 8SSEDT.
+const EdtPt = struct { dx: i32, dy: i32 };
+
+fn edtDist2(p: EdtPt) i64 {
+    return @as(i64, p.dx) * p.dx + @as(i64, p.dy) * p.dy;
+}
+
+/// One 8SSEDT comparison step: if propagating neighbour `(nx,ny)`'s seed
+/// (offset by `(ox,oy)`) to cell `i` is closer, take it.
+fn edtCompare(
+    grid: []EdtPt,
+    w: usize,
+    h: usize,
+    i: usize,
+    nx: i64,
+    ny: i64,
+    ox: i32,
+    oy: i32,
+) void {
+    if (nx < 0 or ny < 0 or nx >= @as(i64, @intCast(w)) or ny >= @as(i64, @intCast(h))) {
+        return;
+    }
+    const ni: usize = @intCast(ny * @as(i64, @intCast(w)) + nx);
+    const cand: EdtPt = .{ .dx = grid[ni].dx + ox, .dy = grid[ni].dy + oy };
+    if (edtDist2(cand) < edtDist2(grid[i])) {
+        grid[i] = cand;
+    }
+}
+
+/// 8-point sequential Euclidean distance transform: fills each cell with the
+/// (dx,dy) offset to the nearest SEED cell (cells that started at (0,0)).
+fn edt8(grid: []EdtPt, w: usize, h: usize) void {
+    // Forward pass.
+    var y: usize = 0;
+    while (y < h) : (y += 1) {
+        var x: usize = 0;
+        while (x < w) : (x += 1) {
+            const i: usize = y * w + x;
+            const xi: i64 = @intCast(x);
+            const yi: i64 = @intCast(y);
+            edtCompare(grid, w, h, i, xi - 1, yi, 1, 0);
+            edtCompare(grid, w, h, i, xi, yi - 1, 0, 1);
+            edtCompare(grid, w, h, i, xi - 1, yi - 1, 1, 1);
+            edtCompare(grid, w, h, i, xi + 1, yi - 1, -1, 1);
+        }
+        var xr: isize = @as(isize, @intCast(w)) - 2;
+        while (xr >= 0) : (xr -= 1) {
+            const x2: usize = @intCast(xr);
+            const i: usize = y * w + x2;
+            edtCompare(grid, w, h, i, @as(i64, @intCast(x2)) + 1, @intCast(y), 1, 0);
+        }
+    }
+    // Backward pass.
+    var yb: isize = @as(isize, @intCast(h)) - 1;
+    while (yb >= 0) : (yb -= 1) {
+        const y2: usize = @intCast(yb);
+        var xb: isize = @as(isize, @intCast(w)) - 1;
+        while (xb >= 0) : (xb -= 1) {
+            const x2: usize = @intCast(xb);
+            const i: usize = y2 * w + x2;
+            const xi: i64 = @intCast(x2);
+            const yi: i64 = @intCast(y2);
+            edtCompare(grid, w, h, i, xi + 1, yi, 1, 0);
+            edtCompare(grid, w, h, i, xi, yi + 1, 0, 1);
+            edtCompare(grid, w, h, i, xi - 1, yi + 1, 1, 1);
+            edtCompare(grid, w, h, i, xi + 1, yi + 1, -1, 1);
+        }
+        var xf: usize = 1;
+        while (xf < w) : (xf += 1) {
+            const i: usize = y2 * w + xf;
+            edtCompare(grid, w, h, i, @as(i64, @intCast(xf)) - 1, @intCast(y2), 1, 0);
+        }
+    }
+}
+
+/// Convert a COVERAGE atlas (RGB white, alpha = glyph coverage) IN PLACE into a
+/// signed-distance-field atlas (RGB white, alpha = SDF). The edge (coverage
+/// crossing 50%) maps to alpha 0.5; interior rises toward 1, exterior falls
+/// toward 0, linearly over ±`spread` pixels. This is the raylib SDF convention
+/// (distance in the alpha channel, 0.5 = edge) so a `smoothstep(0.5±w, a)`
+/// fragment shader renders it crisp at any scale. Pure CPU (a signed 8SSEDT) —
+/// unit-testable headless. RGBA8 image required; `spread` in pixels (> 0).
+pub fn coverageToSdf(gpa: Allocator, image: Image, spread: f32) !void {
+    if (image.data == null or image.pixelFormat() != .uncompressed_r8g8b8a8 or
+        image.width <= 0 or image.height <= 0)
+    {
+        return;
+    }
+    const w: usize = @intCast(image.width);
+    const h: usize = @intCast(image.height);
+    const n: usize = w * h;
+    const data: [*]u8 = @ptrCast(image.data.?);
+
+    const inf_pt: EdtPt = .{ .dx = 20000, .dy = 20000 };
+    // grid_in seeds on INSIDE cells → distance to nearest inside (for outside cells).
+    // grid_out seeds on OUTSIDE cells → distance to nearest outside (for inside cells).
+    const grid_in: []EdtPt = try gpa.alloc(EdtPt, n);
+    defer gpa.free(grid_in);
+    const grid_out: []EdtPt = try gpa.alloc(EdtPt, n);
+    defer gpa.free(grid_out);
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const inside: bool = data[i * 4 + 3] >= 128;
+        grid_in[i] = if (inside) .{ .dx = 0, .dy = 0 } else inf_pt;
+        grid_out[i] = if (inside) inf_pt else .{ .dx = 0, .dy = 0 };
+    }
+    edt8(grid_in, w, h);
+    edt8(grid_out, w, h);
+
+    const spread_safe: f32 = @max(spread, 0.0001);
+    i = 0;
+    while (i < n) : (i += 1) {
+        const cov_u: u8 = data[i * 4 + 3];
+        const inside: bool = cov_u >= 128;
+        // distance to the edge = distance to the nearest opposite-region cell.
+        const d2: i64 = if (inside) edtDist2(grid_out[i]) else edtDist2(grid_in[i]);
+        const dist: f32 = @sqrt(@as(f32, @floatFromInt(d2)));
+        var signed: f32 = if (inside) dist else -dist;
+        // Anti-aliased sub-texel refinement. The binary 8SSEDT only knows the
+        // edge to ±1 texel — that quantization is what makes magnified curves
+        // look faceted. But the SOURCE coverage is anti-aliased: a texel that is
+        // fraction c inside sits ~(c - 0.5) px from the true edge. For texels on
+        // or beside the boundary, trust that sub-texel value instead of the
+        // integer distance; farther texels keep the propagated distance.
+        if (dist <= 1.5) {
+            const cov: f32 = @as(f32, @floatFromInt(cov_u)) / 255.0;
+            signed = (cov - 0.5) * 2.0;
+        }
+        const norm: f32 = 0.5 + signed / (2.0 * spread_safe);
+        const a: f32 = std.math.clamp(norm, 0.0, 1.0);
+        data[i * 4 + 0] = 255;
+        data[i * 4 + 1] = 255;
+        data[i * 4 + 2] = 255;
+        data[i * 4 + 3] = @intFromFloat(@round(a * 255.0));
+    }
+}
+
+test "coverageToSdf: filled square has 0.5 edge, >0.5 inside, <0.5 outside" {
+    const w: usize = 16;
+    const h: usize = 16;
+    var buf: [w * h * 4]u8 = undefined;
+    // an 8x8 filled square centred in a 16x16 field
+    for (0..h) |y| {
+        for (0..w) |x| {
+            const inside: bool = (x >= 4 and x < 12 and y >= 4 and y < 12);
+            const b: usize = (y * w + x) * 4;
+            buf[b + 0] = 255;
+            buf[b + 1] = 255;
+            buf[b + 2] = 255;
+            buf[b + 3] = if (inside) 255 else 0;
+        }
+    }
+    const img: Image = .{
+        .data = @ptrCast(&buf),
+        .width = @intCast(w),
+        .height = @intCast(h),
+        .mipmaps = 1,
+        .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
+    };
+    try coverageToSdf(std.testing.allocator, img, 4.0);
+    const at = struct {
+        fn a(b: []const u8, x: usize, y: usize) u8 {
+            return b[(y * 16 + x) * 4 + 3];
+        }
+    }.a;
+    // deep interior (centre) is brighter than an edge cell, which is brighter
+    // than a far-outside cell — the SDF is monotone across the boundary.
+    try expect(at(&buf, 7, 7) > at(&buf, 4, 7));
+    try expect(at(&buf, 4, 7) >= 120 and at(&buf, 4, 7) <= 160); // near the edge ~0.5
+    try expect(at(&buf, 0, 0) < at(&buf, 4, 7)); // far outside is darkest
+    try expect(at(&buf, 7, 7) > 128); // interior above the edge level
+}
+
+/// Metrics from a raylib-style bitmap-font scan.
+pub const SpriteFontLayout = struct {
+    char_spacing: u32,
+    line_spacing: u32,
+    char_height: u32,
+    /// Number of glyphs written into `out_recs` / `out_vals`.
+    count: u32,
+};
+
+pub const SpriteFontError = error{ InvalidImage, NoGlyphs };
+
+/// True if the RGBA8 pixel at flat index `i` (pixel index, not byte) equals key.
+fn spriteFontKeyMatch(data: [*]const u8, i: usize, key: Color) bool {
+    const b: usize = i * 4;
+    return data[b + 0] == key.r and data[b + 1] == key.g and
+        data[b + 2] == key.b and data[b + 3] == key.a;
+}
+
+/// Segment a raylib-style bitmap-font image into glyph rectangles — a faithful
+/// port of raylib's `LoadFontFromImage` scan, with NO GPU dependency so it is
+/// unit-testable headless. Glyphs sit on a `key`-coloured background; the first
+/// non-key pixel (row-major) gives the shared `charSpacing`/`lineSpacing`
+/// border, the first glyph column gives `charHeight`, then each line band is
+/// walked left-to-right splitting glyphs on key columns. Fills `out_recs` /
+/// `out_vals` (glyph value = `first_char + index`), capped at the smaller of
+/// the two slice lengths, and returns the layout. RGBA8 image required.
+pub fn segmentSpriteFont(
+    image: Image,
+    key: Color,
+    first_char: i32,
+    out_recs: []Rectangle,
+    out_vals: []i32,
+) SpriteFontError!SpriteFontLayout {
+    if (image.width <= 0 or image.height <= 0 or image.data == null or
+        image.pixelFormat() != .uncompressed_r8g8b8a8)
+    {
+        return SpriteFontError.InvalidImage;
+    }
+    const w: usize = @intCast(image.width);
+    const h: usize = @intCast(image.height);
+    const data: [*]const u8 = @ptrCast(image.data.?);
+    const cap: usize = @min(out_recs.len, out_vals.len);
+
+    // Border = first non-key pixel (row-major).
+    var char_spacing: usize = 0;
+    var line_spacing: usize = 0;
+    var found: bool = false;
+    {
+        var y: usize = 0;
+        scan: while (y < h) : (y += 1) {
+            var x: usize = 0;
+            while (x < w) : (x += 1) {
+                if (!spriteFontKeyMatch(data, y * w + x, key)) {
+                    char_spacing = x;
+                    line_spacing = y;
+                    found = true;
+                    break :scan;
+                }
+            }
+        }
+    }
+    if (!found or char_spacing == 0 or line_spacing == 0) {
+        return SpriteFontError.NoGlyphs;
+    }
+
+    // charHeight: down from the first glyph's top-left until key.
+    var char_height: usize = 0;
+    while (line_spacing + char_height < h and
+        !spriteFontKeyMatch(data, (line_spacing + char_height) * w + char_spacing, key)) : (char_height += 1)
+    {}
+    if (char_height == 0) {
+        return SpriteFontError.NoGlyphs;
+    }
+
+    var count: usize = 0;
+    var line: usize = 0;
+    while (line_spacing + line * (char_height + line_spacing) < h) : (line += 1) {
+        const band_y: usize = line_spacing + (char_height + line_spacing) * line;
+        var xp: usize = char_spacing;
+        while (xp < w and !spriteFontKeyMatch(data, band_y * w + xp, key)) {
+            if (count >= cap) {
+                break;
+            }
+            var cw: usize = 0;
+            while (xp + cw < w and !spriteFontKeyMatch(data, band_y * w + xp + cw, key)) : (cw += 1) {}
+            out_vals[count] = first_char + @as(i32, @intCast(count));
+            out_recs[count] = .{
+                .x = @floatFromInt(xp),
+                .y = @floatFromInt(band_y),
+                .width = @floatFromInt(cw),
+                .height = @floatFromInt(char_height),
+            };
+            count += 1;
+            xp += cw + char_spacing;
+        }
+    }
+    if (count == 0) {
+        return SpriteFontError.NoGlyphs;
+    }
+    return .{
+        .char_spacing = @intCast(char_spacing),
+        .line_spacing = @intCast(line_spacing),
+        .char_height = @intCast(char_height),
+        .count = @intCast(count),
+    };
+}
+
+test "segmentSpriteFont: 2 glyphs, 1px key border" {
+    // 8x5 RGBA8: 1px magenta border/separators, two glyphs (w=2 and w=3),
+    // charHeight=3. Layout (K=key, G=glyph):
+    //   row0: K K K K K K K K
+    //   row1: K G G K G G G K
+    //   row2..3 same as row1
+    //   row4: K K K K K K K K
+    const K = [4]u8{ 255, 0, 255, 255 };
+    const G = [4]u8{ 10, 20, 30, 255 };
+    const w: usize = 8;
+    const h: usize = 5;
+    var buf: [w * h * 4]u8 = undefined;
+    for (0..h) |y| {
+        for (0..w) |x| {
+            const glyph: bool = (y >= 1 and y <= 3) and
+                ((x >= 1 and x <= 2) or (x >= 4 and x <= 6));
+            const c: [4]u8 = if (glyph) G else K;
+            @memcpy(buf[(y * w + x) * 4 ..][0..4], &c);
+        }
+    }
+    const img: Image = .{
+        .data = &buf,
+        .width = @intCast(w),
+        .height = @intCast(h),
+        .mipmaps = 1,
+        .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
+    };
+    const key: Color = .{ .r = 255, .g = 0, .b = 255, .a = 255 };
+    var recs: [16]Rectangle = undefined;
+    var vals: [16]i32 = undefined;
+    const lay: SpriteFontLayout = try segmentSpriteFont(img, key, 32, &recs, &vals);
+    try expectEqual(@as(u32, 1), lay.char_spacing);
+    try expectEqual(@as(u32, 1), lay.line_spacing);
+    try expectEqual(@as(u32, 3), lay.char_height);
+    try expectEqual(@as(u32, 2), lay.count);
+    try expectEqual(@as(i32, 32), vals[0]);
+    try expectEqual(@as(i32, 33), vals[1]);
+    try expectEqual(@as(f32, 1), recs[0].x);
+    try expectEqual(@as(f32, 1), recs[0].y);
+    try expectEqual(@as(f32, 2), recs[0].width);
+    try expectEqual(@as(f32, 3), recs[0].height);
+    try expectEqual(@as(f32, 4), recs[1].x);
+    try expectEqual(@as(f32, 3), recs[1].width);
+}
+
+test "segmentSpriteFont: all-key image errors" {
+    const K = [4]u8{ 255, 0, 255, 255 };
+    var buf: [4 * 4 * 4]u8 = undefined;
+    var i: usize = 0;
+    while (i < 16) : (i += 1) {
+        @memcpy(buf[i * 4 ..][0..4], &K);
+    }
+    const img: Image = .{
+        .data = &buf,
+        .width = 4,
+        .height = 4,
+        .mipmaps = 1,
+        .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
+    };
+    var recs: [4]Rectangle = undefined;
+    var vals: [4]i32 = undefined;
+    try expectError(
+        SpriteFontError.NoGlyphs,
+        segmentSpriteFont(img, .{ .r = 255, .g = 0, .b = 255, .a = 255 }, 32, &recs, &vals),
+    );
 }
 
 /// Premultiply RGB by alpha in place (RGBA8). Used before box-blurring so the
@@ -1009,7 +1360,7 @@ pub fn getColor(hexValue: u32) Color {
 /// raylib's, NOT what an earlier zimr version had (which mistakenly
 /// returned 8 bpp for R32/R16 and 32 bpp for R32G32B32 / R16G16B16A16).
 pub fn getPixelDataSize(width: i32, height: i32, format: i32) i32 {
-    const fmt: @import("types.zig").PixelFormat = @enumFromInt(format);
+    const fmt: types.PixelFormat = @fromBackingInt(@intCast(format));
     const bpp: i32 = switch (fmt) {
         .uncompressed_grayscale => 8,
         .uncompressed_gray_alpha,
@@ -1447,7 +1798,7 @@ pub fn getImageColor(
 pub fn getPixelColor(srcPtr: *anyopaque, format: i32) Color {
     const src: [*]const u8 = @ptrCast(srcPtr);
     var color = Color{ .r = 0, .g = 0, .b = 0, .a = 255 };
-    switch (@as(@import("types.zig").PixelFormat, @enumFromInt(format))) {
+    switch (@as(types.PixelFormat, @fromBackingInt(@intCast(format)))) {
         .uncompressed_grayscale => {
             color = .{ .r = src[0], .g = src[0], .b = src[0], .a = 255 };
         },
@@ -2259,7 +2610,7 @@ pub fn setPixelColor(
     format: i32,
 ) void {
     const dst: [*]u8 = @ptrCast(dstPtr);
-    switch (@as(@import("types.zig").PixelFormat, @enumFromInt(format))) {
+    switch (@as(types.PixelFormat, @fromBackingInt(@intCast(format)))) {
         .uncompressed_grayscale => {
             const r = float(color.r) / 255.0;
             const g = float(color.g) / 255.0;
@@ -2426,7 +2777,8 @@ pub fn drawTextureNPatch(
     gl.setTexture(texture.id);
     gl.pushMatrix();
     gl.translate(dest.x, dest.y, 0);
-    gl.rotate(rotation_rad, 0, 0, 1);
+    // `gl.rotate` takes turns; this module's API is still radians, so the crossing is here.
+    gl.rotate(turnsFromRad(rotation_rad), 0, 0, 1);
     gl.translate(-origin[0], -origin[1], 0);
     gl.begin(.quads);
     gl.color4ub(tint.r, tint.g, tint.b, tint.a);
@@ -3144,7 +3496,7 @@ pub const ExportImageError = Allocator.Error || error{
     UnsupportedPixelFormat,
 };
 
-const PixelFormat = @import("types.zig").PixelFormat;
+const PixelFormat = types.PixelFormat;
 
 /// Encode `image` to bytes in the format named by `file_type` (e.g.
 /// `".png"`).  Returns owned bytes the caller must `gpa.free`
@@ -3170,7 +3522,7 @@ pub fn exportImageToMemory(
     {
         return error.UnsupportedFileType;
     }
-    const fmt: PixelFormat = @enumFromInt(image.format);
+    const fmt: PixelFormat = @fromBackingInt(@intCast(image.format));
     if (fmt.isCompressed()) {
         return error.UnsupportedPixelFormat;
     }
@@ -3194,7 +3546,7 @@ pub fn exportImageToMemory(
         rgba[i * 4 + 3] = c.a;
     }
 
-    const codecs_mod = @import("codecs.zig");
+    const codecs_mod = codecs;
     return codecs_mod.png.encode(
         gpa,
         rgba,
@@ -3220,7 +3572,7 @@ pub fn imageFromChannel(
     if (image.data == null or image.width <= 0 or image.height <= 0) {
         return error.InvalidImage;
     }
-    const fmt: PixelFormat = @enumFromInt(image.format);
+    const fmt: PixelFormat = @fromBackingInt(@intCast(image.format));
     if (fmt.isCompressed()) {
         return error.UnsupportedPixelFormat;
     }
@@ -3247,7 +3599,7 @@ pub fn imageFromChannel(
         .width = image.width,
         .height = image.height,
         .mipmaps = 1,
-        .format = @intFromEnum(PixelFormat.uncompressed_grayscale),
+        .format = @backingInt(PixelFormat.uncompressed_grayscale),
     };
 }
 
@@ -3271,7 +3623,7 @@ pub fn imageMipmaps(
     if (image.data == null or image.width <= 0 or image.height <= 0) {
         return error.InvalidImage;
     }
-    const fmt: PixelFormat = @enumFromInt(image.format);
+    const fmt: PixelFormat = @fromBackingInt(@intCast(image.format));
     if (fmt.isCompressed()) {
         return error.UnsupportedPixelFormat;
     }
@@ -3391,11 +3743,11 @@ pub fn imageFormat(
     new_format: PixelFormat,
 ) errors.ImageGenError!void {
     const old_format_int: i32 = image.format;
-    const new_format_int: i32 = @intFromEnum(new_format);
+    const new_format_int: i32 = @backingInt(new_format);
     if (old_format_int == new_format_int) {
         return;
     }
-    const old_format: PixelFormat = @enumFromInt(old_format_int);
+    const old_format: PixelFormat = @fromBackingInt(@intCast(old_format_int));
     if (old_format.isCompressed() or new_format.isCompressed()) {
         // raylib also no-ops here; we'd need a real DXT/ETC encoder
         // to do anything useful, and the runtime path doesn't need
@@ -3449,12 +3801,12 @@ test "imageFormat: same format is a no-op (no realloc)" {
         .width = 4,
         .height = 4,
         .mipmaps = 1,
-        .format = @intFromEnum(PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(PixelFormat.uncompressed_r8g8b8a8),
     };
     defer ta.free(buf); // we still own the original
     try imageFormat(ta, &img, .uncompressed_r8g8b8a8);
     // Same format → no swap, original buf still owned by us.
-    try expectEqual(@intFromEnum(PixelFormat.uncompressed_r8g8b8a8), img.format);
+    try expectEqual(@backingInt(PixelFormat.uncompressed_r8g8b8a8), img.format);
 }
 
 test "imageFormat: RGBA8 → grayscale shrinks buffer + preserves mean" {
@@ -3482,14 +3834,14 @@ test "imageFormat: RGBA8 → grayscale shrinks buffer + preserves mean" {
         .width = 2,
         .height = 2,
         .mipmaps = 1,
-        .format = @intFromEnum(PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(PixelFormat.uncompressed_r8g8b8a8),
     };
     try imageFormat(ta, &img, .uncompressed_grayscale);
     const out_ptr: [*]u8 = @ptrCast(img.data.?);
     const out_slice: []u8 = out_ptr[0..4];
     defer ta.free(out_slice);
 
-    try expectEqual(@intFromEnum(PixelFormat.uncompressed_grayscale), img.format);
+    try expectEqual(@backingInt(PixelFormat.uncompressed_grayscale), img.format);
     try expectEqual(@as(i32, 1), img.mipmaps);
     // setPixelColor uses the standard luma formula:
     //   Y = 0.299 R + 0.587 G + 0.114 B
@@ -3515,10 +3867,10 @@ test "imageFormat: compressed source is silent no-op" {
         .width = 4,
         .height = 4,
         .mipmaps = 1,
-        .format = @intFromEnum(PixelFormat.compressed_dxt1_rgb),
+        .format = @backingInt(PixelFormat.compressed_dxt1_rgb),
     };
     try imageFormat(ta, &img, .uncompressed_r8g8b8a8); // no-op
-    try expectEqual(@intFromEnum(PixelFormat.compressed_dxt1_rgb), img.format);
+    try expectEqual(@backingInt(PixelFormat.compressed_dxt1_rgb), img.format);
 }
 
 test "imageFormat: null data returns InvalidDimensions" {
@@ -3528,7 +3880,7 @@ test "imageFormat: null data returns InvalidDimensions" {
         .width = 4,
         .height = 4,
         .mipmaps = 1,
-        .format = @intFromEnum(PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(PixelFormat.uncompressed_r8g8b8a8),
     };
     try expectError(error.InvalidDimensions, imageFormat(ta, &img, .uncompressed_grayscale));
 }
@@ -3542,7 +3894,7 @@ test "imageFormat: non-positive dimensions return InvalidDimensions" {
         .width = 0,
         .height = 4,
         .mipmaps = 1,
-        .format = @intFromEnum(PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(PixelFormat.uncompressed_r8g8b8a8),
     };
     try expectError(error.InvalidDimensions, imageFormat(ta, &img, .uncompressed_grayscale));
 }
@@ -3757,7 +4109,7 @@ pub fn genImageText(
         .width = width,
         .height = height,
         .mipmaps = 1,
-        .format = @intFromEnum(@import("types.zig").PixelFormat.uncompressed_grayscale),
+        .format = @backingInt(types.PixelFormat.uncompressed_grayscale),
     };
 }
 
@@ -4295,7 +4647,7 @@ test "colorAlphaBlend: zero-alpha src leaves dst unchanged" {
 // ===========================================================================
 
 inline fn pf(tag: PixelFormat) i32 {
-    return @intFromEnum(tag);
+    return @backingInt(tag);
 }
 
 test "getPixelDataSize: RGBA8 = 4 bytes/pixel" {
@@ -5422,7 +5774,7 @@ test "exportImageToMemory: PNG round-trips through codecs.png.decode" {
     try expect(eql(u8, png_bytes[0..8], &sig));
 
     // Round-trip: decode the PNG and verify the pixels match.
-    const codecs_mod = @import("codecs.zig");
+    const codecs_mod = codecs;
     const decoded_img: codecs_mod.png.Image = try codecs_mod.png.decode(ta, png_bytes);
     defer decoded_img.deinit(ta);
     try expect(decoded_img.width == 4);
@@ -5444,7 +5796,7 @@ test "imageFromChannel: extracts R channel as grayscale" {
     const r_only: Image = try imageFromChannel(ta, img, 0);
     defer unloadImage(ta, r_only);
     try expect(r_only.width == 3 and r_only.height == 2);
-    try expect(r_only.format == @intFromEnum(PixelFormat.uncompressed_grayscale));
+    try expect(r_only.format == @backingInt(PixelFormat.uncompressed_grayscale));
 
     // Each pixel is 1 byte; all should == 0x42.
     const buf: [*]const u8 = @ptrCast(@alignCast(r_only.data));

@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -56,14 +56,14 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
-    f.gl.rect(s.rec, .{ .color = co.palette.accent.fade(0.45) });
+    f.gl.rect(s.rec, .{ .color = common.palette.accent.fade(0.45) });
     if (s.ready) {
         f.gl.rect(
             .{ .x = s.rec.x, .y = s.rec.y, .width = s.rec.width, .height = s.rec.height },
-            .{ .color = co.palette.accent2, .outline = 1.0 },
+            .{ .color = common.palette.accent2, .outline = 1.0 },
         );
         const bx: f32 = s.rec.x + s.rec.width;
         const by: f32 = s.rec.y + s.rec.height;
@@ -71,11 +71,11 @@ fn update(f: *z.Frame, s: *State) void {
             .{ bx - handle_size, by },
             .{ bx, by },
             .{ bx, by - handle_size },
-            .{ .color = co.palette.accent2 },
+            .{ .color = common.palette.accent2 },
         );
     }
 
-    co.caption(f.gl, s.font, "rectangle scaling: drag the bottom-right corner");
+    common.caption(f.gl, s.font, "rectangle scaling: drag the bottom-right corner");
     z.endDrawing(f.gl);
 }
 

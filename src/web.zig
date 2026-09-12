@@ -1,3 +1,4 @@
+//! lint:alias web
 // src/web.zig - browser bindings (DOM, Audio, fetch).
 // Aggregates the four browser-binding modules into a single file with
 // namespaced sub-structs:
@@ -57,7 +58,7 @@ pub const dom = struct {
             std.debug.print("{s} {s}\n", .{ prefix, msg });
             return;
         }
-        js_log(@intFromEnum(level), msg.ptr, msg.len);
+        js_log(@backingInt(level), msg.ptr, msg.len);
     }
 
     extern "dom" fn js_panic(ptr: [*]const u8, len: usize) noreturn;
@@ -466,6 +467,42 @@ pub const dom = struct {
             return resized;
         }
         return buf;
+    }
+
+    /// Binary-safe save.  localStorage only holds UTF-8 text, so raw binary
+    /// (anything that isn't valid UTF-8 — e.g. serialized structs, float
+    /// bytes) gets mangled by the string round-trip that `persistence_save`
+    /// does.  This base64-encodes `bytes` first — base64 is pure ASCII, so it
+    /// survives the text round-trip losslessly — then stores that.  Use this
+    /// (not `persistence_save`) for serialized structs / binary blobs.  Returns
+    /// the same status codes as `persistence_save`.
+    pub fn persistence_save_bytes(
+        gpa: Allocator,
+        key: []const u8,
+        bytes: []const u8,
+    ) Allocator.Error!i32 {
+        const encoder = std.base64.standard.Encoder;
+        const b64: []u8 = try gpa.alloc(u8, encoder.calcSize(bytes.len));
+        defer gpa.free(b64);
+        _ = encoder.encode(b64, bytes);
+        return persistence_save(key, b64);
+    }
+
+    /// Binary-safe load — the counterpart to `persistence_save_bytes`.  Reads
+    /// the stored base64 string and decodes it back to the exact original
+    /// bytes.  Returns null if the key is missing, storage is unavailable, or
+    /// the stored value isn't valid base64.  Caller owns the returned slice.
+    pub fn persistence_load_bytes(gpa: Allocator, key: []const u8) Allocator.Error!?[]u8 {
+        const b64: []u8 = (try persistence_load(gpa, key)) orelse return null;
+        defer gpa.free(b64);
+        const decoder = std.base64.standard.Decoder;
+        const out_len: usize = decoder.calcSizeForSlice(b64) catch return null;
+        const out: []u8 = try gpa.alloc(u8, out_len);
+        decoder.decode(out, b64) catch {
+            gpa.free(out);
+            return null;
+        };
+        return out;
     }
 
     // ----- Cursor / pointer-lock
@@ -1741,10 +1778,423 @@ pub const fetch = struct {
 
 };
 
+/// WebSocket client — the browser-side transport for zimr's P2P signaling. It
+/// talks to the L0 signaling server (tools/signal_server.zig) so peers can find
+/// each other and trade WebRTC handshake blobs. Mirrors `fetch`'s handle+poll
+/// shape: nothing blocks; you open a socket, then each frame you poll for
+/// inbound messages and send outbound ones. The JS host (bridge.zig) does the
+/// actual async work and queues inbound frames; wasm drains the queue by polling.
+///
+/// Typical use (a polling state machine across frames):
+///     const h = z.web.ws.open("ws://localhost:7777");
+///     // ... later, every frame:
+///     switch (z.web.ws.state(h)) {
+///         .connecting => {},                       // wait
+///         .open => {
+///             var buf: [4096]u8 = undefined;
+///             while (z.web.ws.poll(h, &buf)) |msg| { handle(msg); }
+///             z.web.ws.send(h, "JOIN my-room");
+///         },
+///         .closed => { z.web.ws.close(h); },       // reconnect or give up
+///     }
+pub const ws = struct {
+    const is_wasm = builtin.target.cpu.arch.isWasm();
+
+    /// Opaque socket handle. 0 means "invalid / not on wasm".
+    pub const Handle = u32;
+
+    /// Connection state, matching the JS host's `st` cell.
+    pub const State = enum(i32) {
+        connecting = 0,
+        open = 1,
+        closed = 2, // closed OR errored — either way you can't use it anymore
+    };
+
+    // ---- JS-side imports (implemented in bridge.zig's "dom" namespace) ----
+    extern "dom" fn js_ws_open(url_ptr: [*]const u8, url_len: usize) Handle;
+    extern "dom" fn js_ws_state(handle: Handle) i32;
+    extern "dom" fn js_ws_send(handle: Handle, ptr: [*]const u8, len: usize) void;
+    extern "dom" fn js_ws_poll(handle: Handle, out_ptr: [*]u8, out_cap: usize) i32;
+    extern "dom" fn js_ws_close(handle: Handle) void;
+    extern "dom" fn js_ws_origin_url(out_ptr: [*]u8, out_cap: usize) usize;
+
+    /// Open a WebSocket to `url` (e.g. "ws://localhost:7777" or a "wss://" URL).
+    /// Returns immediately with a handle; the socket connects in the background.
+    /// Poll `state()` until it reports `.open` before sending.
+    pub fn open(url: []const u8) Handle {
+        if (comptime !is_wasm) {
+            return 0;
+        }
+        return js_ws_open(url.ptr, url.len);
+    }
+
+    /// Current connection state. A stale/closed/freed handle reports `.closed`.
+    pub fn state(handle: Handle) State {
+        if (comptime !is_wasm) {
+            return .closed;
+        }
+        if (handle == 0) {
+            return .closed;
+        }
+        return switch (js_ws_state(handle)) {
+            0 => .connecting,
+            1 => .open,
+            else => .closed,
+        };
+    }
+
+    /// Send `bytes` as a WebSocket text frame (the L0 server speaks text). Safe
+    /// to call before the socket is open — it's dropped rather than throwing.
+    pub fn send(handle: Handle, bytes: []const u8) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        if (handle == 0) {
+            return;
+        }
+        js_ws_send(handle, bytes.ptr, bytes.len);
+    }
+
+    /// Drain the next queued inbound message into `out`. Returns the message as
+    /// a slice of `out` (never longer than `out`), or null if the queue is empty
+    /// right now. A message too big for `out` is dropped and null is returned, so
+    /// size `out` for your largest expected message (SDP offers are a few KB).
+    /// Call in a loop each frame to drain everything that arrived.
+    pub fn poll(handle: Handle, out: []u8) ?[]const u8 {
+        if (comptime !is_wasm) {
+            return null;
+        }
+        if (handle == 0) {
+            return null;
+        }
+        const n: i32 = js_ws_poll(handle, out.ptr, out.len);
+        if (n < 0) {
+            return null;
+        }
+        return out[0..@intCast(n)];
+    }
+
+    /// Close the socket and free its handle. Safe to call more than once.
+    pub fn close(handle: Handle) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        if (handle == 0) {
+            return;
+        }
+        js_ws_close(handle);
+    }
+
+    /// The same-origin WebSocket URL for the page this wasm is running in —
+    /// "wss://host" on an https page, "ws://host" otherwise. Writes it into
+    /// `out` and returns the slice. Handy when the signaling server also serves
+    /// the page: connect to `originUrl(&buf)` and there's nothing to hard-code
+    /// and no mixed-content issue. Returns "" on native builds.
+    pub fn originUrl(out: []u8) []const u8 {
+        if (comptime !is_wasm) {
+            return "";
+        }
+        const n: usize = js_ws_origin_url(out.ptr, out.len);
+        return out[0..n];
+    }
+};
+
+/// WebRTC peer-to-peer data channels. Each `create()` makes one connection to
+/// one remote peer (build a full mesh by making one per peer). The SDP/ICE
+/// payloads are opaque here — you ferry them to the remote peer over whatever
+/// signaling channel you have (the `ws` above, relayed by the signaling
+/// server), and feed the peer's payloads back in via `setRemote` / `addIce`.
+/// The whole offer/answer/ICE dance is driven by draining `poll()` each frame.
+/// Two channels: 0 = "cursor" (unreliable, unordered), 1 = "clicks" (reliable).
+/// All of this is a no-op on native builds (the externs are wasm-only).
+pub const rtc = struct {
+    pub const Handle = u32;
+    const is_wasm: bool = builtin.target.cpu.arch.isWasm();
+
+    pub const EventKind = enum(u8) {
+        none = 0,
+        local_offer = 1, // our SDP offer is ready — send it to the peer
+        local_answer = 2, // our SDP answer is ready — send it to the peer
+        local_ice = 3, // one of our ICE candidates — send it to the peer
+        channel_open = 4, // a data channel opened (see event.channel)
+        data = 5, // bytes arrived on a channel (see event.channel/payload)
+        state = 6, // connection state changed (payload is the state text)
+    };
+
+    /// One drained event. `payload` points into the `out` buffer you passed to
+    /// `poll`, so copy it out before the next `poll` call if you need to keep it.
+    pub const Event = struct {
+        kind: EventKind,
+        channel: u8,
+        payload: []const u8,
+    };
+
+    extern "dom" fn js_rtc_create() Handle;
+    extern "dom" fn js_rtc_create_offer(handle: Handle) void;
+    extern "dom" fn js_rtc_set_remote(
+        handle: Handle,
+        is_offer: u32,
+        sdp_ptr: [*]const u8,
+        sdp_len: usize,
+    ) void;
+    extern "dom" fn js_rtc_add_ice(
+        handle: Handle,
+        cand_ptr: [*]const u8,
+        cand_len: usize,
+    ) void;
+    extern "dom" fn js_rtc_send(
+        handle: Handle,
+        channel: u32,
+        ptr: [*]const u8,
+        len: usize,
+    ) void;
+    extern "dom" fn js_rtc_poll(
+        handle: Handle,
+        out_ptr: [*]u8,
+        out_cap: usize,
+    ) i32;
+    extern "dom" fn js_rtc_close(handle: Handle) void;
+
+    /// Make a new peer connection. Returns a handle (0 on native).
+    pub fn create() Handle {
+        if (comptime !is_wasm) {
+            return 0;
+        }
+        return js_rtc_create();
+    }
+
+    /// Offerer side: create the two data channels and an SDP offer. The offer
+    /// arrives as a `local_offer` event from `poll`.
+    pub fn createOffer(handle: Handle) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_rtc_create_offer(handle);
+    }
+
+    /// Feed in the remote peer's SDP. `is_offer` true means they offered and we
+    /// are answering (an answer will come back as a `local_answer` event);
+    /// false means this is their answer to our offer.
+    pub fn setRemote(handle: Handle, is_offer: bool, sdp: []const u8) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_rtc_set_remote(handle, if (is_offer) 1 else 0, sdp.ptr, sdp.len);
+    }
+
+    /// Feed in one of the remote peer's ICE candidates (the JSON string that came
+    /// out of their `local_ice` event).
+    pub fn addIce(handle: Handle, candidate: []const u8) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_rtc_add_ice(handle, candidate.ptr, candidate.len);
+    }
+
+    /// Send bytes on channel 0 (cursor) or 1 (clicks). No-op if the channel
+    /// isn't open yet.
+    pub fn send(handle: Handle, channel: u8, bytes: []const u8) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_rtc_send(handle, channel, bytes.ptr, bytes.len);
+    }
+
+    /// Drain the next event, or null if none. `event.payload` is a slice of
+    /// `out`, valid only until the next `poll`.
+    pub fn poll(handle: Handle, out: []u8) ?Event {
+        if (comptime !is_wasm) {
+            return null;
+        }
+        const n: i32 = js_rtc_poll(handle, out.ptr, out.len);
+        if (n < 2) {
+            return null; // -1 empty, -2 too big, or malformed
+        }
+        const total: usize = @intCast(n);
+        const raw: u8 = out[0];
+        if (raw < 1 or raw > 6) {
+            return null;
+        }
+        return .{ .kind = @fromBackingInt(@intCast(raw)), .channel = out[1], .payload = out[2..total] };
+    }
+
+    /// Close the connection and free its handle. Safe to call more than once.
+    pub fn close(handle: Handle) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        if (handle == 0) {
+            return;
+        }
+        js_rtc_close(handle);
+    }
+};
+
 // Force discovery of nested-namespace inline tests.  Without this,
 // `_ = @import("web.zig")` in tests.zig only sees file-scope tests
 // (of which there are none) and skips the `audio.*` tests.
+
+/// User-supplied files — drag-and-drop on desktop, the OS file picker on mobile.
+///
+/// ── WHY THIS EXISTS ──
+///
+/// Until now nothing in zimr could read bytes the USER chose at runtime: every example gets its
+/// assets through `@embedFile` at comptime. A viewer that only ever shows the one clip compiled
+/// into it is not a viewer.
+///
+/// ── ★ THE WEB DROP MODEL IS ASYNC AND raylib's IS NOT ──
+///
+/// raylib's `LoadDroppedFiles()` hands back PATHS, synchronously, and the app reads them with
+/// ordinary file I/O. BVHView gets that on the web for free from
+/// `-s USE_GLFW=3 -s FORCE_FILESYSTEM=1`: GLFW's emscripten port reads the dropped files into
+/// MEMFS and only then fires its callback, so the C code still sees paths. The asynchrony is
+/// hidden behind a virtual filesystem.
+///
+/// zimr has no virtual filesystem, and adding one to manufacture that illusion would be a large
+/// detour for no gain. In a browser a `drop` yields `DataTransfer.files`, and each `File` must
+/// be read through `arrayBuffer()`, which resolves LATER. So the asynchrony is exposed rather
+/// than hidden, using the same four-step polling protocol `audio`'s OGG decode already uses:
+///
+///   1. bytes arrive JS-side (a drop, or the picker closing) and are queued
+///   2. `pendingCount()` — poll each frame
+///   3. `nextSize()` / `readNext(buf)` — take the oldest, copy it into wasm memory
+///   4. `discardNext()` if the caller does not want it after all
+///
+/// A file lands a frame or two after the user acts, which for someone dragging a file is
+/// invisible.
+///
+/// ── ★ THE PICKER NEEDS A REAL DOM ELEMENT, NOT A WASM-DRAWN BUTTON ──
+///
+/// `input.click()` only opens the picker inside a genuine user-gesture handler. zimr's UI is
+/// immediate-mode and drawn INTO the canvas, so a "Load file" button is pixels: the press is
+/// detected while walking the UI during `requestAnimationFrame`, long after the `pointerdown`
+/// that delivered the tap, and the browser's transient activation has expired. Desktop often
+/// forgives this; mobile Safari does not.
+///
+/// `requestPicker` therefore positions a real, transparent `<input type="file">` over the
+/// rectangle where the wasm draws its button, so the tap lands on a DOM element and the gesture
+/// is real. This is the same technique `bridge.zig`'s text-input overlay already uses to pop the
+/// mobile soft keyboard over a wasm-drawn text field.
+///
+/// The externs live in the `dom` import namespace rather than one of their own: `bridge.zig`
+/// already routes persistence, clipboard, WebSocket and WebRTC through `dom`, and a new
+/// namespace would have to be registered in the smoke runner's import spec as well.
+pub const userfile = struct {
+    const is_wasm: bool = builtin.target.cpu.arch.isWasm();
+
+    extern "dom" fn js_userfile_pending_count() u32;
+    extern "dom" fn js_userfile_next_size() u32;
+    extern "dom" fn js_userfile_next_name(out_ptr: [*]u8, out_len: u32) u32;
+    extern "dom" fn js_userfile_read_next(out_ptr: [*]u8, out_len: u32) u32;
+    extern "dom" fn js_userfile_discard_next() void;
+    extern "dom" fn js_userfile_set_picker_rect(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        accept_ptr: [*]const u8,
+        accept_len: u32,
+    ) void;
+    extern "dom" fn js_userfile_hide_picker() void;
+
+    /// How many completed files are waiting. Poll this each frame.
+    pub fn pendingCount() u32 {
+        if (comptime !is_wasm) {
+            return 0;
+        }
+        return js_userfile_pending_count();
+    }
+
+    /// Byte length of the oldest waiting file, so the caller can size its buffer. 0 when the
+    /// queue is empty.
+    pub fn nextSize() u32 {
+        if (comptime !is_wasm) {
+            return 0;
+        }
+        return js_userfile_next_size();
+    }
+
+    /// Copy the oldest waiting file's NAME into `out`; returns the number of bytes written.
+    /// The name is the basename the browser reports — there is no path on the web.
+    pub fn nextName(out: []u8) u32 {
+        if (comptime !is_wasm) {
+            return 0;
+        }
+        return js_userfile_next_name(out.ptr, @intCast(out.len));
+    }
+
+    /// Copy the oldest waiting file's bytes into `out` and DROP it from the queue. Returns the
+    /// number of bytes written, which is 0 when `out` is too small — in that case the file
+    /// stays queued, so a caller that mis-sized its buffer can retry rather than lose the file.
+    pub fn readNext(out: []u8) u32 {
+        if (comptime !is_wasm) {
+            return 0;
+        }
+        return js_userfile_read_next(out.ptr, @intCast(out.len));
+    }
+
+    /// Drop the oldest waiting file without reading it.
+    pub fn discardNext() void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_userfile_discard_next();
+    }
+
+    /// Place the invisible `<input type="file">` over `(x, y, w, h)` in CSS pixels — the
+    /// rectangle where the caller draws its own Load button. `accept` is a filter such as
+    /// ".bvh"; pass an empty string for any file.
+    ///
+    /// Call this every frame the button is visible: the canvas can be resized or scrolled, and
+    /// an overlay left at a stale rectangle swallows taps meant for something else.
+    pub fn setPickerRect(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        accept: []const u8,
+    ) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_userfile_set_picker_rect(x, y, w, h, accept.ptr, @intCast(accept.len));
+    }
+
+    /// Hide the overlay, so it stops intercepting taps once the button is gone.
+    pub fn hidePicker() void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_userfile_hide_picker();
+    }
+
+    // ---- Tests
+    // Host-side coverage only: the wrappers are exercised against the `is_wasm = false` branch
+    // to verify they return the documented safe defaults instead of trapping on a missing
+    // import. Real browser behaviour belongs to the smoke harness.
+
+    test "pendingCount on host reports an empty queue" {
+        try expectEqual(@as(u32, 0), pendingCount());
+    }
+
+    test "nextSize and readNext on host return 0 without touching the buffer" {
+        var buf: [8]u8 = @splat(0xAA);
+        try expectEqual(@as(u32, 0), nextSize());
+        try expectEqual(@as(u32, 0), readNext(&buf));
+        try expectEqual(@as(u32, 0), nextName(&buf));
+        // Untouched: a host build must not pretend it wrote anything.
+        try expectEqual(@as(u8, 0xAA), buf[0]);
+    }
+
+    test "picker calls on host are silent" {
+        setPickerRect(0, 0, 100, 32, ".bvh");
+        hidePicker();
+        discardNext();
+    }
+};
+
 comptime {
     _ = audio;
     _ = fetch;
+    _ = userfile;
 }

@@ -31,6 +31,7 @@
 
 const std = @import("std");
 const zm = @import("zm");
+const assertUnreachable = zm.assertUnreachable;
 const float64 = zm.float64;
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
@@ -214,7 +215,7 @@ fn update(f: *z.Frame, s: *State) void {
                 .nav_id_selected = false,
                 .items_count = @intCast(files.len),
             };
-            s.selection.applyRequests(s.gpa, &io) catch {};
+            s.selection.applyRequests(s.gpa, &io) catch assertUnreachable(@src(), "OOM", .{});
         }
 
         // ---- Tap mode (phone affordance)
@@ -259,8 +260,8 @@ fn update(f: *z.Frame, s: *State) void {
         // immediately after Begin.  The scope retains its captured
         // copy, so downstream widgets in this frame see the real
         // modifier state.
-        const ctrl_idx: usize = @intFromEnum(ui.KeyCode.left_control);
-        const shift_idx: usize = @intFromEnum(ui.KeyCode.left_shift);
+        const ctrl_idx: usize = @backingInt(ui.KeyCode.left_control);
+        const shift_idx: usize = @backingInt(ui.KeyCode.left_shift);
         const saved_ctrl: bool = u.ctx.input.keys[ctrl_idx].down;
         const saved_shift: bool = u.ctx.input.keys[shift_idx].down;
         u.ctx.input.keys[ctrl_idx].down = saved_ctrl or (s.tap_mode == .toggle);
@@ -275,7 +276,7 @@ fn update(f: *z.Frame, s: *State) void {
         u.ctx.input.keys[ctrl_idx].down = saved_ctrl;
         u.ctx.input.keys[shift_idx].down = saved_shift;
 
-        s.selection.applyRequests(s.gpa, ms_io) catch {};
+        s.selection.applyRequests(s.gpa, ms_io) catch assertUnreachable(@src(), "OOM", .{});
 
         for (files, 0..) |item, idx| {
             // Build the row label: "[k] name             size".  We
@@ -301,7 +302,7 @@ fn update(f: *z.Frame, s: *State) void {
         }
 
         const ms_io2: *const ui.MultiSelectIO = u.endMultiSelect();
-        s.selection.applyRequests(s.gpa, ms_io2) catch {};
+        s.selection.applyRequests(s.gpa, ms_io2) catch assertUnreachable(@src(), "OOM", .{});
 
         u.separatorText("Status");
         u.textDisabled("Buttons exercise applyRequests directly.", .{});

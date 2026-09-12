@@ -1,3 +1,4 @@
+//! lint:alias renderer_2d
 // src/renderer_2d.zig - the raylib-parity drawing layer.
 // WebGPU architecture is documented centrally in src/zimr.zig
 // (the module-level `//!` doc) — read that before changing wgpu code.
@@ -50,7 +51,7 @@ pub const ibo_ring_indices = @import("gpu_iface.zig").ibo_ring_indices;
 const wgpu = @import("wgpu.zig");
 const wgpu_texture = @import("wgpu_texture.zig");
 const shader = @import("shader_interface");
-const shader_runtime_wgpu = @import("shader_runtime_wgpu.zig");
+const shader_runtime = @import("shader_runtime_wgpu.zig");
 const assertf = zm.assertf;
 
 /// Slots in the per-frame ortho ring — the max projection switches one
@@ -252,7 +253,7 @@ pub const Renderer2D = struct {
     /// dispatch entry points.  On the wgpu side, this is bit-for-bit
     /// equivalent to a raw handle — `setPipeline` extracts
     /// `.gpu_handle` and binds it.
-    shapes_pipeline: shader_runtime_wgpu.RenderPipeline(
+    shapes_pipeline: shader_runtime.RenderPipeline(
         default_shapes_vs_io,
         default_shapes_fs_io,
     ) = .{},
@@ -285,7 +286,7 @@ pub const Renderer2D = struct {
     /// `per_frame_bind_group`/`white_material_bind_group` fields
     /// of the pre-turn-1 shape.  See the `EngineSchema` decl above
     /// for the resource shape.
-    resources: shader_runtime_wgpu.Resources(EngineSchema) = undefined,
+    resources: shader_runtime.Resources(EngineSchema) = undefined,
 
     // Built-in 1×1 white texture.  Owned separately from `resources`
     // because the user can replace it via `Resources.set(.texture0,
@@ -415,7 +416,7 @@ pub const Renderer2D = struct {
         // assigns group 0 to the UBO (default for `.ubo` kind),
         // group 1 to the sampler (default for `.sampler_2d`),
         // matching the engine's WGSL layout exactly.
-        r.resources = try shader_runtime_wgpu.Resources(EngineSchema).init(
+        r.resources = try shader_runtime.Resources(EngineSchema).init(
             gpa,
             f,
             .{
@@ -498,9 +499,9 @@ pub const Renderer2D = struct {
                 "shapes",
             );
             gpa.free(pipe_blob);
-            r.blend_pipes[@intFromEnum(bm)] = pipe_handle;
+            r.blend_pipes[@backingInt(bm)] = pipe_handle;
         }
-        r.shapes_pipeline = .{ .gpu_handle = r.blend_pipes[@intFromEnum(wgpu.BlendMode.alpha)] };
+        r.shapes_pipeline = .{ .gpu_handle = r.blend_pipes[@backingInt(wgpu.BlendMode.alpha)] };
 
         // ---- 6. Batch VBO + IBO ----
         const max_vert_bytes = @as(u64, vbo_ring_vertices) *
@@ -902,6 +903,12 @@ pub const Renderer2D = struct {
     /// same bindings.
     pub fn bindForPass(self: *Renderer2D, ps: *@import("gpu_iface.zig").PassState) void {
         const Backend = @import("gpu_iface.zig").WgpuBackend;
+        // Drop the dedup's memory FIRST. This function is called both at pass start and as the
+        // restore after a custom/3D pipeline has been bound — and in the restore case the
+        // device has already invalidated these groups even though the tracker has not. Binding
+        // unconditionally is what "bind for pass" has to mean; the cost is a handful of
+        // redundant binds per pass. See `WgpuBackend.invalidateBindGroups`.
+        Backend.invalidateBindGroups(ps);
         Backend.setPipeline(ps, self.shapes_pipeline);
         // Record that the 2D shapes pipeline now owns the batch, so a later
         // `flushBatch` can assert it's still bound when it drains. This is the
@@ -947,7 +954,7 @@ pub const Renderer2D = struct {
         const Backend = @import("gpu_iface.zig").WgpuBackend;
         Backend.flushBatch(ps);
         self.active_blend = mode;
-        self.shapes_pipeline = .{ .gpu_handle = self.blend_pipes[@intFromEnum(mode)] };
+        self.shapes_pipeline = .{ .gpu_handle = self.blend_pipes[@backingInt(mode)] };
         Backend.setPipeline(ps, self.shapes_pipeline);
         // The blend variant is a batch-compatible pipeline (same layout, only
         // blend state differs), so it becomes the batch's owner for the assert
@@ -996,7 +1003,7 @@ pub const Renderer2D = struct {
     ) void {
         const Backend = @import("gpu_iface.zig").WgpuBackend;
         Backend.flushBatch(ps);
-        self.shapes_pipeline = .{ .gpu_handle = self.blend_pipes[@intFromEnum(self.active_blend)] };
+        self.shapes_pipeline = .{ .gpu_handle = self.blend_pipes[@backingInt(self.active_blend)] };
         Backend.setPipeline(ps, self.shapes_pipeline);
         ps.batch_owner_pipeline = self.shapes_pipeline.gpu_handle;
     }

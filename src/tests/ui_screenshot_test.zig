@@ -1,7 +1,7 @@
 // src/tests/ui_screenshot_test.zig - host-side debug screenshot.
 // build a tab-bar scene that mirrors
 // `examples/ui_tabbar_tour.zig` Bar 1, then write a PNG via
-// `ui_screenshot.renderToPng`.  The PNG goes to
+// `ui.renderToPng`.  The PNG goes to
 // `/mnt/user-data/outputs/ui_tabbar_bug-turn317.png` so it can be
 // previewed in the chat artifact viewer.
 // This is a layout-bug visualizer, not a pass/fail regression
@@ -15,12 +15,11 @@ const Allocator = std.mem.Allocator;
 const ui = @import("../ui.zig");
 const shapes2d = @import("../shapes2d.zig");
 const text2d = @import("../text2d.zig");
-const ui_screenshot = @import("../ui.zig");
 
 const width: u32 = 480;
 const height: u32 = 360;
 
-test "ui_screenshot: tab-bar scene → PNG for visual debug" {
+test "ui: tab-bar scene → PNG for visual debug" {
     // Always attempt to write - host test runners with /mnt available
     // produce the screenshot; environments without it skip via the
     // catch on renderToPng below.
@@ -28,7 +27,10 @@ test "ui_screenshot: tab-bar scene → PNG for visual debug" {
     const gpa: Allocator = std.testing.allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
-        .frame_arena = std.heap.ArenaAllocator.init(gpa),
+        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // live-byte tripwire that catches a dropped per-frame reset). These four test
+        // files were imported by nothing, so they never compiled against the change.
+        .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),
         .canvas_w = width,
         .canvas_h = height,
     };
@@ -72,12 +74,12 @@ test "ui_screenshot: tab-bar scene → PNG for visual debug" {
     var io_threaded: std.Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
     const io: std.Io = io_threaded.io();
-    ui_screenshot.renderToPng(
+    ui.renderToPng(
         gpa,
         io,
         &ctx,
         width,
         height,
         "/mnt/user-data/outputs/ui_tabbar_bug-turn317.png",
-    ) catch {};
+    ) catch {}; // lint:off catch-suppression: best-effort screenshot artifact
 }

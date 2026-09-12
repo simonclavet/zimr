@@ -11,7 +11,7 @@
 // and asserts the boxes never interpenetrate beyond the slop and never reorder.
 
 const std = @import("std");
-const zp = @import("../zimrphysics.zig");
+const zimrphysics = @import("../zimrphysics.zig");
 const zm = @import("zm");
 const float = zm.float;
 
@@ -27,7 +27,7 @@ const n_boxes: u32 = 8;
 test "stack scene: boxes rest without interpenetrating" {
     const gpa: std.mem.Allocator = std.testing.allocator;
 
-    var world: zp.World = try zp.World.init(gpa, 1024);
+    var world: zimrphysics.World = try zimrphysics.World.init(gpa, 1024);
     defer world.deinit(gpa);
     // Stress: prove the solver holds the stack every frame, not that it merely
     // freezes once asleep. Sleeping would mask residual instability.
@@ -37,7 +37,7 @@ test "stack scene: boxes rest without interpenetrating" {
     defer arena.deinit();
 
     // floor_shape (top at y=0)
-    const floor_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
+    const floor_shape: zimrphysics.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(10, 0.5, 10),
         .convex_radius = 0.05,
     } });
@@ -48,11 +48,11 @@ test "stack scene: boxes rest without interpenetrating" {
     });
 
     // 8 elongated boxes, alternating 90° yaw (the demo's sceneStack)
-    const box: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
+    const box: zimrphysics.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.45, 0.45, 0.95),
         .convex_radius = 0.05,
     } });
-    var ids: [n_boxes]zp.BodyHandle = undefined;
+    var ids: [n_boxes]zimrphysics.BodyHandle = undefined;
     var i: u32 = 0;
     while (i < n_boxes) : (i += 1) {
         const angle: f32 = if (i % 2 == 0) 0.0 else pi * 0.5;
@@ -71,7 +71,7 @@ test "stack scene: boxes rest without interpenetrating" {
 
     var frame: u32 = 0;
     while (frame < 600) : (frame += 1) { // 10 s, continuously awake
-        try zp.step(&world, dt);
+        try zimrphysics.step(&world, dt);
         _ = arena.reset(.retain_capacity);
 
         // After a short settle, the column must hold: ordered heights and no
@@ -107,27 +107,29 @@ test "stack scene: boxes rest without interpenetrating" {
 
 test "hanging chain: off-COM rope links hold a heavy bob" {
     const gpa: std.mem.Allocator = std.testing.allocator;
-    var world: zp.World = try zp.World.init(gpa, 64);
+    var world: zimrphysics.World = try zimrphysics.World.init(gpa, 64);
     defer world.deinit(gpa);
     world.settings.allow_sleeping = false;
     var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
 
-    const link: zp.ShapeId = try world.shapes.add(gpa, .{ .capsule = .{ .half_height = 0.3, .radius = 0.22 } });
-    const anchor_s: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.25 } });
-    const ball: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.6 } });
+    const link: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
+        .capsule = .{ .half_height = 0.3, .radius = 0.22 },
+    });
+    const anchor_s: zimrphysics.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.25 } });
+    const ball: zimrphysics.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.6 } });
     const top_y: f32 = 7.5;
     const gap: f32 = 0.85;
     const hh: f32 = 0.3;
     const two_r: f32 = 2.0 * 0.22;
-    const anchor: zp.BodyHandle = try world.createBody(.{
+    const anchor: zimrphysics.BodyHandle = try world.createBody(.{
         .shape = anchor_s,
         .position = vec(0, top_y, 0),
         .motion_type = .static,
     });
     const m: u32 = 8;
-    var ids: [m]zp.BodyHandle = undefined;
-    var prev: zp.BodyHandle = anchor;
+    var ids: [m]zimrphysics.BodyHandle = undefined;
+    var prev: zimrphysics.BodyHandle = anchor;
     var prev_y: f32 = top_y;
     var i: u32 = 0;
     while (i < m) : (i += 1) {
@@ -140,18 +142,26 @@ test "hanging chain: off-COM rope links hold a heavy bob" {
         });
         // cap-sphere centres, max = 2 radii (the demo's link). Off-COM anchors:
         // only stays bounded because the position solve re-derives the moment arm.
-        try zp.createDistanceJoint(&world, prev, ids[i], vec(0, prev_y - hh, 0), vec(0, cy + hh, 0), 0.0, two_r);
+        try zimrphysics.createDistanceJoint(
+            &world,
+            prev,
+            ids[i],
+            vec(0, prev_y - hh, 0),
+            vec(0, cy + hh, 0),
+            0.0,
+            two_r,
+        );
         prev = ids[i];
         prev_y = cy;
     }
-    const bob: zp.BodyHandle = try world.createBody(.{
+    const bob: zimrphysics.BodyHandle = try world.createBody(.{
         .shape = ball,
         .position = vec(0, prev_y - gap, 0),
         .motion_type = .dynamic,
         .density = 4000.0,
         .group_id = 9,
     });
-    try zp.createDistanceJoint(
+    try zimrphysics.createDistanceJoint(
         &world,
         prev,
         bob,
@@ -165,7 +175,7 @@ test "hanging chain: off-COM rope links hold a heavy bob" {
     const dt: f32 = 1.0 / 60.0;
     var frame: u32 = 0;
     while (frame < 300) : (frame += 1) {
-        try zp.step(&world, dt);
+        try zimrphysics.step(&world, dt);
         _ = arena.reset(.retain_capacity);
         if (frame > 30) {
             // The off-COM rope must stay BOUNDED (the pre-fix bug ran the centre

@@ -31,7 +31,7 @@ const rotationZ = zm.rotationZ;
 const rad_per_deg = zm.rad_per_deg;
 const vec = zm.vec;
 const bufPrint = std.fmt.bufPrint;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -83,7 +83,7 @@ const parts = [_]Part{
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const u: z.ui_real.Ui = s.ui_host.begin(f);
 
@@ -152,8 +152,8 @@ fn update(f: *z.Frame, s: *State) void {
         "pitch {d: >6.1}   yaw {d: >6.1}   roll {d: >6.1}",
         .{ s.pitch, s.yaw, s.roll },
     ) catch "";
-    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = co.palette.ink_dim, .font = &s.font });
-    co.caption(f.gl, s.font, "WebGPU 3D - yaw / pitch / roll (arrows + A/S, or buttons)");
+    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+    common.caption(f.gl, s.font, "WebGPU 3D - yaw / pitch / roll (arrows + A/S, or buttons)");
     s.ui_host.render(f);
 }
 

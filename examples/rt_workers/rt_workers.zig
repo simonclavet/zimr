@@ -31,8 +31,8 @@ const Sphere = tracer.Sphere;
 const float = zm.float;
 const clamp = zm.clamp;
 const normalize = zm.normalize;
-const cos = zm.cos;
-const sin = zm.sin;
+const cosRad = zm.cosRad;
+const sinRad = zm.sinRad;
 const bufPrint = std.fmt.bufPrint;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -430,7 +430,7 @@ fn update(f: *z.Frame, s: *State) void {
     const a: f32 = f.time.time * 3.0;
     f.gl.circle(.{ cx, cy }, fsz * 1.45, .{ .color = .{ .r = 22, .g = 30, .b = 48, .a = 255 }, .segments = 32 });
     f.gl.circle(
-        .{ cx + orbit_r * cos(a), cy + orbit_r * sin(a) },
+        .{ cx + orbit_r * cosRad(a), cy + orbit_r * sinRad(a) },
         fsz * 0.34,
         .{ .color = .{ .r = 126, .g = 231, .b = 135, .a = 255 }, .segments = 16 },
     );

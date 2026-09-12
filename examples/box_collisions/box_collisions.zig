@@ -283,7 +283,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .ibo_bytes = @sizeOf(@TypeOf(cube_indices)),
         .icount = cube_indices.len,
     };
-    const sphere_cpu: z.Mesh = try z.genMeshSphere(gpa, 1.0, 20, 24);
+    const sphere_cpu: z.Mesh = try z.genMeshSphere(gpa, 1.0, 24, 20);
     defer z.unloadMesh(gpa, sphere_cpu);
     const sphere: GpuMesh = try uploadMesh(gpa, device, queue, sphere_cpu, "bc_sphere");
 

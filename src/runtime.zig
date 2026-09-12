@@ -1,3 +1,4 @@
+//! lint:alias runtime
 // src/runtime.zig - Frame/App lifecycle, input, allocators, time-effects.
 // Aggregates the program-runtime cluster into one file with namespaced
 // sub-structs:
@@ -22,10 +23,11 @@ const meta = std.meta;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const zm = @import("zm");
+const turnsFromRad = zm.turnsFromRad;
+const degFromTurns = zm.degFromTurns;
 const float = zm.float;
 const float64 = zm.float64;
-const atan2 = zm.atan2;
-const pi = zm.pi;
+const atan2Rad = zm.atan2Rad;
 const vec = zm.vec;
 const Vec = zm.Vec;
 const normalize3 = zm.normalize3;
@@ -375,11 +377,11 @@ pub const core = struct {
         tracelog: *TraceLogState,
         level: TraceLogLevel,
     ) void {
-        tracelog.level = @intFromEnum(level);
+        tracelog.level = @backingInt(level);
     }
 
     pub fn getTraceLogLevel(tracelog: *const TraceLogState) TraceLogLevel {
-        return @enumFromInt(tracelog.level);
+        return @fromBackingInt(@intCast(tracelog.level));
     }
 
     pub fn setTraceLogCallback(
@@ -434,7 +436,7 @@ pub const core = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) void {
-        const level_int: i32 = @intFromEnum(level);
+        const level_int: i32 = @backingInt(level);
         if (level_int < tracelog.level) {
             return;
         }
@@ -531,7 +533,7 @@ pub const core = struct {
 
     /// Set the browser tab's title (`document.title`).
     pub fn setWindowTitle(title: []const u8) void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         @import("web.zig").dom.set_title(title);
@@ -540,7 +542,7 @@ pub const core = struct {
     /// Return `(devicePixelRatio, devicePixelRatio)` - both axes share
     /// the same DPR in a browser.  Returns `(1, 1)` on host.
     pub fn getWindowScaleDPI() zm.Vec2 {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return .{ 1, 1 };
         }
         const dpr: f32 = @import("web.zig").dom.get_dpi_scale();
@@ -551,7 +553,7 @@ pub const core = struct {
     /// require this be called from a user-gesture handler - if you call
     /// it outside one, the call is silently rejected by the browser.
     pub fn toggleFullscreen() void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         @import("web.zig").dom.toggle_fullscreen();
@@ -559,7 +561,7 @@ pub const core = struct {
 
     /// True if `document.fullscreenElement` is non-null.
     pub fn isFullscreen() bool {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return false;
         }
         return @import("web.zig").dom.is_fullscreen();
@@ -574,7 +576,7 @@ pub const core = struct {
 
     /// Set the canvas CSS opacity in [0, 1].  raylib: `SetWindowOpacity`.
     pub fn setWindowOpacity(opacity: f32) void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         @import("web.zig").dom.set_window_opacity(opacity);
@@ -584,7 +586,7 @@ pub const core = struct {
     /// (zimr also tracks focus state internally - `isWindowFocused` reads
     /// that, this updates the DOM focus.)
     pub fn setWindowFocused() void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         @import("web.zig").dom.set_window_focused();
@@ -595,7 +597,7 @@ pub const core = struct {
     /// call after a resize returns true and clears the flag, subsequent
     /// calls return false until the next resize.
     pub fn isWindowResized() bool {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return false;
         }
         return @import("web.zig").dom.window_resized_take();
@@ -623,7 +625,7 @@ pub const core = struct {
 
     /// True if there are unconsumed dropped files.  raylib: `IsFileDropped`.
     pub fn isFileDropped() bool {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return false;
         }
         return @import("web.zig").dom.dropped_files_count() > 0;
@@ -635,7 +637,7 @@ pub const core = struct {
     /// raylib: `LoadDroppedFiles()`.  After this returns, the JS-side
     /// table is NOT yet cleared - call `unloadDroppedFiles` to clear.
     pub fn loadDroppedFiles(gpa: Allocator) Allocator.Error!DroppedFiles {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return try gpa.alloc(DroppedFile, 0);
         }
         const dom = @import("web.zig").dom;
@@ -673,7 +675,7 @@ pub const core = struct {
             gpa.free(df.bytes);
         }
         gpa.free(files);
-        if (comptime @import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime builtin.target.cpu.arch.isWasm()) {
             @import("web.zig").dom.dropped_files_clear();
         }
     }
@@ -681,7 +683,7 @@ pub const core = struct {
     /// Open `url` in a new tab.  Browsers block this if the call isn't
     /// inside a user-gesture handler.  Use `noopener,noreferrer` flags.
     pub fn openURL(url: []const u8) void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         @import("web.zig").dom.open_url(url);
@@ -691,7 +693,7 @@ pub const core = struct {
     /// browser may reject the call if the document doesn't have focus
     /// or the user hasn't granted permission.
     pub fn setClipboardText(text: []const u8) void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         @import("web.zig").dom.set_clipboard_text(text);
@@ -716,7 +718,7 @@ pub const core = struct {
     /// handle to be passed to `pollClipboardText` over subsequent
     /// frames.  Returns 0 on host (no clipboard).
     pub fn getClipboardTextAsync() ClipboardHandle {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return 0;
         }
         return @import("web.zig").dom.get_clipboard_text_start();
@@ -725,7 +727,7 @@ pub const core = struct {
     /// Poll a previously-started clipboard read.  Bytes are owned by
     /// the runtime; valid until `releaseClipboardText(handle)`.
     pub fn pollClipboardText(handle: ClipboardHandle) ClipboardTextPoll {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return .failed;
         }
         if (handle == 0) {
@@ -742,7 +744,7 @@ pub const core = struct {
 
     /// Release a clipboard-read handle.  Safe to call multiple times.
     pub fn releaseClipboardText(handle: ClipboardHandle) void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         if (handle == 0) {
@@ -765,7 +767,7 @@ pub const core = struct {
     /// Begin reading the system clipboard's image (PNG only).  Returns
     /// 0 on host builds.
     pub fn getClipboardImageAsync() ClipboardHandle {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return 0;
         }
         return @import("web.zig").dom.get_clipboard_image_start();
@@ -773,7 +775,7 @@ pub const core = struct {
 
     /// Poll a previously-started clipboard image read.
     pub fn pollClipboardImage(handle: ClipboardHandle) ClipboardImagePoll {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return .failed;
         }
         if (handle == 0) {
@@ -798,7 +800,7 @@ pub const core = struct {
     /// browser pops a "Save File" dialog (or downloads silently to the
     /// Downloads folder, depending on browser settings).
     pub fn takeScreenshot(filename: []const u8) void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         @import("web.zig").dom.take_screenshot(filename);
@@ -1040,7 +1042,7 @@ pub const core = struct {
     /// We convert at the boundary.
     fn captureSink(level: i32, msg: []const u8) void {
         Captured.count += 1;
-        Captured.last_level = @enumFromInt(level);
+        Captured.last_level = @fromBackingInt(@intCast(level));
         const n = @min(msg.len, Captured.last_msg.len);
         @memcpy(Captured.last_msg[0..n], msg[0..n]);
         Captured.last_msg_len = n;
@@ -1253,7 +1255,7 @@ pub const core = struct {
         const msg: []const u8 = "from C ABI";
         // `traceLogRaw` is the JS-FFI entry; level stays `i32` for ABI
         // shape, so the call needs an explicit `@intFromEnum`.
-        traceLogRaw(&ts, @intFromEnum(LOG_INFO), msg.ptr, msg.len);
+        traceLogRaw(&ts, @backingInt(LOG_INFO), msg.ptr, msg.len);
         try expect(Captured.count == 1);
         try expect(eql(u8, Captured.last_msg[0..Captured.last_msg_len], msg));
     }
@@ -1266,7 +1268,7 @@ pub const core = struct {
 
         // Length 0 - silently drop.
         const empty: []const u8 = "";
-        traceLogRaw(&ts, @intFromEnum(LOG_FATAL), empty.ptr, 0);
+        traceLogRaw(&ts, @backingInt(LOG_FATAL), empty.ptr, 0);
         try expect(Captured.count == 0);
     }
 
@@ -1861,7 +1863,7 @@ pub const input = struct {
         state: *const InputState,
         key: KeyboardKey,
     ) bool {
-        const i: i32 = @intFromEnum(key);
+        const i: i32 = @backingInt(key);
         if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
             return false;
         }
@@ -1873,7 +1875,7 @@ pub const input = struct {
         state: *const InputState,
         key: KeyboardKey,
     ) bool {
-        const i: i32 = @intFromEnum(key);
+        const i: i32 = @backingInt(key);
         if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
             return false;
         }
@@ -1884,7 +1886,7 @@ pub const input = struct {
         state: *const InputState,
         key: KeyboardKey,
     ) bool {
-        const i: i32 = @intFromEnum(key);
+        const i: i32 = @backingInt(key);
         if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
             return false;
         }
@@ -1895,7 +1897,7 @@ pub const input = struct {
         state: *const InputState,
         key: KeyboardKey,
     ) bool {
-        const i: i32 = @intFromEnum(key);
+        const i: i32 = @backingInt(key);
         if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
             return false;
         }
@@ -1907,7 +1909,7 @@ pub const input = struct {
         state: *const InputState,
         key: KeyboardKey,
     ) bool {
-        const i: i32 = @intFromEnum(key);
+        const i: i32 = @backingInt(key);
         if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
             return true;
         }
@@ -1934,7 +1936,7 @@ pub const input = struct {
         }
         state.keyboard.queue_count -= 1;
         state.keyboard.queue[state.keyboard.queue_count] = 0;
-        return @enumFromInt(v);
+        return @fromBackingInt(@intCast(v));
     }
 
     /// Drain the unicode-codepoint queue, returning oldest first.
@@ -1958,7 +1960,7 @@ pub const input = struct {
         state: *InputState,
         key: KeyboardKey,
     ) void {
-        state.keyboard.exit_key = @intFromEnum(key);
+        state.keyboard.exit_key = @backingInt(key);
     }
 
     /// Map a `KeyboardKey` to its display name.  Returns null for unknown
@@ -1970,7 +1972,7 @@ pub const input = struct {
     /// Letters and digits return their character form ("A", "5") for
     /// ergonomic display in keybinding overlays.
     pub fn getKeyName(key: KeyboardKey) ?[]const u8 {
-        return switch (@intFromEnum(key)) {
+        return switch (@backingInt(key)) {
             // Letters: 'A'..'Z' (raylib uses uppercase ASCII as the key code)
             65 => "A",
             66 => "B",
@@ -2103,7 +2105,7 @@ pub const input = struct {
         state: *const InputState,
         button: @import("types.zig").MouseButton,
     ) bool {
-        const i: usize = @intCast(@intFromEnum(button));
+        const i: usize = @intCast(@backingInt(button));
         return state.mouse.previous_button[i] == 0 and state.mouse.current_button[i] != 0;
     }
 
@@ -2111,14 +2113,14 @@ pub const input = struct {
         state: *const InputState,
         button: @import("types.zig").MouseButton,
     ) bool {
-        return state.mouse.current_button[@intCast(@intFromEnum(button))] != 0;
+        return state.mouse.current_button[@intCast(@backingInt(button))] != 0;
     }
 
     pub fn isMouseButtonReleased(
         state: *const InputState,
         button: @import("types.zig").MouseButton,
     ) bool {
-        const i: usize = @intCast(@intFromEnum(button));
+        const i: usize = @intCast(@backingInt(button));
         return state.mouse.previous_button[i] != 0 and state.mouse.current_button[i] == 0;
     }
 
@@ -2126,7 +2128,7 @@ pub const input = struct {
         state: *const InputState,
         button: @import("types.zig").MouseButton,
     ) bool {
-        return state.mouse.current_button[@intCast(@intFromEnum(button))] == 0;
+        return state.mouse.current_button[@intCast(@backingInt(button))] == 0;
     }
 
     pub fn getMouseX(state: *const InputState) i32 {
@@ -2385,7 +2387,7 @@ pub const input = struct {
         if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
             return false;
         }
-        return state.gamepad.current_button[@intCast(gamepad)][@intCast(@intFromEnum(button))] != 0;
+        return state.gamepad.current_button[@intCast(gamepad)][@intCast(@backingInt(button))] != 0;
     }
 
     pub fn isGamepadButtonPressed(
@@ -2397,7 +2399,7 @@ pub const input = struct {
             return false;
         }
         const g: usize = @intCast(gamepad);
-        const b: usize = @intCast(@intFromEnum(button));
+        const b: usize = @intCast(@backingInt(button));
         return state.gamepad.previous_button[g][b] == 0 and state.gamepad.current_button[g][b] != 0;
     }
 
@@ -2411,7 +2413,7 @@ pub const input = struct {
             return false;
         }
         const g: usize = @intCast(gamepad);
-        const b: usize = @intCast(@intFromEnum(button));
+        const b: usize = @intCast(@backingInt(button));
         return state.gamepad.previous_button[g][b] != 0 and state.gamepad.current_button[g][b] == 0;
     }
 
@@ -2424,7 +2426,7 @@ pub const input = struct {
         if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
             return true; // out-of-range → up
         }
-        return state.gamepad.current_button[@intCast(gamepad)][@intCast(@intFromEnum(button))] == 0;
+        return state.gamepad.current_button[@intCast(gamepad)][@intCast(@backingInt(button))] == 0;
     }
 
     /// Returns the index of the last-pressed gamepad button (across all
@@ -2439,7 +2441,7 @@ pub const input = struct {
             }
             for (0..MAX_GAMEPAD_BUTTONS) |b| {
                 if (state.gamepad.current_button[g][b] != 0) {
-                    return @enumFromInt(b);
+                    return @fromBackingInt(@intCast(b));
                 }
             }
         }
@@ -2454,7 +2456,7 @@ pub const input = struct {
         if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
             return 0;
         }
-        return state.gamepad.axis[@intCast(gamepad)][@intCast(@intFromEnum(axis))];
+        return state.gamepad.axis[@intCast(gamepad)][@intCast(@backingInt(axis))];
     }
 
     /// Number of axes the gamepad reports.  We always allocate
@@ -2512,7 +2514,7 @@ pub const input = struct {
         right_motor: f32,
         duration: f32,
     ) void {
-        if (comptime !@import("builtin").target.cpu.arch.isWasm()) {
+        if (comptime !builtin.target.cpu.arch.isWasm()) {
             return;
         }
         if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
@@ -2587,7 +2589,7 @@ pub const input = struct {
     // Cursor / pointer-lock - Phase 12 port
     // ===========================================================================
 
-    const builtin_for_cursor = @import("builtin");
+    const builtin_for_cursor = builtin;
     const dom_for_cursor = if (builtin_for_cursor.target.cpu.arch.isWasm()) @import("web.zig").dom else struct {};
 
     /// Show the OS cursor over the canvas.  Pairs with `hideCursor`.
@@ -2667,7 +2669,7 @@ pub const input = struct {
         if (comptime !builtin_for_cursor.target.cpu.arch.isWasm()) {
             return;
         }
-        dom_for_cursor.set_mouse_cursor(@intCast(@intFromEnum(cursor)));
+        dom_for_cursor.set_mouse_cursor(@intCast(@backingInt(cursor)));
     }
 
     /// Return the last cursor value set via `setMouseCursor`.  Defaults
@@ -2702,7 +2704,7 @@ pub const input = struct {
         button: @import("types.zig").MouseButton,
         lock_threshold: f32,
     ) bool {
-        const idx: usize = @intCast(@intFromEnum(button));
+        const idx: usize = @intCast(@backingInt(button));
         if (state.mouse.current_button[idx] == 0) {
             return false;
         }
@@ -2740,7 +2742,7 @@ pub const input = struct {
         button: @import("types.zig").MouseButton,
         lock_threshold: f32,
     ) Vec2 {
-        const idx: usize = @intCast(@intFromEnum(button));
+        const idx: usize = @intCast(@backingInt(button));
         if (state.mouse.current_button[idx] == 0) {
             return @splat(0);
         }
@@ -2770,7 +2772,7 @@ pub const input = struct {
         state: *InputState,
         button: @import("types.zig").MouseButton,
     ) void {
-        const idx: usize = @intCast(@intFromEnum(button));
+        const idx: usize = @intCast(@backingInt(button));
         if (state.mouse.current_button[idx] == 0) {
             return;
         }
@@ -3010,7 +3012,7 @@ pub const input = struct {
         var i: i32 = 1;
         while (i <= 16) : (i += 1) {
             const got = getKeyPressed(&state) orelse return error.TestExpectedKey;
-            try expect(@intFromEnum(got) == i);
+            try expect(@backingInt(got) == i);
         }
         try expect(getKeyPressed(&state) == null); // Exhausted.
     }
@@ -3054,10 +3056,10 @@ pub const input = struct {
         var state: InputState = .{};
         // Negative
         _testKeyDown(&state, -1);
-        try expect(!isKeyDown(&state, @enumFromInt(-1)));
+        try expect(!isKeyDown(&state, @fromBackingInt(@intCast(-1))));
         // Beyond MAX
         _testKeyDown(&state, 99999);
-        try expect(!isKeyDown(&state, @enumFromInt(99999)));
+        try expect(!isKeyDown(&state, @fromBackingInt(@intCast(99999))));
         // Zero (= KEY_NULL) - also rejected by raylib.
         _testKeyDown(&state, 0);
         try expect(!isKeyDown(&state, .null));
@@ -3065,10 +3067,10 @@ pub const input = struct {
 
     test "queries with bad keycodes return safe values" {
         var state: InputState = .{};
-        try expect(!isKeyDown(&state, @enumFromInt(-50)));
-        try expect(!isKeyPressed(&state, @enumFromInt(-50)));
-        try expect(!isKeyReleased(&state, @enumFromInt(99999)));
-        try expect(isKeyUp(&state, @enumFromInt(-50))); // out-of-range == "not down"
+        try expect(!isKeyDown(&state, @fromBackingInt(@intCast(-50))));
+        try expect(!isKeyPressed(&state, @fromBackingInt(@intCast(-50))));
+        try expect(!isKeyReleased(&state, @fromBackingInt(@intCast(99999))));
+        try expect(isKeyUp(&state, @fromBackingInt(@intCast(-50)))); // out-of-range == "not down"
     }
 
     // ===========================================================================
@@ -3490,10 +3492,10 @@ pub const input = struct {
 
     test "getKeyName: unknown key returns null" {
         // Non-exhaustive enum: @enumFromInt with arbitrary values is safe.
-        try expect(getKeyName(@enumFromInt(9999)) == null);
-        try expect(getKeyName(@enumFromInt(-1)) == null);
+        try expect(getKeyName(@fromBackingInt(@intCast(9999))) == null);
+        try expect(getKeyName(@fromBackingInt(@intCast(-1))) == null);
         // Gap in the range (95 between BACKSLASH=92 and GRAVE=96)
-        try expect(getKeyName(@enumFromInt(95)) == null);
+        try expect(getKeyName(@fromBackingInt(@intCast(95))) == null);
     }
 
     // Gamepad - Roadmap Step 15
@@ -3624,7 +3626,7 @@ pub const gestures = struct {
     /// Aggregated gesture-detector state.  Owned by `Runtime` (or
     /// constructed fresh for tests).
     pub const GesturesState = struct {
-        current: u32 = @intFromEnum(Gesture.none),
+        current: u32 = @backingInt(Gesture.none),
         enabled_flags: u32 = ALL_GESTURES_FLAG,
         touch: TouchSubstate = .{},
         hold: HoldSubstate = .{},
@@ -3645,14 +3647,19 @@ pub const gestures = struct {
     }
 
     /// Angle from `a` to `b` in degrees, 0-360 (atan2-based).
+    ///
+    /// THREE STEPS BECOME ONE IN TURNS
+    ///
+    /// `atan2` gives radians on (-pi, pi]. The old body added `2*pi` to fold the negative half
+    /// up, then multiplied by `180/pi` to reach degrees - a wrap and a scale, both in a unit
+    /// nobody wanted. In turns the fold is `- floor(x)`, which is exact, and the scale to degrees
+    /// is a multiply by 360, which is exact for every eighth of a turn.
     fn vec2AngleDeg(a: Vec2, b: Vec2) f32 {
         const dx: f32 = b[0] - a[0];
         const dy: f32 = b[1] - a[1];
-        var ang_rad: f32 = atan2(dy, dx);
-        if (ang_rad < 0) {
-            ang_rad += 2.0 * pi;
-        }
-        return ang_rad * 180.0 / pi;
+        const raw_turns: f32 = turnsFromRad(atan2Rad(dy, dx));
+        const angle_turns: f32 = raw_turns - @floor(raw_turns);
+        return degFromTurns(angle_turns);
     }
 
     fn currentTime(time: *const core_mod.TimeState) f64 {
@@ -3680,16 +3687,16 @@ pub const gestures = struct {
                     state.touch.tap_counter += 1;
 
                     const now: f64 = currentTime(time);
-                    if (state.current == @intFromEnum(Gesture.none) and
+                    if (state.current == @backingInt(Gesture.none) and
                         state.touch.tap_counter >= 2 and
                         (now - state.touch.event_time) < TAP_TIMEOUT and
                         vec2Distance(state.touch.down_position_a, p0) < DOUBLETAP_RANGE)
                     {
-                        state.current = @intFromEnum(Gesture.doubletap);
+                        state.current = @backingInt(Gesture.doubletap);
                         state.touch.tap_counter = 0;
                     } else {
                         state.touch.tap_counter = 1;
-                        state.current = @intFromEnum(Gesture.tap);
+                        state.current = @backingInt(Gesture.tap);
                     }
 
                     state.touch.down_position_a = p0;
@@ -3700,46 +3707,46 @@ pub const gestures = struct {
                     state.drag.vector = .{ 0, 0 };
                 },
                 .up => {
-                    if (state.current == @intFromEnum(Gesture.drag) or state.current == @intFromEnum(Gesture.hold)) {
+                    if (state.current == @backingInt(Gesture.drag) or state.current == @backingInt(Gesture.hold)) {
                         state.touch.up_position = p0;
                     }
                     state.drag.distance = vec2Distance(state.touch.down_position_a, state.touch.up_position);
                     const dt: f64 = currentTime(time) - state.swipe.start_time;
                     state.drag.intensity = if (dt > 0) state.drag.distance / @as(f32, @floatCast(dt)) else 0;
 
-                    if (state.drag.intensity > FORCE_TO_SWIPE and state.current != @intFromEnum(Gesture.drag)) {
+                    if (state.drag.intensity > FORCE_TO_SWIPE and state.current != @backingInt(Gesture.drag)) {
                         const drag_deg: f32 = vec2AngleDeg(state.touch.down_position_a, state.touch.up_position);
                         state.drag.angle_deg = 360.0 - drag_deg;
                         if (state.drag.angle_deg < 30 or state.drag.angle_deg > 330) {
-                            state.current = @intFromEnum(Gesture.swipe_right);
+                            state.current = @backingInt(Gesture.swipe_right);
                         } else if (state.drag.angle_deg >= 30 and state.drag.angle_deg <= 150) {
-                            state.current = @intFromEnum(Gesture.swipe_up);
+                            state.current = @backingInt(Gesture.swipe_up);
                         } else if (state.drag.angle_deg > 150 and state.drag.angle_deg < 210) {
-                            state.current = @intFromEnum(Gesture.swipe_left);
+                            state.current = @backingInt(Gesture.swipe_left);
                         } else if (state.drag.angle_deg >= 210 and state.drag.angle_deg <= 330) {
-                            state.current = @intFromEnum(Gesture.swipe_down);
+                            state.current = @backingInt(Gesture.swipe_down);
                         } else {
-                            state.current = @intFromEnum(Gesture.none);
+                            state.current = @backingInt(Gesture.none);
                         }
                     } else {
                         state.drag.distance = 0;
                         state.drag.intensity = 0;
                         state.drag.angle_deg = 0;
-                        state.current = @intFromEnum(Gesture.none);
+                        state.current = @backingInt(Gesture.none);
                     }
                     state.touch.down_drag_position = .{ 0, 0 };
                     state.touch.point_count = 0;
                 },
                 .move => {
                     state.touch.move_down_position_a = p0;
-                    if (state.current == @intFromEnum(Gesture.hold)) {
+                    if (state.current == @backingInt(Gesture.hold)) {
                         if (state.hold.reset_required) {
                             state.touch.down_position_a = p0;
                         }
                         state.hold.reset_required = false;
                         if ((currentTime(time) - state.touch.event_time) > DRAG_TIMEOUT) {
                             state.touch.event_time = currentTime(time);
-                            state.current = @intFromEnum(Gesture.drag);
+                            state.current = @backingInt(Gesture.drag);
                         }
                     }
                     state.drag.vector[0] = state.touch.move_down_position_a[0] - state.touch.down_drag_position[0];
@@ -3756,7 +3763,7 @@ pub const gestures = struct {
                     state.touch.previous_position_b = p1;
                     state.pinch.vector[0] = p1[0] - p0[0];
                     state.pinch.vector[1] = p1[1] - p0[1];
-                    state.current = @intFromEnum(Gesture.hold);
+                    state.current = @backingInt(Gesture.hold);
                     state.hold.time_duration = currentTime(time);
                 },
                 .move => {
@@ -3775,25 +3782,20 @@ pub const gestures = struct {
                         if (vec2Distance(state.touch.previous_position_a, state.touch.previous_position_b) >
                             vec2Distance(p0, p1))
                         {
-                            state.current = @intFromEnum(Gesture.pinch_in);
+                            state.current = @backingInt(Gesture.pinch_in);
                         } else {
-                            state.current = @intFromEnum(Gesture.pinch_out);
+                            state.current = @backingInt(Gesture.pinch_out);
                         }
                     } else {
-                        state.current = @intFromEnum(Gesture.hold);
+                        state.current = @backingInt(Gesture.hold);
                         state.hold.time_duration = currentTime(time);
                     }
                     state.pinch.angle_deg = 360.0 - vec2AngleDeg(p0, p1);
                 },
-                .up => {
+                .up, .cancel => {
                     state.pinch = .{};
                     state.touch.point_count = 0;
-                    state.current = @intFromEnum(Gesture.none);
-                },
-                .cancel => {
-                    state.pinch = .{};
-                    state.touch.point_count = 0;
-                    state.current = @intFromEnum(Gesture.none);
+                    state.current = @backingInt(Gesture.none);
                 },
             }
         }
@@ -3827,21 +3829,21 @@ pub const gestures = struct {
         // TAP/DOUBLETAP escalates to HOLD if a finger is STILL down
         // this frame (not just was down last frame - that would
         // also escalate finger-already-released cases).
-        if ((cur_state_before == @intFromEnum(Gesture.tap) or cur_state_before == @intFromEnum(Gesture.doubletap)) and
+        if ((cur_state_before == @backingInt(Gesture.tap) or cur_state_before == @backingInt(Gesture.doubletap)) and
             state.touch.point_count < 2 and cur_count > 0)
         {
-            state.current = @intFromEnum(Gesture.hold);
+            state.current = @backingInt(Gesture.hold);
             state.hold.time_duration = currentTime(time);
         }
 
         // Transient gestures (swipes) clear after one frame of being
         // visible to the caller.
-        if (cur_state_before == @intFromEnum(Gesture.swipe_right) or
-            cur_state_before == @intFromEnum(Gesture.swipe_left) or
-            cur_state_before == @intFromEnum(Gesture.swipe_up) or
-            cur_state_before == @intFromEnum(Gesture.swipe_down))
+        if (cur_state_before == @backingInt(Gesture.swipe_right) or
+            cur_state_before == @backingInt(Gesture.swipe_left) or
+            cur_state_before == @backingInt(Gesture.swipe_up) or
+            cur_state_before == @backingInt(Gesture.swipe_down))
         {
-            state.current = @intFromEnum(Gesture.none);
+            state.current = @backingInt(Gesture.none);
         }
 
         // Now process new touch events.
@@ -3905,7 +3907,7 @@ pub const gestures = struct {
         state: *const GesturesState,
         gesture: Gesture,
     ) bool {
-        const g: u32 = @intCast(@intFromEnum(gesture));
+        const g: u32 = @intCast(@backingInt(gesture));
         return (state.enabled_flags & state.current) == g;
     }
 
@@ -3934,7 +3936,7 @@ pub const gestures = struct {
         state: *const GesturesState,
         time: *const core_mod.TimeState,
     ) f32 {
-        if (state.current != @intFromEnum(Gesture.hold)) {
+        if (state.current != @backingInt(Gesture.hold)) {
             return 0;
         }
         return @floatCast(currentTime(time) - state.hold.time_duration);
@@ -4021,8 +4023,8 @@ pub const gestures = struct {
         // verification is the gestures_demo example running 60 frames
         // in smoke without panicking.
         const g: Gesture = getGestureDetected(&state);
-        try expect(@intFromEnum(g) >= 0);
-        try expect(@intFromEnum(g) <= 512);
+        try expect(@backingInt(g) >= 0);
+        try expect(@backingInt(g) <= 512);
     }
 
     test "two-finger down emits HOLD initially" {
@@ -4042,7 +4044,7 @@ pub const gestures = struct {
         var input_state: input_mod.InputState = .{};
         var time: core_mod.TimeState = .{};
         // Enable ONLY pinch gestures.
-        setGesturesEnabled(&state, @intCast(@intFromEnum(Gesture.pinch_in) | @intFromEnum(Gesture.pinch_out)));
+        setGesturesEnabled(&state, @intCast(@backingInt(Gesture.pinch_in) | @backingInt(Gesture.pinch_out)));
         input_mod.pushTouchDown(&input_state, 1, 50, 50);
         update(&state, &input_state, &time);
         // TAP isn't in the enabled mask → getGestureDetected returns NONE.
@@ -4670,7 +4672,7 @@ pub const effects = struct {
             /// Convert to raylib's i32 LOG_* constants for interop with
             /// `core.traceLog`.
             pub fn toCInt(self: Level) i32 {
-                return @intFromEnum(self);
+                return @backingInt(self);
             }
         };
 
@@ -4804,7 +4806,7 @@ pub const effects = struct {
             // values for shared tags - we just shift the type.
             const self: *Browser = @ptrCast(@alignCast(ud orelse return));
             const tl: *const core.TraceLogState = self.tracelog orelse return;
-            core.traceLog(tl, @enumFromInt(@intFromEnum(level)), "{s}", .{msg});
+            core.traceLog(tl, @fromBackingInt(@intCast(@backingInt(level))), "{s}", .{msg});
         }
 
         // ===========================================================================
@@ -4846,7 +4848,7 @@ pub const effects = struct {
             pub fn countAtLevel(self: *const Capture, level: Level) usize {
                 var n: usize = 0;
                 for (self.lines.items) |entry| {
-                    if (@intFromEnum(entry.level) >= @intFromEnum(level)) {
+                    if (@backingInt(entry.level) >= @backingInt(level)) {
                         n += 1;
                     }
                 }
@@ -6247,7 +6249,7 @@ pub const camera = struct {
         dt: f32,
         input_state: *const input_for_camera.InputState,
     ) void {
-        const mode_int: i32 = @intFromEnum(mode);
+        const mode_int: i32 = @backingInt(mode);
         const move_in_world_plane: bool = (mode == .first_person) or (mode == .third_person);
         const rotate_around_target: bool = (mode == .third_person) or (mode == .orbital);
         const lock_view: bool = (mode == .free) or
@@ -6654,9 +6656,9 @@ pub const allocator = struct {
         }
         const p: *anyopaque = ptr orelse return;
         const user_bytes: [*]u8 = @ptrCast(p);
-        const base: [*]align(@intFromEnum(ALIGN)) u8 = @alignCast(user_bytes - HEADER_SIZE);
+        const base: [*]align(@backingInt(ALIGN)) u8 = @alignCast(user_bytes - HEADER_SIZE);
         const size: usize = readHeader(p);
-        const slice: []align(@intFromEnum(ALIGN)) u8 = base[0 .. size + HEADER_SIZE];
+        const slice: []align(@backingInt(ALIGN)) u8 = base[0 .. size + HEADER_SIZE];
         std.heap.wasm_allocator.free(slice);
     }
 

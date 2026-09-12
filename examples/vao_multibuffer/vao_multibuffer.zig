@@ -20,7 +20,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const scaling = zm.scaling;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -150,7 +150,7 @@ fn update(f: *z.Frame, s: *State) void {
         "vao_multibuffer: colour buffer swapped to palette B (slot 1)"
     else
         "vao_multibuffer: positions slot 0, colours slot 1 (palette A)";
-    co.caption(f.gl, s.font, label);
+    common.caption(f.gl, s.font, label);
     z.endDrawing(f.gl);
 }
 

@@ -1,3 +1,4 @@
+//! lint:alias types
 // src/types.zig - public types ported from raylib 6.0's `raylib.h`.
 // Adapted from raylib by Ramon Santamaria (@raysan5), zlib license.
 // See THIRD_PARTY_LICENSES.md for full attribution.
@@ -271,7 +272,7 @@ pub const PixelFormat = enum(i32) {
     /// when this is true because they'd need to decompress and
     /// recompress to apply the operation - raylib does the same.
     pub fn isCompressed(self: PixelFormat) bool {
-        return @intFromEnum(self) >= @intFromEnum(PixelFormat.compressed_dxt1_rgb);
+        return @backingInt(self) >= @backingInt(PixelFormat.compressed_dxt1_rgb);
     }
 };
 
@@ -292,7 +293,7 @@ pub const Image = extern struct {
     /// dispatch and rejects nonsense values like `-1` at runtime in
     /// safe builds.
     pub fn pixelFormat(self: Image) PixelFormat {
-        return @enumFromInt(self.format);
+        return @fromBackingInt(@intCast(self.format));
     }
 
     // Verbs that act on Image (deinit / isValid / flipVertical /
@@ -976,28 +977,28 @@ comptime {
     // Spot-check the slots that actually drifted historically, plus the
     // anchors (first, a matrix, the diffuse color/map) so a shift
     // anywhere in the range is caught.
-    if (@intFromEnum(SLI.vertex_position) != 0) {
+    if (@backingInt(SLI.vertex_position) != 0) {
         @compileError("ShaderLocationIndex ABI drift: vertex_position must be 0");
     }
-    if (@intFromEnum(SLI.vertex_texcoord02) != 2) {
+    if (@backingInt(SLI.vertex_texcoord02) != 2) {
         @compileError("ShaderLocationIndex ABI drift: vertex_texcoord02 must be 2");
     }
-    if (@intFromEnum(SLI.vertex_normal) != 3) {
+    if (@backingInt(SLI.vertex_normal) != 3) {
         @compileError("ShaderLocationIndex ABI drift: vertex_normal must be 3");
     }
-    if (@intFromEnum(SLI.vertex_color) != 5) {
+    if (@backingInt(SLI.vertex_color) != 5) {
         @compileError("ShaderLocationIndex ABI drift: vertex_color must be 5");
     }
-    if (@intFromEnum(SLI.matrix_mvp) != 6) {
+    if (@backingInt(SLI.matrix_mvp) != 6) {
         @compileError("ShaderLocationIndex ABI drift: matrix_mvp must be 6");
     }
-    if (@intFromEnum(SLI.color_diffuse) != 12) {
+    if (@backingInt(SLI.color_diffuse) != 12) {
         @compileError("ShaderLocationIndex ABI drift: color_diffuse must be 12");
     }
-    if (@intFromEnum(SLI.map_albedo) != 15) {
+    if (@backingInt(SLI.map_albedo) != 15) {
         @compileError("ShaderLocationIndex ABI drift: map_albedo must be 15");
     }
-    if (@intFromEnum(SLI.vertex_instancetransform) != 29) {
+    if (@backingInt(SLI.vertex_instancetransform) != 29) {
         @compileError("ShaderLocationIndex ABI drift: vertex_instancetransform must be 29");
     }
 
@@ -1005,22 +1006,22 @@ comptime {
     // These are the tags rlSetUniform switches on to pick glUniform*.
     // The historical bug was VEC4 mistaken for 4 (=int) and INT for 6
     // (=ivec3); pin the whole float/int range.
-    if (@intFromEnum(SUT.float) != 0) {
+    if (@backingInt(SUT.float) != 0) {
         @compileError("ShaderUniformDataType ABI drift: float must be 0");
     }
-    if (@intFromEnum(SUT.vec3) != 2) {
+    if (@backingInt(SUT.vec3) != 2) {
         @compileError("ShaderUniformDataType ABI drift: vec3 must be 2");
     }
-    if (@intFromEnum(SUT.vec4) != 3) {
+    if (@backingInt(SUT.vec4) != 3) {
         @compileError("ShaderUniformDataType ABI drift: vec4 must be 3");
     }
-    if (@intFromEnum(SUT.int) != 4) {
+    if (@backingInt(SUT.int) != 4) {
         @compileError("ShaderUniformDataType ABI drift: int must be 4");
     }
-    if (@intFromEnum(SUT.ivec3) != 6) {
+    if (@backingInt(SUT.ivec3) != 6) {
         @compileError("ShaderUniformDataType ABI drift: ivec3 must be 6");
     }
-    if (@intFromEnum(SUT.sampler2d) != 12) {
+    if (@backingInt(SUT.sampler2d) != 12) {
         @compileError("ShaderUniformDataType ABI drift: sampler2d must be 12");
     }
 }

@@ -1,3 +1,4 @@
+//! lint:alias errors
 // src/errors.zig
 // Composed error sets for the public loader API.  Sits at L3.5 in the
 // layered DAG: above `codecs` and `web` (whose error sets it composes),

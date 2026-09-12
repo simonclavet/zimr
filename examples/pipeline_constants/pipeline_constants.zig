@@ -20,7 +20,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -152,7 +152,7 @@ fn update(f: *z.Frame, s: *State) void {
         pipe.setVertex(ps, 0, s.vbo, @sizeOf(@TypeOf(vertices)));
         pipe.drawArrays(ps, vertices.len, 1);
     }
-    co.caption(f.gl, s.font, "pipeline_constants: one WGSL -> three pipelines via override constants");
+    common.caption(f.gl, s.font, "pipeline_constants: one WGSL -> three pipelines via override constants");
     z.endDrawing(f.gl);
 }
 

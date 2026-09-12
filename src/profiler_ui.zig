@@ -1,3 +1,4 @@
+//! lint:alias profiler_ui
 //! profiler_ui.zig — app-callable views for the integrated profiler.
 //!
 //! The profiler is APP-DRIVEN: it does not grab input or impose a hotkey. The

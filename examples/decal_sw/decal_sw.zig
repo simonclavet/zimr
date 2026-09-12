@@ -228,7 +228,7 @@ fn buildCpuReceiver(gpa: Allocator, mesh: z.types.Mesh) !CpuReceiver {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // ---- Receiver mesh: one sphere, used by BOTH halves ----
-    const mesh: z.types.Mesh = try z.genMeshSphere(gpa, sphere_radius, 24, 32);
+    const mesh: z.types.Mesh = try z.genMeshSphere(gpa, sphere_radius, 32, 24);
 
     // GPU: a drawable model + a decal receiver from the same mesh.
     const sphere_model: z.Model = try z.loadModelFromMesh(f.gl, gpa, mesh);

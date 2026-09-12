@@ -9,7 +9,7 @@ const z = @import("zimr");
 const zm = @import("zm");
 const clamp = zm.clamp;
 const distance = zm.distance;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
@@ -46,7 +46,7 @@ fn update(f: *z.Frame, s: *State) void {
     // OFFSCREEN FIRST (tile-based-GPU safe; app owns begin/endDrawing).
     // Clear the canvas on the first frame, and on middle-click.
     if (s.frame_count == 1 or z.isMouseButtonPressed(f.input, .middle)) {
-        z.beginTextureMode(f.gl, s.canvas, co.palette.bg);
+        z.beginTextureMode(f.gl, s.canvas, common.palette.bg);
         z.endTextureMode(f.gl);
     }
 
@@ -55,7 +55,7 @@ fn update(f: *z.Frame, s: *State) void {
     const have_prev: bool = !(s.prev[0] == 0 and s.prev[1] == 0);
 
     if ((left_down or right_down) and have_prev) {
-        var col: Color = co.palette.bg; // right-drag erases (paints the background)
+        var col: Color = common.palette.bg; // right-drag erases (paints the background)
         if (left_down) {
             s.hue = @mod(s.hue + distance(s.prev, mouse) / 3.0, 360.0);
             col = z.colorFromHSV(s.hue, 0.85, 1.0);
@@ -73,7 +73,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // SCREEN PASS: open once, clear, then composite.
     z.beginDrawing(f.gl);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // Composite the canvas to the screen (RTs render upright — no flip).
     f.gl.texture(.{ .x = 0, .y = 0, .width = w, .height = h }, s.canvas.asTexture(), .{ .tint = white });
@@ -81,7 +81,7 @@ fn update(f: *z.Frame, s: *State) void {
     if (!left_down) {
         f.gl.circle(mouse, s.thickness * 0.5, .{ .color = .{ .r = 160, .g = 160, .b = 170, .a = 140 }, .outline = 1 });
     }
-    co.caption(f.gl, s.font, "lines drawing: drag to paint (hue cycles with speed)");
+    common.caption(f.gl, s.font, "lines drawing: drag to paint (hue cycles with speed)");
     z.endDrawing(f.gl);
 }
 

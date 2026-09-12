@@ -8,7 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const distance = zm.distance;
 const float = zm.float;
@@ -24,8 +24,8 @@ const lines_per_frame: usize = 4;
 
 const presets = [_]u8{ 18, 30, 60, 86, 102, 124, 126, 150, 182, 225 };
 
-const on_color: Color = co.palette.ink;
-const off_color: Color = co.palette.surface;
+const on_color: Color = common.palette.ink;
+const off_color: Color = common.palette.surface;
 
 const State = struct {
     font: z.Font,
@@ -125,7 +125,7 @@ fn chipX(lay: Layout, i: usize) f32 {
 
 fn update(f: *z.Frame, s: *State) void {
     const lay: Layout = layoutOf(f);
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // --- input (edge-triggered tap; chip vs canvas decided from the press point) ---
     const m: Vec2 = z.getMousePosition(f.input);
@@ -161,7 +161,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var buf: [32]u8 = undefined;
     const label: []const u8 = bufPrint(&buf, "rule {d} - tap a preset or the canvas", .{s.rule}) catch "";
-    co.caption(f.gl, s.font, label);
+    common.caption(f.gl, s.font, label);
     z.endDrawing(f.gl);
 }
 
@@ -187,12 +187,12 @@ fn drawChips(f: *z.Frame, s: *State, lay: Layout) void {
     while (i < presets.len) : (i += 1) {
         const x0: f32 = chipX(lay, i);
         const selected: bool = (i == s.preset);
-        const fill: Color = if (selected) co.palette.accent else co.palette.surface;
+        const fill: Color = if (selected) common.palette.accent else common.palette.surface;
         gl.rectRoundedXYWH(x0, lay.pad, lay.chip_w, lay.chip_h, 0.35, 6, .{ .color = fill });
         var nb: [8]u8 = undefined;
         const num: []const u8 = bufPrint(&nb, "{d}", .{presets[i]}) catch "";
         const dim: Vec2 = z.measureText(s.font, num, 14);
-        const tcol: Color = if (selected) co.palette.bg else co.palette.ink_dim;
+        const tcol: Color = if (selected) common.palette.bg else common.palette.ink_dim;
         gl.text(
             .{ x0 + (lay.chip_w - dim[0]) * 0.5, lay.pad + (lay.chip_h - dim[1]) * 0.5 },
             num,

@@ -1,0 +1,298 @@
+//! Static walk, rewritten clean, with the leg-reach guard I should have had from the start.
+//!
+//! ★ THE GUARD IS THE POINT. Every failure in this arc announced itself as an impossible leg
+//! length before it announced itself as a fall — the SRBD trunk demanding metre-long legs, the
+//! three-leg lift, and a "0.42 m walk" that was really the trunk being thrown while three feet
+//! stayed planted. Asserting reach turns 0.42 m of fiction into an abort at 0.05 m with a
+//! reason attached.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+
+const dt: f32 = 1.0 / 500.0;
+/// Thigh 0.213 + calf 0.213. A commanded foot beyond this is not a hard step, it is a bug.
+const leg_reach: f32 = 0.426;
+/// Crawl order: both right legs, then both left. Never breaks the remaining triangle.
+const order = [_]usize{ 2, 0, 3, 1 };
+
+fn footAt(m: *const rbt.Model, d: *const rbt.Data, geom: u32) zm.Vec {
+    const b: u32 = m.geom_body[geom];
+    return d.body_xpos[b] + zm.rotate(d.body_xrot[b], m.geom_pos[geom]);
+}
+
+/// The hip this leg hangs from — two bodies up from the foot's calf.
+fn hipOf(m: *const rbt.Model, d: *const rbt.Data, geom: u32) zm.Vec {
+    const calf: u32 = m.geom_body[geom];
+    return d.body_xpos[m.body_parent[m.body_parent[calf]]];
+}
+
+fn triangleMargin(tri: [3]zm.Vec, pt: zm.Vec) f32 {
+    var worst: f32 = 1.0e9;
+    for (0..3) |i| {
+        const a = tri[i];
+        const b = tri[(i + 1) % 3];
+        const c = tri[(i + 2) % 3];
+        const ex = b[0] - a[0];
+        const ey = b[1] - a[1];
+        const len = @sqrt(ex * ex + ey * ey);
+        var nx = -ey / len;
+        var ny = ex / len;
+        if (nx * (c[0] - a[0]) + ny * (c[1] - a[1]) < 0) {
+            nx = -nx;
+            ny = -ny;
+        }
+        worst = @min(worst, nx * (pt[0] - a[0]) + ny * (pt[1] - a[1]));
+    }
+    return worst;
+}
+
+pub fn main() !void {
+    for ([_]f32{ 0.03, 0.06, 0.12, 0.25 }) |speed| {
+        try run(speed);
+    }
+}
+
+fn run(sway_speed_arg: f32) !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, go1_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    const m: *const rbt.Model = &imp.model;
+
+    var foot_geom: [4]u32 = undefined;
+    var found: usize = 0;
+    for (0..m.ngeom) |g| {
+        if (m.geom_shape[g] == .sphere and found < 4) {
+            foot_geom[found] = @intCast(g);
+            found += 1;
+        }
+    }
+    var leg_act: [4]ctl.Actuation = undefined;
+    for (0..4) |l| leg_act[l] = try ctl.limbActuation(gpa, m, m.geom_body[foot_geom[l]]);
+    defer for (0..4) |l| leg_act[l].deinit();
+    var all_act: ctl.Actuation = try ctl.Actuation.init(gpa, m);
+    defer all_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(m));
+    defer gpa.free(ik_scratch);
+
+    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    defer d.deinit();
+    _ = rmj.applyKeyframe(m, &d, robot.keyframes[0]);
+    rbt.forward(m, &d);
+    const home: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(home);
+    const commanded: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(commanded);
+    const live_pose: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(live_pose);
+    const root: u32 = m.jnt_qpos_adr[0];
+    const trunk: u32 = imp.bodyIndex("trunk") orelse 1;
+
+    const stride: f32 = 0.06;
+    const sway_speed: f32 = sway_speed_arg;
+    const gate: f32 = 0.03;
+    const swing_seconds: f32 = 0.6;
+
+    var pinned: [4]zm.Vec = undefined;
+    for (0..4) |l| pinned[l] = footAt(m, &d, foot_geom[l]);
+    const com_offset = [2]f32{
+        d.subtree_com[rbt.world_body][0] - home[root + 0],
+        d.subtree_com[rbt.world_body][1] - home[root + 1],
+    };
+    const mean_foot_home: f32 = blk: {
+        var total: f32 = 0;
+        for (0..4) |l| {
+            total += pinned[l][0];
+        }
+        break :blk total / 4.0;
+    };
+    var torso = [2]f32{ 0, 0 };
+    var completed: usize = 0;
+    var swing: f32 = -1;
+    var swing_from = pinned[0];
+    var swing_to = pinned[0];
+    var margin: f32 = 0;
+
+    p("\n=== sway {d:.2} m/s ===\n", .{sway_speed});
+
+    var stalled_ticks: u32 = 0;
+    for (0..12000) |step| {
+        const leg: usize = order[completed % 4];
+
+        var support: [3]zm.Vec = undefined;
+        var goal = [2]f32{ 0, 0 };
+        var k: usize = 0;
+        for (0..4) |other| {
+            if (other == leg) continue;
+            support[k] = pinned[other];
+            goal[0] += pinned[other][0];
+            goal[1] += pinned[other][1];
+            k += 1;
+        }
+        // ★ PLAIN CENTROID. The previous version extrapolated away from the swinging foot —
+        // `centroid + k(centroid − foot)` — which moves the target toward the OPPOSITE EDGE and
+        // is therefore shallower, not deeper. Travel fell as the bias rose (0.488 → 0.401) and
+        // only the tilt improved, which is what made it look like progress.
+        goal[0] /= 3.0;
+        goal[1] /= 3.0;
+
+        // ── ★★★ A FORWARD MARCH, SEPARATE FROM THE SWAY ──
+        //
+        // The support centroid is a SWAY target, not a drive. Lifting a front foot removes it
+        // from the centroid, so the target moves BACKWARD — correctly, that is the weight
+        // shift — and nothing ever pushes forward again. Measured: after two steps the feet had
+        // advanced 0.06 each and the trunk was at −0.200, going the wrong way, until a leg hit
+        // its reach limit at t = 1.67 s.
+        //
+        // Over a full cycle every foot advances by one stride, so the body must too. That is a
+        // feedforward the gait knows in advance, and the centroid correction rides ON TOP of
+        // it rather than being asked to produce it.
+        // ★★★ THE MARCH IS THE MEAN OF THE FEET, NOT A STEP COUNTER. `stride · completed / 4`
+        // assumes every step lands on time; when one is delayed waiting for the margin, the
+        // body keeps marching away from feet that have not moved, and the legs stretch until a
+        // rear one hits its limit. Measured that way: `REACH EXCEEDED at t=2.99s, leg 2 needs
+        // 0.427 m`. Averaging the actual foot positions makes the body advance exactly as far
+        // as the feet have, and stall when they stall.
+        var mean_foot: f32 = 0;
+        for (0..4) |other| {
+            mean_foot += pinned[other][0];
+        }
+        mean_foot /= 4.0;
+        const march: f32 = mean_foot - mean_foot_home;
+        const want_x: f32 = march + goal[0] - com_offset[0];
+        const want_y: f32 = goal[1] - com_offset[1];
+        // ★★★ THE SWAY SPEED IS LIMITED BY LEG COMPLIANCE, NOT BY THE PLAN. Moving a 12 kg
+        // trunk means bending springy legs against planted feet, and `PoseHold` at kp 100 is a
+        // badly damped second-order system. Commanding 0.25 m/s made the body lag its command
+        // by 0.21 m and then overshoot past it — a +-0.2 m oscillation relative to the feet,
+        // which is what stretches a rear leg to its limit. The plan is not what sets this rate.
+        const max_step: f32 = sway_speed * dt;
+        torso[0] += zm.clamp((want_x - (home[root + 0] + torso[0])) * 0.02, -max_step, max_step);
+        torso[1] += zm.clamp((want_y - (home[root + 1] + torso[1])) * 0.02, -max_step, max_step);
+
+        if (swing < 0) {
+            stalled_ticks += 1;
+            if (margin > gate) {
+                swing = 0;
+                stalled_ticks = 0;
+                swing_from = pinned[leg];
+                swing_to = vec(pinned[leg][0] + stride, pinned[leg][1], pinned[leg][2]);
+            }
+        } else {
+            swing += dt / swing_seconds;
+            if (swing >= 1.0) {
+                pinned[leg] = swing_to;
+                swing = -1;
+                completed += 1;
+            }
+        }
+
+        @memcpy(live_pose, d.pos);
+        @memcpy(d.pos, home);
+        d.pos[root + 0] = home[root + 0] + torso[0];
+        d.pos[root + 1] = home[root + 1] + torso[1];
+        d.stage = .stale;
+        rbt.forward(m, &d);
+        for (0..4) |other| {
+            const target: zm.Vec = if (other == leg and swing >= 0)
+                mpc.swingPoint(swing_from, swing_to, 0.05, swing)
+            else
+                pinned[other];
+            _ = (ctl.Ik{ .max_iterations = 12, .max_step = 0.15 }).solve(
+                m,
+                &d,
+                leg_act[other],
+                .{ .body = m.geom_body[foot_geom[other]], .offset = m.geom_pos[foot_geom[other]], .goal = target },
+                ik_scratch,
+            );
+        }
+        @memcpy(commanded, d.pos);
+        @memcpy(d.pos, live_pose);
+        d.stage = .stale;
+        rbt.forward(m, &d);
+        margin = triangleMargin(support, d.subtree_com[rbt.world_body]);
+
+        // ★★★ THE GUARD. Checked against the COMMANDED pose, because that is what is being
+        // asked for — the live robot only tells you afterwards that it could not do it.
+        var worst_reach: f32 = 0;
+        var worst_leg: usize = 0;
+        for (0..4) |other| {
+            const need: f32 = zm.length3(pinned[other] - hipOf(m, &d, foot_geom[other]));
+            if (need > worst_reach) {
+                worst_reach = need;
+                worst_leg = other;
+            }
+        }
+
+        d.clearContacts();
+        for (0..4) |other| {
+            if (other == leg and swing >= 0.05 and swing <= 0.95) continue;
+            const g = foot_geom[other];
+            const radius: f32 = switch (m.geom_shape[g]) {
+                .sphere => |sp| sp.radius,
+                else => continue,
+            };
+            const at = footAt(m, &d, g);
+            const gap = at[2] - radius;
+            if (gap > 0.02) continue;
+            d.pushContact(.{
+                .position = vec(at[0], at[1], 0),
+                .normal = vec(0, 0, 1),
+                .tangent = .{ vec(1, 0, 0), vec(0, 1, 0) },
+                .distance = gap,
+                .friction = .{ 0.8, 0.8 },
+                .body_a = rbt.world_body,
+                .body_b = m.geom_body[g],
+                .id = g,
+            });
+        }
+        (ctl.PoseHold{ .target = commanded, .kp = 100, .kv = 4 }).apply(m, &d, all_act);
+        rbt.step(m, &d);
+
+        if (false) {
+            p("  {d:>5.2}  {d}  {d:>5.2} {d:>8.4}  cmd {d:>7.4} actual {d:>7.4} mean_foot {d:>7.4} lead {d:>7.4}  reach {d:>6.3}  {d}\n", .{
+                @as(f32, @floatFromInt(step)) * dt, leg,                   swing,     margin,
+                home[root + 0] + torso[0],          d.body_xpos[trunk][0], mean_foot, d.body_xpos[trunk][0] - mean_foot,
+                worst_reach,                        completed,
+            });
+        }
+        if (worst_reach > leg_reach) {
+            p("\n  ★ REACH EXCEEDED at t={d:.2}s: leg {d} needs {d:.3} m, limit {d:.3}\n", .{
+                @as(f32, @floatFromInt(step)) * dt, worst_leg, worst_reach, leg_reach,
+            });
+            break;
+        }
+        if (stalled_ticks > 2500) {
+            p("\n  ★ STALLED at t={d:.2}s: margin {d:.4} never reached the gate {d:.3} for leg {d}\n", .{
+                @as(f32, @floatFromInt(step)) * dt, margin, gate, leg,
+            });
+            break;
+        }
+        if (d.body_xpos[trunk][2] < 0.12) {
+            p("\n  ★ FELL at t={d:.2}s\n", .{@as(f32, @floatFromInt(step)) * dt});
+            break;
+        }
+    }
+    p("\n  completed {d} steps, trunk x {d:.3}, feet x {d:.3} {d:.3} {d:.3} {d:.3}\n", .{
+        completed, d.body_xpos[trunk][0], pinned[0][0], pinned[1][0], pinned[2][0], pinned[3][0],
+    });
+}

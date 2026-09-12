@@ -1,3 +1,4 @@
+//! lint:alias plot3d
 //! lint:off scope-balance: ImPlot3D provider/wrapper - begin*/end* here are forwarders, not paired usage.
 //! implot3d.zig — a single-file, pure-Zig port of ImPlot3D v0.5 WIP
 //! (https://github.com/brenocq/implot3d, MIT, (c) 2024-2025 Breno Cunha
@@ -56,11 +57,15 @@ const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
+const cosTurns = zm.cosTurns;
+const radFromTurns = zm.radFromTurns;
+const turnsFromDeg = zm.turnsFromDeg;
 const float = zm.float;
 const Color = zm.Color;
 const ui = @import("ui.zig");
 /// Shared color + colormap + tick machinery (also used by implot.zig).
-const core = @import("plot_core.zig");
+const plot_core = @import("plot_core.zig");
 const math = zm;
 const assert = zm.assert;
 const splat2 = zm.splat2;
@@ -103,7 +108,7 @@ pub const auto: i32 = -1;
 /// scattered silent `catch {}`s. (One-time/persistent allocations are NOT
 /// routed here — those propagate their errors.)
 inline fn dropFrameOnOom(result: anytype) void {
-    result catch {};
+    result catch {}; // lint:off catch-suppression: deliberate frame-drop policy
 }
 
 //=============================================================================
@@ -154,10 +159,12 @@ pub inline fn point3IsNan(p: Point3) bool {
 /// `elevation ∘ (-90° about X) ∘ azimuth` (applied right-to-left, so azimuth
 /// first). `qmul` is Hamilton order (`qmul(a, b) == a * b`), so that maps to
 /// `qmul(qmul(el, zero), az)`.
-pub fn quatFromElAz(elevation_rad: f32, azimuth_rad: f32) Quat {
-    const az: Quat = quatFromAxisAngle(point3(0, 0, 1), azimuth_rad);
-    const el: Quat = quatFromAxisAngle(point3(1, 0, 0), elevation_rad);
-    const zero: Quat = quatFromAxisAngle(point3(1, 0, 0), -math.pi / 2.0);
+pub fn quatFromElAz(elevation_turns: f32, azimuth_turns: f32) Quat {
+    // `quatFromAxisAngle` is zimrmath's and takes radians, so the crossing is here and named.
+    const az: Quat = quatFromAxisAngle(point3(0, 0, 1), radFromTurns(azimuth_turns));
+    const el: Quat = quatFromAxisAngle(point3(1, 0, 0), radFromTurns(elevation_turns));
+    // A quarter turn back, to put the camera's zero where a plot expects it.
+    const zero: Quat = quatFromAxisAngle(point3(1, 0, 0), radFromTurns(-0.25));
     return qmul(qmul(el, zero), az);
 }
 
@@ -369,7 +376,7 @@ pub const Scale = enum(i32) {
 
 /// Built-in colormaps (index into the colormap table).
 /// Shared with plot.zig via plot_core (same members, same discriminants).
-pub const Colormap = core.Colormap;
+pub const Colormap = plot_core.Colormap;
 
 //=============================================================================
 // [SECTION] Flags
@@ -1831,10 +1838,10 @@ pub const Style = struct {
     colormap: Colormap = .deep,
 
     pub inline fn getColor(self: *const Style, idx: Col) ?Color {
-        return self.colors[@intCast(@intFromEnum(idx))];
+        return self.colors[@intCast(@backingInt(idx))];
     }
     pub inline fn setColor(self: *Style, idx: Col, col: ?Color) void {
-        self.colors[@intCast(@intFromEnum(idx))] = col;
+        self.colors[@intCast(@backingInt(idx))] = col;
     }
 };
 
@@ -1885,14 +1892,14 @@ pub const ColormapData = struct {
         self.text.appendSlice(self.gpa, name) catch oom();
         self.text.append(self.gpa, 0) catch oom();
         self.quals.append(self.gpa, qual) catch oom();
-        const cmap: Colormap = @enumFromInt(self.count);
+        const cmap: Colormap = @fromBackingInt(@intCast(self.count));
         self.count += 1;
         self.appendTable(cmap);
         return cmap;
     }
 
     fn appendTable(self: *ColormapData, cmap: Colormap) void {
-        const idx: usize = @intCast(@intFromEnum(cmap));
+        const idx: usize = @intCast(@backingInt(cmap));
         const kc: u32 = self.key_counts.items[idx];
         const ko: u32 = self.key_offsets.items[idx];
         const keys: []const u32 = self.keys.items[ko .. ko + kc];
@@ -1907,31 +1914,31 @@ pub const ColormapData = struct {
             var i: u32 = 0;
             while (i < resolution) : (i += 1) {
                 const t: f32 = float(i) / float(resolution - 1);
-                self.tables.append(self.gpa, core.sampleKeys(keys, t)) catch oom();
+                self.tables.append(self.gpa, plot_core.sampleKeys(keys, t)) catch oom();
             }
             self.table_sizes.append(self.gpa, resolution) catch oom();
         }
     }
 
     pub fn getKeyCount(self: *const ColormapData, cmap: Colormap) usize {
-        return self.key_counts.items[@intCast(@intFromEnum(cmap))];
+        return self.key_counts.items[@intCast(@backingInt(cmap))];
     }
     pub fn getKeyColor(self: *const ColormapData, cmap: Colormap, idx: usize) u32 {
-        const ci: usize = @intCast(@intFromEnum(cmap));
+        const ci: usize = @intCast(@backingInt(cmap));
         const ko: u32 = self.key_offsets.items[ci];
         return self.keys.items[ko + idx];
     }
     pub fn getTableSize(self: *const ColormapData, cmap: Colormap) usize {
-        return self.table_sizes.items[@intCast(@intFromEnum(cmap))];
+        return self.table_sizes.items[@intCast(@backingInt(cmap))];
     }
     pub fn getTableColor(self: *const ColormapData, cmap: Colormap, idx: usize) u32 {
-        const ci: usize = @intCast(@intFromEnum(cmap));
+        const ci: usize = @intCast(@backingInt(cmap));
         const to: u32 = self.table_offsets.items[ci];
         return self.tables.items[to + idx];
     }
     /// Sample the lerp table for cmap at t in [0,1].
     pub fn lerpTable(self: *const ColormapData, cmap: Colormap, t: f32) u32 {
-        const ci: usize = @intCast(@intFromEnum(cmap));
+        const ci: usize = @intCast(@backingInt(cmap));
         const sz: u32 = self.table_sizes.items[ci];
         const to: u32 = self.table_offsets.items[ci];
         if (sz == 1) {
@@ -1943,7 +1950,7 @@ pub const ColormapData = struct {
             i = sz - 2;
         }
         const frac: f32 = scaled - float(i);
-        return core.lerpWire(self.tables.items[to + i], self.tables.items[to + i + 1], frac);
+        return plot_core.lerpWire(self.tables.items[to + i], self.tables.items[to + i + 1], frac);
     }
     /// Index a qualitative colormap by item index (wraps).
     pub fn getKeyColorWrapped(self: *const ColormapData, cmap: Colormap, idx: usize) u32 {
@@ -2018,7 +2025,7 @@ pub fn styleColorsAuto(ctx: *Context, dst: ?*Style) void {
 
 /// True if the style slot `idx` is set to auto.
 pub fn isStyleColorAuto(ctx: *Context, idx: Col) bool {
-    return ctx.style.colors[@intCast(@intFromEnum(idx))] == null;
+    return ctx.style.colors[@intCast(@backingInt(idx))] == null;
 }
 
 /// Resolve an auto color slot to its concrete default (against the ui style).
@@ -2047,17 +2054,12 @@ pub fn getStyle(ctx: *Context) *Style {
 }
 
 pub fn getStyleColor(ctx: *Context, idx: Col) Color {
-    return if (ctx.style.colors[@intCast(@intFromEnum(idx))]) |c| c else getAutoColor(ctx, idx);
+    return if (ctx.style.colors[@intCast(@backingInt(idx))]) |c| c else getAutoColor(ctx, idx);
 }
 
 pub fn getStyleColorU32(ctx: *Context, idx: Col) zm.ColorU32 {
     const im: Im = ctx.im();
     return im.colorToU32(getStyleColor(ctx, idx));
-}
-
-/// Apply the global fill alpha to a style color, returning a packed u32.
-fn getStyleColorU32Alpha(ctx: *Context, idx: Col, alpha_mul: f32) zm.ColorU32 {
-    return getStyleColor(ctx, idx).scaleAlpha(alpha_mul).toWire();
 }
 
 /// The current plot's 2D draw list (the same backend-agnostic recorder used for
@@ -2075,7 +2077,7 @@ const col_names = [_][:0]const u8{
 
 /// Human-readable name for a style color (for editors/labels).
 pub fn getStyleColorName(idx: Col) [:0]const u8 {
-    return col_names[@intCast(@intFromEnum(idx))];
+    return col_names[@intCast(@backingInt(idx))];
 }
 
 // Simple style-color override stack (LIFO). Mirrors implot.zig's behavior:
@@ -2086,9 +2088,9 @@ pub fn pushStyleColor(ctx: *Context, idx: Col, col: Color) void {
     const style: *Style = getStyle(ctx);
     dropFrameOnOom(ctx.style_color_stack.append(
         ctx.gpa,
-        .{ .col = idx, .backup = style.colors[@intCast(@intFromEnum(idx))] },
+        .{ .col = idx, .backup = style.colors[@intCast(@backingInt(idx))] },
     ));
-    style.colors[@intCast(@intFromEnum(idx))] = col;
+    style.colors[@intCast(@backingInt(idx))] = col;
 }
 
 pub fn popStyleColor(ctx: *Context, count: usize) void {
@@ -2096,7 +2098,7 @@ pub fn popStyleColor(ctx: *Context, count: usize) void {
     var n: usize = count;
     while (n > 0) : (n -= 1) {
         const mod = ctx.style_color_stack.pop() orelse break;
-        style.colors[@intCast(@intFromEnum(mod.col))] = mod.backup;
+        style.colors[@intCast(@backingInt(mod.col))] = mod.backup;
     }
 }
 
@@ -2149,7 +2151,7 @@ pub const label_max_size: usize = 32;
 /// Register all 16 built-in colormaps (key colors shared with implot.zig via
 /// plot_core, so the data is defined exactly once).
 fn initColormapTables(data: *ColormapData) void {
-    const ck: type = core.colormap_keys;
+    const ck: type = plot_core.colormap_keys;
     _ = data.append("Deep", &ck.deep, true);
     _ = data.append("Dark", &ck.dark, true);
     _ = data.append("Pastel", &ck.pastel, true);
@@ -2495,7 +2497,7 @@ pub fn pixelsToPlotPlane(ctx: *Context, pix: Vec2, plane: Plane3D, mask: bool) P
     var active_faces: [3]bool = undefined;
     computeActiveFaces(&active_faces, plot.rotation, &plot.axes, null);
 
-    const pidx: usize = @intCast(@intFromEnum(plane));
+    const pidx: usize = @intCast(@backingInt(plane));
     const coord: f32 = (if (active_faces[pidx]) @as(f32, 0.5) else @as(f32, -0.5)) * plot.axes[pidx].ndc_scale;
     const p: Point3 = intersectAt(o, d, plane, coord);
     if (point3IsNan(p)) {
@@ -2619,7 +2621,7 @@ fn addTicksCustom(
 //=============================================================================
 
 fn axisPtr(ctx: *Context, idx: Axis3D) *Axis {
-    return &ctx.currentPlot().axes[@intCast(@intFromEnum(idx))];
+    return &ctx.currentPlot().axes[@intCast(@backingInt(idx))];
 }
 
 /// Compare two packed flag structs for equality.
@@ -2630,7 +2632,7 @@ inline fn flagsEql(a: anytype, b: @TypeOf(a)) bool {
 
 pub fn setupAxis(ctx: *Context, idx: Axis3D, label: ?[]const u8, flags: AxisFlags) void {
     const plot: *Plot3D = ctx.currentPlot();
-    const axis: *Axis = &plot.axes[@intCast(@intFromEnum(idx))];
+    const axis: *Axis = &plot.axes[@intCast(@backingInt(idx))];
     if (!flagsEql(axis.previous_flags, flags)) {
         axis.flags = flags;
     }
@@ -2644,12 +2646,12 @@ pub fn setupAxis(ctx: *Context, idx: Axis3D, label: ?[]const u8, flags: AxisFlag
 /// DEVIATION: upstream takes a C callback formatter; we take a format string.
 pub fn setupAxisFormat(ctx: *Context, idx: Axis3D, fmt: ?[]const u8) void {
     const plot: *Plot3D = ctx.currentPlot();
-    plot.axes[@intCast(@intFromEnum(idx))].format = fmt;
+    plot.axes[@intCast(@backingInt(idx))].format = fmt;
 }
 
 /// Apply equal aspect ratio using ref_axis as reference.
 fn applyEqualAspect(plot: *Plot3D, ref_axis: Axis3D) void {
-    const ri: usize = @intCast(@intFromEnum(ref_axis));
+    const ri: usize = @intCast(@backingInt(ref_axis));
     const aspect: f32 = plot.axes[ri].getAspect();
     for (0..3) |i| {
         if (i != ri and !plot.axes[i].isInputLocked()) {
@@ -2666,7 +2668,7 @@ pub fn setupAxisLimits(
     cond: Cond,
 ) void {
     const plot: *Plot3D = ctx.currentPlot();
-    const axis: *Axis = &plot.axes[@intCast(@intFromEnum(idx))];
+    const axis: *Axis = &plot.axes[@intCast(@backingInt(idx))];
     if (!plot.initialized or cond == .always) {
         axis.setRange(min_lim, max_lim);
         axis.range_cond = cond;
@@ -2857,9 +2859,11 @@ pub fn setupBoxRotation(
     animate: bool,
     cond: Cond,
 ) void {
-    const elev_rad: f32 = elevation_deg * math.pi / 180.0;
-    const azim_rad: f32 = azimuth_deg * math.pi / 180.0;
-    setupBoxRotationQuat(ctx, quatFromElAz(elev_rad, azim_rad), animate, cond);
+    // Degrees at the API - the convention for a plot's camera - and turns through the middle,
+    // because 360 degrees is exactly one turn where 180/pi is not exactly anything.
+    const elevation_turns: f32 = turnsFromDeg(elevation_deg);
+    const azimuth_turns: f32 = turnsFromDeg(azimuth_deg);
+    setupBoxRotationQuat(ctx, quatFromElAz(elevation_turns, azimuth_turns), animate, cond);
 }
 
 pub fn setupBoxInitialRotationQuat(ctx: *Context, rotation: Quat) void {
@@ -2867,9 +2871,9 @@ pub fn setupBoxInitialRotationQuat(ctx: *Context, rotation: Quat) void {
 }
 
 pub fn setupBoxInitialRotation(ctx: *Context, elevation_deg: f32, azimuth_deg: f32) void {
-    const elev_rad: f32 = elevation_deg * math.pi / 180.0;
-    const azim_rad: f32 = azimuth_deg * math.pi / 180.0;
-    setupBoxInitialRotationQuat(ctx, quatFromElAz(elev_rad, azim_rad));
+    const elevation_turns: f32 = turnsFromDeg(elevation_deg);
+    const azimuth_turns: f32 = turnsFromDeg(azimuth_deg);
+    setupBoxInitialRotationQuat(ctx, quatFromElAz(elevation_turns, azimuth_turns));
 }
 
 pub fn setupBoxScale(ctx: *Context, x: f32, y: f32, z: f32) void {
@@ -3268,7 +3272,7 @@ fn renderPlotBorder(
     // While hovering, brighten + thicken the 4 edges of the axis nearest the
     // cursor as an interaction affordance (matches ImPlot3D's edge feedback).
     const hi_axis: i32 = if (plot.hovered) hoveredAxis(corners_pix, im.getMousePos(), edge_hover_px) else -1;
-    const hi_col: zm.ColorU32 = core.lerpWire(col, 0xFFFFFFFF, 0.6);
+    const hi_col: zm.ColorU32 = plot_core.lerpWire(col, 0xFFFFFFFF, 0.6);
     for (box_edges, 0..) |e, i| {
         if (hi_axis >= 0 and @as(i32, axis_of_edge[i]) == hi_axis) {
             dl.addLine(corners_pix[e[0]], corners_pix[e[1]], hi_col, 2.0);
@@ -3514,7 +3518,7 @@ pub fn endPlot(ctx: *Context) void {
                     const aspect: f32 = axis.getAspect();
                     if (aspect > max_aspect) {
                         max_aspect = aspect;
-                        ref_axis = @enumFromInt(i);
+                        ref_axis = @fromBackingInt(@intCast(i));
                     }
                 }
             }
@@ -3637,7 +3641,7 @@ fn nextMarker(ctx: *Context) Marker {
     const items: *ItemGroup = ctx.current_items.?;
     const idx = @mod(items.marker_idx, @as(i32, @intCast(Marker.count)));
     items.marker_idx += 1;
-    return @enumFromInt(idx);
+    return @fromBackingInt(@intCast(idx));
 }
 
 fn endItem(ctx: *Context) void {
@@ -4502,7 +4506,7 @@ const colormap_names = [_][:0]const u8{
 
 /// Name of a colormap by index (for selectors/combos).
 pub fn getColormapName(cmap: Colormap) [:0]const u8 {
-    const i: usize = @intCast(@intFromEnum(cmap));
+    const i: usize = @intCast(@backingInt(cmap));
     if (i < colormap_names.len) {
         return colormap_names[i];
     }
@@ -4588,13 +4592,19 @@ pub fn genSphere(
     var ii: usize = 0;
     var st: usize = 0;
     while (st <= stacks) : (st += 1) {
-        const phi = math.pi * float(st) / float(stacks);
+        // Pole to pole is HALF a turn; once around is a WHOLE one. Both were spelled in
+        // radians only so `@sin` would take them.
+        const phi_turns = 0.5 * float(st) / float(stacks);
         var sl: usize = 0;
         while (sl <= slices) : (sl += 1) {
-            const theta = 2 * math.pi * float(sl) / float(slices);
+            const theta_turns = float(sl) / float(slices);
             if (vi >= out_vtx.len) return .{ .vtx = vi, .idx = ii };
-            const sp: f32 = radius * @sin(phi);
-            out_vtx[vi] = point3(sp * @cos(theta), sp * @sin(theta), radius * @cos(phi));
+            const sp: f32 = radius * sinTurns(phi_turns);
+            out_vtx[vi] = point3(
+                sp * cosTurns(theta_turns),
+                sp * sinTurns(theta_turns),
+                radius * cosTurns(phi_turns),
+            );
             vi += 1;
         }
     }
@@ -4631,7 +4641,7 @@ pub fn genSphere(
 pub fn showColormapSelector(ctx: *Context, label: [:0]const u8) bool {
     const im: Im = ctx.im();
     const style: *Style = getStyle(ctx);
-    var current: i32 = @intFromEnum(style.colormap);
+    var current: i32 = @backingInt(style.colormap);
     var packed_names: [256]u8 = undefined;
     var w: usize = 0;
     for (colormap_names) |nm| {
@@ -4647,7 +4657,7 @@ pub fn showColormapSelector(ctx: *Context, label: [:0]const u8) bool {
         }
     }
     if (im.combo(label, &current, packed_names[0..w])) {
-        style.colormap = @enumFromInt(current);
+        style.colormap = @fromBackingInt(@intCast(current));
         return true;
     }
     return false;
@@ -4671,7 +4681,7 @@ pub fn showStyleEditor(ctx: *Context, ref: ?*Style) void {
     for (0..Col.count) |i| {
         im.pushIDInt(@intCast(i));
         defer im.popID();
-        var v: Color = if (style.colors[i]) |c| c else getAutoColor(ctx, @enumFromInt(i));
+        var v: Color = if (style.colors[i]) |c| c else getAutoColor(ctx, @fromBackingInt(@intCast(i)));
         if (im.colorEdit4(col_names[i], &v)) {
             style.colors[i] = v;
         }

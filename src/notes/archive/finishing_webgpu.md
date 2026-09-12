@@ -74,7 +74,7 @@ rule** (both validate a `textureSample` inside an `if`), so Tint (Simon's
 Chrome) is the only authority → pending Simon's reload of the freshly-built
 2.1 MB `prebuilt/standalone/wgpu_pbr_demo.html` (the `pbr_fs:1516` screenshot
 is the OLD build; the rebuilt shadow_map call is at line 506).
-NEW build-time guard: `tools/lint_zimr.zig` gained a `sampler-at-top`
+NEW build-time guard: `tools/zimrlint.zig` gained a `sampler-at-top`
 discipline (tags `sampler-in-branch` / `sampler-in-helper`). Schema-free
 detection — samplers are the only *callable* members of an Io struct, so any
 `io.<m>(...)` call is a sample; flagged unless it's a non-nested statement of

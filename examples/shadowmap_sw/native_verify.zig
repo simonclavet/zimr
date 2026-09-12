@@ -15,6 +15,7 @@ const std = @import("std");
 const z = @import("zimr");
 const zm = @import("zm");
 const scene = @import("scene.zig");
+const bunny_proxy = @import("bunny_proxy");
 const Allocator = std.mem.Allocator;
 const float = zm.float;
 
@@ -78,8 +79,8 @@ pub fn main() !void {
 
     std.debug.print("shadowmap_sw corner: comptime bake vs runtime render of scene.bakeCorner\n", .{});
     std.debug.print("  proxy {d} verts / {d} tris; shadow map {d}x{d}; image {d}x{d}\n", .{
-        @import("bunny_proxy").vertex_count,
-        @import("bunny_proxy").indices.len / 3,
+        bunny_proxy.vertex_count,
+        bunny_proxy.indices.len / 3,
         sm_res,
         sm_res,
         img_w,

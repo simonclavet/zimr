@@ -26,12 +26,13 @@ const expectEqualStrings = std.testing.expectEqualStrings;
 const meta = std.meta;
 const Allocator = std.mem.Allocator;
 const wgpu = @import("wgpu.zig");
-const compute_pass = @import("wgpu.zig").compute_pass;
+const compute_pass = wgpu.compute_pass;
 const shader_introspect = @import("shader_introspect.zig");
 const jobs = @import("jobs.zig");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
 const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
 
 /// Where a kompute kernel runs. The SAME kernel source, on any of them.
 ///
@@ -107,9 +108,16 @@ pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M)
             @memcpy(std.mem.asBytes(&M.g.B), payload);
             M.g.P = hdr.params;
 
+            // The second call site that had to learn the lean dialect. Same discriminator as the
+            // in-process runner below: a lean kernel takes the raw index, a stock one a `Ctx`.
+            const takes_raw_id: bool = @TypeOf(@field(M, name)) == fn (u32) void;
             var id: u32 = 0;
             while (id < hdr.n) : (id += 1) {
-                @field(M, name)(.{ .id = id, .params = hdr.params });
+                if (takes_raw_id) {
+                    @field(M, name)(id);
+                } else {
+                    @field(M, name)(.{ .id = id, .params = hdr.params });
+                }
             }
 
             try out.writeAll(std.mem.asBytes(&M.g.B));
@@ -367,6 +375,27 @@ pub fn Compute(comptime M: type) type {
             uniform_synced: ?Params = null,
             read: wgpu.BufferRead = .invalid,
             have_read: bool = false,
+            /// How many dispatches have been submitted, and how many are reflected in
+            /// `mirror`. **The difference is what a caller needs and could not ask for.**
+            ///
+            /// `readLatest` polls: it returns `null` until a copy completes, then the mirror's
+            /// contents. What it could never say is WHICH dispatch those contents came from -
+            /// so a caller that dispatched row N and got data back had no way to know whether
+            /// it was row N's or row N-1's still in flight.
+            ///
+            /// The zimrnum sweep worked around that with six fixed settle frames per row, a
+            /// number that had already been wrong twice (three failed at 91 rows, and the
+            /// symptom was another row's data arriving as `inf` against a zero bar). Six was
+            /// chosen from the time budget rather than from a measurement, which the comment
+            /// there says out loud.
+            ///
+            /// A counter replaces the guess. `readGeneration()` is the dispatch number the
+            /// mirror holds; a caller compares it against its own and knows exactly when the
+            /// data is its own - no waiting longer than necessary, and no reading too early.
+            submitted: u64 = 0,
+            mirrored: u64 = 0,
+            /// The dispatch count at the moment the in-flight copy was encoded.
+            copy_at: u64 = 0,
             /// Heap-allocated CPU readback buffer (the whole Buffers struct).
             /// Heap, NOT inline-by-value: Buffers can be megabytes (20k particles
             /// here ≈ 1.3 MB), and an inline field makes the whole Compute value
@@ -880,7 +909,7 @@ pub fn Compute(comptime M: type) type {
                 .worker => {
                     if (comptime @hasDecl(M, "kernels")) {
                         const wk: *Worker = &(self.worker orelse {
-                            assertf(false, @src(), "upload: .worker needs initWorker(gpa)", .{});
+                            assertUnreachable(@src(), "upload: .worker needs initWorker(gpa)", .{});
                             return;
                         });
                         const dst = &@field(wk.mirror.*, @tagName(field));
@@ -954,7 +983,7 @@ pub fn Compute(comptime M: type) type {
             );
             compute_pass.end(gp.batch_pass);
             const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.batch_enc);
-            wgpu.queueSubmit(gp.queue, cmd);
+            submitDispatch(gp, cmd);
             gp.batch_enc = .invalid;
             gp.batch_pass = .invalid;
         }
@@ -1023,10 +1052,25 @@ pub fn Compute(comptime M: type) type {
             );
             switch (self.backend) {
                 .cpu => {
+                    // `M.g.P` is set either way: the LEAN form reads it through `g.uniform()`,
+                    // and the stock form's `Ctx` carries a copy.
                     M.g.P = self.params;
                     var id: u32 = 0;
                     while (id < n) : (id += 1) {
-                        @field(M, name)(.{ .id = id, .params = self.params });
+                        // ★★ A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
+                        // signature is the discriminator, so a file can mix both forms and
+                        // neither has to declare which it is. Without this the CPU driver only
+                        // spoke the `Ctx` dialect, and `installKernelLean` compiled but could
+                        // never be run on the host — half a merge.
+                        // Compared as a TYPE rather than through `@typeInfo`: on
+                        // 0.17.0-dev.1980 `Type.Fn` no longer carries `.params`, and a direct
+                        // comparison needs no reflection to survive.
+                        const takes_raw_id: bool = @TypeOf(@field(M, name)) == fn (u32) void;
+                        if (takes_raw_id) {
+                            @field(M, name)(id);
+                        } else {
+                            @field(M, name)(.{ .id = id, .params = self.params });
+                        }
                     }
                 },
                 // The same loop, somewhere else. Three things diverge from `.cpu`, and
@@ -1049,7 +1093,7 @@ pub fn Compute(comptime M: type) type {
                     // `initWorker`, which is a compile error without it.
                     if (comptime @hasDecl(M, "kernels")) {
                         const wk: *Worker = &(self.worker orelse {
-                            assertf(false, @src(), "run('" ++ name ++ "'): .worker needs initWorker(gpa)", .{});
+                            assertUnreachable(@src(), "run('" ++ name ++ "'): .worker needs initWorker(gpa)", .{});
                             return;
                         });
                         if (wk.job.inFlight()) {
@@ -1082,7 +1126,7 @@ pub fn Compute(comptime M: type) type {
                         // here means a name typo or a kernel missing from initGpu's
                         // list. assertf gives a localized message in dev and lowers
                         // to the `unreachable` optimization hint once stripped.
-                        assertf(false, @src(), "run: kernel '" ++ name ++ "' is not registered with this pipe", .{});
+                        assertUnreachable(@src(), "run: kernel '" ++ name ++ "' is not registered with this pipe", .{});
                         unreachable;
                     };
                     const pipeline: wgpu.ComputePipelineHandle = gp.pipelines[ki];
@@ -1107,7 +1151,12 @@ pub fn Compute(comptime M: type) type {
                     compute_pass.dispatchWorkgroups(cp, .{ .x = workgroups });
                     compute_pass.end(cp);
                     const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
-                    wgpu.queueSubmit(gp.queue, cmd);
+                    // Both dispatch paths go through `submitDispatch`, which counts. I
+                    // incremented by hand at the batched site only, and every caller using
+                    // `run()` outside a batch then saw `submitted == 0` - so the sweep retired
+                    // each row before its own dispatch had executed. **7 of 105 on device**,
+                    // with `inf` against bars of zero: another row's data.
+                    submitDispatch(gp, cmd);
                 },
             }
         }
@@ -1115,6 +1164,67 @@ pub fn Compute(comptime M: type) type {
         /// Read buffer `field` back. CPU: the live slice (zero latency). GPU:
         /// frame-delayed — returns LAST frame's mapped data and kicks off this
         /// frame's copy, never stalling (null until the first readback completes).
+        /// What `readGeneration` reports.
+        ///
+        /// A NAMED type, not an anonymous one: each `Compute(M)` instantiation would otherwise
+        /// get its own incompatible anonymous struct, and a caller holding results from two
+        /// pipelines - which the zimrnum sweep does, one per kernel kind - cannot put them in the
+        /// same variable. The compiler says so in a message naming two generated type names,
+        /// which is not a fun one to read.
+        /// Submit a DISPATCH and count it.
+        ///
+        /// ONE FUNCTION, SO THE COUNT CANNOT BE FORGOTTEN AGAIN
+        ///
+        /// There are two places a dispatch reaches the queue - batched and direct - and I
+        /// incremented the counter at one of them. Every caller using `run()` outside a batch
+        /// then saw `submitted == 0`, so the sweep's `mirrored >= wanted` was `0 >= 0` and each
+        /// row retired before its own work had executed. The device said 7 of 105.
+        ///
+        /// A counter maintained at N call sites is a counter that will be wrong the first time
+        /// someone adds the N+1th. Both sites call this now, and the readback copy deliberately
+        /// does not - it submits a copy, not work.
+        fn submitDispatch(gp: *Gpu, cmd: wgpu.CommandBufferHandle) void {
+            wgpu.queueSubmit(gp.queue, cmd);
+            gp.submitted += 1;
+        }
+
+        pub const Generation = struct {
+            /// Dispatches submitted to the queue.
+            submitted: u64,
+            /// Dispatches the mirror's contents reflect.
+            mirrored: u64,
+        };
+
+        /// How many dispatches the mirror's contents reflect, and how many have been submitted.
+        ///
+        /// WHAT THIS REPLACES: A FIXED WAIT WITH A GUESS IN IT
+        ///
+        /// `readLatest` polls, so it returns `null` until a copy lands - but it could never say
+        /// WHICH dispatch the landed data came from. A caller that dispatched and got bytes back
+        /// had no way to know they were its own rather than the previous dispatch's.
+        ///
+        /// The zimrnum sweep papered over that with six settle frames per row, a number its own
+        /// comment admits was set from the time budget rather than measured - and which had
+        /// already been wrong twice, the symptom being another row's data arriving as `inf`
+        /// against a bar of zero.
+        ///
+        /// With this, a caller records `submitted` after its dispatch and waits until `mirrored`
+        /// reaches it. That is exact: never early, never longer than necessary, and it does not
+        /// move with row count or what else the browser is doing.
+        ///
+        /// On the CPU and worker backends there is no queue, so both numbers are equal and a
+        /// caller's loop degenerates to reading immediately - which is correct and needs no
+        /// special case at the call site.
+        pub fn readGeneration(self: *Self) Generation {
+            switch (self.backend) {
+                .gpu => {
+                    const gp: *Gpu = &self.gpu.?;
+                    return .{ .submitted = gp.submitted, .mirrored = gp.mirrored };
+                },
+                else => return .{ .submitted = 0, .mirrored = 0 },
+            }
+        }
+
         pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
             // Variable-count fields (pos/vel/…) are sized to capacity and slice to
             // the live `element_count`; fixed fields (grid_counts, cell_start) must
@@ -1159,8 +1269,21 @@ pub fn Compute(comptime M: type) type {
                         wgpu.bufferReadRelease(gp.read);
                         gp.read = .invalid;
                         gp.have_read = true;
+                        // The mirror now holds whatever had been dispatched when this copy was
+                        // ENCODED, which is `copy_at` - not `submitted`, which may have moved on
+                        // since. Recording the wrong one of those two is the whole bug this
+                        // counter exists to prevent, so it is stored at encode time below.
+                        gp.mirrored = gp.copy_at;
                     }
                     if (gp.read == .invalid) {
+                        // Stamp the encode, not the completion: everything submitted BEFORE this
+                        // point is what the copy will capture. Anything dispatched afterwards is
+                        // not in it, and a caller comparing generations needs that to be exact
+                        // rather than approximately recent.
+                        // NOT `submitted += 1` here, and the asymmetry is the point: this
+                        // submits a COPY, not a dispatch. Counting it would make the mirror
+                        // appear to reflect work that was never run.
+                        gp.copy_at = gp.submitted;
                         const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
                         inline for (buffer_field_names, 0..) |fname, fi| {
                             wgpu.copyBufferToBuffer(

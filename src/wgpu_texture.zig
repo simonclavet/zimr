@@ -1,3 +1,4 @@
+//! lint:alias wgpu_texture
 // src/wgpu_texture.zig - texture + render-texture lifetime wrappers.
 // WebGPU architecture is documented centrally in src/zimr.zig
 // (the module-level `//!` doc) — read that before changing wgpu code.

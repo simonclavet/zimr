@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec = zm.Vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const vs_wgsl = @embedFile("vertex_texture_test_vs.wgsl");
 const fs_wgsl = @embedFile("vertex_texture_test_fs.wgsl");
@@ -141,8 +141,8 @@ fn update(f: *z.Frame, s: *State) void {
     s.shader.draw(ps, s.vertex_count, 1);
     f.gl.renderer().bindForPass(ps);
 
-    f.gl.text(.{ 16, 16 }, "Vertex Texture Fetch", .{ .size = 22, .color = co.palette.ink, .font = &s.font });
-    co.caption(f.gl, s.font, "grid warped by a texture sampled IN THE VERTEX SHADER (textureSampleLevel)");
+    f.gl.text(.{ 16, 16 }, "Vertex Texture Fetch", .{ .size = 22, .color = common.palette.ink, .font = &s.font });
+    common.caption(f.gl, s.font, "grid warped by a texture sampled IN THE VERTEX SHADER (textureSampleLevel)");
 }
 
 pub const app: z.AppSpec(State) = .{

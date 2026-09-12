@@ -455,6 +455,39 @@
 //! arithmetic, and <=32-bit packed structs are also handled (a packed struct wider
 //! than 32 bits is flagged with a loud marker: a field above bit 32 would need a
 //! true 64-bit heap load/store).
+//!
+//! ---- THE TWO GATES, and why BOTH are needed ------------------------------
+//! c2js translates names the Zig COMPILER generates, so every toolchain bump can
+//! silently change what it is reading. Two independent gates cover the two halves
+//! of that; neither covers the other's.
+//!
+//!  1. The `/*?...*/` MARKER GATE, at the bottom of main(). Catches C that c2js
+//!     KNOWS it cannot model. Every such construct lowers to a constant, so a
+//!     miss is a silently wrong VALUE, not a crash — any marker is fatal.
+//!     This gate exists because 0.17.0-dev.1676 renamed zig.h's integer casts to
+//!     `zig_<dst>_<op>_<src>`; c2js knew only the older `zig_wrap_uN` spelling,
+//!     and 99 call sites per bundle became the literal `0`. It shipped green
+//!     through build, lint, fmt and verify_imports, and the only symptom was one
+//!     device-only `GPUTextureFormat: undefined` — the other 98 corrupted data
+//!     quietly. The marker had been emitted for YEARS with a comment saying its
+//!     purpose was to "make the gap loud, not silent". Nothing ever read it.
+//!     A marker nothing reads is not a gate.
+//!
+//!  2. `zig build c2js-canary` (webtests/c2js_canary.zig). Catches C that c2js
+//!     models WRONGLY — the half a marker can never flag. A battery of integer
+//!     casts, wrapping arithmetic and 64/128-bit ops is transpiled normally and
+//!     compared against the SAME computation folded by Zig's comptime evaluator,
+//!     which never passes through c2js. The seed is a runtime PARAMETER so the
+//!     optimizer cannot fold the runtime path back into the constant and make the
+//!     test a tautology; the runner asserts that too. It earned its keep on its
+//!     first run, catching a Number/BigInt domain crossing in the widening-cast
+//!     path. Atomics and >64-bit heap traffic cannot be comptime-evaluated, so
+//!     they stay gate 1's job.
+//!
+//! WHEN A COMPILER BUMP BREAKS THINGS: read the semantics from the toolchain ON
+//! DISK (`lib/zig.h` ships in the release), never from the helper's name.
+//! `zig_u32_truncate_u32` looks like identity; it takes a `bits` argument and
+//! masks to it, so a packed u9 living in a u32 is a different value.
 
 const std = @import("std");
 /// The jobs ABI, from the ONE file every side of the system reads. c2js checks that a kernel
@@ -469,6 +502,7 @@ const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
 const endsWith = std.mem.endsWith;
 const indexOf = std.mem.indexOf;
+const indexOfPos = std.mem.indexOfPos;
 const splitScalar = std.mem.splitScalar;
 const trimStart = std.mem.trimStart;
 const trim = std.mem.trim;
@@ -1837,6 +1871,8 @@ const Transpiler = struct {
     toks: []const Token, // the whole program as one flat token slice (from the lexer)
     p: usize = 0, // parse cursor: index of the next unconsumed token in `toks`
     out: ArrayList(u8) = .empty, // the JavaScript being built up as we parse + lower
+    diags: ArrayList([]const u8) = .empty, // places we had to GUESS; reported with the markers
+    diag_count: usize = 0, // same, but alloc-free so the gate can never be lost to OOM
     // source-map state: as tokens are consumed, `cur_src_line` follows the C
     // line of the current token. `emit` records (generated-line -> cur_src_line)
     // whenever it starts a new output line, building a JS->C line map.
@@ -2338,6 +2374,10 @@ const Transpiler = struct {
             \\const __f64dv = new DataView(new ArrayBuffer(8));
             \\function __f64bits(bi){ __f64dv.setBigUint64(0, BigInt(bi)); return __f64dv.getFloat64(0); }
             \\function __f32bits(b){ __f64dv.setUint32(0, b >>> 0); return __f64dv.getFloat32(0); }
+            \\// the inverse: @bitCast a float to its integer repr. u64 is a BigInt in
+            \\// this model and u32 a Number, so the two return different domains.
+            \\function __bitsf64(v){ __f64dv.setFloat64(0, v); return __f64dv.getBigUint64(0); }
+            \\function __bitsf32(v){ __f64dv.setFloat32(0, v); return __f64dv.getUint32(0); }
             \\
         );
         try self.emit("\n");
@@ -7161,10 +7201,13 @@ const Transpiler = struct {
             return false;
         }
         const op: []const u8 = name[4 .. i - 2];
+        // Both spellings of the renamed ops (1857: div_trunc -> divTrunc), for
+        // the reason given at the narrow div/mod block: c2js transpiles C, and
+        // the C it is handed may come from either toolchain.
         const ops = [_][]const u8{
-            "make", "lo",   "hi",  "addw",      "subw", "mulw", "shlw",
-            "shl",  "shrw", "shr", "and",       "or",   "xor",  "not",
-            "add",  "sub",  "mul", "div_trunc", "rem",  "cmp",
+            "make", "lo",   "hi",  "addw",      "subw",     "mulw", "shlw",
+            "shl",  "shrw", "shr", "and",       "or",       "xor",  "not",
+            "add",  "sub",  "mul", "div_trunc", "divTrunc", "rem",  "cmp",
         };
         for (ops) |o| {
             if (eql(u8, op, o)) {
@@ -7172,6 +7215,88 @@ const Transpiler = struct {
             }
         }
         return false;
+    }
+
+    /// Record a place where c2js had to GUESS rather than model. Reported at the
+    /// end of the run alongside the `/*?...*/` markers: a guessed width silently
+    /// drops a mask or a sign-extension, which is the same silently-wrong-value
+    /// class as a marker, just without a visible trace in the emitted JS.
+    fn noteDiag(self: *Transpiler, msg: []const u8) void {
+        // The COUNT is what the gate tests and it cannot fail; storing the text
+        // is a nicety. So an allocation failure here costs us a message, never a
+        // silently green build.
+        self.diag_count += 1;
+        // lint:off catch-suppression: count already recorded above; text is best-effort
+        self.diags.append(self.gpa, msg) catch {};
+    }
+
+    /// Parse zig.h's trailing `bits` argument (arrives as `UINT8_C(N)`, already
+    /// unwrapped to `N` by the literal handler). On failure keep going with
+    /// `dflt` so the transpile still reports everything at once, but RECORD it —
+    /// a wrong width means a dropped mask on every sub-width integer downstream.
+    fn bitsArg(self: *Transpiler, e: []const u8, dflt: u16) u16 {
+        const text: []const u8 = trim(u8, e, "() ");
+        return parseInt(u16, text, 10) catch {
+            const msg: []const u8 = allocPrint(
+                self.gpa,
+                "could not parse a cast width from '{s}'; guessed {d} (mask/sign-extend may be wrong)",
+                .{ text, dflt },
+            ) catch return dflt;
+            self.noteDiag(msg);
+            return dflt;
+        };
+    }
+
+    /// A C-backend integer cast helper, matched by name.
+    const CastHelper = struct {
+        dst_bits: u16,
+        dst_signed: bool,
+        has_bits_arg: bool,
+    };
+
+    /// Match `zig_<u|i><dw>_<op>_<u|i><sw>` (op = intCast | truncate | bitCast),
+    /// the spelling Zig's C backend uses for integer casts. Returns the
+    /// DESTINATION width and signedness, plus whether the call carries zig.h's
+    /// trailing `bits` argument. Returns null for any other name.
+    fn castHelper(self: *Transpiler, name: []const u8) ?CastHelper {
+        _ = self;
+        if (!startsWith(u8, name, "zig_")) {
+            return null;
+        }
+        var i: usize = "zig_".len;
+        if (i >= name.len or (name[i] != 'u' and name[i] != 'i')) {
+            return null;
+        }
+        const dst_signed: bool = name[i] == 'i';
+        i += 1;
+        const dw_start: usize = i;
+        while (i < name.len and name[i] >= '0' and name[i] <= '9') {
+            i += 1;
+        }
+        if (i == dw_start or i >= name.len or name[i] != '_') {
+            return null;
+        }
+        const dst_bits: u16 = parseInt(u16, name[dw_start..i], 10) catch return null;
+        const rest: []const u8 = name[i + 1 ..];
+        const Op = struct { tag: []const u8, bits_arg: bool };
+        // zig.h: intCast is value-preserving and takes no `bits`; truncate and
+        // bitCast both take one (bitCast forwards straight to truncate).
+        const ops = [_]Op{
+            .{ .tag = "intCast_", .bits_arg = false },
+            .{ .tag = "truncate_", .bits_arg = true },
+            .{ .tag = "bitCast_", .bits_arg = true },
+        };
+        for (ops) |o| {
+            if (!startsWith(u8, rest, o.tag)) {
+                continue;
+            }
+            const src: []const u8 = rest[o.tag.len..];
+            if (src.len < 2 or (src[0] != 'u' and src[0] != 'i')) {
+                return null;
+            }
+            return .{ .dst_bits = dst_bits, .dst_signed = dst_signed, .has_bits_arg = o.bits_arg };
+        }
+        return null;
     }
 
     /// Lower a wide-integer C-backend helper call `zig_<op>_<u|i><width>(args...)` to a
@@ -7254,7 +7379,16 @@ const Transpiler = struct {
             return try allocPrint(self.gpa, "(({s})^({s}))", .{ a, b });
         }
         if (eql(u8, op, "not")) {
-            return try allocPrint(self.gpa, "BigInt.{s}({s},~({s}))", .{ mask, width_str, a });
+            // `not` carries its width as the SECOND arg, not the third: the
+            // generic `bits` above is for the three-arg wrapping ops (a, b, bits),
+            // and `zig_not_uN(x, bits)` has only two. A u48 arrives as
+            // `zig_not_u64(x, 48)` and must mask at 48 — masking at the uint64_t
+            // STORAGE width leaves all 16 bits above the declared width set, so
+            // `~x` compared against `x ^ maxInt(48)` disagreed. (Signed is
+            // indifferent: `~x` of a sign-extended iN is already in range at
+            // either width, matching zig.h, which ignores `bits` for the i form.)
+            const not_bits: []const u8 = if (args.len > 1) args[1] else width_str;
+            return try allocPrint(self.gpa, "BigInt.{s}({s},~({s}))", .{ mask, not_bits, a });
         }
         // Non-wrapping-named arithmetic (current C backend emits `zig_add_u128`,
         // `zig_mul_u128`, ... without the trailing `w` and with no explicit bits
@@ -7271,7 +7405,7 @@ const Transpiler = struct {
         if (eql(u8, op, "mul")) {
             return try allocPrint(self.gpa, "BigInt.{s}({s},({s})*({s}))", .{ mask, width_str, a, b });
         }
-        if (eql(u8, op, "div_trunc")) {
+        if (eql(u8, op, "div_trunc") or eql(u8, op, "divTrunc")) {
             return try allocPrint(self.gpa, "BigInt.{s}({s},({s})/({s}))", .{ mask, width_str, a, b });
         }
         if (eql(u8, op, "rem")) {
@@ -7818,6 +7952,76 @@ const Transpiler = struct {
             }
             return try allocPrint(self.gpa, "Math.trunc({s})", .{inner});
         }
+        // @bitCast(float) -> integer repr: `zig_u32_bitCast_f32(x)`,
+        // `zig_u64_bitCast_f64(x)` and their signed forms. ONE argument and no
+        // width, so castHelper() below does NOT match these — its pattern wants
+        // an integer SOURCE (`zig_<u|i>N_<op>_<u|i>M`), and here the source is a
+        // float. They reached the marker and lowered to 0, which is the silent
+        // kind of wrong: a float printer reading bits it never got.
+        //
+        // The inverse direction (int bits -> float) is __f32bits/__f64bits above.
+        // f16 and f80 are deliberately NOT modelled — DataView has no portable
+        // f16/f80 accessor, and a wrong answer there is worse than a loud marker.
+        if (indexOf(u8, name, "_bitCast_f") != null and
+            (endsWith(u8, name, "_f32") or endsWith(u8, name, "_f64")))
+        {
+            const is_f32: bool = endsWith(u8, name, "_f32");
+            const signed: bool = name["zig_".len] == 'i';
+            self.expect("(");
+            const inner: []const u8 = try self.parseExpr();
+            self.expect(")");
+            // f64 bits are 64 wide, so they land in the BigInt domain; f32 bits
+            // stay a Number. Tell the rest of the expression layer which.
+            self.last_w = if (is_f32) 32 else 64;
+            const call: []const u8 = try allocPrint(
+                self.gpa,
+                "{s}({s})",
+                .{ if (is_f32) "__bitsf32" else "__bitsf64", inner },
+            );
+            if (!signed) {
+                return call;
+            }
+            if (is_f32) {
+                return try allocPrint(self.gpa, "(({s}) | 0)", .{call});
+            }
+            return try allocPrint(self.gpa, "BigInt.asIntN(64,{s})", .{call});
+        }
+        // Integer casts under the `zig_<dst>_<op>_<src>` spelling, e.g.
+        // `zig_u32_truncate_u32(x, bits)`. zig.h defines intCast/truncate/bitCast
+        // all in terms of the same mask (unsigned dest) or sign-extend (signed
+        // dest) at the DESTINATION width, so they lower through the very same
+        // wrap() as `zig_wrap_uN` below. Note these are NOT identity even when
+        // src and dst widths match: `bits` can be narrower (a packed u9 in a u32).
+        // Falling through to the unhandled-helper marker emitted a literal 0 —
+        // silently wrong data rather than a crash.
+        if (self.castHelper(name)) |ch| {
+            self.expect("(");
+            var inner: []const u8 = try self.parseExpr();
+            // The ARGUMENT's domain, captured before parsing the width clobbers it.
+            const src_w: u16 = self.last_w;
+            var bits: u16 = ch.dst_bits;
+            if (ch.has_bits_arg) {
+                self.expect(",");
+                // Parse the transpiled expression, not the raw token: the width
+                // arrives wrapped as `UINT8_C(N)` (same reason as zig_wrap_ below).
+                const bits_e: []const u8 = try self.parseExpr();
+                bits = self.bitsArg(bits_e, ch.dst_bits);
+            }
+            self.expect(")");
+            // A cast is the one place that legitimately CROSSES c2js's value
+            // domains: <=32-bit values are Numbers, 33+ bit values are BigInts.
+            // asUintN throws on a Number ("Cannot convert 19 to a BigInt"), and
+            // a Number mask on a BigInt throws too, so coerce explicitly here
+            // rather than letting either reach the browser. Narrowing masks in
+            // the BigInt domain FIRST: a bare Number(bigint) loses the low bits
+            // past 2^53, which are exactly the ones a narrowing cast keeps.
+            if (bits > 32 and src_w <= 32) {
+                inner = try allocPrint(self.gpa, "BigInt({s})", .{inner});
+            } else if (bits <= 32 and src_w > 32) {
+                inner = try allocPrint(self.gpa, "Number(BigInt.asUintN({d},{s}))", .{ bits, inner });
+            }
+            return try self.wrap(inner, .{ .kind = .int, .bits = bits, .signed = ch.dst_signed });
+        }
         // zig_wrap_uN(x, bits) / zig_wrap_iN(x, bits): mask/sign-extend to width.
         // Reuse the same masking wrap() helper used for store-narrowing.
         if (startsWith(u8, name, "zig_wrap_u") or startsWith(u8, name, "zig_wrap_i")) {
@@ -7832,7 +8036,7 @@ const Transpiler = struct {
             // sign-extension for any sub-32-bit field (e.g. a packed `i7`).
             const bits_e: []const u8 = try self.parseExpr();
             self.expect(")");
-            const bits = parseInt(u16, trim(u8, bits_e, "() "), 10) catch 32;
+            const bits: u16 = self.bitsArg(bits_e, 32);
             return try self.wrap(inner, .{ .kind = .int, .bits = bits, .signed = signed });
         }
         // literal wrappers: UINTxx_C(x) / INTxx_C(x) -> x
@@ -7875,7 +8079,7 @@ const Transpiler = struct {
             const bits_e: []const u8 = try self.parseExpr();
             self.expect(")");
             // parse the bits literal if it's a plain integer; default 32
-            const bits: u16 = parseInt(u16, trim(u8, bits_e, "() "), 10) catch 32;
+            const bits: u16 = self.bitsArg(bits_e, 32);
             const ty = CType{ .kind = .int, .bits = bits, .signed = is_signed };
             const inner: []const u8 = switch (wo) {
                 .add => try allocPrint(self.gpa, "{s} + {s}", .{ a, b }),
@@ -8115,14 +8319,17 @@ const Transpiler = struct {
                     );
                 }
             }
-            if (eql(u8, stem, "div_trunc") or eql(u8, stem, "div_floor")) {
+            // The FLOAT forms were renamed too (zig_div_trunc_f32 ->
+            // zig_divTrunc_f32); both spellings accepted, as everywhere else.
+            const is_div_trunc: bool = eql(u8, stem, "div_trunc") or eql(u8, stem, "divTrunc");
+            const is_div_floor: bool = eql(u8, stem, "div_floor") or eql(u8, stem, "divFloor");
+            if (is_div_trunc or is_div_floor) {
                 self.expect("(");
                 const a: []const u8 = try self.parseExpr();
                 self.expect(",");
                 const b: []const u8 = try self.parseExpr();
                 self.expect(")");
-                const f: []const u8 =
-                    if (eql(u8, stem, "div_trunc")) "Math.trunc" else "Math.floor";
+                const f: []const u8 = if (is_div_trunc) "Math.trunc" else "Math.floor";
                 return try allocPrint(self.gpa, "{s}({s} / {s})", .{ f, a, b });
             }
             if (eql(u8, stem, "fma")) { // fused multiply-add: x*y+z
@@ -8187,7 +8394,7 @@ const Transpiler = struct {
             const bits_e: []const u8 = try self.parseExpr();
             self.expect(")");
             const signed: bool = indexOf(u8, name, "_i") != null;
-            const bits: u16 = parseInt(u16, trim(u8, bits_e, "() "), 10) catch 32;
+            const bits: u16 = self.bitsArg(bits_e, 32);
             const ty = CType{ .kind = .int, .bits = bits, .signed = signed };
             // 64-bit: JS `<<` truncates to 32 bits; `x * 2^n` is exact within 2^53.
             const inner: []const u8 = if (bits <= 32)
@@ -8222,16 +8429,21 @@ const Transpiler = struct {
         //   rem (trunc)  -> a % b
         //   unsigned     -> plain % and Math.trunc(/) (operands are non-negative)
         // The result is then masked to the operand width via `wrap`.
+        //
+        // BOTH SPELLINGS, for the reason given at the bit-builtin table below:
+        // 1857 renamed div_floor -> divFloor and div_trunc -> divTrunc, and c2js
+        // transpiles C from whichever toolchain produced it. `mod` and `rem` were
+        // not renamed.
         {
             const DivOp = enum { mod_floor, div_floor, div_trunc, rem };
             var dop: ?DivOp = null;
             if (startsWith(u8, name, "zig_mod_")) {
                 dop = .mod_floor;
             }
-            if (startsWith(u8, name, "zig_div_floor_")) {
+            if (startsWith(u8, name, "zig_divFloor_") or startsWith(u8, name, "zig_div_floor_")) {
                 dop = .div_floor;
             }
-            if (startsWith(u8, name, "zig_div_trunc_")) {
+            if (startsWith(u8, name, "zig_divTrunc_") or startsWith(u8, name, "zig_div_trunc_")) {
                 dop = .div_trunc;
             }
             if (startsWith(u8, name, "zig_rem_")) {
@@ -8413,13 +8625,57 @@ const Transpiler = struct {
             return try allocPrint(self.gpa, "Math.abs({s})", .{a});
         }
 
+        // ~x: zig_not_uN(x, bits) / zig_not_iN(x, bits), for N of 8/16/32. The
+        // 1857 compiler routes every integer `~` through these instead of
+        // emitting the C operator, so before this handler a narrow bitwise NOT
+        // reached the unhandled-helper marker and lowered to 0 — which took MD5
+        // and math.rotl with it. (The _u64/_i64/_u128/_i128 spellings never get
+        // here: isWideArith intercepts them for the BigInt path above.)
+        //
+        // zig.h spells these `arg ^ maxInt_u(N, bits)` (unsigned) and `~arg`
+        // (signed, bits unused) — both are `~x` narrowed to the DECLARED width,
+        // which is exactly what wrap() does: `>>> 0` at u32, `& mask` below it,
+        // and a shift pair to sign-extend the signed forms.
+        //
+        // The `bits` ARG is the real width; the name suffix is only the C STORAGE
+        // type, and they differ constantly. math.rotl emits
+        // `zig_not_u8(t1, UINT8_C(5))` for a 5-bit shift amount, where trusting
+        // the u8 suffix would mask with 255 and hand every downstream shift a
+        // value eight times too large. So read bitsArg, never SuffixWidth.
+        if (startsWith(u8, name, "zig_not_u") or startsWith(u8, name, "zig_not_i")) {
+            const signed: bool = (name["zig_not_".len] == 'i');
+            self.expect("(");
+            const a: []const u8 = try self.parseExpr();
+            var bits: u16 = SuffixWidth.parse(name) orelse 32;
+            if (self.atText(",")) {
+                self.p += 1;
+                const bits_e: []const u8 = try self.parseExpr();
+                bits = self.bitsArg(bits_e, bits);
+            }
+            self.expect(")");
+            const negated: []const u8 = try allocPrint(self.gpa, "(~({s}))", .{a});
+            return try self.wrap(negated, .{ .kind = .int, .bits = bits, .signed = signed });
+        }
+
         // single-arg bit builtins -> width-aware kernel helpers.
+        //
+        // BOTH SPELLINGS ARE LIVE. Compiler 1857 renamed three of these five in
+        // zig.h to camelCase — popcount -> popCount, byte_swap -> byteSwap,
+        // bit_reverse -> bitReverse — while clz and ctz kept their snake form.
+        // c2js consumes C, not a compiler, so a C file emitted by either
+        // toolchain must transpile; the old prefixes stay. A missing spelling is
+        // NOT a compile error here, it is a silent lowering to 0, so this table
+        // is only ever appended to. `tools/c2js_cases/cases/builtins.zig` is what
+        // catches the next rename.
         const BitBuiltin = struct { prefix: []const u8, helper: []const u8 };
         for ([_]BitBuiltin{
             .{ .prefix = "zig_clz_", .helper = "__clz" },
             .{ .prefix = "zig_ctz_", .helper = "__ctz" },
+            .{ .prefix = "zig_popCount_", .helper = "__popcount" },
             .{ .prefix = "zig_popcount_", .helper = "__popcount" },
+            .{ .prefix = "zig_byteSwap_", .helper = "__byteswap" },
             .{ .prefix = "zig_byte_swap_", .helper = "__byteswap" },
+            .{ .prefix = "zig_bitReverse_", .helper = "__bitreverse" },
             .{ .prefix = "zig_bit_reverse_", .helper = "__bitreverse" },
         }) |entry| {
             if (startsWith(u8, name, entry.prefix)) {
@@ -8463,7 +8719,7 @@ const Transpiler = struct {
                 self.expect(",");
                 const bits_e: []const u8 = try self.parseExpr();
                 self.expect(")");
-                const wn: u16 = parseInt(u16, trim(u8, bits_e, "() "), 10) catch 32;
+                const wn: u16 = self.bitsArg(bits_e, 32);
                 const op: []const u8 = switch (kind) {
                     .add => "+",
                     .sub => "-",
@@ -8490,7 +8746,7 @@ const Transpiler = struct {
             self.expect(",");
             const bits_e: []const u8 = try self.parseExpr();
             self.expect(")");
-            const wn: u16 = parseInt(u16, trim(u8, bits_e, "() "), 10) catch 32;
+            const wn: u16 = self.bitsArg(bits_e, 32);
             const cf: []const u8 = if (signed) "__clampi" else "__clampu";
             // 64-bit operands are BigInt: `a * Math.pow(2, b)` would mix BigInt and
             // Number, so shift in BigInt (exact, arbitrary precision) before clamping.
@@ -8516,7 +8772,7 @@ const Transpiler = struct {
                     self.expect(",");
                     const bits_e: []const u8 = try self.parseExpr();
                     self.expect(")");
-                    const wn: u16 = parseInt(u16, trim(u8, bits_e, "() "), 10) catch 32;
+                    const wn: u16 = self.bitsArg(bits_e, 32);
                     const signed: bool = indexOf(u8, name, "_i") != null;
                     if (wn > 32) {
                         // BigInt: exact shift; mask the stored result to the width
@@ -8594,7 +8850,7 @@ const Transpiler = struct {
                         self.expect(",");
                         const bits_e: []const u8 = try self.parseExpr();
                         self.expect(")");
-                        const wn: u16 = parseInt(u16, trim(u8, bits_e, "() "), 10) catch 32;
+                        const wn: u16 = self.bitsArg(bits_e, 32);
                         const signed: bool = indexOf(u8, name, "_i") != null;
                         const op: []const u8 = switch (kind) {
                             .add => "+",
@@ -8836,6 +9092,17 @@ const Transpiler = struct {
                 if (eql(u8, t.text, "INT64_MIN")) {
                     self.last_w = 64;
                     return self.gpa.dupe(u8, "(-9223372036854775808n)");
+                }
+                // limitMacroValue stores the MIN macros as their two's-complement
+                // u64 because its other caller is the data-image writer, which
+                // truncates to the slot width. An EXPRESSION has no slot to
+                // truncate against, so printing that u64 verbatim made INT8_MIN
+                // read as 18446744073709551488 — and `x != INT8_MIN` is then
+                // ALWAYS true. Silent: no marker, no error, just a comparison
+                // that can never hold. Emit the signed value here.
+                if (endsWith(u8, t.text, "_MIN")) {
+                    const signed_v: i64 = @bitCast(v);
+                    return allocPrint(self.gpa, "({d})", .{signed_v});
                 }
                 return allocPrint(self.gpa, "{d}", .{v});
             }
@@ -9152,6 +9419,45 @@ pub fn main(init: std.process.Init) !void {
     var t = Transpiler.init(gpa, toks.items, pp.defines, safe_heap);
     try t.run();
 
+    // GATE: c2js emits a `/*?...*/ 0` marker wherever it meets C it cannot
+    // model — an unmodeled zig.h helper, an atomic, a >64-bit packed field, or
+    // just an unknown token. The marker was always written to be "visible", but
+    // nothing ever LOOKED at it, so a compiler bump that renamed zig.h's cast
+    // helpers turned 99 call sites into a literal 0 and shipped green through
+    // lint, fmt and verify_imports. EVERY marker is a silently wrong VALUE
+    // rather than a crash — the worst failure mode there is — so ANY marker, of
+    // ANY kind, is fatal here, not just the one that happened to bite us.
+    // Guessed cast widths (bitsArg) are the same class with no trace in the
+    // emitted JS, so they ride along in the same report.
+    {
+        const open: []const u8 = "/*?";
+        var count: usize = 0;
+        var at_from: usize = 0;
+        while (indexOfPos(u8, t.out.items, at_from, open)) |at| {
+            const body_at: usize = at + open.len;
+            const close: usize = indexOfPos(u8, t.out.items, body_at, "*/") orelse t.out.items.len;
+            try writeAllStderr(init.io, try allocPrint(
+                gpa,
+                "c2js: FATAL: unmodeled C construct '{s}' lowered to a constant\n",
+                .{t.out.items[body_at..close]},
+            ));
+            count += 1;
+            at_from = close;
+        }
+        for (t.diags.items) |d| {
+            try writeAllStderr(init.io, try allocPrint(gpa, "c2js: FATAL: {s}\n", .{d}));
+        }
+        count += t.diag_count;
+        if (count > 0) {
+            try writeAllStderr(init.io, try allocPrint(
+                gpa,
+                "c2js: {d} unmodeled construct(s) — teach c2js these before shipping\n",
+                .{count},
+            ));
+            std.process.exit(2);
+        }
+    }
+
     if (base_opt) |base| {
         const map_name: []u8 = try allocPrint(gpa, "{s}.js.map", .{base});
         // The source we map back to is the *preprocessed* C (line numbers match
@@ -9188,12 +9494,41 @@ pub fn main(init: std.process.Init) !void {
             const enc: std.base64.Base64Encoder = std.base64.standard.Encoder;
             const b64: []u8 = try gpa.alloc(u8, enc.calcSize(wbytes.len));
             _ = enc.encode(b64, wbytes);
-            break :blk try allocPrint(
+            // ── ★★★ THE BASE64 IS WRAPPED, AND THAT IS NOT COSMETIC ──
+            //
+            // Emitted as one string, the wasm becomes a SINGLE LINE as long as the encoding:
+            // measured at **1 048 385 characters** for `zimrnum_field` — just under 2^20 — where
+            // `hello_world` sat at 747 949 and had always opened fine. That page was the first
+            // to cross a megabyte on one line, and the first that Claude's Android viewer refused
+            // to open while Chrome opened it happily. A per-line buffer limit is the obvious
+            // suspect and this is the cheap way to stop provoking it.
+            //
+            // ★★ SPLIT INTO JS STRING CONCATENATION, not by putting newlines inside the literal.
+            // `atob` tolerating whitespace is implementation behaviour, not something the spec
+            // promises, and a page that decodes on one engine and not another is worse than a
+            // long line. `"a" + "b"` is unambiguous everywhere.
+            //
+            // ★ 64 KB per chunk: comfortably under any plausible line limit, and few enough
+            // concatenations that no parser is troubled by the expression depth.
+            const chunk: usize = 64 * 1024;
+            var js: std.ArrayList(u8) = .empty;
+            defer js.deinit(gpa);
+            try js.appendSlice(gpa, "<script>window.WASM_BYTES = Uint8Array.from(atob(\n");
+            var at: usize = 0;
+            while (at < b64.len) : (at += chunk) {
+                const end: usize = @min(at + chunk, b64.len);
+                if (at > 0) {
+                    try js.appendSlice(gpa, " +\n");
+                }
+                try js.append(gpa, '"');
+                try js.appendSlice(gpa, b64[at..end]);
+                try js.append(gpa, '"');
+            }
+            try js.appendSlice(
                 gpa,
-                "<script>window.WASM_BYTES = Uint8Array.from(atob(\"{s}\"), " ++
-                    "function (c) {{ return c.charCodeAt(0); }});</script>\n",
-                .{b64},
+                "\n), function (c) { return c.charCodeAt(0); });</script>\n",
             );
+            break :blk try js.toOwnedSlice(gpa);
         } else if (wasm_url_opt) |url|
             try allocPrint(gpa, "<script>window.WASM_URL = \"{s}\";</script>\n", .{url})
         else

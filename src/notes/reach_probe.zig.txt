@@ -1,0 +1,222 @@
+//! Does MPC beat PD at "reach this target in 0.3 s, with the motors you have"?
+//!
+//! ★ THE CLAIM TO TEST BEFORE BUILDING ANYTHING. PD is genuinely good at reaching a joint
+//! target, so a demo only means something if the setup contains a bind PD cannot escape. The
+//! candidate is TORQUE LIMITS: fast enough to arrive in 0.3 s means saturating and overshooting;
+//! slow enough not to overshoot means not arriving. A planner has no such tradeoff.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const float = zm.float;
+const keeper_xml = @embedFile("tests/fixtures/robot/keeper.xml");
+
+const sim_dt: f32 = 1.0 / 250.0;
+const deadline: f32 = 0.30;
+const knots: u32 = 75; // 0.30 s at 1/250
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, keeper_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 8,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    var m: rbt.Model = imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    defer d.deinit();
+    rbt.forward(&m, &d);
+    const hand: u32 = imp.bodyIndex("hand") orelse return error.NoHand;
+    const rest: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(rest);
+
+    var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, hand);
+    defer arm_act.deinit();
+    var all_act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+    defer all_act.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+    defer gpa.free(ik_scratch);
+    const goal_pose: []f32 = try gpa.alloc(f32, m.nq);
+    defer gpa.free(goal_pose);
+
+    // A target that needs a real move: about 0.8 m of hand travel in 0.3 s.
+    const target: zm.Vec = vec(0.62, 0.42, 0.72);
+    @memcpy(d.pos, rest);
+    d.stage = .stale;
+    rbt.forward(&m, &d);
+    const start_gap: f32 = zm.length3(d.body_xpos[hand] - target);
+    _ = (ctl.Ik{ .max_iterations = 100 }).solve(&m, &d, arm_act, .{ .body = hand, .offset = vec(0, 0, 0), .goal = target }, ik_scratch);
+    @memcpy(goal_pose, d.pos[0..m.nq]);
+    p("reach {d:.3} m of hand travel in {d:.2} s, torque limited to +/-260 N.m\n\n", .{ start_gap, deadline });
+
+    var plan: mpc.Plan = try mpc.Plan.init(gpa, &m, knots);
+    defer plan.deinit();
+    const nstate: u32 = m.nq + m.nv;
+    const reference: []f32 = try gpa.alloc(f32, (knots + 1) * nstate);
+    defer gpa.free(reference);
+    const state_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(state_w);
+    const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
+    defer gpa.free(term_w);
+    const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+    defer gpa.free(ctrl_w);
+
+    p("  controller        err at 0.30s   overshoot   peak |torque|   settled\n", .{});
+
+    // ── THE PD FAMILY, SWEPT: there is no gain that does both jobs ──
+    for ([_]f32{ 300, 1200, 4000 }) |kp| {
+        @memcpy(d.pos, rest);
+        @memset(d.vel, 0);
+        @memset(d.ctrl, 0);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        var at_deadline: f32 = -1;
+        var overshoot: f32 = 0;
+        var peak: f32 = 0;
+        var elapsed: f32 = 0;
+        while (elapsed < 0.9) : (elapsed += sim_dt) {
+            (ctl.PoseHold{
+                .target = goal_pose,
+                .kp = kp,
+                .kv = 2.0 * @sqrt(kp),
+                .max_torque = 260,
+            }).apply(&m, &d, all_act);
+            for (0..m.nv) |v| peak = @max(peak, @abs(d.applied_force[v]));
+            rbt.step(&m, &d);
+            rbt.forward(&m, &d);
+            const gap: f32 = zm.length3(d.body_xpos[hand] - target);
+            if (at_deadline < 0 and elapsed >= deadline) at_deadline = gap;
+            if (elapsed > deadline) overshoot = @max(overshoot, gap);
+        }
+        const settled: f32 = zm.length3(d.body_xpos[hand] - target);
+        p("  PD kp {d:>5.0}       {d:>10.4}   {d:>9.4}   {d:>13.0}   {d:>7.4}\n", .{ kp, at_deadline, overshoot, peak, settled });
+    }
+
+    // ── THE PLANNER: told the deadline, and bounded by the same motors ──
+    {
+        // ── ★★★ DO NOT SHAPE THE PATH. THAT IS THE OPTIMISER'S JOB. ──
+        //
+        // A smoothstep reference has ZERO SLOPE AT THE START, so it tells the arm to barely move
+        // for the first fifth of the window — and for "arrive in 0.3 s under a torque limit" the
+        // optimal profile is close to bang-bang. I was asking for the opposite of the answer.
+        //
+        // ★ AND THIS IS THE EXACT OPPOSITE OF THE RENDEZVOUS CASE, correctly. There the path
+        // shape mattered because the arrival had to MATCH something moving; here only the
+        // endpoint matters, so running position weight is zero and the terminal knot carries it
+        // all. **A reference is scaffolding for a planner that cannot see far enough. When it
+        // can see the whole task, scaffolding is just a worse plan imposed from outside.**
+        for (0..m.nv) |i| {
+            state_w[i] = 0.0;
+            state_w[m.nv + i] = 0.002;
+            term_w[i] = 800.0;
+            term_w[m.nv + i] = 40.0;
+        }
+        @memset(ctrl_w, 1.0e-5);
+        // ★ THE TERMINAL KNOT IS THE DEADLINE. That is the whole difference in intent: a PD is
+        // told WHERE to go and discovers when it arrives; the plan is told WHEN and works out
+        // the profile that fits inside the torque it actually has.
+        // (the reference is rebuilt live below — see the replan block)
+        @memcpy(d.pos, rest);
+        @memset(d.vel, 0);
+        @memset(d.ctrl, 0);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        @memset(plan.ctrl, 0);
+
+        var at_deadline: f32 = -1;
+        var overshoot: f32 = 0;
+        var peak: f32 = 0;
+        var elapsed: f32 = 0;
+        var tick: u32 = 0;
+        while (elapsed < 0.9) : (tick += 1) {
+            // ── ★★★ SHIFT AND SOLVE MUST BE PAIRED ──
+            //
+            // `shift` ran every tick and `optimize` every fifth, so four shifts in five
+            // propagated the tail of the control sequence with nothing correcting it. With a
+            // chattering plan that is garbage being slid forward and re-consumed: the warm-start
+            // rollout diverges, `initial_cost` arrives at **1.5e5**, and the solver spends its
+            // whole budget climbing back to where it was — then emits more chatter.
+            //
+            // ★ THE TELL WAS THE INITIAL COST JUMPING BETWEEN SOLVES. A warm start that is
+            // working produces an initial cost near the previous final cost. Ten-fold jumps mean
+            // the seed no longer describes the problem, which is the same diagnosis as the
+            // rocket's missing shift, arrived at from the opposite direction.
+            if (true) {
+                // ── ★★★ A FIXED 0.3 s LOOKAHEAD, WHICH IS WHAT THE ARCHITECTURE DESCRIBES ──
+                //
+                // Shrinking the horizon to the deadline was right for an INTERCEPTION, where the
+                // moment is fixed and passes. Here the deadline recurs — a new target every
+                // 0.3 s — so the planner should always look one target-interval ahead. Shrunk to
+                // its floor of 2 knots it had no room to plan at all, and sat 1.7 m from the
+                // target believing it had done its best.
+                //
+                // ★ THE SAME PARAMETER, OPPOSITE CORRECT SETTINGS, FOR TWO PROBLEMS THAT LOOK
+                // ALIKE. Worth stating: "horizon = time remaining" is not a rule, it is an
+                // answer to "does the moment recur?".
+                plan.setHorizon(knots);
+                // ── ★★★ A TRAJECTORY, NOT A DESTINATION. THIRD TIME. ──
+                //
+                // The reference was the goal pose at EVERY knot, knot zero included — "be at the
+                // target already". Diagnosed on the rocket, written into tutorial §42, repeated
+                // on the catch, and here again. The tell each time is the same: the commanded
+                // control chatters between its bounds (-2.5, 260, 257, -132, -239) and the error
+                // closes partway then RETREATS, because the plan re-derives a fresh impossible
+                // demand every solve instead of following a path.
+                //
+                // Smoothstepped from where the arm is to the goal, arriving at the deadline.
+                // The goal at every knot, and with ZERO running position weight that means
+                // only the terminal knot is actually asking for anything. The plan in between
+                // is whatever the torque limit makes best.
+                for (0..knots + 1) |k| {
+                    @memcpy(reference[k * nstate ..][0..m.nq], goal_pose);
+                    @memset(reference[k * nstate + m.nq ..][0..m.nv], 0);
+                }
+                const wanted: usize = (plan.horizon + 1) * nstate;
+                const r: mpc.Result = mpc.optimize(&m, &d, &plan, .{
+                    .state = state_w,
+                    .control = ctrl_w,
+                    .terminal = term_w,
+                    .reference = reference[0..wanted],
+                }, .{ .iterations = 8 });
+                if (tick < 40 or tick == 100) {
+                    p("    t{d:>4} gap {d:>6.3}  cost {e:>9.2}->{e:>9.2} it {d:>2} conv {any} reg {e:.0} ctrl0 {d:>7.1}\n", .{
+                        tick,
+                        zm.length3(d.body_xpos[hand] - target),
+                        r.initial_cost,
+                        r.cost,
+                        r.iterations,
+                        r.converged,
+                        r.regularization,
+                        plan.ctrl[0],
+                    });
+                }
+            }
+            @memcpy(d.ctrl, plan.ctrl[0..m.nu]);
+            for (0..m.nu) |j| peak = @max(peak, @abs(plan.ctrl[j]));
+            mpc.shift(&plan);
+            rbt.step(&m, &d);
+            rbt.forward(&m, &d);
+            elapsed += sim_dt;
+            const gap: f32 = zm.length3(d.body_xpos[hand] - target);
+            if (at_deadline < 0 and elapsed >= deadline) at_deadline = gap;
+            if (elapsed > deadline) overshoot = @max(overshoot, gap);
+        }
+        const settled: f32 = zm.length3(d.body_xpos[hand] - target);
+        p("  MPC 0.30s        {d:>10.4}   {d:>9.4}   {d:>13.0}   {d:>7.4}\n", .{ at_deadline, overshoot, peak, settled });
+    }
+}

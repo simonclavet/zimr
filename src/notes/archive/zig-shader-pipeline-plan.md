@@ -853,7 +853,7 @@ These shaped the design.  Will be transcribed into
 - ⏸ **S1.6 partial** — `src/notes/shader-style.md` written
   (consolidated do/don't reference covering everything discovered
   through S1.3-S1.4).  `lint-shaders` step: two checks landed in
-  `lint_zimr` (`shader-inline-fn`, `shader-no-atan`) that fire
+  `zimrlint` (`shader-inline-fn`, `shader-no-atan`) that fire
   automatically on `.fs.zig` / `.vs.zig` files — no separate build
   step needed; surfaces in regular `zig build lint`.  More rules
   can join as patterns emerge.

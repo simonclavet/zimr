@@ -1,3 +1,4 @@
+//! lint:alias shader_codegen
 //! src/shader_codegen.zig — public build-time API for zimr.
 //!
 //! This module is the API surface Phase 3 of the typed-shader plan
@@ -670,6 +671,9 @@ pub const ShaderPipeline = struct {
         self: *ShaderPipeline,
         source: LazyPath,
         entry: ?[]const u8,
+        /// Give the kernel `zn`, so it can call the host function rather than transcribe it.
+        /// Opt-in: Zig rejects `--dep` for a module the file does not import.
+        wants_zimrnum: bool,
     ) LazyPath {
         const b: *Build = self.b;
         // Stage 1: Zig -> SPIR-V (same flags as the fragment path).
@@ -691,12 +695,33 @@ pub const ShaderPipeline = struct {
         compile.addArg("zm");
         compile.addArg("--dep");
         compile.addArg("kompute");
+        if (wants_zimrnum) {
+            // ROOT'S dependency list. Zig's `--dep` flags attach to the NEXT `-M`, so declaring
+            // `-Mzn=` further down gives the module a name without making it visible to the
+            // kernel - and the compiler says `module "zn" declared but not used`, which reads
+            // like the file failed to import it when in fact the file's own dep list was short.
+            compile.addArg("--dep");
+            compile.addArg("zn");
+        }
         compile.addPrefixedFileArg("-Mroot=", source);
         compile.addPrefixedFileArg("-Mzm=", b.path("src/zimrmath.zig"));
         // kompute re-exports zm (as `k.math`), so the kompute module needs zm too.
         compile.addArg("--dep");
         compile.addArg("zm");
         compile.addPrefixedFileArg("-Mkompute=", b.path("src/kompute.zig"));
+        if (wants_zimrnum) {
+            // THE KERNEL CALLS THE HOST FUNCTION INSTEAD OF RESTATING IT
+            //
+            // zimrnum compiles to SPIR-V - checked directly with `build-obj -ofmt=spirv` before
+            // this was wired - so a kernel can import it and call the same code the CPU runs.
+            // That removes the transcription, which has produced two bugs no unit test could
+            // see: a buffer overrun in `mesh_grid` and a wrong divisor in `slice_columns`.
+            compile.addArg("--dep");
+            compile.addArg("zm");
+            compile.addArg("--dep");
+            compile.addArg("kompute");
+            compile.addPrefixedFileArg("-Mzn=", b.path("src/zimrnum.zig"));
+        }
 
         // Stage 2: SPIR-V -> WGSL. @workgroup_size comes from the SPIR-V LocalSize.
         const w: *Run = if (self.spv2wgsl_exe) |exe| awblk: {
@@ -727,7 +752,7 @@ pub const ShaderPipeline = struct {
         source: LazyPath,
         import_name: []const u8,
     ) void {
-        const wgsl_path: LazyPath = self.addCompute(source, null);
+        const wgsl_path: LazyPath = self.addCompute(source, null, false);
         mod.addAnonymousImport(import_name, .{ .root_source_file = wgsl_path });
     }
 
@@ -739,9 +764,10 @@ pub const ShaderPipeline = struct {
         mod: *Module,
         source: LazyPath,
         entries: []const []const u8,
+        wants_zimrnum: bool,
     ) void {
         for (entries) |entry| {
-            const wgsl_path: LazyPath = self.addCompute(source, entry);
+            const wgsl_path: LazyPath = self.addCompute(source, entry, wants_zimrnum);
             mod.addAnonymousImport(
                 self.b.fmt("{s}_wgsl", .{entry}),
                 .{ .root_source_file = wgsl_path },

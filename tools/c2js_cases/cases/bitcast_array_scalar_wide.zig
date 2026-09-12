@@ -4,8 +4,14 @@
 // it used a 32-bit typed-view (`__HEAPU32[..] = bigint` threw "Cannot convert a
 // BigInt value to a number"; the read-back grabbed only the low word).
 var sink: u64 = 0;
-fn ru(x: u64) u64 { sink +%= x; return x; }
-fn rw(x: [2]u32) [2]u32 { sink +%= x[0]; return x; }
+fn ru(x: u64) u64 {
+    sink +%= x;
+    return x;
+}
+fn rw(x: [2]u32) [2]u32 {
+    sink +%= x[0];
+    return x;
+}
 
 export fn run_test() i32 {
     const v: u64 = ru(0xDEADBEEF_CAFEF00D);

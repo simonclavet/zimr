@@ -15,7 +15,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -101,7 +101,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.shader.setVertex(ps, 0, s.vbo, @sizeOf(@TypeOf(vertices)));
     s.shader.draw(ps, vertices.len, 1);
 
-    co.caption(f.gl, s.font, "pipeline_basic: a Zig-authored custom pipeline, composed with 2D");
+    common.caption(f.gl, s.font, "pipeline_basic: a Zig-authored custom pipeline, composed with 2D");
     z.endDrawing(f.gl);
 }
 

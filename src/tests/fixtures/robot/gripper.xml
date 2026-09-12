@@ -1,0 +1,22 @@
+<mujoco model="gripper">
+  <compiler angle="radian"/>
+  <worldbody>
+    <body name="palm" pos="0 0 0.5">
+      <geom type="box" size="0.05 0.03 0.02" mass="0.4"/>
+      <body name="left_finger" pos="0 0.03 0">
+        <joint name="left" type="slide" axis="0 1 0" range="0 0.08"/>
+        <geom type="box" size="0.01 0.005 0.03" mass="0.05"/>
+      </body>
+      <body name="right_finger" pos="0 -0.03 0">
+        <joint name="right" type="slide" axis="0 1 0" range="-0.08 0"/>
+        <geom type="box" size="0.01 0.005 0.03" mass="0.05"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="grip" joint="left" gear="1"/>
+  </actuator>
+  <equality>
+    <joint joint1="right" joint2="left" polycoef="0 -1"/>
+  </equality>
+</mujoco>

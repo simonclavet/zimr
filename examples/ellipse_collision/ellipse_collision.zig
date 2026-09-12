@@ -26,7 +26,7 @@ const zm = @import("zm");
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const Vec2 = zm.Vec2;
-const atan2 = zm.atan2;
+const atan2Rad = zm.atan2Rad;
 const c = Color;
 
 const screen_w: i32 = 800;
@@ -96,7 +96,7 @@ fn ellipsesIntersect(
 
     // Angle from c1 toward c2, used to evaluate the ellipses'
     // radial-boundary functions in that direction.
-    const theta: f32 = atan2(dy, dx);
+    const theta: f32 = atan2Rad(dy, dx);
     const cos_t: f32 = @cos(theta);
     const sin_t: f32 = @sin(theta);
 

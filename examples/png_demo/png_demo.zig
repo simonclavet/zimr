@@ -13,7 +13,7 @@ const zm = @import("zm");
 const Color = zm.Color;
 
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -47,7 +47,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn update(f: *z.Frame, state: *State) void {
     _ = state.scratch.reset(.retain_capacity);
     state.frame_count += 1;
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const tw: f32 = float(state.tex.width) * 4.0;
     const th: f32 = float(state.tex.height) * 4.0;
@@ -72,7 +72,7 @@ fn update(f: *z.Frame, state: *State) void {
         "embedded PNG: {d}x{d} - decoded at runtime, drawn tinted 2x2",
         .{ state.tex.width, state.tex.height },
     ) catch "png demo";
-    co.caption(f.gl, state.font, hud);
+    common.caption(f.gl, state.font, hud);
     z.endDrawing(f.gl);
 }
 

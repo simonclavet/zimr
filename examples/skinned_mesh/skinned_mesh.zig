@@ -1,5 +1,7 @@
 //! skinned_mesh — port of the GL `skinned_mesh`: a skinned glTF rig,
-//! animated and deformed every frame.
+//! animated and deformed every frame. (The bone-socket technique — parenting
+//! an object to a bone — now lives in its own `bone_socket` example on a real
+//! rigged character, so this stays a focused pure-skinning demo.)
 //!
 //! The 2KB embedded GLB (same `skinned_mesh_data` the GL demo generated):
 //! a 6-vertex quad, 2 bones, JOINTS_0/WEIGHTS_0, inverseBindMatrices, and a
@@ -40,7 +42,7 @@ const quat_identity = zm.quat_identity;
 const splat = zm.splat;
 const translationV = zm.translationV;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 const skin_data = @import("skinned_mesh_data.zig");
 
@@ -97,6 +99,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         return error.NotASkinnedMesh;
     }
     const mesh: z.types.Mesh = meshes[0];
+    // Free the outer slice from meshesFromGltf (we keep meshes[0] by value; its
+    // CPU arrays travel with the model). Without this the twice-lifecycle census
+    // leaks a little each cycle.
+    gpa.free(meshes);
     const vertex_count: usize = @intCast(mesh.vertexCount);
 
     // Snapshot the bind pose; the mesh's own position array becomes the
@@ -288,6 +294,7 @@ fn update(f: *z.Frame, s: *State) void {
             z.drawLine3D(f.gl, pos, next, c.amber_300);
         }
     }
+
     z.endMode3D(f.gl);
 
     f.gl.text(
@@ -303,7 +310,7 @@ fn update(f: *z.Frame, s: *State) void {
     ) catch "";
     f.gl.text(.{ 16, 42 }, hud, .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font });
     _ = vw;
-    co.caption(f.gl, s.font, "glTF skin + animation parsed by codecs - bone 1 waves the right edge");
+    common.caption(f.gl, s.font, "glTF skin + animation parsed by codecs - bone 1 waves the right edge");
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

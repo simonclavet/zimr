@@ -1,3 +1,4 @@
+//! lint:alias easings
 // src/easings.zig - pure-CPU easing curves for tween animation.
 // What's here: 28 functions named `<family><Mode>`, where `family` is
 // one of {linear, sine, circ, quad, cubic, expo, back, bounce,
@@ -48,13 +49,12 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
+const cosTurns = zm.cosTurns;
 const float = zm.float;
 const isFinite = zm.isFinite;
 const pow = zm.pow;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
-
-const pi: f32 = zm.pi;
-const half_pi: f32 = pi / 2.0;
 
 // ============================================================================
 // Linear
@@ -72,19 +72,21 @@ pub fn linear(t: f32) f32 {
 // `quad` to the eye but is computationally similar.
 
 pub fn sineIn(t: f32) f32 {
-    // 1 - cos(t·π/2): starts at 0, accelerates to 1 with infinite
-    // derivative at t=1.
-    return 1.0 - @cos(t * half_pi);
+    // 1 - cos of a QUARTER TURN: starts at 0, accelerates to 1 with infinite derivative at
+    // t=1. `t` is already the fraction of the ease; the quarter-turn scale was only ever
+    // there so `@cos` would take it.
+    return 1.0 - cosTurns(t * 0.25);
 }
 
 pub fn sineOut(t: f32) f32 {
-    // sin(t·π/2): inverse-shape of sineIn.  Fast start, decelerating.
-    return @sin(t * half_pi);
+    // sin of a quarter turn: inverse-shape of sineIn. Fast start, decelerating.
+    return sinTurns(t * 0.25);
 }
 
 pub fn sineInOut(t: f32) f32 {
     // -(cos(π·t) - 1) / 2: full half-cosine, slow→fast→slow.
-    return -(@cos(pi * t) - 1.0) / 2.0;
+    // A HALF turn across the ease, so it starts and ends flat.
+    return -(cosTurns(t * 0.5) - 1.0) / 2.0;
 }
 
 // ============================================================================
@@ -307,7 +309,8 @@ pub fn elasticIn(t: f32) f32 {
     const s: f32 = p / 4.0;
     const tm1: f32 = t - 1.0;
     const post_fix: f32 = pow(2.0, 10.0 * tm1);
-    return -(post_fix * @sin((tm1 - s) * (2.0 * pi) / p));
+    // `(x) * 2pi / p` radians IS `x / p` turns: the constant cancels rather than converts.
+    return -(post_fix * sinTurns((tm1 - s) / p));
 }
 
 pub fn elasticOut(t: f32) f32 {
@@ -319,7 +322,7 @@ pub fn elasticOut(t: f32) f32 {
     }
     const p: f32 = 0.3;
     const s: f32 = p / 4.0;
-    return pow(2.0, -10.0 * t) * @sin((t - s) * (2.0 * pi) / p) + 1.0;
+    return pow(2.0, -10.0 * t) * sinTurns((t - s) / p) + 1.0;
 }
 
 pub fn elasticInOut(t: f32) f32 {
@@ -335,11 +338,11 @@ pub fn elasticInOut(t: f32) f32 {
     if (ts < 1.0) {
         const tm1: f32 = ts - 1.0;
         const post_fix: f32 = pow(2.0, 10.0 * tm1);
-        return -0.5 * post_fix * @sin((tm1 - s) * (2.0 * pi) / p);
+        return -0.5 * post_fix * sinTurns((tm1 - s) / p);
     }
     const tm1: f32 = ts - 1.0;
     const post_fix: f32 = pow(2.0, -10.0 * tm1);
-    return post_fix * 0.5 * @sin((tm1 - s) * (2.0 * pi) / p) + 1.0;
+    return post_fix * 0.5 * sinTurns((tm1 - s) / p) + 1.0;
 }
 
 // ============================================================================

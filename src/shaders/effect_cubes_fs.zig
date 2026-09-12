@@ -19,6 +19,7 @@
 //! maths with none of the spooky action.
 
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
 const Vec2 = zm.Vec2;
 const clamp01 = zm.clamp01;
 const fract = zm.fract;
@@ -35,22 +36,29 @@ pub const TextureRef = shader_externs.TextureRef;
 
 /// The rotation angle for this instant. 0 -> pi/4 -> hold -> 0 across one second,
 /// with the two MOVING quarters eased by a sine so the snap has weight.
+/// TURNS ALL THE WAY THROUGH, WHICH IS WHAT THIS FUNCTION WAS ALREADY DOING
+///
+/// `local_turns` is `fract(t)` - a turn count on [0, 1) - and the branch thresholds are quarter turns.
+/// The two `@sin` calls converted that to radians and the library divided it back out. Now the
+/// quarter-turn shift reads as `- 0.25` rather than `- pi / 2.0`, which is the same number said
+/// in the same units as everything around it.
 fn snapAngle(t: f32) f32 {
-    const local: f32 = fract(t);
+    const local_turns: f32 = fract(t);
     var a: f32 = 0.0;
-    if (local < 0.25) {
+    if (local_turns < 0.25) {
         a = 0.0;
-    } else if (local < 0.50) {
-        a = (pi / 4.0) * @sin(2.0 * pi * local - pi / 2.0);
-    } else if (local < 0.75) {
+    } else if (local_turns < 0.50) {
+        // `local_turns` is already a turn, and so is the shift: `- pi/2` is a quarter turn back.
+        a = (pi / 4.0) * sinTurns(local_turns - 0.25);
+    } else if (local_turns < 0.75) {
         a = pi * 0.25;
     } else {
-        a = (pi / 4.0) * @sin(2.0 * pi * local);
+        a = (pi / 4.0) * sinTurns(local_turns);
     }
     return a;
 }
 
-/// Rotate a cell-local coordinate about the cell's CENTRE (0.5, 0.5) — rotating
+/// Rotate a cell-local_turns coordinate about the cell's CENTRE (0.5, 0.5) — rotating
 /// about the origin would swing the square out of its own cell.
 fn rotateAboutCentre(v: Vec2, angle: f32) Vec2 {
     const c: f32 = @cos(angle);

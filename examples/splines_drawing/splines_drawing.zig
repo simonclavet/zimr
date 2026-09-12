@@ -7,9 +7,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
+const sinRad = zm.sinRad;
 const distance = zm.distance;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
@@ -62,7 +62,7 @@ fn nearestPoint(pts: []const Vec2, m: Vec2) i32 {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
     s.t += 0.016;
 
     // --- input: drag the nearest point; a clean tap on empty space cycles the type ---
@@ -91,14 +91,14 @@ fn update(f: *z.Frame, s: *State) void {
     const focused: i32 = if (s.selected >= 0) s.selected else nearestPoint(s.points[0..], mouse);
 
     // --- spline stroke: breathing thickness + slow hue drift ---
-    const thick: f32 = 8.0 + 2.0 * sin(s.t * 2.0);
+    const thick: f32 = 8.0 + 2.0 * sinRad(s.t * 2.0);
     const stroke: Color = z.colorFromHSV(@mod(s.t * 30.0, 360.0), 0.85, 0.95);
 
     // control-polygon helper lines (basis / catmull-rom only, like raylib)
     if (s.spline_type == 1 or s.spline_type == 2) {
         var i: usize = 0;
         while (i + 1 < point_count) : (i += 1) {
-            f.gl.line(s.points[i], s.points[i + 1], .{ .color = co.palette.ink_dim, .thickness = 1.0 });
+            f.gl.line(s.points[i], s.points[i + 1], .{ .color = common.palette.ink_dim, .thickness = 1.0 });
         }
     }
 
@@ -113,11 +113,11 @@ fn update(f: *z.Frame, s: *State) void {
     for (s.points, 0..) |p, i| {
         const is_focus: bool = (focused == @as(i32, @intCast(i)));
         const r: f32 = if (is_focus) 12.0 else 8.0;
-        const ring: Color = if (is_focus) co.palette.accent else co.palette.accent2;
+        const ring: Color = if (is_focus) common.palette.accent else common.palette.accent2;
         f.gl.circle(p, r, .{ .color = ring, .outline = 1 });
         var buf: [32]u8 = undefined;
         const label: []const u8 = bufPrint(&buf, "[{d:.0}, {d:.0}]", .{ p[0], p[1] }) catch "";
-        f.gl.text(.{ p[0] + 12, p[1] - 6 }, label, .{ .size = 12, .color = co.palette.ink_dim, .font = &s.font });
+        f.gl.text(.{ p[0] + 12, p[1] - 6 }, label, .{ .size = 12, .color = common.palette.ink_dim, .font = &s.font });
     }
 
     var hud: [64]u8 = undefined;
@@ -126,7 +126,7 @@ fn update(f: *z.Frame, s: *State) void {
         "spline: {s} - drag points, tap to cycle",
         .{type_names[s.spline_type]},
     ) catch "";
-    co.caption(f.gl, s.font, line);
+    common.caption(f.gl, s.font, line);
     z.endDrawing(f.gl);
 }
 
@@ -151,10 +151,10 @@ fn drawBezier(f: *z.Frame, s: *State, thick: f32, stroke: Color) void {
     while (i + 1 < point_count) : (i += 1) {
         const c_start: Vec2 = inter[3 * i + 1];
         const c_end: Vec2 = inter[3 * i + 2];
-        f.gl.line(s.points[i], c_start, .{ .color = co.palette.ink_dim, .thickness = 1.5 });
-        f.gl.line(s.points[i + 1], c_end, .{ .color = co.palette.ink_dim, .thickness = 1.5 });
-        f.gl.circle(c_start, 5.0, .{ .color = co.palette.warn, .segments = 16 });
-        f.gl.circle(c_end, 5.0, .{ .color = co.palette.warn, .segments = 16 });
+        f.gl.line(s.points[i], c_start, .{ .color = common.palette.ink_dim, .thickness = 1.5 });
+        f.gl.line(s.points[i + 1], c_end, .{ .color = common.palette.ink_dim, .thickness = 1.5 });
+        f.gl.circle(c_start, 5.0, .{ .color = common.palette.warn, .segments = 16 });
+        f.gl.circle(c_end, 5.0, .{ .color = common.palette.warn, .segments = 16 });
     }
 }
 

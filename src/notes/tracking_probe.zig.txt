@@ -1,0 +1,190 @@
+//! Find a configuration that is ~3x cheaper and still beats the servo.
+//!
+//! ── ★★★ THE ESTIMATE THAT WAS WRONG ──
+//!
+//! 14.7 us per knot of derivatives was measured NATIVELY. The demo runs in wasm, which is
+//! typically 2-3x slower, so a "6.6 ms" replan is nearer 15-20 ms on the phone — and the frame
+//! budget was blown by a factor I never accounted for. **A native measurement is not a wasm
+//! budget.**
+//!
+//! ★ AND THE STRONGEST LEVER IS NOT FEWER KNOTS, IT IS A COARSER SIM TIMESTEP. A knot IS one
+//! model timestep, so halving the rate halves the knots needed for the same preview horizon —
+//! at no cost in lookahead, which is the thing that actually wins.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const mpc = @import("robot_mpc.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const float = zm.float;
+const tracker_xml = @embedFile("tests/fixtures/robot/tracker.xml");
+
+/// ★ SIMON'S ASK: a LARGER circle and a HIGHER speed. Both make the task harder, which widens
+/// the servo's structural lag (`e ≈ 2v/√kp` grows with v) and makes the difference easier to see.
+const speed: f32 = 2.2;
+const radius: f32 = 0.46;
+
+fn targetAt(t: f32) zm.Vec {
+    const a: f32 = t * speed;
+    return vec(0.92 + radius * @cos(a), radius * @sin(a), 1.15 + 0.26 * @sin(a * 0.5));
+}
+
+const Setup = struct { hz: f32, knots: u32, iters: u32, cadence: u32 };
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    p("bigger circle (r={d:.2}) at speed {d:.1} — tip about {d:.2} m/s\n\n", .{ radius, speed, radius * speed });
+    p("  sim Hz  knots  iters  cadence   knot-iters/s   PD best    MPC     verdict\n", .{});
+
+    const setups = [_]Setup{
+        .{ .hz = 125, .knots = 40, .iters = 4, .cadence = 2 }, // exactly what the demo ships
+    };
+
+    for (setups) |setup| {
+        const dt: f32 = 1.0 / setup.hz;
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, tracker_xml, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+            .max_contacts = 8,
+            .timestep = dt,
+            .gravity = vec(0, 0, -9.81),
+        });
+        defer imp.deinit();
+        var m: rbt.Model = imp.model;
+        var d: rbt.Data = try rbt.Data.init(gpa, &m);
+        defer d.deinit();
+        rbt.forward(&m, &d);
+        const grip: u32 = imp.bodyIndex("gripper") orelse return error.NoGripper;
+        const rest: []f32 = try gpa.dupe(f32, d.pos);
+        defer gpa.free(rest);
+        var arm_act: ctl.Actuation = try ctl.limbActuation(gpa, &m, grip);
+        defer arm_act.deinit();
+        var all_act: ctl.Actuation = try ctl.Actuation.init(gpa, &m);
+        defer all_act.deinit();
+        const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(&m));
+        defer gpa.free(ik_scratch);
+
+        const table_size: u32 = 512;
+        const period: f32 = 2.0 * zm.pi / speed;
+        const table: []f32 = try gpa.alloc(f32, table_size * m.nq);
+        defer gpa.free(table);
+        @memcpy(d.pos, rest);
+        d.stage = .stale;
+        rbt.forward(&m, &d);
+        var pass: u32 = 0;
+        while (pass < 2) : (pass += 1) {
+            for (0..table_size) |i| {
+                const t: f32 = period * float(i) / float(table_size);
+                _ = (ctl.Ik{ .max_iterations = 24, .max_step = 0.35 }).solve(&m, &d, arm_act, .{ .body = grip, .offset = vec(0, 0, 0), .goal = targetAt(t) }, ik_scratch);
+                if (pass == 1) @memcpy(table[i * m.nq ..][0..m.nq], d.pos[0..m.nq]);
+            }
+        }
+        const aim: []f32 = try gpa.alloc(f32, m.nq);
+        defer gpa.free(aim);
+
+        var plan: mpc.Plan = try mpc.Plan.init(gpa, &m, setup.knots);
+        defer plan.deinit();
+        const nstate: u32 = m.nq + m.nv;
+        const reference: []f32 = try gpa.alloc(f32, (setup.knots + 1) * nstate);
+        defer gpa.free(reference);
+        const state_w: []f32 = try gpa.alloc(f32, plan.ndx);
+        defer gpa.free(state_w);
+        const term_w: []f32 = try gpa.alloc(f32, plan.ndx);
+        defer gpa.free(term_w);
+        const ctrl_w: []f32 = try gpa.alloc(f32, m.nu);
+        defer gpa.free(ctrl_w);
+        for (0..m.nv) |i| {
+            state_w[i] = 8.0;
+            state_w[m.nv + i] = 0.05;
+            term_w[i] = 40.0;
+            term_w[m.nv + i] = 1.0;
+        }
+        @memset(ctrl_w, 1.0e-5);
+
+        var pd_best: f32 = 1.0e9;
+        var mpc_mean: f32 = 0;
+        // ★ THE GAIN OPTIMUM MOVES WITH THE TASK. It was 90000 on the small slow circle; the
+        // demo now runs a bigger faster one and reads a mean of 1.551 m there, which is far
+        // worse than the 0.771 measured. **A default tuned for one setting is not a default.**
+        for ([_]f32{ 20000, 45000, 90000, 180000, 360000, -1 }) |kp| {
+            const planning: bool = kp < 0;
+            @memcpy(d.pos, rest);
+            @memset(d.vel, 0);
+            @memset(d.ctrl, 0);
+            @memset(d.applied_force, 0);
+            d.stage = .stale;
+            rbt.forward(&m, &d);
+            @memset(plan.ctrl, 0);
+            var total: f64 = 0;
+            var samples: u32 = 0;
+            var tick: u32 = 0;
+            var elapsed: f32 = 0;
+            while (elapsed < 6.0) : (elapsed += dt) {
+                const phase_now: f32 = @mod(elapsed / period, 1.0) * float(table_size);
+                if (planning) {
+                    if (tick % setup.cadence == 0) {
+                        for (0..plan.horizon + 1) |k| {
+                            const when: f32 = elapsed + float(k) * dt;
+                            const ph: f32 = @mod(when / period, 1.0) * float(table_size);
+                            const lo: u32 = @min(table_size - 1, zm.floori(u32, ph));
+                            const hi: u32 = (lo + 1) % table_size;
+                            const frac: f32 = ph - float(lo);
+                            for (0..m.nq) |q| {
+                                reference[k * nstate + q] = table[lo * m.nq + q] +
+                                    frac * (table[hi * m.nq + q] - table[lo * m.nq + q]);
+                            }
+                            @memset(reference[k * nstate + m.nq ..][0..m.nv], 0);
+                        }
+                        _ = mpc.optimize(&m, &d, &plan, .{
+                            .state = state_w,
+                            .control = ctrl_w,
+                            .terminal = term_w,
+                            .reference = reference,
+                        }, .{ .iterations = setup.iters });
+                    }
+                    mpc.feedbackControl(&m, &d, &plan, d.ctrl[0..m.nu]);
+                    mpc.shift(&plan);
+                } else {
+                    const lo: u32 = @min(table_size - 1, zm.floori(u32, phase_now));
+                    const hi: u32 = (lo + 1) % table_size;
+                    const frac: f32 = phase_now - float(lo);
+                    for (0..m.nq) |q| {
+                        aim[q] = table[lo * m.nq + q] + frac * (table[hi * m.nq + q] - table[lo * m.nq + q]);
+                    }
+                    (ctl.PoseHold{ .target = aim, .kp = kp, .kv = 2.0 * @sqrt(kp), .max_torque = 400 })
+                        .apply(&m, &d, all_act);
+                }
+                tick += 1;
+                rbt.step(&m, &d);
+                rbt.forward(&m, &d);
+                if (elapsed > 1.5) {
+                    total += zm.length3(d.body_xpos[grip] - targetAt(elapsed));
+                    samples += 1;
+                }
+            }
+            const mean: f32 = @floatCast(total / @as(f64, @floatFromInt(@max(1, samples))));
+            if (planning) {
+                mpc_mean = mean;
+            } else {
+                p("      kp {d:>7.0}: {d:.4}\n", .{ kp, mean });
+                pd_best = @min(pd_best, mean);
+            }
+        }
+        // The cost that matters: knot-iterations of derivatives per SECOND of simulated time.
+        const load: f32 = setup.hz / float(setup.cadence) * float(setup.knots) * float(setup.iters);
+        p("  {d:>6.0}  {d:>5}  {d:>5}  {d:>7}   {d:>12.0}   {d:>7.4}  {d:>7.4}   {s}\n", .{
+            setup.hz,                                        setup.knots, setup.iters, setup.cadence, load, pd_best, mpc_mean,
+            if (mpc_mean < pd_best) "MPC wins" else "loses",
+        });
+    }
+}

@@ -364,9 +364,10 @@
             <h2 class="subtitle">
                 A zig port of raylib, imgui, implot2d/3d, and box2d / jolt
                 physics for wasm/webgpu. Includes transpilers from zig to wgsl
-                (gpu shaders/compute) and javascript &mdash; the browser host and
-                the web workers are Zig too &mdash; so we can live in a pure zig
-                world.
+                (gpu shaders/compute) and javascript, plus peer-to-peer
+                multiplayer over WebRTC &mdash; the browser host, the web
+                workers, and the signaling server are Zig too &mdash; so we can
+                live in a pure zig world.
             </h2>
 
             <nav class="toplinks">
@@ -379,15 +380,20 @@
                 <a href="#shaders">zig shaders</a>
                 <a href="#demos">building the demos</a>
                 <a href="#compute">gpu compute</a>
+                <a href="#numerics">numerics and rl</a>
                 <a href="#jobs">web workers</a>
                 <a href="#threed">3d &amp; assets</a>
+                <a href="#shapes">procedural shapes</a>
                 <a href="#imgui">imgui</a>
                 <a href="#plot">plots</a>
                 <a href="#physics">physics</a>
+                <a href="#mocap">mocap &amp; retargeting</a>
                 <a href="#instruments">profiler &amp; friends</a>
+                <a href="#networking">multiplayer</a>
                 <a href="#machinery">under the hood</a>
                 <a href="#layout">source layout</a>
                 <a href="#build">building</a>
+                <a href="#docs">tutorials</a>
                 <a href="#walkthroughs">walkthroughs</a>
                 <a href="#examples">examples</a>
                 <a href="#limits">status</a>
@@ -428,10 +434,11 @@
                 math, the UI, the 2D and 3D plotting, the physics, the glTF
                 loader, the TTF font loader, the shader toolchain, the GPU
                 compute layer, the software rasterizer, the
-                <a href="#jobs">web workers</a>, and the browser host are all in
-                this repository, all in Zig. There is no hand-written JavaScript
-                anywhere in the engine &mdash; not in the host, and not in the
-                worker.
+                <a href="#jobs">web workers</a>, the
+                <a href="#networking">peer-to-peer networking</a>, and the
+                browser host are all in this repository, all in Zig. There is
+                no hand-written JavaScript anywhere in the engine &mdash; not in
+                the host, and not in the worker.
             </p>
 
             <figure class="demo-embed full-bleed">
@@ -1246,6 +1253,116 @@ const pos_buf = pipe.fieldBuffer(.pos).?;</code></pre>
                 is how the simulation is debugged without a GPU in the loop.
             </p>
 
+            <h3 id="numerics">Numerics, deep learning and RL (zimrnum)</h3>
+
+            <p>
+                <code>zimrnum</code> is a numerics library in the same Zig, built on
+                <code>zimrmath</code> and compiling to SPIR-V like any other kernel source. It
+                covers tensors with strided views, linear algebra, statistics, dataframes,
+                automatic differentiation, neural-network layers, and reinforcement learning
+                &mdash; around 350 public declarations.
+            </p>
+
+            <p>
+                A tensor is a shape, a stride list and a slice, so a row, a column or a
+                transpose is a <em>view</em>: no copy, and writes go back through to the original.
+                Every operation reads through the strides, so a column taken out of a matrix
+                behaves like a tensor in its own right.
+            </p>
+
+            <pre><code class="language-zig">const x = try zn.linspace(f64, gpa, 0, 1, 32, .include);
+const y = try zn.zeros(f64, gpa, &amp;.{ 32, 1 });
+
+var graph: zn.Graph(f64) = .init(gpa);        // a tape, rebuilt each step
+const layer = try zn.Dense(f64).init(gpa, rng, 1, 1, .xavier);
+const out = try layer.attach(&amp;graph, try graph.constant(inputs));
+const loss = try graph.mseLoss(out.out, try graph.constant(y));
+try graph.backward(loss);
+const dw = try graph.gradOf(out.weight);      // gradients for anything reachable</code></pre>
+
+            <p>
+                The forward pass runs eagerly and the backward pass is recorded, so a value is
+                available the moment it is computed and the tape holds only what
+                <code>backward</code> needs. A tape is an arena of nodes; discarding it between
+                steps is one pointer reset.
+            </p>
+
+            <h4>Training on the GPU</h4>
+
+            <p>
+                <code>zimrnum</code> compiles to SPIR-V, so a compute kernel can call the same
+                function the CPU does rather than restating it. The
+                <code>zimrnum_train</code> example trains an XOR network entirely on device
+                &mdash; eight dispatches per step, with the weights never leaving the GPU and
+                only the loss read back &mdash; and runs the identical network through
+                <code>Graph</code> on the CPU from the same seed. The two loss curves agree to
+                about 1e-7 for the first forty steps, which is a claim about forward, backward
+                and update <em>composing</em> that no per-operation check can make.
+            </p>
+
+            <p>
+                Around a hundred operations have GPU kernels, each checked against its CPU twin on
+                the same input with a per-operation tolerance. Operations whose arithmetic cannot
+                drift &mdash; comparisons, counts, <code>all</code>, <code>any</code> &mdash;
+                carry a bar of exactly zero; a product carries a real one, because multiplication
+                is associative in real arithmetic and not in floating point.
+            </p>
+
+            <h4>Reinforcement learning</h4>
+
+            <p>
+                PPO, DQN, TD3, SAC and the modern off-policy extensions. The critic estimates
+                arrive as a <em>slice</em> rather than a pair, which is what makes the variants
+                one call with a different list: twin critics pass two networks, DroQ passes
+                several dropout passes of one network, REDQ passes a freshly drawn subset of an
+                ensemble, and CrossQ passes a single value and no target network at all.
+            </p>
+
+            <pre><code class="language-zig">// GAE: `terminal` kills the bootstrap, `episode_end` kills the trace
+try zn.gae(steps, 0.99, 0.95, &amp;advantages, &amp;returns);
+
+// one target function, every variant
+const y = try zn.sacTarget(f64, transition, next_estimates, next_log_prob,
+                           gamma, alpha, .minimum);</code></pre>
+
+            <p>
+                Distributions are types rather than loose functions, so
+                <code>sample</code>, <code>logProb</code> and <code>entropy</code> share one
+                normalisation and cannot disagree. <code>logProb</code> goes through a stable
+                log-softmax, so a logit eight hundred below the maximum scores as
+                &minus;800 rather than negative infinity &mdash; which is the common case for a
+                confident policy, not an edge case.
+            </p>
+
+            <h4>Dataframes, and missing data that stays missing</h4>
+
+            <p>
+                A <code>Series</code> is a named column with an optional validity mask, where
+                <code>null</code> means every value is present and costs nothing. Missing is not
+                NaN: an integer column has no NaN, and a gap that silently reads as zero is how
+                an average of five values measured three times comes out plausible and wrong.
+            </p>
+
+            <p>
+                The mask carries through everything. A shifted column's vacated row is
+                <em>absent</em> rather than zero, because a zero there reads as "no change"
+                instead of "no data"; a rolling mean's first partial window is absent rather than
+                an average of fewer samples.
+            </p>
+
+            <h4>The tutorial</h4>
+
+            <p>
+                <a href="notes/tutorials/zimrnum-tutorial.html">The zimrnum tutorial</a> opens
+                with a complete program that fits a line to noisy data, and is organised as
+                twenty-one sections ending in Recipes, Gotchas and a reference table of every
+                public declaration. Three things in it are checked by the build rather than by
+                hand: the reference table against the library's public surface, the opening
+                program against <code>examples/zimrnum_hello.zig</code> byte for byte, and the
+                argument count of every <code>zn.foo(...)</code> in every example against the
+                real signature.
+            </p>
+
             <h3 id="jobs">Web workers, written in Zig</h3>
 
             <p>
@@ -1482,6 +1599,73 @@ z.drawModelWires(f.gl, s.model, .{ 0, 0, 0 }, 1.0, zm.Color.darkgray);</code></p
                 <code>genMesh*</code> generators.
             </p>
 
+            <h3 id="shapes">Procedural shapes and mesh editing</h3>
+
+            <p>
+                Beyond loading glTF, zimr generates meshes on the CPU. The
+                heart of it is a <em>parametric spine</em>: any smooth surface
+                is a callback mapping the unit square <code>(u, v)</code> to a
+                point, fed through <code>parametricMesh</code>, which
+                triangulates the grid, converts to Y-up, and welds seam and
+                pole normals so shading stays smooth. Every built-in curved
+                primitive &mdash; sphere, hemisphere, cylinder, cone, torus,
+                trefoil knot, plane, klein bottle &mdash; is a few-line
+                callback on that core, so authoring your own surface is one
+                function call. Alongside them are a disk, the four platonic
+                solids (flat-shaded), a geodesic <em>icosphere</em> (a
+                subdivided icosahedron &mdash; uniform triangles, no pinched
+                poles), and a procedural <em>rock</em> (a noise-displaced
+                icosphere).
+            </p>
+
+            <pre><code class="language-zig">// built-in primitives - (gpa, dims..., slices, stacks)
+const sphere = try z.genMeshSphere(gpa, 0.75, 32, 24);
+const torus  = try z.genMeshTorus(gpa, 0.6, 0.25, 36, 18);
+const ico    = try z.genMeshIcosphere(gpa, 1.0, 4);   // geodesic sphere
+const rock   = try z.genMeshRock(gpa, 1.0, 4, 7);      // seed 7 -> a unique rock
+const solid  = try z.genMeshDodecahedron(gpa);
+
+// a custom surface: supply your own uv -> xyz (par_shapes' Z-up convention)
+fn rippleUv(u: f32, v: f32, ctx: ?*const anyopaque) [3]f32 {
+    _ = ctx;
+    const x = (u - 0.5) * 4.0;
+    const y = (v - 0.5) * 4.0;
+    return .{ x, y, 0.4 * @sin(6.0 * @sqrt(x * x + y * y)) };
+}
+const wavy = try z.parametricMesh(gpa, rippleUv, null, 80, 80);</code></pre>
+
+            <p>
+                A <em>mesh-ops toolkit</em> edits and composes any of these (or
+                a glTF mesh) on the CPU, so shapes build up from parts:
+                <code>meshMerge</code> fuses two meshes,
+                <code>meshTranslate</code> / <code>meshRotate</code> /
+                <code>meshScale</code> place them, <code>meshInvert</code>
+                flips a shell inside-out, and <code>meshUnweld</code> /
+                <code>meshWeld</code> / <code>meshRemoveDegenerate</code>
+                handle faceting and cleanup.
+            </p>
+
+            <pre><code class="language-zig">// compose an arrow: a cylinder shaft + a cone head, both spun onto +X
+var shaft = try z.genMeshCylinder(gpa, 0.07, 1.7, 18, 2);
+z.meshRotate(&shaft, 0, 0, 1, -zm.pi * 0.5);   // +Y -> +X
+var head = try z.genMeshCone(gpa, 0.18, 0.6, 18, 2);
+z.meshRotate(&head, 0, 0, 1, -zm.pi * 0.5);
+z.meshTranslate(&head, 1.7, 0, 0);             // onto the shaft's tip
+const arrow = try z.meshMerge(gpa, shaft, head);   // fuse into one mesh
+z.unloadMesh(gpa, shaft);                       // merge copies, free the parts
+z.unloadMesh(gpa, head);
+const model = try z.loadModelFromMesh(f.gl, gpa, arrow);</code></pre>
+
+            <p>
+                These are a pure-Zig reimplementation inspired by Philip
+                Rideout's <code>par_shapes.h</code> (see the LICENSE file for
+                attribution). The demos <code>shapes_gallery</code>,
+                <code>platonic_solids</code>, <code>icosphere_demo</code>,
+                <code>rock_demo</code>, and <code>mesh_builder</code> show them
+                off, and there's a full walkthrough in
+                <code>src/notes/tutorials/shapes-tutorial.md</code>.
+            </p>
+
             <h3 id="imgui">The Dear ImGui port</h3>
 
             <p>
@@ -1578,9 +1762,11 @@ z.plot_ui.show(u, &s.plot, .{ 520, 320 }, &series, .{
             <h3 id="physics">The physics engines</h3>
 
             <p>
-                Two of them, both pure Zig, both with no GPU dependency &mdash;
+                Three of them, all pure Zig, none with a GPU dependency &mdash;
                 so the whole simulation runs and is unit-tested natively, and
-                only drawing it needs a browser.
+                only drawing it needs a browser. Two are general rigid-body
+                engines in maximal coordinates; the third is an articulated-robot
+                simulator in generalized coordinates.
             </p>
 
             <p>
@@ -1629,6 +1815,163 @@ z.plot_ui.show(u, &s.plot, .{ 520, 320 }, &series, .{
                 description of a world.
             </p>
 
+            <p>
+                <strong>Robots: <code>src/robot.zig</code></strong> is a third engine, and a
+                different kind. Where the other two carry each body's full pose and
+                enforce joints with a solver, this one simulates in
+                <em>generalized</em> coordinates &mdash; a four-hinge arm is four
+                numbers, and the joints cannot be violated because the freedom to
+                violate them was never represented. It follows MuJoCo's design:
+                composite-rigid-body for the mass matrix, an
+                <code>L<sup>T</sup>DL</code> factorization that exploits the tree's
+                sparsity, recursive Newton-Euler for Coriolis and gravity, and a
+                constraint solver (PGS and Newton) that poses contact, friction and
+                joint limits as a complementarity problem on accelerations. Hinge,
+                slide, ball and free joints; closed loops through connect, weld and
+                coupling equalities; sensors; MJCF import, so the MuJoCo Menagerie's
+                robots load and are checked against MuJoCo's own kinematics. On top
+                sits <code>robot_mpc.zig</code>: iLQR trajectory optimization with a
+                box-constrained control solve, used as receding-horizon MPC. Contacts
+                come from <code>zimrphysics</code> through a bridge, so collision
+                detection is written once. The walkthrough is
+                <a href="robots.html">Robot dynamics, from the ground up</a>, a course
+                that derives the whole thing from
+                <code>M(q)v&#775; + c = &tau; + J<sup>T</sup>f</code> and ends with
+                three worked examples.
+            </p>
+
+            <p>
+                <strong>How the dynamics are checked.</strong> Two kinds of evidence,
+                kept apart because they are not equally strong.
+            </p>
+
+            <table>
+                <tr><th></th><th>checked against</th><th>how</th></tr>
+                <tr><td>forward kinematics</td><td>MuJoCo's <code>xpos</code>, every body, to 1e-4</td><td>generated fixture</td></tr>
+                <tr><td>mass matrix, <code>cinert</code>, <code>cdof</code></td><td>MuJoCo's <code>mj_fullM</code> and friends</td><td>generated fixture</td></tr>
+                <tr><td>bias forces, accelerations</td><td>MuJoCo's <code>qfrc_bias</code>, <code>qacc</code></td><td>generated fixture</td></tr>
+                <tr><td>Jacobians</td><td>MuJoCo's <code>mj_jacBodyCom</code></td><td>generated fixture</td></tr>
+                <tr><td>constraint rows and softness</td><td>MuJoCo's <code>efc_J</code>, <code>efc_pos</code>, <code>efc_aref</code></td><td>generated fixture</td></tr>
+                <tr><td>constraint forces</td><td><code>m&middot;g</code>, and MuJoCo's resting depth</td><td>closed form</td></tr>
+                <tr><td>actuators</td><td>every gain, gear and transmission</td><td>closed form</td></tr>
+                <tr><td>tendons</td><td>length, rate, and the transpose that spreads the force</td><td>closed form</td></tr>
+                <tr><td>sensors</td><td>MuJoCo's readings for the same model and state</td><td>fixture</td></tr>
+                <tr><td>integrators</td><td>an rk4 reference at dt = 1/20000</td><td>self-consistency</td></tr>
+            </table>
+
+            <p>
+                The <strong>generated fixtures</strong> are real MuJoCo output:
+                <code>scripts/robot_oracle.py</code> runs mujoco 3.11 over eleven models
+                and writes <code>src/tests/fixtures/robot/reference.zig</code>. The
+                <strong>closed forms</strong> are quantities derivable with a pen, so
+                they do not depend on MuJoCo being right; they are single states rather
+                than a swept corpus.
+            </p>
+
+            <p>
+                <strong>Speed is a build step rather than a claim.</strong>
+                <code>zig build robot-bench</code> runs four models for 200&thinsp;000
+                steps each and prints ns/step; one case fails the build if the Go1 is
+                not actually holding the pose it is named for. On a 1-core box:
+            </p>
+
+            <pre><code>two-link arm    nv  2     292 ns/step
+KUKA iiwa       nv  7    1664 ns/step
+KUKA, limits    nv  7    2376 ns/step
+Go1 standing    nv 18   12313 ns/step  (pgs)   22273 ns/step  (newton)</code></pre>
+
+            <p>
+                <code>scripts/robot_bench_mujoco.py</code> is the other half &mdash; the
+                same models under <code>mj_step</code>, so the comparison runs on your
+                machine rather than on a number in a readme. Newton is compared against
+                Newton: MuJoCo's default solver is Newton, and quoting ours against
+                anything else flatters us for a reason unrelated to the code.
+            </p>
+
+            <p>
+                <strong>Two constraint solvers</strong>, because the right one depends on
+                the scene. PGS is around twice as fast where contacts are few and weakly
+                coupled, and does not reach tolerance on a standing quadruped &mdash; it
+                stops on its stall detector near <code>tolerance</code> rather than at
+                it. Newton converges there in two iterations, and solves a six-box stack
+                PGS cannot in a hundred. PGS is the default because "close, and fast"
+                suits most scenes; <code>solver.algorithm = .newton</code> switches.
+            </p>
+
+            <h3 id="mocap">Motion capture and retargeting</h3>
+
+            <p>
+                <code>src/codecs.zig</code> reads <strong>BVH</strong> and
+                <strong>FBX</strong>, so a skeleton and its animation load from
+                whatever tool produced them. <code>examples/geno_dance</code> plays a
+                skinned character and drives a MuJoCo robot from the same clip.
+            </p>
+
+            <p>
+                <strong>Using it.</strong> Three calls, in
+                <code>src/robot.zig</code>:
+            </p>
+
+            <pre><code>const scale = robot.captureScale(&amp;model, frame);
+const n = robot.buildPointSamples(&amp;model, inputs, &amp;samples);
+robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
+
+            <p>
+                <code>captureScale</code> converts the capture's units to the robot's
+                metres. <code>buildPointSamples</code> is called once per
+                robot&ndash;capture pairing and returns the sample set.
+                <code>solvePointCloud</code> runs per frame and leaves the pose in
+                <code>data</code>. A <code>MatchRow</code> table states which capture
+                joint drives which robot body; it accepts alternative joint names and
+                ignores exporter prefixes such as <code>mixamorig:</code>, so one table
+                serves several rigs.
+            </p>
+
+            <p>
+                <strong>How it works.</strong> Retargeting is one optimization rather
+                than a pipeline of stages. Each frame minimizes
+                <code>E(q) = &Sigma; &#8214;T<sub>b</sub>(q)&middot;s<sub>bk</sub> &minus;
+                &375;<sub>bk</sub>&#8214;&sup2; + &lambda;<sub>lim</sub>
+                &Sigma; barrier(q<sub>j</sub>) + &lambda;<sub>smo</sub>
+                &#8214;q &#8854; q<sub>prev</sub>&#8214;&sup2;</code> over the whole
+                configuration by Gauss&ndash;Newton: sample points on the robot's bodies
+                matched to where the capture puts them, joint limits as a soft barrier,
+                and a term holding the pose near the previous frame.
+            </p>
+
+            <p>
+                Sample points rather than joint rotations, because one point on a body
+                fixes its position, two fix its direction and three fix its twist.
+                Aiming a bone, choosing a bend plane, resolving a limb's swivel and
+                converting a rotation between differently-built skeletons are then all
+                the same operation. A body carrying too few samples is under-constrained
+                in a way the sample count makes visible.
+            </p>
+
+            <p>
+                Two choices matter for quality. Joint limits enter as a
+                <strong>soft barrier</strong>, so the solve slides along a limit instead
+                of sticking against a clamp and jumping between the answers on either
+                side. And limb targets take their <strong>direction from the capture and
+                their length from the robot</strong>, which keeps every target reachable
+                when the two skeletons differ in proportion; the
+                <code>position_pull</code> option blends between that and the capture's
+                own joint positions.
+            </p>
+
+            <p>
+                Correspondences &mdash; twist offsets, foot heel and toe, leaf
+                orientation &mdash; are measured once from the rest pose and reused per
+                frame. A sample whose target misses its own point at rest is dropped, so
+                a mismatched joint pair is excluded rather than fought.
+            </p>
+
+            <p>
+                <code>examples/geno_dance/humanoid_flex2.xml</code> is the stock
+                humanoid adapted to one capture: arm lengths and spine proportions
+                matched, one shoulder axis added, a toe bone added.
+            </p>
+
             <h3 id="instruments">The profiler, entities, and audio</h3>
 
             <p>
@@ -1656,6 +1999,77 @@ z.plot_ui.show(u, &s.plot, .{ 520, 320 }, &series, .{
                 WebAudio from the Zig host: play decoded clips or stream
                 synthesized samples (the drum machine and live synth make sound
                 with no JavaScript of their own).
+            </p>
+
+            <h3 id="networking">Peer-to-peer multiplayer</h3>
+
+            <p>
+                The networking targets the small-scale case &mdash; invite a
+                few friends into a shared session &mdash; and it is
+                peer-to-peer: game data travels browser-to-browser over WebRTC
+                data channels, and a server is used only to introduce peers,
+                never to relay the game itself. Like the rest of the engine
+                both ends are pure Zig, and the parts that don't need a live
+                connection &mdash; the signaling server, the session logic, the
+                room-name generator &mdash; build and run outside the browser.
+            </p>
+
+            <p>
+                <strong>The signaling server:
+                <code>tools/signal_server.zig</code></strong> is a from-scratch
+                WebSocket server on Zig&nbsp;0.17's new <code>std.Io</code>
+                &mdash; its own handshake (SHA-1 + base64 accept), frame parser,
+                and a room registry, with one async mutex serializing writes.
+                It is a native Zig program, like the dev server: peers
+                <code>JOIN</code> a room by name and it relays the opaque
+                SDP/ICE handshake between them (<code>WELCOME</code> /
+                <code>JOINED</code> / <code>LEFT</code> / <code>FROM</code>),
+                without ever parsing the payloads. A deploy twin,
+                <code>tools/render_server.zig</code>, folds the demo pages in
+                and builds to a single ~6&nbsp;MB static binary.
+            </p>
+
+            <p>
+                <strong>The client, in the host:
+                <code>src/web.zig</code></strong> exposes <code>ws</code> and
+                <code>rtc</code> &mdash; thin, poll-based wrappers over the
+                browser's WebSocket and <code>RTCPeerConnection</code>. The
+                JavaScript that actually touches those APIs isn't hand-written:
+                it is emitted from <code>src/bridge.zig</code> through the same
+                Zig&rarr;C&rarr;JS transpiler as the rest of the host, and its
+                event handlers are pure closures that only push into a queue the
+                wasm drains each frame &mdash; nothing ever calls back into
+                wasm. On native builds both wrappers compile to no-ops, so an
+                example links and runs headless with the networking simply
+                inert.
+            </p>
+
+            <p>
+                <strong>The session layer:
+                <code>src/net.zig</code></strong> is the part a game actually
+                touches. <code>connect(url, room)</code>, then each frame drain
+                <code>poll()</code> for events &mdash; a peer joined, a peer
+                left, a message arrived &mdash; and <code>broadcast()</code> /
+                <code>sendTo()</code> to talk. It runs a full mesh (one
+                connection per peer) and drives the whole offer/answer/ICE dance
+                for every peer itself, choosing which side offers from the peer
+                ids so two ends never collide. Rooms get human names like
+                <code>brave-otter-42</code> so one player can host and read the
+                name out loud; the generator is pure and unit-tested for spread.
+                Two channels open per peer &mdash; an unreliable, unordered one
+                for fire-and-forget state like a cursor position, and a reliable
+                one for events you can't afford to drop.
+            </p>
+
+            <p>
+                <code>examples/net_cursors</code> is the demo on top: a shared
+                canvas where everyone's mouse cursor moves live and a click
+                sends a ripple every peer sees, in about 380 lines over that
+                session API. The honest edges: connectivity uses Google's public
+                STUN with no TURN relay yet, so a small fraction of very
+                restrictive networks won't connect; and while the handshake and
+                the session logic are exercised headlessly, two real browsers
+                meeting over the internet is the test that matters.
             </p>
 
             <h3 id="machinery">Under the hood: host, WebGPU layer, rasterizer</h3>
@@ -1703,6 +2117,61 @@ z.plot_ui.show(u, &s.plot, .{ 520, 320 }, &series, .{
                 same (buffer,&nbsp;offset) twice in one frame. The whole class is
                 a red build rather than a device-only glitch.
             </p>
+
+            <h3 id="docs">Long-form walkthroughs</h3>
+
+            <p>
+                Six standalone pages, each building one subsystem from first
+                principles rather than documenting its API. They ship alongside this
+                page.
+            </p>
+
+            <ul>
+                <li>
+                    <a href="robots.html"
+                        >Robot dynamics, from the ground up</a
+                    >
+                    &mdash; a course on articulated-body simulation, from
+                    <code>M(q)v&#775; + c = &tau; + J<sup>T</sup>f</code> through
+                    kinematics, the mass matrix, contact and trajectory
+                    optimization, ending with three worked examples. Its code blocks
+                    are checked against <code>src/robot.zig</code> by
+                    <code>zig build doc-sync</code>, so they cannot quote drifted
+                    source.
+                </li>
+                <li>
+                    <a href="mujoco-tutorial.html">MuJoCo, and how it becomes robot.zig</a>
+                    &mdash; what MuJoCo's model and data structures contain, and how
+                    each part maps onto the Zig port.
+                </li>
+                <li>
+                    <a href="gpu-compute-tutorial.html">GPU compute: one Zig function, two machines</a>
+                    &mdash; writing a kernel once and running it on the CPU and the
+                    GPU, and what has to be true for that to work.
+                </li>
+                <li>
+                    <a href="shader-authoring-tutorial.html">Two ways to write a shader</a>
+                    &mdash; the Zig-to-WGSL path against hand-written WGSL, and when
+                    each is the right choice.
+                </li>
+                <li>
+                    <a href="rtt-tutorial.html">Render to texture</a>
+                    &mdash; offscreen targets, and the passes that read them back.
+                </li>
+                <li>
+                    <a href="zimrnum-tutorial.html">zimrnum</a>
+                    &mdash; the numerics, statistics, deep-learning and RL library:
+                    what exists, what does not, and why each piece is shaped the way
+                    it is. Its reference table is checked against
+                    <code>src/zimrnum.zig</code> by a test in that file, so it cannot
+                    name a declaration the library no longer has.
+                </li>
+                <li>
+                    <a href="wgpu-ports-tutorial.html">WebGPU ports</a>
+                    &mdash; how a C or C++ graphics library is brought across to Zig
+                    and WebGPU without a translation layer.
+                </li>
+            </ul>
 
             <h3 id="layout">Source layout</h3>
 

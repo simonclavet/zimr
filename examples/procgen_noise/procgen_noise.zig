@@ -14,7 +14,7 @@ const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -124,7 +124,7 @@ fn update(f: *z.Frame, state: *State) void {
         freeImage(state.gpa, anim_img);
     } else |_| {}
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const row_y: f32 = 48;
     const x0: f32 = 20;
@@ -137,7 +137,7 @@ fn update(f: *z.Frame, state: *State) void {
     const anim_w: f32 = f.window.widthf() - 40;
     drawPanel(f, state.font, state.tex_anim, x0, row_y + panel + 24, anim_w, 120, "animated Perlin (scrolling)");
 
-    co.caption(f.gl, state.font, "genImage* on the CPU -> GPU textures; animated panel regenerates each frame");
+    common.caption(f.gl, state.font, "genImage* on the CPU -> GPU textures; animated panel regenerates each frame");
     z.endDrawing(f.gl);
 }
 

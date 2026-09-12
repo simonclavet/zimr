@@ -1,3 +1,4 @@
+//! lint:alias BindGroupCache
 // src/BindGroupCache.zig - bind group cache keyed by texture handle.
 //
 // In raylib-style 2D rendering, the same texture is drawn dozens or
@@ -137,41 +138,41 @@ test "BindGroupCache stores and retrieves entries" {
     defer cache.deinit();
 
     const k1: Key = .{
-        .texture_view = @enumFromInt(1),
-        .sampler = @enumFromInt(2),
-        .material_ubo = @enumFromInt(0),
-        .layout = @enumFromInt(3),
+        .texture_view = @fromBackingInt(@intCast(1)),
+        .sampler = @fromBackingInt(@intCast(2)),
+        .material_ubo = @fromBackingInt(@intCast(0)),
+        .layout = @fromBackingInt(@intCast(3)),
     };
-    try cache.entries.put(cache.gpa, k1, @enumFromInt(42));
+    try cache.entries.put(cache.gpa, k1, @fromBackingInt(@intCast(42)));
     try expectEqual(@as(usize, 1), cache.count());
 
     const found: ?wgpu.BindGroupHandle = cache.entries.get(k1);
     try expect(found != null);
-    try expectEqual(@as(u32, 42), @intFromEnum(found.?));
+    try expectEqual(@as(u32, 42), @backingInt(found.?));
 }
 
 test "invalidateForTexture removes only matching entries" {
     var cache: BindGroupCache = .{ .gpa = std.testing.allocator };
     defer cache.deinit();
 
-    const tex_a: wgpu.TextureViewHandle = @enumFromInt(1);
-    const tex_b: wgpu.TextureViewHandle = @enumFromInt(2);
-    const sampler: wgpu.SamplerHandle = @enumFromInt(10);
-    const layout: wgpu.BindGroupLayoutHandle = @enumFromInt(20);
+    const tex_a: wgpu.TextureViewHandle = @fromBackingInt(@intCast(1));
+    const tex_b: wgpu.TextureViewHandle = @fromBackingInt(@intCast(2));
+    const sampler: wgpu.SamplerHandle = @fromBackingInt(@intCast(10));
+    const layout: wgpu.BindGroupLayoutHandle = @fromBackingInt(@intCast(20));
 
     try cache.entries.put(cache.gpa, .{
         .texture_view = tex_a,
         .sampler = sampler,
-        .material_ubo = @enumFromInt(0),
+        .material_ubo = @fromBackingInt(@intCast(0)),
         .layout = layout,
-    }, @enumFromInt(100));
+    }, @fromBackingInt(@intCast(100)));
 
     try cache.entries.put(cache.gpa, .{
         .texture_view = tex_b,
         .sampler = sampler,
-        .material_ubo = @enumFromInt(0),
+        .material_ubo = @fromBackingInt(@intCast(0)),
         .layout = layout,
-    }, @enumFromInt(200));
+    }, @fromBackingInt(@intCast(200)));
 
     try expectEqual(@as(usize, 2), cache.count());
     cache.invalidateForTexture(tex_a);

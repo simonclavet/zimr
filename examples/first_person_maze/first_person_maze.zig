@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const assertUnreachable = zm.assertUnreachable;
 
 const Color = zm.Color;
 const Mat = zm.Mat;
@@ -447,7 +448,7 @@ fn update(f: *z.Frame, s: *State) void {
     // recorded draw references the mesh it rebuilds.
     if (s.regen_requested) {
         s.regen_requested = false;
-        regen(s.gpa, f, s) catch {};
+        regen(s.gpa, f, s) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     // ---- first-person camera ----

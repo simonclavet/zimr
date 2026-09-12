@@ -12,11 +12,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
 const float = zm.float;
 const Color = zm.Color;
-const pi = zm.pi;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
@@ -52,7 +52,8 @@ fn update(f: *z.Frame, state: *State) void {
     const t: f32 = f.time.time;
 
     // Slow pulse between two slates over a 4s period.
-    const phase: f32 = 0.5 + 0.5 * @sin(t * pi * 0.5);
+    // A QUARTER turn: the phase rises from 0.5 to 1 across the cycle.
+    const phase: f32 = 0.5 + 0.5 * sinTurns(t * 0.25);
     const a: Color = c.slate_950;
     const b: Color = c.slate_800;
     const bg: Color = .{
@@ -81,7 +82,7 @@ fn update(f: *z.Frame, state: *State) void {
     z.rlEnd(f.gl);
     z.rlSetTexture(f.gl, .{});
 
-    co.caption(f.gl, state.font, "basic - one tinted-checker triangle via the rl-immediate textured path");
+    common.caption(f.gl, state.font, "basic - one tinted-checker triangle via the rl-immediate textured path");
     z.endDrawing(f.gl);
 }
 

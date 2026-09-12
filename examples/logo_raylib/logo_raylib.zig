@@ -7,9 +7,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
+const sinRad = zm.sinRad;
 const Vec2 = zm.Vec2;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -29,11 +29,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
     s.t += 0.016;
 
     // a gentle breathe so the static logo feels alive
-    const breathe: f32 = 1.0 + 0.02 * sin(s.t * 1.4);
+    const breathe: f32 = 1.0 + 0.02 * sinRad(s.t * 1.4);
     const size: f32 = @min(w, h) * 0.52 * breathe;
     const border: f32 = size * 0.0625; // raylib's 16/256 ratio
     const inner: f32 = size - 2.0 * border;
@@ -43,11 +43,11 @@ fn update(f: *z.Frame, s: *State) void {
     // outer fill, then punch the page colour back out -> a thick square frame
     f.gl.rect(
         .{ .x = cx - size * 0.5, .y = cy - size * 0.5, .width = size, .height = size },
-        .{ .color = co.palette.ink },
+        .{ .color = common.palette.ink },
     );
     f.gl.rect(
         .{ .x = cx - inner * 0.5, .y = cy - inner * 0.5, .width = inner, .height = inner },
-        .{ .color = co.palette.bg },
+        .{ .color = common.palette.bg },
     );
 
     // the word, centred horizontally and sat in the lower third like the original
@@ -57,10 +57,10 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.text(
         .{ cx - word_dim[0] * 0.5, cy + inner * 0.5 - word_dim[1] - border },
         word,
-        .{ .size = word_size, .color = co.palette.ink, .font = &s.font },
+        .{ .size = word_size, .color = common.palette.ink, .font = &s.font },
     );
 
-    co.caption(f.gl, s.font, "this is NOT a texture - every pixel is a drawn shape");
+    common.caption(f.gl, s.font, "this is NOT a texture - every pixel is a drawn shape");
     z.endDrawing(f.gl);
 }
 

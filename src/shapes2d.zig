@@ -1,3 +1,4 @@
+//! lint:alias shapes2d
 //! src/shapes2d.zig — the backend-generic 2D shape primitives, MOVED
 //! VERBATIM out of drawing.zig (GL retirement P1, t1173): rectangles,
 //! ellipses, polys, rings, splines, lines — all over `gl: anytype`, drawn
@@ -7,13 +8,16 @@ const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
+const cosTurns = zm.cosTurns;
+const turnsFromRad = zm.turnsFromRad;
 const float = zm.float;
-const acos = zm.acos;
+const acosRad = zm.acosRad;
 const floatEps = zm.floatEps;
 const isFinite = zm.isFinite;
 const pi = zm.pi;
-const tau = zm.tau;
-const seg_step36: f32 = tau / 36.0;
+/// One turn in 36 steps, which is what this constant always meant.
+const seg_step36: f32 = 1.0 / 36.0;
 const pow = zm.pow;
 /// Inert renderer for the no-panic smoke tests below (GL-retirement P5d:
 /// they used to replay into rlgl.GlState, whose host build was no-op
@@ -66,6 +70,7 @@ pub const TestGl = struct {
 };
 
 const types = @import("types.zig");
+const runtime = @import("runtime.zig");
 const Mat = zm.Mat;
 const z = struct {
     pub const Rectangle = types.Rectangle;
@@ -109,7 +114,7 @@ pub const ShapesTextureState = struct {
         .width = 1,
         .height = 1,
         .mipmaps = 1,
-        .format = @intFromEnum(@import("types.zig").PixelFormat.uncompressed_r8g8b8a8),
+        .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
     },
     source: Rectangle = .{ .x = 0, .y = 0, .width = 1, .height = 1 },
 };
@@ -172,7 +177,7 @@ pub fn getSplinePointBasis(
 }
 
 /// Catmull-Rom spline point. Curve passes through p2 (at t=0) and p3 (at
-/// t=1); p1 and p4 are the prior/next control points that influence the
+/// t=1); p1 and p4 are the prior/next_turns control points that influence the
 /// tangent at the endpoints.
 pub fn getSplinePointCatmullRom(
     p1: Vec2,
@@ -581,7 +586,7 @@ pub fn drawLineV(
 /// same WebGL2 batch shader so the same constraint applies.
 ///
 /// Ribbon → quads mapping: vertices `[i, i+1]` form one cross-
-/// section, `[i+2, i+3]` form the next, and together they make one
+/// section, `[i+2, i+3]` form the next_turns, and together they make one
 /// quad in order `(i, i+1, i+3, i+2)` to keep consistent winding.
 /// The loop strides by 2 since each iteration advances by one
 /// cross-section.  Input with fewer than 4 vertices is a no-op
@@ -644,15 +649,15 @@ pub fn drawLineThick(
     drawTriangleStrip(gl, shapes_state, &strip, color);
 }
 
-/// Draw a filled rectangle with a rotation pivot and rotation angle (radians).
+/// Draw a filled rectangle with a rotation pivot and rotation angle_turns (radians).
 /// `origin` is the rotation pivot, expressed relative to the rectangle's
-/// top-left corner. `rotation_rad` is in radians (zimr is radians-centric).
+/// top-left corner. `rotation_turns` is in radians (zimr is radians-centric).
 pub fn drawRectanglePro(
     gl: anytype,
     shapes_state: *const ShapesTextureState,
     rec: Rectangle,
     origin: Vec2,
-    rotation_rad: f32,
+    rotation_turns: f32,
     color: Color,
 ) void {
     var top_left: Vec2 = undefined;
@@ -660,7 +665,7 @@ pub fn drawRectanglePro(
     var bottom_left: Vec2 = undefined;
     var bottom_right: Vec2 = undefined;
 
-    if (rotation_rad == 0.0) {
+    if (rotation_turns == 0.0) {
         // Fast path: just an AABB. Avoid the trig.
         const x: f32 = rec.x - origin[0];
         const y: f32 = rec.y - origin[1];
@@ -669,8 +674,8 @@ pub fn drawRectanglePro(
         bottom_left = .{ x, y + rec.height };
         bottom_right = .{ x + rec.width, y + rec.height };
     } else {
-        const sinr: f32 = @sin(rotation_rad);
-        const cosr: f32 = @cos(rotation_rad);
+        const sinr: f32 = sinTurns(rotation_turns);
+        const cosr: f32 = cosTurns(rotation_turns);
         const x: f32 = rec.x;
         const y: f32 = rec.y;
         const dx: f32 = -origin[0];
@@ -903,10 +908,10 @@ pub fn drawEllipseV(
     while (i < 36) : (i += 1) {
         gl.color4ub(color.r, color.g, color.b, color.a);
         gl.vertex2f(center[0], center[1]);
-        const a1 = float(i + 1) * seg_step36;
-        const a0 = float(i) * seg_step36;
-        gl.vertex2f(center[0] + @cos(a1) * radiusH, center[1] + @sin(a1) * radiusV);
-        gl.vertex2f(center[0] + @cos(a0) * radiusH, center[1] + @sin(a0) * radiusV);
+        const a1_turns = float(i + 1) * seg_step36;
+        const a0_turns = float(i) * seg_step36;
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * radiusH, center[1] + sinTurns(a1_turns) * radiusV);
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * radiusH, center[1] + sinTurns(a0_turns) * radiusV);
     }
     gl.end();
 }
@@ -936,10 +941,10 @@ pub fn drawEllipseLinesV(
     var i: i32 = 0;
     while (i < 36) : (i += 1) {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const a1 = float(i + 1) * seg_step36;
-        const a0 = float(i) * seg_step36;
-        gl.vertex2f(center[0] + @cos(a1) * radiusH, center[1] + @sin(a1) * radiusV);
-        gl.vertex2f(center[0] + @cos(a0) * radiusH, center[1] + @sin(a0) * radiusV);
+        const a1_turns = float(i + 1) * seg_step36;
+        const a0_turns = float(i) * seg_step36;
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * radiusH, center[1] + sinTurns(a1_turns) * radiusV);
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * radiusH, center[1] + sinTurns(a0_turns) * radiusV);
     }
     gl.end();
 }
@@ -957,41 +962,42 @@ pub fn drawEllipseLines(
 }
 
 /// Draw a regular polygon (filled). `sides` is clamped to a minimum of 3.
-/// `rotation_rad` is in radians, applied to the first vertex's angle.
+/// `rotation_turns` is in radians, applied to the first vertex's angle_turns.
 pub fn drawPoly(
     gl: anytype,
     shapes_state: *const ShapesTextureState,
     center: Vec2,
     sides_in: i32,
     radius: f32,
-    rotation_rad: f32,
+    rotation_turns: f32,
     color: Color,
 ) void {
     var sides: i32 = sides_in;
     if (sides < 3) {
         sides = 3;
     }
-    var central: f32 = rotation_rad;
-    const step: f32 = tau / float(sides);
+    var central_turns: f32 = rotation_turns;
+    // One turn shared between the sides.
+    const step_turns: f32 = 1.0 / float(sides);
 
     gl.setTexture(shapes_state.texture.id);
     const uv: ShapesUV = shapesUv(shapes_state);
     gl.begin(.quads);
     for (0..@intCast(sides)) |_| {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const next: f32 = central + step;
+        const next_turns: f32 = central_turns + step_turns;
         // Wedge as a quad: (center, p[i], p[i+1], center). The first and
         // last vertex are both the center, collapsing the quad into a
         // triangle for the polygon segment.
         gl.texCoord2f(uv.u0, uv.v0);
         gl.vertex2f(center[0], center[1]);
         gl.texCoord2f(uv.u0, uv.v1);
-        gl.vertex2f(center[0] + @cos(central) * radius, center[1] + @sin(central) * radius);
+        gl.vertex2f(center[0] + cosTurns(central_turns) * radius, center[1] + sinTurns(central_turns) * radius);
         gl.texCoord2f(uv.u1, uv.v0);
-        gl.vertex2f(center[0] + @cos(next) * radius, center[1] + @sin(next) * radius);
+        gl.vertex2f(center[0] + cosTurns(next_turns) * radius, center[1] + sinTurns(next_turns) * radius);
         gl.texCoord2f(uv.u1, uv.v1);
-        gl.vertex2f(center[0] + @cos(central) * radius, center[1] + @sin(central) * radius);
-        central = next;
+        gl.vertex2f(center[0] + cosTurns(central_turns) * radius, center[1] + sinTurns(central_turns) * radius);
+        central_turns = next_turns;
     }
     gl.end();
     gl.setTexture(0);
@@ -1003,21 +1009,25 @@ pub fn drawPolyLines(
     center: Vec2,
     sides_in: i32,
     radius: f32,
-    rotation_rad: f32,
+    rotation_turns: f32,
     color: Color,
 ) void {
     var sides: i32 = sides_in;
     if (sides < 3) {
         sides = 3;
     }
-    var central: f32 = rotation_rad;
-    const step: f32 = tau / float(sides);
+    var central_turns: f32 = rotation_turns;
+    // One turn shared between the sides.
+    const step_turns: f32 = 1.0 / float(sides);
     gl.begin(.lines);
     for (0..@intCast(sides)) |_| {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        gl.vertex2f(center[0] + @cos(central) * radius, center[1] + @sin(central) * radius);
-        gl.vertex2f(center[0] + @cos(central + step) * radius, center[1] + @sin(central + step) * radius);
-        central += step;
+        gl.vertex2f(center[0] + cosTurns(central_turns) * radius, center[1] + sinTurns(central_turns) * radius);
+        gl.vertex2f(
+            center[0] + cosTurns(central_turns + step_turns) * radius,
+            center[1] + sinTurns(central_turns + step_turns) * radius,
+        );
+        central_turns += step_turns;
     }
     gl.end();
 }
@@ -1034,17 +1044,17 @@ pub fn drawCircleGradient(
 ) void {
     gl.begin(.triangles);
     // 36 segments around the full circle; i is the segment index and
-    // a0/a1 are its radian bounds (i·tau/36 .. (i+1)·tau/36).
+    // a0_turns/a1_turns are its bounds in TURNS: i/36 .. (i+1)/36.
     for (0..36) |seg| {
         const i: i32 = @intCast(seg);
         gl.color4ub(inner.r, inner.g, inner.b, inner.a);
         gl.vertex2f(center[0], center[1]);
         gl.color4ub(outer.r, outer.g, outer.b, outer.a);
-        const a1 = float(i + 1) * seg_step36;
-        gl.vertex2f(center[0] + @cos(a1) * radius, center[1] + @sin(a1) * radius);
+        const a1_turns = float(i + 1) * seg_step36;
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * radius, center[1] + sinTurns(a1_turns) * radius);
         gl.color4ub(outer.r, outer.g, outer.b, outer.a);
-        const a0 = float(i) * seg_step36;
-        gl.vertex2f(center[0] + @cos(a0) * radius, center[1] + @sin(a0) * radius);
+        const a0_turns = float(i) * seg_step36;
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * radius, center[1] + sinTurns(a0_turns) * radius);
     }
     gl.end();
 }
@@ -1067,25 +1077,27 @@ const smooth_circle_error_rate: f32 = 0.5;
 /// requested at least `minSegments = ceil(arc_span / (pi/2))`, that's
 /// honored; otherwise the formula picks an adaptive count.
 fn adaptiveArcSegments(
-    start_angle_rad: f32,
-    end_angle_rad: f32,
+    start_turns: f32,
+    end_turns: f32,
     radius: f32,
     requested: i32,
 ) i32 {
-    const min_segments: i32 = @ceil((end_angle_rad - start_angle_rad) / (pi / 2.0));
+    // A quarter turn per segment is the floor, which in turns is simply 0.25.
+    const min_segments: i32 = @ceil((end_turns - start_turns) / 0.25);
     if (requested >= min_segments) {
         return requested;
     }
-    // Solve for the maximum angle between segments such that the chord
+    // Solve for the maximum angle_turns between segments such that the chord
     // height at `radius` stays below smooth_circle_error_rate.
     const ratio: f32 = 1.0 - smooth_circle_error_rate / radius;
-    const th: f32 = acos(2.0 * (ratio * ratio) - 1.0);
-    const adaptive: i32 = @trunc((end_angle_rad - start_angle_rad) * @ceil(2.0 * pi / th) / (2.0 * pi));
+    // `acos` returns radians, so the count it feeds is converted to turns once here.
+    const th_turns: f32 = turnsFromRad(acosRad(2.0 * (ratio * ratio) - 1.0));
+    const adaptive: i32 = @trunc((end_turns - start_turns) * @ceil(1.0 / th_turns));
     return if (adaptive <= 0) min_segments else adaptive;
 }
 
-/// Draw a circle sector - a wedge of a circle from `start_angle_rad` to
-/// `end_angle_rad` (radians). `segments` is a hint; the actual count may be
+/// Draw a circle sector - a wedge of a circle from `start_turns` to
+/// `end_turns` (radians). `segments` is a hint; the actual count may be
 /// raised if too few are requested for a smooth-looking arc at this
 /// radius.
 pub fn drawCircleSector(
@@ -1093,13 +1105,13 @@ pub fn drawCircleSector(
     shapes_state: *const ShapesTextureState,
     center: Vec2,
     radius_in: f32,
-    start_angle_rad: f32,
-    end_angle_rad: f32,
+    start_turns: f32,
+    end_turns: f32,
     segments_in: i32,
     color: Color,
 ) void {
-    var start: f32 = start_angle_rad;
-    var end: f32 = end_angle_rad;
+    var start: f32 = start_turns;
+    var end: f32 = end_turns;
     if (start == end) {
         return;
     }
@@ -1112,8 +1124,8 @@ pub fn drawCircleSector(
     }
 
     const segments: i32 = adaptiveArcSegments(start, end, radius, segments_in);
-    const step: f32 = (end - start) / float(segments);
-    var angle: f32 = start;
+    const step_turns: f32 = (end - start) / float(segments);
+    var angle_turns: f32 = start;
 
     gl.setTexture(shapes_state.texture.id);
     const uv: ShapesUV = shapesUv(shapes_state);
@@ -1122,31 +1134,31 @@ pub fn drawCircleSector(
     const pairs: i32 = @divFloor(segments, 2);
     for (0..@intCast(pairs)) |_| {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const a0: f32 = angle;
-        const a1: f32 = (angle + step);
-        const a2: f32 = (angle + step * 2.0);
+        const a0_turns: f32 = angle_turns;
+        const a1_turns: f32 = (angle_turns + step_turns);
+        const a2_turns: f32 = (angle_turns + step_turns * 2.0);
         gl.texCoord2f(uv.u0, uv.v0);
         gl.vertex2f(center[0], center[1]);
         gl.texCoord2f(uv.u1, uv.v0);
-        gl.vertex2f(center[0] + @cos(a2) * radius, center[1] + @sin(a2) * radius);
+        gl.vertex2f(center[0] + cosTurns(a2_turns) * radius, center[1] + sinTurns(a2_turns) * radius);
         gl.texCoord2f(uv.u1, uv.v1);
-        gl.vertex2f(center[0] + @cos(a1) * radius, center[1] + @sin(a1) * radius);
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * radius, center[1] + sinTurns(a1_turns) * radius);
         gl.texCoord2f(uv.u0, uv.v1);
-        gl.vertex2f(center[0] + @cos(a0) * radius, center[1] + @sin(a0) * radius);
-        angle += step * 2.0;
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * radius, center[1] + sinTurns(a0_turns) * radius);
+        angle_turns += step_turns * 2.0;
     }
     // Odd-segment leftover: emit a single wedge as a quad with one vertex
     // duplicated at the center.
     if (@mod(segments, 2) == 1) {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const a0: f32 = angle;
-        const a1: f32 = (angle + step);
+        const a0_turns: f32 = angle_turns;
+        const a1_turns: f32 = (angle_turns + step_turns);
         gl.texCoord2f(uv.u0, uv.v0);
         gl.vertex2f(center[0], center[1]);
         gl.texCoord2f(uv.u1, uv.v1);
-        gl.vertex2f(center[0] + @cos(a1) * radius, center[1] + @sin(a1) * radius);
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * radius, center[1] + sinTurns(a1_turns) * radius);
         gl.texCoord2f(uv.u0, uv.v1);
-        gl.vertex2f(center[0] + @cos(a0) * radius, center[1] + @sin(a0) * radius);
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * radius, center[1] + sinTurns(a0_turns) * radius);
         gl.texCoord2f(uv.u1, uv.v0);
         gl.vertex2f(center[0], center[1]);
     }
@@ -1160,13 +1172,13 @@ pub fn drawCircleSectorLines(
     gl: anytype,
     center: Vec2,
     radius_in: f32,
-    start_angle_rad: f32,
-    end_angle_rad: f32,
+    start_turns: f32,
+    end_turns: f32,
     segments_in: i32,
     color: Color,
 ) void {
-    var start: f32 = start_angle_rad;
-    var end: f32 = end_angle_rad;
+    var start: f32 = start_turns;
+    var end: f32 = end_turns;
     if (start == end) {
         return;
     }
@@ -1179,28 +1191,28 @@ pub fn drawCircleSectorLines(
     }
 
     const segments: i32 = adaptiveArcSegments(start, end, radius, segments_in);
-    const step: f32 = (end - start) / float(segments);
-    var angle: f32 = start;
+    const step_turns: f32 = (end - start) / float(segments);
+    var angle_turns: f32 = start;
 
     gl.begin(.lines);
     // Cap line from center to arc start.
     gl.color4ub(color.r, color.g, color.b, color.a);
     gl.vertex2f(center[0], center[1]);
-    gl.vertex2f(center[0] + @cos(angle) * radius, center[1] + @sin(angle) * radius);
+    gl.vertex2f(center[0] + cosTurns(angle_turns) * radius, center[1] + sinTurns(angle_turns) * radius);
 
     for (0..@intCast(segments)) |_| {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const a0: f32 = angle;
-        const a1: f32 = (angle + step);
-        gl.vertex2f(center[0] + @cos(a0) * radius, center[1] + @sin(a0) * radius);
-        gl.vertex2f(center[0] + @cos(a1) * radius, center[1] + @sin(a1) * radius);
-        angle += step;
+        const a0_turns: f32 = angle_turns;
+        const a1_turns: f32 = (angle_turns + step_turns);
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * radius, center[1] + sinTurns(a0_turns) * radius);
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * radius, center[1] + sinTurns(a1_turns) * radius);
+        angle_turns += step_turns;
     }
 
     // Cap line from center to arc end.
     gl.color4ub(color.r, color.g, color.b, color.a);
     gl.vertex2f(center[0], center[1]);
-    gl.vertex2f(center[0] + @cos(angle) * radius, center[1] + @sin(angle) * radius);
+    gl.vertex2f(center[0] + cosTurns(angle_turns) * radius, center[1] + sinTurns(angle_turns) * radius);
     gl.end();
 }
 
@@ -1212,7 +1224,7 @@ pub fn drawCircleV(
     radius: f32,
     color: Color,
 ) void {
-    drawCircleSector(gl, shapes_state, center, radius, 0, tau, 36, color);
+    drawCircleSector(gl, shapes_state, center, radius, 0, 1.0, 36, color);
 }
 
 /// Draw a filled circle (full 360° sector with 36 segments).
@@ -1238,10 +1250,10 @@ pub fn drawCircleLinesV(
     gl.color4ub(color.r, color.g, color.b, color.a);
     var i: i32 = 0;
     while (i < 36) : (i += 1) {
-        const a0 = float(i) * seg_step36;
-        const a1 = float(i + 1) * seg_step36;
-        gl.vertex2f(center[0] + @cos(a0) * radius, center[1] + @sin(a0) * radius);
-        gl.vertex2f(center[0] + @cos(a1) * radius, center[1] + @sin(a1) * radius);
+        const a0_turns = float(i) * seg_step36;
+        const a1_turns = float(i + 1) * seg_step36;
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * radius, center[1] + sinTurns(a0_turns) * radius);
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * radius, center[1] + sinTurns(a1_turns) * radius);
     }
     gl.end();
 }
@@ -1258,7 +1270,7 @@ pub fn drawCircleLines(
 }
 
 /// Draw a filled ring (annulus) between two radii. If `innerRadius <= 0`
-/// this collapses to a `drawCircleSector` call. `end_angle_rad < start_angle_rad`
+/// this collapses to a `drawCircleSector` call. `end_turns < start_turns`
 /// is silently swapped; `outerRadius < innerRadius` is also swapped.
 pub fn drawRing(
     gl: anytype,
@@ -1266,15 +1278,15 @@ pub fn drawRing(
     center: Vec2,
     innerRadius_in: f32,
     outerRadius_in: f32,
-    start_angle_rad: f32,
-    end_angle_rad: f32,
+    start_turns: f32,
+    end_turns: f32,
     segments_in: i32,
     color: Color,
 ) void {
     var inner: f32 = innerRadius_in;
     var outer: f32 = outerRadius_in;
-    var start: f32 = start_angle_rad;
-    var end: f32 = end_angle_rad;
+    var start: f32 = start_turns;
+    var end: f32 = end_turns;
     if (start == end) {
         return;
     }
@@ -1295,26 +1307,26 @@ pub fn drawRing(
         return;
     }
 
-    const step: f32 = (end - start) / float(segments);
-    var angle: f32 = start;
+    const step_turns: f32 = (end - start) / float(segments);
+    var angle_turns: f32 = start;
 
     gl.setTexture(shapes_state.texture.id);
     const uv: ShapesUV = shapesUv(shapes_state);
     gl.begin(.quads);
     for (0..@intCast(segments)) |_| {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const a0: f32 = angle;
-        const a1: f32 = (angle + step);
+        const a0_turns: f32 = angle_turns;
+        const a1_turns: f32 = (angle_turns + step_turns);
         // Each quad spans one segment, with corners on both radii.
         gl.texCoord2f(uv.u0, uv.v1);
-        gl.vertex2f(center[0] + @cos(a0) * outer, center[1] + @sin(a0) * outer);
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * outer, center[1] + sinTurns(a0_turns) * outer);
         gl.texCoord2f(uv.u0, uv.v0);
-        gl.vertex2f(center[0] + @cos(a0) * inner, center[1] + @sin(a0) * inner);
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * inner, center[1] + sinTurns(a0_turns) * inner);
         gl.texCoord2f(uv.u1, uv.v0);
-        gl.vertex2f(center[0] + @cos(a1) * inner, center[1] + @sin(a1) * inner);
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * inner, center[1] + sinTurns(a1_turns) * inner);
         gl.texCoord2f(uv.u1, uv.v1);
-        gl.vertex2f(center[0] + @cos(a1) * outer, center[1] + @sin(a1) * outer);
-        angle += step;
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * outer, center[1] + sinTurns(a1_turns) * outer);
+        angle_turns += step_turns;
     }
     gl.end();
     gl.setTexture(0);
@@ -1326,15 +1338,15 @@ pub fn drawRingLines(
     center: Vec2,
     innerRadius_in: f32,
     outerRadius_in: f32,
-    start_angle_rad: f32,
-    end_angle_rad: f32,
+    start_turns: f32,
+    end_turns: f32,
     segments_in: i32,
     color: Color,
 ) void {
     var inner: f32 = innerRadius_in;
     var outer: f32 = outerRadius_in;
-    var start: f32 = start_angle_rad;
-    var end: f32 = end_angle_rad;
+    var start: f32 = start_turns;
+    var end: f32 = end_turns;
     if (start == end) {
         return;
     }
@@ -1354,32 +1366,32 @@ pub fn drawRingLines(
         return;
     }
 
-    const step: f32 = (end - start) / float(segments);
-    var angle: f32 = start;
+    const step_turns: f32 = (end - start) / float(segments);
+    var angle_turns: f32 = start;
 
     gl.begin(.lines);
     // Cap line at start.
     gl.color4ub(color.r, color.g, color.b, color.a);
-    gl.vertex2f(center[0] + @cos(angle) * outer, center[1] + @sin(angle) * outer);
-    gl.vertex2f(center[0] + @cos(angle) * inner, center[1] + @sin(angle) * inner);
+    gl.vertex2f(center[0] + cosTurns(angle_turns) * outer, center[1] + sinTurns(angle_turns) * outer);
+    gl.vertex2f(center[0] + cosTurns(angle_turns) * inner, center[1] + sinTurns(angle_turns) * inner);
 
     for (0..@intCast(segments)) |_| {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const a0: f32 = angle;
-        const a1: f32 = (angle + step);
+        const a0_turns: f32 = angle_turns;
+        const a1_turns: f32 = (angle_turns + step_turns);
         // Outer arc segment.
-        gl.vertex2f(center[0] + @cos(a0) * outer, center[1] + @sin(a0) * outer);
-        gl.vertex2f(center[0] + @cos(a1) * outer, center[1] + @sin(a1) * outer);
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * outer, center[1] + sinTurns(a0_turns) * outer);
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * outer, center[1] + sinTurns(a1_turns) * outer);
         // Inner arc segment.
-        gl.vertex2f(center[0] + @cos(a0) * inner, center[1] + @sin(a0) * inner);
-        gl.vertex2f(center[0] + @cos(a1) * inner, center[1] + @sin(a1) * inner);
-        angle += step;
+        gl.vertex2f(center[0] + cosTurns(a0_turns) * inner, center[1] + sinTurns(a0_turns) * inner);
+        gl.vertex2f(center[0] + cosTurns(a1_turns) * inner, center[1] + sinTurns(a1_turns) * inner);
+        angle_turns += step_turns;
     }
 
     // Cap line at end.
     gl.color4ub(color.r, color.g, color.b, color.a);
-    gl.vertex2f(center[0] + @cos(angle) * outer, center[1] + @sin(angle) * outer);
-    gl.vertex2f(center[0] + @cos(angle) * inner, center[1] + @sin(angle) * inner);
+    gl.vertex2f(center[0] + cosTurns(angle_turns) * outer, center[1] + sinTurns(angle_turns) * outer);
+    gl.vertex2f(center[0] + cosTurns(angle_turns) * inner, center[1] + sinTurns(angle_turns) * inner);
     gl.end();
 }
 
@@ -1688,7 +1700,7 @@ pub fn drawRectangleLinesThick(
 
 /// Draw a thick polygon outline. Implemented as a ring of trapezoidal
 /// quads between an outer vertex (at `radius`) and an inner vertex (at
-/// `radius - lineThick * cos(half exterior angle)`), so the outline is
+/// `radius - lineThick * cos(half exterior angle_turns)`), so the outline is
 /// drawn entirely INSIDE the polygon's perimeter circle.
 pub fn drawPolyLinesThick(
     gl: anytype,
@@ -1696,7 +1708,7 @@ pub fn drawPolyLinesThick(
     center: Vec2,
     sides_in: i32,
     radius: f32,
-    rotation_rad: f32,
+    rotation_turns: f32,
     lineThick: f32,
     color: Color,
 ) void {
@@ -1704,27 +1716,28 @@ pub fn drawPolyLinesThick(
     if (sides < 3) {
         sides = 3;
     }
-    var central: f32 = rotation_rad;
-    const ext: f32 = tau / float(sides);
+    var central_turns: f32 = rotation_turns;
+    // One turn shared between the sides.
+    const ext_turns: f32 = 1.0 / float(sides);
     // Inner radius is offset perpendicular to each edge so the band's width
     // (measured perpendicular to each edge) equals lineThick exactly.
-    const inner: f32 = radius - lineThick * @cos(ext / 2.0);
+    const inner: f32 = radius - lineThick * cosTurns(ext_turns / 2.0);
 
     gl.setTexture(shapes_state.texture.id);
     const uv: ShapesUV = shapesUv(shapes_state);
     gl.begin(.quads);
     for (0..@intCast(sides)) |_| {
         gl.color4ub(color.r, color.g, color.b, color.a);
-        const next: f32 = central + ext;
+        const next_turns: f32 = central_turns + ext_turns;
         gl.texCoord2f(uv.u0, uv.v1);
-        gl.vertex2f(center[0] + @cos(central) * radius, center[1] + @sin(central) * radius);
+        gl.vertex2f(center[0] + cosTurns(central_turns) * radius, center[1] + sinTurns(central_turns) * radius);
         gl.texCoord2f(uv.u0, uv.v0);
-        gl.vertex2f(center[0] + @cos(central) * inner, center[1] + @sin(central) * inner);
+        gl.vertex2f(center[0] + cosTurns(central_turns) * inner, center[1] + sinTurns(central_turns) * inner);
         gl.texCoord2f(uv.u1, uv.v1);
-        gl.vertex2f(center[0] + @cos(next) * inner, center[1] + @sin(next) * inner);
+        gl.vertex2f(center[0] + cosTurns(next_turns) * inner, center[1] + sinTurns(next_turns) * inner);
         gl.texCoord2f(uv.u1, uv.v0);
-        gl.vertex2f(center[0] + @cos(next) * radius, center[1] + @sin(next) * radius);
-        central = next;
+        gl.vertex2f(center[0] + cosTurns(next_turns) * radius, center[1] + sinTurns(next_turns) * radius);
+        central_turns = next_turns;
     }
     gl.end();
     gl.setTexture(0);
@@ -1768,13 +1781,15 @@ pub fn drawRectangleRounded(
     var segments: i32 = segments_in;
     if (segments < 4) {
         const ratio: f32 = 1.0 - smooth_circle_error_rate / radius;
-        const th: f32 = acos(2.0 * (ratio * ratio) - 1.0);
-        segments = @trunc(@ceil(2.0 * pi / th) / 4.0);
+        // `acos` returns radians, so the count it feeds is converted to turns once here.
+        const th_turns: f32 = turnsFromRad(acosRad(2.0 * (ratio * ratio) - 1.0));
+        segments = @trunc(@ceil(1.0 / th_turns) / 4.0);
         if (segments <= 0) {
             segments = 4;
         }
     }
-    const step: f32 = (pi / 2.0) / float(segments);
+    // A quarter turn, split across the corner's segments.
+    const step_turns: f32 = 0.25 / float(segments);
 
     // Twelve geometry anchor points. See ASCII sketch in rshapes.c for
     // reference; P0..P7 lie on the rectangle's outer rounded perimeter,
@@ -1803,34 +1818,34 @@ pub fn drawRectangleRounded(
     // Four corner arcs. Each quad covers two segments (sector-style) plus
     // an odd-leftover wedge.
     for (0..4) |k| {
-        var angle: f32 = angles[k];
+        var angle_turns: f32 = angles[k];
         const c: Vec2 = centers[k];
         const pairs: i32 = @divFloor(segments, 2);
         for (0..@intCast(pairs)) |_| {
             gl.color4ub(color.r, color.g, color.b, color.a);
-            const a0: f32 = angle;
-            const a1: f32 = (angle + step);
-            const a2: f32 = (angle + step * 2.0);
+            const a0_turns: f32 = angle_turns;
+            const a1_turns: f32 = (angle_turns + step_turns);
+            const a2_turns: f32 = (angle_turns + step_turns * 2.0);
             gl.texCoord2f(uv.u0, uv.v0);
             gl.vertex2f(c[0], c[1]);
             gl.texCoord2f(uv.u1, uv.v0);
-            gl.vertex2f(c[0] + @cos(a2) * radius, c[1] + @sin(a2) * radius);
+            gl.vertex2f(c[0] + cosTurns(a2_turns) * radius, c[1] + sinTurns(a2_turns) * radius);
             gl.texCoord2f(uv.u1, uv.v1);
-            gl.vertex2f(c[0] + @cos(a1) * radius, c[1] + @sin(a1) * radius);
+            gl.vertex2f(c[0] + cosTurns(a1_turns) * radius, c[1] + sinTurns(a1_turns) * radius);
             gl.texCoord2f(uv.u0, uv.v1);
-            gl.vertex2f(c[0] + @cos(a0) * radius, c[1] + @sin(a0) * radius);
-            angle += step * 2.0;
+            gl.vertex2f(c[0] + cosTurns(a0_turns) * radius, c[1] + sinTurns(a0_turns) * radius);
+            angle_turns += step_turns * 2.0;
         }
         if (@mod(segments, 2) == 1) {
             gl.color4ub(color.r, color.g, color.b, color.a);
-            const a0: f32 = angle;
-            const a1: f32 = (angle + step);
+            const a0_turns: f32 = angle_turns;
+            const a1_turns: f32 = (angle_turns + step_turns);
             gl.texCoord2f(uv.u0, uv.v0);
             gl.vertex2f(c[0], c[1]);
             gl.texCoord2f(uv.u1, uv.v1);
-            gl.vertex2f(c[0] + @cos(a1) * radius, c[1] + @sin(a1) * radius);
+            gl.vertex2f(c[0] + cosTurns(a1_turns) * radius, c[1] + sinTurns(a1_turns) * radius);
             gl.texCoord2f(uv.u0, uv.v1);
-            gl.vertex2f(c[0] + @cos(a0) * radius, c[1] + @sin(a0) * radius);
+            gl.vertex2f(c[0] + cosTurns(a0_turns) * radius, c[1] + sinTurns(a0_turns) * radius);
             gl.texCoord2f(uv.u1, uv.v0);
             gl.vertex2f(c[0], c[1]);
         }
@@ -1908,13 +1923,15 @@ pub fn drawRectangleRoundedLinesThick(
     var segments: i32 = segments_in;
     if (segments < 4) {
         const ratio: f32 = 1.0 - smooth_circle_error_rate / radius;
-        const th: f32 = acos(2.0 * (ratio * ratio) - 1.0);
-        segments = @trunc(@ceil(2.0 * pi / th) / 2.0);
+        // `acos` returns radians, so the count it feeds is converted to turns once here.
+        const th_turns: f32 = turnsFromRad(acosRad(2.0 * (ratio * ratio) - 1.0));
+        segments = @trunc(@ceil(1.0 / th_turns) / 2.0);
         if (segments <= 0) {
             segments = 4;
         }
     }
-    const step: f32 = (pi / 2.0) / float(segments);
+    // A quarter turn, split across the corner's segments.
+    const step_turns: f32 = 0.25 / float(segments);
     const outer: f32 = radius + lineThick;
     const inner: f32 = radius;
 
@@ -1953,21 +1970,21 @@ pub fn drawRectangleRoundedLinesThick(
         gl.begin(.quads);
         // Four corner arcs, each as a band of trapezoidal quads.
         for (0..4) |k| {
-            var angle: f32 = angles[k];
+            var angle_turns: f32 = angles[k];
             const c: Vec2 = centers[k];
             for (0..@intCast(segments)) |_| {
                 gl.color4ub(color.r, color.g, color.b, color.a);
-                const a0: f32 = angle;
-                const a1: f32 = (angle + step);
+                const a0_turns: f32 = angle_turns;
+                const a1_turns: f32 = (angle_turns + step_turns);
                 gl.texCoord2f(uv.u0, uv.v0);
-                gl.vertex2f(c[0] + @cos(a0) * inner, c[1] + @sin(a0) * inner);
+                gl.vertex2f(c[0] + cosTurns(a0_turns) * inner, c[1] + sinTurns(a0_turns) * inner);
                 gl.texCoord2f(uv.u1, uv.v0);
-                gl.vertex2f(c[0] + @cos(a1) * inner, c[1] + @sin(a1) * inner);
+                gl.vertex2f(c[0] + cosTurns(a1_turns) * inner, c[1] + sinTurns(a1_turns) * inner);
                 gl.texCoord2f(uv.u1, uv.v1);
-                gl.vertex2f(c[0] + @cos(a1) * outer, c[1] + @sin(a1) * outer);
+                gl.vertex2f(c[0] + cosTurns(a1_turns) * outer, c[1] + sinTurns(a1_turns) * outer);
                 gl.texCoord2f(uv.u0, uv.v1);
-                gl.vertex2f(c[0] + @cos(a0) * outer, c[1] + @sin(a0) * outer);
-                angle += step;
+                gl.vertex2f(c[0] + cosTurns(a0_turns) * outer, c[1] + sinTurns(a0_turns) * outer);
+                angle_turns += step_turns;
             }
         }
         // Four edge rectangles of the band.
@@ -1995,15 +2012,15 @@ pub fn drawRectangleRoundedLinesThick(
         // straight cap segments connecting them.
         gl.begin(.lines);
         for (0..4) |k| {
-            var angle: f32 = angles[k];
+            var angle_turns: f32 = angles[k];
             const c: Vec2 = centers[k];
             for (0..@intCast(segments)) |_| {
                 gl.color4ub(color.r, color.g, color.b, color.a);
-                const a0: f32 = angle;
-                const a1: f32 = (angle + step);
-                gl.vertex2f(c[0] + @cos(a0) * outer, c[1] + @sin(a0) * outer);
-                gl.vertex2f(c[0] + @cos(a1) * outer, c[1] + @sin(a1) * outer);
-                angle += step;
+                const a0_turns: f32 = angle_turns;
+                const a1_turns: f32 = (angle_turns + step_turns);
+                gl.vertex2f(c[0] + cosTurns(a0_turns) * outer, c[1] + sinTurns(a0_turns) * outer);
+                gl.vertex2f(c[0] + cosTurns(a1_turns) * outer, c[1] + sinTurns(a1_turns) * outer);
+                angle_turns += step_turns;
             }
         }
         var i: usize = 0;
@@ -2032,7 +2049,7 @@ pub fn drawRectangleRoundedLines(
 //
 // Each spline-segment draw walks the curve in spline_segment_divisions+1
 // steps, computes a perpendicular offset (`dy*size, -dx*size` and its
-// mirror) at every step, fills a 2-vertex-wide ribbon in points[], and
+// mirror) at every step_turns, fills a 2-vertex-wide ribbon in points[], and
 // hands it to drawTriangleStrip. The multi-segment drawSpline* variants
 // chain segment draws and add round caps via drawCircleV.
 
@@ -2098,7 +2115,7 @@ pub fn drawSplineBasis(
         return;
     }
     var current: Vec2 = .{ 0, 0 };
-    var next: Vec2 = .{ 0, 0 };
+    var next_turns: Vec2 = .{ 0, 0 };
     var dx: f32 = 0;
     var dy: f32 = 0;
     var size: f32 = 0;
@@ -2110,9 +2127,9 @@ pub fn drawSplineBasis(
         const p3: Vec2 = points[i + 2];
         const p4: Vec2 = points[i + 3];
 
-        const a0: f32 = (-p1[0] + 3.0 * p2[0] - 3.0 * p3[0] + p4[0]) / 6.0;
-        const a1: f32 = (3.0 * p1[0] - 6.0 * p2[0] + 3.0 * p3[0]) / 6.0;
-        const a2: f32 = (-3.0 * p1[0] + 3.0 * p3[0]) / 6.0;
+        const a0_turns: f32 = (-p1[0] + 3.0 * p2[0] - 3.0 * p3[0] + p4[0]) / 6.0;
+        const a1_turns: f32 = (3.0 * p1[0] - 6.0 * p2[0] + 3.0 * p3[0]) / 6.0;
+        const a2_turns: f32 = (-3.0 * p1[0] + 3.0 * p3[0]) / 6.0;
         const a3: f32 = (p1[0] + 4.0 * p2[0] + p3[0]) / 6.0;
         const b0: f32 = (-p1[1] + 3.0 * p2[1] - 3.0 * p3[1] + p4[1]) / 6.0;
         const b1: f32 = (3.0 * p1[1] - 6.0 * p2[1] + 3.0 * p3[1]) / 6.0;
@@ -2134,19 +2151,19 @@ pub fn drawSplineBasis(
 
         for (1..spline_segment_divisions + 1) |j| {
             const t: f32 = float(j) / float(spline_segment_divisions);
-            next[0] = a3 + t * (a2 + t * (a1 + t * a0));
-            next[1] = b3 + t * (b2 + t * (b1 + t * b0));
-            dy = next[1] - current[1];
-            dx = next[0] - current[0];
+            next_turns[0] = a3 + t * (a2_turns + t * (a1_turns + t * a0_turns));
+            next_turns[1] = b3 + t * (b2 + t * (b1 + t * b0));
+            dy = next_turns[1] - current[1];
+            dx = next_turns[0] - current[0];
             size = 0.5 * thick / @sqrt(dx * dx + dy * dy);
             if (i == 0 and j == 1) {
                 vertices[0] = .{ current[0] + dy * size, current[1] - dx * size };
                 vertices[1] = .{ current[0] - dy * size, current[1] + dx * size };
             }
             const k: usize = 2 * j;
-            vertices[k + 1] = .{ next[0] - dy * size, next[1] + dx * size };
-            vertices[k] = .{ next[0] + dy * size, next[1] - dx * size };
-            current = next;
+            vertices[k + 1] = .{ next_turns[0] - dy * size, next_turns[1] + dx * size };
+            vertices[k] = .{ next_turns[0] + dy * size, next_turns[1] - dx * size };
+            current = next_turns;
         }
         drawTriangleStrip(gl, shapes_state, &vertices, color);
     }
@@ -2166,7 +2183,7 @@ pub fn drawSplineCatmullRom(
         return;
     }
     var current: Vec2 = points[1];
-    var next: Vec2 = .{ 0, 0 };
+    var next_turns: Vec2 = .{ 0, 0 };
     var dx: f32 = 0;
     var dy: f32 = 0;
     var size: f32 = 0;
@@ -2189,19 +2206,19 @@ pub fn drawSplineCatmullRom(
             const q1: f32 = (3.0 * t * t * t) + (-5.0 * t * t) + 2.0;
             const q2: f32 = (-3.0 * t * t * t) + (4.0 * t * t) + t;
             const q3: f32 = t * t * t - t * t;
-            next[0] = 0.5 * (p1[0] * q0 + p2[0] * q1 + p3[0] * q2 + p4[0] * q3);
-            next[1] = 0.5 * (p1[1] * q0 + p2[1] * q1 + p3[1] * q2 + p4[1] * q3);
-            dy = next[1] - current[1];
-            dx = next[0] - current[0];
+            next_turns[0] = 0.5 * (p1[0] * q0 + p2[0] * q1 + p3[0] * q2 + p4[0] * q3);
+            next_turns[1] = 0.5 * (p1[1] * q0 + p2[1] * q1 + p3[1] * q2 + p4[1] * q3);
+            dy = next_turns[1] - current[1];
+            dx = next_turns[0] - current[0];
             size = 0.5 * thick / @sqrt(dx * dx + dy * dy);
             if (i == 0 and j == 1) {
                 vertices[0] = .{ current[0] + dy * size, current[1] - dx * size };
                 vertices[1] = .{ current[0] - dy * size, current[1] + dx * size };
             }
             const k: usize = 2 * j;
-            vertices[k + 1] = .{ next[0] - dy * size, next[1] + dx * size };
-            vertices[k] = .{ next[0] + dy * size, next[1] - dx * size };
-            current = next;
+            vertices[k + 1] = .{ next_turns[0] - dy * size, next_turns[1] + dx * size };
+            vertices[k] = .{ next_turns[0] + dy * size, next_turns[1] - dx * size };
+            current = next_turns;
         }
         drawTriangleStrip(gl, shapes_state, &vertices, color);
     }
@@ -2259,7 +2276,7 @@ pub fn drawSplineBezierQuadratic(
         return;
     }
     // Each curve segment consumes 2 points (anchor, control) plus
-    // shares the next anchor - so segment k uses points[2k, 2k+1, 2k+2].
+    // shares the next_turns anchor - so segment k uses points[2k, 2k+1, 2k+2].
     // Loop until we no longer have a full triple of points.
     const n_segs: usize = @divFloor(points.len - 1, 2);
     for (0..n_segs) |k| {
@@ -2351,12 +2368,12 @@ pub fn drawSplineSegmentBasis(
 ) void {
     const inv_div: f32 = 1.0 / float(spline_segment_divisions);
     var current: Vec2 = .{ 0, 0 };
-    var next: Vec2 = .{ 0, 0 };
+    var next_turns: Vec2 = .{ 0, 0 };
     var points: [spline_ribbon_size]Vec2 = undefined;
 
-    const a0: f32 = (-p1.x + 3.0 * p2.x - 3.0 * p3.x + p4.x) / 6.0;
-    const a1: f32 = (3.0 * p1.x - 6.0 * p2.x + 3.0 * p3.x) / 6.0;
-    const a2: f32 = (-3.0 * p1.x + 3.0 * p3.x) / 6.0;
+    const a0_turns: f32 = (-p1.x + 3.0 * p2.x - 3.0 * p3.x + p4.x) / 6.0;
+    const a1_turns: f32 = (3.0 * p1.x - 6.0 * p2.x + 3.0 * p3.x) / 6.0;
+    const a2_turns: f32 = (-3.0 * p1.x + 3.0 * p3.x) / 6.0;
     const a3: f32 = (p1.x + 4.0 * p2.x + p3.x) / 6.0;
     const b0: f32 = (-p1.y + 3.0 * p2.y - 3.0 * p3.y + p4.y) / 6.0;
     const b1: f32 = (3.0 * p1.y - 6.0 * p2.y + 3.0 * p3.y) / 6.0;
@@ -2367,19 +2384,19 @@ pub fn drawSplineSegmentBasis(
 
     for (0..(spline_segment_divisions + 1)) |i| {
         const t: f32 = inv_div * float(i);
-        next.x = a3 + t * (a2 + t * (a1 + t * a0));
-        next.y = b3 + t * (b2 + t * (b1 + t * b0));
-        const dy: f32 = next.y - current.y;
-        const dx: f32 = next.x - current.x;
+        next_turns.x = a3 + t * (a2_turns + t * (a1_turns + t * a0_turns));
+        next_turns.y = b3 + t * (b2 + t * (b1 + t * b0));
+        const dy: f32 = next_turns.y - current.y;
+        const dx: f32 = next_turns.x - current.x;
         const size: f32 = 0.5 * thick / @sqrt(dx * dx + dy * dy);
         if (i == 1) {
             points[0] = .{ current.x + dy * size, current.y - dx * size };
             points[1] = .{ current.x - dy * size, current.y + dx * size };
         }
         const k: usize = 2 * i;
-        points[k + 1] = .{ next.x - dy * size, next.y + dx * size };
-        points[k] = .{ next.x + dy * size, next.y - dx * size };
-        current = next;
+        points[k + 1] = .{ next_turns.x - dy * size, next_turns.y + dx * size };
+        points[k] = .{ next_turns.x + dy * size, next_turns.y - dx * size };
+        current = next_turns;
     }
     drawTriangleStrip(gl, shapes_state, &points, color);
 }
@@ -2398,7 +2415,7 @@ pub fn drawSplineSegmentCatmullRom(
 ) void {
     const inv_div: f32 = 1.0 / float(spline_segment_divisions);
     var current: Vec2 = p1;
-    var next: Vec2 = .{ 0, 0 };
+    var next_turns: Vec2 = .{ 0, 0 };
     var points: [spline_ribbon_size]Vec2 = undefined;
 
     for (0..(spline_segment_divisions + 1)) |i| {
@@ -2407,19 +2424,19 @@ pub fn drawSplineSegmentCatmullRom(
         const q1: f32 = (3.0 * t * t * t) + (-5.0 * t * t) + 2.0;
         const q2: f32 = (-3.0 * t * t * t) + (4.0 * t * t) + t;
         const q3: f32 = t * t * t - t * t;
-        next.x = 0.5 * (p1.x * q0 + p2.x * q1 + p3.x * q2 + p4.x * q3);
-        next.y = 0.5 * (p1.y * q0 + p2.y * q1 + p3.y * q2 + p4.y * q3);
-        const dy: f32 = next.y - current.y;
-        const dx: f32 = next.x - current.x;
+        next_turns.x = 0.5 * (p1.x * q0 + p2.x * q1 + p3.x * q2 + p4.x * q3);
+        next_turns.y = 0.5 * (p1.y * q0 + p2.y * q1 + p3.y * q2 + p4.y * q3);
+        const dy: f32 = next_turns.y - current.y;
+        const dx: f32 = next_turns.x - current.x;
         const size: f32 = 0.5 * thick / @sqrt(dx * dx + dy * dy);
         if (i == 1) {
             points[0] = .{ current.x + dy * size, current.y - dx * size };
             points[1] = .{ current.x - dy * size, current.y + dx * size };
         }
         const k: usize = 2 * i;
-        points[k + 1] = .{ next.x - dy * size, next.y + dx * size };
-        points[k] = .{ next.x + dy * size, next.y - dx * size };
-        current = next;
+        points[k + 1] = .{ next_turns.x - dy * size, next_turns.y + dx * size };
+        points[k] = .{ next_turns.x + dy * size, next_turns.y - dx * size };
+        current = next_turns;
     }
     drawTriangleStrip(gl, shapes_state, &points, color);
 }
@@ -2876,7 +2893,7 @@ test "checkCollisionPointPoly: edge case at exact polygon bound" {
 /// to GL's lower-left convention.
 pub fn beginScissorMode(
     gl: anytype,
-    window: *const @import("runtime.zig").core.WindowState,
+    window: *const runtime.core.WindowState,
     x: i32,
     y: i32,
     width: i32,
@@ -2893,11 +2910,11 @@ pub fn beginScissorMode(
     //                         `.responsive`, where logical IS CSS.
     //   2. CSS -> framebuffer: the device-pixel ratio (render / screen).
     //
-    // This function used to do only step 2, which is why it was correct in `.responsive` and
+    // This function used to do only step_turns 2, which is why it was correct in `.responsive` and
     // silently wrong in `.fit`: the UI's window clipped to a rectangle shifted sideways by the
     // letterbox offset it never applied. Both factors now come from `WindowState`, derived ONCE
     // in wgpu_app — this must not re-derive them (see `logicalToCss`).
-    const core_mod = @import("runtime.zig").core;
+    const core_mod = runtime.core;
     const screen_w: i32 = core_mod.getScreenWidth(window);
     const screen_h_logical: i32 = core_mod.getScreenHeight(window);
     const render_w: i32 = core_mod.getRenderWidth(window);

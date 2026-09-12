@@ -16,16 +16,17 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const sinTurns = zm.sinTurns;
 
 const Camera3D = zm.Camera3D;
 const Vec = zm.Vec;
 const pointVec = zm.pointVec;
 const pi = zm.pi;
-const atan2 = zm.atan2;
+const atan2Rad = zm.atan2Rad;
 const bufPrint = std.fmt.bufPrint;
 const float = zm.float;
 const clamp = zm.clamp;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -83,7 +84,7 @@ fn makeAtlas(gpa: Allocator) !z.Image {
         var a: u32 = 0;
         while (a < anims) : (a += 1) {
             // Walk bob: legs swing, body lifts a touch, per frame.
-            const swing: f32 = @sin(2.0 * pi * float(a) / float(anims));
+            const swing: f32 = sinTurns(float(a) / float(anims));
             paintRobot(px, w, a * cell, d * cell, frontness, swing);
         }
     }
@@ -153,7 +154,7 @@ fn inDisc(u: f32, v: f32, cx: f32, cy: f32, r: f32) bool {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const u: z.ui_real.Ui = s.ui_host.begin(f);
     const cam: Camera3D = s.cam.update(f, u.wantCaptureMouse(), .{
@@ -172,7 +173,7 @@ fn update(f: *z.Frame, s: *State) void {
     // ---- pick the DIRECTION row from the camera's angle around the sprite ----
     const cp: Vec = cam.position;
     // Angle of the camera in the ground plane, relative to +X.
-    const view_ang: f32 = atan2(cp[2], cp[0]);
+    const view_ang: f32 = atan2Rad(cp[2], cp[0]);
     // Map to [0, dirs) and round to the nearest row.
     var dir_f: f32 = view_ang / (2.0 * pi) * float(dirs);
     dir_f = @mod(dir_f + float(dirs), float(dirs));
@@ -212,8 +213,8 @@ fn update(f: *z.Frame, s: *State) void {
     // ---- HUD ----
     var buf: [64]u8 = undefined;
     const hud: []const u8 = bufPrint(&buf, "direction row: {d}   walk frame: {d}", .{ dir, s.anim }) catch "";
-    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = co.palette.ink_dim, .font = &s.font });
-    co.caption(f.gl, s.font, "WebGPU 3D - directional billboard (orbit to see other sides)");
+    f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
+    common.caption(f.gl, s.font, "WebGPU 3D - directional billboard (orbit to see other sides)");
     s.ui_host.render(f);
 }
 

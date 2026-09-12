@@ -14,7 +14,7 @@ What CARRIES FORWARD from the previous plan and is NOT re-litigated here:
 
 - **`addrspace(.constant)` for individual uniforms** — established in S1.4.5 step 1, used by this plan's codegen.
 - **`UniformBuffer(T)` for UBO blocks** — already shipped in `src/uniform_buffer.zig` (S1.2). This plan adds a schema-level wrapper (`UniformBlock`) that delegates to it.
-- **The shader-style conventions** in `src/notes/shader-style.md` — particularly relevant for shader-BODY code (not interface), including the `lint_zimr` rules that gate `_vs.zig` / `_fs.zig` files.
+- **The shader-style conventions** in `src/notes/shader-style.md` — particularly relevant for shader-BODY code (not interface), including the `zimrlint` rules that gate `_vs.zig` / `_fs.zig` files.
 - **The 11-point gotchas appendix** in the previous plan's §4 — preserved here in Appendix B with current relevance annotations.
 - **Open follow-ups from the previous plan** — WGSL output via `--target` flag, cross-compile prebuilt binaries, comptime GLSL validator, multi-UBO frequency separation — re-evaluated below in "Deferred ideas" with current priority.
 
@@ -1109,7 +1109,7 @@ These gotchas justify the `gen_shader_externs` tool's output choices and the bui
 
 ## Appendix C — Reference: `shader-style.md`
 
-`src/notes/shader-style.md` (shipped S1.6) documents the style conventions for the SHADER BODY code itself: when to use `pub fn` vs inline, naming conventions for inline-asm operands, how to structure helper functions, the `lint_zimr` rules that fire on `_vs.zig` / `_fs.zig` files (`shader-inline-fn`, `shader-no-atan`, etc.). It complements this plan, which focuses on the INTERFACE between shader and engine. Phase 8's contributor guide should fold both into one authoring document.
+`src/notes/shader-style.md` (shipped S1.6) documents the style conventions for the SHADER BODY code itself: when to use `pub fn` vs inline, naming conventions for inline-asm operands, how to structure helper functions, the `zimrlint` rules that fire on `_vs.zig` / `_fs.zig` files (`shader-inline-fn`, `shader-no-atan`, etc.). It complements this plan, which focuses on the INTERFACE between shader and engine. Phase 8's contributor guide should fold both into one authoring document.
 
 ## Implementation log
 
@@ -1211,7 +1211,7 @@ Phase 3 is "external projects can use the pipeline through their own `build.zig`
 
 11. **Build-time helper sharing via `b.addModule`.** Zig 0.16 lets a dep register a regular module that the consumer can `@import` directly from their own build.zig — the build runner resolves the named module through the build.zig.zon dependency graph. No special "build_helper" annotation needed. This is the mechanism Phase 3 uses.
 
-12. **Lint exclusion is needed for build-helper files.** `lint_zimr`'s rule 2 (untyped-local) was designed for runtime Zig code and fires constantly on idiomatic build.zig code (`const exe = b.addExecutable(...)` etc.). Build-time helper files moved out of `build.zig` need to be explicitly excluded from the lint scan.
+12. **Lint exclusion is needed for build-helper files.** `zimrlint`'s rule 2 (untyped-local) was designed for runtime Zig code and fires constantly on idiomatic build.zig code (`const exe = b.addExecutable(...)` etc.). Build-time helper files moved out of `build.zig` need to be explicitly excluded from the lint scan.
 
 13. **Phase 3 splits cleanly into 3a (surface) and 3b (prebuilts).** The original plan's Phase 3 mixed extracting the public API with cross-compiling vendored tool binaries for three platforms. These are independent: 3a is mechanical refactoring + module registration; 3b is build-system work for cross-platform CI. The split is documented in `shader-pipeline-external.md`.
 
@@ -1236,7 +1236,7 @@ Recommendation: **(b) Phase 4** first. It exercises the typed API on the most co
 
 **What shipped:**
 
-- `build.zig` and `src/shader_codegen.zig` both now pass `lint_zimr`. The lint scan grew from 161 to **163 files** (the two build-time helpers joined the scan).
+- `build.zig` and `src/shader_codegen.zig` both now pass `zimrlint`. The lint scan grew from 161 to **163 files** (the two build-time helpers joined the scan).
 - Type aliases at the top of each file: `Build`, `Module`, `Step`, `Run`, `Compile`, `Fmt`, `InstallArtifact`, `InstallDir`, `InstallFile`, `Options`, `WriteFile`, `LazyPath`, `ResolvedTarget` — short names for the `std.Build.*` types that rule 2's untyped-local annotations now reference. Without these, the annotations would push expression content ~30-40 chars right at every `b.addX(...)` call site.
 - 97 untyped-local violations fixed (78 in build.zig + 19 in shader_codegen.zig).
 - 8 branch-braces violations fixed (single-line `continue;` / `return;` bodies wrapped in `{ ... }`).

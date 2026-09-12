@@ -1,3 +1,4 @@
+//! lint:alias gpu
 //! gpu.zig — zimr's WebGPU resource layer over the raw `wgpu` bindings. One
 //! flat module (merged from pipeline_cache + descriptor_encoder + gpu_frame):
 //!   - pipeline state caching: StateCombo / CacheKey / PipelineCache + hashers
@@ -20,12 +21,12 @@ const BindGroupCache = @import("BindGroupCache.zig");
 /// hash.  Every field of the pipeline state that affects WHICH
 /// pipeline object WebGPU needs goes in here.
 pub const StateCombo = packed struct(u64) {
-    topology: u4 = @intFromEnum(wgpu.PrimitiveTopology.triangle_list),
-    blend: u4 = @intFromEnum(wgpu.BlendMode.alpha),
-    depth: u4 = @intFromEnum(wgpu.DepthMode.none),
-    cull: u4 = @intFromEnum(wgpu.CullMode.none),
-    color_format: u8 = @intFromEnum(wgpu.TextureFormat.rgba8_unorm),
-    depth_format: u8 = @intFromEnum(wgpu.TextureFormat.undefined_),
+    topology: u4 = @backingInt(wgpu.PrimitiveTopology.triangle_list),
+    blend: u4 = @backingInt(wgpu.BlendMode.alpha),
+    depth: u4 = @backingInt(wgpu.DepthMode.none),
+    cull: u4 = @backingInt(wgpu.CullMode.none),
+    color_format: u8 = @backingInt(wgpu.TextureFormat.rgba8_unorm),
+    depth_format: u8 = @backingInt(wgpu.TextureFormat.undefined_),
     sample_count: u4 = 1,
     _pad: u28 = 0,
 
@@ -39,12 +40,12 @@ pub const StateCombo = packed struct(u64) {
         sample_count: u4,
     ) StateCombo {
         return .{
-            .topology = @intCast(@intFromEnum(topology)),
-            .blend = @intCast(@intFromEnum(blend)),
-            .depth = @intCast(@intFromEnum(depth)),
-            .cull = @intCast(@intFromEnum(cull)),
-            .color_format = @intCast(@intFromEnum(color_format)),
-            .depth_format = @intCast(@intFromEnum(depth_format)),
+            .topology = @intCast(@backingInt(topology)),
+            .blend = @intCast(@backingInt(blend)),
+            .depth = @intCast(@backingInt(depth)),
+            .cull = @intCast(@backingInt(cull)),
+            .color_format = @intCast(@backingInt(color_format)),
+            .depth_format = @intCast(@backingInt(depth_format)),
             .sample_count = sample_count,
         };
     }
@@ -140,7 +141,7 @@ pub const PipelineCache = struct {
 /// The 8 hot combos pre-baked at app init for the default 2D shader.
 /// See D4 in `notes/MIGRATION_DECISIONS.md`.
 pub fn hotCombos2D(color_format: wgpu.TextureFormat) [8]StateCombo {
-    const color_fmt_u8: u8 = @intCast(@intFromEnum(color_format));
+    const color_fmt_u8: u8 = @intCast(@backingInt(color_format));
     // Local builder: every hot 2D combo shares the same color format
     // and differs only in (topology, blend).  Folding the repeated
     // `@intFromEnum(...)` boilerplate into one call keeps the table
@@ -152,8 +153,8 @@ pub fn hotCombos2D(color_format: wgpu.TextureFormat) [8]StateCombo {
             color_fmt: u8,
         ) StateCombo {
             return .{
-                .topology = @intCast(@intFromEnum(topology)),
-                .blend = @intCast(@intFromEnum(blend)),
+                .topology = @intCast(@backingInt(topology)),
+                .blend = @intCast(@backingInt(blend)),
                 .color_format = color_fmt,
             };
         }
@@ -218,8 +219,8 @@ test "invalidateSource removes only matching entries" {
     const shader_b: u64 = 0xBBBB_BBBB_BBBB_BBBB;
     const state: StateCombo = .{};
 
-    try cache.put(CacheKey.from(shader_a, state), @enumFromInt(1));
-    try cache.put(CacheKey.from(shader_b, state), @enumFromInt(2));
+    try cache.put(CacheKey.from(shader_a, state), @fromBackingInt(@intCast(1)));
+    try cache.put(CacheKey.from(shader_b, state), @fromBackingInt(@intCast(2)));
 
     try expectEqual(@as(usize, 2), cache.entries.count());
     cache.invalidateSource(shader_a);
@@ -290,8 +291,8 @@ pub fn encodeBindGroupLayoutEntries(
         };
         try writeU32(gpa, &buf, extra);
         const view_dim: u32 = switch (e.resource) {
-            .texture => |t| @intFromEnum(t.view_dimension),
-            .storage_texture => |st| @intFromEnum(st.view_dimension),
+            .texture => |t| @backingInt(t.view_dimension),
+            .storage_texture => |st| @backingInt(st.view_dimension),
             else => 0,
         };
         try writeU32(gpa, &buf, view_dim);
@@ -323,6 +324,52 @@ pub const BindGroupEntry = struct {
     };
 };
 
+/// A bind-group layout holding ONE uniform buffer at binding 0 — the overwhelmingly common
+/// case for a custom pipeline's per-stage uniforms.
+///
+/// ★ THIS EXACT HELPER WAS COPIED INTO TWELVE EXAMPLES before it lived here (`shadowmap`,
+/// `deferred_render`, `cel_shading`, `fog_rendering`, `mesh_picking`, `geno_dance`, ...). It is
+/// not example scaffolding — it is what every hand-built pipeline needs before it can bind
+/// anything, and twelve copies is twelve chances for one of them to drift.
+pub fn uniformBindGroupLayout(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    min_size: u64,
+    visibility: wgpu.ShaderStage,
+    label: []const u8,
+) !wgpu.BindGroupLayoutHandle {
+    const entries = [_]shader_introspect.BindGroupLayoutEntry{
+        .{
+            .binding = 0,
+            .visibility = visibility,
+            .resource = .{ .uniform_buffer = .{ .min_size = min_size } },
+        },
+    };
+    const blob: []const u8 = try encodeBindGroupLayoutEntries(gpa, &entries);
+    defer gpa.free(blob);
+    return wgpu.createBindGroupLayout(device, blob, label);
+}
+
+/// The matching bind group: one uniform buffer bound at 0.
+pub fn uniformBindGroup(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    layout: wgpu.BindGroupLayoutHandle,
+    buffer: wgpu.BufferHandle,
+    size: u64,
+    label: []const u8,
+) !wgpu.BindGroupHandle {
+    const entries = [_]BindGroupEntry{
+        .{
+            .binding = 0,
+            .resource = .{ .buffer = .{ .handle = buffer, .offset = 0, .size = size } },
+        },
+    };
+    const blob: []const u8 = try encodeBindGroupEntries(gpa, &entries);
+    defer gpa.free(blob);
+    return wgpu.createBindGroup(device, layout, blob, label);
+}
+
 fn writeU64(
     gpa: Allocator,
     buf: *ArrayList(u8),
@@ -346,19 +393,19 @@ pub fn encodeBindGroupEntries(
         switch (e.resource) {
             .buffer => |b| {
                 try writeU32(gpa, &buf, 0);
-                try writeU32(gpa, &buf, @intFromEnum(b.handle));
+                try writeU32(gpa, &buf, @backingInt(b.handle));
                 try writeU64(gpa, &buf, b.offset);
                 try writeU64(gpa, &buf, b.size);
             },
             .sampler => |s| {
                 try writeU32(gpa, &buf, 1);
-                try writeU32(gpa, &buf, @intFromEnum(s));
+                try writeU32(gpa, &buf, @backingInt(s));
                 try writeU64(gpa, &buf, 0);
                 try writeU64(gpa, &buf, 0);
             },
             .texture_view => |tv| {
                 try writeU32(gpa, &buf, 2);
-                try writeU32(gpa, &buf, @intFromEnum(tv));
+                try writeU32(gpa, &buf, @backingInt(tv));
                 try writeU64(gpa, &buf, 0);
                 try writeU64(gpa, &buf, 0);
             },
@@ -444,10 +491,10 @@ pub fn encodeRenderPipelineDescriptor(
     try writeU32(gpa, &buf, @intCast(desc.vertex_buffer_layouts.len));
     for (desc.vertex_buffer_layouts) |vbl| {
         try writeU32(gpa, &buf, vbl.array_stride);
-        try writeU32(gpa, &buf, @intFromEnum(vbl.step_mode));
+        try writeU32(gpa, &buf, @backingInt(vbl.step_mode));
         try writeU32(gpa, &buf, @intCast(vbl.attributes.len));
         for (vbl.attributes) |attr| {
-            try writeU32(gpa, &buf, @intFromEnum(attr.format));
+            try writeU32(gpa, &buf, @backingInt(attr.format));
             try writeU32(gpa, &buf, attr.offset);
             try writeU32(gpa, &buf, attr.shader_location);
         }
@@ -466,7 +513,7 @@ pub fn encodeRenderPipelineDescriptor(
     // bridge consumes them directly and never re-derives depth semantics from a
     // raw int. See wgpu.DepthMode: adding a mode is a compile error until both
     // are stated, so a passive mode can't silently end up writing depth again.
-    const depth_mode: wgpu.DepthMode = @enumFromInt(desc.state.depth);
+    const depth_mode: wgpu.DepthMode = @fromBackingInt(@intCast(desc.state.depth));
     try writeStr(gpa, &buf, depth_mode.depthCompare());
     try writeU32(gpa, &buf, @intFromBool(depth_mode.writesDepth()));
 
@@ -481,7 +528,7 @@ pub fn encodeRenderPipelineDescriptor(
     // strict prefix-extension of the old layout.
     try writeU32(gpa, &buf, @intCast(desc.extra_color_formats.len));
     for (desc.extra_color_formats) |fmt| {
-        try writeU32(gpa, &buf, @intFromEnum(fmt));
+        try writeU32(gpa, &buf, @backingInt(fmt));
     }
 
     return buf.toOwnedSlice(gpa);
@@ -523,9 +570,9 @@ test "encodeBindGroupLayoutEntries emits expected bytes for a UBO entry" {
 
 test "encodeBindGroupEntries handles mixed resource types" {
     const entries: []const BindGroupEntry = &.{
-        .{ .binding = 0, .resource = .{ .buffer = .{ .handle = @enumFromInt(42), .size = 256 } } },
-        .{ .binding = 1, .resource = .{ .sampler = @enumFromInt(7) } },
-        .{ .binding = 2, .resource = .{ .texture_view = @enumFromInt(99) } },
+        .{ .binding = 0, .resource = .{ .buffer = .{ .handle = @fromBackingInt(@intCast(42)), .size = 256 } } },
+        .{ .binding = 1, .resource = .{ .sampler = @fromBackingInt(@intCast(7)) } },
+        .{ .binding = 2, .resource = .{ .texture_view = @fromBackingInt(@intCast(99)) } },
     };
     const bytes: []const u8 = try encodeBindGroupEntries(std.testing.allocator, entries);
     defer std.testing.allocator.free(bytes);
@@ -603,11 +650,11 @@ test "encodeRenderPipelineDescriptor appends the MRT extra-target tail" {
     const tail: []const u8 = bytes[bytes.len - 12 ..];
     try expectEqual(@as(u32, 2), std.mem.readInt(u32, tail[0..4], .little));
     try expectEqual(
-        @as(u32, @intFromEnum(wgpu.TextureFormat.rgba16_float)),
+        @as(u32, @backingInt(wgpu.TextureFormat.rgba16_float)),
         std.mem.readInt(u32, tail[4..8], .little),
     );
     try expectEqual(
-        @as(u32, @intFromEnum(wgpu.TextureFormat.rgba8_unorm)),
+        @as(u32, @backingInt(wgpu.TextureFormat.rgba8_unorm)),
         std.mem.readInt(u32, tail[8..12], .little),
     );
 }

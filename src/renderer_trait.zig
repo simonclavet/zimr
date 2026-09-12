@@ -1,3 +1,4 @@
+//! lint:alias renderer_trait
 // src/renderer_trait.zig - renderer-polymorphic immediate-mode interface.
 // The convention from `notes/claude.md` → Architectural commitments
 // → "`gl: anytype` for renderer-polymorphic scene code": scene-
@@ -78,7 +79,7 @@ const required_methods: []const []const u8 = &.{
 /// via `blendFunc`.  This enum names the recipes the demo actually
 /// uses; adapters translate to their underlying API.  Extend as
 /// needed; both adapters error or fall back on unsupported modes.
-pub const BlendMode = @import("SwAdapter.zig").BlendMode;
+pub const BlendMode = SwAdapter.BlendMode;
 
 /// Comptime trait check: error out at compile time if `gl` doesn't
 /// expose the renderer interface.  Place this at the top of any

@@ -5,7 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const message: []const u8 = "watch the words appear, one character at a time...";
@@ -38,21 +38,21 @@ fn update(f: *z.Frame, s: *State) void {
     const ref_w: f32 = z.measureText(s.font, message, 28)[0];
     const size: f32 = @min(28.0, 28.0 * (w * 0.88) / ref_w);
 
-    z.clearViewport(f, co.palette.bg);
-    co.backdrop(f.gl, w, h);
+    z.clearViewport(f, common.palette.bg);
+    common.backdrop(f.gl, w, h);
 
     const full_w: f32 = z.measureText(s.font, message, size)[0];
     const tx: f32 = (w - full_w) * 0.5;
     const ty: f32 = h * 0.45;
-    f.gl.text(.{ tx, ty }, message[0..chars_shown], .{ .size = size, .color = co.palette.ink, .font = &s.font });
+    f.gl.text(.{ tx, ty }, message[0..chars_shown], .{ .size = size, .color = common.palette.ink, .font = &s.font });
 
     const shown_w: f32 = z.measureText(s.font, message[0..chars_shown], size)[0];
     const blink: bool = @mod(t, 1.0) < 0.5;
     if (chars_shown < message.len or blink) {
-        f.gl.rect(.{ .x = tx + shown_w + 2, .y = ty, .width = 3, .height = size }, .{ .color = co.palette.accent });
+        f.gl.rect(.{ .x = tx + shown_w + 2, .y = ty, .width = 3, .height = size }, .{ .color = common.palette.accent });
     }
 
-    co.caption(f.gl, s.font, "writing anim: typewriter reveal");
+    common.caption(f.gl, s.font, "writing anim: typewriter reveal");
     z.endDrawing(f.gl);
 }
 

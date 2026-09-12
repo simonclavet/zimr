@@ -13,7 +13,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 
 const float = zm.float;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -87,7 +87,7 @@ fn update(f: *z.Frame, state: *State) void {
     const cur: z.Gesture = z.getGestureDetected(&state.gestures);
     pushHistory(state, cur);
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     f.gl.text(.{ 20, 20 }, "Current gesture", .{ .size = 16, .color = c.slate_400, .font = &state.font });
     f.gl.text(.{ 20, 50 }, gestureName(cur), .{ .size = 56, .color = c.amber_300, .font = &state.font });
@@ -140,7 +140,7 @@ fn update(f: *z.Frame, state: *State) void {
         "frame {d}, fingers {d}",
         .{ state.frame_count, tcount },
     ) catch "";
-    co.caption(f.gl, state.font, hud);
+    common.caption(f.gl, state.font, hud);
     z.endDrawing(f.gl);
 }
 

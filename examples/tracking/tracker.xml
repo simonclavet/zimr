@@ -1,0 +1,58 @@
+<mujoco model="tracker">
+  <!--
+    A long five-segment arm with a HEAVY gripper, designed to be hard for a fixed-gain servo.
+
+    ★ THE END MASS IS THE POINT. A 6 kg gripper at 1.9 m makes the arm's inertia strongly
+    configuration-dependent — the shoulder feels a different load at every pose — so no single
+    kp is right everywhere. That is a bind a PD cannot escape and a planner does not have,
+    because the planner re-linearises the actual mass matrix at every knot.
+
+    Torque limits are generous enough that the task is feasible and tight enough that a servo
+    trying to gain its way out of the lag will saturate.
+  -->
+  <compiler angle="radian"/>
+  <option timestep="0.004" gravity="0 0 -9.81"/>
+
+  <default>
+    <joint type="hinge" damping="1.5" armature="0.03"/>
+    <geom type="capsule" size="0.045" density="500" rgba="0.62 0.66 0.74 1"/>
+    <motor ctrlrange="-400 400" gear="1"/>
+  </default>
+
+  <worldbody>
+    <body name="base" pos="0 0 0.30">
+      <joint name="yaw" axis="0 0 1" range="-3.1 3.1"/>
+      <geom name="base_g" fromto="0 0 -0.30 0 0 0.06" size="0.085"/>
+      <body name="seg1" pos="0 0 0.06">
+        <joint name="j1" axis="0 1 0" range="-2.5 2.5"/>
+        <geom name="g1" fromto="0 0 0 0 0 0.55"/>
+        <body name="seg2" pos="0 0 0.55">
+          <joint name="j2" axis="0 1 0" range="-2.7 2.7"/>
+          <geom name="g2" fromto="0 0 0 0 0 0.48" size="0.040"/>
+          <body name="seg3" pos="0 0 0.48">
+            <joint name="j3" axis="0 1 0" range="-2.7 2.7"/>
+            <geom name="g3" fromto="0 0 0 0 0 0.42" size="0.036"/>
+            <body name="seg4" pos="0 0 0.42">
+              <joint name="j4" axis="0 1 0" range="-2.4 2.4"/>
+              <geom name="g4" fromto="0 0 0 0 0 0.34" size="0.032"/>
+              <body name="gripper" pos="0 0 0.34">
+                <joint name="j5" axis="0 0 1" range="-2.8 2.8"/>
+                <!-- ★ 6 kg at the tip. density on a 0.11 m sphere gives roughly that. -->
+                <geom name="grip_g" type="sphere" size="0.11" density="1100" rgba="0.35 0.80 0.60 1"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="m_yaw" joint="yaw"/>
+    <motor name="m_j1" joint="j1"/>
+    <motor name="m_j2" joint="j2"/>
+    <motor name="m_j3" joint="j3"/>
+    <motor name="m_j4" joint="j4"/>
+    <motor name="m_j5" joint="j5"/>
+  </actuator>
+</mujoco>

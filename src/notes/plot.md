@@ -340,7 +340,7 @@ HBars, Dual, Subplots, Rect, Select, Time, Symlog, AxisCfg, Equal, Pie, Bubbles,
   cell's `active`; double-tap/wheel use `hovered`; **pinch** must be gated
   on `frame.contains(pz.mid)` because `u.pinch()` is a *global* gesture —
   otherwise every subplot zooms together.
-- `zig build` runs `lint_zimr` + `zig fmt --check` as hard prereqs. Lint:
+- `zig build` runs `zimrlint` + `zig fmt --check` as hard prereqs. Lint:
   typed locals; braced `if(){...}`; ≤120 cols; bind `zm.X` at file scope; no
   `std.math` in shader-reachable code; with a pinned int type use bare
   `@floor`/`@round`/`@ceil` (not `@intFromFloat(@floor(..))`); `@splat` not `**`;

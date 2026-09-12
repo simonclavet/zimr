@@ -1,0 +1,182 @@
+//! PHASE A: can the humanoid hold `stand_on_left_leg`, and what does it take?
+//!
+//! Three questions, in order, because each only matters if the last one held:
+//!   1. does the shipped pose put the centre of mass over the LEFT foot at all?
+//!   2. with only that foot in contact, does `PoseHold` keep it up?
+//!   3. how hard a push does it survive — the number MPC has to beat.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const humanoid_xml = @embedFile("tests/fixtures/robot/humanoid.xml");
+
+const dt: f32 = 1.0 / 500.0;
+
+fn geomWorld(m: *const rbt.Model, d: *const rbt.Data, g: u32) zm.Vec {
+    const b: u32 = m.geom_body[g];
+    return d.body_xpos[b] + zm.rotate(d.body_xrot[b], m.geom_pos[g]);
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = dt,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    const m: *const rbt.Model = &imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    defer d.deinit();
+
+    var total_mass: f32 = 0;
+    for (0..m.nbody) |b| total_mass += m.body_mass[b];
+    p("humanoid: {d} bodies, nv {d}, nu {d}, mass {d:.1} kg\n", .{ m.nbody, m.nv, m.nu, total_mass });
+    p("keyframes: ", .{});
+    for (robot.keyframes) |kf| p("{s} ", .{kf.name});
+    p("\n\n", .{});
+
+    // Find the two feet and the keyframe we want.
+    const left_foot: u32 = imp.bodyIndex("foot_left") orelse return error.NoLeftFoot;
+    const right_foot: u32 = imp.bodyIndex("foot_right") orelse return error.NoRightFoot;
+    var stand_key: ?mjcf.Keyframe = null;
+    for (robot.keyframes) |kf| {
+        if (std.mem.eql(u8, kf.name, "stand_on_left_leg")) stand_key = kf;
+    }
+    const key: mjcf.Keyframe = stand_key orelse return error.NoKeyframe;
+
+    // ── QUESTION 1: where is the mass, relative to each foot? ──
+    _ = rmj.applyKeyframe(m, &d, key);
+    rbt.forward(m, &d);
+    const com: zm.Vec = d.subtree_com[rbt.world_body];
+    p("Q1  pose `stand_on_left_leg`, as shipped:\n", .{});
+    p("      CM            ({d:>7.4},{d:>7.4},{d:>7.4})\n", .{ com[0], com[1], com[2] });
+    p("      left foot     ({d:>7.4},{d:>7.4},{d:>7.4})\n", .{ d.body_xpos[left_foot][0], d.body_xpos[left_foot][1], d.body_xpos[left_foot][2] });
+    p("      right foot    ({d:>7.4},{d:>7.4},{d:>7.4})\n", .{ d.body_xpos[right_foot][0], d.body_xpos[right_foot][1], d.body_xpos[right_foot][2] });
+    const offset_l: f32 = @sqrt((com[0] - d.body_xpos[left_foot][0]) * (com[0] - d.body_xpos[left_foot][0]) +
+        (com[1] - d.body_xpos[left_foot][1]) * (com[1] - d.body_xpos[left_foot][1]));
+    p("      CM is {d:.4} m horizontally from the LEFT foot\n", .{offset_l});
+    p("      right foot is {d:.4} m off the ground\n\n", .{d.body_xpos[right_foot][2]});
+
+    // ── QUESTION 2: does it hold, with only the planted foot in contact? ──
+    var actuated: ctl.Actuation = try ctl.Actuation.init(gpa, m);
+    defer actuated.deinit();
+    const home: []f32 = try gpa.dupe(f32, d.pos);
+    defer gpa.free(home);
+    const root: u32 = m.jnt_qpos_adr[0];
+
+    // ── ★ VERIFY THE INSTRUMENT BEFORE TRUSTING IT ──
+    // The sole spans x = -0.07 to +0.14 in the foot's frame, so the four contact points must
+    // spread ~0.21 m in x and sit at ground height. Anything else means the capsule axis
+    // assumption is wrong and every contact is in the wrong place.
+    _ = rmj.applyKeyframe(m, &d, key);
+    rbt.forward(m, &d);
+    p("Q1b contact points the probe would place on the left foot:\n", .{});
+    for (0..m.ngeom) |g| {
+        if (m.geom_body[g] != left_foot) continue;
+        const half: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.half_height,
+            else => 0,
+        };
+        const radius: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.radius,
+            else => 0,
+        };
+        const axis_world: zm.Vec = zm.rotate(zm.qmul(d.body_xrot[left_foot], m.geom_rot[g]), vec(0, 0, 1));
+        const centre: zm.Vec = geomWorld(m, &d, @intCast(g));
+        p("      geom {d}: half {d:.4} radius {d:.4} axis ({d:>6.3},{d:>6.3},{d:>6.3})\n", .{ g, half, radius, axis_world[0], axis_world[1], axis_world[2] });
+        for ([_]f32{ -1.0, 1.0 }) |end| {
+            const at: zm.Vec = centre + axis_world * zm.splat(end * half);
+            p("         end {d:>4.1}: ({d:>7.4},{d:>7.4},{d:>7.4})  gap {d:>7.4}\n", .{ end, at[0], at[1], at[2], at[2] - radius });
+        }
+    }
+    p("\n", .{});
+
+    p("Q2  holding it, contacts on the left foot only:\n", .{});
+    p("      kp     kv    torso z   tilt     CM->foot   verdict\n", .{});
+    for ([_]bool{ true, false }) |one_leg| {
+        p("    --- {s} ---\n", .{if (one_leg) "ONE leg (left only)" else "BOTH legs, same pose"});
+        for ([_]f32{ 200, 400, 800 }) |kp| {
+            for ([_]f32{ 10, 25 }) |kv| {
+                _ = rmj.applyKeyframe(m, &d, key);
+                rbt.forward(m, &d);
+                var worst_tilt: f32 = 0;
+                for (0..2500) |_| { // 5 s
+                    d.clearContacts();
+                    // ── ★★★ A SOLE IS NOT A POINT ──
+                    //
+                    // The humanoid's feet are two horizontal capsules spanning x = −0.07 to +0.14 —
+                    // a 0.21 m sole. One contact at each capsule's CENTRE gives a single point under
+                    // the middle of the foot, which resists no pitch whatsoever: the robot pivots
+                    // about it and goes over immediately, at every gain. That is what the first
+                    // version measured, and it was a fault in the instrument rather than in the
+                    // robot.
+                    //
+                    // Contacts at both ENDS of each capsule give four points and a real foot
+                    // polygon. The Go1 got away with one per foot because its feet genuinely ARE
+                    // spheres.
+                    var contacts_made: u32 = 0;
+                    for (0..m.ngeom) |g| {
+                        const owner: u32 = m.geom_body[g];
+                        if (owner != left_foot and (one_leg or owner != right_foot)) continue;
+                        const half: f32 = switch (m.geom_shape[g]) {
+                            .capsule => |c| c.half_height,
+                            else => 0,
+                        };
+                        const radius: f32 = switch (m.geom_shape[g]) {
+                            .capsule => |c| c.radius,
+                            .sphere => |sp| sp.radius,
+                            else => continue,
+                        };
+                        const body_rot: zm.Quat = d.body_xrot[left_foot];
+                        const axis_world: zm.Vec = zm.rotate(
+                            zm.qmul(body_rot, m.geom_rot[g]),
+                            vec(0, 0, 1),
+                        );
+                        const centre: zm.Vec = geomWorld(m, &d, @intCast(g));
+                        for ([_]f32{ -1.0, 1.0 }) |end| {
+                            const at: zm.Vec = centre + axis_world * zm.splat(end * half);
+                            const gap: f32 = at[2] - radius;
+                            if (gap > 0.02) continue;
+                            d.pushContact(.{
+                                .position = vec(at[0], at[1], 0),
+                                .normal = vec(0, 0, 1),
+                                .tangent = .{ vec(1, 0, 0), vec(0, 1, 0) },
+                                .distance = gap,
+                                .friction = .{ 1.0, 1.0 },
+                                .body_a = rbt.world_body,
+                                .body_b = left_foot,
+                                .id = @intCast(g * 2 + @as(u32, if (end > 0) 1 else 0)),
+                            });
+                            contacts_made += 1;
+                        }
+                    }
+                    if (contacts_made == 0 and false) unreachable;
+                    (ctl.PoseHold{ .target = home, .kp = kp, .kv = kv }).apply(m, &d, actuated);
+                    rbt.step(m, &d);
+                    const rpy = zm.quatToEulerXYZ(.{ d.pos[root + 3], d.pos[root + 4], d.pos[root + 5], d.pos[root + 6] });
+                    worst_tilt = @max(worst_tilt, @abs(rpy[0]) + @abs(rpy[1]));
+                    if (d.body_xpos[1][2] < 0.4) break;
+                }
+                const now: zm.Vec = d.subtree_com[rbt.world_body];
+                const off: f32 = @sqrt((now[0] - d.body_xpos[left_foot][0]) * (now[0] - d.body_xpos[left_foot][0]) +
+                    (now[1] - d.body_xpos[left_foot][1]) * (now[1] - d.body_xpos[left_foot][1]));
+                const up: bool = d.body_xpos[1][2] > 0.8 and worst_tilt < 0.5;
+                p("     {d:>4.0}  {d:>5.0}   {d:>7.3}  {d:>6.3}   {d:>8.4}   {s}\n", .{ kp, kv, d.body_xpos[1][2], worst_tilt, off, if (up) "HOLDS" else "falls" });
+            }
+        }
+    }
+}

@@ -117,6 +117,68 @@ compliance:
 
 ---
 
+## par_shapes — Philip Rideout (`prideout`)
+
+- **Upstream:** https://github.com/prideout/par (`par_shapes.h`)
+- **License:** MIT
+- **Author:** Philip Rideout
+
+zimr's shape-generation library — the parametric spine
+(`parametricMesh`), the primitives (sphere, hemisphere, cylinder,
+cone, torus, trefoil knot, plane, klein bottle), the disk, the four
+platonic solids, the subdivided icosphere, the procedural rock, and
+the mesh-ops toolkit (merge / translate / rotate / scale / invert /
+compute-aabb / clone / unweld / weld / remove-degenerate), all in
+`src/draw3d.zig` — is a pure-Zig reimplementation inspired by the
+algorithms and API design of Philip Rideout's `par_shapes.h`.  No
+par_shapes source is copied; the shapes were re-derived in Zig.  What
+follows par_shapes is the design: a `uv -> xyz` parametric core with
+per-shape callbacks, the platonic-solid coordinate tables, the
+subdivide-and-project icosphere, and the shape-editing operations.
+
+par_shapes' MIT notice is reproduced here:
+
+    Copyright (c) 2019 Philip Rideout
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+---
+
+## zmesh — Michal Ziulek and zig-gamedev contributors
+
+- **Upstream:** https://github.com/zig-gamedev/zmesh
+- **License:** MIT
+- **Author:** Michal Ziulek and zig-gamedev contributors
+
+The zig-gamedev `zmesh` library (a Zig wrapper binding par_shapes,
+meshoptimizer, and cgltf) was studied as a reference for a
+Zig-idiomatic shape-generation API surface while building zimr's own
+shape library.  No zmesh code is used — only par_shapes'
+shape-generation concepts were ported, in pure Zig.  zmesh is
+distributed under the same MIT terms reproduced above, with the
+following copyright:
+
+    Copyright (c) 2022 Michal Ziulek
+    Copyright (c) 2024 zig-gamedev contributors
+
+---
+
 ## andrewrk/TrueType — Andrew Kelley and contributors
 
 - **Upstream:** https://codeberg.org/andrewrk/TrueType

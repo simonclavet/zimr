@@ -1,6 +1,6 @@
 //! wireframe — port of the GL `wireframe`: a generated sphere + two cubes,
 //! drawn solid or as wireframe (TAB toggles), proving the retained Mesh/Model
-//! tier — `genMeshSphere`/`genMeshCube` → `loadModelFromMesh` → `drawModel` /
+//! tier — `genMeshSphereLegacy`/`genMeshCube` → `loadModelFromMesh` → `drawModel` /
 //! `drawModelWires`. The wgpu retained path CPU-transforms each mesh into the
 //! immediate 3D batch (Step 3a); true GPU instancing lands in Step 4. The
 //! camera auto-orbits; the caption is 2D, drawn after endMode3D.
@@ -13,7 +13,7 @@ const Camera3D = zm.Camera3D;
 const pi = zm.pi;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -34,7 +34,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // Sphere: 16 rings × 24 slices = 768 triangles, indexed.
-    var sphere_mesh: z.Mesh = try z.genMeshSphere(gpa, 1.2, 16, 24);
+    var sphere_mesh: z.Mesh = try z.genMeshSphere(gpa, 1.2, 24, 16);
     try z.uploadMesh(gpa, &sphere_mesh, false);
     const sphere_model: z.Model = try z.loadModelFromMesh(f.gl, gpa, sphere_mesh);
 
@@ -56,7 +56,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.show_wires = !s.show_wires;
     }
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const rad: f32 = s.angle * pi / 180.0;
     const cam: Camera3D = .{
@@ -85,7 +85,7 @@ fn update(f: *z.Frame, s: *State) void {
         "WebGPU wireframe - TAB toggles - MODE: wires (sphere + 2 cubes)"
     else
         "WebGPU wireframe - TAB toggles - MODE: solid (sphere + 2 cubes)";
-    co.caption(f.gl, s.font, cap);
+    common.caption(f.gl, s.font, cap);
     z.endDrawing(f.gl);
 }
 

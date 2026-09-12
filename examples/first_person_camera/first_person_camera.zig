@@ -21,7 +21,7 @@ const zm = @import("zm");
 const Camera3D = zm.Camera3D;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -98,7 +98,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.camera.position[2],
     }) catch "pos (?)";
     f.gl.text(.{ 16, 42 }, hud, .{ .size = 16, .color = .{ .r = 170, .g = 180, .b = 200, .a = 255 }, .font = &s.font });
-    co.caption(f.gl, s.font, "WASD: walk - drag: look - wheel: speed - heightmap terrain via genMeshHeightmap");
+    common.caption(f.gl, s.font, "WASD: walk - drag: look - wheel: speed - heightmap terrain via genMeshHeightmap");
     z.endDrawing(f.gl);
 }
 

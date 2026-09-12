@@ -1,0 +1,112 @@
+//! PHASE E GATE: does `tau = A_G_angular^T * w` on the limbs actually produce angular momentum
+//! rate along `w`? If not, the planner's output cannot reach the robot and the demo is moot.
+//!
+//! Tested in FREE FLIGHT with no contacts: gravity acts at the centre of mass and exerts no
+//! torque about it, so any change in centroidal angular momentum must come from the torques.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const vec = zm.vec;
+const humanoid_xml = @embedFile("tests/fixtures/robot/humanoid.xml");
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 8,
+        .timestep = 1.0 / 2000.0,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    const m: *const rbt.Model = &imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    defer d.deinit();
+
+    const jac: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+    defer gpa.free(jac);
+    const jac_rot: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+    defer gpa.free(jac_rot);
+    const s1: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+    defer gpa.free(s1);
+    const s2: []zm.Vec = try gpa.alloc(zm.Vec, m.nv);
+    defer gpa.free(s2);
+
+    // Which DOFs belong to the arms and torso — the limbs a balancing robot windmills with.
+    var limb_dof: [64]bool = @splat(false);
+    var limb_count: u32 = 0;
+    // No joint-name lookup on `Imported`, so go via the bodies the joints drive.
+    const limb_bodies = [_][]const u8{
+        "upper_arm_right", "lower_arm_right", "hand_right",
+        "upper_arm_left",  "lower_arm_left",  "hand_left",
+        "waist_lower",     "pelvis",
+    };
+    for (0..m.njnt) |j| {
+        const body: u32 = m.jnt_body[j];
+        var is_limb: bool = false;
+        for (limb_bodies) |name| {
+            if (imp.bodyIndex(name)) |index| {
+                if (index == body) is_limb = true;
+            }
+        }
+        if (!is_limb) continue;
+        for (0..m.jnt_type[j].dofCount()) |k| {
+            limb_dof[m.jnt_dof_adr[j] + k] = true;
+            limb_count += 1;
+        }
+    }
+    p("limb DOFs (shoulder/elbow/abdomen): {d}\n\n", .{limb_count});
+
+    p("does tau = A_G_ang^T * w produce momentum rate along w?\n", .{});
+    p("  requested w        achieved dL/dt          cosine   ratio\n", .{});
+
+    const tests = [_]zm.Vec{
+        vec(1, 0, 0),      vec(0, 1, 0),         vec(0, 0, 1),
+        vec(0.6, -0.8, 0), vec(-0.3, 0.4, 0.87),
+    };
+    for (tests) |w| {
+        for (robot.keyframes) |kf| {
+            if (std.mem.eql(u8, kf.name, "stand_on_left_leg")) _ = rmj.applyKeyframe(m, &d, kf);
+        }
+        d.pos[m.jnt_qpos_adr[0] + 2] += 5.0; // free flight, well clear of the ground
+        @memset(d.vel, 0);
+        rbt.forward(m, &d);
+
+        var before_ang: zm.Vec = undefined;
+        var before_lin: zm.Vec = undefined;
+        ctl.centroidalMomentumDirect(m, &d, &before_ang, &before_lin);
+
+        // tau = A_G_ang^T * w, on limb DOFs only.
+        for (0..50) |_| {
+            ctl.centroidalMomentum(m, &d, jac, jac_rot, s1, s2);
+            @memset(d.applied_force, 0);
+            for (0..m.nv) |v| {
+                if (!limb_dof[v]) continue;
+                d.applied_force[v] = 40.0 * zm.dot3(jac_rot[v], w);
+            }
+            d.clearContacts();
+            rbt.step(m, &d);
+        }
+
+        var after_ang: zm.Vec = undefined;
+        var after_lin: zm.Vec = undefined;
+        ctl.centroidalMomentumDirect(m, &d, &after_ang, &after_lin);
+        const delta: zm.Vec = after_ang - before_ang;
+        const len: f32 = zm.length3(delta);
+        const cosine: f32 = if (len > 1e-9) zm.dot3(delta, w) / (len * zm.length3(w)) else 0;
+        p("  ({d:>5.2},{d:>5.2},{d:>5.2})   ({d:>7.3},{d:>7.3},{d:>7.3})   {d:>6.3}  {d:>6.3}\n", .{
+            w[0], w[1], w[2], delta[0], delta[1], delta[2], cosine, len,
+        });
+    }
+}

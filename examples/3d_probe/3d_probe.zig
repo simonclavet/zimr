@@ -15,7 +15,7 @@ const Vec = zm.Vec;
 const matFromAxisAngle = zm.matFromAxisAngle;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const Color = zm.Color;
@@ -46,7 +46,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.updateCamera(f.gl, &s.cam, .orbital);
     const t: f32 = f.time.time;
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     z.beginMode3D(f.gl, s.cam);
     const floor_color: Color = .{ .r = 30, .g = 32, .b = 42, .a = 255 };
@@ -75,7 +75,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // 2D HUD on top, AFTER the 3D flush. Single shared pass: the 2D pipeline is
     // depth compare=always, so it composites over the depth-tested 3D.
-    co.caption(f.gl, s.font, "3D probe: drag to orbit - plane, spinning cubes, sphere, cylinder");
+    common.caption(f.gl, s.font, "3D probe: drag to orbit - plane, spinning cubes, sphere, cylinder");
     z.endDrawing(f.gl);
 }
 

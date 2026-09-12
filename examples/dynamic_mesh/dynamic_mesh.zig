@@ -11,7 +11,7 @@ const zm = @import("zm");
 const Camera3D = zm.Camera3D;
 const pointVec = zm.pointVec;
 const vec = zm.vec;
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -86,7 +86,7 @@ fn update(f: *z.Frame, s: *State) void {
     };
     z.updateMeshBuffer(s.quad, 0, std.mem.sliceAsBytes(corners[0..]), 0);
 
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const cam: Camera3D = .{
         .position = pointVec(0, 0, 4),
@@ -99,7 +99,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawModel(f.gl, s.model, pointVec(0, 0, 0), 1.0, c.sky_400);
     z.endMode3D(f.gl);
 
-    co.caption(f.gl, s.font, "WebGPU dynamic mesh - updateMeshBuffer breathes the quad corners");
+    common.caption(f.gl, s.font, "WebGPU dynamic mesh - updateMeshBuffer breathes the quad corners");
     z.endDrawing(f.gl);
 }
 

@@ -1,3 +1,4 @@
+//! lint:alias profiler
 //! profiler.zig — zimr's integrated, in-process profiler (Tracy-inspired).
 //!
 //! Comptime-gated by `build_options.profile_enabled` (derived from `-Dmode`:

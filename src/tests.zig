@@ -1,3 +1,6 @@
+//! lint:off import-at-root: test aggregator - every statement here is an
+//! import by design, so hoisting 47 bindings adds names without adding
+//! any information a reader does not already see.
 // src/tests.zig — the host test aggregator.
 //
 // POLICY (Simon, t1176): every live source file gets
@@ -24,6 +27,32 @@ comptime {
     _ = @import("tests/ext_storage_test.zig");
     _ = @import("tests/errors_test.zig");
     _ = @import("tests/zimrphysics_stack_test.zig");
+    _ = @import("tests/character_walk_test.zig");
+    // ── ★★★ SIX FILES THAT WERE NEVER IMPORTED BY ANYTHING (24 tests) ──
+    //
+    // Found by walking the import closure of every test root: these are not in `fast_test_roots`
+    // and were not listed here, so they compiled nowhere and ran never. The header's documented
+    // exclusions (`spv2wgsl_wasm`, `wgpu_smoke_test`, `wgpu_runner` — wasm module roots) are
+    // deliberate and stay out; these six had no such reason. Every dependency they name was
+    // already inside this aggregator's closure, so wiring them costs no extra compile.
+    //
+    // ★ The same shape as zimrmath having no gate at all: a test that is written and never run
+    // is worse than no test, because it reads like coverage.
+    _ = @import("tests/shader_enum_test.zig");
+    _ = @import("tests/snapshot_regression_test.zig");
+    _ = @import("tests/ui_dock_builder_test.zig");
+    _ = @import("tests/ui_dock_screenshot_test.zig");
+    _ = @import("tests/ui_screenshot_test.zig");
+    _ = @import("leakwatch.zig");
+    _ = @import("robot.zig");
+    _ = @import("robot_physics.zig");
+    _ = @import("urdf.zig");
+    _ = @import("robot_urdf.zig");
+    _ = @import("robot_scene.zig");
+    _ = @import("mjcf.zig");
+    _ = @import("robot_mjcf.zig");
+    _ = @import("robot_control.zig");
+    _ = @import("robot_mpc.zig");
     _ = @import("tests/cpu_shadowmap_test.zig");
 
     // (Removed: tests/spv2wgsl_corpus_test.zig.  Its three tests

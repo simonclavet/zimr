@@ -1,0 +1,320 @@
+//! Build a stand-on-right-leg pose procedurally, with the arms out and the mass over the foot.
+//!
+//! ── ★★ WHY BUILD IT RATHER THAN USE THE SHIPPED KEYFRAME ──
+//!
+//! `stand_on_left_leg` puts the centre of mass **0.040 m** from the support foot, so a balance
+//! controller starts by fighting an offset instead of at equilibrium. And it holds the arms at
+//! the sides, where their moment arm is about 0.3 m — extended, it is nearer 0.6, and the
+//! orbital part of the angular momentum goes as `m·r²·ω`, so **four times** the authority.
+//! The arms are most of the flywheel, and folded arms throw most of it away.
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zm = @import("zm");
+const rbt = @import("robot.zig");
+const ctl = @import("robot_control.zig");
+const codecs = @import("codecs.zig");
+const mjcf = @import("mjcf.zig");
+const rmj = @import("robot_mjcf.zig");
+const mpc = @import("robot_mpc.zig");
+const zp = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
+const vec = zm.vec;
+const humanoid_xml = @embedFile("tests/fixtures/robot/humanoid.xml");
+
+/// The model has no name table; the MJCF struct does, and `robot_mjcf` builds the joints in
+/// the same order it read them.
+fn jointByName(robot: *const mjcf.Robot, want: []const u8) ?u32 {
+    for (robot.joints, 0..) |joint, j| {
+        if (std.mem.eql(u8, joint.name, want)) {
+            return @intCast(j);
+        }
+    }
+    return null;
+}
+
+fn geomWorld(m: *const rbt.Model, d: *const rbt.Data, g: u32) zm.Vec {
+    const b: u32 = m.geom_body[g];
+    return d.body_xpos[b] + zm.rotate(d.body_xrot[b], m.geom_pos[g]);
+}
+
+/// Rotate the WHOLE robot so the support foot's sole lies flat on the ground.
+///
+/// ── ★★★ THE STEP THAT WAS MISSING, AND IT IS A GLOBAL ONE ──
+///
+/// Setting joint angles gets every bone right RELATIVE to its parent, and says nothing about
+/// where the chain ends up pointing. Bending the support hip rotates the leg against a torso
+/// that stays bolt upright, so the foot meets the ground at whatever angle the chain leaves it.
+/// Measured on the first version: **13.2 degrees**, the sole touching on ONE CORNER with the
+/// other three between 27 and 49 mm in the air.
+///
+/// That is not a stance. It is a pose caught mid-fall, and no controller holds it because there
+/// is nothing to hold — a foot on a corner has no support polygon at all.
+fn levelFoot(m: *const rbt.Model, d: *rbt.Data, foot: u32) void {
+    d.stage = .stale;
+    rbt.forward(m, d);
+    const up: zm.Vec = zm.rotate(d.body_xrot[foot], vec(0, 0, 1));
+    const axis: zm.Vec = zm.cross(up, vec(0, 0, 1));
+    const sine: f32 = zm.length3(axis);
+    if (sine < 1.0e-6) {
+        return; // already flat
+    }
+    const angle: f32 = std.math.atan2(sine, zm.dot3(up, vec(0, 0, 1)));
+    const fix: zm.Quat = zm.quatFromAxisAngle(axis / zm.splat(sine), angle);
+    const root: u32 = m.jnt_qpos_adr[0];
+    const current: zm.Quat = .{ d.pos[root + 3], d.pos[root + 4], d.pos[root + 5], d.pos[root + 6] };
+    const fixed: zm.Quat = zm.qmul(fix, current);
+    d.pos[root + 3] = fixed[0];
+    d.pos[root + 4] = fixed[1];
+    d.pos[root + 5] = fixed[2];
+    d.pos[root + 6] = fixed[3];
+    d.stage = .stale;
+    rbt.forward(m, d);
+}
+
+/// Lowest point of any geom on `body`, so the foot can be set down on the ground exactly.
+fn lowestOn(m: *const rbt.Model, d: *const rbt.Data, body: u32) f32 {
+    var lowest: f32 = 1.0e9;
+    for (0..m.ngeom) |g| {
+        if (m.geom_body[g] != body) continue;
+        const half: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.half_height,
+            else => 0,
+        };
+        const radius: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.radius,
+            .sphere => |s| s.radius,
+            else => continue,
+        };
+        const axis: zm.Vec = zm.rotate(zm.qmul(d.body_xrot[body], m.geom_rot[g]), vec(0, 1, 0));
+        const centre: zm.Vec = geomWorld(m, d, @intCast(g));
+        for ([_]f32{ -1.0, 1.0 }) |end| {
+            lowest = @min(lowest, (centre + axis * zm.splat(end * half))[2] - radius);
+        }
+    }
+    return lowest;
+}
+
+pub fn main() !void {
+    var da: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = da.deinit();
+    const gpa: Allocator = da.allocator();
+    const p = std.debug.print;
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_xml, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imp: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .max_contacts = 64,
+        .timestep = 1.0 / 500.0,
+        .gravity = vec(0, 0, -9.81),
+    });
+    defer imp.deinit();
+    const m: *const rbt.Model = &imp.model;
+    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    defer d.deinit();
+
+    const right_foot: u32 = imp.bodyIndex("foot_right") orelse return error.NoFoot;
+    const hand_right: u32 = imp.bodyIndex("hand_right") orelse return error.NoHand;
+    const hand_left: u32 = imp.bodyIndex("hand_left") orelse return error.NoHand;
+    const root: u32 = m.jnt_qpos_adr[0];
+
+    // ── ★ THE CONTROL THAT CANNOT LIE: at `qpos0` this robot stands, so its soles ARE flat.
+    // Any spread reported here is the measurement being wrong, not the model.
+    @memcpy(d.pos, m.qpos0);
+    d.stage = .stale;
+    rbt.forward(m, &d);
+    {
+        var lo: f32 = 1.0e9;
+        var hi: f32 = -1.0e9;
+        for (0..m.ngeom) |g| {
+            if (m.geom_body[g] != right_foot) continue;
+            const half: f32 = switch (m.geom_shape[g]) {
+                .capsule => |c| c.half_height,
+                else => continue,
+            };
+            const radius: f32 = switch (m.geom_shape[g]) {
+                .capsule => |c| c.radius,
+                else => continue,
+            };
+            const ax: zm.Vec = zm.rotate(zm.qmul(d.body_xrot[right_foot], m.geom_rot[g]), vec(0, 1, 0));
+            const mid: zm.Vec = geomWorld(m, &d, @intCast(g));
+            for ([_]f32{ -1.0, 1.0 }) |end| {
+                const h: f32 = (mid + ax * zm.splat(end * half))[2] - radius;
+                lo = @min(lo, h);
+                hi = @max(hi, h);
+            }
+        }
+        p("qpos0 sole spread: {d:.5} m  (must be ~0 — the robot stands here)\n\n", .{hi - lo});
+    }
+
+    // ── STEP 1: lift the left leg out of the way ──
+    @memcpy(d.pos, m.qpos0);
+    const lift = [_]struct { name: []const u8, angle: f32 }{
+        .{ .name = "hip_y_left", .angle = -0.85 },
+        .{ .name = "knee_left", .angle = -1.30 },
+        .{ .name = "hip_x_left", .angle = -0.10 },
+    };
+    for (lift) |set| {
+        if (jointByName(&robot, set.name)) |j| {
+            d.pos[m.jnt_qpos_adr[j]] = set.angle;
+        } else {
+            p("MISSING joint {s}\n", .{set.name});
+        }
+    }
+    d.stage = .stale;
+    rbt.forward(m, &d);
+
+    // ── ★★★ THE STANCE COMES FIRST, THE ARMS LAST ──
+    //
+    // Levelling rotates the WHOLE robot, so anything placed in world coordinates before it gets
+    // rotated too. Placing the arms first left them visibly lopsided — right hand at z 1.166,
+    // left at 1.677, from a step that was supposed to be symmetric. Settle the stance, then
+    // reach: the arm targets are relative to the shoulders, so they land right the first time.
+    // ── STEP 2: put the centre of mass over the foot, with the sole flat ──
+    //
+    // ★ A TWO-BY-TWO NEWTON ON THE SUPPORT HIP. Translating the root moves the foot and the
+    // mass together, so their offset is fixed by the joint angles and only joints can change
+    // it. `hip_x` swings the mass sideways, `hip_y` fore-and-aft; measure both, invert, step.
+    // ★★★ THE ABDOMEN, NOT THE HIP, FOR THE LATERAL AXIS. Swinging the pelvis over the foot
+    // with `hip_x` alone runs the joint to its limit (−0.52) and still leaves 16 mm of lateral
+    // offset — on a foot **0.06 m wide**, i.e. over half the half-width. That is why people lean
+    // their TORSO to stand on one leg rather than just angling the hip: the hip has nowhere near
+    // enough range on its own.
+    const hip_x: u32 = m.jnt_qpos_adr[jointByName(&robot, "abdomen_x").?];
+    const hip_y: u32 = m.jnt_qpos_adr[jointByName(&robot, "hip_y_right").?];
+
+    p("  iter   hip_x     hip_y     CM-over-foot offset\n", .{});
+    for (0..14) |iter| {
+        // ★ LEVEL, THEN SET DOWN, THEN MEASURE. The order matters: rotating the robot moves
+        // the mass relative to the foot, so levelling has to happen before the offset is read
+        // or the Newton is chasing a number that its own next step invalidates.
+        levelFoot(m, &d, right_foot);
+        d.pos[root + 2] -= lowestOn(m, &d, right_foot);
+        d.stage = .stale;
+        rbt.forward(m, &d);
+
+        const com: zm.Vec = d.subtree_com[rbt.world_body];
+        const foot: zm.Vec = d.body_xpos[right_foot];
+        const err = [2]f32{ com[0] - foot[0], com[1] - foot[1] };
+        const size: f32 = @sqrt(err[0] * err[0] + err[1] * err[1]);
+        if (iter % 2 == 0 or size < 0.005) {
+            p("  {d:>4}   {d:>7.4}   {d:>7.4}   ({d:>7.4},{d:>7.4})  |{d:.4}|\n", .{ iter, d.pos[hip_x], d.pos[hip_y], err[0], err[1], size });
+        }
+        if (size < 0.003) break;
+
+        // Numerical 2x2: how the offset responds to each hip angle.
+        var jac: [4]f32 = undefined;
+        const eps: f32 = 0.01;
+        inline for (.{ hip_x, hip_y }, 0..) |q, col| {
+            const saved: f32 = d.pos[q];
+            d.pos[q] = saved + eps;
+            levelFoot(m, &d, right_foot);
+            d.pos[root + 2] -= lowestOn(m, &d, right_foot);
+            d.stage = .stale;
+            rbt.forward(m, &d);
+            const c2: zm.Vec = d.subtree_com[rbt.world_body];
+            const f2: zm.Vec = d.body_xpos[right_foot];
+            jac[0 * 2 + col] = ((c2[0] - f2[0]) - err[0]) / eps;
+            jac[1 * 2 + col] = ((c2[1] - f2[1]) - err[1]) / eps;
+            d.pos[q] = saved;
+        }
+        const det: f32 = jac[0] * jac[3] - jac[1] * jac[2];
+        if (@abs(det) < 1.0e-6) {
+            p("  singular at iter {d}\n", .{iter});
+            break;
+        }
+        const dx: f32 = (-err[0] * jac[3] + err[1] * jac[1]) / det;
+        const dy: f32 = (-jac[0] * err[1] + jac[2] * err[0]) / det;
+        d.pos[hip_x] = zm.clamp(d.pos[hip_x] + zm.clamp(dx, -0.15, 0.15), -0.60, 0.60);
+        d.pos[hip_y] = zm.clamp(d.pos[hip_y] + zm.clamp(dy, -0.15, 0.15), -2.6, 0.35);
+    }
+
+    // ── STEP 3: the arms, horizontal and 45 degrees forward-and-out, placed by IK ──
+    //
+    // ★ BY IK RATHER THAN BY ANGLE, because the shoulder axes are `2 1 1` and `0 -1 1` — not
+    // orthogonal, not aligned with anything, and "45 degrees" in joint space would mean
+    // whatever those axes happen to make of it. A hand position is unambiguous.
+    var arm_act_r: ctl.Actuation = try ctl.limbActuation(gpa, m, hand_right);
+    defer arm_act_r.deinit();
+    var arm_act_l: ctl.Actuation = try ctl.limbActuation(gpa, m, hand_left);
+    defer arm_act_l.deinit();
+    const ik_scratch: []zm.Vec = try gpa.alloc(zm.Vec, ctl.Ik.scratchSize(m));
+    defer gpa.free(ik_scratch);
+
+    const reach: f32 = 0.52;
+    const diag: f32 = reach * 0.7071;
+    for (0..12) |_| {
+        const shoulder_r: zm.Vec = d.body_xpos[imp.bodyIndex("upper_arm_right").?];
+        const shoulder_l: zm.Vec = d.body_xpos[imp.bodyIndex("upper_arm_left").?];
+        _ = (ctl.Ik{ .max_iterations = 10, .max_step = 0.20 }).solve(
+            m,
+            &d,
+            arm_act_r,
+            .{ .body = hand_right, .offset = vec(0, 0, 0), .goal = shoulder_r + vec(diag, -diag, 0) },
+            ik_scratch,
+        );
+        _ = (ctl.Ik{ .max_iterations = 10, .max_step = 0.20 }).solve(
+            m,
+            &d,
+            arm_act_l,
+            .{ .body = hand_left, .offset = vec(0, 0, 0), .goal = shoulder_l + vec(diag, diag, 0) },
+            ik_scratch,
+        );
+    }
+
+    d.stage = .stale;
+    rbt.forward(m, &d);
+    const com: zm.Vec = d.subtree_com[rbt.world_body];
+    const foot: zm.Vec = d.body_xpos[right_foot];
+    p("\nfinal pose:\n", .{});
+    p("  torso z          {d:.4}\n", .{d.body_xpos[1][2]});
+    p("  CM               ({d:>7.4},{d:>7.4},{d:>7.4})\n", .{ com[0], com[1], com[2] });
+    p("  right foot       ({d:>7.4},{d:>7.4},{d:>7.4})\n", .{ foot[0], foot[1], foot[2] });
+    p("  CM over foot by  {d:.4} m\n", .{@sqrt((com[0] - foot[0]) * (com[0] - foot[0]) +
+        (com[1] - foot[1]) * (com[1] - foot[1]))});
+    p("  left foot z      {d:.4}  (clear of the ground)\n", .{d.body_xpos[imp.bodyIndex("foot_left").?][2]});
+    const hr: zm.Vec = d.body_xpos[hand_right];
+    const hl: zm.Vec = d.body_xpos[hand_left];
+    p("  right hand       ({d:>7.4},{d:>7.4},{d:>7.4})\n", .{ hr[0], hr[1], hr[2] });
+    p("  left hand        ({d:>7.4},{d:>7.4},{d:>7.4})\n", .{ hl[0], hl[1], hl[2] });
+    p("  hand spread      {d:.4} m apart\n", .{zm.length3(hr - hl)});
+
+    // ── ★★★ IS THE SOLE ACTUALLY FLAT ON THE GROUND? ──
+    //
+    // The pose sets joint angles and drops the root's HEIGHT, and never touches the root's
+    // ORIENTATION. Bending the support hip rotates the leg relative to the torso, so the foot
+    // arrives at the ground at whatever angle the chain leaves it — resting on an edge, not a
+    // sole. That is not a stance, it is a pose caught mid-fall.
+    p("\n  sole contact heights (all four should be equal if the foot is flat):\n", .{});
+    var lowest_z: f32 = 1.0e9;
+    var highest_z: f32 = -1.0e9;
+    for (0..m.ngeom) |g| {
+        if (m.geom_body[g] != right_foot) continue;
+        const half: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.half_height,
+            else => 0,
+        };
+        const radius: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.radius,
+            else => continue,
+        };
+        const axis: zm.Vec = zm.rotate(zm.qmul(d.body_xrot[right_foot], m.geom_rot[g]), vec(0, 1, 0));
+        const centre: zm.Vec = geomWorld(m, &d, @intCast(g));
+        for ([_]f32{ -1.0, 1.0 }) |end| {
+            const at: zm.Vec = centre + axis * zm.splat(end * half);
+            const height: f32 = at[2] - radius;
+            lowest_z = @min(lowest_z, height);
+            highest_z = @max(highest_z, height);
+            p("    geom {d:>2} end {d:>4.1}: {d:>8.4}\n", .{ g, end, height });
+        }
+    }
+    p("    spread {d:.4} m over a 0.21 m sole -> tilted {d:.1} degrees\n", .{
+        highest_z - lowest_z,
+        std.math.radiansToDegrees(std.math.atan2(highest_z - lowest_z, 0.21)),
+    });
+
+    // What the foot's own up-axis is doing, which is the thing the root should be cancelling.
+    const foot_up: zm.Vec = zm.rotate(d.body_xrot[right_foot], vec(0, 0, 1));
+    p("    foot up-axis ({d:>6.3},{d:>6.3},{d:>6.3})   should be (0,0,1)\n", .{ foot_up[0], foot_up[1], foot_up[2] });
+}

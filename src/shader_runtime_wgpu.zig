@@ -1,3 +1,4 @@
+//! lint:alias shader_runtime
 // src/shader_runtime_wgpu.zig - the user-facing shader loading API.
 // WebGPU architecture is documented centrally in src/zimr.zig
 // (the module-level `//!` doc) — read that before changing wgpu code.
@@ -82,13 +83,13 @@ const Allocator = std.mem.Allocator;
 const wgpu = @import("wgpu.zig");
 const shader_introspect = @import("shader_introspect.zig");
 const wgpu_texture = @import("wgpu_texture.zig");
-const PassState = @import("gpu_iface.zig").PassState;
+const PassState = gpu_iface.PassState;
 
 // ============================================================================
 // SECTION 1 — LoadedShader result type
 // ============================================================================
 
-pub const SwPipelineDispatch = @import("gpu_iface.zig").SwPipelineDispatch;
+pub const SwPipelineDispatch = gpu_iface.SwPipelineDispatch;
 
 /// Comptime-construct an SW dispatch vtable for a typed pipeline.
 ///
@@ -258,7 +259,7 @@ pub fn LoadedShader(comptime SchemaT: type) type {
         /// pipeline before any further 2D drawing. `flushBatch` asserts this at
         /// runtime; `vertex_texture_test` is the worked example.
         pub fn bindForDraw(self: Self, ps: *PassState) void {
-            const Backend = @import("gpu_iface.zig").WgpuBackend;
+            const Backend = gpu_iface.WgpuBackend;
             const RP = RenderPipeline(void, void);
             Backend.setPipeline(ps, RP{ .gpu_handle = self.pipeline });
             var res = self.resources;
@@ -313,7 +314,7 @@ pub fn LoadedShader(comptime SchemaT: type) type {
         /// group index beyond the schema-managed UBO group.
         pub fn setBindGroup(self: Self, ps: *PassState, group: u32, bind_group: wgpu.BindGroupHandle) void {
             _ = self;
-            @import("gpu_iface.zig").WgpuBackend.setBindGroup(ps, group, bind_group);
+            gpu_iface.WgpuBackend.setBindGroup(ps, group, bind_group);
         }
     };
 }
@@ -656,7 +657,7 @@ pub fn loadShader(
 
         // Cache it if we have a cache
         if (desc.f.pipeline_cache) |pc| {
-            pc.put(cache_key, handle) catch {}; // cache miss on OOM, not fatal
+            pc.put(cache_key, handle) catch {}; // lint:off catch-suppression: cache miss on OOM, not fatal
         }
         break :blk handle;
     };
@@ -694,8 +695,15 @@ pub fn MaterialSchema(comptime VsSchema: type, comptime FsSchema: type) type {
     const fs_res = @hasDecl(FsSchema, "Ubo") or @hasDecl(FsSchema, "Samplers");
     if (vs_res and fs_res) {
         @compileError("loadShaderVF: resources (Ubo/Samplers) in BOTH the vertex " ++
-            "and fragment schema aren't supported through this path yet — merge " ++
-            "them into one schema and use z.shader.Resources directly (see cube_demo).");
+            "and fragment schema aren't supported here (a VS uniform like `mvp` " ++
+            "plus FS `Samplers` is the common case). Merge them into ONE schema — " ++
+            "a struct declaring both `Ubo` and `Samplers`, like cube_demo's " ++
+            "`CubeSchema` — and call `z.shader.loadShader(MergedSchema, desc)` " ++
+            "directly. That returns the SAME `LoadedShader` (same pushUbo / " ++
+            "bindForDraw / drawIndexed draw API, still usable inside `f.gl`); no " ++
+            "manual pipeline or `Resources` wiring is needed. The split shader IO " ++
+            "files stay as-is — the codegen already puts a VS uniform at group 0 " ++
+            "and samplers at group 1, which the merged schema mirrors.");
     }
     if (vs_res) {
         return VsSchema;
@@ -1188,7 +1196,7 @@ pub fn Resources(comptime SchemaT: type) type {
             inline for (0..4) |g_usize| {
                 const g: u32 = @intCast(g_usize);
                 if (self.groups_used & (@as(u8, 1) << @intCast(g)) != 0) {
-                    @import("gpu_iface.zig").WgpuBackend.setBindGroup(ps, g, self.bind_groups[g]);
+                    gpu_iface.WgpuBackend.setBindGroup(ps, g, self.bind_groups[g]);
                 }
             }
         }
@@ -1469,16 +1477,16 @@ test "RenderPipeline default-initialises with invalid gpu_handle" {
 
 test "RenderPipeline wraps a real gpu_handle value" {
     const Pipe = RenderPipeline(TestVsIoOnly, TestFsWithShaderMain);
-    const p: Pipe = .{ .gpu_handle = @enumFromInt(42) };
-    try expectEqual(@as(u32, 42), @intFromEnum(p.gpu_handle));
+    const p: Pipe = .{ .gpu_handle = @fromBackingInt(@intCast(42)) };
+    try expectEqual(@as(u32, 42), @backingInt(p.gpu_handle));
 }
 
 test "RenderPipeline(void, void) is valid for wgpu-only pipelines" {
     const Pipe = RenderPipeline(void, void);
     try expectEqual(void, Pipe.Vs);
     try expectEqual(void, Pipe.Fs);
-    const p: Pipe = .{ .gpu_handle = @enumFromInt(1) };
-    try expectEqual(@as(u32, 1), @intFromEnum(p.gpu_handle));
+    const p: Pipe = .{ .gpu_handle = @fromBackingInt(@intCast(1)) };
+    try expectEqual(@as(u32, 1), @backingInt(p.gpu_handle));
 }
 
 test "makeSwDispatch returns null for void/void pipeline" {

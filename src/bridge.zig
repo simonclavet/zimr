@@ -1001,7 +1001,18 @@ const ZimrWgpu = struct {
     }
     fn jsRequestPointerLock() void {
         if (g.wgpu.have_canvas) {
-            _ = g.wgpu.canvas.call("requestPointerLock", .{});
+            // requestPointerLock() rejects when the environment forbids the lock
+            // -- a sandboxed iframe without allow-pointer-lock, a request outside a
+            // user gesture, or a mobile browser with no pointer to capture. An
+            // uncaught rejection crashes the whole page, so swallow it. Wrapping in
+            // Promise.resolve() tolerates old browsers where the call returns
+            // undefined instead of a promise. Pointer lock is an optional
+            // enhancement; callers must not depend on it succeeding.
+            const swallow: Value = global().get("Function").new(.{
+                str("c"),
+                str("try{Promise.resolve(c.requestPointerLock()).catch(function(){});}catch(e){}"),
+            });
+            _ = swallow.call("call", .{ global(), g.wgpu.canvas });
         }
     }
     fn jsExitPointerLock() void {
@@ -1100,6 +1111,302 @@ const ZimrWgpu = struct {
         }
         _ = ls.call("removeItem", .{lsKey(key_ptr, key_len)});
         return 0;
+    }
+
+    // ---- WebSocket host (zimr P2P signaling client; see src/net.zig) ---------
+    // Each socket lives in the object table as a small holder { ws, q, st }:
+    //   ws = the browser WebSocket
+    //   q  = a queue of received messages (each a Uint8Array of the frame bytes)
+    //   st = 0 connecting / 1 open / 2 closed-or-errored
+    // The onopen/onmessage/onclose/onerror handlers are PURE JS closures (built
+    // with `new Function`) that only push to the queue and flip the state — they
+    // never call back into wasm, so nothing re-enters a running frame. wasm drains
+    // the queue by polling once per frame, exactly like the fetch bridge.
+    fn jsWsOpen(url_ptr: f64, url_len: f64) f64 {
+        const ws: Value = global().get("WebSocket").new(.{modString(url_ptr, url_len)});
+        ws.set("binaryType", str("arraybuffer"));
+        const holder: Value = global().get("Object").new(.{});
+        holder.set("ws", ws);
+        holder.set("q", global().get("Array").new(.{}));
+        holder.set("st", @as(f64, 0)); // connecting
+        // One setup function wires all four handlers onto (ws, h). Text frames
+        // arrive as JS strings (encode to bytes); binary frames as ArrayBuffers.
+        const setup: Value = global().get("Function").new(.{
+            str("ws"),
+            str("h"),
+            str("ws.onopen=function(){h.st=1;};" ++
+                "ws.onmessage=function(e){var d=e.data;" ++
+                "h.q.push(typeof d==='string'?new TextEncoder().encode(d):new Uint8Array(d));};" ++
+                "ws.onclose=function(){h.st=2;};" ++
+                "ws.onerror=function(){h.st=2;};"),
+        });
+        _ = setup.call("call", .{ global(), ws, holder });
+        return @floatFromInt(tblInsert(holder));
+    }
+
+    fn jsWsState(handle: f64) f64 {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return 2; // a handle that's gone counts as closed
+        }
+        return holder.getNum("st");
+    }
+
+    fn jsWsSend(handle: f64, ptr: f64, len: f64) void {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return;
+        }
+        const ws: Value = holder.get("ws");
+        // readyState 1 == OPEN; sending before the socket opens throws, so guard.
+        if (ws.getNum("readyState") != 1) {
+            return;
+        }
+        // Send as a text frame (a JS string) — the L0 server speaks text frames.
+        _ = ws.call("send", .{modString(ptr, len)});
+    }
+
+    fn jsWsPoll(handle: f64, out_ptr: f64, out_cap: f64) f64 {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return -1;
+        }
+        const q: Value = holder.get("q");
+        if (q.getNum("length") < 1) {
+            return -1; // nothing queued right now
+        }
+        const msg: Value = q.call("shift", .{}); // oldest message, a Uint8Array
+        const n: f64 = msg.getNum("length");
+        if (n > out_cap) {
+            return -2; // too big for the caller's buffer; message is dropped
+        }
+        _ = modBytes(out_ptr, n).call("set", .{msg});
+        return n;
+    }
+
+    fn jsWsClose(handle: f64) void {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return;
+        }
+        _ = holder.get("ws").call("close", .{});
+        tblRelease(handle);
+    }
+
+    // Build the same-origin WebSocket URL for the current page: "wss://host" on
+    // an https page, "ws://host" otherwise. Lets a page served by the signaling
+    // server connect straight back to it with no hard-coded address and no
+    // mixed-content trouble. Writes the URL into the caller's buffer, returns len.
+    fn jsWsOriginUrl(out_ptr: f64, out_cap: f64) f64 {
+        const builder: Value = global().get("Function").new(.{
+            str("return (location.protocol==='https:'?'wss://':'ws://')+location.host;"),
+        });
+        const url: Value = builder.call("call", .{global()}); // a JS string
+        if (g.wgpu.text_encoder.isNull()) {
+            g.wgpu.text_encoder = global().get("TextEncoder").new(.{});
+        }
+        const bytes: Value = g.wgpu.text_encoder.call("encode", .{url});
+        const n: f64 = bytes.getNum("length");
+        if (n > out_cap) {
+            return 0;
+        }
+        _ = modBytes(out_ptr, n).call("set", .{bytes});
+        return n;
+    }
+
+    // ---- WebRTC: peer-to-peer data channels --------------------------------
+    // Same shape as the WebSocket bridge above: every RTCPeerConnection is a
+    // handle whose holder carries the pc, a two-slot channel array, a buffer of
+    // ICE candidates that arrived before the remote description was set, and an
+    // event queue that pure-JS closures push into (they NEVER call back into
+    // wasm — the game drains the queue itself via jsRtcPoll). Channel 0 is
+    // "cursor" (unreliable, unordered — lossy is fine); channel 1 is "clicks"
+    // (reliable, ordered). Poll event encoding (written into the game buffer):
+    //   byte 0 = kind, byte 1 = channel, bytes 2.. = payload
+    //   kind 1 local offer SDP | 2 local answer SDP | 3 local ICE (JSON) |
+    //        4 channel open | 5 data received | 6 connection state changed
+    fn jsRtcCreate() f64 {
+        // Google's public STUN lets peers behind NAT discover a route. No TURN
+        // in v1, so a small fraction of restrictive networks won't connect.
+        const cfg: Value = global().get("Object").new(.{});
+        const servers: Value = global().get("Array").new(.{});
+        const stun: Value = global().get("Object").new(.{});
+        stun.set("urls", str("stun:stun.l.google.com:19302"));
+        _ = servers.call("push", .{stun});
+        cfg.set("iceServers", servers);
+        const pc: Value = global().get("RTCPeerConnection").new(.{cfg});
+
+        const holder: Value = global().get("Object").new(.{});
+        holder.set("pc", pc);
+        holder.set("q", global().get("Array").new(.{}));
+        holder.set("chans", global().get("Array").new(.{}));
+        holder.set("pendingIce", global().get("Array").new(.{}));
+
+        // One setup call wires the connection-level handlers and installs a
+        // channel-wiring helper on the holder (h.wire), used both when WE make
+        // the channels as the offerer and when they arrive via ondatachannel.
+        const setup: Value = global().get("Function").new(.{
+            str("pc"),
+            str("h"),
+            str("h.wire=function(ch,idx){ch.binaryType='arraybuffer';h.chans[idx]=ch;" ++
+                "ch.onopen=function(){h.q.push({kind:4,ch:idx});};" ++
+                "ch.onmessage=function(ev){var d=ev.data;" ++
+                "var b=(typeof d==='string')?new TextEncoder().encode(d):new Uint8Array(d);" ++
+                "h.q.push({kind:5,ch:idx,bytes:b});};};" ++
+                "pc.onicecandidate=function(e){if(e.candidate){" ++
+                "h.q.push({kind:3,ch:0,str:JSON.stringify(e.candidate)});}};" ++
+                "pc.onconnectionstatechange=function(){" ++
+                "h.q.push({kind:6,ch:0,str:pc.connectionState});};" ++
+                "pc.ondatachannel=function(e){var ch=e.channel;" ++
+                "h.wire(ch,(ch.label==='clicks')?1:0);};"),
+        });
+        _ = setup.call("call", .{ global(), pc, holder });
+        return @floatFromInt(tblInsert(holder));
+    }
+
+    fn jsRtcCreateOffer(handle: f64) void {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return;
+        }
+        const pc: Value = holder.get("pc");
+        // Offerer creates both channels, wires them, then makes the offer.
+        const cursor_opts: Value = global().get("Object").new(.{});
+        cursor_opts.set("ordered", false);
+        cursor_opts.set("maxRetransmits", @as(f64, 0));
+        const cursor: Value = pc.call("createDataChannel", .{ str("cursor"), cursor_opts });
+        const clicks_opts: Value = global().get("Object").new(.{});
+        clicks_opts.set("ordered", true);
+        const clicks: Value = pc.call("createDataChannel", .{ str("clicks"), clicks_opts });
+        const wire: Value = holder.get("wire");
+        _ = wire.call("call", .{ global(), cursor, @as(f64, 0) });
+        _ = wire.call("call", .{ global(), clicks, @as(f64, 1) });
+        // createOffer -> setLocalDescription -> queue the SDP for the game.
+        const chain: Value = global().get("Function").new(.{
+            str("pc"),
+            str("h"),
+            str("pc.createOffer().then(function(o){return pc.setLocalDescription(o);})" ++
+                ".then(function(){h.q.push({kind:1,ch:0,str:pc.localDescription.sdp});})" ++
+                ".catch(function(err){h.q.push({kind:6,ch:0,str:'offer-error:'+err});});"),
+        });
+        _ = chain.call("call", .{ global(), pc, holder });
+    }
+
+    fn jsRtcSetRemote(handle: f64, is_offer: f64, sdp_ptr: f64, sdp_len: f64) void {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return;
+        }
+        const pc: Value = holder.get("pc");
+        const desc: Value = global().get("Object").new(.{});
+        desc.set("type", if (is_offer != 0) str("offer") else str("answer"));
+        desc.set("sdp", modString(sdp_ptr, sdp_len));
+        // setRemoteDescription is async. After it resolves we flush any ICE that
+        // arrived early, and — if this was an offer (we're the answerer) — create
+        // the answer right here so it can't race ahead of the remote description.
+        // (`d` and `isOffer` come in as the 3rd/4th call args — arguments[2] and
+        // arguments[3] — to keep new Function at its 3-arg limit.)
+        const chain: Value = global().get("Function").new(.{
+            str("pc"),
+            str("h"),
+            str("var d=arguments[2];var isOffer=arguments[3];" ++
+                "pc.setRemoteDescription(d).then(function(){" ++
+                "var p=h.pendingIce;for(var i=0;i<p.length;i++){" ++
+                "pc.addIceCandidate(p[i]).catch(function(){});}h.pendingIce=[];" ++
+                "if(isOffer){return pc.createAnswer().then(function(a){" ++
+                "return pc.setLocalDescription(a);}).then(function(){" ++
+                "h.q.push({kind:2,ch:0,str:pc.localDescription.sdp});});}})" ++
+                ".catch(function(err){h.q.push({kind:6,ch:0,str:'remote-error:'+err});});"),
+        });
+        _ = chain.call("call", .{ global(), pc, holder, desc, if (is_offer != 0) @as(f64, 1) else @as(f64, 0) });
+    }
+
+    fn jsRtcAddIce(handle: f64, cand_ptr: f64, cand_len: f64) void {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return;
+        }
+        const pc: Value = holder.get("pc");
+        // Buffer candidates that arrive before the remote description is set;
+        // jsRtcSetRemote flushes them once it resolves. (`s` comes in as the 3rd
+        // call arg — arguments[2] — to keep new Function at its 3-arg limit.)
+        const add: Value = global().get("Function").new(.{
+            str("pc"),
+            str("h"),
+            str("var s=arguments[2];var c=JSON.parse(s);if(pc.remoteDescription){" ++
+                "pc.addIceCandidate(c).catch(function(){});}else{h.pendingIce.push(c);}"),
+        });
+        _ = add.call("call", .{ global(), pc, holder, modString(cand_ptr, cand_len) });
+    }
+
+    fn jsRtcSend(handle: f64, channel: f64, ptr: f64, len: f64) void {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return;
+        }
+        const idx: u32 = @trunc(channel);
+        const ch: Value = holder.get("chans").at(idx);
+        if (ch.isNull()) {
+            return; // channel not open yet
+        }
+        // Cache the guarded-send helper on window (send can be per-frame hot, so
+        // no re-parsing a Function each call). Sending on a non-open channel
+        // throws, so the guard checks readyState first.
+        if (global().get("__zimrRtcSend").isNull()) {
+            const f: Value = global().get("Function").new(.{
+                str("ch"),
+                str("b"),
+                str("if(ch&&ch.readyState==='open'){ch.send(b);}"),
+            });
+            global().set("__zimrRtcSend", f);
+        }
+        _ = global().get("__zimrRtcSend").call("call", .{ global(), ch, modBytes(ptr, len) });
+    }
+
+    fn jsRtcPoll(handle: f64, out_ptr: f64, out_cap: f64) f64 {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return -1;
+        }
+        const q: Value = holder.get("q");
+        if (q.getNum("length") < 1) {
+            return -1; // nothing queued
+        }
+        const ev: Value = q.call("shift", .{});
+        const kind: f64 = ev.getNum("kind");
+        const ch: f64 = ev.getNum("ch");
+        var payload: Value = global().get("Uint8Array"); // placeholder; unused for kind 4
+        var plen: f64 = 0;
+        if (kind == 5) {
+            payload = ev.get("bytes");
+            plen = payload.getNum("length");
+        } else if (kind != 4) {
+            if (g.wgpu.text_encoder.isNull()) {
+                g.wgpu.text_encoder = global().get("TextEncoder").new(.{});
+            }
+            payload = g.wgpu.text_encoder.call("encode", .{ev.get("str")});
+            plen = payload.getNum("length");
+        }
+        const total: f64 = 2 + plen;
+        if (total > out_cap) {
+            return -2; // too big for the caller's buffer; event dropped
+        }
+        const buf: Value = modBytes(out_ptr, total);
+        buf.setAt(0, kind);
+        buf.setAt(1, ch);
+        if (plen > 0) {
+            _ = buf.call("set", .{ payload, @as(f64, 2) });
+        }
+        return total;
+    }
+
+    fn jsRtcClose(handle: f64) void {
+        const holder: Value = tblGet(handle);
+        if (holder.isNull()) {
+            return;
+        }
+        _ = holder.get("pc").call("close", .{});
+        tblRelease(handle);
     }
     var perf_obj_handle: Handle = 0; // lint:off module-var: cached performance object (a stable page global)
     fn jsNowMs() f64 {
@@ -2165,7 +2472,7 @@ const ZimrWgpu = struct {
         _ = js_promise_take(pid);
         if (status == 2) {
             // Rejected map: mark ready-with-empty so the poller doesn't hang.
-            rec.set("data", global().get("Uint8Array").new(.{numValue(0)}));
+            rec.set("data", global().get("Uint8Array").new(.{num(0)}));
             return 1;
         }
         const buf: Value = rec.get("buf");
@@ -2502,10 +2809,25 @@ const ZimrBoot = struct {
     /// whose depth-stencil doesn't match the pass's depth attachment) just paints
     /// black with no clue. Logging the GPU's own message turns "why is it black?"
     /// into a one-line diagnosis, on-device (the page log mirrors console.error).
+    ///
+    /// ALSO paints it full-screen via `__wzFail`. console.error alone is not
+    /// enough on a phone: the bottom log overlay is `bottom:0` and
+    /// `pointer-events:none`, so inside an embedded viewer (the Claude app's
+    /// HTML preview, an iframe, any chrome that overlaps the bottom strip) it can
+    /// be cropped out of sight — and a webview has no devtools to fall back on.
+    /// A command-buffer rejection paints black anyway, so there is nothing to
+    /// occlude: taking the screen is strictly better than being invisible. The
+    /// panel is selectable, so the GPU's exact wording can be copied off-device.
     fn onGpuError(ev: Handle) void {
         const e: Value = .{ .h = ev };
         const msg: Value = e.get("error").get("message");
         _ = global().get("console").call("error", .{ str("[zimr GPU] "), msg });
+        const fail: Value = global().get("__wzFail");
+        // __wzFail takes ONE argument, so the message goes through alone; the
+        // panel supplies its own heading.
+        if (fail.h != 0) {
+            _ = fail.call("call", .{ global(), msg });
+        }
     }
 
     fn modU8(ptr: u32, len: u32) Value {
@@ -2633,6 +2955,193 @@ const ZimrBoot = struct {
         const dv: Value = global().get("DataView").new(.{g.boot.module_exports.get("memory").get("buffer")});
         _ = dv.call("setUint32", .{ p, w, true });
         _ = dv.call("setUint32", .{ p + 4, ht, true });
+    }
+
+    // ---- user-file port (drag-and-drop + the mobile file picker) ---------
+    //
+    // Both entry points feed ONE queue, because a caller should not care whether the bytes
+    // arrived by drag or by picker — see `web.zig`'s `userfile` for the full rationale.
+    //
+    // ★ `preventDefault` is needed on BOTH `dragover` AND `drop`. Without the first the drop
+    // event never fires; without the second the browser NAVIGATES AWAY to the dropped file,
+    // discarding the whole app. It is the classic first bug in every web drop implementation
+    // and it looks exactly like "the page crashed".
+
+    fn ufEnsureQueue() void {
+        if (g.userfile.queue.h == 0) {
+            g.userfile.queue = global().get("Array").new(.{});
+        }
+    }
+
+    /// A resolved `arrayBuffer()`: push `{ name, bytes }` onto the queue.
+    ///
+    /// The name is carried on the promise itself (`p.__zimr_name`) rather than in a Zig-side
+    /// map, because several reads can be in flight at once and the transpiler forbids closures
+    /// — so the only place to hang per-operation state is the JS object already in hand.
+    fn ufOnBuffer(buf_h: Handle) void {
+        ufEnsureQueue();
+        const buf: Value = .{ .h = buf_h };
+        const rec: Value = global().get("Object").new(.{});
+        rec.set("bytes", global().get("Uint8Array").new(.{buf}));
+        rec.set("name", g.userfile.pending_name);
+        _ = g.userfile.queue.call("push", .{rec});
+    }
+
+    fn ufAcceptFile(file: Value) void {
+        // Remember the name before the read starts; `ufOnBuffer` has no other way to get it.
+        g.userfile.pending_name = file.get("name");
+        _ = file.call("arrayBuffer", .{}).call("then", .{func(&ufOnBuffer)});
+    }
+
+    fn ufOnDragOver(ev: Handle) void {
+        const e: Value = .{ .h = ev };
+        _ = e.call("preventDefault", .{});
+    }
+
+    fn ufOnDrop(ev: Handle) void {
+        const e: Value = .{ .h = ev };
+        _ = e.call("preventDefault", .{});
+        const dt: Value = e.get("dataTransfer");
+        if (dt.isNull()) {
+            return;
+        }
+        const files: Value = dt.get("files");
+        if (files.isNull()) {
+            return;
+        }
+        const n: f64 = js_to_num(files.get("length").h);
+        var i: f64 = 0;
+        while (i < n) : (i += 1) {
+            ufAcceptFile(files.call("item", .{num(i)}));
+        }
+    }
+
+    fn ufOnPicked(ev: Handle) void {
+        const e: Value = .{ .h = ev };
+        const picker: Value = e.get("target");
+        const files: Value = picker.get("files");
+        if (files.isNull()) {
+            return;
+        }
+        const n: f64 = js_to_num(files.get("length").h);
+        var i: f64 = 0;
+        while (i < n) : (i += 1) {
+            ufAcceptFile(files.call("item", .{num(i)}));
+        }
+        // Clear the value, or picking the SAME file twice fires no second `change` event.
+        picker.set("value", str(""));
+    }
+
+    fn ufEnsureListening() void {
+        if (g.userfile.listening) {
+            return;
+        }
+        g.userfile.listening = true;
+        ufEnsureQueue();
+        const target: Value = global().get("window");
+        _ = target.call("addEventListener", .{ str("dragover"), func(&ufOnDragOver) });
+        _ = target.call("addEventListener", .{ str("drop"), func(&ufOnDrop) });
+    }
+
+    fn ufPendingCount() f64 {
+        if (g.userfile.queue.h == 0) {
+            return 0;
+        }
+        return js_to_num(g.userfile.queue.get("length").h);
+    }
+
+    fn ufHead() Value {
+        return g.userfile.queue.call("at", .{num(0)});
+    }
+
+    fn ufNextSize() f64 {
+        if (ufPendingCount() == 0) {
+            return 0;
+        }
+        return js_to_num(ufHead().get("bytes").get("length").h);
+    }
+
+    fn ufNextName(out_ptr: f64, out_cap: f64) f64 {
+        if (ufPendingCount() == 0) {
+            return 0;
+        }
+        if (g.wgpu.text_encoder.isNull()) {
+            g.wgpu.text_encoder = global().get("TextEncoder").new(.{});
+        }
+        const bytes: Value = g.wgpu.text_encoder.call("encode", .{ufHead().get("name")});
+        const n: f64 = js_to_num(bytes.get("length").h);
+        if (n > out_cap) {
+            return 0;
+        }
+        _ = modU8(@intFromFloat(out_ptr), @intFromFloat(n)).call("set", .{bytes});
+        return n;
+    }
+
+    /// Copy the head's bytes out and drop it. A too-small buffer returns 0 and LEAVES the file
+    /// queued, so a caller that mis-sized can size again from `nextSize` and retry rather than
+    /// silently lose the drop.
+    fn ufReadNext(out_ptr: f64, out_cap: f64) f64 {
+        if (ufPendingCount() == 0) {
+            return 0;
+        }
+        const bytes: Value = ufHead().get("bytes");
+        const n: f64 = js_to_num(bytes.get("length").h);
+        if (n > out_cap) {
+            return 0;
+        }
+        _ = modU8(@intFromFloat(out_ptr), @intFromFloat(n)).call("set", .{bytes});
+        _ = g.userfile.queue.call("shift", .{});
+        return n;
+    }
+
+    fn ufDiscardNext() void {
+        if (ufPendingCount() == 0) {
+            return;
+        }
+        _ = g.userfile.queue.call("shift", .{});
+    }
+
+    /// Park the invisible `<input type="file">` over the caller's button rectangle.
+    ///
+    /// Opacity 0 rather than `display:none` or `visibility:hidden`: a hidden input cannot be
+    /// tapped, and the whole point is that the TAP must land on a real DOM element so the
+    /// browser sees a genuine user gesture. The canvas still draws the visible button.
+    fn ufSetPickerRect(
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        accept_ptr: f64,
+        accept_len: f64,
+    ) void {
+        ufEnsureListening();
+        if (g.userfile.input.h == 0) {
+            const el: Value = document().j.call("createElement", .{str("input")});
+            el.set("type", str("file"));
+            const st: Value = el.get("style");
+            st.set("position", str("fixed"));
+            st.set("opacity", str("0"));
+            st.set("zIndex", str("99998"));
+            st.set("cursor", str("pointer"));
+            _ = el.call("addEventListener", .{ str("change"), func(&ufOnPicked) });
+            _ = document().body().j.call("appendChild", .{el});
+            g.userfile.input = el;
+        }
+        const el: Value = g.userfile.input;
+        el.set("accept", modStr(js_num(accept_ptr), js_num(accept_len)));
+        const st: Value = el.get("style");
+        st.set("display", str("block"));
+        ovSetPx(st, "left", x);
+        ovSetPx(st, "top", y);
+        ovSetPx(st, "width", w);
+        ovSetPx(st, "height", h);
+    }
+
+    fn ufHidePicker() void {
+        if (g.userfile.input.h == 0) {
+            return;
+        }
+        g.userfile.input.get("style").set("display", str("none"));
     }
 
     // ---- text-input overlay port (mobile soft-keyboard for editable widgets) ----
@@ -3264,6 +3773,28 @@ const ZimrBoot = struct {
                     dom.set("js_persistence_size", funcNum(&ZimrWgpu.jsPersistenceSize));
                     dom.set("js_persistence_read", funcNum(&ZimrWgpu.jsPersistenceRead));
                     dom.set("js_persistence_remove", funcNum(&ZimrWgpu.jsPersistenceRemove));
+                    // User-supplied files: drag-and-drop plus the mobile file picker.
+                    dom.set("js_userfile_pending_count", funcNum(&ZimrBoot.ufPendingCount));
+                    dom.set("js_userfile_next_size", funcNum(&ZimrBoot.ufNextSize));
+                    dom.set("js_userfile_next_name", funcNum(&ZimrBoot.ufNextName));
+                    dom.set("js_userfile_read_next", funcNum(&ZimrBoot.ufReadNext));
+                    dom.set("js_userfile_discard_next", funcNum(&ZimrBoot.ufDiscardNext));
+                    dom.set("js_userfile_set_picker_rect", funcNum(&ZimrBoot.ufSetPickerRect));
+                    dom.set("js_userfile_hide_picker", funcNum(&ZimrBoot.ufHidePicker));
+                    // WebSocket client (P2P signaling — see src/net.zig).
+                    dom.set("js_ws_open", funcNum(&ZimrWgpu.jsWsOpen));
+                    dom.set("js_ws_state", funcNum(&ZimrWgpu.jsWsState));
+                    dom.set("js_ws_send", funcNum(&ZimrWgpu.jsWsSend));
+                    dom.set("js_ws_poll", funcNum(&ZimrWgpu.jsWsPoll));
+                    dom.set("js_ws_close", funcNum(&ZimrWgpu.jsWsClose));
+                    dom.set("js_ws_origin_url", funcNum(&ZimrWgpu.jsWsOriginUrl));
+                    dom.set("js_rtc_create", funcNum(&ZimrWgpu.jsRtcCreate));
+                    dom.set("js_rtc_create_offer", funcNum(&ZimrWgpu.jsRtcCreateOffer));
+                    dom.set("js_rtc_set_remote", funcNum(&ZimrWgpu.jsRtcSetRemote));
+                    dom.set("js_rtc_add_ice", funcNum(&ZimrWgpu.jsRtcAddIce));
+                    dom.set("js_rtc_send", funcNum(&ZimrWgpu.jsRtcSend));
+                    dom.set("js_rtc_poll", funcNum(&ZimrWgpu.jsRtcPoll));
+                    dom.set("js_rtc_close", funcNum(&ZimrWgpu.jsRtcClose));
                     // Text-input overlay host functions: a real <input> positioned
                     // over the wasm-drawn widget (ported from src/web/zimr.ts). These
                     // satisfy the imports editable-widget modules need AND make typing
@@ -5109,6 +5640,22 @@ const BridgeGlobals = struct {
     default_sheet: ?css.Sheet = null, // lazily-created default stylesheet
     overlay: Overlay = .{},
     overlay_ta: Overlay = .{}, // multiline sibling of `overlay`; its own <textarea>
+    userfile: UserFile = .{},
+};
+
+/// Drag-and-drop + file-picker state. See `web.zig`'s `userfile` namespace for the protocol
+/// and for why the picker must be a real DOM element rather than a wasm-drawn button.
+const UserFile = struct {
+    /// JS array of `{ name, bytes }`, oldest first. Files land here only once their
+    /// `arrayBuffer()` has resolved, so anything in the queue is complete and readable.
+    queue: Value = .{ .h = 0 },
+    /// The transparent `<input type="file">` parked over the caller's Load button.
+    input: Value = .{ .h = 0 },
+    /// Drop listeners are attached once, lazily — attaching them at boot would mean every
+    /// page paid for a feature almost none of them use.
+    listening: bool = false,
+    /// The name of the file whose `arrayBuffer()` is currently in flight.
+    pending_name: Value = .{ .h = 0 },
 };
 
 // lint:off module-var: THE one page singleton - see BridgeGlobals doc above

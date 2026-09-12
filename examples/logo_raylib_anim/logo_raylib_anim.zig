@@ -7,7 +7,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const clamp = zm.clamp;
 const Vec2 = zm.Vec2;
@@ -54,7 +54,7 @@ fn lerpf(a: f32, b: f32, t: f32) f32 {
 }
 
 fn fade(a: f32) Color {
-    const base: Color = co.palette.ink;
+    const base: Color = common.palette.ink;
     const al: u8 = @round(clamp(a, 0.0, 1.0) * 255.0);
     return .{ .r = base.r, .g = base.g, .b = base.b, .a = al };
 }
@@ -63,7 +63,7 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
     const dt: f32 = f.time.delta_time;
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     const tapped: bool = z.isMouseButtonReleased(f.input, .left);
     if (tapped) {
@@ -103,7 +103,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     drawLogo(f, s, w, h);
-    co.caption(f.gl, s.font, "logo animation - tap to replay");
+    common.caption(f.gl, s.font, "logo animation - tap to replay");
     z.endDrawing(f.gl);
 }
 
@@ -118,27 +118,27 @@ fn drawLogo(f: *z.Frame, s: *State, w: f32, h: f32) void {
         st_blink => {
             // blink the seed box on/off
             if (@mod(@floor(s.t / 0.22), 2.0) == 0) {
-                gl.rect(.{ .x = lx, .y = ly, .width = thick, .height = thick }, .{ .color = co.palette.ink });
+                gl.rect(.{ .x = lx, .y = ly, .width = thick, .height = thick }, .{ .color = common.palette.ink });
             }
         },
         st_grow1 => {
             const p: f32 = clamp(s.t / grow_time, 0.0, 1.0);
             const grow: f32 = lerpf(thick, size, p);
-            gl.rect(.{ .x = lx, .y = ly, .width = grow, .height = thick }, .{ .color = co.palette.ink }); // top
-            gl.rect(.{ .x = lx, .y = ly, .width = thick, .height = grow }, .{ .color = co.palette.ink }); // left
+            gl.rect(.{ .x = lx, .y = ly, .width = grow, .height = thick }, .{ .color = common.palette.ink }); // top
+            gl.rect(.{ .x = lx, .y = ly, .width = thick, .height = grow }, .{ .color = common.palette.ink }); // left
         },
         st_grow2 => {
             const p: f32 = clamp(s.t / grow_time, 0.0, 1.0);
             const grow: f32 = lerpf(thick, size, p);
-            gl.rect(.{ .x = lx, .y = ly, .width = size, .height = thick }, .{ .color = co.palette.ink }); // top
-            gl.rect(.{ .x = lx, .y = ly, .width = thick, .height = size }, .{ .color = co.palette.ink }); // left
+            gl.rect(.{ .x = lx, .y = ly, .width = size, .height = thick }, .{ .color = common.palette.ink }); // top
+            gl.rect(.{ .x = lx, .y = ly, .width = thick, .height = size }, .{ .color = common.palette.ink }); // left
             gl.rect(
                 .{ .x = lx + size - thick, .y = ly, .width = thick, .height = grow },
-                .{ .color = co.palette.ink },
+                .{ .color = common.palette.ink },
             ); // right
             gl.rect(
                 .{ .x = lx, .y = ly + size - thick, .width = grow, .height = thick },
-                .{ .color = co.palette.ink },
+                .{ .color = common.palette.ink },
             ); // bottom
         },
         st_letters => {
@@ -168,7 +168,7 @@ fn drawLogo(f: *z.Frame, s: *State, w: f32, h: f32) void {
             gl.text(
                 .{ w * 0.5 - dim[0] * 0.5, h * 0.5 - dim[1] * 0.5 },
                 msg,
-                .{ .size = ms, .color = co.palette.ink_dim, .font = &s.font },
+                .{ .size = ms, .color = common.palette.ink_dim, .font = &s.font },
             );
         },
     }

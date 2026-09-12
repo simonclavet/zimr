@@ -1,6 +1,6 @@
 # lint-zimr-tutorial.md — how the linter works
 
-`tools/lint_zimr.zig` is an AST-based style linter for the zimr
+`tools/zimrlint.zig` is an AST-based style linter for the zimr
 codebase.  It encodes the mechanical style rules from `claude.md`
 as automated checks, runnable per-file (for editor integration)
 or whole-codebase (build step).
@@ -54,14 +54,14 @@ zig build lint -- --skip=line-length
 **Standalone `zig run` (recommended for editor integration):**
 
 ```
-zig run tools/lint_zimr.zig -- <file.zig> [<file2.zig> ...]
+zig run tools/zimrlint.zig -- <file.zig> [<file2.zig> ...]
 ```
 
 **Compiled binary** (faster after first build):
 
 ```
-zig build-exe tools/lint_zimr.zig -OReleaseFast
-./lint_zimr src/ui.zig
+zig build-exe tools/zimrlint.zig -OReleaseFast
+./zimrlint src/ui.zig
 ```
 
 Output format is editor-parseable:
@@ -489,9 +489,9 @@ Steps in `build.zig` that touch the linter:
 
 ```zig
 const lint_exe = b.addExecutable(.{
-    .name = "lint_zimr",
+    .name = "zimrlint",
     .root_module = b.createModule(.{
-        .root_source_file = b.path("tools/lint_zimr.zig"),
+        .root_source_file = b.path("tools/zimrlint.zig"),
         .target = b.graph.host,
         .optimize = .ReleaseFast,
     }),

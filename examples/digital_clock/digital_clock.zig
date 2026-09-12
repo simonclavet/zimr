@@ -8,10 +8,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
-const cos = zm.cos;
+const sinRad = zm.sinRad;
+const cosRad = zm.cosRad;
 const clamp = zm.clamp;
 const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
@@ -126,7 +126,7 @@ fn drawDigital(f: *z.Frame, hms: [3]i64) void {
 
 fn handTip(center: Vec2, deg: f32, len: f32) Vec2 {
     const r: f32 = deg * rad_per_deg;
-    return .{ center[0] + cos(r) * len, center[1] + sin(r) * len };
+    return .{ center[0] + cosRad(r) * len, center[1] + sinRad(r) * len };
 }
 
 fn drawAnalog(f: *z.Frame, hms: [3]i64) void {
@@ -142,7 +142,7 @@ fn drawAnalog(f: *z.Frame, hms: [3]i64) void {
     var i: usize = 0;
     while (i < 60) : (i += 1) {
         const r: f32 = (6.0 * float(i) - 90.0) * rad_per_deg;
-        const dir: Vec2 = .{ cos(r), sin(r) };
+        const dir: Vec2 = .{ cosRad(r), sinRad(r) };
         const major: bool = (i % 5) == 0;
         const factor: f32 = if (major) 0.84 else 0.90;
         const inner: f32 = radius * factor;
@@ -159,14 +159,17 @@ fn drawAnalog(f: *z.Frame, hms: [3]i64) void {
     const min_deg: f32 = mf * 6.0 + sf * 0.1 - 90.0;
     const sec_deg: f32 = sf * 6.0 - 90.0;
 
-    f.gl.line(center, handTip(center, hour_deg, radius * 0.5), .{ .color = co.palette.ink, .thickness = 7.0 * ks });
-    f.gl.line(center, handTip(center, min_deg, radius * 0.72), .{ .color = co.palette.accent, .thickness = 5.0 * ks });
+    f.gl.line(center, handTip(center, hour_deg, radius * 0.5), .{ .color = common.palette.ink, .thickness = 7.0 * ks });
+    f.gl.line(center, handTip(center, min_deg, radius * 0.72), .{
+        .color = common.palette.accent,
+        .thickness = 5.0 * ks,
+    });
     f.gl.line(center, handTip(center, sec_deg, radius * 0.82), .{ .color = on_col, .thickness = 2.0 * ks });
     f.gl.circle(center, radius * 0.05, .{ .color = tick_col, .segments = 16 });
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // real local wall-clock time (DST-correct), via z.localTime()
     const dt: z.DateTime = z.localTime();
@@ -192,7 +195,7 @@ fn update(f: *z.Frame, s: *State) void {
         drawAnalog(f, hms);
     }
 
-    co.caption(f.gl, s.font, if (s.digital)
+    common.caption(f.gl, s.font, if (s.digital)
         "digital clock - tap to switch to the analog face"
     else
         "analog clock - tap to switch to the digital face");

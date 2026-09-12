@@ -4,9 +4,9 @@
 //! comptime) and into a separate freestanding kernel wasm with ZERO imports, which the Web
 //! Workers instantiate with `{}`. The build ASSERTS that import section is empty, so a kernel
 //! that reaches for the DOM fails to build rather than failing on a phone.
-const zimr = @import("zimr");
+const z = @import("zimr");
 
-const jobs = zimr.jobs;
+const jobs = z.jobs;
 
 pub const tracer = @import("tracer.zig");
 pub const traceTile = tracer.traceTile;

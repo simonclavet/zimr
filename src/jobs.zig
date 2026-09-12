@@ -1,3 +1,4 @@
+//! lint:alias jobs
 //! src/jobs.zig — run a PURE kernel off the main thread, on a Web Worker.
 //!
 //! ===========================================================================
@@ -74,7 +75,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const web = @import("web.zig");
-const abi = @import("jobs_abi.zig");
+const jobs_abi = @import("jobs_abi.zig");
 const wgpu = @import("wgpu.zig");
 
 const Allocator = std.mem.Allocator;
@@ -714,10 +715,10 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
         ///
         /// There is now exactly one spelling of each name in the whole engine.
         pub fn exportWorkerEntry() void {
-            @export(&Worker.alloc, .{ .name = abi.alloc });
-            @export(&Worker.outPtr, .{ .name = abi.out_ptr });
-            @export(&Worker.errPtr, .{ .name = abi.err_ptr });
-            @export(&Worker.errLen, .{ .name = abi.err_len });
+            @export(&Worker.alloc, .{ .name = jobs_abi.alloc });
+            @export(&Worker.outPtr, .{ .name = jobs_abi.out_ptr });
+            @export(&Worker.errPtr, .{ .name = jobs_abi.err_ptr });
+            @export(&Worker.errLen, .{ .name = jobs_abi.err_len });
 
             for (kernels) |entry| {
                 const kernel = entry[1];
@@ -726,7 +727,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                         return Worker.run(kernel, in_len);
                     }
                 };
-                @export(&Entry.run, .{ .name = abi.kernel_prefix ++ entry[0] });
+                @export(&Entry.run, .{ .name = jobs_abi.kernel_prefix ++ entry[0] });
             }
         }
 

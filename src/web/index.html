@@ -27,6 +27,10 @@
             --mod-shaders:  #ec4899;
             --mod-audio:    #eab308;
             --mod-ui:       #38bdf8;
+            /* robot and physics: the dynamics examples, previously absent from the
+               gallery entirely even though `physics` was already a manifest module. */
+            --mod-robot:    #f97316;
+            --mod-physics:  #a78bfa;
             --mod-plot:     #14b8a6;
             --mod-compute:  #a78bfa;
         }
@@ -152,6 +156,8 @@
         .filter-btn[data-mod="shaders"]  { --swatch: var(--mod-shaders); }
         .filter-btn[data-mod="audio"]    { --swatch: var(--mod-audio); }
         .filter-btn[data-mod="ui"]       { --swatch: var(--mod-ui); }
+        .filter-btn[data-mod="robot"]    { --swatch: var(--mod-robot); }
+        .filter-btn[data-mod="physics"]  { --swatch: var(--mod-physics); }
         .filter-btn[data-mod="plot"]     { --swatch: var(--mod-plot); }
         .filter-btn[data-mod="compute"]  { --swatch: var(--mod-compute); }
         .filter-btn.active[data-mod]     { color: var(--swatch); border-color: var(--swatch); }
@@ -246,6 +252,8 @@
         .card[data-mod="shaders"]  { --card-color: var(--mod-shaders); }
         .card[data-mod="audio"]    { --card-color: var(--mod-audio); }
         .card[data-mod="ui"]       { --card-color: var(--mod-ui); }
+        .card[data-mod="robot"]    { --card-color: var(--mod-robot); }
+        .card[data-mod="physics"]  { --card-color: var(--mod-physics); }
         .card[data-mod="plot"]     { --card-color: var(--mod-plot); }
         .card[data-mod="compute"]  { --card-color: var(--mod-compute); }
 
@@ -304,6 +312,8 @@
                 <button class="filter-btn" data-mod="shapes"><span class="swatch"></span>shapes</button>
                 <button class="filter-btn" data-mod="textures"><span class="swatch"></span>textures</button>
                 <button class="filter-btn" data-mod="text"><span class="swatch"></span>text</button>
+                <button class="filter-btn" data-mod="robot"><span class="swatch"></span>robot</button>
+                <button class="filter-btn" data-mod="physics"><span class="swatch"></span>physics</button>
                 <button class="filter-btn" data-mod="models"><span class="swatch"></span>models</button>
                 <button class="filter-btn" data-mod="shaders"><span class="swatch"></span>shaders</button>
                 <button class="filter-btn" data-mod="ui"><span class="swatch"></span>ui</button>

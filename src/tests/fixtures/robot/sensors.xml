@@ -1,0 +1,29 @@
+<mujoco model="sensors">
+  <compiler angle="radian"/>
+  <worldbody>
+    <body name="upper" pos="0 0 1">
+      <joint name="shoulder" type="hinge" axis="0 1 0" pos="0 0 0"/>
+      <geom type="capsule" fromto="0 0 0 0 0 -0.4" size="0.05" mass="1.5"/>
+      <body name="lower" pos="0 0 -0.4">
+        <joint name="elbow" type="hinge" axis="0 1 0" pos="0 0 0"/>
+        <geom type="capsule" fromto="0 0 0 0 0 -0.3" size="0.04" mass="0.8"/>
+        <site name="tip" pos="0 0 -0.3" size="0.01"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="shoulder_motor" joint="shoulder" gear="1"/>
+    <motor name="elbow_motor" joint="elbow" gear="1"/>
+  </actuator>
+  <sensor>
+    <jointpos name="shoulder_q" joint="shoulder"/>
+    <jointvel name="shoulder_qd" joint="shoulder"/>
+    <jointpos name="elbow_q" joint="elbow"/>
+    <framepos name="tip_pos" objtype="site" objname="tip"/>
+    <framequat name="tip_quat" objtype="site" objname="tip"/>
+    <velocimeter name="tip_vel" site="tip"/>
+    <gyro name="tip_gyro" site="tip"/>
+    <accelerometer name="tip_acc" site="tip"/>
+    <actuatorfrc name="elbow_force" actuator="elbow_motor"/>
+  </sensor>
+</mujoco>

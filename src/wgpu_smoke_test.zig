@@ -21,7 +21,7 @@ const gpu = @import("gpu.zig");
 const expect = std.testing.expect;
 const Allocator = std.mem.Allocator;
 const wgpu = @import("wgpu.zig");
-const render_pass = @import("wgpu.zig").render_pass;
+const render_pass = wgpu.render_pass;
 const BindGroupCache = @import("BindGroupCache.zig");
 
 // ============================================================================

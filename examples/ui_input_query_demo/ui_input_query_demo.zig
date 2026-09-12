@@ -100,7 +100,7 @@ fn update(f: *z.Frame, s: *State) void {
             if (kc == .MAX) {
                 continue;
             }
-            const ks: ui.KeyState = s.ui_host.ctx.input.keys[@intFromEnum(kc)];
+            const ks: ui.KeyState = s.ui_host.ctx.input.keys[@backingInt(kc)];
             if (ks.down or ks.pressed_this_frame or ks.released_this_frame) {
                 u.text("  {s:<14} D={s} P={s} R={s} dur={d}", .{
                     @tagName(kc),

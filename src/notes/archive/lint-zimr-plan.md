@@ -8,13 +8,13 @@ step).
 
 ## Architecture
 
-- Single Zig binary at `tools/lint_zimr.zig`.  New `tools/` dir,
+- Single Zig binary at `tools/zimrlint.zig`.  New `tools/` dir,
   distinct from `scripts/` (Python utilities).
 - One `std.zig.Ast.parse` per file; all checks dispatched in a
   single walk.
 - Build step: `zig build lint` (default scan: `src/` +
   `examples/`) or `zig build lint -- <files>`.
-- Standalone: `zig run tools/lint_zimr.zig -- <files>`.
+- Standalone: `zig run tools/zimrlint.zig -- <files>`.
 
 ---
 

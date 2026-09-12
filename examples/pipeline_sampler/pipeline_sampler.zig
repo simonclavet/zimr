@@ -17,7 +17,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -230,9 +230,9 @@ fn update(f: *z.Frame, s: *State) void {
     for (cells) |c| {
         const px: f32 = (c.cx * sx * 0.5 + 0.5) * w;
         const py: f32 = (0.5 - (c.cy - half) * sy * 0.5) * h + 8.0;
-        f.gl.text(.{ px - 70.0, py }, c.label, .{ .size = 20, .color = co.palette.ink_dim, .font = &s.font });
+        f.gl.text(.{ px - 70.0, py }, c.label, .{ .size = 20, .color = common.palette.ink_dim, .font = &s.font });
     }
-    co.caption(f.gl, s.font, "pipeline_sampler: filter (nearest/linear) + address (repeat/clamp/mirror)");
+    common.caption(f.gl, s.font, "pipeline_sampler: filter (nearest/linear) + address (repeat/clamp/mirror)");
     z.endDrawing(f.gl);
 }
 

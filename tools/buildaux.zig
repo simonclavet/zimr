@@ -23,8 +23,8 @@ fn printUsage(io: std.Io) void {
         \\usage: buildaux dist-copy
         \\       buildaux check-wgsl-clean <file>
         \\
-    , .{}) catch {};
-    w.interface.flush() catch {};
+    , .{}) catch {}; // lint:off catch-suppression: stderr write, best-effort
+    w.interface.flush() catch {}; // lint:off catch-suppression: stderr flush, best-effort
 }
 
 fn distCopy(io: std.Io, gpa: Allocator) !void {
@@ -53,8 +53,8 @@ fn die(
 ) noreturn {
     var buf: [1024]u8 = undefined;
     var w: std.Io.File.Writer = std.Io.File.stderr().writer(io, &buf);
-    w.interface.print(fmt, args) catch {};
-    w.interface.flush() catch {};
+    w.interface.print(fmt, args) catch {}; // lint:off catch-suppression: stderr write, best-effort
+    w.interface.flush() catch {}; // lint:off catch-suppression: stderr flush, best-effort
     std.process.exit(1);
 }
 

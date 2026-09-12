@@ -17,6 +17,7 @@ const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
+const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
 const render = @import("render.zig");
 
@@ -87,12 +88,12 @@ const Scene = enum {
     stress,
 
     fn next(self: Scene) Scene {
-        const count: u32 = @as(u32, @intFromEnum(Scene.stress)) + 1;
-        return @enumFromInt((@as(u32, @intFromEnum(self)) + 1) % count);
+        const count: u32 = @as(u32, @backingInt(Scene.stress)) + 1;
+        return @fromBackingInt(@intCast((@as(u32, @backingInt(self)) + 1) % count));
     }
     fn prev(self: Scene) Scene {
-        const count: u32 = @as(u32, @intFromEnum(Scene.stress)) + 1;
-        return @enumFromInt((@as(u32, @intFromEnum(self)) + count - 1) % count);
+        const count: u32 = @as(u32, @backingInt(Scene.stress)) + 1;
+        return @fromBackingInt(@intCast((@as(u32, @backingInt(self)) + count - 1) % count));
     }
     fn label(self: Scene) []const u8 {
         return switch (self) {
@@ -1941,7 +1942,7 @@ fn sceneStirrer(world: *zp.World, gpa: Allocator, state: *State) !void {
         const phi: f32 = float(seg) * (2.0 * pi / float(seg_count));
         _ = try world.createBody(.{
             .shape = seg_shape,
-            .position = vec(r_wall * zm.cos(phi), 1.5, r_wall * zm.sin(phi)),
+            .position = vec(r_wall * zm.cosRad(phi), 1.5, r_wall * zm.sinRad(phi)),
             .rotation = quatFromAxisAngle(vec(0, 1, 0), -(phi + pi / 2.0)),
             .motion_type = .static,
         });
@@ -2220,7 +2221,7 @@ fn stressBlender(world: *zp.World, gpa: Allocator, state: *State, o: Vec) !void 
         const phi: f32 = float(seg) * (2.0 * pi / float(seg_count));
         _ = try world.createBody(.{
             .shape = seg_shape,
-            .position = o + vec(r_wall * zm.cos(phi), 3.8, r_wall * zm.sin(phi)),
+            .position = o + vec(r_wall * zm.cosRad(phi), 3.8, r_wall * zm.sinRad(phi)),
             .rotation = quatFromAxisAngle(vec(0, 1, 0), -(phi + pi / 2.0)),
             .motion_type = .static,
         });
@@ -2561,7 +2562,7 @@ fn switchScene(state: *State, scene: Scene) void {
     state.scene = scene;
     state.cam_distance = scene.camDistance();
     state.cam_pan = vec(0, 0, 0);
-    buildScene(state) catch {};
+    buildScene(state) catch assertUnreachable(@src(), "OOM", .{});
 }
 
 // ===== Phase 4: constraint showcase scenes (one Jolt sample each) =====
@@ -2751,7 +2752,7 @@ fn drawUiPanel(f: *z.Frame, state: *State) bool {
         }
         u.sameLine(.{});
         if (u.button("Launch", btn)) {
-            launchSphere(state) catch {};
+            launchSphere(state) catch assertUnreachable(@src(), "OOM", .{});
         }
         const plabel: []const u8 = if (state.profiling) "Resume" else "Profile";
         if (u.button(plabel, btn)) {
@@ -2808,7 +2809,7 @@ fn update(f: *z.Frame, state: *State) void {
 
     if (!state.spawned) {
         state.cam_distance = state.scene.camDistance();
-        buildScene(state) catch {};
+        buildScene(state) catch assertUnreachable(@src(), "OOM", .{});
         state.spawned = true;
     }
 
@@ -2863,7 +2864,7 @@ fn update(f: *z.Frame, state: *State) void {
     }
 
     if (z.isKeyPressed(f.input, .space)) {
-        launchSphere(state) catch {};
+        launchSphere(state) catch assertUnreachable(@src(), "OOM", .{});
     }
     if (z.isKeyPressed(f.input, .tab)) {
         switchScene(state, state.scene.next());
@@ -2911,7 +2912,7 @@ fn update(f: *z.Frame, state: *State) void {
             if (state.scene == .conveyor) {
                 spawnConveyorMarble(state);
             }
-            zp.step(&state.world, fixed_dt) catch {};
+            zp.step(&state.world, fixed_dt) catch assertUnreachable(@src(), "OOM", .{});
             state.phys_accum -= fixed_dt;
         }
         if (state.phys_accum > fixed_dt) {

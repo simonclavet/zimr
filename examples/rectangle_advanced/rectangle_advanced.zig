@@ -8,10 +8,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const cos = zm.cos;
-const sin = zm.sin;
+const cosRad = zm.cosRad;
+const sinRad = zm.sinRad;
 const clamp = zm.clamp;
 const distance = zm.distance;
 const float = zm.float;
@@ -42,7 +42,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 fn arcPoint(center: Vec2, deg: f32, radius: f32) Vec2 {
     const r: f32 = deg * rad_per_deg;
-    return .{ center[0] + cos(r) * radius, center[1] + sin(r) * radius };
+    return .{ center[0] + cosRad(r) * radius, center[1] + sinRad(r) * radius };
 }
 
 /// Rounded rect with per-side corner radius and a left->right colour gradient.
@@ -115,7 +115,7 @@ fn gradQuad(
 fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
 
     // --- input: drag sets the roundness scale, tap toggles the outline ---
     const down: bool = z.isMouseButtonDown(f.input, .left);
@@ -150,8 +150,8 @@ fn update(f: *z.Frame, s: *State) void {
     while (i < bar_count) : (i += 1) {
         const fi: f32 = float(i);
         // each bar breathes its two corners on offset phases
-        const rl: f32 = clamp((0.5 + 0.5 * sin(s.t * 1.1 + fi * 0.9)) * s.round_scale, 0.0, 1.0);
-        const rr: f32 = clamp((0.5 + 0.5 * sin(s.t * 1.3 + fi * 0.9 + 1.6)) * s.round_scale, 0.0, 1.0);
+        const rl: f32 = clamp((0.5 + 0.5 * sinRad(s.t * 1.1 + fi * 0.9)) * s.round_scale, 0.0, 1.0);
+        const rr: f32 = clamp((0.5 + 0.5 * sinRad(s.t * 1.3 + fi * 0.9 + 1.6)) * s.round_scale, 0.0, 1.0);
         const hue_l: f32 = @mod(s.t * 22.0 + fi * 40.0, 360.0);
         const hue_r: f32 = @mod(hue_l + 70.0, 360.0);
         const left: Color = z.colorFromHSV(hue_l, 0.7, 0.95);
@@ -167,13 +167,13 @@ fn update(f: *z.Frame, s: *State) void {
                 round_avg,
                 corner_segments,
                 2.0,
-                .{ .color = co.palette.ink },
+                .{ .color = common.palette.ink },
             );
         }
         y += bar_h + gap;
     }
 
-    co.caption(f.gl, s.font, "rectangle advanced: drag to set roundness, tap to toggle outline");
+    common.caption(f.gl, s.font, "rectangle advanced: drag to set roundness, tap to toggle outline");
     z.endDrawing(f.gl);
 }
 

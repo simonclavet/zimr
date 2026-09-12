@@ -4,7 +4,10 @@
 // Math.max — and those return NaN if EITHER argument is NaN, so `@min(x, nan)`
 // came back NaN instead of x. Fixed with NaN-ignoring __fmin/__fmax helpers.
 var sink: f64 = 0;
-fn rf(x: f64) f64 { sink += x; return x; }
+fn rf(x: f64) f64 {
+    sink += x;
+    return x;
+}
 
 export fn run_test() i32 {
     const z = rf(0.0);

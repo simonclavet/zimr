@@ -13,7 +13,7 @@ const float = zm.float;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 
-const co = @import("example_common");
+const common = @import("example_common");
 const c = z.colors;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -138,7 +138,7 @@ fn update(f: *z.Frame, state: *State) void {
         f.gl.circle(.{ margin + pad_w - 28, y + 28 }, 9, .{ .color = dot_color, .segments = 16 });
     }
 
-    co.caption(f.gl, state.font, "composer.tone -> Web Audio buffers; first tap resumes the AudioContext");
+    common.caption(f.gl, state.font, "composer.tone -> Web Audio buffers; first tap resumes the AudioContext");
     z.endDrawing(f.gl);
 }
 

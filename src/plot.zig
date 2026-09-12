@@ -1,20 +1,21 @@
+//! lint:alias plot
 //! plot.zig — a native-Zig plotting library for zimr, in the spirit of
 //! Dear ImGui's ImPlot but redesigned to be idiomatic Zig.
 //!
 //! Layering (the key departure from ImPlot, which welds rendering to a
 //! single `ImDrawList`):
 //!
-//!   1. **Rendering core** (this file, the `Plot` type + `Axis`/`Ticker`).
+//!   1. **Rendering plot_core** (this file, the `Plot` type + `Axis`/`Ticker`).
 //!      Depends only on `zm`.  Emits primitives to a *duck-typed sink* —
 //!      anything exposing `fillRect / line / polyline / circleFilled /
 //!      triangleFilled / text`.  Pure, allocation-light, host-testable,
 //!      and renderable off-screen.
 //!   2. **Sinks.**  `SvgSink` (here) renders to an SVG string for host
 //!      snapshot tests and docs.  A `DrawListSink` wrapping `ui.DrawList`
-//!      (next increment) renders in-engine.  The core never learns which.
+//!      (next increment) renders in-engine.  The plot_core never learns which.
 //!   3. **ImPlot-style stateful API** (next increment): `beginPlot /
 //!      setupAxes / plotLine / endPlot` over `ui.Ui`, a thin shell that
-//!      drives the core with a `DrawListSink` and feeds interaction.
+//!      drives the plot_core with a `DrawListSink` and feeds interaction.
 //!
 //! Data coords are f64 (science data needs the precision); pixel coords
 //! are f32 (`zm.Vec2`).  The axis transform encodes direction *and*
@@ -31,7 +32,7 @@ const Allocator = std.mem.Allocator;
 const zm = @import("zm");
 const float64 = zm.float64;
 const draw2d = @import("draw2d.zig");
-const core = @import("plot_core.zig");
+const plot_core = @import("plot_core.zig");
 
 // Bind zm helpers at file scope (lint: no qualified zm.* in bodies).
 const Range = zm.Range;
@@ -45,6 +46,7 @@ const log10 = zm.log10;
 const clamp = zm.clamp;
 const exp10 = zm.exp10;
 const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
 const isFinite = zm.isFinite;
 const nan = zm.nan;
 const float = zm.float;
@@ -57,7 +59,7 @@ const label_color: Color = .{ .r = 224, .g = 224, .b = 228, .a = 255 };
 const Vec2 = zm.Vec2;
 pub const DataRange = Range(f64);
 
-/// Axis-aligned pixel rectangle (top-left origin, +y down).  The core's
+/// Axis-aligned pixel rectangle (top-left origin, +y down).  The plot_core's
 /// own rect type so it owes nothing to `ui`; the `ui` adapter converts.
 pub const Rect = struct {
     x: f32 = 0,
@@ -325,11 +327,11 @@ pub const Style = struct {
 // built-in key tables directly through plot_core.
 // ============================================================================
 
-pub const Colormap = core.Colormap;
+pub const Colormap = plot_core.Colormap;
 
 /// Sample a colormap at t in [0,1]. Qualitative maps pick a discrete color;
 /// continuous maps interpolate between control colors.
-const sampleColormap = core.sampleBuiltinColormap;
+const sampleColormap = plot_core.sampleBuiltinColormap;
 
 /// Draw a horizontal gradient strip of `cmap` filling `rect` (t=0 at left).
 pub fn drawColormapBar(sink: anytype, rect: Rect, cmap: Colormap, segments: usize) void {
@@ -503,7 +505,7 @@ pub const DigitalSpec = struct {
 
 // ============================================================================
 // [SECTION] Histogram binning — pure (caller owns buffers); render the result
-// with plotBars (1D) or plotHeatmap (2D). Keeps the core allocation-free.
+// with plotBars (1D) or plotHeatmap (2D). Keeps the plot_core allocation-free.
 // ============================================================================
 
 /// Count `values` into `counts.len` equal-width bins over [min,max]. Values
@@ -699,7 +701,7 @@ pub const Axis = struct {
             .symlog => return symForward(v, self.linthresh),
             .custom => {
                 const tr: AxisMap = self.transform orelse {
-                    assertf(false, @src(), "Scale.custom requires Axis.transform to be set", .{});
+                    assertUnreachable(@src(), "Scale.custom requires Axis.transform to be set", .{});
                     return v;
                 };
                 return tr.forward(v);
@@ -1089,7 +1091,7 @@ pub const Ticker = struct {
 };
 
 // ============================================================================
-// [SECTION] Plot — the rendering core
+// [SECTION] Plot — the rendering plot_core
 // ============================================================================
 
 fn padRange(r: DataRange) DataRange {
@@ -2229,7 +2231,7 @@ pub const SvgSink = struct {
     fn p(self: *SvgSink, comptime fmt: []const u8, args: anytype) void {
         var tmp: [512]u8 = undefined;
         const s: []const u8 = bufPrint(&tmp, fmt, args) catch return;
-        self.buf.appendSlice(self.gpa, s) catch {};
+        self.buf.appendSlice(self.gpa, s) catch assertUnreachable(@src(), "OOM", .{});
     }
 
     pub fn begin(self: *SvgSink) void {

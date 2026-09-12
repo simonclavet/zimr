@@ -19,7 +19,7 @@ const zm = @import("zm");
 const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
 const Vec3 = zm.Vec3;
-const atan2 = zm.atan2;
+const atan2Rad = zm.atan2Rad;
 const clamp = zm.clamp;
 const clamp01 = zm.clamp01;
 const fract = zm.fract;
@@ -70,7 +70,7 @@ pub fn shaderMain(io_in: Io) Out {
     const inv_h: Vec2 = vec2(1.0 / io_in.u.resolution[1], 1.0 / io_in.u.resolution[1]);
     const to_mouse: Vec2 = (frag - io_in.u.mouse) * inv_h;
     const r: f32 = length(to_mouse);
-    const angle: f32 = atan2(to_mouse[1], to_mouse[0]);
+    const angle: f32 = atan2Rad(to_mouse[1], to_mouse[0]);
 
     const hue_raw: f32 = (angle / tau + 0.5) + @sin(r * 12.0 - io_in.u.time * 1.5) * 0.15 + io_in.u.time * 0.05;
     const hue: f32 = fract(hue_raw);

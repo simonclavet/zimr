@@ -14,7 +14,7 @@ export fn run_test() i32 {
     // global sentinel enum array
     es[1] = .c;
     var t: u32 = 0;
-    for (es) |x| t = t * 10 + @intFromEnum(x);
+    for (es) |x| t = t * 10 + @backingInt(x);
     if (t != 22) return 1; // a=0, c=2, c=2 -> 022
     if (es[es.len] != .a) return 2; // sentinel is .a (value 0)
 
@@ -22,7 +22,7 @@ export fn run_test() i32 {
     var ls: [4:.end]Tok = .{ .a, .b, .c, .a };
     ls[3] = .b;
     var u: u32 = 0;
-    for (ls) |x| u = u * 10 + @intFromEnum(x);
+    for (ls) |x| u = u * 10 + @backingInt(x);
     if (u != 121) return 3; // 0,1,2,1
     if (ls[ls.len] != .end) return 4; // sentinel is .end (value 3)
 

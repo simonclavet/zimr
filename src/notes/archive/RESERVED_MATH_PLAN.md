@@ -132,9 +132,9 @@ Duplicate functions → delete and use zm:
 auto-detected by their `@import`/alias RHS); `sw` (screen-width abbreviation, not core
 math). `bridge.math()` is fine — `math` is the excluded `std.math` re-export.
 
-## 6. The two lint rules (in tools/lint_zimr.zig)
+## 6. The two lint rules (in tools/zimrlint.zig)
 
-**R1 `reserved-math-names`** — ✅ IMPLEMENTED in `tools/lint_zimr.zig`. In a file that
+**R1 `reserved-math-names`** — ✅ IMPLEMENTED in `tools/zimrlint.zig`. In a file that
 imports zm, flags any `const`/`var`/`fn` decl whose name ∈ R_core, except the canonical
 binding `const NAME = zm.NAME;`. R_core is a `StaticStringMap`; `collectZmAliases` scans
 each file for whole-module `const X = @import("zm");` bindings (empty ⇒ exempt, decision
@@ -142,7 +142,7 @@ each file for whole-module `const X = @import("zm");` bindings (empty ⇒ exempt
 Struct/enum FIELDS and PARAMS are deliberately NOT covered (only decls). Verified:
 flags real collisions, honours the binding + the no-zm exemption, prints a rule note.
 
-**R2 `no-qualified-zm`** — ✅ IMPLEMENTED in `tools/lint_zimr.zig` and enforced (P5).
+**R2 `no-qualified-zm`** — ✅ IMPLEMENTED in `tools/zimrlint.zig` and enforced (P5).
 Fires on any `zm.X` field-access in a body, EXCEPT the canonical binding init
 `const X = zm.X;` (name == member), which is pre-marked per file by
 `markCanonicalZmInits` and skipped. Modeled on `checkDebugPrint` (a per-`field_access`
@@ -258,7 +258,7 @@ fragment shader); `wgpu-compute-particles` + `wgpu-fluid-gpu` (kernel Zig→SPIR
 `tools/zig-out` and produces spurious shader-pipeline failures.
 
 **P5 — R2 enforced (COMPLETE).** R2 (`no-qualified-zm`) is implemented in
-`tools/lint_zimr.zig` and live in the gate.  The feared ~1011 was a textual grep count
+`tools/zimrlint.zig` and live in the gate.  The feared ~1011 was a textual grep count
 inflated by doc-comments; the real AST surface was **43 fires across 3 files**:
 runtime.zig (40), ui.zig (2), physics.zig (1).  runtime.zig's 40 are its per-struct
 `const zm` uses — not bindable at file scope — and are cleared *en masse* by R2's

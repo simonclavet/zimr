@@ -6,11 +6,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
-const sin = zm.sin;
-const cos = zm.cos;
-const atan2 = zm.atan2;
+const sinRad = zm.sinRad;
+const cosRad = zm.cosRad;
+const atan2Rad = zm.atan2Rad;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -41,8 +41,8 @@ fn irisPos(c: Vec2, max_d: f32, target: Vec2) Vec2 {
     if (dx * dx + dy * dy <= max_d * max_d) {
         return target;
     }
-    const a: f32 = atan2(dy, dx);
-    return .{ c[0] + max_d * cos(a), c[1] + max_d * sin(a) };
+    const a: f32 = atan2Rad(dy, dx);
+    return .{ c[0] + max_d * cosRad(a), c[1] + max_d * sinRad(a) };
 }
 
 fn drawEye(
@@ -65,7 +65,7 @@ fn drawEye(
 fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
-    z.clearViewport(f, co.palette.bg);
+    z.clearViewport(f, common.palette.bg);
     s.t += 0.016;
 
     const sr: f32 = @min(w, h) * 0.18;
@@ -81,12 +81,12 @@ fn update(f: *z.Frame, s: *State) void {
     const target: Vec2 = if (down)
         z.getMousePosition(f.input)
     else
-        .{ cx + cos(s.t * 0.9) * w * 0.36, cy + sin(s.t * 1.7) * h * 0.34 };
+        .{ cx + cosRad(s.t * 0.9) * w * 0.36, cy + sinRad(s.t * 1.7) * h * 0.34 };
 
     drawEye(f, left_c, sr, ir, iris_left_col, target);
     drawEye(f, right_c, sr, ir, iris_right_col, target);
 
-    co.caption(f.gl, s.font, "following eyes: move your finger - the eyes follow (and wander when idle)");
+    common.caption(f.gl, s.font, "following eyes: move your finger - the eyes follow (and wander when idle)");
     z.endDrawing(f.gl);
 }
 

@@ -13,7 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
-const co = @import("example_common");
+const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
@@ -359,7 +359,7 @@ fn update(f: *z.Frame, s: *State) void {
         f.gl.line(.{ m[0], m[1] - 12 }, .{ m[0], m[1] + 12 }, .{ .color = red, .thickness = 1.5 });
     }
 
-    co.caption(f.gl, s.font, "textured curve - drag the four points; sliders set width & segments");
+    common.caption(f.gl, s.font, "textured curve - drag the four points; sliders set width & segments");
     z.endDrawing(f.gl);
 }
 
