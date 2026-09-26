@@ -147,6 +147,7 @@ test {
     std.testing.refAllDecls(@import("wgpu.zig").storage_buffer);
     std.testing.refAllDecls(@import("sw_runtime.zig"));
     std.testing.refAllDecls(@import("text2d.zig"));
+    std.testing.refAllDecls(@import("glyph_atlas.zig"));
     std.testing.refAllDecls(@import("plot.zig"));
     std.testing.refAllDecls(@import("types.zig"));
     std.testing.refAllDecls(@import("ui.zig"));

@@ -50,6 +50,7 @@ pub const vbo_ring_vertices = @import("gpu_iface.zig").vbo_ring_vertices;
 pub const ibo_ring_indices = @import("gpu_iface.zig").ibo_ring_indices;
 const wgpu = @import("wgpu.zig");
 const wgpu_texture = @import("wgpu_texture.zig");
+const glyph_atlas = @import("glyph_atlas.zig");
 const shader = @import("shader_interface");
 const shader_runtime = @import("shader_runtime_wgpu.zig");
 const assertf = zm.assertf;
@@ -222,6 +223,13 @@ pub fn buildMaterialBindGroup(
     return wgpu.createBindGroup(device, layout, blob, "material");
 }
 
+/// One page of the glyph cache on the GPU: its texture and the material bind
+/// group the 2D batch binds to draw from it.
+pub const GlyphPage = struct {
+    texture: WgpuTexture = .{},
+    bind_group: wgpu.BindGroupHandle = .invalid,
+};
+
 /// The 2D batch's vertex layout: position (2xf32), uv (2xf32), packed colour (4xu8) = 20 bytes.
 ///
 /// A free function, NOT a literal inlined at each use, because `Shader2D` builds a user
@@ -371,6 +379,14 @@ pub const Renderer2D = struct {
     sprite_ids: [max_sprite_residency]u64 = undefined,
     sprite_tex: [max_sprite_residency]u32 = undefined,
     sprite_count: usize = 0,
+
+    // Glyphs rasterized at the size they are drawn (text2d's dynamic path): the
+    // CPU bookkeeping plus the GPU pages it packs into. Engine-owned and OUTSIDE
+    // the texture-id registry on purpose: the launcher releases registrations
+    // per child (`releaseOwner`, `resetRegistryFrom`), and these pages are
+    // shared by every child's fonts - a child reset must not destroy them.
+    glyph_cache: glyph_atlas.GlyphAtlas = .{},
+    glyph_pages: [glyph_atlas.page_max]GlyphPage = @splat(.{}),
 
     pub fn init(gpa: Allocator, f: *GpuFrame) !Renderer2D {
         var r: Renderer2D = .{ .gpa = gpa };
@@ -810,7 +826,87 @@ pub const Renderer2D = struct {
         return self.lookupBindGroup(id);
     }
 
+    /// `text2d.cachedGlyph`'s page hook: create glyph page `page` (a blank
+    /// linear-filtered RGBA8 texture + its material bind group) the first time
+    /// the atlas puts a glyph on it. False if the bind group cannot be built.
+    pub fn ensureGlyphPage(self: *Renderer2D, page: u32) bool {
+        const glyph_page: *GlyphPage = &self.glyph_pages[page];
+        if (glyph_page.bind_group != .invalid) {
+            return true;
+        }
+        const device: wgpu.DeviceHandle = self.resources.f.device;
+        const handle: wgpu.TextureHandle = wgpu.createTexture(device, .{
+            .width = glyph_atlas.page_size,
+            .height = glyph_atlas.page_size,
+            .format = .rgba8_unorm,
+            .usage = .{ .texture_binding = true, .copy_dst = true },
+            .label = "glyph_page",
+        });
+        // Linear, no mips: glyphs are drawn 1:1 (texel centres on pixel
+        // centres), where linear is exact; only rotated or oversized text is
+        // resampled, and the border keeps that from reading a neighbour.
+        var texture: WgpuTexture = .{
+            .handle = handle,
+            .view = wgpu.createTextureView(handle),
+            .sampler = wgpu.createSampler(device, .{ .mag_filter_linear = true, .min_filter_linear = true }),
+            .width = glyph_atlas.page_size,
+            .height = glyph_atlas.page_size,
+            .format = .rgba8_unorm,
+        };
+        const bind_group: wgpu.BindGroupHandle = buildMaterialBindGroup(
+            self.gpa,
+            device,
+            self.resources.bg_layouts[1],
+            texture,
+        ) catch {
+            texture.deinit();
+            return false;
+        };
+        glyph_page.* = .{ .texture = texture, .bind_group = bind_group };
+        return true;
+    }
+
+    /// `text2d.cachedGlyph`'s upload hook: write one bordered glyph (`rgba`,
+    /// tightly packed) into page `page` at texel (`x`, `y`).
+    pub fn writeGlyphPage(
+        self: *Renderer2D,
+        page: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        rgba: []const u8,
+    ) void {
+        wgpu.queueWriteTextureRegion(
+            self.resources.f.queue,
+            self.glyph_pages[page].texture.handle,
+            x,
+            y,
+            width,
+            height,
+            width * 4,
+            rgba,
+        );
+    }
+
+    /// The material bind group of glyph page `page` (white/untextured if the
+    /// page was never created).
+    pub fn glyphPageBindGroup(self: *const Renderer2D, page: u32) wgpu.BindGroupHandle {
+        const bind_group: wgpu.BindGroupHandle = self.glyph_pages[page].bind_group;
+        if (bind_group == .invalid) {
+            return self.resources.bind_groups[1];
+        }
+        return bind_group;
+    }
+
     pub fn deinit(self: *Renderer2D) void {
+        for (&self.glyph_pages) |*glyph_page| {
+            if (glyph_page.bind_group != .invalid) {
+                wgpu.destroyBindGroup(glyph_page.bind_group);
+                glyph_page.texture.deinit();
+            }
+        }
+        self.glyph_cache.deinit(self.gpa);
         self.resources.deinit();
         wgpu.destroyBuffer(self.batch_vbo);
         wgpu.destroyBuffer(self.batch_ibo);

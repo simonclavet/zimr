@@ -71,6 +71,7 @@ const WgpuTexture = @import("wgpu_texture.zig").WgpuTexture;
 const Texture = @import("types.zig").Texture;
 const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
 const text2d = @import("text2d.zig");
+const glyph_atlas = @import("glyph_atlas.zig");
 const Font = @import("types.zig").Font;
 const Sprite = @import("Sprite.zig");
 const shapes2d = @import("shapes2d.zig");
@@ -200,6 +201,12 @@ owner: ?*anyopaque = null,
 /// exactly these, not a giant rect.
 render_w: u32 = 0,
 render_h: u32 = 0,
+/// Where the current pass puts world (post-modelview) coordinates, in device
+/// pixels of its target: `device = world * device_scale + device_offset`, per
+/// axis. Set wherever the 2D view-projection is programmed (`setDeviceMapping`);
+/// text reads it to rasterize glyphs at the size they actually land at.
+device_scale: [2]f32 = .{ 1, 1 },
+device_offset: [2]f32 = .{ 0, 0 },
 
 // Current immediate-mode primitive group.
 mode: raster.DrawMode = .triangles,
@@ -410,6 +417,66 @@ pub fn bindTexture(self: *WgpuGl, tex: WgpuTexture) void {
 /// registry's prebuilt material bind group. id 0 = white/untextured.
 pub fn setTexture(self: *WgpuGl, id: u32) void {
     const bg: BindGroupHandle = self.renderer().lookupBindGroup(id);
+    if (bg == self.renderer().shapes_batch.current_texture_bind_group) {
+        return;
+    }
+    self.flushBeforeMaterialSwap();
+    self.renderer().shapes_batch.bindTextureGroup(bg);
+}
+
+/// Record the device-pixel mapping implied by the 2D view-projection `vp`
+/// (column-major, an axis-aligned ortho as `orthoTopLeft` / `fitOrtho` build)
+/// over a `target_w` x `target_h` pixel target. Call it wherever the pass's
+/// view-projection is programmed, with that pass's target size.
+pub fn setDeviceMapping(
+    self: *WgpuGl,
+    vp: [16]f32,
+    target_w: u32,
+    target_h: u32,
+) void {
+    const half_w: f32 = float(target_w) * 0.5;
+    const half_h: f32 = float(target_h) * 0.5;
+    // NDC x in [-1, 1] -> [0, w] left to right; NDC y in [1, -1] -> [0, h] top to bottom.
+    self.device_scale = .{ vp[0] * half_w, -vp[5] * half_h };
+    self.device_offset = .{ (vp[12] + 1.0) * half_w, (1.0 - vp[13]) * half_h };
+}
+
+/// text2d's hook for glyphs rasterized at their drawn size: how draw
+/// coordinates map to device pixels right now - the modelview (camera,
+/// `pushViewport` placement, `drawPro`'s rotation) composed with the pass
+/// mapping. Derived by pushing points through the modelview, so it holds for
+/// whatever the stack contains.
+pub fn glyphDeviceMapping(self: *const WgpuGl) text2d.DeviceMapping {
+    const origin: Vec = mulMatVec(self.modelview, vec4(0, 0, 0, 1));
+    const unit_x: Vec = mulMatVec(self.modelview, vec4(1, 0, 0, 1));
+    const unit_y: Vec = mulMatVec(self.modelview, vec4(0, 1, 0, 1));
+    const scale_x: f32 = self.device_scale[0];
+    const scale_y: f32 = self.device_scale[1];
+    return .{
+        .xx = scale_x * (unit_x[0] - origin[0]),
+        .xy = scale_x * (unit_y[0] - origin[0]),
+        .yx = scale_y * (unit_x[1] - origin[1]),
+        .yy = scale_y * (unit_y[1] - origin[1]),
+        .tx = scale_x * origin[0] + self.device_offset[0],
+        .ty = scale_y * origin[1] + self.device_offset[1],
+    };
+}
+
+/// text2d's hook: the glyph cache's entry for `key`, rasterizing + uploading
+/// it on first use (null when the atlas is full this frame).
+pub fn glyphEntry(
+    self: *WgpuGl,
+    face: *const text2d.FontFace,
+    key: glyph_atlas.Key,
+) ?glyph_atlas.Entry {
+    const r: *Renderer2D = self.renderer();
+    return text2d.cachedGlyph(&r.glyph_cache, r.gpa, r, face, key);
+}
+
+/// text2d's hook: make glyph page `page` the active 2D material. Same dedup as
+/// `setTexture` - consecutive glyphs on one page batch into one draw.
+pub fn bindGlyphPage(self: *WgpuGl, page: u32) void {
+    const bg: BindGroupHandle = self.renderer().glyphPageBindGroup(page);
     if (bg == self.renderer().shapes_batch.current_texture_bind_group) {
         return;
     }

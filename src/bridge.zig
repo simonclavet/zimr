@@ -898,11 +898,13 @@ const ZimrWgpu = struct {
             canvas.get("style").set("cssText", str("position:fixed;inset:0;width:100vw;height:100vh;" ++
                 "display:block;touch-action:none;user-select:none;-webkit-user-select:none"));
             _ = doc.get("body").call("appendChild", .{canvas});
-            const dpr: f64 = js_to_num(global().get("devicePixelRatio").h);
-            const w: u32 = @trunc(js_to_num(canvas.get("clientWidth").h) * dpr);
-            const h: u32 = @trunc(js_to_num(canvas.get("clientHeight").h) * dpr);
-            canvas.set("width", Value{ .h = js_num(@floatFromInt(@max(w, 1))) });
-            canvas.set("height", Value{ .h = js_num(@floatFromInt(@max(h, 1))) });
+            g.wgpu.canvas = canvas;
+            g.wgpu.have_canvas = true;
+            // Size the backing store now, then keep it in step with the CSS box
+            // for the life of the page (window resize, fullscreen, iframe resize,
+            // browser zoom, a move to a monitor with another devicePixelRatio).
+            observeCanvasSize(canvas);
+            syncCanvasBacking();
             const ctx: Value = canvas.call("getContext", .{str("webgpu")});
             // rgba8unorm (not getPreferredCanvasFormat's bgra8unorm) to match the
             // engine's RGBA8 render textures - see domCanvasConfigure for why.
@@ -912,12 +914,115 @@ const ZimrWgpu = struct {
             cfg.set("format", preferred);
             cfg.set("alphaMode", str("opaque"));
             _ = ctx.call("configure", .{cfg});
-            g.wgpu.canvas = canvas;
             g.wgpu.context = ctx;
             g.wgpu.format_index = formatIndexOf(preferred);
-            g.wgpu.have_canvas = true;
         }
         return 1;
+    }
+
+    // ---- canvas backing store = CSS box x devicePixelRatio -----------------
+    //
+    // The canvas has TWO sizes: its CSS box (what the page lays out, and the
+    // space the engine's ortho + input use) and its backing store
+    // (`canvas.width/height`, the pixels the GPU actually renders). When the
+    // backing store lags the CSS box, the browser STRETCHES the stale image to
+    // fit: a page that booted at 847 px wide and was then enlarged to 1906 px
+    // rendered everything at 0.44 device px per CSS px - 12 px text became 5
+    // px, 2 px lines fell between pixel centres and vanished. So the backing
+    // store is re-synced at the top of EVERY frame, before the module renders:
+    // one frame's getCurrentTexture, depth attachment and scissor clamp then
+    // all agree on one size.
+
+    /// Start watching the canvas's device-pixel size. `device-pixel-content-box`
+    /// reports the EXACT number of device pixels the CSS box covers (no rounding
+    /// of clientWidth x dpr, which can be off by one and resample the whole
+    /// frame by a hair) and also fires when only the devicePixelRatio changes.
+    /// Browsers without it (Safari) get no observer: the per-frame fallback in
+    /// `syncCanvasBacking` covers them.
+    fn observeCanvasSize(canvas: Value) void {
+        const observer_ctor: Value = global().get("ResizeObserver");
+        if (observer_ctor.isNull()) {
+            return;
+        }
+        const entry_proto: Value = global().get("ResizeObserverEntry").get("prototype");
+        const has_device_pixel_box: bool = entry_proto
+            .call("hasOwnProperty", .{str("devicePixelContentBoxSize")})
+            .truthy();
+        if (!has_device_pixel_box) {
+            return;
+        }
+        g.wgpu.has_device_pixel_box = true;
+        const observer: Value = observer_ctor.new(.{func(&onCanvasResize)});
+        const options: Value = global().get("Object").new(.{});
+        options.set("box", str("device-pixel-content-box"));
+        _ = observer.call("observe", .{ canvas, options });
+        g.wgpu.resize_observer = observer;
+    }
+
+    /// ResizeObserver callback: record the canvas's device-pixel size. Nothing is
+    /// resized here - the callback runs between frames at a time the browser
+    /// picks, so the new size is applied at the top of the next frame instead.
+    /// Fires outside any frame, so every handle minted here is freed explicitly.
+    fn onCanvasResize(entries_h: Handle, _: Handle) void {
+        const entries: Value = .{ .h = entries_h };
+        const entry_count: u32 = entries.getU32("length");
+        if (entry_count == 0) {
+            return;
+        }
+        const entry: Value = entries.at(entry_count - 1);
+        const sizes: Value = entry.get("devicePixelContentBoxSize");
+        const size: Value = sizes.at(0);
+        g.wgpu.observed_device_w = size.getNum("inlineSize");
+        g.wgpu.observed_device_h = size.getNum("blockSize");
+        size.free();
+        sizes.free();
+        entry.free();
+    }
+
+    /// Make `canvas.width/height` match the CSS box in device pixels. Runs at
+    /// canvas creation and at the top of every frame; writes only on a change
+    /// (assigning `canvas.width` reallocates the swapchain texture). Reads are
+    /// numeric, so a frame that changes nothing mints no JS handles.
+    fn syncCanvasBacking() void {
+        if (!g.wgpu.have_canvas) {
+            return;
+        }
+        const canvas: Value = g.wgpu.canvas;
+        var target_w: f64 = g.wgpu.observed_device_w;
+        var target_h: f64 = g.wgpu.observed_device_h;
+        const has_exact_size: bool = target_w >= 1 and target_h >= 1;
+        if (!has_exact_size) {
+            const css_w: f64 = canvas.getNum("clientWidth");
+            const css_h: f64 = canvas.getNum("clientHeight");
+            const is_laid_out: bool = css_w >= 1 and css_h >= 1;
+            if (!is_laid_out) {
+                return; // display:none / not in the document yet: keep the old size
+            }
+            const reported_dpr: f64 = global().getNum("devicePixelRatio");
+            const dpr: f64 = if (reported_dpr > 0) reported_dpr else 1;
+            target_w = @round(css_w * dpr);
+            target_h = @round(css_h * dpr);
+        }
+        // Clamp to the GPU's texture limit, scaling BOTH axes so the backing
+        // store keeps the CSS aspect ratio (the engine derives one DPR per axis,
+        // but text and UI assume the two agree).
+        const longest_side: f64 = @max(target_w, target_h);
+        const exceeds_gpu_limit: bool = longest_side > g.wgpu.max_backing_dim;
+        if (exceeds_gpu_limit) {
+            const shrink: f64 = g.wgpu.max_backing_dim / longest_side;
+            target_w = @floor(target_w * shrink);
+            target_h = @floor(target_h * shrink);
+        }
+        target_w = @max(target_w, 1);
+        target_h = @max(target_h, 1);
+        const width_changed: bool = canvas.getNum("width") != target_w;
+        const height_changed: bool = canvas.getNum("height") != target_h;
+        if (width_changed) {
+            canvas.set("width", target_w);
+        }
+        if (height_changed) {
+            canvas.set("height", target_h);
+        }
     }
     fn jsSurfaceGetCurrentTexture(_: f64) f64 {
         const view: Value = g.wgpu.context.call("getCurrentTexture", .{}).call("createView", .{});
@@ -2039,6 +2144,36 @@ const ZimrWgpu = struct {
         extent.set("height", Value{ .h = js_num(height) });
         _ = g.boot.gpu_queue.call("writeTexture", .{ dst, modBytes(data_ptr, data_len), layout, extent });
     }
+    /// Sub-rectangle upload into mip level 0 at (x, y) - the glyph cache writes
+    /// one glyph at a time into a shared atlas page.
+    fn jsQueueWriteTextureRegion(
+        _: f64,
+        texture: f64,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        bytes_per_row: f64,
+        data_ptr: f64,
+        data_len: f64,
+    ) void {
+        const tex: Value = tblGet(texture);
+        if (tex.isNull()) {
+            return;
+        }
+        const origin: Value = global().get("Object").new(.{});
+        origin.set("x", x);
+        origin.set("y", y);
+        const dst: Value = global().get("Object").new(.{});
+        dst.set("texture", tex);
+        dst.set("origin", origin);
+        const layout: Value = global().get("Object").new(.{});
+        layout.set("bytesPerRow", bytes_per_row);
+        const extent: Value = global().get("Object").new(.{});
+        extent.set("width", width);
+        extent.set("height", height);
+        _ = g.boot.gpu_queue.call("writeTexture", .{ dst, modBytes(data_ptr, data_len), layout, extent });
+    }
 
     // ---- binary descriptor decoding (Phase 3c) -----------------------------
     // Complex descriptors cross the wasm boundary as packed little-endian
@@ -2625,6 +2760,7 @@ const ZimrWgpu = struct {
         ns.set("js_shader_module_destroy", funcNum(&jsShaderModuleDestroy));
         ns.set("js_texture_view_destroy", funcNum(&jsTextureViewDestroy));
         ns.set("js_queue_write_texture", funcNum(&jsQueueWriteTexture));
+        ns.set("js_queue_write_texture_region", funcNum(&jsQueueWriteTextureRegion));
         ns.set("js_device_create_bind_group_layout", funcNum(&jsDeviceCreateBindGroupLayout));
         ns.set("js_device_create_bind_group", funcNum(&jsDeviceCreateBindGroup));
         ns.set("js_device_create_pipeline_layout", funcNum(&jsDeviceCreatePipelineLayout));
@@ -2721,6 +2857,12 @@ const ZimrInput = struct {
         callIfPresent("input_push_mouse_button_down", .{numArg(js_to_num(e.get("button").h))});
         g.input.dragging = true;
         _ = e.call("preventDefault", .{});
+        // preventDefault also cancels the focus change the press would have made,
+        // so an app running in a FRAME (the examples gallery, readme's launcher)
+        // was never focused and never saw a key - keydown/keyup listen on this
+        // window. Take the focus explicitly; at top level the window already has
+        // it and this does nothing.
+        global().callVoid("focus", .{});
     }
     fn onPointerMove(ev: Handle) void {
         const e: Value = .{ .h = ev };
@@ -3728,6 +3870,9 @@ const ZimrBoot = struct {
                 // Finish any in-flight GPU-timestamp readback before this frame
                 // records the next one (it reuses the same read buffer).
                 pollGpuTiming();
+                // Backing store = CSS box x DPR, applied BEFORE the module
+                // renders so the whole frame sees one surface size.
+                ZimrWgpu.syncCanvasBacking();
                 const performance: Value = global().get("performance");
                 const now_ms: f64 = js_to_num(performance.call("now", .{}).h);
                 if (g.boot.classic_contract) {
@@ -3800,6 +3945,11 @@ const ZimrBoot = struct {
                 const device: Value = v;
                 g.boot.gpu_device = device;
                 g.boot.gpu_queue = device.get("queue");
+                const max_texture_dim: f64 = device.get("limits").getNum("maxTextureDimension2D");
+                const limit_is_usable: bool = max_texture_dim >= 1; // false for NaN too
+                if (limit_is_usable) {
+                    g.wgpu.max_backing_dim = max_texture_dim;
+                }
                 // Surface GPU validation errors instead of silently going black.
                 _ = device.call("addEventListener", .{ str("uncapturederror"), func(&onGpuError) });
 
@@ -5659,6 +5809,18 @@ const BridgeGlobals = struct {
         context: Value = undefined,
         format_index: u32 = 0,
         have_canvas: bool = false,
+        // Backing-store sync for the primary canvas (see ZimrWgpu.syncCanvasBacking).
+        // The ResizeObserver stores the canvas's EXACT device-pixel content size
+        // here. 0 = no exact report (no observer yet, or a browser without
+        // 'device-pixel-content-box' - Safari), and the sync falls back to
+        // round(clientWidth x devicePixelRatio) every frame.
+        observed_device_w: f64 = 0,
+        observed_device_h: f64 = 0,
+        has_device_pixel_box: bool = false,
+        resize_observer: Value = .{ .h = 0 },
+        // device.limits.maxTextureDimension2D: a canvas larger than this cannot
+        // be rendered into, so the backing store is clamped to it.
+        max_backing_dim: f64 = 8192,
         format_list: Value = .{ .h = 0 }, // lazily-built JS array of format names
         text_encoder: Value = .{ .h = 0 }, // lazily-built TextEncoder (adapter_info)
         // GPU timing (profiler): a timestamp query set + a QUERY_RESOLVE|COPY_SRC

@@ -387,7 +387,7 @@ Frame Time: 0.016667
 <h3 id="parse">3.2 Reading one<a class="anchor" href="#parse">#</a></h3>
 <p><code>codecs.bvh.parse</code> reads the text into a <code>bvh.Data</code>. Everything inside is owned by
 one arena, so a single <code>deinit</code> frees it.</p>
-<details class="src-fold" data-src="src/codecs.zig" data-decl="pub const Data =" data-in="pub const bvh ="><summary><code>bvh.Data</code></summary><pre><code class="zig">/// A parsed document. Everything inside is arena-owned, so `deinit` is one call — the same
+<details class="src-fold" data-src="src/codecs.zig" data-decl="pub const Data =" data-in="pub const bvh ="><summary><code>bvh.Data</code></summary><pre><code class="zig">/// A parsed document. Everything inside is arena-owned, so `deinit` is one call - the same
 /// shape as `xml.Document`, and for the same reason: a document is freed all at once or not
 /// at all, and per-field frees are a source of leaks nobody notices.
 pub const Data = struct {
@@ -408,7 +408,7 @@ pub const Data = struct {
     }
 
     /// Clip length in seconds. Not derivable by a caller without also knowing that
-    /// `frame_time` is per-frame rather than a rate — 60 fps and 120 fps files both occur,
+    /// `frame_time` is per-frame rather than a rate - 60 fps and 120 fps files both occur,
     /// and inverting the wrong one is a silent 4x error in a timeline.
     pub fn duration(self: Data) f32 {
         return float(self.frame_count) * self.frame_time;
@@ -703,8 +703,8 @@ capture's <code>LeftUpLeg</code> to the robot's left thigh, it does so with the 
 /// broken, because a mirrored dance is still a perfectly good dance. `.rotate` is the real conversion
 /// (a quarter turn about X); `.swizzle` is kept around so you can see the difference for yourself.
 pub const FrameConvert = enum {
-    /// Positions (x, y, z) -&gt; (x, z, y), rotations left in the BVH frame — `dance_track`'s.
-    /// ★★★ Swapping two axes is a REFLECTION (determinant -1), not a rotation: it mirrors the
+    /// Positions (x, y, z) -&gt; (x, z, y), rotations left in the BVH frame - `dance_track`'s.
+    /// *** Swapping two axes is a REFLECTION (determinant -1), not a rotation: it mirrors the
     /// capture left-for-right while the match table still sends its left leg to the robot's.
     swizzle,
     /// A proper rotation, +90 degrees about X: positions (x, y, z) -&gt; (x, -z, y), and every
@@ -1108,10 +1108,10 @@ not on one line, fix its twist as well. Everything a retarget needs — aiming a
 forearm, bending a knee the right way — is a special case of matching enough points.</p>
 <details class="src-fold" data-src="src/robot.zig" data-decl="pub const PointSample ="><summary><code>PointSample</code></summary><pre><code class="zig">/// One point on a robot body, and where the capture says it should be.
 ///
-/// ── ★★★ THE WHOLE RETARGET IS "MATCH THESE POINTS" ──
+/// -- *** THE WHOLE RETARGET IS "MATCH THESE POINTS" --
 ///
 /// One point per body gives POSITION, two give DIRECTION, three give TWIST. Aiming a bone at its
-/// child, a twist offset, a two-bone limb, a bend plane — each is a special case of matching
+/// child, a twist offset, a two-bone limb, a bend plane - each is a special case of matching
 /// enough points, so the retarget matches points and nothing else.
 pub const PointSample = struct {
     body: usize,
@@ -1128,7 +1128,7 @@ pub const PointSample = struct {
     /// The ROBOT body whose retargeted position is this sample's target.
     target_body: ?usize = null,
     /// The residual is on the DIFFERENCE between this point and `relative_local` on the same
-    /// body — a rotation statement rather than two positions that imply one.
+    /// body - a rotation statement rather than two positions that imply one.
     relative_local: ?Vec = null,
     weight: f32,
 };</code></pre></details>
@@ -1145,98 +1145,98 @@ pub const MatchRow = struct {
     human_joint: []const u8,
     /// Other names this row will accept, in preference order, when `human_joint` is absent.
     ///
-    /// ── ★★★ ONE TABLE, MANY CAPTURE FORMATS ──
+    /// -- *** ONE TABLE, MANY CAPTURE FORMATS --
     ///
     /// LAFAN1's top spine joint is `Spine3`; **Mixamo's is `Spine2`** and it has no `Spine3` at
-    /// all. A table naming one of them maps the robot's TORSO — its ROOT — to nothing on the
+    /// all. A table naming one of them maps the robot's TORSO - its ROOT - to nothing on the
     /// other, and everything downstream anchors on that body.
     ///
-    /// ★★ The alternative is a second table per format, which is the wrong abstraction: **if two
+    /// ** The alternative is a second table per format, which is the wrong abstraction: **if two
     /// tables are needed, the row is under-specified.** A row states which joint it wants and
     /// what it will settle for, and the resolver takes the first that exists.
     ///
-    /// ★ Preference order carries real knowledge — `Spine3` before `Spine2` before `Spine1` is a
+    /// * Preference order carries real knowledge - `Spine3` before `Spine2` before `Spine1` is a
     /// statement about which is highest up the chest, not an arbitrary list.
     alternatives: []const []const u8 = &amp;.{},
     /// Set when this row's ROBOT body exists on some rigs and not others, so one table can
     /// serve a family of models.
     ///
-    /// ── ★★★ THE SAME ARGUMENT AS `alternatives`, ON THE OTHER SIDE ──
+    /// -- *** THE SAME ARGUMENT AS `alternatives`, ON THE OTHER SIDE --
     ///
     /// `alternatives` exists because two capture formats spell one joint differently and "a
     /// second table per format is the wrong abstraction". Two RIGS differ the same way: the
     /// stock `humanoid.xml` has no toe bone and the flexed one does. Without this the resolver
     /// hard-errors on the stock model and the whole retarget suite cannot run.
     ///
-    /// ★★ It is PER ROW and defaults to false, so a typo in any of the other rows is still
+    /// ** It is PER ROW and defaults to false, so a typo in any of the other rows is still
     /// `error.UnknownRobotBody`. The relaxation is spelled out where it applies, not applied
-    /// globally — a resolver that skipped every missing body would turn a broken table into a
+    /// globally - a resolver that skipped every missing body would turn a broken table into a
     /// silently half-mapped robot.
     ///
-    /// ★ A model without the body is not a degraded case: the foot's heel/toe/up construction
-    /// fires on LEAF bodies, so a rig with no toe takes the leaf path deliberately — see the
+    /// * A model without the body is not a degraded case: the foot's heel/toe/up construction
+    /// fires on LEAF bodies, so a rig with no toe takes the leaf path deliberately - see the
     /// leaf-orientation target in `solveRestPoseFromSource`.
     optional_body: bool = false,
     /// How hard to pull this body's POSITION onto the human's, in the IK stage. Zero means
     /// orientation only.
     ///
-    /// ── ★★★ THE ASYMMETRY IS THE RETARGETING KNOWLEDGE ──
+    /// -- *** THE ASYMMETRY IS THE RETARGETING KNOWLEDGE --
     ///
     /// GMR's own table reads the same way: pelvis and knee get position weight 0, the ankle
-    /// gets 50 — five times any rotation weight. **A robot's limb lengths differ from a human's,
+    /// gets 50 - five times any rotation weight. **A robot's limb lengths differ from a human's,
     /// so demanding every joint's position would fight the skeleton against itself.** But feet
     /// must land where the human's landed or the robot skates, and that is not something a
     /// per-joint rotation fit can deliver: orientation error compounds down the chain and
     /// nothing constrains the endpoint.
     ///
-    /// ★ So: rotation everywhere, POSITION ONLY AT THE ENDS.
+    /// * So: rotation everywhere, POSITION ONLY AT THE ENDS.
     position_weight: f32 = 0,
     /// How hard to pull this body's ORIENTATION onto the human's.
     ///
-    /// ── ★★★ NOT A BLANKET VALUE, BECAUSE THE ROBOT IS OVER-CONSTRAINED ──
+    /// -- *** NOT A BLANKET VALUE, BECAUSE THE ROBOT IS OVER-CONSTRAINED --
     ///
     /// 16 mapped bodies asking for 3 position and 3 orientation components each is 96
     /// constraints against `humanoid.xml`'s **27 degrees of freedom**. A least-squares solve of
-    /// that satisfies nothing well — which is what an `ik error` of 0.59 after 30 steps means:
+    /// that satisfies nothing well - which is what an `ik error` of 0.59 after 30 steps means:
     /// not a solver bug, but a system with no good answer.
     ///
-    /// ★★ GMR's robot (G1) has roughly twice the DOF and a real shoulder chain. Ours has ONE
+    /// ** GMR's robot (G1) has roughly twice the DOF and a real shoulder chain. Ours has ONE
     /// waist segment, no shoulders, and a single-hinge knee. **The same weights cannot
     /// transfer**, and pretending they can is why a faithful port of GMR's numbers still looked
     /// wrong.
     ///
-    /// ★ So orientation is requested only where the robot can actually deliver it, and the
-    /// bodies whose orientation is a CONSEQUENCE of their chain — shins, forearms, the pelvis
-    /// hanging under the torso — ask for none and let position drive them.
+    /// * So orientation is requested only where the robot can actually deliver it, and the
+    /// bodies whose orientation is a CONSEQUENCE of their chain - shins, forearms, the pelvis
+    /// hanging under the torso - ask for none and let position drive them.
     rotation_weight: f32 = 0,
 };</code></pre></details>
-<details class="src-fold" data-src="src/robot.zig" data-decl="pub const lafan_to_humanoid ="><summary><code>lafan_to_humanoid</code></summary><pre><code class="zig">/// ★★★ LAFAN1 -&gt; `humanoid.xml`, AND THE ASYMMETRY IS THE KNOWLEDGE.
+<details class="src-fold" data-src="src/robot.zig" data-decl="pub const lafan_to_humanoid ="><summary><code>lafan_to_humanoid</code></summary><pre><code class="zig">/// *** LAFAN1 -&gt; `humanoid.xml`, AND THE ASYMMETRY IS THE KNOWLEDGE.
 ///
 /// GMR ships this as JSON with a weight column per row. Ours needs no weights, because
 /// `robot.fitLocalRotations` gives every joint the best rotation its DOF can express and
-/// REPORTS the shortfall — where GMR's weights exist to let a solver trade one task off
+/// REPORTS the shortfall - where GMR's weights exist to let a solver trade one task off
 /// against another.
 ///
-/// ★ 16 robot bodies against LAFAN1's 96 joints. The robot has NO shoulders, NO spine chain
+/// * 16 robot bodies against LAFAN1's 96 joints. The robot has NO shoulders, NO spine chain
 /// beyond one waist segment, NO toes and NO fingers, so most of the capture simply has no
 /// counterpart. That is not a failure: an unmapped body keeps its rest orientation, and the
-/// motion that matters — limbs, torso, head — is all here.
+/// motion that matters - limbs, torso, head - is all here.
 ///
-/// ★★ **THE ROBOT'S TREE IS INVERTED RELATIVE TO THE HUMAN'S.** `humanoid.xml` roots at
+/// ** **THE ROBOT'S TREE IS INVERTED RELATIVE TO THE HUMAN'S.** `humanoid.xml` roots at
 /// `torso` with `pelvis` hanging BELOW it through `waist_lower`; a BVH roots at `Hips` and the
-/// spine goes up. The global-space retarget handles this with no special case — each body's
+/// spine goes up. The global-space retarget handles this with no special case - each body's
 /// local rotation is computed against whatever parent the ROBOT has, not the one the human has.
 /// A local-rotation copy could not have done this at all.
 pub const lafan_to_humanoid = [_]MatchRow{
-    // ★★ `Spine3`, NOT `Spine2` — chosen by MEASUREMENT, not by name. The robot's torso sits
+    // ** `Spine3`, NOT `Spine2` - chosen by MEASUREMENT, not by name. The robot's torso sits
     // high, between the shoulders, and the shoulder-offset error against each candidate is:
     //
     //     Spine 0.453   Spine1 0.375   Spine2 0.284   Spine3 0.226   Neck 0.253
     //
-    // ★★★ **AND NOTHING GETS BELOW ~0.21 m**, which is the IRREDUCIBLE error: the robot's
+    // *** **AND NOTHING GETS BELOW ~0.21 m**, which is the IRREDUCIBLE error: the robot's
     // torso-to-shoulder offset is fixed by the model and simply does not match any human
     // joint's at a single hip-height scale. **That floor is a scaling problem, not a mapping
-    // one** — GMR ships a per-body `human_scale_table` for exactly this.
+    // one** - GMR ships a per-body `human_scale_table` for exactly this.
     .{
         .robot_body = "torso",
         .human_joint = "Spine3",
@@ -1245,7 +1245,7 @@ pub const lafan_to_humanoid = [_]MatchRow{
     },
     .{ .robot_body = "head", .human_joint = "Head", .rotation_weight = 4 },
     .{ .robot_body = "waist_lower", .human_joint = "Spine" },
-    // ★ The pelvis carries the body's placement, so a modest pull keeps the robot from drifting
+    // * The pelvis carries the body's placement, so a modest pull keeps the robot from drifting
     // off the capture's path while the feet do the precise work.
     .{ .robot_body = "pelvis", .human_joint = "Hips", .position_weight = 20 },
 
@@ -1254,7 +1254,7 @@ pub const lafan_to_humanoid = [_]MatchRow{
     .{ .robot_body = "foot_left", .human_joint = "LeftFoot", .position_weight = 50, .rotation_weight = 4 },
     .{ .robot_body = "thigh_right", .human_joint = "RightUpLeg", .rotation_weight = 6 },
     .{ .robot_body = "shin_right", .human_joint = "RightLeg", .position_weight = 20 },
-    // ── ★★★ THE TOES, ADDED WITH THE TOE BONE ──
+    // -- *** THE TOES, ADDED WITH THE TOE BONE --
     //
     // Without these rows the toe bodies are UNMAPPED, and adding them silently cost the foot its
     // heel/toe/up construction: that construction fires on LEAF bodies, and the foot stopped
@@ -1310,7 +1310,7 @@ pub const lafan_to_humanoid = [_]MatchRow{
             }
             return error.UnknownRobotBody;
         }
-        // ★★★ The wanted joint, or the first ALTERNATIVE that exists. A capture that calls its
+        // *** The wanted joint, or the first ALTERNATIVE that exists. A capture that calls its
         // top spine `Spine2` instead of `Spine3` then needs no code and no second table.
         var human_joint: ?usize = null;
         for (human_joint_names, 0..) |name, index| {
@@ -1350,10 +1350,10 @@ lands flat and a pointed one lifts its heel. The head and hands, whose shapes ar
 direction to point along, are handled on their own.</p>
 <details class="src-fold" data-src="src/robot.zig" data-decl="pub fn buildPointSamples("><summary><code>buildPointSamples</code></summary><pre><code class="zig">/// Build the sample set for a robot and a capture. Returns how many were written.
 ///
-/// ── ★★★ THE SAMPLE RULE ──
+/// -- *** THE SAMPLE RULE --
 ///
 ///     a body needs THREE NON-COLLINEAR SAMPLES to be fully oriented
-///     and the DOF to use them — from its own joints OR FROM ANY ANCESTOR
+///     and the DOF to use them - from its own joints OR FROM ANY ANCESTOR
 ///
 /// With one sample a body can spin about any axis through it; with two, or with collinear ones,
 /// it can still twist about their line. And the DOF that can use a sample are not only the
@@ -1365,8 +1365,8 @@ pub fn buildPointSamples(
     out: []PointSample,
 ) usize {
     var n: usize = 0;
-    // ★★ RUNNING OUT OF ROOM IS REPORTED, NOT ABSORBED. Each capacity guard below used to be folded
-    // into a skip condition, so a short `out` silently dropped whole bodies' samples — the shape of
+    // ** RUNNING OUT OF ROOM IS REPORTED, NOT ABSORBED. Each capacity guard below used to be folded
+    // into a skip condition, so a short `out` silently dropped whole bodies' samples - the shape of
     // the bug that once left two thirds of a robot without targets. The guards still stop before
     // an out-of-bounds write; they now also say that they did, in the assert before `return`.
     var out_of_room: bool = false;
@@ -1403,7 +1403,7 @@ pub fn buildPointSamples(
             };
             n += 1;
 
-            // ★★ Off-axis points only where a twist is reachable — **through the CHAIN, not
+            // ** Off-axis points only where a twist is reachable - **through the CHAIN, not
             // only through this body's own joint.** The elbow's one hinge cannot roll the
             // forearm; the shoulder can roll the whole arm.
             var chain_dof: usize = 0;
@@ -1449,23 +1449,23 @@ pub fn buildPointSamples(
         }
     }
 
-    // ── ★★★ LEAF BODIES: HEEL, TOE AND ONE ABOVE, IN THE CAPTURE'S ANKLE FRAME ──
+    // -- *** LEAF BODIES: HEEL, TOE AND ONE ABOVE, IN THE CAPTURE'S ANKLE FRAME --
     //
     // **A joint is not a contact point.** A capture's ankle sits inside the leg, above and behind
-    // the heel, so matching it to a foot's ORIGIN is wrong — and a 24-degree pitch, an
+    // the heel, so matching it to a foot's ORIGIN is wrong - and a 24-degree pitch, an
     // always-level rule and a contact blend were all built to compensate for that before the
     // correspondence itself was fixed.
     //
-    // ★★★ The rest pose states the offsets exactly, because the figure stands FLAT there: heel
+    // *** The rest pose states the offsets exactly, because the figure stands FLAT there: heel
     // and toe are both ON the floor. Project the ankle and the toe joint down and record the
     // results in the ankle's own frame. **Constants, measured once.**
     //
-    // ★★ Per frame they ride the capture's ankle rotation, so a flat foot lands flat and a
-    // pointed one lifts its heel. **No rule, no threshold, no blend — the capture's own foot
+    // ** Per frame they ride the capture's ankle rotation, so a flat foot lands flat and a
+    // pointed one lifts its heel. **No rule, no threshold, no blend - the capture's own foot
     // does it.**
     //
-    // ★ The third point sits ABOVE the ankle. Three non-collinear points pin the full
-    // orientation including ROLL, which two cannot — and the roll is reachable through the LEG
+    // * The third point sits ABOVE the ankle. Three non-collinear points pin the full
+    // orientation including ROLL, which two cannot - and the roll is reachable through the LEG
     // even though the ankle's two DOF cannot supply it alone.
     var ground_height: f32 = 1.0e9;
     for (in.rest_positions) |p| {
@@ -1498,68 +1498,68 @@ pub fn buildPointSamples(
                 far = m.geom_pos[g] * @as(Vec, @splat(2.0));
             }
         }
-        // ── ★★ A SPHERE HAS NO DIRECTION — and an ARBITRARY axis is not a substitute ──
+        // -- ** A SPHERE HAS NO DIRECTION - and an ARBITRARY axis is not a substitute --
         //
         // The head's geom is a sphere centred on the body origin, so `geom_pos` is zero and
         // there is nothing to point with. Same for the hands. **That is why the head kept ONE
         // sample after the no-tip fix**: that fix assumed every leaf has an off-centre geom.
         //
-        // ★★★ Tried: substitute a fixed offset along local X and carry it through the rest-pose
-        // correspondence like a geom point. **Measured MUCH worse** — torso 4.3 -&gt; 64.6, arm
-        // 10.7 -&gt; 140.4, forearm 2.8 -&gt; 128.2 — because at weight 1.5 an axis that means nothing
+        // *** Tried: substitute a fixed offset along local X and carry it through the rest-pose
+        // correspondence like a geom point. **Measured MUCH worse** - torso 4.3 -&gt; 64.6, arm
+        // 10.7 -&gt; 140.4, forearm 2.8 -&gt; 128.2 - because at weight 1.5 an axis that means nothing
         // physically outweighs every sample that does.
         //
-        // ★★ The correspondence was not the problem; **the CHOICE of axis was.** A head's
+        // ** The correspondence was not the problem; **the CHOICE of axis was.** A head's
         // orientation is real information and the capture carries it in `rest_rotations`, but it
         // has to enter with a weight and a direction that mean something. **That is a design
         // question, not a fallback**, and it is left open rather than answered with a constant.
-        // ── ★★★ A SPHERE HAS NO DIRECTION — BUT THE BONE DOES ──
+        // -- *** A SPHERE HAS NO DIRECTION - BUT THE BONE DOES --
         //
         // The head's geom is a sphere centred on the body origin, so `geom_pos` is zero and
         // there is nothing to point with; the hands are the same. **That is why they kept ONE
         // sample**: a position, with orientation unconstrained.
         //
-        // ★★ A first attempt substituted an arbitrary axis and measured catastrophically worse
-        // (torso 4.3 -&gt; 64.6, arm 10.7 -&gt; 140.4) — **at a high weight, an axis that means nothing
+        // ** A first attempt substituted an arbitrary axis and measured catastrophically worse
+        // (torso 4.3 -&gt; 64.6, arm 10.7 -&gt; 140.4) - **at a high weight, an axis that means nothing
         // physically outweighs every sample that does.**
         //
-        // ★★ Second attempt: use `body_pos[b]`, the bone from this body's PARENT — a real
+        // ** Second attempt: use `body_pos[b]`, the bone from this body's PARENT - a real
         // direction, the same quantity the interior bodies use. **Also much worse** (torso 4.3 -&gt;
         // 56.2, forearm 2.8 -&gt; 118.4), even at weight 0.4.
         //
-        // ★★★ So the axis was not the whole problem. The no-tip branch places its two points at
-        // `ankle ± rotate(robot_rest_rotations[b], far)` — **a ROBOT-frame direction applied at
+        // *** So the axis was not the whole problem. The no-tip branch places its two points at
+        // `ankle +/- rotate(robot_rest_rotations[b], far)` - **a ROBOT-frame direction applied at
         // the CAPTURE's joint.** That is only a valid correspondence where the two rest
         // orientations agree, and for a head or a hand they do not: the foot case escapes it
         // because heel and toe are floor PROJECTIONS, which live in the world and need no frame
         // at all.
         //
-        // ★★★ MEASURED, and it refutes the guess for the HEAD: rest-frame disagreement is
+        // *** MEASURED, and it refutes the guess for the HEAD: rest-frame disagreement is
         //
         //     torso 0.0   head 0.0   foot 4.7   **hand 90.0**
         //
-        // The head's frames AGREE. **The hands are 90 degrees apart** — and both attempts applied
+        // The head's frames AGREE. **The hands are 90 degrees apart** - and both attempts applied
         // the construction to head and hands together, so the hands alone were enough to wreck
         // the solve.
         //
-        // ★★ So the criterion is not "does this body have a geom" but **"do the two rest frames
-        // agree?"** — a number, checkable per body, that says exactly where a frame-mixing
+        // ** So the criterion is not "does this body have a geom" but **"do the two rest frames
+        // agree?"** - a number, checkable per body, that says exactly where a frame-mixing
         // construction is sound. The head passes it; the hands do not and need their own
         // correspondence.
         //
-        // ★ Left unimplemented rather than approximated a third time, but the next attempt has a
+        // * Left unimplemented rather than approximated a third time, but the next attempt has a
         // test to gate on rather than a hypothesis.
         var leaf_weight: f32 = 1.5;
         if (far_length &lt; 1.0e-5) {
-            // ★★★ THE CRITERION, MEASURED RATHER THAN GUESSED: this branch carries a ROBOT-frame
+            // *** THE CRITERION, MEASURED RATHER THAN GUESSED: this branch carries a ROBOT-frame
             // offset into the CAPTURE joint's frame, which is sound only where the two rest
             // orientations agree. Measured on `humanoid_flex2` against Geno:
             //
             //     torso 0.0   head 0.0   foot 4.7   **hand 90.0**
             //
             // **The head passes and the hands do not**, and both earlier attempts applied it to
-            // all three at once — the hands alone wrecked the solve while the head was innocent.
-            // ★★★ THREE ATTEMPTS, THREE FAILURES, AND THE THIRD RULES OUT THE SECOND DIAGNOSIS.
+            // all three at once - the hands alone wrecked the solve while the head was innocent.
+            // *** THREE ATTEMPTS, THREE FAILURES, AND THE THIRD RULES OUT THE SECOND DIAGNOSIS.
             //
             //     1. an arbitrary local axis           torso 4.3 -&gt; 64.6   forearm 2.8 -&gt; 140.4
             //     2. `body_pos`, the parent bone       torso 4.3 -&gt; 56.2   forearm 2.8 -&gt; 118.4
@@ -1567,42 +1567,42 @@ pub fn buildPointSamples(
             //        convention that makes every body's absolute rest orientations differ by
             //        ~90 degrees                       **identical to attempt 2, to the decimal**
             //
-            // ★★ Identical output from a changed composition is the no-op signature this project
+            // ** Identical output from a changed composition is the no-op signature this project
             // knows well: either the transform is near-identity in this configuration, or the
             // targets were never the thing going wrong. **Both attempts 2 and 3 produce the same
-            // numbers, so the frame convention is NOT the cause** — which retires the only
+            // numbers, so the frame convention is NOT the cause** - which retires the only
             // diagnosis that survived measurement.
             //
-            // ★ Held OFF. The alternative is a construction that measures 20x worse for reasons
+            // * Held OFF. The alternative is a construction that measures 20x worse for reasons
             // not yet understood, and **a known gap beats a wrong fix**: the head and hands are
             // unconstrained in orientation, printed every run by the under-sampling assertion.
-            // ★★★ With the floor branch guarded, the no-tip construction was judged on its own
-            // for the first time: **torso 56.2 -&gt; 5.5, arm 13.5 -&gt; 5.1** — the head is fixed and
+            // *** With the floor branch guarded, the no-tip construction was judged on its own
+            // for the first time: **torso 56.2 -&gt; 5.5, arm 13.5 -&gt; 5.1** - the head is fixed and
             // the regression was never about frames at all.
             //
-            // ★★ But the FOREARM goes 2.8 -&gt; 20.7 and the arm 10.7 -&gt; 16.9, because the same
+            // ** But the FOREARM goes 2.8 -&gt; 20.7 and the arm 10.7 -&gt; 16.9, because the same
             // branch now also fires for the HANDS, whose rest frames are the ones genuinely 90
-            // degrees out. **One construction, two bodies, opposite outcomes** — so it stays off
+            // degrees out. **One construction, two bodies, opposite outcomes** - so it stays off
             // until the hands have a correspondence of their own, and the head keeps its single
             // sample.
             //
-            // ★ The floor guard is kept regardless: **it is a real bug** independent of this
+            // * The floor guard is kept regardless: **it is a real bug** independent of this
             // switch, and it was projecting head targets 1.5 m into the ground for any caller
             // that enabled the branch.
             const agreement: f32 = 1.0;
             //
-            // ★★★ AND THE CRITERION USES A DIFFERENT QUANTITY THAN THE ONE MEASURED. The 0.0
+            // *** AND THE CRITERION USES A DIFFERENT QUANTITY THAN THE ONE MEASURED. The 0.0
             // degrees reported for the head came from `body_xrot` at `qpos0`; this reads
             // `robot_rest_rotations`, which is the SOLVED rest pose. **They are not the same
             // orientation**, and the head fails here while passing there.
             //
-            // ★★ Which is the same error as the diagnosis it was written to fix: *measure the
-            // thing the claim is about.* Three times in one session — the foot pitch, the
+            // ** Which is the same error as the diagnosis it was written to fix: *measure the
+            // thing the claim is about.* Three times in one session - the foot pitch, the
             // frame-disagreement guess, and now the criterion itself. **The lesson is not that
             // measurement is good; it is that a measurement of an ADJACENT quantity is worth
             // nothing.**
             //
-            // ★ Left as-is: the construction stays off for every no-tip leaf, which is the
+            // * Left as-is: the construction stays off for every no-tip leaf, which is the
             // status quo and measurably safe. **The next attempt should decide FIRST which
             // orientation the construction actually consumes, then measure that one.**
             if (agreement &lt; 0.87) {
@@ -1619,21 +1619,21 @@ pub fn buildPointSamples(
         const ankle: Vec = in.rest_positions[hb];
         const into_ankle: Quat = conjugate(in.rest_rotations[hb]);
 
-        // ── ★★★ A LEAF WITH NO TIP JOINT STILL HAS A REST POSE ──
+        // -- *** A LEAF WITH NO TIP JOINT STILL HAS A REST POSE --
         //
         // A foot has `ToeBase` beyond it and its heel and toe can be projected to the floor. **A
-        // HEAD has nothing beyond it** — LAFAN1 ends there — so the floor construction has no
+        // HEAD has nothing beyond it** - LAFAN1 ends there - so the floor construction has no
         // second point and the head got ONE sample: a position, with its orientation
         // unconstrained. The robot's head could face anywhere the solve found convenient.
         //
-        // ★★★ But the third point never needed a tip joint: it records the ROBOT's own geom
+        // *** But the third point never needed a tip joint: it records the ROBOT's own geom
         // offset in the CAPTURE joint's frame, measured once at the rest pose. **That works for
         // any leaf.** So when there is no tip, take three geom-derived points instead of the
         // heel/toe pair, and the same rest-pose correspondence carries them.
         //
-        // ★ Same principle as everywhere else in this system: **state the correspondence once,
+        // * Same principle as everywhere else in this system: **state the correspondence once,
         // at rest, and never decide it again.**
-        // ── ★★★ THE FLOOR PROJECTION IS ONLY FOR BODIES ON THE FLOOR ──
+        // -- *** THE FLOOR PROJECTION IS ONLY FOR BODIES ON THE FLOOR --
         //
         // Printed the targets instead of arguing about frames, and the answer was immediate:
         //
@@ -1641,11 +1641,11 @@ pub fn buildPointSamples(
         //     head[70]  target z = 0.011  &lt;- the FLOOR    miss 1.650 m
         //
         // **The head was being treated as a foot.** `firstChildJoint` finds a child for it, so it
-        // took the heel/toe branch and its two targets were projected to the ground — 1.5 m below
+        // took the heel/toe branch and its two targets were projected to the ground - 1.5 m below
         // where a head is. That is the whole 20x regression, and no amount of reasoning about
         // rest frames could have reached it.
         //
-        // ★★ The guard is physical, not structural: **a heel and a toe are on the ground because
+        // ** The guard is physical, not structural: **a heel and a toe are on the ground because
         // the BODY is on the ground.** A body resting a metre and a half up is not a foot,
         // whatever its joint topology looks like.
         const near_ground: bool = (in.rest_positions[hb][2] - ground_height) &lt; 0.25;
@@ -1653,9 +1653,9 @@ pub fn buildPointSamples(
             const t: usize = firstChildJoint(in.human_parents, hb) orelse break :blk null;
             break :blk if (t &lt; in.rest_positions.len) t else null;
         };
-        // ★★★ THE OFFSET CARRIED THROUGH THE **RELATIVE** TRANSFORM, not the robot's rotation
+        // *** THE OFFSET CARRIED THROUGH THE **RELATIVE** TRANSFORM, not the robot's rotation
         // applied raw in the capture's world. Geno faces +Z and the robot faces +X, so every
-        // body's absolute rest orientations differ by a constant ~90 degrees — **a CONVENTION,
+        // body's absolute rest orientations differ by a constant ~90 degrees - **a CONVENTION,
         // not a disagreement.** Two attempts placed these points with that yaw uncancelled and
         // both measured 20x worse.
         const carried: Vec = zm.rotate(
@@ -1672,7 +1672,7 @@ pub fn buildPointSamples(
             ankle - carried;
         const above: Vec = ankle + vec(0, 0, vecLength(far));
 
-        // ★ With a tip the first point is the body ORIGIN (the heel); without one it is the
+        // * With a tip the first point is the body ORIGIN (the heel); without one it is the
         // geom's far end, because there is no floor projection to anchor an origin against.
         out[n] = .{
             .body = b,
@@ -1699,23 +1699,23 @@ pub fn buildPointSamples(
         };
         n += 1;
 
-        // ── ★★★ CHECK THE CORRESPONDENCE AGAINST THE REST POSE ITSELF ──
+        // -- *** CHECK THE CORRESPONDENCE AGAINST THE REST POSE ITSELF --
         //
         // **At the rest pose both figures depict the same pose by definition.** So a sample whose
-        // target does not land on its own point THERE has a broken correspondence — not a
+        // target does not land on its own point THERE has a broken correspondence - not a
         // difficult one, a wrong one. Printed for the two leaves that differ:
         //
         //     head[69..71]      miss 0.03 m     correspondence is right
         //     hand_right[78,79] miss 0.40 m     correspondence is WRONG
         //
-        // ★★★ Which is why one construction helped the head (torso 56 -&gt; 5.5) and wrecked the
+        // *** Which is why one construction helped the head (torso 56 -&gt; 5.5) and wrecked the
         // hands (forearm 2.8 -&gt; 20.7) in the same run. **The difference is measurable from the
         // rest pose alone**, so it needs no name list and no per-body table.
         //
-        // ★★ This is the system's own principle turned into a self-check: *state the
-        // correspondence once at rest* — and if it does not hold at rest, do not use it.
-        // ★ Skips itself when the caller has not supplied the robot's rest POSITIONS. **A check
-        // that traps when its input is missing is worse than no check** — the example called this
+        // ** This is the system's own principle turned into a self-check: *state the
+        // correspondence once at rest* - and if it does not hold at rest, do not use it.
+        // * Skips itself when the caller has not supplied the robot's rest POSITIONS. **A check
+        // that traps when its input is missing is worse than no check** - the example called this
         // without them and the smoke test died inside the solve rather than reporting a gap.
         if (in.rest_check &gt; 0 and b &lt; in.rest_positions_robot.len) {
             var k: usize = n - 3;
@@ -1725,7 +1725,7 @@ pub fn buildPointSamples(
                 const on_robot: Vec = in.rest_positions_robot[b] +
                     zm.rotate(in.robot_rest_rotations[b], out[k].local);
                 if (vecLength(target - on_robot) &gt; in.rest_check) {
-                    // ★ Drop all three: they are one construction, and two thirds of a broken
+                    // * Drop all three: they are one construction, and two thirds of a broken
                     // correspondence is not better than none.
                     n -= 3;
                     break;
@@ -1735,9 +1735,9 @@ pub fn buildPointSamples(
         }
     }
 
-    // ── ★★★ WEIGHTS THAT MEAN SOMETHING ──
+    // -- *** WEIGHTS THAT MEAN SOMETHING --
     //
-    // ★★ NORMALISE PER BODY first: a body with four samples would otherwise pull four times as
+    // ** NORMALISE PER BODY first: a body with four samples would otherwise pull four times as
     // hard as one with a single sample, so influence would be set by an accident of CHILD COUNT.
     var per_body: [128]f32 = undefined;
     const body_limit: usize = @min(m.nbody, per_body.len);
@@ -1796,13 +1796,13 @@ pub const PointCloudOptions = struct {
     /// The capture's joint positions and rotations for this frame, already in the robot's frame.
     positions: []const Vec,
     rotations: []const Quat,
-    /// Retargeted joint positions — the capture's DIRECTIONS at the robot's OWN bone lengths.
+    /// Retargeted joint positions - the capture's DIRECTIONS at the robot's OWN bone lengths.
     retargeted: []const Vec,
     /// Where the root body should start, before solving.
     root_world: ?Vec = null,
     /// 0 takes targets from `retargeted`, 1 from `positions`.
     ///
-    /// ★★ **The dial between SHAPE and PLACE.** 1.0 is right when the robot's proportions match
+    /// ** **The dial between SHAPE and PLACE.** 1.0 is right when the robot's proportions match
     /// the capture's; a mismatched robot cannot reach the capture's joints and wants less.
     position_pull: f32 = 1.0,
     /// Continuity: the previous frame's configuration, and how hard to hold it.
@@ -1816,13 +1816,13 @@ pub const PointCloudOptions = struct {
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot.zig" data-decl="pub fn solvePointCloud("><summary><code>solvePointCloud</code></summary><pre><code class="zig">/// Pose the robot for one frame by a single point-cloud solve.
 ///
-/// ── ★★★ ONE SOLVE ──
+/// -- *** ONE SOLVE --
 ///
 /// No masks, no sequence, no rest-pose algebra, no aim rule, no bend-plane rule, no hinge
 /// formula. Sample points, a soft limit barrier so a wall is a SLOPE rather than a cliff, and a
 /// posture term so redundant DOF stay put between frames.
 ///
-/// It lives in the library, and every caller — the retarget, the examples, the tests — runs this
+/// It lives in the library, and every caller - the retarget, the examples, the tests - runs this
 /// one function, so what is measured is what ships.
 pub fn solvePointCloud(
     m: *const Model,
@@ -1830,10 +1830,10 @@ pub fn solvePointCloud(
     samples: []const PointSample,
     opts: PointCloudOptions,
 ) void {
-    // ── ★★★ PRECONDITIONS ARE CHECKED, NEVER CLAMPED ──
+    // -- *** PRECONDITIONS ARE CHECKED, NEVER CLAMPED --
     //
-    // This used to size its work with `@min(samples.len, tasks.len)` — the silent clamp that once
-    // left two thirds of a robot without targets for a whole take — and to skip a sample whose
+    // This used to size its work with `@min(samples.len, tasks.len)` - the silent clamp that once
+    // left two thirds of a robot without targets for a whole take - and to skip a sample whose
     // capture joint was out of range with a bare `continue`. The skip was worse than a drop: it
     // left `tasks[i]` holding the PREVIOUS frame's target, which the solve still consumed. And a
     // `human_parent` bounds guard sat two lines above an unguarded dereference of the same index.
@@ -1853,7 +1853,7 @@ pub fn solvePointCloud(
     );
     @memcpy(d.pos[0..m.nq], m.qpos0[0..m.nq]);
     if (opts.root_world) |world| {
-        // ★ Three position coordinates are written at joint 0's address, which is only the root's
+        // * Three position coordinates are written at joint 0's address, which is only the root's
         // translation when joint 0 is a free joint. On a fixed-base robot they would overwrite the
         // first three hinge angles.
         const root_is_free: bool = m.jnt_type.len &gt; 0 and m.jnt_type[0] == .free;
@@ -1869,7 +1869,7 @@ pub fn solvePointCloud(
     kinematics(m, d);
     comPos(m, d);
 
-    // ★ An EMPTY `retargeted` is a deliberate caller choice — targets then come from the capture's
+    // * An EMPTY `retargeted` is a deliberate caller choice - targets then come from the capture's
     // own joints. Only a slice that exists but stops short of a sample's body is an error.
     const retargeted_given: bool = opts.retargeted.len &gt; 0;
     for (samples, 0..) |sample, i| {
@@ -1900,7 +1900,7 @@ pub fn solvePointCloud(
                 "solvePointCloud: sample {d} has parent joint {d} of {d}",
                 .{ i, parent_joint, opts.positions.len },
             );
-            // ★ Direction from the capture, length from the robot: exactly reachable.
+            // * Direction from the capture, length from the robot: exactly reachable.
             const bone: Vec = opts.positions[sample.human] - opts.positions[parent_joint];
             const bone_has_direction: bool = vecLength(bone) &gt; 1.0e-5;
             if (bone_has_direction) {
@@ -2001,7 +2001,7 @@ pub fn retargetClip(
     const to_robot: Quat = quatFromAxisAngle(vec(1, 0, 0), 0.5 * pi);
     const human_joints: usize = capture.joints.len;
 
-    // ── The robot at rest, and which capture joint drives which body. ──
+    // -- The robot at rest, and which capture joint drives which body. --
     var rest: rbt.Data = try rbt.Data.init(gpa, m);
     defer rest.deinit();
     @memcpy(rest.pos, m.qpos0);
@@ -2030,7 +2030,7 @@ pub fn retargetClip(
         .{ tpose.joints.len, capture.joints.len },
     );
 
-    // ── The capture at rest: the T-pose's first frame, in metres, Z-up. ──
+    // -- The capture at rest: the T-pose's first frame, in metres, Z-up. --
     const local: []Quat = try gpa.alloc(Quat, human_joints);
     defer gpa.free(local);
     const human_rest_rot: []Quat = try gpa.alloc(Quat, human_joints);
@@ -2047,7 +2047,7 @@ pub fn retargetClip(
         human_rest_rot[i] = rotationToRobot(convert, to_robot, human_rest_rot[i]);
     }
 
-    // ── The samples, once: they depend only on the two rest poses. ──
+    // -- The samples, once: they depend only on the two rest poses. --
     const samples: []rbt.PointSample = try gpa.alloc(rbt.PointSample, max_samples);
     defer gpa.free(samples);
     const sample_count: usize = rbt.buildPointSamples(m, .{
@@ -2060,7 +2060,7 @@ pub fn retargetClip(
         .rest_positions_robot = rest.body_xpos,
     }, samples);
 
-    // ── Every frame: capture FK, the retargeted skeleton, the IK. ──
+    // -- Every frame: capture FK, the retargeted skeleton, the IK. --
     const wanted: usize = @trunc(seconds / capture.frame_time);
     const frame_count: usize = @min(capture.frame_count, wanted);
     const nq: usize = m.nq;
@@ -2113,8 +2113,8 @@ pub fn retargetClip(
         });
         rbt.forward(m, &amp;kin);
         @memcpy(targets[frame * nq ..][0..nq], kin.pos[0..nq]);
-        // ★★ FRAME 0 HAS NO PREVIOUS SOLUTION TO START FROM, so its solve begins at qpos0 and can
-        // stop short, in whichever branch the rest pose leads to — and the clip then snaps to the
+        // ** FRAME 0 HAS NO PREVIOUS SOLUTION TO START FROM, so its solve begins at qpos0 and can
+        // stop short, in whichever branch the rest pose leads to - and the clip then snaps to the
         // better branch a few frames in (humanoid_flex2's right arm, 1.5 rad at frame 5). Solving
         // frame 0 again from its own answer, a few times, lets it finish converging first.
         if (frame == 0) {
@@ -2280,7 +2280,7 @@ pub const Clip = struct {
     /// Seconds per frame, from the capture.
     frame_time: f32,
     nq: usize,
-    /// `frame_count * nq` — frame f's pose is `targets[f * nq ..][0..nq]`.
+    /// `frame_count * nq` - frame f's pose is `targets[f * nq ..][0..nq]`.
     targets: []f32,
     /// Per frame: the worst distance, over matched bodies, between where the IK put a body and
     /// where the retargeted skeleton asked for it.
@@ -2731,7 +2731,7 @@ pub const Tracker = struct {
         rbt.differentiatePos(m, self.err, d.pos, now, 1.0);
         rbt.differentiatePos(m, self.v_ref, now, next, dt);
         rbt.differentiatePos(m, self.v_prev, prev, now, dt);
-        // ── ★ The velocity error is measured against v_prev, not v_ref ──
+        // -- * The velocity error is measured against v_prev, not v_ref --
         //
         // This one's subtle, and it's what makes fast motion work. robot.zig steps with
         // semi-implicit Euler: first v += dt a, then q += dt v using the NEW velocity. So to land
@@ -2762,14 +2762,14 @@ step instead and solves for the acceleration that satisfies it. That is stable a
 very stiff spring simply degrades toward "arrive in a step or two". Critically damped (ζ = 1), it
 approaches a held target as fast as it can without ever passing it.</p>
 <details class="src-fold" data-src="src/robot_maximal.zig" data-decl="pub fn stableSpringAccel("><summary><code>stableSpringAccel</code></summary><pre><code class="zig">/// The acceleration a critically damped (for `damping` 1) spring of `frequency` Hz asks of one
-/// joint over a step of `dt`, evaluated IMPLICITLY — at the end of the step.
+/// joint over a step of `dt`, evaluated IMPLICITLY - at the end of the step.
 ///
-/// ★★★ WHY IMPLICIT. The explicit spring a = w²e - 2ζwv, stepped by semi-implicit Euler, is
-/// stable only while h² + 4ζh &lt; 4 with h = w·dt: for ζ = 1, h &lt; 2√2 - 2 ≈ 0.83, which at 60 Hz
-/// caps the spring at w ≈ 50 rad/s — 7.9 Hz. Asking for the spring at the END of the step,
-///     a = w²(e - dt·v - dt²·a) - 2ζw(v + dt·a),
+/// *** WHY IMPLICIT. The explicit spring a = w^2e - 2 zeta wv, stepped by semi-implicit Euler, is
+/// stable only while h^2 + 4 zeta h &lt; 4 with h = w*dt: for zeta = 1, h &lt; 2sqrt2 - 2 ~ 0.83, which at 60 Hz
+/// caps the spring at w ~ 50 rad/s - 7.9 Hz. Asking for the spring at the END of the step,
+///     a = w^2(e - dt*v - dt^2*a) - 2 zeta w(v + dt*a),
 /// and solving for a gives the line below: backward Euler, stable for EVERY frequency. Stiffness
-/// then degrades gracefully toward "reach the target in a step or two" instead of blowing up —
+/// then degrades gracefully toward "reach the target in a step or two" instead of blowing up -
 /// the same idea as Tan et al.'s stable PD, and the reason Jolt's frequency-stated springs
 /// (zimrphysics' motors) are stable at any setting. Feed the result to inverse dynamics.
 pub fn stableSpringAccel(
@@ -2808,7 +2808,7 @@ and gravity already demand. <code>biasForce</code> computes <em>c</em>; <code>in
 τ in one recursive pass, without forming <em>M</em>. Applied as <code>applied_force</code>, those torques
 make the simulator produce exactly the accelerations asked for — on a model whose root is welded, where
 every degree of freedom is actuated.</p>
-<details class="src-fold" data-src="src/robot.zig" data-decl="pub fn biasForce("><summary><code>biasForce</code></summary><pre><code class="zig">/// Compute `c(q,v)` — Coriolis, centrifugal and gravitational forces — into
+<details class="src-fold" data-src="src/robot.zig" data-decl="pub fn biasForce("><summary><code>biasForce</code></summary><pre><code class="zig">/// Compute `c(q,v)` - Coriolis, centrifugal and gravitational forces - into
 /// `Data.bias_force`. This is RNE with the acceleration set to zero.
 pub fn biasForce(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.rne");
@@ -2817,9 +2817,9 @@ pub fn biasForce(m: *const Model, d: *Data) void {
 }</code></pre></details>
 <details class="src-fold" data-src="src/robot.zig" data-decl="pub fn inverseDynamics("><summary><code>inverseDynamics</code></summary><pre><code class="zig">/// Inverse dynamics: the joint forces that would produce acceleration `acc`.
 ///
-///     τ = M·a + c
+///     tau = M*a + c
 ///
-/// Useful on its own — gravity compensation is this with zero acceleration — and it is
+/// Useful on its own - gravity compensation is this with zero acceleration - and it is
 /// half of the sharpest test in the project: run it on the output of forward dynamics and
 /// it must return the force you started with, which checks `M`, its factorization, `c` and
 /// every frame convention between them at once.
@@ -3164,7 +3164,7 @@ pub fn contactTorques(
                 }
             }
             a[i][n] = rhs;
-            // ★★ Regularisation strong enough to prefer MODERATE forces: at 1e-4 the solve put
+            // ** Regularisation strong enough to prefer MODERATE forces: at 1e-4 the solve put
             // 12x body weight through one contact, cancelling its moment with tangential forces,
             // and the friction clamp then broke that balance - a residual larger than the demand.
             a[i][i] += contact_regularisation;
@@ -3414,7 +3414,7 @@ has no ragdoll; <code>humanoid_flex</code>, all hinges, does. And joints are bui
 free body, or one welded to the world — so a model whose first body hangs from the world on a joint needs
 a welded base above it.</p>
 <details class="src-fold" data-src="src/robot_maximal.zig" data-decl="pub const Variant ="><summary><code>Variant</code></summary><pre><code class="zig">pub const Variant = enum {
-    /// Swing-twist wherever a body carries two or three hinges — how game ragdolls are built
+    /// Swing-twist wherever a body carries two or three hinges - how game ragdolls are built
     /// (Jolt's `RagdollSettings`). The first hinge is the twist, with its exact range; the second
     /// is the plane swing and a third the normal swing, each a SYMMETRIC half-cone wide enough
     /// for that hinge's range, and a missing third is locked. MJCF's hinges compose in sequence,
@@ -3428,7 +3428,7 @@ pub const TwistHinge = enum {
     /// swing-twist decomposition puts its twist, so its exact range ends up limiting the wrong angle.
     first,
     /// The last hinge MJCF lists. MJCF composes a body's hinges in order, R = R0 R1 R2, so the
-    /// last is applied in the child's own frame — which is where a swing-twist decomposition puts
+    /// last is applied in the child's own frame - which is where a swing-twist decomposition puts
     /// its twist (q = swing * twist). The swings are then the earlier hinges, and the hip's
     /// -150..20 flexion is a twist with its exact range instead of a 150 degree swing cone.
     last,
@@ -3437,14 +3437,14 @@ pub const TwistHinge = enum {
     variant: Variant = .game,
     twist_hinge: TwistHinge = .last,
     friction: f32 = 0.7,
-    /// Every part shares this group, so the ragdoll does not collide with itself — the reduced
+    /// Every part shares this group, so the ragdoll does not collide with itself - the reduced
     /// side's `Bridge` does the same, one group per root. Zero turns self-collision on.
     group_id: u32 = 1,
     /// zimrphysics' own defaults are 0.05 each. robot.zig has no body damping, so neither does
     /// the fair comparison.
     linear_damping: f32 = 0.0,
     angular_damping: f32 = 0.0,
-    /// zimrphysics caps spin at 0.25·π·60 ≈ 47 rad/s by default; robot.zig's cap is its
+    /// zimrphysics caps spin at 0.25*pi*60 ~ 47 rad/s by default; robot.zig's cap is its
     /// `max_velocity`, 100.
     max_angular_speed: f32 = 100.0,
     /// robot.zig's dynamics include every gyroscopic term; zimrphysics' default leaves them out.
@@ -3486,7 +3486,7 @@ joints at <code>qpos0</code>, where the two zeros agree, and then moves the fini
 it was asked for. Any pose can be passed; every angle means what the robot means by it.</p>
 <details class="src-fold" data-src="src/robot_maximal.zig" data-decl="pub fn build("><summary><code>build</code></summary><pre><code class="zig">/// Rebuild `m` in `world` as rigid bodies and joints, posed as `d` holds (`d` current).
 ///
-/// ── ★★★ ANY POSE: THE RAGDOLL IS MADE AT qpos0, THEN POSED ──
+/// -- *** ANY POSE: THE RAGDOLL IS MADE AT qpos0, THEN POSED --
 ///
 /// A zimrphysics joint measures from its orientation AT CREATION: a revolute joint's zero angle is
 /// the pose it was built in, and so are a swing-twist joint's frames - while `driveToPose` hands a
@@ -3524,7 +3524,7 @@ fn buildAtRest(
     const at: *const rbt.Data = &amp;rest;
     const body_count: usize = m.nbody;
 
-    // ── Which robot bodies get a part: every body carrying a joint. ──
+    // -- Which robot bodies get a part: every body carrying a joint. --
     const jointed: []bool = try gpa.alloc(bool, body_count);
     defer gpa.free(jointed);
     @memset(jointed, false);
@@ -3566,7 +3566,7 @@ fn buildAtRest(
     const com_local: []Vec = try gpa.alloc(Vec, part_count);
     errdefer gpa.free(com_local);
 
-    // ── One compound per part, from every geom of the bodies that make it up. ──
+    // -- One compound per part, from every geom of the bodies that make it up. --
     var children: std.ArrayList(zimrphysics.CompoundChild) = .empty;
     defer children.deinit(gpa);
     for (0..part_count) |part| {
@@ -3617,7 +3617,7 @@ fn buildAtRest(
         });
     }
 
-    // ── One joint per part below the root, from the hinges its robot body carries. ──
+    // -- One joint per part below the root, from the hinges its robot body carries. --
     var joint_list: std.ArrayList(Joint) = .empty;
     defer joint_list.deinit(gpa);
     for (0..part_count) |part| {
@@ -3693,7 +3693,7 @@ fn buildAtRest(
                         .twist_axis = rotate(child_rot, m.jnt_axis[twist]),
                         .plane_axis = rotate(child_rot, m.jnt_axis[plane]),
                         .swing_type = .pyramid,
-                        // ★ Jolt's cones bound the swing WITHIN the plane each names, so the cone for
+                        // * Jolt's cones bound the swing WITHIN the plane each names, so the cone for
                         // rotation ABOUT the plane axis is `normal_half_cone`, and about the normal
                         // axis `plane_half_cone`. Reading the names the other way round locked every
                         // 2-hinge body's first hinge and gave the hip the wrong cone per axis.
@@ -3756,7 +3756,7 @@ character in a scene those are the right trade-offs; for control and learning, t
 reference.</p>
 <details class="src-fold" data-src="src/robot_maximal.zig" data-decl="pub const Drive ="><summary><code>Drive</code></summary><pre><code class="zig">/// A joint drive: a spring toward a target, stated as a FREQUENCY. zimrphysics' motors solve it
 /// inside the constraint solver, and a frequency-stated spring behaves the same whatever the
-/// limb weighs — a hand and a thigh settle equally fast, with no per-joint gain tuning.
+/// limb weighs - a hand and a thigh settle equally fast, with no per-joint gain tuning.
 pub const Drive = struct {
     frequency: f32,
     damping: f32 = 1.0,
@@ -3800,7 +3800,7 @@ pub const Drive = struct {
         return self.handles[part].index();
     }
 
-    /// The world pose of a part's robot-body frame — what `rbt.Data.body_xpos`/`body_xrot`
+    /// The world pose of a part's robot-body frame - what `rbt.Data.body_xpos`/`body_xrot`
     /// would say for the same body.
     pub fn bodyFrame(
         self: *const Ragdoll,
@@ -3883,7 +3883,7 @@ pub const Drive = struct {
     /// Pose the ragdoll like the reduced model's `d`, at rest: every part takes its robot body's
     /// ROTATION, and its position follows down the tree through the maximal pivots.
     ///
-    /// ★★ POSITIONS BY MAXIMAL KINEMATICS, NOT COPIED. Copying each body's reduced position put
+    /// ** POSITIONS BY MAXIMAL KINEMATICS, NOT COPIED. Copying each body's reduced position put
     /// the feet where the ankles' two pivots put them, 2 cm from where the one maximal pivot can;
     /// the solver's first step then yanked that gap shut through the whole leg, up to 0.37 rad
     /// at every leg joint at once. Placed this way every joint starts exactly closed, and the
@@ -3945,7 +3945,7 @@ pub const Drive = struct {
         return weighted / splat(total);
     }
 
-    /// Fastest linear or angular speed of any part — the "has it come to rest" number.
+    /// Fastest linear or angular speed of any part - the "has it come to rest" number.
     pub fn peakSpeed(self: *const Ragdoll, world: *const zimrphysics.World) f32 {
         var fastest: f32 = 0.0;
         for (0..self.partCount()) |part| {
@@ -4074,6 +4074,13 @@ pub const TrackingError = struct {
     root_position: f32,
     /// And how far it is from facing the way the reference faces (radians).
     root_rotation: f32,
+    /// GRAVITY, which every term above but the root's two is blind to - they measure the pose from the root's
+    /// own frame, so a body lying on the floor with the right joint angles matches a standing reference. The
+    /// mean over bodies of the difference in HEIGHT above the floor (metres, world z)...
+    height: f32,
+    /// ...and how far the UP direction, as each root sees it, differs (the distance between two unit vectors,
+    /// 0 to 2): tilt against gravity, what SuperTrack's L_up measures.
+    up: f32,
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn trackingError("><summary><code>trackingError</code></summary><pre><code class="zig">/// Measure one against the other. Both states are whole-body states in world space (`stateOf`);
 /// `root` is the character's root body.
@@ -4092,6 +4099,8 @@ pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
         .angular = 0.0,
         .root_position = length3(sim.positions[root] - reference.positions[root]),
         .root_rotation = angleBetween(sim.rotations[root], reference.rotations[root]),
+        .height = 0.0,
+        .up = length3(rotate(to_local, vec(0.0, 0.0, 1.0)) - rotate(to_local_ref, vec(0.0, 0.0, 1.0))),
     };
     // Body 0 is the world, and the root's own pose terms are zero by construction; both are still
     // counted so the mean is over the same number of bodies every time, which keeps a reward
@@ -4107,6 +4116,7 @@ pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
         const w: Vec = rotate(to_local, sim.angular[b]);
         const w_ref: Vec = rotate(to_local_ref, reference.angular[b]);
         out.pose_position += length3(p - p_ref) / count;
+        out.height += @abs(sim.positions[b][2] - reference.positions[b][2]) / count;
         out.pose_rotation += angleBetween(r, r_ref) / count;
         out.velocity += length3(v - v_ref) / count;
         out.angular += length3(w - w_ref) / count;
@@ -4138,15 +4148,30 @@ pub const RewardWeights = struct {
     root_position_scale: f32 = 0.15,
     root_rotation: f32 = 0.1,
     root_rotation_scale: f32 = 0.3,
+    /// THE GRAVITY GATE (Sep 26). The terms above add up, and 80% of them measure the pose from the root's own
+    /// frame - so a body lying on the floor with the right joint angles earns about 0.8 while its reference
+    /// stands. SuperTrack's reward is ONE exponential of every loss, heights and up included, so any large loss
+    /// sinks all of it; here that becomes a gate: when set, the whole reward is multiplied by
+    /// exp(-height / height_scale) and exp(-up / up_scale). Perfect tracking still earns exactly 1. Zero - the
+    /// default - leaves the reward exactly as it was.
+    height_scale: f32 = 0.0,
+    up_scale: f32 = 0.0,
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn reward("><summary><code>reward</code></summary><pre><code class="zig">/// The reward for one step: 1 when the characters coincide, falling smoothly from there.
 pub fn reward(err: TrackingError, w: RewardWeights) f32 {
-    return w.pose_position * @exp(-err.pose_position / w.pose_position_scale) +
+    var total: f32 = w.pose_position * @exp(-err.pose_position / w.pose_position_scale) +
         w.pose_rotation * @exp(-err.pose_rotation / w.pose_rotation_scale) +
         w.velocity * @exp(-err.velocity / w.velocity_scale) +
         w.angular * @exp(-err.angular / w.angular_scale) +
         w.root_position * @exp(-err.root_position / w.root_position_scale) +
         w.root_rotation * @exp(-err.root_rotation / w.root_rotation_scale);
+    if (w.height_scale &gt; 0.0) {
+        total *= @exp(-err.height / w.height_scale);
+    }
+    if (w.up_scale &gt; 0.0) {
+        total *= @exp(-err.up / w.up_scale);
+    }
+    return total;
 }</code></pre></details>
 <p>An episode ends when the reference is lost, and by nothing else. The obvious test — has the head
 dropped below some height? — is wrong for this set of clips: a fall-and-get-up spends ten seconds
@@ -4162,20 +4187,39 @@ pub const Termination = struct {
     pose_rotation: f32 = 1.2,
     root_position: f32 = 0.6,
     root_rotation: f32 = 1.5,
+    /// The reference is also lost when the bodies' mean HEIGHT differs from its by more than this (metres) -
+    /// RELATIVE to the reference, so the get-up's ten seconds on the floor are fine while the reference lies
+    /// there too: SuperTrack's rule (the head 25 cm off the reference's), over every body. Off by default.
+    height: f32 = 1.0e30,
+    /// ...and when the body's TILT against gravity differs from the reference's by more than this (the up
+    /// vectors' distance, each in its own root's frame: 0.8 is ~47 degrees) - falling over, whatever the
+    /// heading. Off by default.
+    up: f32 = 1.0e30,
+
+    /// Steps after a reset during which losing the reference does not end the episode. A policy bad enough
+    /// to fail within a training window's length leaves NO window in its data - training then stops for
+    /// good, and the bad policy never improves (seen on the phone: updates frozen, 0.1 s to failure). A
+    /// grace of the window's length guarantees every episode one. 0 for the old robot's fleets.
+    grace_steps: u32 = 0,
+
+    /// Every limit scaled by `fraction` (the grace kept) - a looser leash (&gt; 1) or an early warning (&lt; 1). The
+    /// ONE place limits are copied: copies written out field by field forgot the limits added later (Sep 26:
+    /// geno_train's watching leash dropped the tilt limit).
+    pub fn scaled(self: Termination, fraction: f32) Termination {
+        var out: Termination = self;
+        out.pose_position *= fraction;
+        out.pose_rotation *= fraction;
+        out.root_position *= fraction;
+        out.root_rotation *= fraction;
+        out.height *= fraction;
+        out.up *= fraction;
+        return out;
+    }
 };</code></pre></details>
 <p>And episodes start anywhere in the clip, not always at its beginning — <em>reference-state
 initialisation</em> — so a learner sees the middle of a run and the middle of a fall as often as a
 standing start, instead of having to survive everything before them first.</p>
-<details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn resetToFrame("><summary><code>resetToFrame</code></summary><pre><code class="zig">/// Put the simulation exactly on the clip at `frame` - the pose, and the velocity the clip has
-/// there.
-///
-/// This is reference-state initialisation: episodes start at a random frame rather than always at
-/// the beginning, so a learner sees the middle of a run and the middle of a fall as often as it
-/// sees a standing start, instead of having to survive everything before them first. The velocity
-/// is the backward difference into `frame`, which is the velocity the discrete trajectory actually
-/// has there (the same argument as the servo's) - so frame 0 starts at frame 1 instead, there being
-/// nothing before it to difference against.
-pub fn resetToFrame(
+<details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn resetToFrame("><summary><code>resetToFrame</code></summary><pre><code class="zig">pub fn resetToFrame(
     m: *const rbt.Model,
     d: *rbt.Data,
     clip: *const dance.Clip,
@@ -4211,6 +4255,7 @@ pub fn observe(
     subset: Subset,
     sim: track.State,
     reference: track.State,
+    ahead: []const track.State,
     root: usize,
     previous_action: []const f32,
     out: []f32,
@@ -4218,6 +4263,10 @@ pub fn observe(
     assertf(out.len == observationSize(subset), @src(), "observation is {d} long, wants {d}", .{
         out.len,
         observationSize(subset),
+    });
+    assertf(ahead.len == lookahead_frames.len, @src(), "lookahead has {d} states, wants {d}", .{
+        ahead.len,
+        lookahead_frames.len,
     });
     assertf(previous_action.len == subset.dofs, @src(), "previous action is {d}, wants {d}", .{
         previous_action.len,
@@ -4231,6 +4280,21 @@ pub fn observe(
     writeVec(out, &amp;at, sim_cm);
     writeVec(out, &amp;at, ref_cm);
     writeVec(out, &amp;at, sim_cm - ref_cm);
+    // The centre of mass's HEIGHT above the floor (z = 0): what a get-up is about, and what positions measured
+    // FROM the centre of mass cannot show. Vertical, so no heading changes it.
+    out[at] = sim_frame.origin[2];
+    at += 1;
+    // WHERE THE REFERENCE IS, from the character (Simon, Sep 26; MimicKit places its targets exactly so): its
+    // centre of mass in the character's heading frame, and its heading against the character's, as cos and sin.
+    // Every other term is a difference taken in each character's OWN frame - drift-free by construction, which
+    // also made drift INVISIBLE: a policy rewarded for following the reference's root motion could not see that
+    // it had wandered off it, or turned away from it, and so could never learn to turn on the spot or go
+    // somewhere reliably.
+    writeVec(out, &amp;at, rotate(sim_frame.to_local, ref_frame.origin - sim_frame.origin));
+    const facing: Vec = rotate(sim_frame.to_local, rotate(conjugate(ref_frame.to_local), vec(1.0, 0.0, 0.0)));
+    out[at] = facing[0];
+    out[at + 1] = facing[1];
+    at += 2;
     for (subset.bodies) |b| {
         writeVec(out, &amp;at, rotate(sim_frame.to_local, sim.positions[b] - sim_frame.origin));
         writeVec(out, &amp;at, rotate(sim_frame.to_local, sim.velocities[b]));
@@ -4242,6 +4306,16 @@ pub fn observe(
         const v_ref: Vec = rotate(ref_frame.to_local, reference.velocities[b]);
         writeVec(out, &amp;at, p - p_ref);
         writeVec(out, &amp;at, v - v_ref);
+    }
+    // FURTHER AHEAD: where the reference's centre of mass will be, from the CHARACTER (in its heading frame - the
+    // way to go, drift included: a rise, a jump or a turn shows here before it happens), and its watched bodies'
+    // SHAPE then (each future frame in its own heading frame - the pose, free of where it stands).
+    for (ahead) |future| {
+        const future_frame: Frame = headingFrame(m, future, root);
+        writeVec(out, &amp;at, rotate(sim_frame.to_local, future_frame.origin - sim_frame.origin));
+        for (subset.bodies) |b| {
+            writeVec(out, &amp;at, rotate(future_frame.to_local, future.positions[b] - future_frame.origin));
+        }
     }
     @memcpy(out[at..][0..previous_action.len], previous_action);
 }</code></pre></details>
@@ -4391,6 +4465,10 @@ is not credited to the decision that failed.</p>
     epochs: u32 = 4,
     gamma: f32 = 0.99,
     lambda: f32 = 0.95,
+    /// What a clip running out means to the advantage (MimicKit's choice is the default: its "success" earns
+    /// nothing and nothing follows, which keeps a character from idling toward the end). `.bootstrap` counts it
+    /// as CUT SHORT instead - the critic's value of where it ended follows. The step cap is always a cut.
+    clip_end: ClipEnd = .terminal,
     /// Both networks' width. DReCon used 128 for ten minutes of locomotion steered by a user; one
     /// short clip is a much smaller function, and their own Fig 8 has small networks learning
     /// FASTER early on.
@@ -4413,6 +4491,23 @@ is not credited to the decision that failed.</p>
     /// shorter than the clip would end good episodes early, and counting those as anything but
     /// survival would make the clip look harder than it is.
     max_episode_steps: u32 = 600,
+    /// The servo's spring and the floor's friction, passed to every fleet the trainer builds (training and
+    /// judging). The old robot's defaults; Geno uses `robot_geno.servo_gains` and `robot_geno.floor_friction`.
+    gains: track.Gains = .{},
+    floor_friction: f32 = 0.7,
+    /// Radians per unit of the policy's action - the fleet's own default (0.2) unless set. Passed to every
+    /// fleet the trainer builds, so the scale a policy was trained under is the one it is judged under.
+    action_scale: f32 = 0.2,
+    /// Rest every reset on the floor (`robot_track.Fleet.Options.rest_on_floor`); Geno's copied clips need it.
+    rest_on_floor: bool = false,
+    /// The task's reward weights and termination (`robot_track.RewardWeights`, `Termination`) - passed to every
+    /// fleet the trainer builds, so a policy is trained and judged by the same rules. Geno's gate gravity in:
+    /// `robot_geno.task_weights`, `task_termination`.
+    weights: track.RewardWeights = .{},
+    termination: track.Termination = .{},
+    /// DReCon's watched and actuated bodies, in this robot's names (the old robot's by default).
+    watched: []const []const u8 = &amp;policy.watched_bodies,
+    actuated: []const []const u8 = &amp;policy.actuated_bodies,
     /// What this network is trained FOR - an opaque number the caller chooses (a clip, say). It
     /// travels in the weights file, and a file with another tag is refused: a get-up policy and a
     /// dance policy have identical shapes, so nothing else would notice the difference.
@@ -4437,16 +4532,7 @@ against the servo alone on the same starts. Exploration noise makes a policy loo
 learns, and reward per step is a poor yardstick here, because a character that loses the reference
 is put straight back on it and scores well from that fresh start. How long it stays with the
 reference is the honest number.</p>
-<details class="src-fold" data-src="src/robot_ppo_track.zig" data-decl="pub fn evaluate("><summary><code>Trainer.evaluate</code></summary><pre><code class="zig">/// How the policy does when it is JUDGED: its mean action, no exploration, no learning -
-/// over `decisions` decisions per environment. With `servo_only` the action is exactly zero
-/// instead, which is the baseline every policy has to beat.
-///
-/// **On fixed starts, in a fleet of its own.** Judging on the training fleet would continue
-/// its random stream, so every evaluation - and the policy and the servo within one - would
-/// start from different frames, and differences between them would be partly luck. Here
-/// both are judged on the same starts every time, which makes the servo's number a
-/// constant: if it ever changes between chunks, something other than the policy did.
-pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
+<details class="src-fold" data-src="src/robot_ppo_track.zig" data-decl="pub fn evaluate("><summary><code>Trainer.evaluate</code></summary><pre><code class="zig">pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
     const envs: usize = self.options.envs;
     const dofs: usize = self.subset.dofs;
     const hold: u32 = @max(self.options.decimation, 1);
@@ -4454,6 +4540,12 @@ pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
         .envs = envs,
         .capacity = 16,
         .seed = evaluation_seed,
+        .gains = self.options.gains,
+        .floor_friction = self.options.floor_friction,
+        .action_scale = self.options.action_scale,
+        .rest_on_floor = self.options.rest_on_floor,
+        .weights = self.options.weights,
+        .termination = self.options.termination,
     });
     defer judge.deinit();
     var controller: policy.Controller = try policy.Controller.init(self.gpa, self.m, self.subset, envs, .{
@@ -4466,6 +4558,11 @@ pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
     @memset(lengths, 0);
     var reward_sum: f32 = 0.0;
     var reward_steps: u32 = 0;
+    // Counted exactly as training counts them: a unit of exposure per physics step per character, and
+    // a failure when the fleet says the reference was LOST (not the clip ending). Their ratio is the
+    // mean time to failure. (Until Sep 25 `evaluate` left both at zero - and a test printed that.)
+    var exposure: u64 = 0;
+    var failures: u32 = 0;
     var ended: u32 = 0;
     var ended_length: u64 = 0;
     for (0..decisions) |_| {
@@ -4475,14 +4572,14 @@ pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
                 @memset(slot, 0.0);
             } else {
                 track.stateOf(self.m, &amp;judge.data[env], &amp;self.sim_state);
-                const clip: *const dance.Clip = judge.clips[judge.clip_of[env]];
-                judge.referenceStateInto(clip, judge.frame[env] + 1, &amp;self.probe, &amp;self.reference_state);
-                policy.observe(
+                policy.observeFrom(
                     self.m,
                     self.subset,
+                    judge,
+                    judge.clips[judge.clip_of[env]],
+                    judge.frame[env],
                     self.sim_state,
-                    self.reference_state,
-                    judge.root,
+                    &amp;self.views,
                     controller.lastAction(env),
                     self.obs_scratch,
                 );
@@ -4498,6 +4595,10 @@ pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
             _ = judge.step(full);
             for (0..envs) |env| {
                 lengths[env] += 1;
+                exposure += 1;
+                if (judge.failures[env]) {
+                    failures += 1;
+                }
                 reward_sum += judge.rewards[env];
                 reward_steps += 1;
                 if (judge.dones[env]) {
@@ -4515,6 +4616,8 @@ pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
         .mean_reward = if (reward_steps &gt; 0) reward_sum / float(reward_steps) else 0.0,
         .episodes = ended,
         .mean_episode = if (ended &gt; 0) float(ended_length) / float(ended) else 0.0,
+        .exposure = exposure,
+        .failures = failures,
     };
 }</code></pre></details>
 <p>On a phone a batch cannot be collected in one go — two thousand physics steps would freeze the page
@@ -4821,6 +4924,29 @@ ends when the torso falls below <code>healthy_height</code>, or at <code>max_ste
     ) !*HumanoidEnv {
         const env: *HumanoidEnv = try gpa.create(HumanoidEnv);
         errdefer gpa.destroy(env);
+        // whole-init-first: the whole struct first - defaults applied, every field named.
+        env.* = .{
+            .gpa = undefined,
+            .options = undefined,
+            .doc = undefined,
+            .robot = undefined,
+            .imported = undefined,
+            .data = undefined,
+            .world = undefined,
+            .bridge = undefined,
+            .tracker = undefined,
+            .base = undefined,
+            .target = undefined,
+            .previous_action = undefined,
+            .hinge_qpos = undefined,
+            .hinge_dof = undefined,
+            .a_des = undefined,
+            .torque = undefined,
+            .full = undefined,
+            .dense = undefined,
+            .rng = undefined,
+            .steps = undefined,
+        };
         env.gpa = gpa;
         env.options = options;
         env.doc = try codecs.xml.parse(gpa, xml, null);
@@ -4917,7 +5043,7 @@ ends when the torso falls below <code>healthy_height</code>, or at <code>max_ste
 
     /// Start an episode: the base pose, feet on the floor, a little noise on the joints.
     ///
-    /// ★★ A RESET MUST FORGET EVERYTHING, OR NO TWO LEARNING CURVES CAN BE COMPARED. The first
+    /// ** A RESET MUST FORGET EVERYTHING, OR NO TWO LEARNING CURVES CAN BE COMPARED. The first
     /// version kept the physics world and the solver between episodes, and the same seed did not
     /// replay the same episode: contact caches and the solver's warm start carried the previous
     /// episode's forces into this one's first steps. The world and bridge are rebuilt and the
@@ -5095,7 +5221,7 @@ pub const Layer = struct {
     horizon: usize = 2048,
     minibatch: usize = 256,
     epochs: usize = 5,
-    /// ★★ ADAM's rate. `ppoUpdate` steps plain SGD; the trainer runs the minibatch itself and
+    /// ** ADAM's rate. `ppoUpdate` steps plain SGD; the trainer runs the minibatch itself and
     /// steps Adam (`updateSlice`), because no single SGD rate suits every parameter of the
     /// policy: a small one does not move it, and a large one drives its mean into the action clamp
     /// within a few iterations - a star pose, every joint at its offset limit.
@@ -5104,7 +5230,7 @@ pub const Layer = struct {
     /// unit size: 5 per step alive makes returns of ~130, and plain SGD on a squared error that
     /// large diverges. The printed returns are unscaled.
     reward_scale: f32 = 0.05,
-    /// ★ Start NEAR THE STATUE: sigma = e^-1.5 = 0.22, times the 0.5 rad action scale. A wider
+    /// * Start NEAR THE STATUE: sigma = e^-1.5 = 0.22, times the 0.5 rad action scale. A wider
     /// start flails every joint by tenths of a radian, falls sooner than holding the reference pose
     /// would, and PPO does not climb back from there.
     initial_log_std: f32 = -1.5,
@@ -5174,7 +5300,39 @@ pub const PpoTrainer = struct {
     ) !*PpoTrainer {
         const t: *PpoTrainer = try gpa.create(PpoTrainer);
         errdefer gpa.destroy(t);
-        t.* = undefined;
+        // whole-init-first: the whole struct first - defaults applied, every field named.
+        t.* = .{
+            .arena_state = undefined,
+            .gpa = undefined,
+            .env = undefined,
+            .options = undefined,
+            .p1 = undefined,
+            .p2 = undefined,
+            .p3 = undefined,
+            .v1 = undefined,
+            .v2 = undefined,
+            .v3 = undefined,
+            .log_std = undefined,
+            .graph = undefined,
+            .model = undefined,
+            .norm = undefined,
+            .raw = undefined,
+            .normed = undefined,
+            .a1 = undefined,
+            .a2 = undefined,
+            .mu = undefined,
+            .act = undefined,
+            .val = undefined,
+            .observations = undefined,
+            .actions = undefined,
+            .advantages = undefined,
+            .returns = undefined,
+            .rollout = undefined,
+            .rng = undefined,
+            .episode_seed = undefined,
+            .moments = undefined,
+            .velocities = undefined,
+        };
         t.arena_state = .init(gpa);
         errdefer t.arena_state.deinit();
         const arena: Allocator = t.arena_state.allocator();
@@ -5206,7 +5364,7 @@ pub const PpoTrainer = struct {
         t.log_std = try zn.Tensor(f32).alloc(arena, &amp;.{ 1, n_act });
         @memset(t.log_std.data, options.initial_log_std);
 
-        // ── The update's graph, built once at minibatch size. ──
+        // -- The update's graph, built once at minibatch size. --
         t.graph = .init(arena);
         // The graph lives as long as the trainer and runs thousands of passes: its backward
         // temporaries need an allocator that can free (zimrnum's `Graph.scratch`).
@@ -5270,7 +5428,7 @@ pub const PpoTrainer = struct {
             .parameters = parameters,
         };
 
-        // ── Collection buffers. ──
+        // -- Collection buffers. --
         t.norm = .{ .mean = try arena.alloc(f64, n_obs), .m2 = try arena.alloc(f64, n_obs) };
         @memset(t.norm.mean, 0.0);
         @memset(t.norm.m2, 0.0);
@@ -5407,7 +5565,7 @@ pub const PpoTrainer = struct {
         }
         const size: usize = t.options.minibatch;
         const at: usize = t.minibatch_index * size;
-        // ★★ The minibatch by hand, so it can step ADAM (`ppoUpdate` steps plain SGD): the
+        // ** The minibatch by hand, so it can step ADAM (`ppoUpdate` steps plain SGD): the
         // chunk's rows into the graph's leaves (contiguous after the shuffle), the clip node's
         // copies refreshed, the loss and gradients recomputed, then one Adam step per tensor.
         const n_obs: usize = t.raw.len;
@@ -5530,7 +5688,7 @@ pub const AdamSet = struct {
 /// Gaussian actor (`squashedReparameterize`), twin critics on `concat(s, a)` with polyak targets,
 /// the target y = r + gamma (1 - done)(min Q' - alpha log pi), and a tuned temperature
 /// (`zn.Temperature`). Every network steps ADAM: zimrnum's `offPolicyUpdate` steps plain SGD,
-/// the trap `ppoUpdate` already sprang (rl_track_journal.md §6). Env-agnostic: flat observations
+/// the trap `ppoUpdate` already sprang (rl_track_journal.md section 6). Env-agnostic: flat observations
 /// and actions in [-1, 1].
 pub const SacAgent = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -5593,7 +5751,46 @@ pub const SacAgent = struct {
     ) !*SacAgent {
         const a: *SacAgent = try gpa.create(SacAgent);
         errdefer gpa.destroy(a);
-        a.* = undefined;
+        // whole-init-first: the whole struct first - defaults applied, every field named.
+        a.* = .{
+            .arena_state = undefined,
+            .gpa = undefined,
+            .options = undefined,
+            .n_obs = undefined,
+            .n_act = undefined,
+            .actor = undefined,
+            .raw_log_std = undefined,
+            .q1 = undefined,
+            .q2 = undefined,
+            .target1 = undefined,
+            .target2 = undefined,
+            .critic_graph = undefined,
+            .critic_obs = undefined,
+            .critic_act = undefined,
+            .critic_y = undefined,
+            .critic_loss = undefined,
+            .critic_vars = undefined,
+            .actor_graph = undefined,
+            .actor_obs = undefined,
+            .actor_noise = undefined,
+            .actor_alpha = undefined,
+            .actor_log_prob = undefined,
+            .actor_loss = undefined,
+            .critic_adam = undefined,
+            .actor_adam = undefined,
+            .temperature = undefined,
+            .replay = undefined,
+            .rng = undefined,
+            .row = undefined,
+            .t1 = undefined,
+            .t2 = undefined,
+            .out = undefined,
+            .qin = undefined,
+            .q_out = undefined,
+            .batch_rows = undefined,
+            .next_noise = undefined,
+            .noise_row = undefined,
+        };
         a.arena_state = .init(gpa);
         errdefer a.arena_state.deinit();
         const arena: Allocator = a.arena_state.allocator();
@@ -5620,7 +5817,7 @@ pub const SacAgent = struct {
         for (a.target2.tensors(), a.q2.tensors()) |t, o| {
             @memcpy(t.data, o.data);
         }
-        // ★★★ -1 PER DIMENSION, the SAC heuristic (target entropy = per_dim x action_dim). This
+        // *** -1 PER DIMENSION, the SAC heuristic (target entropy = per_dim x action_dim). This
         // passed +1.0 at first: a target entropy of +1, which a tanh-squashed 1-D action cannot
         // reach (its maximum is the uniform's, log 2 ~ 0.69) - so alpha rose from the first update
         // and ran away, doubling every 2k steps, and the cartpole policy collapsed after 8k.
@@ -5631,7 +5828,7 @@ pub const SacAgent = struct {
         const mean_row_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ 1, b });
         @memset(mean_row_t.data, 1.0 / float(b));
 
-        // ── The critic graph: both critics against one target column. ──
+        // -- The critic graph: both critics against one target column. --
         a.critic_graph = .init(arena);
         a.critic_graph.useScratchAllocator(gpa);
         const cg: *zn.Graph(f32) = &amp;a.critic_graph;
@@ -5645,7 +5842,7 @@ pub const SacAgent = struct {
         a.critic_loss = try cg.add(try cg.mseLoss(v1, a.critic_y), try cg.mseLoss(v2, a.critic_y));
         a.critic_vars = concatVars(a.q1.vars(), a.q2.vars());
 
-        // ── The actor graph: a reparameterised draw through the (shared) critics. ──
+        // -- The actor graph: a reparameterised draw through the (shared) critics. --
         a.actor_graph = .init(arena);
         a.actor_graph.useScratchAllocator(gpa);
         const ag: *zn.Graph(f32) = &amp;a.actor_graph;
@@ -6036,7 +6233,7 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
     world: Net,
     /// `envs` rings of `per_env` records each, back to back.
     ///
-    /// ★ ONE SHARED RING WAS THE FIRST VERSION'S BUG: the cartpoles take turns recording, so
+    /// * ONE SHARED RING WAS THE FIRST VERSION'S BUG: the cartpoles take turns recording, so
     /// consecutive records were different cartpoles - a world-model "window" was nine states of
     /// nine cartpoles (its end check passed because record +8 is the same one a tick later), and
     /// a policy start's 1-step window never matched a segment, so the policy never trained.
@@ -6045,14 +6242,14 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
     heads: []usize,
     lens: []usize,
     rng: std.Random.DefaultPrng,
-    // ── The world model's graph: a window of real states and forces, rolled out. ──
+    // -- The world model's graph: a window of real states and forces, rolled out. --
     wm_graph: Graph,
     wm_states: [][4]Var,
     wm_forces: []Var,
     wm_loss: Var,
     wm_vars: [6]Var,
     wm_adam: gym.AdamSet,
-    // ── The policy's graph: a start state and noise, rolled out through the world model. ──
+    // -- The policy's graph: a start state and noise, rolled out through the world model. --
     pi_graph: Graph,
     pi_start: Columns,
     pi_noise: []Var,
@@ -6072,7 +6269,37 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
     pub fn init(gpa: Allocator, options: Options) !*SuperTrack {
         const st: *SuperTrack = try gpa.create(SuperTrack);
         errdefer gpa.destroy(st);
-        st.* = undefined;
+        // whole-init-first: the whole struct first - defaults applied, every field named.
+        st.* = .{
+            .arena_state = undefined,
+            .gpa = undefined,
+            .options = undefined,
+            .policy = undefined,
+            .world = undefined,
+            .records = undefined,
+            .per_env = undefined,
+            .heads = undefined,
+            .lens = undefined,
+            .rng = undefined,
+            .wm_graph = undefined,
+            .wm_states = undefined,
+            .wm_forces = undefined,
+            .wm_loss = undefined,
+            .wm_vars = undefined,
+            .wm_adam = undefined,
+            .pi_graph = undefined,
+            .pi_start = undefined,
+            .pi_noise = undefined,
+            .pi_loss = undefined,
+            .pi_vars = undefined,
+            .pi_adam = undefined,
+            .stage_states = undefined,
+            .stage_forces = undefined,
+            .stage_starts = undefined,
+            .stage_noise = undefined,
+            .t1 = undefined,
+            .t2 = undefined,
+        };
         st.arena_state = .init(gpa);
         errdefer st.arena_state.deinit();
         const arena: Allocator = st.arena_state.allocator();
@@ -6109,7 +6336,7 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
         pick_pole.data[1] = acc_scale;
         const zero_col: Tensor = try filled(arena, &amp;.{ b, 1 }, 0.0);
 
-        // ── The world model's graph. ──
+        // -- The world model's graph. --
         st.wm_graph = .init(arena);
         st.wm_graph.useScratchAllocator(gpa);
         const wg: *Graph = &amp;st.wm_graph;
@@ -6137,7 +6364,7 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
         st.wm_loss = loss.?;
         st.wm_adam = try .init(arena, &amp;st.world.tensors());
 
-        // ── The policy's graph: rolled out through the SAME world model weights. ──
+        // -- The policy's graph: rolled out through the SAME world model weights. --
         st.pi_graph = .init(arena);
         st.pi_graph.useScratchAllocator(gpa);
         const pg: *Graph = &amp;st.pi_graph;
@@ -6668,22 +6895,7 @@ pub fn pdTorques(
     full: []f32,
     out: []f32,
 ) void {
-    rbt.differentiatePos(m, scratch, d.pos, target, 1.0);
-    const root: usize = rootDofs(m);
-    @memset(accel_scratch[0..root], 0.0);
-    for (root..m.nv) |k| {
-        const want: f32 = rmx.stableSpringAccel(scratch[k], d.vel[k], gains.frequency, gains.damping, dt);
-        accel_scratch[k] = clamp(want, -gains.max_acceleration, gains.max_acceleration);
-    }
-    if (root == 0) {
-        rbt.inverseDynamics(m, d, accel_scratch, out);
-    } else {
-        rmx.floatingBaseTorques(m, d, accel_scratch, dense, full, out);
-        @memset(out[0..root], 0.0);
-        if (gains.assist &gt; 0.0) {
-            rootAssist(m, d, gains, dt, scratch, accel_scratch, dense, out);
-        }
-    }
+    pdTorquesToward(m, d, target, null, gains, dt, accel_scratch, scratch, dense, full, out);
 }</code></pre></details>
 
 <h3 id="replay">11.7 Collecting it: rings, segments and a fleet<a class="anchor" href="#replay">#</a></h3>
@@ -6911,6 +7123,15 @@ pub const Fleet = struct {
         termination: Termination = .{},
         /// Frames between shoves (0 never shoves). A shove is an impulse on the root, which is what
         /// "small perturbations" means when it is time to measure robustness.
+        /// The floor's friction (a contact's is the geometric mean with the robot's shapes'). The old
+        /// robot's 0.7; Geno's feet skate at that under its servo, and use `robot_geno.floor_friction`.
+        floor_friction: f32 = 0.7,
+        /// Rest every reset ON the floor (`rbt.restOnFloor`, 1 mm clear): a pose copied from a capture sinks
+        /// its feet into the simulated floor, and the solver kicks the body out of it on the first step - at
+        /// every episode start. Off for the old robot, whose tests pin its exact behaviour; Geno's fleets set it.
+        rest_on_floor: bool = false,
+        /// Every reset pushed off the reference (`perturbStart`) - D5.5's perturbed starts. None by default.
+        start_noise: StartNoise = .{},
         shove_every: u32 = 0,
         /// How hard, as a velocity added to the root, in m/s.
         shove_speed: f32 = 0.6,
@@ -6969,6 +7190,15 @@ pub const Fleet = struct {
     /// out of clip while still with the reference is success, and counting it as an ending shortens
     /// every episode to whatever was left of the clip when it started.
     failures: []bool,
+    /// WHY each ending happened (valid where `dones` is set), and the state it ended IN - captured before
+    /// the restart replaces it. A learner needs both: an episode that was LOST has no future, but one CUT
+    /// SHORT - by the step cap, or a clip running out - does, and its value is the critic's value of the
+    /// state it ended in, not of the fresh start that took its place (MimicKit bootstraps its timeouts
+    /// exactly so; ours treated every end as a death until Sep 26).
+    ends: []End,
+    terminal: []State,
+    terminal_frame: []u32,
+    terminal_clip: []usize,
     /// Every failure since the fleet was made, beside `episodes`, which counts every ending.
     failed: u64 = 0,
     /// The last step's reward and how many episodes have ended, for whoever is watching.
@@ -6998,6 +7228,41 @@ pub const Fleet = struct {
         }
         const fleet: *Fleet = try gpa.create(Fleet);
         errdefer gpa.destroy(fleet);
+        // whole-init-first: the whole struct first - defaults applied, every field named.
+        fleet.* = .{
+            .gpa = undefined,
+            .arena = undefined,
+            .m = undefined,
+            .clips = undefined,
+            .root = undefined,
+            .options = undefined,
+            .data = undefined,
+            .worlds = undefined,
+            .bridges = undefined,
+            .clip_of = undefined,
+            .frame = undefined,
+            .segment = undefined,
+            .steps = undefined,
+            .next_segment = undefined,
+            .rng = undefined,
+            .replay = undefined,
+            .reference_data = undefined,
+            .sim_state = undefined,
+            .reference_state = undefined,
+            .targets = undefined,
+            .accel = undefined,
+            .torque = undefined,
+            .scratch = undefined,
+            .full = undefined,
+            .dense = undefined,
+            .rewards = undefined,
+            .dones = undefined,
+            .failures = undefined,
+            .ends = undefined,
+            .terminal = undefined,
+            .terminal_frame = undefined,
+            .terminal_clip = undefined,
+        };
         fleet.arena = .init(gpa);
         errdefer fleet.arena.deinit();
         const owned: Allocator = fleet.arena.allocator();
@@ -7018,6 +7283,10 @@ pub const Fleet = struct {
             .rewards = try owned.alloc(f32, options.envs),
             .dones = try owned.alloc(bool, options.envs),
             .failures = try owned.alloc(bool, options.envs),
+            .ends = try owned.alloc(End, options.envs),
+            .terminal = try owned.alloc(State, options.envs),
+            .terminal_frame = try owned.alloc(u32, options.envs),
+            .terminal_clip = try owned.alloc(usize, options.envs),
             .next_segment = 0,
             .rng = .init(options.seed),
             .replay = try .init(owned, m, options.envs, options.capacity),
@@ -7034,8 +7303,11 @@ pub const Fleet = struct {
         for (fleet.data) |*d| {
             d.* = try rbt.Data.init(owned, m);
         }
+        for (fleet.terminal) |*state| {
+            state.* = try State.init(owned, m.nbody);
+        }
         for (fleet.worlds, fleet.bridges, fleet.data) |*world, *bridge, *d| {
-            world.* = try floorWorld(owned);
+            world.* = try floorWorld(owned, options.floor_friction);
             bridge.* = try robot_physics.Bridge.init(owned, world, m, d, 256);
             bridge.listen(world);
         }
@@ -7067,6 +7339,10 @@ pub const Fleet = struct {
         const clip: *const dance.Clip = self.clips[self.clip_of[env]];
         const frame: usize = 1 + random.uintLessThan(usize, clip.frame_count - 2);
         resetToFrame(self.m, &amp;self.data[env], clip, frame);
+        if (self.options.rest_on_floor) {
+            _ = rbt.restOnFloor(self.m, &amp;self.data[env], 0.001);
+        }
+        perturbStart(self.m, &amp;self.data[env], self.options.start_noise, random, self.scratch);
         self.frame[env] = @intCast(frame);
         self.steps[env] = 0;
         self.segment[env] = self.next_segment;
@@ -7242,7 +7518,7 @@ pub const Fleet = struct {
     /// One frame for every environment: act, drive, step, record, and start again where needed.
     /// `actions` is `envs * actionSize(m)` long, each in [-1, 1]. Returns the mean reward.
     /// A ground to stand on: a large static box with its top face at z = 0, as the dance rungs use.
-    pub fn floorWorld(gpa: Allocator) !zimrphysics.World {
+    pub fn floorWorld(gpa: Allocator, friction: f32) !zimrphysics.World {
         var world: zimrphysics.World = try .init(gpa, 64);
         errdefer world.deinit(gpa);
         world.gravity = vec(0, 0, -9.81);
@@ -7255,7 +7531,7 @@ pub const Fleet = struct {
             .shape = ground,
             .position = vec(0, 0, -0.5),
             .motion_type = .static,
-            .friction = 0.7,
+            .friction = friction,
         });
         return world;
     }
@@ -7295,7 +7571,12 @@ pub const Fleet = struct {
             self.dones[env] = false;
             reward_total += earned;
 
-            const lost: bool = terminated(err, self.options.termination);
+            // A character whose state is no longer finite is broken, grace or not: every comparison
+            // with NaN is false, so the limits alone would let it run on - poisoning the world - forever.
+            const broken: bool = !(err.pose_position == err.pose_position and err.pose_rotation == err.pose_rotation and
+                err.root_position == err.root_position and err.root_rotation == err.root_rotation);
+            const graced: bool = self.steps[env] &lt; self.options.termination.grace_steps;
+            const lost: bool = broken or (!graced and terminated(err, self.options.termination));
             const finished: bool = lost or
                 self.steps[env] &gt;= self.options.max_steps or
                 self.frame[env] + 1 &gt;= clip.frame_count;
@@ -7304,6 +7585,12 @@ pub const Fleet = struct {
                 self.episodes += 1;
                 self.dones[env] = true;
                 self.failures[env] = lost;
+                // Why it ended, and where - before `restart` replaces the state just measured.
+                const capped: bool = self.steps[env] &gt;= self.options.max_steps;
+                self.ends[env] = if (lost) .lost else if (capped) .cap else .clip_end;
+                copyState(&amp;self.terminal[env], self.sim_state);
+                self.terminal_frame[env] = self.frame[env];
+                self.terminal_clip[env] = self.clip_of[env];
                 if (lost) {
                     self.failed += 1;
                 }
@@ -7847,7 +8134,7 @@ pub const Params = extern struct {
     /// PPO's clip range epsilon (`ppo_mean_grad`, `ppo_logstd_grad`).
     clip: f32 = 0.2,
     _p2: u32 = 0,
-    // ── SAC (the squash / target / temperature kernels below) ──
+    // -- SAC (the squash / target / temperature kernels below) --
     /// A third acts offset (the second critic's output, an action's destination block).
     z_off: u32 = 0,
     /// acts offset of the pre-squash u (written forward, read backward).
@@ -7870,7 +8157,7 @@ pub const Params = extern struct {
     /// The bounds the actor's raw log-std is squashed into: min + half (1 + tanh(raw)).
     log_std_min: f32 = -5.0,
     log_std_max: f32 = 2.0,
-    // ── SuperTrack on the cartpole (the cp_ kernels) ──
+    // -- SuperTrack on the cartpole (the cp_ kernels) --
     /// 1: `dense_bwd_w` and `cp_track_bwd` ADD into their destination (gradients summed over
     /// unrolled steps); 0: they overwrite it.
     accumulate: u32 = 0,
@@ -7885,7 +8172,7 @@ pub const Params = extern struct {
     w_pole: f32 = 10.0,
     w_pole_rate: f32 = 0.1,
     w_action: f32 = 0.01,
-    // ── The latent model's gather (`lat_gather`): sizes, and where each resident region starts
+    // -- The latent model's gather (`lat_gather`): sizes, and where each resident region starts
     // in the activation buffer. Named for what they are rather than borrowing other kernels'
     // fields - twelve words, 48 bytes, so the struct keeps its 16-byte multiple.
     lat_features: u32 = 0,
@@ -7914,12 +8201,15 @@ pub const Params = extern struct {
     lat_sigma: f32 = 0.0,
     lat_seed: u32 = 0,
     _p9: u32 = 0,
-    /// The action price's gradient coefficient for `lat_act_bwd` (2 w_action / (rows x actions)),
-    /// and padding back to the 16-byte multiple.
+    /// The action price's gradient coefficient for `lat_act_bwd` (2 w_action / (rows x actions)), and
+    /// the SMOOTHNESS term's (CAPS: 2 w_smooth / (rows x actions)) with where the previous and next window
+    /// steps' raw actions start. A step with no such neighbour points at ITSELF (its own `x_off`), so
+    /// `raw - raw` is exactly zero: no sentinel to compare, no branch - nothing a shader translation can get
+    /// subtly wrong. Once padding: the block is still 16 bytes.
     lat_penalty: f32 = 0.0,
-    _p10: u32 = 0,
-    _p11: u32 = 0,
-    _p12: u32 = 0,
+    lat_smooth: f32 = 0.0,
+    lat_prev: u32 = 0,
+    lat_next: u32 = 0,
     _p4: u32 = 0,
     _p5: u32 = 0,
     _p6: u32 = 0,
@@ -8556,13 +8846,13 @@ submission. Results come back asynchronously: <code>readGeneration</code> says h
 and <code>readLatest</code> returns the newest readback — typically a frame late, and only the prefix of a
 field that was asked for.</p>
 <details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn initCpu("><summary><code>Compute.initCpu</code></summary><pre><code class="zig">/// CPU backend: zero GPU resources, instant. The kernel module's globals
-/// (`M.g.B` / `M.g.P`) ARE the storage — upload writes them, run loops.
+/// (`M.g.B` / `M.g.P`) ARE the storage - upload writes them, run loops.
 pub fn initCpu() Self {
     return .{ .backend = .cpu };
 }</code></pre></details>
 <details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn uploadAt("><summary><code>Compute.uploadAt</code></summary><pre><code class="zig">/// `upload` at an ELEMENT offset into the field, not at its start.
 ///
-/// ★ Two steps in one frame that upload their inputs to DISJOINT ranges of one field stay
+/// * Two steps in one frame that upload their inputs to DISJOINT ranges of one field stay
 /// correct under any model of the queue - including one where every write in a frame lands
 /// before the frame's submission, as with a renderer's single frame encoder, where two writes
 /// to the same (buffer, offset) clobber each other. SuperTrack's world and policy steps each
@@ -8602,7 +8892,7 @@ pub fn uploadAt(
         },
     }
 }</code></pre></details>
-<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn beginRecording("><summary><code>Compute.beginRecording</code></summary><pre><code class="zig">/// ── MANY DISPATCHES, ONE SUBMISSION, EACH WITH ITS OWN PARAMS ──
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn beginRecording("><summary><code>Compute.beginRecording</code></summary><pre><code class="zig">/// -- MANY DISPATCHES, ONE SUBMISSION, EACH WITH ITS OWN PARAMS --
 ///
 /// Until `submitRecording`, every `run` is RECORDED rather than submitted: its params go
 /// into a slot of a params table, a copy of that slot into the uniform is encoded before
@@ -8614,7 +8904,7 @@ pub fn uploadAt(
 /// Pipelines, bind groups and WGSL are untouched: the uniform is still the uniform,
 /// filled on the GPU timeline instead.
 ///
-/// ★ Upload a recording's inputs BEFORE `beginRecording`, or at least before the dispatches
+/// * Upload a recording's inputs BEFORE `beginRecording`, or at least before the dispatches
 /// that read them: a `writeBuffer` issued mid-recording lands before the WHOLE recording
 /// executes, not between its dispatches. On the CPU and worker backends `run` executes
 /// at once, as always - the same results, so every CPU-twin check covers this path.
@@ -8656,14 +8946,14 @@ pub fn submitRecording(self: *Self) void {
     flushRecording(gp);
 }</code></pre></details>
 <details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn run("><summary><code>Compute.run</code></summary><pre><code class="zig">/// Run kernel `name` over exactly `n` invocations. `n` is the dispatch
-/// width FOR THIS CALL — explicit, because a multi-kernel pipeline mixes
+/// width FOR THIS CALL - explicit, because a multi-kernel pipeline mixes
 /// widths (clearGrid over grid_cells, the particle kernels over
 /// num_particles, prefixSum over 1). Passing it per call kills the old
 /// footgun of a mutable `pipe.count` you had to re-set between kernels:
 /// forget, and a kernel silently dispatched the PREVIOUS kernel's width.
 ///   CPU: a plain `for id in 0..n` loop calling the kernel (the dual-shape
 ///        source runs as ordinary Zig).
-///   GPU: dispatch `ceil(n / config.workgroup)` workgroups — into the open
+///   GPU: dispatch `ceil(n / config.workgroup)` workgroups - into the open
 ///        batch pass if one is active, else a fresh single-dispatch submit.
 /// Readback is unaffected by `n`; it slices by `element_count` (set once).
 pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
@@ -8681,11 +8971,11 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
             M.g.P = self.params;
             var id: u32 = 0;
             while (id &lt; n) : (id += 1) {
-                // ★★ A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
+                // ** A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
                 // signature is the discriminator, so a file can mix both forms and
                 // neither has to declare which it is. Without this the CPU driver only
                 // spoke the `Ctx` dialect, and `installKernelLean` compiled but could
-                // never be run on the host — half a merge.
+                // never be run on the host - half a merge.
                 // Compared as a TYPE rather than through `@typeInfo`: on
                 // 0.17.0-dev.1980 `Type.Fn` no longer carries `.params`, and a direct
                 // comparison needs no reflection to survive.
@@ -8701,7 +8991,7 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
         // they are the price of not freezing the frame:
         //
         //   1. It is ASYNCHRONOUS. `readLatest` returns null until the job lands
-        //      — as the GPU arm already does, so an app written for `.gpu` needs
+        //      - as the GPU arm already does, so an app written for `.gpu` needs
         //      no change.
         //   2. It runs ONE JOB AT A TIME. A `run` issued while a job is still out
         //      is DROPPED, because two jobs would both write back into the same
@@ -8712,7 +9002,7 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
         //      is what `.gpu` is for.
         .worker =&gt; {
             // Gated on `kernels` so a module that never opts in pays NOTHING for
-            // this arm — an untaken comptime `if` is never analyzed, so none of
+            // this arm - an untaken comptime `if` is never analyzed, so none of
             // the jobs machinery is linked. Selecting `.worker` requires
             // `initWorker`, which is a compile error without it.
             if (comptime @hasDecl(M, "kernels")) {
@@ -8721,7 +9011,7 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
                     return;
                 });
                 if (wk.job.inFlight()) {
-                    return; // still working on the last one — see (2) above
+                    return; // still working on the last one - see (2) above
                 }
                 wk.job = komputeRegistry(M).submit(
                     wk.gpa,
@@ -8738,7 +9028,7 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
             const gp: *Gpu = &amp;self.gpu.?;
             const workgroups: u32 = (n + M.config.workgroup - 1) / M.config.workgroup;
             // Find this kernel's slot so we get BOTH its pipeline and its
-            // own bind group — each kernel binds a different subset of the
+            // own bind group - each kernel binds a different subset of the
             // buffers now, so the two always travel together.
             const ki: usize = blk: {
                 for (gp.kernel_names, 0..) |kn, idx| {
@@ -8782,7 +9072,7 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
             if (gp.batch_enc != .invalid) {
                 // Open batch: encode into the shared pass. Params were
                 // written once at beginBatch (all batched dispatches share
-                // them). The bind group is set PER DISPATCH now — adjacent
+                // them). The bind group is set PER DISPATCH now - adjacent
                 // kernels bind different buffer subsets, so it can't be
                 // hoisted to beginBatch the way the old shared one was.
                 compute_pass.setPipeline(gp.batch_pass, pipeline);
@@ -8837,9 +9127,9 @@ pub fn readGeneration(self: *Self) Generation {
     }
 }</code></pre></details>
 <details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn readLatest("><summary><code>Compute.readLatest</code></summary><pre><code class="zig">pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
-    // Variable-count fields (pos/vel/…) are sized to capacity and slice to
+    // Variable-count fields (pos/vel/...) are sized to capacity and slice to
     // the live `element_count`; fixed fields (grid_counts, cell_start) must
-    // slice to THEIR OWN array length, never the particle count — else
+    // slice to THEIR OWN array length, never the particle count - else
     // grid_counts (grid_cells long) overruns the next field. Clamp to the
     // lesser of the two.
     const arr_len: usize = @field(M.g.B, @tagName(field)).len;
@@ -8848,7 +9138,7 @@ pub fn readGeneration(self: *Self) Generation {
         .cpu =&gt; {
             return @field(M.g.B, @tagName(field))[0..n];
         },
-        // Same contract as the GPU arm: null until it lands, then the data —
+        // Same contract as the GPU arm: null until it lands, then the data -
         // out of our OWN mirror, never out of `M.g.B`, so a `.cpu` pipe on the
         // same module keeps its answer.
         .worker =&gt; {
@@ -8897,7 +9187,7 @@ pub fn readGeneration(self: *Self) Generation {
                 // submits a COPY, not a dispatch. Counting it would make the mirror
                 // appear to reflect work that was never run.
                 gp.copy_at = gp.submitted;
-                // ★★ ONLY WHAT `readLatest` CAN RETURN: each field's first
+                // ** ONLY WHAT `readLatest` CAN RETURN: each field's first
                 // `element_count` elements, packed back to back. This copied every field
                 // WHOLE - 7 MiB a readback for the zn_mlp kit's 1 MiB fields, mapped and
                 // copied into wasm memory up to 60 times a second, to return 6 KB of
@@ -9262,6 +9552,15 @@ pub fn GpuPpoOn(comptime M: type) type {
             @memcpy(action, p.mean[0..p.n_act]);
         }
 
+        /// The policy's MEAN for one observation, on the CPU copy of the weights - no sampling, no random
+        /// numbers consumed. Valid until the next call.
+        pub fn meanOf(p: *Self, obs: []const f32) []const f32 {
+            kitLayer(p.cpu_params, p.p_off[0], obs, p.t1, true);
+            kitLayer(p.cpu_params, p.p_off[1], p.t1, p.t2, true);
+            kitLayer(p.cpu_params, p.p_off[2], p.t2, p.mean, false);
+            return p.mean;
+        }
+
         pub fn value(p: *Self, obs: []const f32) f32 {
             var v: [1]f32 = undefined;
             kitLayer(p.cpu_params, p.v_off[0], obs, p.t1, true);
@@ -9312,36 +9611,9 @@ pub fn GpuPpoOn(comptime M: type) type {
             const tanh_act: u32 = @backingInt(M.Act.tanh);
             const lin: u32 = @backingInt(M.Act.linear);
             p.pipe.upload(.acts, p.staging);
-            // ONE submission for the whole minibatch (compute_host's recording, §8 E1).
+            // ONE submission for the whole minibatch (compute_host's recording, section 8 E1).
             p.pipe.beginRecording();
-            // Policy forward.
-            p.dispatch("dense_fwd", .{
-                .rows = rows,
-                .in_dim = no,
-                .out_dim = h,
-                .act = tanh_act,
-                .x_off = p.obs_off,
-                .y_off = p.h1_off,
-                .w_off = p.p_off[0],
-            }, rows * h);
-            p.dispatch("dense_fwd", .{
-                .rows = rows,
-                .in_dim = h,
-                .out_dim = h,
-                .act = tanh_act,
-                .x_off = p.h1_off,
-                .y_off = p.h2_off,
-                .w_off = p.p_off[1],
-            }, rows * h);
-            p.dispatch("dense_fwd", .{
-                .rows = rows,
-                .in_dim = h,
-                .out_dim = na,
-                .act = lin,
-                .x_off = p.h2_off,
-                .y_off = p.mu_off,
-                .w_off = p.p_off[2],
-            }, rows * na);
+            p.policyForward();
             // The PPO head.
             const head: M.Params = .{
                 .rows = rows,
@@ -9355,47 +9627,7 @@ pub fn GpuPpoOn(comptime M: type) type {
             };
             p.dispatch("ppo_mean_grad", head, rows * na);
             p.dispatch("ppo_logstd_grad", head, na);
-            // Policy backward.
-            const l3: M.Params = .{
-                .rows = rows,
-                .in_dim = h,
-                .out_dim = na,
-                .act = lin,
-                .x_off = p.h2_off,
-                .y_off = p.mu_off,
-                .w_off = p.p_off[2],
-                .dy_off = p.d_mu,
-                .dx_off = p.d_h2,
-            };
-            p.dispatch("dense_bwd_w", l3, h * na + na);
-            p.dispatch("dense_bwd_x", l3, rows * h);
-            const l2: M.Params = .{
-                .rows = rows,
-                .in_dim = h,
-                .out_dim = h,
-                .act = tanh_act,
-                .x_off = p.h1_off,
-                .y_off = p.h2_off,
-                .w_off = p.p_off[1],
-                .dy_off = p.d_h2,
-                .dx_off = p.d_h1,
-            };
-            p.dispatch("act_bwd", l2, rows * h);
-            p.dispatch("dense_bwd_w", l2, h * h + h);
-            p.dispatch("dense_bwd_x", l2, rows * h);
-            const l1: M.Params = .{
-                .rows = rows,
-                .in_dim = no,
-                .out_dim = h,
-                .act = tanh_act,
-                .x_off = p.obs_off,
-                .y_off = p.h1_off,
-                .w_off = p.p_off[0],
-                .dy_off = p.d_h1,
-                .dx_off = p.d_in,
-            };
-            p.dispatch("act_bwd", l1, rows * h);
-            p.dispatch("dense_bwd_w", l1, no * h + h);
+            p.policyBackward();
             // Value forward, MSE against the returns, backward.
             p.dispatch("dense_fwd", .{
                 .rows = rows,
@@ -9468,6 +9700,140 @@ pub fn GpuPpoOn(comptime M: type) type {
                 .correction1 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.9)))),
                 .correction2 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.999)))),
             }, p.param_count);
+            p.pipe.submitRecording();
+        }
+
+        /// The policy's forward pass over a staged minibatch: observations at `obs_off` -&gt; the means at
+        /// `mu_off`. Shared by PPO's update and the clone's, so the two can never drift apart.
+        fn policyForward(p: *Self) void {
+            const rows: u32 = @intCast(p.options.rows);
+            const h: u32 = @intCast(p.options.hidden);
+            const no: u32 = @intCast(p.n_obs);
+            const na: u32 = @intCast(p.n_act);
+            const tanh_act: u32 = @backingInt(M.Act.tanh);
+            const lin: u32 = @backingInt(M.Act.linear);
+            // Policy forward.
+            p.dispatch("dense_fwd", .{
+                .rows = rows,
+                .in_dim = no,
+                .out_dim = h,
+                .act = tanh_act,
+                .x_off = p.obs_off,
+                .y_off = p.h1_off,
+                .w_off = p.p_off[0],
+            }, rows * h);
+            p.dispatch("dense_fwd", .{
+                .rows = rows,
+                .in_dim = h,
+                .out_dim = h,
+                .act = tanh_act,
+                .x_off = p.h1_off,
+                .y_off = p.h2_off,
+                .w_off = p.p_off[1],
+            }, rows * h);
+            p.dispatch("dense_fwd", .{
+                .rows = rows,
+                .in_dim = h,
+                .out_dim = na,
+                .act = lin,
+                .x_off = p.h2_off,
+                .y_off = p.mu_off,
+                .w_off = p.p_off[2],
+            }, rows * na);
+        }
+
+        /// The policy's backward pass from a gradient on the means (`d_mu`) to every policy weight's
+        /// gradient - overwritten, never accumulated. Shared by PPO's update and the clone's.
+        fn policyBackward(p: *Self) void {
+            const rows: u32 = @intCast(p.options.rows);
+            const h: u32 = @intCast(p.options.hidden);
+            const no: u32 = @intCast(p.n_obs);
+            const na: u32 = @intCast(p.n_act);
+            const tanh_act: u32 = @backingInt(M.Act.tanh);
+            const lin: u32 = @backingInt(M.Act.linear);
+            // Policy backward.
+            const l3: M.Params = .{
+                .rows = rows,
+                .in_dim = h,
+                .out_dim = na,
+                .act = lin,
+                .x_off = p.h2_off,
+                .y_off = p.mu_off,
+                .w_off = p.p_off[2],
+                .dy_off = p.d_mu,
+                .dx_off = p.d_h2,
+            };
+            p.dispatch("dense_bwd_w", l3, h * na + na);
+            p.dispatch("dense_bwd_x", l3, rows * h);
+            const l2: M.Params = .{
+                .rows = rows,
+                .in_dim = h,
+                .out_dim = h,
+                .act = tanh_act,
+                .x_off = p.h1_off,
+                .y_off = p.h2_off,
+                .w_off = p.p_off[1],
+                .dy_off = p.d_h2,
+                .dx_off = p.d_h1,
+            };
+            p.dispatch("act_bwd", l2, rows * h);
+            p.dispatch("dense_bwd_w", l2, h * h + h);
+            p.dispatch("dense_bwd_x", l2, rows * h);
+            const l1: M.Params = .{
+                .rows = rows,
+                .in_dim = no,
+                .out_dim = h,
+                .act = tanh_act,
+                .x_off = p.obs_off,
+                .y_off = p.h1_off,
+                .w_off = p.p_off[0],
+                .dy_off = p.d_h1,
+                .dx_off = p.d_in,
+            };
+            p.dispatch("act_bwd", l1, rows * h);
+            p.dispatch("dense_bwd_w", l1, no * h + h);
+        }
+
+        /// BEHAVIOUR CLONING (D5 step 3): one supervised step of the POLICY toward a teacher's actions. It's
+        /// the policy half of `trainMinibatch` with the PPO head swapped for `mse_bwd` - d_mu = 2 (mu - label)
+        /// / (rows x actions), the gradient of the mean square error - and Adam over the policy's layers
+        /// ONLY: the log-std row and the value net keep their weights AND their Adam moments. So the network
+        /// cloned is the very network PPO then fine-tunes; nothing is copied between two nets. The Adam step
+        /// count is shared with PPO's (its bias corrections are ~1 after the first hundred steps anyway).
+        /// `observations`: rows x n_obs, normalised exactly as PPO sees them; `labels`: rows x n_act.
+        pub fn cloneMinibatch(p: *Self, observations: []const f32, labels: []const f32) void {
+            const rows: u32 = @intCast(p.options.rows);
+            const no: u32 = @intCast(p.n_obs);
+            const na: u32 = @intCast(p.n_act);
+            assertf(
+                observations.len == rows * no and labels.len == rows * na,
+                @src(),
+                "clone minibatch: {d} observations, {d} labels; want {d} x {d} and {d} x {d}",
+                .{ observations.len, labels.len, rows, no, rows, na },
+            );
+            @memcpy(p.staging[p.obs_off..][0 .. rows * no], observations);
+            @memcpy(p.staging[p.act_off..][0 .. rows * na], labels);
+            p.pipe.upload(.acts, p.staging);
+            p.pipe.beginRecording();
+            p.policyForward();
+            p.dispatch("mse_bwd", .{
+                .rows = rows,
+                .out_dim = na,
+                .y_off = p.mu_off,
+                .t_off = p.act_off,
+                .dy_off = p.d_mu,
+            }, rows * na);
+            p.policyBackward();
+            p.adam_step += 1;
+            const s: f32 = @floatFromInt(p.adam_step);
+            const count: u32 = p.log_std_off - p.p_off[0];
+            p.dispatch("adam", .{
+                .w_off = p.p_off[0],
+                .count = count,
+                .rate = p.options.learning_rate,
+                .correction1 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.9)))),
+                .correction2 = 1.0 / (1.0 - @exp(s * @log(@as(f32, 0.999)))),
+            }, count);
             p.pipe.submitRecording();
         }
 
@@ -9916,12 +10282,12 @@ pub fn GpuSacOn(comptime M: type) type {
             @memcpy(st[p.eps_next..][0 .. b * na], next_noise[0 .. b * na]);
             @memcpy(st[p.eps_pi..][0 .. b * na], actor_noise[0 .. b * na]);
             p.pipe.upload(.acts, st);
-            // ONE submission for the whole update, ~60 dispatches (compute_host's recording, §8 E1).
+            // ONE submission for the whole update, ~60 dispatches (compute_host's recording, section 8 E1).
             p.pipe.beginRecording();
             p.adam_step += 1;
             const entropy: f32 = -float(p.n_act);
 
-            // ── The target: a' ~ pi(s') written into s2a's action slot, the target critics. ──
+            // -- The target: a' ~ pi(s') written into s2a's action slot, the target critics. --
             p.mlpFwd(p.actor, p.s2a, p.width, p.n_obs, p.n_act, p.nh1, p.nh2, p.nmu);
             const next_squash: M.Params = .{
                 .rows = p.rows,
@@ -9950,7 +10316,7 @@ pub fn GpuSacOn(comptime M: type) type {
                 .gamma = p.options.gamma,
             }, p.rows);
 
-            // ── The critics: both against y, one Adam over both. ──
+            // -- The critics: both against y, one Adam over both. --
             p.mlpFwd(p.q1, p.sa, 0, p.width, 1, p.c1h1, p.c1h2, p.cq1);
             p.mlpFwd(p.q2, p.sa, 0, p.width, 1, p.c2h1, p.c2h2, p.cq2);
             p.run("mse_bwd", .{ .rows = p.rows, .out_dim = 1, .y_off = p.cq1, .t_off = p.y, .dy_off = p.dq1 }, p.rows);
@@ -9959,7 +10325,7 @@ pub fn GpuSacOn(comptime M: type) type {
             p.criticWeights(p.q2, p.sa, p.c2h1, p.c2h2, p.dq2, p.d2h2, p.d2h1);
             p.adam(p.q1[0], p.critic_count);
 
-            // ── The actor: a reparameterised draw, through the UPDATED critics. ──
+            // -- The actor: a reparameterised draw, through the UPDATED critics. --
             p.mlpFwd(p.actor, p.spi, p.width, p.n_obs, p.n_act, p.ah1, p.ah2, p.amu);
             const squash: M.Params = .{
                 .rows = p.rows,
@@ -10129,7 +10495,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         pol_step: u32 = 0,
         wm_step: u32 = 0,
         arena_state: std.heap.ArenaAllocator,
-        // ── The FUSED path (st_ kernels): its own upload region, records, per-row gradients. ──
+        // -- The FUSED path (st_ kernels): its own upload region, records, per-row gradients. --
         f_p_start: u32,
         f_p_eps: u32,
         f_w_start: u32,
@@ -10510,7 +10876,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
             @memset(p.staging[p.zero..][0 .. r * 4], 0.0);
             // Only the policy step's own region (the zero target, starts, noise).
             p.pipe.uploadAt(.acts, 0, p.staging[0..p.w_start]);
-            // ONE submission for the whole window, ~900 dispatches (compute_host's recording, §8 E1).
+            // ONE submission for the whole window, ~900 dispatches (compute_host's recording, section 8 E1).
             p.pipe.beginRecording();
             for (0..n) |k| {
                 p.mlpFwd(p.pol, p.p_state[k], 1, p.p_h1[k], p.p_h2[k], p.p_o[k]);
@@ -11143,6 +11509,10 @@ pub fn policyBackward(self: Self) void {
             .dy_off = self.draw_at,
             .lat_scale = self.action_scale,
             .lat_penalty = 2.0 * self.w_action / float(self.rows * self.actions),
+            .lat_smooth = 2.0 * self.w_smooth / float(self.rows * self.actions),
+            // A missing neighbour is this step itself: raw - raw, exactly zero.
+            .lat_prev = if (k &gt; 0) raw - self.rows * self.actions else raw,
+            .lat_next = if (k + 1 &lt; self.steps) raw + self.rows * self.actions else raw,
         };
         self.pipe.run("lat_act_bwd", self.rows * self.actions);
         // The policy: weight gradients accumulated across the steps, input gradients down.
@@ -11198,8 +11568,16 @@ in a hundred thousand, a policy update to one in ten million. What remains for t
 the pieces fit and that it moves: the ring stays in step with the replay, the slots keep their windows
 apart, and the mirror follows the GPU.</p>
 <details class="src-fold" data-src="src/robot_track_resident.zig" data-decl="pub fn round("><summary><code>Resident.round</code></summary><pre><code class="zig">/// One round of the loop: simulate, then train each network, each update in its own slot.
+///
+/// ONE RECORDING PER ROUND, and not one for several. Every `run` inside a recording carries
+/// its own parameters - without it each dispatch would read whichever parameters were written
+/// last, which on a device means every kernel in the frame running with the final one's. But a
+/// recording may not span rounds either: an upload made while one is open lands before the
+/// WHOLE recording executes, so a later round's appends would overwrite ring slots this
+/// round's gathers are still about to read. Simulate, record this round's dispatches, submit.
 pub fn round(self: *Self) void {
     self.act(self.options.collect, 1.0);
+    self.kit.pipe.beginRecording();
     var slot: u32 = 0;
     for (0..self.options.world_updates) |_| {
         self.trainWorld(slot);
@@ -11209,11 +11587,17 @@ pub fn round(self: *Self) void {
         self.trainPolicy(slot);
         slot += 1;
     }
+    self.kit.pipe.submitRecording();
     // The weights the simulation acts from, as of this round.
     self.syncMirror();
 }</code></pre></details>
 <details class="src-fold" data-src="src/robot_track_resident.zig" data-decl="pub fn act("><summary><code>Resident.act</code></summary><pre><code class="zig">/// `steps` simulation steps with the policy acting - its raw output plus exploration noise,
 /// which the fleet scales into a pose offset - every one recorded into the ring.
+///
+/// `noise_scale` of zero is the policy ALONE: no draw is made at all (so judging cannot shift
+/// the random stream and change what training does afterwards), and those steps are counted
+/// into the judged pair rather than the collected one. They are still recorded: noise-free
+/// on-policy steps are perfectly good data, and the ring must stay in step with the replay.
 pub fn act(self: *Self, steps: u32, noise_scale: f32) void {
     const random: std.Random = self.rng.random();
     const actions: usize = self.raw.len;
@@ -11231,17 +11615,35 @@ pub fn act(self: *Self, steps: u32, noise_scale: f32) void {
                 // judged run would train differently afterwards. The fleet turns this into a
                 // pose offset with the one action scale it owns.
                 const spread: f32 = noise_scale * self.options.sigma;
-                slot.* = if (spread == 0.0) raw else raw + spread * random.floatNorm(f32);
+                const chosen: f32 = if (spread == 0.0) raw else raw + spread * random.floatNorm(f32);
+                // Never a non-finite action into the physics: NaN targets make NaN bodies, which
+                // are never "terminated" (every comparison with NaN is false) and poison the world.
+                if (chosen == chosen and @abs(chosen) &lt; 1.0e30) {
+                    slot.* = chosen;
+                } else {
+                    slot.* = 0.0;
+                    self.nonfinite_actions += 1;
+                }
             }
         }
         _ = self.fleet.step(self.actions);
         // One step watched per character, and a failure for each that just lost its reference.
         // The fleet raises that flag on the step an episode ENDS, and only when it ended badly
         // - a clip running out is a character that survived to the end of the motion.
+        //
+        // Noise-free steps are counted apart: those are the policy being judged, not explored
+        // with, and mixing the two would leave a number that answers neither question.
         for (self.fleet.failures) |lost| {
-            self.exposure += 1;
-            if (lost) {
-                self.failures += 1;
+            if (noise_scale == 0.0) {
+                self.judged_exposure += 1;
+                if (lost) {
+                    self.judged_failures += 1;
+                }
+            } else {
+                self.exposure += 1;
+                if (lost) {
+                    self.failures += 1;
+                }
             }
         }
         self.data.appendLatest(self.fleet);
@@ -11259,7 +11661,14 @@ pub fn syncMirror(self: *Self) void {
     if (params.len &lt; self.kit.p_at + self.kit.policy_count) {
         return;
     }
-    @memcpy(self.mirror, params[self.kit.p_at..][0..self.kit.policy_count]);
+    const weights: []const f32 = params[self.kit.p_at..][0..self.kit.policy_count];
+    for (weights) |w| {
+        if (!(w == w and @abs(w) &lt; 1.0e30)) {
+            self.mirror_rejected += 1;
+            return;
+        }
+    }
+    @memcpy(self.mirror, weights);
 }</code></pre></details>
 
 <h2 id="pages">13. Running it in a page<a class="anchor" href="#pages">#</a></h2>
@@ -11286,7 +11695,7 @@ budget sharply, a frame with room grows it slowly — additive increase, multipl
 controller that converges instead of oscillating when what it measures is what it changes. Every frame
 still gets at least one collection tick, so learning never stalls. The GPU gets a new batch only when the
 previous one is back, so at most one is ever in flight and the device's queue never floods.</p>
-<details class="src-fold" data-src="examples/cartpole_duel/cartpole_duel.zig" data-decl="const frame_target_ms: f32 ="><summary><code>frame_target_ms</code></summary><pre><code class="zig">/// ── ★★★ THE FRAME IS BUDGETED ON BOTH PROCESSORS ──
+<details class="src-fold" data-src="examples/cartpole_duel/cartpole_duel.zig" data-decl="const frame_target_ms: f32 ="><summary><code>frame_target_ms</code></summary><pre><code class="zig">/// -- *** THE FRAME IS BUDGETED ON BOTH PROCESSORS --
 ///
 /// A learner that issues GPU work faster than the device completes it floods the queue - and on
 /// a phone the GPU is shared with the compositor, so a flooded queue stalls the whole device, not
@@ -11299,19 +11708,19 @@ previous one is back, so at most one is ever in flight and the device's queue ne
 const frame_target_ms: f32 = 1000.0 / 60.0;</code></pre></details>
 <details class="src-fold" data-src="examples/cartpole_duel/cartpole_duel.zig" data-decl="const cpu_budget_min_ms: f32 ="><summary><code>cpu_budget_min_ms</code></summary><pre><code class="zig">const cpu_budget_min_ms: f32 = 0.25;</code></pre></details>
 <details class="src-fold" data-src="examples/cartpole_duel/cartpole_duel.zig" data-decl="const cpu_budget_max_ms: f32 ="><summary><code>cpu_budget_max_ms</code></summary><pre><code class="zig">const cpu_budget_max_ms: f32 = 8.0;</code></pre></details>
-<details class="src-fold" data-src="examples/cartpole_duel/cartpole_duel.zig" data-decl="fn planWithinFrame("><summary><code>planWithinFrame</code></summary><pre><code class="zig">/// ── ★★★ THE BUDGET LOOP: PLAN A LITTLE, ALWAYS RETURN ──
+<details class="src-fold" data-src="examples/cartpole_duel/cartpole_duel.zig" data-decl="fn planWithinFrame("><summary><code>planWithinFrame</code></summary><pre><code class="zig">/// -- *** THE BUDGET LOOP: PLAN A LITTLE, ALWAYS RETURN --
 ///
 /// `mpc.optimize` with `iterations = n` does at most n improvement passes and returns. That is
 /// the hook this whole demo hangs on: the planner is re-entrant across frames because its unit
 /// of work is one iteration, and a frame simply stops asking.
 ///
-/// ── ★★ THE BUDGET IS DRIVEN BY THE FRAME TIME, NOT BY A STOPWATCH ──
+/// -- ** THE BUDGET IS DRIVEN BY THE FRAME TIME, NOT BY A STOPWATCH --
 ///
 /// A page has no wall clock of its own to time the planner with (`bridge.zig` imports none), and
 /// needs none.
 ///
-/// ★ `f.time.delta_time` measures the thing actually worth protecting — whether frames are
-/// landing on time — rather than a proxy for it. Planning time is only one contributor; a device
+/// * `f.time.delta_time` measures the thing actually worth protecting - whether frames are
+/// landing on time - rather than a proxy for it. Planning time is only one contributor; a device
 /// struggling with the renderer needs the planner to back off just as much, and a stopwatch
 /// around `optimize` cannot see that.
 ///
@@ -11321,21 +11730,21 @@ const frame_target_ms: f32 = 1000.0 / 60.0;</code></pre></details>
 fn planWithinFrame(s: *State, delta_time: f32) void {
     const target: f32 = 1.0 / 60.0;
 
-    // ── ★★★ PROFILING IS SUSPENDED ACROSS THE PLANNER, AND IT HAS TO BE ──
+    // -- *** PROFILING IS SUSPENDED ACROSS THE PLANNER, AND IT HAS TO BE --
     //
     // `robot.step` is instrumented, which is right for a frame that steps a robot a few times.
-    // One planning frame here steps it **tens of thousands** of times — 250 knots x 6
-    // finite-difference columns x up to 40 iterations — and every zone takes two timestamps,
+    // One planning frame here steps it **tens of thousands** of times - 250 knots x 6
+    // finite-difference columns x up to 40 iterations - and every zone takes two timestamps,
     // which on wasm are two JS boundary crossings.
     //
     // Measured: at horizon 60 the smoke runner already saw 12 225 clock calls per frame. At
-    // 250 it **exhausted Node's JS heap and the gate died** — and a browser would have been
+    // 250 it **exhausted Node's JS heap and the gate died** - and a browser would have been
     // paying the same crossings, tens of milliseconds a frame, for a profile nobody can read
     // (a flame graph of 60 000 identical `robot.step` zones is not a diagnostic).
     //
-    // ★ THIS IS NOT PROFILER-BASHING. The instrument is priced for the workload it was built
+    // * THIS IS NOT PROFILER-BASHING. The instrument is priced for the workload it was built
     // for. A planner is a different workload, and the right move is to tell the instrument so.
-    // Everything outside this call — rendering, UI, the physics the robot actually runs — is
+    // Everything outside this call - rendering, UI, the physics the robot actually runs - is
     // still profiled normally.
     const was_frozen: bool = profiler.isFrozen();
     profiler.freeze();
@@ -11358,15 +11767,15 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
         s.first_cost = result.initial_cost;
     }
 
-    // ── ★★★ "GOOD ENOUGH TO ACT ON" IS NOT "CONVERGED", AND WAITING FOR THE LATTER IS A BUG ──
+    // -- *** "GOOD ENOUGH TO ACT ON" IS NOT "CONVERGED", AND WAITING FOR THE LATTER IS A BUG --
     //
-    // This used to hold the robot still until `result.converged`, which on a phone — 4
-    // iterations a frame, a cold plan starting from a 2.5 s free-fall rollout — meant staring
+    // This used to hold the robot still until `result.converged`, which on a phone - 4
+    // iterations a frame, a cold plan starting from a 2.5 s free-fall rollout - meant staring
     // at a motionless cartpole under the word "planning" with no way to tell whether it was
     // making progress or wedged. That is a worse failure than a wrong answer, because the user
     // cannot distinguish it from a hang.
     //
-    // ★ AND CONVERGENCE IS THE WRONG BAR ANYWAY. MPC re-solves every single tick; the plan
+    // * AND CONVERGENCE IS THE WRONG BAR ANYWAY. MPC re-solves every single tick; the plan
     // does not need to be optimal before the first step, it needs to be SANE. A budget of
     // iterations buys that, and everything after it is bought while the robot is already
     // moving, which is what the receding horizon is for.
@@ -11383,9 +11792,9 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
         s.cost_history[s.cost_history.len - 1] = result.cost;
     }
 
-    // A slow average, so one hitch — a texture upload, a GC pause — does not swing the budget.
+    // A slow average, so one hitch - a texture upload, a GC pause - does not swing the budget.
     s.frame_ms += (delta_time * 1000.0 - s.frame_ms) * 0.1;
-    // ── ★ A FAIR SHARE OF THE FRAME ──
+    // -- * A FAIR SHARE OF THE FRAME --
     // This rule was "add iterations only below 0.7 of the frame target" - which, on a display
     // locked to vsync, never happens once a learner fills the headroom: on Simon's phone MPC sat
     // at 1 iteration a frame. Now MPC's budget is MILLISECONDS, steered by the learners' own
@@ -11439,7 +11848,7 @@ fn collectTick(s: *State) void {
 }</code></pre></details>
 <details class="src-fold" data-src="examples/cartpole_duel/cartpole_duel.zig" data-decl="fn runPpo("><summary><code>runPpo</code></summary><pre><code class="zig">/// PPO's share of the frame, budgeted on both processors (see `frame_target_ms`).
 fn runPpo(s: *State, delta_time: f32) void {
-    // ── Steer the budgets on the measured frame time: back off fast, creep up slowly. ──
+    // -- Steer the budgets on the measured frame time: back off fast, creep up slowly. --
     const frame_ms: f32 = delta_time * 1000.0;
     const on_time: bool = frame_ms &lt; frame_target_ms * 1.1;
     if (frame_ms &gt; frame_target_ms * 1.25) {
@@ -11449,9 +11858,9 @@ fn runPpo(s: *State, delta_time: f32) void {
         s.learner_budget_ms = @min(cpu_budget_max_ms, s.learner_budget_ms + 0.1);
     }
 
-    // ── GPU: new work only once the last batch is BACK (finished and mirrored). ──
+    // -- GPU: new work only once the last batch is BACK (finished and mirrored). --
     //
-    // ★★ POLL THE READBACK EVERY FRAME, FIRST. `readLatest` (inside `syncWeights`) both lands a
+    // ** POLL THE READBACK EVERY FRAME, FIRST. `readLatest` (inside `syncWeights`) both lands a
     // finished copy AND encodes the next one, and the mirrored generation only advances in it.
     // Calling it only once the GPU looked idle deadlocked: after the first batch nothing encoded
     // a copy, so `mirrored` never reached `gpu_wait` and training stopped for good. The stub GPU
@@ -11481,9 +11890,9 @@ fn runPpo(s: *State, delta_time: f32) void {
         s.busy_window += 1;
     }
 
-    // ── CPU: collect within the budget; wait when the next rollout is full and the last is
-    // still training. ──
-    // ★ AT LEAST ONE TICK A FRAME, then the budget: learning always progresses, even when the
+    // -- CPU: collect within the budget; wait when the next rollout is full and the last is
+    // still training. --
+    // * AT LEAST ONE TICK A FRAME, then the budget: learning always progresses, even when the
     // frame's budget is spent (a tick is ~0.1 ms). The smoke runner's clock advances 16 ms a
     // CALL, so a budget-first loop exited before collecting anything - neither learner ever
     // trained headlessly, and the training paths went unexercised there.
@@ -11639,7 +12048,7 @@ fn switchLearner(s: *State) void {
     defer s.ui_host.render(f);
     const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
 
-    // 1. PLAN — bounded, every frame, whether or not the physics advances.
+    // 1. PLAN - bounded, every frame, whether or not the physics advances.
     planWithinFrame(s, f.time.delta_time);
     switch (s.kind) {
         .ppo =&gt; runPpo(s, f.time.delta_time),
@@ -11647,33 +12056,33 @@ fn switchLearner(s: *State) void {
         .supertrack =&gt; runSuperTrack(s, f.time.delta_time),
     }
 
-    // 2. ACT — the simulation runs on its own clock, not the display's.
+    // 2. ACT - the simulation runs on its own clock, not the display's.
     //
-    // ★ WHILE `warming`, THE ROBOT DOES NOT MOVE. A cold plan is nonsense for its first few
+    // * WHILE `warming`, THE ROBOT DOES NOT MOVE. A cold plan is nonsense for its first few
     // iterations, and applying it would flail the cart around for a quarter of a second before
     // the optimiser found anything. Holding still until the first solve converges makes the
     // ghost trajectory readable and the start honest: you are watching it think, then act.
     if (s.running and !s.warming) {
         s.accumulator += @min(f.time.delta_time, 0.1);
         while (s.accumulator &gt;= sim_timestep) : (s.accumulator -= sim_timestep) {
-            // ★ `feedbackControl` RATHER THAN `plan.ctrl[0]`, and the difference is the whole
+            // * `feedbackControl` RATHER THAN `plan.ctrl[0]`, and the difference is the whole
             // reason MPC survives a slow solver. The plan in hand was linearised about a state
-            // the robot has since left — up to two sim steps ago, because physics runs at 100 Hz
-            // and planning at the display rate. `K₀·δx` is the backward pass's own answer to
+            // the robot has since left - up to two sim steps ago, because physics runs at 100 Hz
+            // and planning at the display rate. `K_0*dx` is the backward pass's own answer to
             // being somewhere else.
             mpc.feedbackControl(&amp;s.model, &amp;s.data, &amp;s.plan, s.applied);
             @memcpy(s.data.ctrl, s.applied);
             rbt.step(&amp;s.model, &amp;s.data);
-            // ★★ SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
+            // ** SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
             // robot has advanced a tick, knot 1 is the new now. Shifting before the step
-            // applies knot 1's control to knot 0's state — off by one, every tick, compounding.
+            // applies knot 1's control to knot 0's state - off by one, every tick, compounding.
             mpc.shift(&amp;s.plan);
         }
     }
 
     z.clearViewport(f, bg);
     const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
-    // ★ FRAME THE RAIL, NOT THE CART. The plan spans the full 4.8 m of track and the ghost
+    // * FRAME THE RAIL, NOT THE CART. The plan spans the full 4.8 m of track and the ghost
     // trajectory is the thing worth seeing; a distance tuned to the robot alone crops it.
     s.cam.distance = clamp(5.2 / @max(0.35, aspect), 4.0, 11.0);
     const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.2, .max_distance = 9.0 });
@@ -11812,6 +12221,7 @@ so it always lists what exists — a new public function appears here the moment
 <tr><td><code>retargetClip</code></td><td>Retarget the first <code>seconds</code> of a capture onto a robot, one frame at a time.</td></tr>
 <tr><td><code>lowestFootPoint</code></td><td>How low the robot's feet reach right now: the lowest point, in world z, of any body with "foot" in its name - capsule ends and sphere bottoms, radius included.</td></tr>
 <tr><td><code>lowestBodyPoint</code></td><td>The same for the WHOLE robot: how low any part of it reaches.</td></tr>
+<tr><td><code>lowestGeomNamed</code></td><td>The lowest world z of the bodies whose name contains <code>want</code> - a foot, say, or a toe.</td></tr>
 <tr><td><code>toRobot</code></td><td>A BVH position (centimetres, Y-up) as the robot sees it (metres, Z-up).</td></tr>
 <tr><td><code>rotationToRobot</code></td><td>A BVH rotation as the robot sees it.</td></tr>
 <tr><td><code>globalsAtFrame</code></td><td>One frame of the capture, turned into rotations: every joint's GLOBAL rotation (in the capture's world, not relative to its parent), plus the root's translation.</td></tr>
@@ -11870,8 +12280,9 @@ so it always lists what exists — a new public function appears here the moment
 <tr><td><code>Options</code></td><td>—</td></tr>
 <tr><td><code>Joint</code></td><td>One joint between two parts, and the pivot it holds together in each part's COM-centred frame, captured when it was built.</td></tr>
 <tr><td><code>Drive</code></td><td>A joint drive: a spring toward a target, stated as a FREQUENCY.</td></tr>
-<tr><td><code>stableSpringAccel</code></td><td>The acceleration a critically damped (for <code>damping</code> 1) spring of <code>frequency</code> Hz asks of one joint over a step of <code>dt</code>, evaluated IMPLICITLY — at the end of the step.</td></tr>
-<tr><td><code>floatingBaseTorques</code></td><td>Joint torques that give a FLOATING-base model the joint accelerations <code>accel</code> asks for (root entries ignored), with the root free to respond — floating-base inverse dynamics.</td></tr>
+<tr><td><code>stableSpringAccel</code></td><td>The acceleration a critically damped (for <code>damping</code> 1) spring of <code>frequency</code> Hz asks of one joint over a step of <code>dt</code>, evaluated IMPLICITLY - at the end of the step.</td></tr>
+<tr><td><code>stableSpringAccelToward</code></td><td>The same spring, damped toward a MOVING target's velocity instead of zero - velocity feedforward.</td></tr>
+<tr><td><code>floatingBaseTorques</code></td><td>Joint torques that give a FLOATING-base model the joint accelerations <code>accel</code> asks for (root entries ignored), with the root free to respond - floating-base inverse dynamics.</td></tr>
 <tr><td><code>Frame</code></td><td>A robot body frame in the world: origin and rotation.</td></tr>
 <tr><td><code>Ragdoll</code></td><td>—</td></tr>
 <tr><td><code>build</code></td><td>Rebuild <code>m</code> in <code>world</code> as rigid bodies and joints, posed as <code>d</code> holds (<code>d</code> current).</td></tr>

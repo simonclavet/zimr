@@ -54,7 +54,9 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // re-filter. Sharing a single atlas would re-filter the UI text too and
     // muddle what the example is showing.
     const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
-    const demo_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, bake_size);
+    // BAKED, not loadFont: loadFont rasterizes at the drawn size, so it would
+    // never be magnified and there would be no filtering to see.
+    const demo_font: z.Font = try z.loadFontBaked(f, gpa, atkinson_mono_ttf, bake_size);
     s.* = .{
         .ui_font = ui_font,
         .ui_host = z.UiHost.init(gpa, ui_font),

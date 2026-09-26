@@ -4674,7 +4674,7 @@ pub fn sampleColormap(
     ctx: *Context,
     t: f32,
     cmap_in: ?Colormap,
-) Color { // lint:off dup-pub-fn: 3D twin of plot.zig's; namespaced API
+) Color {
     const im: Im = ctx.im();
     return im.colorFromU32(sampleColormapU32(ctx, t, cmap_in));
 }

@@ -377,3 +377,21 @@ lint-clean (it already caught a prefer-std-alias slip during authoring).
 - **No semantic analyzer.** The (a) approximation gets ~80% of the bug-catching
   value in one file; zlint's Symbol.Table/Scope.Tree is a multi-file undertaking we
   explicitly decline.
+
+- **Opt-in tier (Sep 26), for apps built on zimr.** The linter used to be all-on with no
+  config. Ten rules are now OPT-IN, run only under `--enable=<tag>`: the ones an outside
+  Zig developer would switch off purely on taste, because mainstream Zig does the opposite
+  and nothing breaks without them - untyped-local, anon-return (its reason IS untyped-local),
+  branch-braces, decl-order, fn-args-multiline, module-var, no-qualified-zm,
+  reserved-math-names, prefer-std-alias, ascii-comments. Everything that catches a bug,
+  works around a toolchain limit, or holds the one-math-vocabulary contract stays always-on,
+  and there is still NO way to turn a rule off - `--enable` rejects an always-on tag - so
+  the reason `--only`/`--skip` were removed still holds. Borderline and kept always-on:
+  catch-suppression (UB in ReleaseSmall), std-math (GPU portability), std-debug-assert,
+  line-length. zimr enables all ten for itself except decl-order (`zimr_lint_rules` in
+  build.zig); a project picks its own through `LintRule` / `addLint`, and the template lists
+  them commented out.
+- **The filter sits in ONE place: `analyzeSource`**, after every check has run, so the
+  checks know nothing about configuration and a disabled rule's autofix can never apply
+  (the fix loop analyses through the same function). The per-file clean stamps hash the
+  enabled set: before that, a run with a new `--enable` skipped every stamped file.

@@ -851,6 +851,10 @@ pub const endTextureMode = wgpu_app.endTextureMode;
 pub const Font = wgpu_app.Font;
 pub const loadFont = wgpu_app.loadFont;
 pub const loadFontEx = wgpu_app.loadFontEx;
+/// raylib `LoadFontEx` semantics: ONE point-sampled atlas at `size`, magnified
+/// for bigger text. Only for when that magnified look is the point; ordinary
+/// text uses `loadFont`, which rasterizes at the drawn size.
+pub const loadFontBaked = wgpu_app.loadFontBaked;
 /// raylib `LoadFontData(..., FONT_SDF, ...)` - bake a font as a signed distance
 /// field (crisp when magnified). Draw inside `beginShaderMode(sdf_shader)`.
 pub const loadFontSdf = wgpu_app.loadFontSdf;

@@ -371,6 +371,14 @@ pub const Font = extern struct {
     recs: [*c]Rectangle = null,
     /// Per-glyph metadata; len = glyphCount.
     glyphs: [*c]GlyphInfo = null,
+    /// The font's outlines, for rasterizing glyphs at the size they are DRAWN
+    /// (a `text2d.FontFace`; read it through `text2d.fontFace`). Set by
+    /// `loadFont`/`loadFontEx`; null for baked-only fonts (bitmap, sprite, SDF,
+    /// `loadFontBaked`), which always draw from `texture`. Opaque here because
+    /// `types.zig` sits under `codecs.zig`, which several builds use as a module
+    /// root on its own - importing `text2d.zig` from here would drag the whole
+    /// text stack into those modules.
+    face: ?*anyopaque = null,
 
     // Verbs (`isValid`, `deinit`) live in `drawing.text`
     // `isFontValid(font)` and `unloadFont(gpa, font)`.

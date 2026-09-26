@@ -7,94 +7,65 @@
     <meta name="description" content="zimr is a pure-Zig port of raylib + Dear ImGui targeting WebGPU. Browse the examples." />
 <!--docfmt:style-->
 </head>
-<body>
-    <header>
-        <div class="header-inner">
-            <a class="logo" href="./"><span>z</span>imr</a>
-            <nav class="menu">
-                <a class="active" href="./">examples</a>
-                <a href="./readme.html">readme</a>
-            </nav>
+<body class="gallery list-open">
+    <!-- The list of examples. A fixed left column on a wide screen; on a phone
+         it is a drawer over the example, opened by the ☰ button. -->
+    <aside class="g-side">
+        <div class="g-head">
+            <a class="g-logo" href="./">zimr examples</a>
+            <a href="./readme.html">readme</a>
+            <a href="./cheatsheet.html">cheatsheet</a>
         </div>
-    </header>
+        <div class="g-filters">
+            <input type="search" id="q" placeholder="search  (press /)" autocomplete="off" spellcheck="false" />
+            <select id="mod" aria-label="module"><option value="">all modules</option></select>
+        </div>
+        <div class="g-count" id="count"></div>
+        <nav class="g-list" id="list"></nav>
+    </aside>
 
-    <main>
-        <section class="page-intro">
-            <h1>zimr examples</h1>
-            <p>A pure-Zig port of raylib + Dear&nbsp;ImGui targeting WebGPU. Click any example to run it.</p>
-            <p class="hint">
-                Examples are organised by module (color-coded) and
-                rated by complexity (★ = basic, ★★★★ = most complex).
-            </p>
-        </section>
-
-        <div class="filters">
-            <div class="filter-row">
-                <span class="label">module:</span>
-                <button class="filter-btn active" data-mod="all">all</button>
-                <button class="filter-btn" data-mod="core"><span class="swatch"></span>core</button>
-                <button class="filter-btn" data-mod="shapes"><span class="swatch"></span>shapes</button>
-                <button class="filter-btn" data-mod="textures"><span class="swatch"></span>textures</button>
-                <button class="filter-btn" data-mod="text"><span class="swatch"></span>text</button>
-                <button class="filter-btn" data-mod="robot"><span class="swatch"></span>robot</button>
-                <button class="filter-btn" data-mod="physics"><span class="swatch"></span>physics</button>
-                <button class="filter-btn" data-mod="models"><span class="swatch"></span>models</button>
-                <button class="filter-btn" data-mod="shaders"><span class="swatch"></span>shaders</button>
-                <button class="filter-btn" data-mod="ui"><span class="swatch"></span>ui</button>
-                <button class="filter-btn" data-mod="plot"><span class="swatch"></span>plot</button>
-                <button class="filter-btn" data-mod="compute"><span class="swatch"></span>compute</button>
-                <button class="filter-btn" data-mod="audio"><span class="swatch"></span>audio</button>
-            </div>
-            <div class="filter-row">
-                <span class="label">function:</span>
-                <input type="text" class="fn-input" id="fnInput"
-                       placeholder="e.g. mandelbrot, drawText, loadShader — filter by example name or function" />
-                <span class="match-counter" id="matchCounter"></span>
+    <!-- The selected example, running in a frame. Its own page is `<name>/`,
+         linked from the bar as "open". -->
+    <main class="g-main">
+        <div class="g-bar">
+            <button class="g-btn" id="menu" title="show / hide the list">&#9776;</button>
+            <button class="g-btn" id="prev" title="previous (&uarr; or k)">&#8249;</button>
+            <button class="g-btn" id="next" title="next (&darr; or j)">&#8250;</button>
+            <span class="g-title" id="title"></span>
+            <a class="g-open" id="open" target="_blank" hidden>open &#8599;</a>
+        </div>
+        <div class="g-stage" id="stage">
+            <div class="g-intro">
+                <h1>zimr examples</h1>
+                <p>A pure-Zig port of raylib + Dear&nbsp;ImGui targeting WebGPU.
+                   Pick an example from the list and it runs here.</p>
+                <p class="dim">
+                    &uarr;&nbsp;&darr; or j&nbsp;k step through the list, / searches.
+                    Click inside a running example to give it the keyboard.
+                    Every example also has a page of its own: <em>open &#8599;</em>.
+                    Stars rate complexity, &#9733; basic to &#9733;&#9733;&#9733;&#9733;&#9733; most complex.
+                </p>
             </div>
         </div>
-
-        <div id="grid" class="grid"></div>
-        <div id="empty" class="empty" hidden>No examples match the current filters.</div>
     </main>
 
-    <footer>
-        zimr · raylib + Dear ImGui → Zig · WebGPU
-    </footer>
-
     <script type="module">
-        // Load the manifest, render cards, wire up filters.
-        const grid = document.getElementById("grid");
-        const empty = document.getElementById("empty");
-        const fnInput = document.getElementById("fnInput");
-        const counter = document.getElementById("matchCounter");
-        const filterBtns = document.querySelectorAll(".filter-btn");
+        // Manifest-driven: the list, the module filter and the search all come
+        // from manifest.json. The selected example lives in the URL hash
+        // (index.html#<name>), so a reload or a shared link comes back to it.
+        const $ = id => document.getElementById(id);
+        const list = $("list"), q = $("q"), mod = $("mod"), count = $("count");
+        const stage = $("stage"), title = $("title"), open = $("open");
+        const narrow = matchMedia("(max-width: 700px)");
 
-        let activeModule = "all";
-        let fnQuery = "";
-        let manifest = { examples: [] };
+        // Module display order; a module missing here sorts after these, by name.
+        const ORDER = ["core", "shapes", "textures", "text", "models", "shaders",
+                       "ui", "plot", "compute", "audio", "physics", "robot"];
+        const rank = m => { const i = ORDER.indexOf(m); return i < 0 ? ORDER.length : i; };
 
-        async function load() {
-            try {
-                const r = await fetch("./manifest.json", { cache: "no-store" });
-                manifest = await r.json();
-            } catch (e) {
-                console.error("manifest fetch failed:", e);
-                grid.innerHTML = `<p style="color:#f87171; padding:1rem">
-                    Failed to load <code>manifest.json</code>. Run <code>zig build serve</code> first.
-                </p>`;
-                return;
-            }
-            render();
-        }
-
-        function starHtml(n) {
-            const MAX = 5;
-            const filled_n = Math.max(0, Math.min(MAX, n | 0));
-            const empty_n = MAX - filled_n;
-            const filled = "★".repeat(filled_n);
-            const hollow = "☆".repeat(empty_n);
-            return `<span class="filled">${filled}</span>${hollow}`;
-        }
+        let examples = [];   // manifest order, re-sorted by module
+        let current = null;  // the example object on stage
+        let mountTimer = 0;
 
         function escapeHtml(s) {
             return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
@@ -103,72 +74,179 @@
             }[c]));
         }
 
-        function render() {
-            grid.innerHTML = "";
-            for (const ex of manifest.examples) {
-                const card = document.createElement("a");
-                card.className = "card";
-                card.dataset.mod = ex.module;
-                card.dataset.name = ex.name;
-                card.dataset.functions = (ex.functions || []).join(" ");
-                // Streamed per-example page: zig-out/web/<name>/index.html
-                card.href = `${ex.name}/`;
-                card.innerHTML = `
-                    <div class="stripe"></div>
-                    <div class="body">
-                        <div class="top">
-                            <span class="name">${escapeHtml(ex.name)}</span>
-                            <span class="stars" title="${ex.stars}/5 complexity">${starHtml(ex.stars)}</span>
-                        </div>
-                        <p class="desc">${escapeHtml(ex.description)}</p>
-                        <span class="module-tag">${escapeHtml(ex.module)}</span>
-                    </div>
-                `;
-                grid.appendChild(card);
+        const stars = n => "★".repeat(Math.max(0, Math.min(5, n | 0)));
+
+        async function load() {
+            try {
+                const r = await fetch("./manifest.json", { cache: "no-store" });
+                examples = (await r.json()).examples;
+            } catch (e) {
+                console.error("manifest fetch failed:", e);
+                list.innerHTML = `<p class="g-none">Failed to load <code>manifest.json</code>.
+                    Run <code>zig build</code> first.</p>`;
+                return;
             }
-            applyFilters();
+            examples.sort((a, b) => rank(a.module) - rank(b.module)
+                || a.module.localeCompare(b.module) || a.name.localeCompare(b.name));
+            for (const ex of examples) {
+                // Everything the search looks at, lower-cased once.
+                ex.hay = [ex.name, ex.name.replace(/_/g, " "), ex.module, ex.description,
+                          ...(ex.functions || [])].join(" ").toLowerCase();
+            }
+            const mods = [...new Set(examples.map(ex => ex.module))];
+            for (const m of mods) {
+                const n = examples.filter(ex => ex.module === m).length;
+                mod.add(new Option(`${m} (${n})`, m));
+            }
+            render();
+            fromHash();
+            // A phone lands on the list unless the link named an example.
+            if (narrow.matches) {
+                document.body.classList.toggle("list-open", !current);
+            }
         }
 
-        function applyFilters() {
-            const cards = grid.querySelectorAll(".card");
-            const q = fnQuery.toLowerCase().trim();
-            let shown = 0;
-            cards.forEach(card => {
-                const modOk = activeModule === "all" || card.dataset.mod === activeModule;
-                // Match the query against both the function list AND the
-                // example name, so typing "mand" finds the mandelbrot card.
-                const fns = card.dataset.functions.toLowerCase();
-                const exname = card.dataset.name.toLowerCase();
-                const fnOk = q === "" || fns.includes(q) || exname.includes(q);
-                if (modOk && fnOk) {
-                    card.classList.remove("hidden");
-                    shown++;
-                } else {
-                    card.classList.add("hidden");
+        // Rebuild the list for the current filter. 300 rows: cheap enough to
+        // redraw on every keystroke, and nothing to keep in sync.
+        function render() {
+            const terms = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+            const m = mod.value;
+            const shown = examples.filter(ex =>
+                (!m || ex.module === m) && terms.every(t => ex.hay.includes(t)));
+            let html = "", group = "";
+            for (const ex of shown) {
+                if (ex.module !== group) {
+                    group = ex.module;
+                    html += `<div class="g-group">${escapeHtml(group)}</div>`;
                 }
-            });
-            counter.textContent = q || activeModule !== "all"
-                ? `${shown} / ${cards.length} matching`
-                : `${cards.length} examples`;
-            empty.hidden = shown !== 0;
+                const on = ex === current ? " on" : "";
+                html += `<a class="g-item${on}" href="#${escapeHtml(ex.name)}"
+                    title="${escapeHtml(ex.description)}"><span>${escapeHtml(ex.name)}</span><span
+                    class="g-stars">${stars(ex.stars)}</span></a>`;
+            }
+            list.innerHTML = html || `<p class="g-none">No example matches.</p>`;
+            count.textContent = shown.length === examples.length
+                ? `${examples.length} examples`
+                : `${shown.length} of ${examples.length}`;
         }
 
-        filterBtns.forEach(btn => {
-            btn.addEventListener("click", () => {
-                filterBtns.forEach(b => b.classList.remove("active"));
-                btn.classList.add("active");
-                activeModule = btn.dataset.mod;
-                applyFilters();
-            });
-        });
+        const visible = () => [...list.querySelectorAll(".g-item")];
 
-        let fnTimeout;
-        fnInput.addEventListener("input", () => {
-            clearTimeout(fnTimeout);
-            fnTimeout = setTimeout(() => {
-                fnQuery = fnInput.value;
-                applyFilters();
-            }, 100);
+        function select(name) {
+            const ex = examples.find(e => e.name === name);
+            if (!ex) {
+                return;
+            }
+            // On a phone, a pick closes the drawer - even a pick of the example
+            // already running behind it.
+            if (narrow.matches) {
+                document.body.classList.remove("list-open");
+            }
+            if (ex === current) {
+                return;
+            }
+            current = ex;
+            history.replaceState(null, "", "#" + ex.name);
+            document.title = `${ex.name} — zimr examples`;
+            title.innerHTML = `<strong>${escapeHtml(ex.name)}</strong>
+                <span class="g-stars">${stars(ex.stars)}</span>
+                <span class="g-desc">${escapeHtml(ex.description)}</span>`;
+            title.title = ex.description;
+            open.href = `${ex.name}/`;
+            open.hidden = false;
+            for (const a of visible()) {
+                const on = a.hash === "#" + ex.name;
+                a.classList.toggle("on", on);
+                if (on) {
+                    a.scrollIntoView({ block: "nearest" });
+                }
+            }
+            // A fresh frame per example, so the previous app (its wasm, its GPU
+            // device, its audio) is torn down with its document - and so the
+            // frame's own navigations never land in this page's history. The
+            // short delay lets a held arrow key skim the list without booting
+            // every example on the way.
+            clearTimeout(mountTimer);
+            mountTimer = setTimeout(() => {
+                const frame = document.createElement("iframe");
+                frame.src = `${ex.name}/`;
+                frame.title = ex.name;
+                frame.allow = "autoplay; fullscreen";
+                stage.replaceChildren(frame);
+            }, 120);
+        }
+
+        function fromHash() {
+            select(decodeURIComponent(location.hash.slice(1)));
+        }
+
+        // Step through the list as currently filtered.
+        function step(delta) {
+            const items = visible();
+            if (items.length === 0) {
+                return;
+            }
+            const at = items.findIndex(a => a.classList.contains("on"));
+            const next = at < 0
+                ? (delta > 0 ? 0 : items.length - 1)
+                : Math.max(0, Math.min(items.length - 1, at + delta));
+            select(items[next].hash.slice(1));
+        }
+
+        list.addEventListener("click", e => {
+            const a = e.target.closest(".g-item");
+            // Ctrl/middle click keeps its default: this gallery, on that example,
+            // in a new tab.
+            if (!a || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) {
+                return;
+            }
+            e.preventDefault();
+            select(a.hash.slice(1));
+        });
+        q.addEventListener("input", render);
+        mod.addEventListener("change", render);
+        $("prev").addEventListener("click", () => step(-1));
+        $("next").addEventListener("click", () => step(1));
+        $("menu").addEventListener("click", () => {
+            document.body.classList.toggle("list-open");
+            list.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+        });
+        addEventListener("hashchange", fromHash);
+        // Crossing the breakpoint (a rotated phone, a resized window) resets to
+        // that layout's default: the list beside the example, or the example alone.
+        narrow.addEventListener("change", () =>
+            document.body.classList.toggle("list-open", !narrow.matches || !current));
+
+        document.addEventListener("keydown", e => {
+            if (e.ctrlKey || e.metaKey || e.altKey) {
+                return;
+            }
+            // The arrows step from the search box too (type, then arrow down);
+            // only the module <select> keeps them for itself.
+            if (e.target === mod) {
+                return;
+            }
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                step(1);
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                step(-1);
+            } else if (e.target === q) {
+                if (e.key === "Escape") {
+                    q.value = "";
+                    render();
+                }
+            } else if (e.key === "j") {
+                step(1);
+            } else if (e.key === "k") {
+                step(-1);
+            } else if (e.key === "/") {
+                e.preventDefault();
+                document.body.classList.add("list-open");
+                q.focus();
+                q.select();
+            }
         });
 
         load();

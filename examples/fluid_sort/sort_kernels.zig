@@ -137,7 +137,7 @@ fn cellOf(pos: Vec2, n_cols: u32, n_rows: u32, h: f32) u32 {
 
 /// Per CELL (dispatch count = grid_cells): zero this cell's count before
 /// countGrid accumulates into it.
-pub fn clearGrid(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
+pub fn clearGrid(c: k.Ctx(@This())) void {
     const cell: u32 = c.id;
     if (cell >= c.params.n_cols * c.params.n_rows) {
         return;
@@ -222,7 +222,7 @@ pub fn copyback(c: k.Ctx(@This())) void {
 }
 
 /// Per particle: gravity + the (signed) mouse impulse with linear falloff.
-pub fn gravityMouse(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
+pub fn gravityMouse(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
         return;
@@ -248,7 +248,7 @@ pub fn gravityMouse(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-flu
 /// never a bounce, strictly dissipative, 1/2 each. Weight 1 inside h/2, linear to
 /// 0 at h. Reads the STALE sort (last frame's cell_start + the still-sorted
 /// pos) - it runs before predict and the reorder.
-pub fn viscosity(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
+pub fn viscosity(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
         return;
@@ -304,7 +304,7 @@ pub fn viscosity(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid 
 
 /// Per particle: save prev, advance by vel*dt (the prediction half of Clavet's
 /// prediction-relaxation).
-pub fn predict(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
+pub fn predict(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
         return;
@@ -316,7 +316,7 @@ pub fn predict(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid va
 
 /// Per particle: rho = sum(1-q)^2, rho_near = sum(1-q)^3 over the 3x3 neighbourhood,
 /// iterating each cell's CONTIGUOUS sorted range [cell_start[c], cell_start[c+1]).
-pub fn density(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
+pub fn density(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
         return;
@@ -374,7 +374,7 @@ pub fn density(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid va
 /// Per particle: pressure-only double-density displacement (viscosity is the
 /// separate pre-predict pass). Reads neighbour pos + density from the CONTIGUOUS
 /// sorted ranges.
-pub fn force(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
+pub fn force(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
         return;
@@ -462,7 +462,7 @@ pub fn force(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid vari
 /// boundary. Velocity is taken BEFORE any boundary position edit (so clamps/pushes
 /// can't pump energy in - the corner-jet fix), then a wall contact removes a
 /// tunable proportion of the normal and tangential velocity (diagnostic knobs).
-pub fn applyAndFinalize(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
+pub fn applyAndFinalize(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
         return;

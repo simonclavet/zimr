@@ -159,6 +159,11 @@ const style =
     \\/* media */
     \\img,svg,canvas,video{max-width:100%;height:auto;}
     \\iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+    \\/* a live demo embedded in a page: the full column, 16:9. Without a size the
+    \\   frame is the browser default 300x150 and the app boots that small. */
+    \\.demo-embed{margin:1.6em 0;}
+    \\.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+    \\.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
     \\/* Inline marks the pages already use, mapped onto the SAME token colours
     \\   rather than given colours of their own — cheatsheet's signature rows,
     \\   the reference tables, and the two semantic marks that carry teaching
@@ -231,11 +236,68 @@ const style =
     \\  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
     \\  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
     \\}
-    \\.filter-btn{
-    \\  padding:.25em .7em;margin:.15em;background:var(--panel);color:var(--dim);
-    \\  border:1px solid var(--rule);border-radius:2px;font:inherit;font-size:.85em;cursor:pointer;
+    \\/* The examples gallery (index.html): the list of examples on the left, the
+    \\   selected one running in a frame that fills the rest. On a phone the list
+    \\   is a drawer over the example, under the bar. `list-open` shows the list. */
+    \\body.gallery{
+    \\  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+    \\  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+    \\  color-scheme:dark;
     \\}
-    \\.filter-btn:hover,.filter-btn.on{color:var(--fg);border-color:var(--tok-fn);}
+    \\body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+    \\.gallery a{border:0;}
+    \\.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+    \\.list-open .g-side{display:flex;}
+    \\.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+    \\.g-head a{color:var(--dim);}
+    \\.g-head a:hover{color:var(--link);}
+    \\.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+    \\.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+    \\.g-filters input,.g-filters select{
+    \\  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+    \\  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+    \\}
+    \\.g-filters input{flex:1 1 10em;}
+    \\.g-filters select{flex:1 1 auto;}
+    \\.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+    \\.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+    \\.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+    \\.g-group{
+    \\  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+    \\  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+    \\}
+    \\/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+    \\.g-item{
+    \\  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+    \\  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+    \\}
+    \\.g-item:hover{color:var(--fg);background:var(--panel);}
+    \\.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+    \\.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    \\.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+    \\.g-none{padding:1em;color:var(--faint);}
+    \\.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+    \\.g-bar{
+    \\  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+    \\  border-bottom:1px solid var(--rule);white-space:nowrap;
+    \\}
+    \\.g-btn{
+    \\  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+    \\  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+    \\}
+    \\.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+    \\.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+    \\.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+    \\.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+    \\.g-stage{flex:1;position:relative;min-height:0;}
+    \\.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+    \\.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+    \\@media(max-width:700px){
+    \\  body.gallery.list-open{grid-template-columns:1fr;}
+    \\  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+    \\  .g-item{padding:.45em 1em;}
+    \\  .g-desc{display:none;}
+    \\}
     \\/* A tutorial pointer, sitting directly under the heading whose subject it
     \\   covers rather than pooled in a list at the foot of the page. */
     \\.tut{

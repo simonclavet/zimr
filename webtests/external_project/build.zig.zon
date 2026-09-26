@@ -1,0 +1,11 @@
+.{
+    .name = .zimr_external_project,
+    .version = "0.0.0",
+    .fingerprint = 0x7963d2c092d9561b,
+    .minimum_zig_version = "0.17.0-dev.2122+3e15e99e6",
+    .dependencies = .{
+        // This checkout: the check builds whatever zimr is on disk.
+        .zimr = .{ .path = "../.." },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "assets" },
+}

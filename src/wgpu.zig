@@ -290,6 +290,17 @@ extern "wgpu" fn js_queue_write_texture(
     data_len: usize,
     mip_level: u32,
 ) void;
+extern "wgpu" fn js_queue_write_texture_region(
+    queue: u32,
+    texture: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+    data_ptr: [*]const u8,
+    data_len: usize,
+) void;
 
 // --- Sampler ---
 extern "wgpu" fn js_device_create_sampler(
@@ -1170,6 +1181,36 @@ pub fn queueWriteTextureLevel(
         data.ptr,
         data.len,
         mip_level,
+    );
+}
+
+/// Write a `width`x`height` rectangle of mip level 0 at (`x`, `y`), leaving the
+/// rest of the texture untouched - the partial upload a glyph cache needs (one
+/// freshly rasterized glyph into a shared atlas page). `data` holds exactly the
+/// rectangle, `bytes_per_row` apart.
+pub fn queueWriteTextureRegion(
+    queue: QueueHandle,
+    texture: TextureHandle,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+    data: []const u8,
+) void {
+    if (comptime !is_wasm) {
+        return;
+    }
+    js_queue_write_texture_region(
+        @backingInt(queue),
+        @backingInt(texture),
+        x,
+        y,
+        width,
+        height,
+        bytes_per_row,
+        data.ptr,
+        data.len,
     );
 }
 

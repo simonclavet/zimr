@@ -1,33 +1,19 @@
 //! lint:alias shader_codegen
 //! src/shader_codegen.zig - public build-time API for zimr.
 //!
-//! This module is the API surface Phase 3 of the typed-shader plan
-//! (`src/notes/typesafe_zig_shaders.md`) exposes to downstream
-//! projects.  Two kinds of consumer:
+//! `ShaderPipeline`: Zig shader source -> SPIR-V -> WGSL, with the
+//! typed-shader codegen (`src/notes/typesafe_zig_shaders.md`) in front.
+//! zimr's own `build.zig` imports this file directly
+//! (`@import("src/shader_codegen.zig")`) and constructs ONE pipeline,
+//! whose pure-Zig tools (`zspv`, `spv2wgsl`) are artifacts of that build.
 //!
-//!   1. zimr's own `build.zig` - imports this file as a relative
-//!      `@import("src/shader_codegen.zig")`.  Internal use; the path
-//!      defaults all resolve correctly because the build root IS
-//!      zimr's root.
-//!
-//!   2. External projects depending on zimr via `build.zig.zon` -
-//!      add zimr as a build dep, then in their own build.zig do
-//!      `const zimr_build = @import("zimr_build");`.  Zig's build
-//!      runner resolves the named module through `b.addModule(...)`
-//!      in zimr's build.zig.  The consumer's call to
-//!      `ShaderPipeline.init(b, zimr_dep, shader_interface_mod)`
-//!      hands the pipeline a `*std.Build.Dependency` so it can find
-//!      the prebuilt SPIR-V / zspv / zglsl tool binaries inside the
-//!      zimr dep's vendored paths.
-//!
-//! Current limitations (Phase 3a, this session):
-//!   - Only Linux x86_64 is supported for external consumers.  The
-//!     SPIR-V tools (spirv-opt / spirv-val / spirv-cross) and the
-//!     zspv / zglsl text rewriters are built by zimr's own
-//!     `tools/build.zig` subbuild from the zimr-vendored sources;
-//!     consumers' builds depend transitively on the subbuild.
-//!   - Cross-platform vendored prebuilts (Phase 3b) need to land
-//!     before consumers on macOS / Windows can use this.
+//! The pipeline resolves its own sources (`src/zimrmath.zig`,
+//! `tools/gen_shader_externs.zig`, ...) against the builder it was made
+//! with, so it only works as the instance zimr's build constructed. A
+//! project that depends on zimr therefore does not construct one: it
+//! uses `zimr.Project` (in zimr's build.zig), whose `App.shaders` runs
+//! the project's shaders through zimr's instance. Works on every host
+//! zimr builds on.
 //!
 //! See the file-level docstring of `tools/gen_shader_externs.zig`
 //! for how the bootstrap-per-shader Phase 2 codegen weaves into

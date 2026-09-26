@@ -12,5 +12,9 @@
         "tools",
         "webtests",
         "README.md",
+        // The two files from assets/ every app imports (`roboto_mono_ttf`,
+        // `sample_ogg`) - not the whole directory, which is mostly mocap data.
+        "assets/RobotoMono-Regular.ttf",
+        "assets/sample.ogg",
     },
 }

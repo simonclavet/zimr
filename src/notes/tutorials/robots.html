@@ -203,7 +203,7 @@ const assertf = zm.assertf;</code></pre>
 <pre><code class="zig">//     ANGULAR FIRST, then linear.  (MuJoCo calls this `rot:lin`.)
 //
 // We store them as two `Vec` rather than a `[6]f32`. The fourth lane goes unused, which
-// costs a little memory and buys the whole zm vocabulary — `cross`, `dot3`, `splat` — and
+// costs a little memory and buys the whole zm vocabulary - `cross`, `dot3`, `splat` - and
 // code that reads like the vector maths it is.</code></pre>
 
 <p>That is a deliberate tradeoff. A <code>[6]f32</code> is denser; two <code>Vec</code> means every operation below is written in zm's vocabulary instead of index arithmetic.</p>
@@ -233,7 +233,7 @@ pub const Motion = struct {
 };
 
 /// A spatial force vector: a torque and a linear force about the same reference point.
-/// Wrenches live here. Structurally identical to `Motion`, deliberately a separate type —
+/// Wrenches live here. Structurally identical to `Motion`, deliberately a separate type -
 /// adding a velocity to a force is a bug the compiler can catch for free.
 pub const Force = struct {
     ang: Vec = vec_zero,
@@ -245,7 +245,7 @@ pub const Force = struct {
 
 <h3>Where motion and force meet</h3>
 
-<pre><code class="zig">/// The pairing of a motion and a force — the only way the two types legally meet, and the
+<pre><code class="zig">/// The pairing of a motion and a force - the only way the two types legally meet, and the
 /// reason they are separate types. `dot6(v, f)` is the rate of work `f` does moving at `v`.
 /// Named for MuJoCo's `mju_dot6` rather than `dot`, because it is emphatically not the
 /// vector dot product: it contracts a 6-vector against its DUAL.
@@ -257,8 +257,8 @@ pub fn dot6(m: Motion, f: Force) f32 {
 
 <h3>The two cross products</h3>
 
-<pre><code class="zig">/// Spatial cross product for MOTION vectors: `v × m`. This is what carries a velocity
-/// down a kinematic chain — a child's velocity is its parent's plus its own joint motion,
+<pre><code class="zig">/// Spatial cross product for MOTION vectors: `v x m`. This is what carries a velocity
+/// down a kinematic chain - a child's velocity is its parent's plus its own joint motion,
 /// and the coupling term is exactly this.
 pub fn crossMotion(v: Motion, m: Motion) Motion {
     return .{
@@ -267,8 +267,8 @@ pub fn crossMotion(v: Motion, m: Motion) Motion {
     };
 }
 
-/// Spatial cross product for FORCE vectors: `v ×* f`. Not the same operator as
-/// `crossMotion` — forces transform by the dual, which is where gyroscopic terms come
+/// Spatial cross product for FORCE vectors: `v x* f`. Not the same operator as
+/// `crossMotion` - forces transform by the dual, which is where gyroscopic terms come
 /// from. Getting these two confused produces a simulation that looks alive and conserves
 /// nothing.
 pub fn crossForce(v: Motion, f: Force) Force {
@@ -285,18 +285,18 @@ pub fn crossForce(v: Motion, f: Force) Force {
 <pre><code class="zig">/// A rigid body's spatial inertia, in the ten-parameter form MuJoCo uses:
 ///
 ///     [  I      skew(h) ]     I = rotational inertia about the reference point
-///     [ -skew(h)  m·1   ]     h = m · (centre of mass − reference point)
+///     [ -skew(h)  m*1   ]     h = m * (centre of mass - reference point)
 ///
 /// The packing matters. Because all bodies in one kinematic tree share a reference frame
-/// (see `comPos` in phase 1), a COMPOSITE inertia is just the sum of its parts — which
+/// (see `comPos` in phase 1), a COMPOSITE inertia is just the sum of its parts - which
 /// makes the composite-rigid-body algorithm three vector adds and a scalar add per body.
-/// That is the whole reason CRB is cheap, and the reason this is not stored as a 6×6.
+/// That is the whole reason CRB is cheap, and the reason this is not stored as a 6x6.
 pub const Inertia = struct {
     /// Ixx, Iyy, Izz.
     diag: Vec = vec_zero,
-    /// Ixy, Ixz, Iyz — the tensor is symmetric, so three numbers cover the rest.
+    /// Ixy, Ixz, Iyz - the tensor is symmetric, so three numbers cover the rest.
     off: Vec = vec_zero,
-    /// First moment of mass: `mass · com`. Zero when the reference point IS the centre
+    /// First moment of mass: `mass * com`. Zero when the reference point IS the centre
     /// of mass, which is why a body's own inertia is usually stored that way.
     h: Vec = vec_zero,
     mass: f32 = 0,
@@ -332,40 +332,40 @@ pub const Inertia = struct {
 <h3>Applying an inertia</h3>
 
 <details class="src-fold"><summary><code>fn mul</code><span class="faint"> · 75 lines</span></summary><pre><code class="zig">    /// Apply this inertia to a motion, giving the momentum (or, with an acceleration in,
-    /// the force out). The expanded form of the 6×6 above.
+    /// the force out). The expanded form of the 6x6 above.
     pub fn mul(self: Inertia, m: Motion) Force {
         // Rotational block: the symmetric tensor times the angular part.
         const torque: Vec = self.applyTensor(m.ang);
         return .{
-            // torque gains h × v_lin from the off-diagonal block
+            // torque gains h x v_lin from the off-diagonal block
             .ang = torque + cross(self.h, m.lin),
-            // force is m·v_lin, plus the ω × h coupling when the com is offset
+            // force is m*v_lin, plus the omega x h coupling when the com is offset
             .lin = m.lin * splat(self.mass) + cross(m.ang, self.h),
         };
     }
 
-    /// Translate the BODY by `offset`, keeping the reference point fixed — equivalently,
-    /// move the reference point by `−offset`. Used to place each body's own inertia into
+    /// Translate the BODY by `offset`, keeping the reference point fixed - equivalently,
+    /// move the reference point by `-offset`. Used to place each body's own inertia into
     /// the tree's shared frame.
     ///
     /// (The direction is worth stating twice, because both readings are plausible and the
     /// wrong one is a sign error you cannot see. `translate` of a point mass by `+d` puts
-    /// its centre of mass at `+d`, so `h` grows by `+m·d`.)
+    /// its centre of mass at `+d`, so `h` grows by `+m*d`.)
     ///
     /// DERIVATION. Write the body's own inertia about its centre of mass as `I_c`, and its
     /// centre of mass at `c` relative to the reference. Then the inertia about the
     /// reference is the parallel-axis theorem:
     ///
-    ///     I = I_c + m·(cᵀc·1 − c·cᵀ)
+    ///     I = I_c + m*(c^Tc*1 - c*c^T)
     ///
-    /// Translating the body by `d` sends `c → c + d`. Expanding and subtracting the
+    /// Translating the body by `d` sends `c -&gt; c + d`. Expanding and subtracting the
     /// original leaves exactly two groups, which is how the code below is written:
     ///
-    ///     ΔI = m·(dᵀd·1 − d·dᵀ)            ← the pure point-mass term
-    ///        + (2h·d)·1 − (h·dᵀ + d·hᵀ)    ← cross terms, using h = m·c
+    ///     dI = m*(d^Td*1 - d*d^T)            &lt;- the pure point-mass term
+    ///        + (2h*d)*1 - (h*d^T + d*h^T)    &lt;- cross terms, using h = m*c
     ///
     /// The cross terms vanish when `h` is zero, which is the common case: a body's own
-    /// inertia is stored about its own centre of mass. The general form is kept anyway —
+    /// inertia is stored about its own centre of mass. The general form is kept anyway -
     /// a COMPOSITE inertia carries a nonzero `h`, and silently being wrong for it in
     /// phase 2 would be a nasty trap.
     pub fn translate(self: Inertia, offset: Vec) Inertia {
@@ -373,7 +373,7 @@ pub const Inertia = struct {
         const d: Vec = offset;
         const h: Vec = self.h;
 
-        // m·(dᵀd·1 − d·dᵀ), the pure point-mass term.
+        // m*(d^Td*1 - d*d^T), the pure point-mass term.
         const dd: f32 = dot3(d, d);
         var diag: Vec = vec(
             m * (dd - d[0] * d[0]),
@@ -386,7 +386,7 @@ pub const Inertia = struct {
             -m * d[1] * d[2],
         );
 
-        // Cross terms: (h·d)·1 − ½(h·dᵀ + d·hᵀ), symmetric by construction.
+        // Cross terms: (h*d)*1 - 1/2(h*d^T + d*h^T), symmetric by construction.
         const hd: f32 = dot3(h, d);
         diag += vec(
             2.0 * (hd - h[0] * d[0]),
@@ -415,28 +415,28 @@ pub const Inertia = struct {
 
 <p>The direction is worth stating explicitly. "Translate by <code>offset</code>" has two plausible readings: move the <em>body</em>, or move the <em>reference point</em>. They differ by a sign, both compile, and both pass a test written against the same misunderstanding. So the doc comment states which one, twice:</p>
 
-<details class="src-fold"><summary><code>fn translate</code><span class="faint"> · 62 lines</span></summary><pre><code class="zig">    /// Translate the BODY by `offset`, keeping the reference point fixed — equivalently,
-    /// move the reference point by `−offset`. Used to place each body's own inertia into
+<details class="src-fold"><summary><code>fn translate</code><span class="faint"> · 62 lines</span></summary><pre><code class="zig">    /// Translate the BODY by `offset`, keeping the reference point fixed - equivalently,
+    /// move the reference point by `-offset`. Used to place each body's own inertia into
     /// the tree's shared frame.
     ///
     /// (The direction is worth stating twice, because both readings are plausible and the
     /// wrong one is a sign error you cannot see. `translate` of a point mass by `+d` puts
-    /// its centre of mass at `+d`, so `h` grows by `+m·d`.)
+    /// its centre of mass at `+d`, so `h` grows by `+m*d`.)
     ///
     /// DERIVATION. Write the body's own inertia about its centre of mass as `I_c`, and its
     /// centre of mass at `c` relative to the reference. Then the inertia about the
     /// reference is the parallel-axis theorem:
     ///
-    ///     I = I_c + m·(cᵀc·1 − c·cᵀ)
+    ///     I = I_c + m*(c^Tc*1 - c*c^T)
     ///
-    /// Translating the body by `d` sends `c → c + d`. Expanding and subtracting the
+    /// Translating the body by `d` sends `c -&gt; c + d`. Expanding and subtracting the
     /// original leaves exactly two groups, which is how the code below is written:
     ///
-    ///     ΔI = m·(dᵀd·1 − d·dᵀ)            ← the pure point-mass term
-    ///        + (2h·d)·1 − (h·dᵀ + d·hᵀ)    ← cross terms, using h = m·c
+    ///     dI = m*(d^Td*1 - d*d^T)            &lt;- the pure point-mass term
+    ///        + (2h*d)*1 - (h*d^T + d*h^T)    &lt;- cross terms, using h = m*c
     ///
     /// The cross terms vanish when `h` is zero, which is the common case: a body's own
-    /// inertia is stored about its own centre of mass. The general form is kept anyway —
+    /// inertia is stored about its own centre of mass. The general form is kept anyway -
     /// a COMPOSITE inertia carries a nonzero `h`, and silently being wrong for it in
     /// phase 2 would be a nasty trap.
     pub fn translate(self: Inertia, offset: Vec) Inertia {
@@ -444,7 +444,7 @@ pub const Inertia = struct {
         const d: Vec = offset;
         const h: Vec = self.h;
 
-        // m·(dᵀd·1 − d·dᵀ), the pure point-mass term.
+        // m*(d^Td*1 - d*d^T), the pure point-mass term.
         const dd: f32 = dot3(d, d);
         var diag: Vec = vec(
             m * (dd - d[0] * d[0]),
@@ -457,7 +457,7 @@ pub const Inertia = struct {
             -m * d[1] * d[2],
         );
 
-        // Cross terms: (h·d)·1 − ½(h·dᵀ + d·hᵀ), symmetric by construction.
+        // Cross terms: (h*d)*1 - 1/2(h*d^T + d*h^T), symmetric by construction.
         const hd: f32 = dot3(h, d);
         diag += vec(
             2.0 * (hd - h[0] * d[0]),
@@ -484,7 +484,7 @@ pub const Inertia = struct {
 
 <pre><code class="zig">test "spatial algebra: translate is the parallel-axis theorem" {
     // A point mass at the origin, moved so the reference point sits 2 m away on X. The
-    // textbook answer is m·d² about the two axes perpendicular to the offset, and zero
+    // textbook answer is m*d^2 about the two axes perpendicular to the offset, and zero
     // about the offset axis itself.
     const mass: f32 = 3.0;
     const point: Inertia = .{ .mass = mass };
@@ -514,7 +514,7 @@ pub const Inertia = struct {
 <p>A robot is described with designated struct literals, like everything else in zimr. Start with the four kinds of freedom, which are the only four:</p>
 
 <pre><code class="zig">/// The four kinds of degree of freedom, and the only four. A body with no joint is welded
-/// to its parent, which is free and exact — no constraint needed.
+/// to its parent, which is free and exact - no constraint needed.
 pub const JointType = enum {
     /// 7 position coords (xyz + quat), 6 velocity coords. Only on a child of the world.
     free,
@@ -526,7 +526,7 @@ pub const JointType = enum {
     hinge,
 
     /// How many `qpos` entries this joint occupies. Larger than `dofCount` for anything
-    /// carrying a quaternion — the reason `nq != nv` in most models.
+    /// carrying a quaternion - the reason `nq != nv` in most models.
     pub fn posCount(self: JointType) u32 {
         return switch (self) {
             .free => 7,
@@ -571,7 +571,7 @@ pub const JointType = enum {
     /// Pose relative to the parent's frame.
     pos: Vec = vec_zero,
     rot: Quat = quat_identity,
-    /// Several joints on one body is legal and useful — three hinges give a ball joint
+    /// Several joints on one body is legal and useful - three hinges give a ball joint
     /// with per-axis limits, which real robot models do use.
     joints: []const JointSpec = &amp;.{},
     geoms: []const GeomSpec = &amp;.{},
@@ -671,7 +671,7 @@ fn NamesEnum(comptime names: []const []const u8) type {
         assertUniqueNames(&amp;body_names, "body");
 
         for (spec.bodies, 0..) |b, bi| {
-            // A parent must exist AND be declared earlier — the tree passes rely on it.
+            // A parent must exist AND be declared earlier - the tree passes rely on it.
             if (b.parent) |parent| {
                 var found: bool = false;
                 for (spec.bodies[0..bi]) |earlier| {
@@ -757,13 +757,13 @@ fn NamesEnum(comptime names: []const []const u8) type {
             // factorization divides by zero. Catch it here with the body's name rather
             // than as a NaN three phases downstream.
             if (b.inertial) |inertial| {
-                // ★ A zero mass is legal on a body with NO degrees of freedom, and real
+                // * A zero mass is legal on a body with NO degrees of freedom, and real
                 // models rely on it: a KUKA iiwa's `lbr_iiwa_link_0` is the bolted-down
                 // base and declares `mass="0.0"`. Nothing accelerates it, so nothing
                 // divides by it.
                 //
-                // With joints it is fatal — the mass matrix is singular and `factorM`
-                // divides by zero — which is the same rule as the geom check below, and
+                // With joints it is fatal - the mass matrix is singular and `factorM`
+                // divides by zero - which is the same rule as the geom check below, and
                 // for the same reason.
                 if (b.joints.len &gt; 0 and inertial.mass &lt;= 0.0) {
                     @compileError("robot: body '" ++ b.name ++
@@ -952,7 +952,7 @@ pub const world_body: u32 = 0;</code></pre>
 <h3>Welds are transparent to the chain</h3>
 
 <pre><code class="zig">/// The last DOF belonging to `body`, walking up until a body with DOFs is found. That is
-/// the DOF a child's first DOF chains onto — welded bodies are transparent here, which is
+/// the DOF a child's first DOF chains onto - welded bodies are transparent here, which is
 /// exactly what makes a weld free.
 fn lastDofOf(m: *const Model, body: u32) u32 {
     var b: u32 = body;
@@ -1002,17 +1002,17 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
             // zm stores a quat as (x, y, z, w), so the w lane is the one that starts at 1.
             switch (j.kind) {
                 .free =&gt; {
-                    // ★★ A FREE JOINT'S REFERENCE POSE IS THE BODY'S DECLARED POSE.
+                    // ** A FREE JOINT'S REFERENCE POSE IS THE BODY'S DECLARED POSE.
                     //
                     // For every other joint the body's `pos`/`rot` is a fixed offset from the
                     // parent and the joint moves relative to it. A free joint HAS no fixed
-                    // offset — its seven coordinates ARE the body's pose — so leaving `qpos0`
+                    // offset - its seven coordinates ARE the body's pose - so leaving `qpos0`
                     // at zero silently discards wherever the model said the body was.
                     //
                     // Found by stacking five crates and watching all five appear at the
                     // origin on step zero, already interpenetrating. Nothing warned: the
                     // model was valid, the simulation stable, and every body simply in the
-                    // wrong place. MuJoCo does the same thing — `qpos0` for a free joint is
+                    // wrong place. MuJoCo does the same thing - `qpos0` for a free joint is
                     // seeded from `body_pos`/`body_quat`.
                     m.qpos0[qpos_n + 0] = b.pos[0];
                     m.qpos0[qpos_n + 1] = b.pos[1];
@@ -1046,7 +1046,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
     crb: []Inertia,
     /// Lower triangle of M, packed by the model's sparsity tables. Length `mass_nonzero_count`.
     mass_matrix: []f32,
-    /// The LᵀDL factorization, same packing.
+    /// The L^TDL factorization, same packing.
     qLD: []f32,
     /// Reciprocals of D, so the solve multiplies instead of dividing.
     qLDiagInv: []f32,</code></pre>
@@ -1075,7 +1075,7 @@ fn buildFromSpec(gpa: Allocator, comptime spec: ModelSpec) !Model {
     /// The pointer is not decoration: an `ArenaAllocator` is NOT movable once an
     /// `Allocator` has been taken from it, because that allocator holds the arena
     /// struct's ADDRESS. Storing it by value and returning the model would strand every
-    /// allocation in a copy nobody frees. (zimr has been bitten by this shape before —
+    /// allocation in a copy nobody frees. (zimr has been bitten by this shape before -
     /// see the wgpu_bringup use-after-scope note in claude.md.)
     arena: *std.heap.ArenaAllocator,</code></pre>
 
@@ -1103,7 +1103,7 @@ fn jointIndex(joint: anytype) u32 {
 
 <p>This is the hybrid decision made concrete. A hand-written model gets <code>Arm.Joint.elbow</code> and a compile error if it misspells it; a URDF-loaded model passes an integer; both call the same accessor. Neither pays anything at runtime.</p>
 
-<pre><code class="zig">    /// Read a scalar joint's position. Only valid for hinge and slide — a ball or free
+<pre><code class="zig">    /// Read a scalar joint's position. Only valid for hinge and slide - a ball or free
     /// joint has no single number, and asking for one is a programming error.
     pub fn jointPos(self: *const Data, m: *const Model, joint: anytype) f32 {
         const ji: u32 = jointIndex(joint);
@@ -1221,7 +1221,7 @@ pub fn normalizeQuats(m: *const Model, pos: []f32) void {
 
 <pre><code class="zig">/// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
 /// user input both walk quaternions off the unit sphere, and a zero-norm quaternion has no
-/// orientation to recover — identity keeps the simulation running instead of emitting NaN.
+/// orientation to recover - identity keeps the simulation running instead of emitting NaN.
 fn normalizeQuat(q: Quat) Quat {
     const n: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
     return if (n &gt; 1.0e-9) q / splat(n) else quat_identity;
@@ -1287,7 +1287,7 @@ fn normalizeQuat(q: Quat) Quat {
     if (total.mass &lt;= min_mass) {
         return .{ .mass = 0, .com = vec_zero, .inertia = .zero };
     }
-    // `h` is `mass · com`, so the centre of mass falls out of the sum for free.
+    // `h` is `mass * com`, so the centre of mass falls out of the sum for free.
     const com: Vec = total.h / splat(total.mass);
     // Shift from the body origin back to the centre of mass: the inverse of step 3.
     return .{ .mass = total.mass, .com = com, .inertia = total.translate(-com) };
@@ -1308,7 +1308,7 @@ fn normalizeQuat(q: Quat) Quat {
 <p>First, the type the whole pass is written in. A pose is a real concept here rather than an implementation detail — bodies, joints and sites all have one, and composing them is the operation the tree walk is made of:</p>
 
 <pre><code class="zig">/// A rigid placement in some frame. Named rather than anonymous because a pose is a real
-/// concept here — bodies, joints and sites all have one, and `compose` is how they relate.
+/// concept here - bodies, joints and sites all have one, and `compose` is how they relate.
 pub const Pose = struct {
     pos: Vec = vec_zero,
     rot: Quat = quat_identity,
@@ -1339,10 +1339,10 @@ pub const Pose = struct {
 /// rule is what lets this be a flat loop instead of a recursive walk.
 ///
 /// The subtle step is the off-centre correction. A hinge does not rotate the body about
-/// the body's own origin — it rotates it about the ANCHOR. So after composing the
+/// the body's own origin - it rotates it about the ANCHOR. So after composing the
 /// rotation we recompute where the origin must be for the anchor to have stayed put:
 ///
-///     xpos = xanchor − R_new · jnt_pos
+///     xpos = xanchor - R_new * jnt_pos
 ///
 /// Skip it and every joint whose anchor is not at the body origin swings the body through
 /// an arc it should never take. Almost every real robot joint is off-centre, so this is
@@ -1379,7 +1379,7 @@ pub fn kinematics(m: *const Model, d: *Data) void {
             for (jnt_adr..jnt_adr + jnt_num) |ji| {
                 const qadr: u32 = m.jnt_qpos_adr[ji];
 
-                // Axis and anchor, in the frame the joint acts in — which is the pose as
+                // Axis and anchor, in the frame the joint acts in - which is the pose as
                 // built SO FAR, so several joints on one body compose in declared order.
                 const axis: Vec = rotate(rot, m.jnt_axis[ji]);
                 const anchor: Vec = pos + rotate(rot, m.jnt_pos[ji]);
@@ -1441,7 +1441,7 @@ pos = anchor - rotate(rot, m.jnt_pos[ji]);</code></pre>
 
 <pre><code class="zig">test "kinematics: a hinge rotates about its ANCHOR, not the body origin" {
     // The off-centre correction, isolated. A hinge whose anchor sits 1 m out along X,
-    // turned a quarter turn about Z, must swing the body origin onto the Y axis — if the
+    // turned a quarter turn about Z, must swing the body origin onto the Y axis - if the
     // correction were missing the origin would stay put and only the orientation change.</code></pre>
 
 <p>Note also that <code>axis</code> and <code>anchor</code> are computed from the pose built <em>so far</em>, not from the body's rest pose. That is what makes several joints on one body compose in declaration order — three hinges behaving as a ball joint with per-axis limits, which is exactly the case §3's <code>joints</code>-as-a-list exists for.</p>
@@ -1465,12 +1465,12 @@ pos = anchor - rotate(rot, m.jnt_pos[ji]);</code></pre>
 <p>A capsule is a cylinder plus two hemispherical caps, and the caps are the subtle part. A hemisphere's transverse moment <code>(2/5)m·r²</code> — the number you will find quoted — is measured about the centre of its <strong>flat face</strong>. The parallel-axis theorem needs it about the <strong>centroid</strong>, which sits <code>3r/8</code> away. Using <code>2/5</code> directly double-counts <code>m·(3r/8)²</code>.</p>
 
 <pre><code class="zig">            //   * A hemisphere's transverse moment about the CENTRE OF ITS FLAT FACE is
-            //     (2/5)m·r², the same as a full sphere, by symmetry.
-            //   * Its centroid is NOT there — it sits 3r/8 out along the axis.
+            //     (2/5)m*r^2, the same as a full sphere, by symmetry.
+            //   * Its centroid is NOT there - it sits 3r/8 out along the axis.
             //   * Parallel axis moves an inertia between a point and the CENTROID, so
             //     before shifting out to the capsule's centre we must first come back to
             //     the centroid:
-            //         I_centroid = (2/5)m·r² − m·(3r/8)² = (2/5 − 9/64)·m·r²
+            //         I_centroid = (2/5)m*r^2 - m*(3r/8)^2 = (2/5 - 9/64)*m*r^2
             //     and only then push out to (half_height + 3r/8).</code></pre>
 
 <p>What makes this worth flagging is that the <em>axial</em> moment is unaffected — it comes out right either way. Only the side moment moves, by about 0.15%. That is a value no invariant catches: it is positive, plausible, symmetric, and wrong. It is the kind of error only a comparison against an independent implementation finds, which is why the reference fixtures pin every primitive.</p>
@@ -1513,7 +1513,7 @@ fn quotaFor(comptime spec: ModelSpec) u32 {
 ///
 /// WHY A SHARED FRAME AT ALL. Two inertias can only be added when they are expressed about
 /// the same reference point in the same orientation. `crb` in phase 2 accumulates a
-/// subtree's inertia by literally summing the ten numbers of each body — which is legal
+/// subtree's inertia by literally summing the ten numbers of each body - which is legal
 /// only because this function first moved them all into one frame. That summation is the
 /// entire reason the composite-rigid-body algorithm is cheap, and this is where it is paid
 /// for.
@@ -1521,16 +1521,16 @@ fn quotaFor(comptime spec: ModelSpec) u32 {
 /// WHICH FRAME. Global ORIENTATION (so collision, which happens in world space, shares it),
 /// translated to the root's subtree centre of mass. The translation is purely for floating
 /// point: an inertia expressed about a distant origin has its useful bits swamped by the
-/// `m·d²` parallel-axis term. MuJoCo does this at f64; we are at f32 and need it more.
+/// `m*d^2` parallel-axis term. MuJoCo does this at f64; we are at f32 and need it more.
 ///
-/// The frame is per TREE, not per body — every body in one tree shares its root's subtree
+/// The frame is per TREE, not per body - every body in one tree shares its root's subtree
 /// com, which is what makes their inertias summable. `subtree_com` is computed for every
 /// body anyway because sensors and the phase-3 `subtreeVel` want it.
 pub fn comPos(m: *const Model, d: *Data) void {
     d.requireStage(.position, "comPos");
 
     // ---- subtree centres of mass, accumulated leaf-to-root ----
-    // Start each body holding its own first moment (mass × com), add children into
+    // Start each body holding its own first moment (mass x com), add children into
     // parents walking backwards, then divide out the subtree mass. Backwards works
     // because a parent always has a lower index than its children.
     for (0..m.nbody) |bi| {
@@ -1568,7 +1568,7 @@ pub fn comPos(m: *const Model, d: *Data) void {
         const body: u32 = m.jnt_body[ji];
         const frame_origin: Vec = d.subtree_com[m.body_root[body]];
         // From the frame's origin TO the joint anchor: a rotation about the anchor moves
-        // the origin by `axis × offset`, which is the linear half of the motion vector.
+        // the origin by `axis x offset`, which is the linear half of the motion vector.
         const offset: Vec = frame_origin - d.jnt_xanchor[ji];
         const dof_adr: u32 = m.jnt_dof_adr[ji];
 
@@ -1607,7 +1607,7 @@ pub fn comPos(m: *const Model, d: *Data) void {
 
 <pre><code class="zig">/// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
 /// `offset` from the axis. Rotating about a line that does not pass through the origin
-/// moves the origin too, and `axis × offset` is exactly how much.
+/// moves the origin too, and `axis x offset` is exactly how much.
 fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
     return .{ .ang = axis, .lin = cross(axis, offset) };
 }</code></pre>
@@ -1617,21 +1617,21 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
 <p><code>mjModel</code> stores each body's inertia as three principal moments plus a quaternion — seven numbers, and producing them requires diagonalizing a symmetric 3×3 with a Jacobi iteration. We already store the full symmetric tensor in six numbers, so we can rotate it directly and never diagonalize:</p>
 
 <pre><code class="zig">    /// Re-express this inertia in a frame rotated by `q`. The rotational block transforms
-    /// by similarity, `I' = R·I·Rᵀ`, and the first moment just rotates.
+    /// by similarity, `I' = R*I*R^T`, and the first moment just rotates.
     ///
     /// This is the function that lets us skip MuJoCo's principal-axis storage entirely.
-    /// `mjModel` keeps a body's inertia as three principal moments plus a quaternion —
-    /// seven numbers, and producing them needs a symmetric-3×3 eigendecomposition. We
+    /// `mjModel` keeps a body's inertia as three principal moments plus a quaternion -
+    /// seven numbers, and producing them needs a symmetric-3x3 eigendecomposition. We
     /// already store the full symmetric tensor in six, so we can rotate it directly and
     /// never diagonalize. Fewer numbers, no Jacobi iteration, no degenerate-eigenvalue
     /// edge cases. MuJoCo's form is the better one in C, where a diagonal inertia makes
     /// the inner loops cheaper; here the six-float form composes better.
     pub fn rotated(self: Inertia, q: Quat) Inertia {
-        // `I' = R·I·Rᵀ` expands to `I'[a][b] = rowᵃ · (I · rowᵇ)`, so we need the ROWS
-        // of R — and `rotate(q, e_k)` gives the COLUMNS. The rows of R are the columns of
-        // Rᵀ, which is the rotation by the conjugate.
+        // `I' = R*I*R^T` expands to `I'[a][b] = row^a * (I * row^b)`, so we need the ROWS
+        // of R - and `rotate(q, e_k)` gives the COLUMNS. The rows of R are the columns of
+        // R^T, which is the rotation by the conjugate.
         //
-        // This is not pedantry: using the columns computes `Rᵀ·I·R` instead, which has the
+        // This is not pedantry: using the columns computes `R^T*I*R` instead, which has the
         // same eigenvalues and a plausible-looking diagonal, so the error hides in the
         // off-diagonal terms alone. The oracle comparison caught it; nothing else would
         // have, which is the entire argument for having one.
@@ -1639,7 +1639,7 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
         const rx: Vec = rotate(inv, vec(1, 0, 0));
         const ry: Vec = rotate(inv, vec(0, 1, 0));
         const rz: Vec = rotate(inv, vec(0, 0, 1));
-        // I·rᵃ for each basis column, then contract.
+        // I*r^a for each basis column, then contract.
         const ix: Vec = self.applyTensor(rx);
         const iy: Vec = self.applyTensor(ry);
         const iz: Vec = self.applyTensor(rz);
@@ -1657,7 +1657,7 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
 
 <p>One line in that function deserves attention out of proportion to its size:</p>
 
-<pre class="sketch"><code class="zig">// This is not pedantry: using the columns computes `Rᵀ·I·R` instead, which has the
+<pre class="sketch"><code class="zig">// This is not pedantry: using the columns computes `R^T*I*R` instead, which has the
 // same eigenvalues and a plausible-looking diagonal, so the error hides in the
 // off-diagonal terms alone.</code></pre>
 
@@ -1720,7 +1720,7 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
     // Start each body holding its own inertia, then fold children into parents walking
     // backwards. Because a parent always has a lower index, one reverse pass suffices.
     //
-    // This sum is only legal because every `cinert` is expressed in the same frame — the
+    // This sum is only legal because every `cinert` is expressed in the same frame - the
     // shared subtree-COM frame `comPos` built. That is the payoff for the whole previous
     // section, collected here in three lines.
     @memcpy(d.crb, d.cinert);
@@ -1741,19 +1741,19 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
 <details class="src-fold"><summary><code>fn crb</code><span class="faint"> · 66 lines</span></summary><pre><code class="zig">/// Composite Rigid Body: build the joint-space inertia matrix M.
 ///
 /// THE IDEA, which is genuinely simple once seen. Suppose only DOF `i` accelerates and
-/// every other joint is locked. Then everything below `i` moves as ONE RIGID BODY — that
+/// every other joint is locked. Then everything below `i` moves as ONE RIGID BODY - that
 /// is what locking the joints below means. Call that body's spatial inertia `I_comp(i)`.
-/// The spatial force needed to produce that acceleration is `I_comp(i) · cdof_i`, and the
+/// The spatial force needed to produce that acceleration is `I_comp(i) * cdof_i`, and the
 /// torque it demands at any DOF `j` is that force projected onto `j`'s motion axis:
 ///
-///     M[i][j] = cdof_j · (I_comp(i) · cdof_i)
+///     M[i][j] = cdof_j * (I_comp(i) * cdof_i)
 ///
 /// That single line is the whole algorithm. Everything else is bookkeeping: getting the
 /// composite inertias (a backward sum, cheap because `comPos` put them in a shared frame)
 /// and visiting only the `j` that can be nonzero (the ancestor chain).
 ///
 /// COST. The outer loop is `nv`; the inner walks one ancestor chain. For a chain robot
-/// that is O(nv²) entries but each is a 6-vector dot — and for a tree with branches it is
+/// that is O(nv^2) entries but each is a 6-vector dot - and for a tree with branches it is
 /// far less, because siblings never interact. This is why the sparsity is not an
 /// optimisation bolted on afterwards: it is the shape of the physics.
 pub fn crb(m: *const Model, d: *Data) void {
@@ -1763,7 +1763,7 @@ pub fn crb(m: *const Model, d: *Data) void {
     // Start each body holding its own inertia, then fold children into parents walking
     // backwards. Because a parent always has a lower index, one reverse pass suffices.
     //
-    // This sum is only legal because every `cinert` is expressed in the same frame — the
+    // This sum is only legal because every `cinert` is expressed in the same frame - the
     // shared subtree-COM frame `comPos` built. That is the payoff for the whole previous
     // section, collected here in three lines.
     @memcpy(d.crb, d.cinert);
@@ -1788,7 +1788,7 @@ pub fn crb(m: *const Model, d: *Data) void {
 
         // Walk the ancestor chain, writing backwards. The row is stored root-first with
         // the diagonal LAST (see `Model.mass_col_index`), and walking UP from `i` visits the
-        // diagonal first — so the cursor starts at the end and decrements. Storage order
+        // diagonal first - so the cursor starts at the end and decrements. Storage order
         // and traversal order were chosen to match precisely here.
         var slot: u32 = nnz;
         var j: u32 = @intCast(i);
@@ -1799,7 +1799,7 @@ pub fn crb(m: *const Model, d: *Data) void {
 
         // Armature is rotor inertia reflected through a gearbox: a real physical mass that
         // the motor must spin up, felt at this DOF alone. It lands on the diagonal, which
-        // is also why it is the cheapest defence against an ill-conditioned M — it is
+        // is also why it is the cheapest defence against an ill-conditioned M - it is
         // literally diagonal regularization that happens to be true.
         d.mass_matrix[row + nnz - 1] += m.dof_armature[i];
     }
@@ -1897,7 +1897,7 @@ pub fn crb(m: *const Model, d: *Data) void {
         const start: u32 = m.mass_row_start[k];
         const diag: u32 = start + m.mass_row_nonzeros[k] - 1;
 
-        // M is positive definite, so every pivot is positive — armature guarantees it even
+        // M is positive definite, so every pivot is positive - armature guarantees it even
         // for a massless-looking DOF. A non-positive pivot means the model is degenerate
         // (a zero-mass body, or an inertia that has gone bad upstream) and every number
         // after this point would be meaningless.
@@ -1945,22 +1945,22 @@ pub fn crb(m: *const Model, d: *Data) void {
 /// A limit end is ACTIVE when the joint is within `margin` of it. The distance is measured
 /// per END, not to the nearest one:
 ///
-///     lower:  q − lo          upper:  hi − q
+///     lower:  q - lo          upper:  hi - q
 ///
 /// and either being below `margin` produces a row. Negative means already violated.
 ///
-/// ★ BOTH ENDS CAN BE ACTIVE AT ONCE, and the code must allow it. It looks impossible —
-/// a joint cannot be past its lower and upper stops simultaneously — but `margin` is what
-/// makes it reachable: if the range is narrower than `2·margin`, the joint is within margin
+/// * BOTH ENDS CAN BE ACTIVE AT ONCE, and the code must allow it. It looks impossible -
+/// a joint cannot be past its lower and upper stops simultaneously - but `margin` is what
+/// makes it reachable: if the range is narrower than `2*margin`, the joint is within margin
 /// of both ends everywhere in its travel, and MuJoCo emits two rows. A tempting shortcut
-/// (`residual = min(q − lo, hi − q)`, one row) is correct for every model with the default
+/// (`residual = min(q - lo, hi - q)`, one row) is correct for every model with the default
 /// zero margin and silently wrong for a narrow range with a generous one. The two rows then
 /// oppose each other and the solver balances them, which is the right behaviour: the joint
 /// is being softly squeezed from both sides.
 ///
-/// The Jacobian row is `+1` for a lower end and `−1` for an upper one, so a positive
+/// The Jacobian row is `+1` for a lower end and `-1` for an upper one, so a positive
 /// constraint force always pushes the joint back INTO its range whichever end it hit. That
-/// convention is what lets the solver clamp every row to `f ≥ 0` uniformly instead of
+/// convention is what lets the solver clamp every row to `f &gt;= 0` uniformly instead of
 /// tracking which direction each row wants to push.
 pub fn makeConstraints(m: *const Model, d: *Data) void {
     d.requireStage(.position, "makeConstraints");
@@ -1975,7 +1975,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
         const q: f32 = d.pos[qadr];
         const margin: f32 = m.jnt_limit_margin[ji];
 
-        // Lower end first, then upper — the order MuJoCo emits them in, which matters
+        // Lower end first, then upper - the order MuJoCo emits them in, which matters
         // because the fixtures compare row by row.
         const ends = [_]struct { distance: f32, jacobian: f32 }{
             .{ .distance = q - range[0], .jacobian = 1.0 },
@@ -2066,7 +2066,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
         const jnt_adr: u32 = m.body_jnt_adr[bi];
 
         // Walk JOINTS, not DOFs. The distinction is invisible for scalar joints and
-        // load-bearing for ball and free ones — see the note on `rotationTriple`.
+        // load-bearing for ball and free ones - see the note on `rotationTriple`.
         for (jnt_adr..jnt_adr + m.body_jnt_num[bi]) |ji| {
             const dof: u32 = m.jnt_dof_adr[ji];
             switch (m.jnt_type[ji]) {
@@ -2204,7 +2204,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 
 /// Advance the state by `dt` using semi-implicit Euler.
 ///
-/// The `q` update uses the NEW velocity, not the old one — that single change is what
+/// The `q` update uses the NEW velocity, not the old one - that single change is what
 /// separates semi-implicit Euler from explicit Euler, and it is the difference between a
 /// pendulum that gains energy until it explodes and one that oscillates stably forever.
 /// Explicit Euler is not offered here; it has pedagogical value and no other kind.
@@ -2222,8 +2222,8 @@ fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
 /// Advance by `dt` using classical fourth-order Runge-Kutta.
 ///
 /// Four evaluations of the dynamics per step, combined so that the error per step is
-/// O(dt⁵) instead of Euler's O(dt²). Worth it when you care about energy over a long
-/// horizon — a double pendulum integrated with RK4 conserves energy to a fraction of a
+/// O(dt^5) instead of Euler's O(dt^2). Worth it when you care about energy over a long
+/// horizon - a double pendulum integrated with RK4 conserves energy to a fraction of a
 /// percent over ten seconds, where Euler visibly drifts.
 ///
 /// Not worth it once contact is involved: contact makes the dynamics non-smooth, and a

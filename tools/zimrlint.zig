@@ -5,12 +5,18 @@
 //!   compiler already checks. Guiding idea (see src/notes/lint_opinionated_plan.md):
 //!   "one obvious way" -- where several spellings mean the same thing, mandate the
 //!   canonical one; where a silent default hides a real choice, force it to be made.
-//!   Like `zig fmt` it is all-on with no config and no severity levels -- a file
-//!   either passes or it doesn't -- and it gates every `zig build`.
+//!   Like `zig fmt` it has no severity levels -- a file either passes or it
+//!   doesn't. Rules cannot be turned OFF. A short list of OPT-IN rules -- house
+//!   taste that mainstream Zig does the other way -- runs only when `--enable`d:
+//!   zimr's build enables them for its own tree, and an app built on zimr picks
+//!   the ones it agrees with (build.zig's `LintRule` / `addLint`).
 //!
 //! HOW TO RUN IT
 //!   zimrlint <file.zig> [<file2.zig> ...]   check; exits non-zero on any issue
 //!   zimrlint --fix <file.zig> ...           apply the autofixes a rule marked safe
+//!   zimrlint --enable=<tag>,<tag> ...       also run these opt-in rules
+//!   zimrlint --list-rules                   every tag, opt-in ones marked
+//!   zimrlint --cache-dir <dir> ...          where the per-file clean stamps go
 //!   Built as a ReleaseSafe exe (NOT ReleaseFast -- this dev Zig miscompiles it in
 //!   ReleaseFast; see build.zig). `zig build` compiles it and runs it over the tree.
 //!
@@ -18,18 +24,26 @@
 //!   Every rule has a kebab tag emitted in its diagnostic and a `rule_notes` entry,
 //!   so the tag is self-documenting. A reviewed exception is silenced with a trailing
 //!   `// lint:off <tag>: <why>` (one line) or a file-level `//! lint:off <tag>`
-//!   (container doc-comment). Rough groupings of the ~26 tags:
-//!     idiom/style : untyped-local, branch-braces, fn-args-multiline, import-at-top,
-//!                   decl-order, line-length, ascii-comments, ascii-test-names,
-//!                   named-struct-init, anon-return,
-//!                   module-var, screaming-const, prefer-std-alias
-//!     math -> zm  : std-math, reserved-math-names, clamp-pattern, prefer-vec,
-//!                   array-mult, int-from-float, float-from-int, as-round,
-//!                   redundant-cast, std-debug-assert
+//!   (container doc-comment). Rough groupings (* = opt-in):
+//!     idiom/style : untyped-local*, branch-braces*, fn-args-multiline*, decl-order*,
+//!                   anon-return*, module-var*, prefer-std-alias*, ascii-comments*,
+//!                   import-at-top, import-at-root, line-length, ascii-test-names,
+//!                   named-struct-init, screaming-const, canonical-alias,
+//!                   redundant-import, duplicate-case, unused-global
+//!     math -> zm  : no-qualified-zm*, reserved-math-names*, std-math, clamp-pattern,
+//!                   prefer-vec, array-mult, int-from-float, float-from-int,
+//!                   as-round, redundant-cast, std-debug-assert, custom-degrad,
+//!                   turn-in-radian-call
+//!     errors      : catch-suppression, no-catch-return, useless-error-return,
+//!                   prefer-assert-unreachable
+//!     bugs        : returned-stack-reference, whole-init-first, state-uninit,
+//!                   scope-balance, depth-format, debug-print, no-std-timer,
+//!                   import-cycle
 //!     shaders     : shader-inline-fn, shader-missing-entry, shader-no-atan,
-//!                   sampler-in-branch, sampler-in-helper
+//!                   shader-safe, sampler-in-branch, sampler-in-helper
 //!     gpu safety  : raw-pass-state-bind
-//!     meta        : parse-error (file didn't parse -> AST rules skipped for it)
+//!     meta        : parse-error (file didn't parse -> AST rules skipped for it),
+//!                   unknown-lint-tag (a `lint:off` naming no rule)
 //!
 //! HOW THE FILE IS LAID OUT  (chapters are marked by `====` dividers -- search a title)
 //!   1. Data model           Fix / Issue / Ctx -- the diagnostic, the fix, and the
@@ -47,7 +61,10 @@
 //! ADDING A RULE
 //!   Write `checkX(ctx, ...)`, call it from the walker (per node) or as a whole-file
 //!   pass, and emit with `ctx.emitAt(token, "kebab-tag", ...)`. Add a `rule_notes`
-//!   entry, and give it a `// lint:off` escape. There is no advisory tier: lint
+//!   entry (emitting a tag without one panics), and give it a `// lint:off`
+//!   escape. A taste rule gets `.opt_in = true` AND a field in build.zig's
+//!   `LintRule` (plus `zimr_lint_rules`, if zimr holds itself to it); a rule
+//!   that catches bugs stays always-on. There is no advisory tier: lint
 //!   gates the build exactly like the compiler, so a rule is tuned until it is
 //!   FP-free on the whole tree (with `// lint:off <tag>: <why>` for the cases a
 //!   contract genuinely forces) -- or it is deleted. A rule nobody's build
@@ -73,6 +90,7 @@ const startsWith = std.mem.startsWith;
 const Allocator = std.mem.Allocator;
 const Ast = std.zig.Ast;
 const expect = std.testing.expect;
+const expectError = std.testing.expectError;
 
 /// A 78-character `=` divider for the rule-note headers.  Written as an
 /// explicit literal (not `"=" ** 78`) per the linter's own retired-`**`
@@ -342,12 +360,6 @@ const Ctx = struct {
     /// into `source` (it is a parallel bool array, freed after the file).
     canonical_zm_inits: []const bool = &.{},
 
-    /// Whether the `prefer-vec` rule runs. GATING (default ON) now that the
-    /// tree is fully migrated to `Vec`/`Vec2`/`Vec3`. `--no-prefer-vec` disables
-    /// it (escape hatch); `--fix` autofixes `@Vector(N,f32)` wherever the alias
-    /// is bound.
-    prefer_vec: bool = true,
-
     /// Whether this file has a column-0 `const zm = @import("zm");` (or `pub`
     /// variant).  Only such files are subject to `no-qualified-zm`; a file
     /// whose sole zm import is per-struct/indented (runtime.zig's per-namespace
@@ -361,7 +373,13 @@ const Ctx = struct {
     /// can't host a file-scope alias binding.
     std_col0: bool = false,
 
-    /// Whether the opt-in `decl-order` rule runs (set by `--decl-order`).
+    /// Whether this file declares an app (`AppSpec(` appears in it) - the files
+    /// whose `State` is an app's state type, for `state-uninit`.
+    declares_app: bool = false,
+
+    /// Whether the opt-in `decl-order` rule runs (`--enable=decl-order`). The
+    /// one opt-in rule that is skipped rather than filtered: its pass is the
+    /// expensive one, and `--decl-order-only` runs it alone.
     check_decl_order: bool = false,
 
     /// Run ONLY the decl-order check, skipping every other rule (set by
@@ -631,13 +649,24 @@ const keywords = std.StaticStringMap(void).initComptime(.{
 // of a rule is enough context for someone to decide whether the rule
 // applies to their case or whether the linter is wrong.
 //
-// Suppressed under `--quiet`.  Per-tag, per-run (not per-file) - the
-// `seen_tags` set lives in `main` across the whole file loop.
+// Per-tag, per-run (not per-file) - the `seen_tags` set lives in `main`
+// across the whole file loop.
+//
+// This table is also the linter's ONE list of rules: every tag any check can
+// emit has an entry, which is what lets `--enable` and the `unknown-lint-tag`
+// check tell a real tag from a typo.
 
 const RuleNote = struct {
     tag: []const u8,
     title: []const u8,
     body: []const u8,
+    /// An OPT-IN rule runs only when named by `--enable=<tag>`. These are the
+    /// rules that are pure house taste - mainstream Zig does the opposite, and
+    /// nothing breaks without them. zimr's own build enables them explicitly;
+    /// an app built on zimr picks the ones it agrees with. Every other rule is
+    /// always on and cannot be turned off: it guards a real bug, a toolchain
+    /// limit, or the one-vocabulary contract zimr is built on.
+    opt_in: bool = false,
 };
 
 const rule_notes = [_]RuleNote{
@@ -701,6 +730,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "fn-args-multiline",
+        .opt_in = true,
         .title = "Rule 1 - fn signatures: 5+ args multiline; 3-4 args one-line only if <=90 cols",
         .body =
         \\Functions with 5 or more parameters split to one argument per line
@@ -720,6 +750,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "untyped-local",
+        .opt_in = true,
         .title = "Rule 2 - locals: write the type even when Zig can deduce it",
         .body =
         \\Reason: greppability.  To find every place that produces a Foo,
@@ -735,6 +766,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "branch-braces",
+        .opt_in = true,
         .title = "Rule 3 - braces required on every if/else/while/for body",
         .body =
         \\Even single-statement bodies get braces.  A one-line `if (x)
@@ -758,6 +790,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "module-var",
+        .opt_in = true,
         .title = "Rule 9 - no module-level mutable globals",
         .body =
         \\Mutable state belongs on a struct that's owned, allocated, and
@@ -803,6 +836,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "ascii-comments",
+        .opt_in = true,
         .title = "Comments are ASCII",
         .body =
         \\Every comment - `//`, `///` and `//!` - is plain ASCII. A comment
@@ -905,6 +939,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "prefer-std-alias",
+        .opt_in = true,
         .title = "prefer-std-alias - bind hot std.* names at file scope, use bare",
         .body =
         \\Frequently-used std members read better aliased once at file scope
@@ -1033,6 +1068,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "reserved-math-names",
+        .opt_in = true,
         .title = "Rule - reserved math vocabulary: don't shadow the zm.* core",
         .body =
         \\A curated core of common math words - dot, cross, length, normalize,
@@ -1077,28 +1113,27 @@ const rule_notes = [_]RuleNote{
         \\flagged too.  The ONLY exemption is the canonical definitions in
         \\`zimrmath.zig` themselves (`pub const Vec = @Vector(4, f32)` etc.).
         \\
-        \\GATING (the tree is fully migrated).  `--fix` rewrites the whole
-        \\`@Vector(N, f32)` span to the alias (only the f32 widths 2/3/4 have
-        \\aliases; other element types / widths keep the raw form).
-        \\`--no-prefer-vec` disables the rule; `// lint:off prefer-vec: <why>`
-        \\for a single deliberate raw use.
+        \\`--fix` rewrites the whole `@Vector(N, f32)` span to the alias (only
+        \\the f32 widths 2/3/4 have aliases; other element types / widths keep
+        \\the raw form).  `// lint:off prefer-vec: <why>` for a single
+        \\deliberate raw use.
         ,
     },
     .{
         .tag = "anon-return",
-        .title = "Survey rule - anonymous struct return types",
+        .opt_in = true,
+        .title = "anon-return - name the struct a function returns",
         .body =
         \\Functions returning `struct { ... }` directly are awkward at
         \\call sites: callers can't write `const x: ReturnType = ...`
         \\because identically-shaped anonymous structs are DISTINCT
         \\types in Zig.  Workarounds are `@TypeOf(call())` (verbose)
-        \\or skipping the annotation (violates rule 2).  The fix is
-        \\to name the type, e.g.
+        \\or skipping the annotation (violates untyped-local).  The fix
+        \\is to name the type, e.g.
         \\  `pub const LogicalPoint = struct { x: f32, y: f32 };`
         \\  `pub fn cssToLogical(...) LogicalPoint { ... }`
-        \\Defaults to OFF - opt in with `--only=anon-return` for the
-        \\survey.  Whether to ban these via a hard rule is TBD; the
-        \\survey output informs that decision.
+        \\Opt-in, and meant to be enabled together with untyped-local:
+        \\without that rule a caller can simply leave the local untyped.
         ,
     },
     .{
@@ -1157,6 +1192,7 @@ const rule_notes = [_]RuleNote{
     },
     .{
         .tag = "decl-order",
+        .opt_in = true,
         .title = "decl-order - declare file-scope names before they are used",
         .body =
         \\A reference to a file-scope `fn`, `const`, or `var` appears before
@@ -1393,6 +1429,152 @@ const rule_notes = [_]RuleNote{
         \\it, or `// lint:off import-at-root: <why>` for a file that is all imports.
         ,
     },
+    .{
+        .tag = "state-uninit",
+        .title = "state-uninit - an app's State must be born from a `.{...}` literal",
+        .body =
+        \\`var s: State = undefined` in a file that declares an `AppSpec` skips the
+        \\one check that keeps app state honest: a struct literal makes the compiler
+        \\demand every field (or its default, or an explicit `= undefined`), while a
+        \\whole-struct `undefined` filled in piecemeal leaves any forgotten field as
+        \\garbage. Only files declaring an AppSpec are checked - other modules have
+        \\their own unrelated `State` types that may legitimately start undefined.
+        \\
+        \\Fix: `var s: State = .{ ... };`, or `// lint:off state-uninit: <why>`.
+        ,
+    },
+    .{
+        .tag = "no-qualified-zm",
+        .opt_in = true,
+        .title = "no-qualified-zm - bind zm math keywords once at file scope, use them bare",
+        .body =
+        \\In a file with a column-0 `const zm = @import("zm");`, a zm KEYWORD (the
+        \\curated core vocabulary: length, dot, cross, clamp, vec, ...) is used bare
+        \\through a file-scope binding - `const length = zm.length;` then
+        \\`length(v)` - never qualified inline as `zm.length(v)` in a body. Math reads
+        \\like math, and the binding block at the top of the file is the list of
+        \\what the file uses. Non-keyword zm helpers may stay qualified.
+        \\
+        \\`--fix` drops the `zm.` when the binding already exists. Otherwise add
+        \\the binding, or `// lint:off no-qualified-zm: <why>` when a local
+        \\already owns the name.
+        ,
+    },
+    .{
+        .tag = "custom-degrad",
+        .title = "custom-degrad - one spelling for degree/radian conversion",
+        .body =
+        \\`deg2rad`, `DEG2RAD`, `toRadians`, `degrees_to_radians` and their
+        \\siblings are the same conversion under a dozen names. zimr has exactly
+        \\one: `zm.radFromDeg` / `zm.degFromRad`, or the constants
+        \\`zm.rad_per_deg` / `zm.deg_per_rad`. Only those exact banned names fire.
+        \\
+        \\Fix: call the zm helper and delete the local copy.
+        ,
+    },
+    .{
+        .tag = "no-std-timer",
+        .title = "no-std-timer - std.time.Timer does not exist in the pinned std",
+        .body =
+        \\The pinned Zig has no `std.time.Timer` (nor `nanoTimestamp` /
+        \\`milliTimestamp`), so this fails to compile with an unhelpful "struct
+        \\'time' has no member" error. The rule exists to put the real answer next
+        \\to the error: in an app, time things with the frame clock (`f.time` on the
+        \\Frame). A native host-only tool that needs a monotonic clock opts out with
+        \\`// lint:off no-std-timer: <why>`.
+        ,
+    },
+    .{
+        .tag = "debug-print",
+        .title = "debug-print - no std.debug.print in code that ships as wasm",
+        .body =
+        \\`std.debug.print` bypasses `std_options.logFn` and writes to the raw
+        \\stderr writer, whose wasm path traps under ReleaseSmall - a SILENT freeze
+        \\in a release page. The sanctioned sink is `std.log.*`, which zimr routes
+        \\to the browser console on wasm and to stderr on the host.
+        \\
+        \\Fix: `std.log.info(...)` / `.warn` / `.err`. Native host-only code opts
+        \\out with `// lint:off debug-print: <why>`.
+        ,
+    },
+    .{
+        .tag = "float-from-int",
+        .title = "float-from-int - `@as(f32, @floatFromInt(x))` is `zm.float(x)`",
+        .body =
+        \\The `@as(T, ...)` wrapper exists only to give `@floatFromInt` a result
+        \\type, which the zm helpers already carry: `zm.float(x)` -> f32,
+        \\`zm.float64(x)` -> f64. A bare `@floatFromInt(x)` whose type comes from
+        \\context is left alone.
+        \\
+        \\`--fix` rewrites to `float(x)` when the file binds `const float =
+        \\zm.float;`, and to `zm.float(x)` when it only imports zm.
+        ,
+    },
+    .{
+        .tag = "shader-safe",
+        .title = "shader-safe - a SHADER-SAFE file stays compilable for the GPU",
+        .body =
+        \\A file starting with `//! SHADER-SAFE` (and every `*_io.zig` shader
+        \\interface) promises it compiles for SPIR-V. Allocators, heap containers,
+        \\filesystem and runtime IO, `std.debug.print`, `extern fn` and the wasm
+        \\bridge imports cannot, so they are banned outside `test` blocks - the
+        \\breakage otherwise shows up only when a shader that imports the file is
+        \\built.
+        \\
+        \\Fix: move the host-only code to a file that is not marked SHADER-SAFE.
+        ,
+    },
+    .{
+        .tag = "scope-balance",
+        .title = "scope-balance - every begin{X} in a function has its end{X}",
+        .body =
+        \\A function that calls `beginDrawing`, `beginMode3D`, `beginChild`, ...
+        \\must also call the matching `end*` - directly or through `defer`. A missing
+        \\end leaves the renderer or UI in the wrong scope for the rest of the frame,
+        \\which shows up as a blank or corrupted frame rather than an error.
+        \\
+        \\Fix: add the `end*` (a `defer z.endX();` right after the begin is the
+        \\usual form). A helper that deliberately opens a scope its caller closes
+        \\carries `// lint:off scope-balance: <why>`.
+        ,
+    },
+    .{
+        .tag = "screaming-const",
+        .title = "screaming-const - file-scope value consts are snake_case",
+        .body =
+        \\Zig's style: types are PascalCase, values are snake_case. An all-caps
+        \\`MAX_ITEMS` is the C-macro spelling and reads as foreign next to every
+        \\other name in the file.
+        \\
+        \\Fix: `max_items`, or `// lint:off screaming-const: <why>` for a name
+        \\mirrored from an external spec.
+        ,
+    },
+    .{
+        .tag = "shader-missing-entry",
+        .title = "shader-missing-entry - a shader body must bind its SPIR-V entry",
+        .body =
+        \\A `_fs.zig` / `_vs.zig` body that imports its generated `*_externs` module
+        \\and defines `shaderMain` must call `installSpirvEntry(shaderMain)`.
+        \\Without it the file compiles clean and passes the headless smoke:
+        \\`shaderMain` is unreferenced, the SPIR-V backend strips it, and the WGSL
+        \\comes out empty - which fails only on a real GPU, as "entryPoint doesn't
+        \\exist". The lint gate is the last place to catch it before hardware.
+        ,
+    },
+    .{
+        .tag = "unknown-lint-tag",
+        .title = "unknown-lint-tag - a `lint:off` names a rule that does not exist",
+        .body =
+        \\A `// lint:off <tag>` or `//! lint:off <tag>` whose tag is not a rule
+        \\silences nothing: it is a typo that fails silently, or a leftover from a
+        \\rule that was renamed or deleted. Either way the comment lies about the
+        \\code next to it.
+        \\
+        \\Fix: correct the tag (the rule list is the `rule_notes` table in
+        \\tools/zimrlint.zig), or delete the stale directive.
+        ,
+    },
 };
 
 fn lookupRuleNote(tag: []const u8) ?RuleNote {
@@ -1402,6 +1584,32 @@ fn lookupRuleNote(tag: []const u8) ?RuleNote {
         }
     }
     return null;
+}
+
+/// Index of `tag` in `rule_notes`, or null for a string that is not a rule.
+fn ruleIndex(tag: []const u8) ?usize {
+    for (rule_notes, 0..) |note, i| {
+        if (eql(u8, note.tag, tag)) {
+            return i;
+        }
+    }
+    return null;
+}
+
+/// Which opt-in rules this run enables, indexed like `rule_notes`. Entries for
+/// always-on rules are never read.
+const EnabledRules = [rule_notes.len]bool;
+
+/// Whether issues tagged `tag` are reported in this run: always-on rules always
+/// are, opt-in rules only when `--enable` named them. An emitted tag with no
+/// `rule_notes` entry is a linter bug, and is reported loudly rather than
+/// silently kept or dropped.
+fn ruleEnabled(enabled: *const EnabledRules, tag: []const u8) bool {
+    const i: usize = ruleIndex(tag) orelse std.debug.panic(
+        "zimrlint bug: a check emitted '{s}', which has no rule_notes entry",
+        .{tag},
+    );
+    return !rule_notes[i].opt_in or enabled[i];
 }
 
 /// PascalCase with >=1 lowercase letter, OR single uppercase letter.
@@ -2084,11 +2292,12 @@ fn checkVarDecl(
     // defaulted / explicitly `= undefined`), but starting from whole-struct
     // `undefined` and filling piecemeal leaves any forgotten field as garbage.
     // Require the State to be born from a `.{...}` literal instead. Scoped to
-    // example files, where `State` is the AppSpec state type (other modules have
-    // their own unrelated `State` structs that legitimately use `= undefined`).
-    if (std.mem.indexOf(u8, ctx.path, "examples/") != null and
-        vd.ast.type_node != .none and isStateTypedVar(ast, vd))
-    {
+    // files that declare an AppSpec, where `State` is the app's state type (other
+    // modules have their own unrelated `State` structs that legitimately use
+    // `= undefined`). Keyed on content, not on an `examples/` path: that never
+    // matched Windows' `.\examples\...` paths, and an app outside zimr's tree has
+    // no `examples/` at all.
+    if (ctx.declares_app and vd.ast.type_node != .none and isStateTypedVar(ast, vd)) {
         if (vd.ast.init_node.unwrap()) |init_node| {
             if (initIsUndefined(ast, init_node)) {
                 try ctx.emitAt(
@@ -2347,9 +2556,6 @@ fn checkStdMath(
 /// reserved-math rule, is every file using these types); a file that somehow
 /// lacks the binding gets a report to add it.
 fn checkPreferVec(ctx: Ctx, node: Index, tag: Ast.Node.Tag) !void {
-    if (!ctx.prefer_vec) {
-        return;
-    }
     if (tag != .builtin_call_two and tag != .builtin_call_two_comma) {
         return;
     }
@@ -3157,8 +3363,19 @@ fn checkFloatFromInt(
     const x_end: usize = ast.tokenStart(x_last) + ast.tokenSlice(x_last).len;
     const x_src: []const u8 = ctx.source[x_start..x_end];
 
+    // The fix spells the helper the way the file can resolve it: bare when the file
+    // binds `const float = zm.float;`, qualified when it only imports zm. A bare
+    // `float(x)` with no binding is an undeclared identifier, which the fix loop's
+    // guard catches by throwing away the whole pass - every other fix with it. A
+    // file that doesn't import zm at all gets the report without a fix.
+    const message: []const u8 = "@as({s}, @floatFromInt(x)) is redundant - use zm.{s}(x)";
     // A temporary: `emitFix` copies it if the issue is kept, so it is freed here either way.
-    const replacement: []const u8 = try allocPrint(ctx.alloc, "{s}({s})", .{ helper, x_src });
+    const replacement: []const u8 = if (fileScopeBindsZm(ast, ctx.zm_aliases, helper))
+        try allocPrint(ctx.alloc, "{s}({s})", .{ helper, x_src })
+    else if (ctx.zm_aliases.len > 0)
+        try allocPrint(ctx.alloc, "{s}.{s}({s})", .{ ctx.zm_aliases[0], helper, x_src })
+    else
+        return ctx.emitAt(ast.nodeMainToken(node), "float-from-int", 0, message, .{ ty_slice, helper });
     defer ctx.alloc.free(replacement);
 
     try ctx.emitFix(
@@ -3166,7 +3383,7 @@ fn checkFloatFromInt(
         "float-from-int",
         0,
         .{ .start = as_start, .end = as_end, .replacement = replacement },
-        "@as({s}, @floatFromInt(x)) is redundant - use zm.{s}(x)",
+        message,
         .{ ty_slice, helper },
     );
 }
@@ -5557,6 +5774,93 @@ fn runScreamingConsts(ctx: Ctx) !void {
     }
 }
 
+/// True when `s` is shaped like a rule tag: non-empty lowercase kebab-case.
+/// Anything else after `lint:off` - `<tag>`, `...` - is prose ABOUT the
+/// directive, not a directive.
+fn isTagShaped(s: []const u8) bool {
+    if (s.len == 0) {
+        return false;
+    }
+    for (s) |c| {
+        const ok: bool = (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '-';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// `unknown-lint-tag`: a `// lint:off` / `//! lint:off` naming a tag that is not
+/// a rule suppresses nothing, so it is either a typo or left over from a rule
+/// that was renamed or deleted.
+///
+/// Only real directives are checked. Mentions of the syntax are skipped: a
+/// `///` doc line or a `\\` multiline-string line, a marker quoted in backticks
+/// or inside a string literal (an odd number of `"` before it), and a tag list
+/// that isn't tag-shaped (`<tag>`). The file-level form is recognised only at
+/// the start of a line, matching `fileSuppressedByDirective`.
+fn runUnknownLintTags(ctx: Ctx) !void {
+    var lines: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, ctx.source, '\n');
+    var line_no: u32 = 0;
+    while (lines.next()) |line| {
+        line_no += 1;
+        const trimmed: []const u8 = std.mem.trimStart(u8, line, " \t");
+        const file_marker: []const u8 = "//! lint:off";
+        const line_marker: []const u8 = "// lint:off";
+        var list_start: usize = undefined;
+        if (startsWith(u8, trimmed, file_marker)) {
+            list_start = (line.len - trimmed.len) + file_marker.len;
+        } else {
+            if (startsWith(u8, trimmed, "///") or startsWith(u8, trimmed, "\\\\")) {
+                continue;
+            }
+            const idx: usize = std.mem.indexOf(u8, line, line_marker) orelse continue;
+            if (idx > 0 and line[idx - 1] == '`') {
+                continue;
+            }
+            const quotes: usize = std.mem.count(u8, line[0..idx], "\"");
+            if (quotes % 2 == 1) {
+                continue;
+            }
+            list_start = idx + line_marker.len;
+        }
+        while (list_start < line.len and (line[list_start] == ' ' or line[list_start] == '\t')) {
+            list_start += 1;
+        }
+        var list_end: usize = list_start;
+        while (list_end < line.len) : (list_end += 1) {
+            const c: u8 = line[list_end];
+            if (c == ':' or c == ' ' or c == '\t' or c == '\r') {
+                break;
+            }
+        }
+        const list: []const u8 = line[list_start..list_end];
+        var shaped: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, list, ',');
+        var all_shaped: bool = list.len > 0;
+        while (shaped.next()) |tag| {
+            if (!isTagShaped(tag)) {
+                all_shaped = false;
+            }
+        }
+        if (!all_shaped) {
+            continue;
+        }
+        var tags: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, list, ',');
+        while (tags.next()) |tag| {
+            if (ruleIndex(tag) == null) {
+                try ctx.emit(
+                    line_no,
+                    @intCast(list_start + 1),
+                    "unknown-lint-tag",
+                    0,
+                    "`lint:off {s}` names no rule - fix the tag or delete the directive",
+                    .{tag},
+                );
+            }
+        }
+    }
+}
+
 fn runChecks(ctx: Ctx) !void {
     // Fast path for the reorder tooling: run ONLY the decl-order check and skip
     // the full node walk + every other rule. Turns an O(all-rules) pass into a
@@ -5601,6 +5905,7 @@ fn runChecks(ctx: Ctx) !void {
     // node-by-node, so they live outside the walk.
     try runLineLength(ctx);
     try runAsciiComments(ctx);
+    try runUnknownLintTags(ctx);
     try runDepthFormat(ctx);
     try runShaderChecks(ctx);
     try runShaderSafeChecks(ctx);
@@ -6059,6 +6364,10 @@ fn scanArrayMult(
 // Driver.
 // ============================================================================
 
+/// Where the per-file clean stamps live unless `--cache-dir` says otherwise:
+/// zimr's own tools cache, which survives `rm -rf .zig-cache` at the root.
+const default_stamp_dir = "tools/.zig-cache/lint-stamps";
+
 const Args = struct {
     files: ArrayList([]const u8),
     /// `--baseline <path>` grandfathers the violations a tree already has.
@@ -6081,11 +6390,11 @@ const Args = struct {
     /// `--write-baseline` regenerates that file from the current tree instead of checking
     /// against it. Run it only when deliberately accepting a new backlog.
     write_baseline: bool = false,
-    /// `--decl-order` opts in to the (migration-stage) decl-order rule. It is
-    /// OFF by default so the standing lint gate stays green while files are
-    /// reorganised into declare-before-use order incrementally.
-    decl_order: bool = false,
-    /// `--decl-order-only` runs ONLY the decl-order check (implies decl_order).
+    /// `--enable=<tag>[,<tag>...]` turns on opt-in rules (see `RuleNote.opt_in`).
+    /// Naming an always-on rule, or a tag that is not a rule, is a usage error:
+    /// there is deliberately no way to turn a rule OFF.
+    enabled: EnabledRules = @splat(false),
+    /// `--decl-order-only` runs ONLY the decl-order check (implies enabling it).
     decl_order_only: bool = false,
     /// `--fix` applies the mechanical autofixes in place (mirrors `zig fmt`'s
     /// write mode). Off by default so the gate stays a pure check.
@@ -6095,8 +6404,12 @@ const Args = struct {
     check: bool = false,
     /// `--dry-run` (with `--fix`) reports what would change but writes nothing.
     dry_run: bool = false,
-    /// prefer-vec gates by default; `--no-prefer-vec` turns it off (see Ctx).
-    prefer_vec: bool = true,
+    /// `--list-rules` prints every rule tag, marking the opt-in ones, and exits.
+    list_rules: bool = false,
+    /// `--cache-dir <dir>` puts the per-file clean stamps somewhere other than
+    /// zimr's `tools/.zig-cache/lint-stamps` - an app linting its own sources
+    /// passes its build cache, so nothing is written into its source tree.
+    cache_dir: []const u8 = default_stamp_dir,
 
     /// Module alias declarations gathered from every input file's
     /// `//! lint:alias <name>` header, driving `canonical-alias`.
@@ -6112,9 +6425,9 @@ const Args = struct {
 // ============================================================================
 // Files are linted in one batch but we don't want to re-process clean
 // files on every invocation.  For each file passed in, we maintain a
-// stamp at `tools/.zig-cache/lint-stamps/<hash>.stamp` containing the
-// source file's mtime AND the lint binary's mtime at the moment we
-// last produced 0 issues for that file.
+// stamp at `<cache-dir>/<hash>.stamp` containing the source file's
+// mtime AND the lint binary's mtime at the moment we last produced 0
+// issues for that file.
 //
 // If both mtimes match on the next run, the file is skipped.  Editing
 // any file re-lints just that file.  Rebuilding the linter (binary
@@ -6122,25 +6435,27 @@ const Args = struct {
 // lint-check` after a single-file edit drops from ~2.4s to ~0.X s.
 // See turn 382 notes.
 
-const stamp_dir_path = "tools/.zig-cache/lint-stamps";
-
 const Stamp = extern struct {
     source_mtime_ns: i128,
     binary_mtime_ns: i128,
-    /// Hash of every `//! lint:alias` declaration in the run. `canonical-alias`
-    /// makes one file's verdict depend on ANOTHER file's header, which the
-    /// per-file mtime cache alone can't see: edit zimrmath.zig's directive and
-    /// every importer's cached "clean" is stale. Folding the registry into the
-    /// stamp invalidates all of them at once.
-    alias_registry_hash: u64,
+    /// Hash of everything besides the file itself that decides its verdict:
+    ///   * every `//! lint:alias` declaration in the run - `canonical-alias`
+    ///     makes one file's verdict depend on ANOTHER file's header, so editing
+    ///     zimrmath.zig's directive must invalidate every importer's "clean";
+    ///   * which opt-in rules are enabled - a file clean without untyped-local
+    ///     is not clean with it, and before this was folded in, a run with a
+    ///     new `--enable` skipped every stamped file and reported nothing;
+    ///   * `--decl-order-only`, which runs one rule and so proves nothing about
+    ///     the rest.
+    config_hash: u64,
 };
 
-fn stampPathFor(arena: Allocator, source_path: []const u8) ![]const u8 {
+fn stampPathFor(arena: Allocator, cache_dir: []const u8, source_path: []const u8) ![]const u8 {
     // Hash the path so source files at deep paths still map to a flat
     // stamp filename.  Wyhash is plenty for collision avoidance
     // among ~150 files.
     const hash: u64 = std.hash.Wyhash.hash(0, source_path);
-    return allocPrint(arena, stamp_dir_path ++ "/{x:0>16}.stamp", .{hash});
+    return allocPrint(arena, "{s}/{x:0>16}.stamp", .{ cache_dir, hash });
 }
 
 fn loadStamp(
@@ -6169,19 +6484,91 @@ fn writeStamp(
     }) catch @panic("OOM");
 }
 
+/// A malformed command line. The message has already been printed.
+const UsageError = error{Usage};
+
+/// Prints the opt-in rule tags, the only valid values for `--enable`.
+fn printOptInRules() void {
+    std.debug.print("opt-in rules:", .{});
+    for (rule_notes) |note| {
+        if (note.opt_in) {
+            std.debug.print(" {s}", .{note.tag});
+        }
+    }
+    std.debug.print("\n", .{});
+}
+
+/// Turns on each opt-in rule named in the comma-separated `list`. A tag that is
+/// not a rule, or that names an always-on rule, is a usage error - printed here,
+/// where the message can say which of the two it was.
+fn enableRules(enabled: *EnabledRules, list: []const u8) UsageError!void {
+    var it: std.mem.TokenIterator(u8, .scalar) = std.mem.tokenizeScalar(u8, list, ',');
+    while (it.next()) |tag| {
+        const i: usize = ruleIndex(tag) orelse {
+            std.debug.print("zimrlint: --enable: '{s}' is not a rule\n", .{tag});
+            printOptInRules();
+            return error.Usage;
+        };
+        if (!rule_notes[i].opt_in) {
+            std.debug.print("zimrlint: --enable: '{s}' is always on; only opt-in rules take --enable\n", .{tag});
+            printOptInRules();
+            return error.Usage;
+        }
+        enabled[i] = true;
+    }
+}
+
+/// Hash of the run's configuration that a per-file verdict depends on - see
+/// `Stamp.config_hash`. Opt-in rules are hashed in `rule_notes` order, so the
+/// order they were listed in on the command line does not matter.
+fn configHash(args: *const Args) u64 {
+    var h: std.hash.Wyhash = .init(0);
+    for (args.aliases) |d| {
+        h.update(d.stem);
+        h.update("=");
+        h.update(d.alias);
+        h.update(";");
+    }
+    for (rule_notes, 0..) |note, i| {
+        if (note.opt_in and args.enabled[i]) {
+            h.update("+");
+            h.update(note.tag);
+        }
+    }
+    if (args.decl_order_only) {
+        h.update("decl-order-only");
+    }
+    return h.final();
+}
+
 fn parseArgs(alloc: Allocator, argv: []const [:0]const u8) !Args {
     var a: Args = .{
         .files = .empty,
     };
+    errdefer a.files.deinit(alloc);
+    const enable_flag: []const u8 = "--enable=";
     var i: usize = 1; // skip program name
     while (i < argv.len) : (i += 1) {
-        if (eql(u8, argv[i], "--decl-order")) {
-            a.decl_order = true;
+        if (startsWith(u8, argv[i], enable_flag)) {
+            try enableRules(&a.enabled, argv[i][enable_flag.len..]);
             continue;
         }
         if (eql(u8, argv[i], "--decl-order-only")) {
-            a.decl_order = true;
+            a.enabled[ruleIndex("decl-order").?] = true;
             a.decl_order_only = true;
+            continue;
+        }
+        if (eql(u8, argv[i], "--cache-dir")) {
+            i += 1;
+            if (i >= argv.len) {
+                std.debug.print("zimrlint: --cache-dir needs a directory\n", .{});
+                return error.Usage;
+            }
+            a.cache_dir = argv[i];
+            continue;
+        }
+        if (eql(u8, argv[i], "--list-rules")) {
+            a.list_rules = true;
             continue;
         }
         if (eql(u8, argv[i], "--baseline")) {
@@ -6207,13 +6594,12 @@ fn parseArgs(alloc: Allocator, argv: []const [:0]const u8) !Args {
             a.dry_run = true;
             continue;
         }
-        if (eql(u8, argv[i], "--prefer-vec")) {
-            a.prefer_vec = true; // back-compat no-op (now default on)
-            continue;
-        }
-        if (eql(u8, argv[i], "--no-prefer-vec")) {
-            a.prefer_vec = false;
-            continue;
+        // An unrecognised flag is an error, not a file name: read as a path it
+        // failed with a read error that was printed and skipped, so a retired
+        // flag like `--decl-order` silently did nothing.
+        if (startsWith(u8, argv[i], "--")) {
+            std.debug.print("zimrlint: unknown flag '{s}'\n", .{argv[i]});
+            return error.Usage;
         }
         try a.files.append(alloc, argv[i]);
     }
@@ -6224,7 +6610,37 @@ fn parseArgs(alloc: Allocator, argv: []const [:0]const u8) !Args {
 /// Returns whether the file had parse errors (AST checks are skipped if so).
 /// Mirrors the per-file body of `main` so the check path and the fix loop share
 /// exactly one analysis routine.
+///
+/// Issues from opt-in rules the run did not `--enable` are dropped HERE, the one
+/// point every issue passes through - AST checks, the raw-text scans that append
+/// directly, and parse errors alike. Filtering at the end rather than gating each
+/// check keeps the checks unaware of configuration, and because the fix loop
+/// analyses through this same function, a disabled rule's autofix is never
+/// applied either.
 fn analyzeSource(
+    gpa: Allocator,
+    path: []const u8,
+    source_z: [:0]u8,
+    args: *const Args,
+    issues: *ArrayList(Issue),
+) !bool {
+    const first_new: usize = issues.items.len;
+    const has_parse_errors: bool = try analyzeSourceAllRules(gpa, path, source_z, args, issues);
+    var kept: usize = first_new;
+    for (issues.items[first_new..]) |is| {
+        if (ruleEnabled(&args.enabled, is.tag)) {
+            issues.items[kept] = is;
+            kept += 1;
+        } else {
+            is.deinit(gpa);
+        }
+    }
+    issues.items.len = kept;
+    return has_parse_errors;
+}
+
+/// `analyzeSource` before the opt-in filter: every check, every rule.
+fn analyzeSourceAllRules(
     gpa: Allocator,
     path: []const u8,
     source_z: [:0]u8,
@@ -6272,10 +6688,10 @@ fn analyzeSource(
         .zm_aliases = zm_alias_buf[0..zm_alias_n],
         .std_aliases = std_alias_buf[0..std_alias_n],
         .canonical_zm_inits = canon_inits,
-        .prefer_vec = args.prefer_vec,
         .zm_col0 = hasCol0ZmImport(source_z),
         .std_col0 = hasCol0StdImport(source_z),
-        .check_decl_order = args.decl_order,
+        .declares_app = std.mem.indexOf(u8, source_z, "AppSpec(") != null,
+        .check_decl_order = args.enabled[ruleIndex("decl-order").?],
         .decl_order_only = args.decl_order_only,
         .aliases = args.aliases,
     };
@@ -6630,19 +7046,35 @@ pub fn main(init: std.process.Init) !u8 {
 
     const argv: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
 
-    var args: Args = try parseArgs(gpa, argv);
+    var args: Args = parseArgs(gpa, argv) catch |e| switch (e) {
+        error.Usage => return 2,
+        else => return e,
+    };
     defer args.deinit(gpa);
 
+    if (args.list_rules) {
+        var list_buf: [1024]u8 = undefined;
+        var list_writer: std.Io.File.Writer = std.Io.File.stdout().writer(io, &list_buf);
+        for (rule_notes) |note| {
+            try list_writer.interface.print("{s}{s}\n", .{ note.tag, if (note.opt_in) "  (opt-in)" else "" });
+        }
+        try list_writer.interface.flush();
+        return 0;
+    }
     if (args.files.items.len == 0) {
-        std.debug.print("usage: zimrlint <file.zig> [<file2.zig> ...]\n", .{});
+        std.debug.print(
+            "usage: zimrlint [--enable=<tag>,...] [--fix] [--cache-dir <dir>] <file.zig> ...\n" ++
+                "       zimrlint --list-rules\n",
+            .{},
+        );
         return 0;
     }
 
     // ---- Per-file mtime cache setup --------------------------------
-    // Stamps live under tools/.zig-cache/lint-stamps/ so they survive
-    // `rm -rf .zig-cache` in the project root.  --no-cache or --fix
-    // disable lookups (but --no-cache still writes fresh stamps).
-    std.Io.Dir.cwd().createDirPath(io, stamp_dir_path) catch {}; // lint:off catch-suppression: stamp dir, non-fatal
+    // Stamps live under tools/.zig-cache/lint-stamps/ by default so they
+    // survive `rm -rf .zig-cache` in the project root; `--cache-dir` moves
+    // them. `--fix --dry-run` skips lookups.
+    std.Io.Dir.cwd().createDirPath(io, args.cache_dir) catch {}; // lint:off catch-suppression: stamp dir, non-fatal
     const binary_mtime_ns: i128 = blk: {
         const stat: std.Io.Dir.Stat = std.Io.Dir.cwd().statFile(io, argv[0], .{}) catch break :blk 0;
         break :blk stat.mtime.nanoseconds;
@@ -6670,18 +7102,14 @@ pub fn main(init: std.process.Init) !u8 {
         });
     }
     args.aliases = alias_list.items;
-    const alias_registry_hash: u64 = blk: {
-        var h: std.hash.Wyhash = .init(0);
-        for (alias_list.items) |d| {
-            h.update(d.stem);
-            h.update("=");
-            h.update(d.alias);
-            h.update(";");
-        }
-        break :blk h.final();
-    };
+    const config_hash: u64 = configHash(&args);
 
     var total_issues: usize = 0;
+    // Inputs that could not be read (or, under --fix, written back). Each one fails
+    // the run: a path the linter could not open was not linted, and passing it
+    // meant a build handing over a directory (`b.path("src")`) linted nothing and
+    // went green.
+    var io_failures: usize = 0;
 
     // The grandfathered counts, keyed "<path>\t<tag>". Empty unless --baseline was given, in
     // which case every rule behaves exactly as it did before the ratchet existed.
@@ -6744,12 +7172,12 @@ pub fn main(init: std.process.Init) !u8 {
                 const stat: std.Io.Dir.Stat = std.Io.Dir.cwd().statFile(io, path, .{}) catch break :blk 0;
                 break :blk stat.mtime.nanoseconds;
             };
-            const fix_stamp_path: []const u8 = try stampPathFor(arena, path);
+            const fix_stamp_path: []const u8 = try stampPathFor(arena, args.cache_dir, path);
             if (!args.dry_run) {
                 if (loadStamp(io, gpa, fix_stamp_path)) |stamp| {
                     if (stamp.source_mtime_ns == fix_mtime_ns and
                         stamp.binary_mtime_ns == binary_mtime_ns and
-                        stamp.alias_registry_hash == alias_registry_hash)
+                        stamp.config_hash == config_hash)
                     {
                         continue;
                     }
@@ -6758,6 +7186,7 @@ pub fn main(init: std.process.Init) !u8 {
 
             const source_bytes: []u8 = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
                 std.debug.print("error reading {s}: {s}\n", .{ path, @errorName(e) });
+                io_failures += 1;
                 continue;
             };
             defer gpa.free(source_bytes);
@@ -6774,6 +7203,7 @@ pub fn main(init: std.process.Init) !u8 {
                 } else {
                     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = outcome.bytes }) catch |e| {
                         std.debug.print("error writing {s}: {s}\n", .{ path, @errorName(e) });
+                        io_failures += 1;
                         continue;
                     };
                     try out.print("fixed {d} in {s}\n", .{ outcome.edits_applied, path });
@@ -6808,7 +7238,7 @@ pub fn main(init: std.process.Init) !u8 {
                     writeStamp(io, fix_stamp_path, .{
                         .source_mtime_ns = stamp_mtime_ns,
                         .binary_mtime_ns = binary_mtime_ns,
-                        .alias_registry_hash = alias_registry_hash,
+                        .config_hash = config_hash,
                     });
                 }
             }
@@ -6821,11 +7251,11 @@ pub fn main(init: std.process.Init) !u8 {
             const stat: std.Io.Dir.Stat = std.Io.Dir.cwd().statFile(io, path, .{}) catch break :blk 0;
             break :blk stat.mtime.nanoseconds;
         };
-        const stamp_sub_path: []const u8 = try stampPathFor(arena, path);
+        const stamp_sub_path: []const u8 = try stampPathFor(arena, args.cache_dir, path);
         if (loadStamp(io, gpa, stamp_sub_path)) |stamp| {
             if (stamp.source_mtime_ns == source_mtime_ns and
                 stamp.binary_mtime_ns == binary_mtime_ns and
-                stamp.alias_registry_hash == alias_registry_hash)
+                stamp.config_hash == config_hash)
             {
                 continue;
             }
@@ -6833,6 +7263,7 @@ pub fn main(init: std.process.Init) !u8 {
 
         const source_bytes: []u8 = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
             std.debug.print("error reading {s}: {s}\n", .{ path, @errorName(e) });
+            io_failures += 1;
             continue;
         };
         defer gpa.free(source_bytes);
@@ -6903,7 +7334,7 @@ pub fn main(init: std.process.Init) !u8 {
             writeStamp(io, stamp_sub_path, .{
                 .source_mtime_ns = source_mtime_ns,
                 .binary_mtime_ns = binary_mtime_ns,
-                .alias_registry_hash = alias_registry_hash,
+                .config_hash = config_hash,
             });
         }
     }
@@ -6940,11 +7371,14 @@ pub fn main(init: std.process.Init) !u8 {
             .{ total_issues, args.files.items.len },
         );
     }
+    if (io_failures > 0) {
+        try out.print("\n{d} input(s) could not be read or written - pass files, not directories\n", .{io_failures});
+    }
     try out.flush();
 
     // The hard gate: any issue is a non-zero exit, so `zig build lint`, `lint-check`
-    // and every compile gated on lint fail on it.
-    if (has_issues) {
+    // and every compile gated on lint fail on it. So is an input that was never linted.
+    if (has_issues or io_failures > 0) {
         return 1;
     }
     return 0;
@@ -6974,8 +7408,18 @@ fn ruleFiresArgs(alloc: Allocator, src: []const u8, tag: []const u8, args: *Args
     return false;
 }
 
-fn ruleFires(alloc: Allocator, src: []const u8, tag: []const u8) !bool {
+/// An `Args` with every opt-in rule enabled - what the fires/clean harness uses,
+/// since it pins what each rule DOES, not whether a given run has it switched on.
+fn allRulesArgs() Args {
     var args: Args = .{ .files = .empty };
+    for (rule_notes, 0..) |note, i| {
+        args.enabled[i] = note.opt_in;
+    }
+    return args;
+}
+
+fn ruleFires(alloc: Allocator, src: []const u8, tag: []const u8) !bool {
+    var args: Args = allRulesArgs();
     return ruleFiresArgs(alloc, src, tag, &args);
 }
 
@@ -7391,6 +7835,9 @@ test "tags asserted by the harness are documented in rule_notes" {
         "redundant-import",
         "canonical-alias",
         "import-at-root",
+        "state-uninit",
+        "float-from-int",
+        "unknown-lint-tag",
     };
     for (tested) |tag| {
         var found: bool = false;
@@ -7401,4 +7848,106 @@ test "tags asserted by the harness are documented in rule_notes" {
         }
         try expect(found);
     }
+}
+
+test "an opt-in rule reports nothing unless enabled" {
+    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const src: []const u8 = "fn f(x: bool) void {\n    if (x) return;\n}\n";
+    var args: Args = .{ .files = .empty };
+    try expect(!try ruleFiresArgs(arena.allocator(), src, "branch-braces", &args));
+    try enableRules(&args.enabled, "branch-braces");
+    try expect(try ruleFiresArgs(arena.allocator(), src, "branch-braces", &args));
+}
+
+test "an always-on rule reports without any --enable" {
+    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var args: Args = .{ .files = .empty };
+    const src: []const u8 = "fn f() void {\n    foo() catch {};\n}\n";
+    try expect(try ruleFiresArgs(arena.allocator(), src, "catch-suppression", &args));
+}
+
+test "--enable accepts opt-in rules and rejects the rest" {
+    var enabled: EnabledRules = @splat(false);
+    try enableRules(&enabled, "untyped-local,anon-return");
+    try expect(enabled[ruleIndex("untyped-local").?]);
+    try expect(enabled[ruleIndex("anon-return").?]);
+    try expectError(error.Usage, enableRules(&enabled, "line-length"));
+    try expectError(error.Usage, enableRules(&enabled, "no-such-rule"));
+}
+
+test "the stamp config hash follows the enabled set, not its order" {
+    var a: Args = .{ .files = .empty };
+    var b: Args = .{ .files = .empty };
+    const none: u64 = configHash(&a);
+    try enableRules(&a.enabled, "untyped-local,branch-braces");
+    try enableRules(&b.enabled, "branch-braces,untyped-local");
+    try expect(configHash(&a) != none);
+    try expect(configHash(&a) == configHash(&b));
+}
+
+test "unknown-lint-tag fires on a directive naming no rule" {
+    try expectFires("const a: u32 = 1; // lint:off no-such-rule: why\n", "unknown-lint-tag");
+    try expectFires("//! lint:off branch-braces,no-such-rule\n", "unknown-lint-tag");
+}
+
+test "unknown-lint-tag stays quiet on real tags and on prose about the syntax" {
+    try expectClean("const a: u32 = 1; // lint:off line-length: why\n", "unknown-lint-tag");
+    try expectClean("// A reviewed exception carries `// lint:off tag-here: why`.\n", "unknown-lint-tag");
+    try expectClean("/// Write // lint:off rule: reason on the line.\n", "unknown-lint-tag");
+    try expectClean("// Add a // lint:off <tag>: <why> directive.\n", "unknown-lint-tag");
+    try expectClean("const marker: []const u8 = \"// lint:off nope\";\n", "unknown-lint-tag");
+}
+
+test "state-uninit fires only in a file that declares an AppSpec" {
+    const body: []const u8 = "fn f() void {\n    var s: State = undefined;\n    _ = &s;\n}\n";
+    const app: []const u8 = "pub const app: z.AppSpec(State) = .{};\n";
+    var buf: [256]u8 = undefined;
+    const with_app: []const u8 = try bufPrint(&buf, "{s}{s}", .{ app, body });
+    try expectFires(with_app, "state-uninit");
+    try expectClean(body, "state-uninit");
+}
+
+/// The replacement text of the first `tag` fix emitted for `src`, or null.
+fn fixReplacement(alloc: Allocator, src: []const u8, tag: []const u8) !?[]const u8 {
+    const src_z: [:0]u8 = try alloc.allocSentinel(u8, src.len, 0);
+    @memcpy(src_z[0..src.len], src);
+    var issues: ArrayList(Issue) = .empty;
+    var args: Args = allRulesArgs();
+    _ = try analyzeSource(alloc, "src/lint_fixture.zig", src_z, &args, &issues);
+    for (issues.items) |issue| {
+        if (eql(u8, issue.tag, tag)) {
+            if (issue.fix) |fx| {
+                return fx.replacement;
+            }
+        }
+    }
+    return null;
+}
+
+test "float-from-int fixes to the spelling the file can resolve" {
+    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a: Allocator = arena.allocator();
+    const bound: []const u8 =
+        \\const zm = @import("zm");
+        \\const float = zm.float;
+        \\fn f(n: u32) f32 {
+        \\    return @as(f32, @floatFromInt(n));
+        \\}
+        \\
+    ;
+    const unbound: []const u8 =
+        \\const zm = @import("zm");
+        \\fn f(n: u32) f32 {
+        \\    return @as(f32, @floatFromInt(n));
+        \\}
+        \\
+    ;
+    const no_zm: []const u8 = "fn f(n: u32) f32 {\n    return @as(f32, @floatFromInt(n));\n}\n";
+    try expect(eql(u8, (try fixReplacement(a, bound, "float-from-int")).?, "float(n)"));
+    try expect(eql(u8, (try fixReplacement(a, unbound, "float-from-int")).?, "zm.float(n)"));
+    try expect(try fixReplacement(a, no_zm, "float-from-int") == null);
+    try expectFires(no_zm, "float-from-int");
 }

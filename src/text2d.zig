@@ -15,6 +15,7 @@ const expectError = std.testing.expectError;
 const builtin = @import("builtin");
 const zm = @import("zm");
 const float = zm.float;
+const clamp = zm.clamp;
 const ceilPowerOfTwo = zm.ceilPowerOfTwo;
 // GL-retirement P5d: the GL texture bridge is gone.  Font GPU residency
 // on the wgpu path comes from WgpuGl registration (FontCache's
@@ -33,6 +34,7 @@ const types = @import("types.zig");
 const allocator_mod = @import("runtime.zig").allocator;
 const truetype = @import("codecs.zig").truetype;
 const rectpack = @import("codecs.zig").rectpack;
+const glyph_atlas = @import("glyph_atlas.zig");
 
 // Re-export the truetype + rectpack imports so tests and downstream
 // callers can reach them via `s.truetype` / `s.rectpack`
@@ -650,6 +652,9 @@ pub fn unloadFont(
     if (font.recs != null) {
         allocator_mod.freeMany(gpa, font.recs, @intCast(font.glyphCount));
     }
+    if (fontFace(font)) |face| {
+        destroyFontFace(gpa, face);
+    }
 }
 
 /// Free the CPU-side glyph data of a loaded (non-default) font: the per-glyph
@@ -666,6 +671,11 @@ pub fn unloadFontOwned(gpa: Allocator, font: Font) void {
     }
     if (font.recs != null) {
         allocator_mod.freeMany(gpa, font.recs, @intCast(font.glyphCount));
+    }
+    // The face's glyphs may still sit in the shared atlas; they are keyed by a
+    // never-reused face id, so they simply go unused until it starts over.
+    if (fontFace(font)) |face| {
+        destroyFontFace(gpa, face);
     }
 }
 
@@ -1427,11 +1437,403 @@ pub fn getGlyphAtlasRec(font: Font, codepoint: u21) Rectangle {
     return font.recs[getGlyphIndex(font, codepoint)];
 }
 
+// ===========================================================================
+// Glyphs rasterized at the size they are DRAWN
+// ===========================================================================
+//
+// See `glyph_atlas.zig` for why. The split: layout (advances, `measureWithFont`)
+// stays in logical units and never depends on the devicePixelRatio. At draw time
+// a backend that can rasterize on demand (WgpuGl - `glyphDeviceMapping`) says how
+// draw coordinates map to device pixels; each glyph is rasterized at exactly
+// that size the first time it is needed and drawn 1:1, its origin snapped to the
+// pixel grid. Backends without the hook (the CPU rasterizer, host tests) and
+// fonts without a face (bitmap, sprite, SDF, `loadFontBaked`) keep drawing from
+// the baked atlas.
+
+/// A font's outlines plus the metrics layout needs, kept alive so its glyphs can
+/// be rasterized on demand. Owned by the `Font` (`Font.face`, read it with
+/// `fontFace`); freed by `unloadFontOwned` / `unloadFont`.
+pub const FontFace = struct {
+    /// Keys this face's glyphs in the shared atlas. A counter, never an address:
+    /// an unloaded face's glyphs stay cached until the atlas starts over, and a
+    /// new face allocated at the same address must not find them.
+    id: u32,
+    /// The TTF, copied - `truetype.Font` borrows its bytes, and a caller may free
+    /// theirs as soon as `loadFont` returns.
+    ttf_bytes: []u8,
+    tt: truetype.Font,
+    /// Per glyph SLOT (index into `Font.glyphs`): the TTF glyph and its advance
+    /// in font units. By slot, not codepoint, so a codepoint the font was not
+    /// loaded with falls back to '?' exactly as it does on the baked path.
+    glyph_ids: []truetype.GlyphIndex,
+    advance_units: []i16,
+    /// Ascent, and ascent - descent (what `scaleForPixelHeight` divides by, so
+    /// sizes here mean what they mean for the baked atlas), in font units.
+    ascent_units: f32,
+    height_units: f32,
+
+    /// Font units -> pixels, for text `size` pixels tall.
+    pub fn pixelsPerUnit(face: *const FontFace, size: f32) f32 {
+        return size / face.height_units;
+    }
+};
+
+// lint:off module-var: the face-id counter must outlive every face (see FontFace.id)
+var next_font_face_id: u32 = 1;
+
+/// Build the face for a font baked from `ttf_bytes`; `glyphs` are that font's
+/// glyph slots, whose codepoints pick the TTF glyphs.
+pub fn createFontFace(
+    gpa: Allocator,
+    ttf_bytes: []const u8,
+    glyphs: []const GlyphInfo,
+) !*FontFace {
+    const face: *FontFace = try gpa.create(FontFace);
+    errdefer gpa.destroy(face);
+    const owned_bytes: []u8 = try gpa.dupe(u8, ttf_bytes);
+    errdefer gpa.free(owned_bytes);
+    const glyph_ids: []truetype.GlyphIndex = try gpa.alloc(truetype.GlyphIndex, glyphs.len);
+    errdefer gpa.free(glyph_ids);
+    const advance_units: []i16 = try gpa.alloc(i16, glyphs.len);
+    errdefer gpa.free(advance_units);
+    const tt: truetype.Font = try truetype.loadFontFromTtf(gpa, owned_bytes);
+    for (glyphs, glyph_ids, advance_units) |glyph, *glyph_id, *advance| {
+        glyph_id.* = tt.codepointGlyphIndex(@intCast(glyph.value));
+        advance.* = tt.glyphHMetrics(glyph_id.*).advance_width;
+    }
+    const vm: truetype.VerticalMetrics = tt.verticalMetrics();
+    face.* = .{
+        .id = next_font_face_id,
+        .ttf_bytes = owned_bytes,
+        .tt = tt,
+        .glyph_ids = glyph_ids,
+        .advance_units = advance_units,
+        .ascent_units = float(vm.ascent),
+        .height_units = float(vm.ascent) - float(vm.descent),
+    };
+    next_font_face_id += 1;
+    return face;
+}
+
+pub fn destroyFontFace(gpa: Allocator, face: *FontFace) void {
+    gpa.free(face.advance_units);
+    gpa.free(face.glyph_ids);
+    gpa.free(face.ttf_bytes);
+    gpa.destroy(face);
+}
+
+/// The face behind `font`, or null for a baked-only font.
+pub fn fontFace(font: Font) ?*FontFace {
+    const face_ptr: *anyopaque = font.face orelse return null;
+    return @ptrCast(@alignCast(face_ptr));
+}
+
+/// Largest size a glyph is rasterized at, in device px; bigger text is drawn
+/// from this, magnified.
+const glyph_max_px: f32 = 256;
+/// Up to this size (device px), sizes are cached to a quarter pixel and glyphs
+/// are positioned to a quarter pixel (four sub-pixel phases). Above it, sizes
+/// step ~2% and positions snap to whole pixels - differences nobody can see on
+/// big text, and without them a smoothly zooming heading would rasterize a new
+/// size every frame.
+const glyph_fine_px: f32 = 48;
+
+/// A device-pixel size -> the size the cache rasterizes it at, in quarter pixels.
+fn quantizeGlyphSize(size_px: f32) u32 {
+    const clamped_px: f32 = clamp(size_px, 1.0, glyph_max_px);
+    const step_quarters: f32 = if (clamped_px <= glyph_fine_px) 1.0 else @floor(clamped_px / 12.0);
+    const step_count: f32 = @round(clamped_px * 4.0 / step_quarters);
+    const size_quarters: u32 = @round(step_count * step_quarters);
+    return size_quarters;
+}
+
+/// The atlas entry for `key`, rasterizing and uploading the glyph the first time
+/// it is asked for. Null when the atlas has no room this frame (the caller then
+/// draws that glyph from the baked atlas). `pages` is the atlas's owner, which
+/// holds the GPU pages: `ensureGlyphPage(page) bool` creates one on first use,
+/// `writeGlyphPage(page, x, y, width, height, rgba)` uploads a rectangle.
+pub fn cachedGlyph(
+    atlas: *glyph_atlas.GlyphAtlas,
+    gpa: Allocator,
+    pages: anytype,
+    face: *const FontFace,
+    key: glyph_atlas.Key,
+) ?glyph_atlas.Entry {
+    if (atlas.find(key)) |entry| {
+        return entry;
+    }
+    const size_px: f32 = float(key.size_quarters) / 4.0;
+    const shift_x: f32 = float(key.phase) / 4.0;
+    const scale: f32 = face.pixelsPerUnit(size_px);
+    atlas.coverage.clearRetainingCapacity();
+    const bitmap: truetype.GlyphBitmap = face.tt.glyphBitmapSubpixel(
+        gpa,
+        &atlas.coverage,
+        face.glyph_ids[key.slot],
+        scale,
+        scale,
+        shift_x,
+        0,
+    ) catch return null;
+    var entry: glyph_atlas.Entry = .{ .offset_x = bitmap.off_x, .offset_y = bitmap.off_y };
+    const glyph_has_ink: bool = bitmap.width > 0 and bitmap.height > 0;
+    if (glyph_has_ink) {
+        const width: u32 = bitmap.width;
+        const height: u32 = bitmap.height;
+        const slot: glyph_atlas.Slot = atlas.reserve(gpa, width, height) orelse return null;
+        const page_ready: bool = pages.ensureGlyphPage(slot.page);
+        if (!page_ready) {
+            return null;
+        }
+        // The upload is the whole bordered slot - coverage in the alpha channel
+        // of white texels, the same format as the baked atlas - so the border is
+        // rewritten transparent too, whatever an earlier atlas generation left.
+        const upload_width: u32 = width + 2 * glyph_atlas.border;
+        const upload_height: u32 = height + 2 * glyph_atlas.border;
+        atlas.upload.resize(gpa, upload_width * upload_height * 4) catch return null;
+        const rgba: []u8 = atlas.upload.items;
+        @memset(rgba, 0);
+        for (0..height) |row| {
+            for (0..width) |col| {
+                const dst_row: usize = row + glyph_atlas.border;
+                const dst_col: usize = col + glyph_atlas.border;
+                const dst: usize = (dst_row * upload_width + dst_col) * 4;
+                rgba[dst + 0] = 255;
+                rgba[dst + 1] = 255;
+                rgba[dst + 2] = 255;
+                rgba[dst + 3] = atlas.coverage.items[row * width + col];
+            }
+        }
+        pages.writeGlyphPage(slot.page, slot.x, slot.y, upload_width, upload_height, rgba);
+        entry.page = slot.page;
+        entry.x = slot.x + glyph_atlas.border;
+        entry.y = slot.y + glyph_atlas.border;
+        entry.width = width;
+        entry.height = height;
+    }
+    atlas.remember(gpa, key, entry) catch return null;
+    return entry;
+}
+
+/// How draw coordinates map to device pixels at the moment of a draw - the
+/// backend's modelview composed with its pass's logical -> device mapping:
+/// `device_x = xx*x + xy*y + tx`, `device_y = yx*x + yy*y + ty`.
+pub const DeviceMapping = struct {
+    xx: f32 = 1,
+    xy: f32 = 0,
+    yx: f32 = 0,
+    yy: f32 = 1,
+    tx: f32 = 0,
+    ty: f32 = 0,
+};
+
+/// True for a backend that can rasterize glyphs on demand (WgpuGl). `GlPtr` is
+/// the type of the `gl` the text functions receive.
+fn rasterizesGlyphs(comptime GlPtr: type) bool {
+    return switch (@typeInfo(GlPtr)) {
+        .pointer => |ptr| @typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "glyphDeviceMapping"),
+        else => false,
+    };
+}
+
+/// One string's worth of glyph drawing. Decides ONCE whether glyphs come from
+/// the dynamic cache (a font with a face, on a backend that rasterizes) or from
+/// the baked atlas, and precomputes the device mapping for the former.
+const GlyphRun = struct {
+    font: Font,
+    font_size: f32,
+    tint: Color,
+    /// Null = draw from the baked atlas.
+    face: ?*const FontFace = null,
+    map: DeviceMapping = .{},
+    size_quarters: u32 = 0,
+    /// The mapping is an axis-aligned positive scale (no rotation, no flip):
+    /// glyph origins then snap to the pixel grid and bitmaps land 1:1.
+    snaps_to_pixels: bool = false,
+    /// Glyphs are small enough to be positioned to a quarter pixel.
+    uses_subpixel_phases: bool = false,
+    /// Device px per atlas texel: 1 unless the cached size had to be rounded by
+    /// more than a quarter pixel (big text), where the bitmap is then stretched
+    /// to the exact size.
+    texel_to_device: f32 = 1,
+    /// Draw units per atlas texel, for the unsnapped (rotated) path.
+    texel_to_draw: f32 = 1,
+    /// Baseline below the line-box top, in draw units.
+    ascent_draw: f32 = 0,
+
+    fn init(
+        gl: anytype,
+        font: Font,
+        font_size: f32,
+        tint: Color,
+    ) GlyphRun {
+        var run: GlyphRun = .{ .font = font, .font_size = font_size, .tint = tint };
+        if (comptime !rasterizesGlyphs(@TypeOf(gl))) {
+            return run;
+        }
+        const face: *const FontFace = fontFace(font) orelse return run;
+        const map: DeviceMapping = gl.glyphDeviceMapping();
+        const device_per_draw: f32 = @sqrt(@abs(map.xx * map.yy - map.xy * map.yx));
+        const drawn_px: f32 = font_size * device_per_draw;
+        const is_legible_size: bool = drawn_px >= 1.0 and drawn_px < 1.0e6;
+        if (!is_legible_size) {
+            return run;
+        }
+        const size_quarters: u32 = quantizeGlyphSize(drawn_px);
+        const cached_px: f32 = float(size_quarters) / 4.0;
+        const cached_size_is_exact: bool = @abs(drawn_px - cached_px) <= 0.25;
+        const tolerance: f32 = 1.0e-4;
+        const is_axis_aligned: bool = @abs(map.xy) <= tolerance * @abs(map.xx) and
+            @abs(map.yx) <= tolerance * @abs(map.yy) and map.xx > 0 and map.yy > 0;
+        run.face = face;
+        run.map = map;
+        run.size_quarters = size_quarters;
+        run.snaps_to_pixels = is_axis_aligned;
+        run.uses_subpixel_phases = is_axis_aligned and cached_size_is_exact and cached_px <= glyph_fine_px;
+        run.texel_to_device = if (cached_size_is_exact) 1.0 else drawn_px / cached_px;
+        run.texel_to_draw = font_size / cached_px;
+        run.ascent_draw = face.ascent_units * face.pixelsPerUnit(font_size);
+        return run;
+    }
+
+    /// Pen advance for glyph `slot`, in draw units (spacing not included).
+    fn advance(run: *const GlyphRun, slot: usize) f32 {
+        if (run.face) |face| {
+            return float(face.advance_units[slot]) * face.pixelsPerUnit(run.font_size);
+        }
+        const scale: f32 = run.font_size / float(run.font.baseSize);
+        const glyph: GlyphInfo = run.font.glyphs[slot];
+        if (glyph.advanceX == 0) {
+            return run.font.recs[slot].width * scale;
+        }
+        return float(glyph.advanceX) * scale;
+    }
+
+    /// Draw glyph `slot` (`codepoint`) with its line-box top-left at `pen`.
+    fn drawGlyph(
+        run: *const GlyphRun,
+        gl: anytype,
+        codepoint: u21,
+        slot: usize,
+        pen: Vec2,
+    ) void {
+        // Comptime: a backend without the hooks must not even compile the calls.
+        if (comptime !rasterizesGlyphs(@TypeOf(gl))) {
+            drawBakedCodepoint(gl, run.font, codepoint, pen, run.font_size, run.tint);
+            return;
+        }
+        const face: *const FontFace = run.face orelse {
+            drawBakedCodepoint(gl, run.font, codepoint, pen, run.font_size, run.tint);
+            return;
+        };
+        var key: glyph_atlas.Key = .{
+            .face_id = face.id,
+            .slot = @intCast(slot),
+            .size_quarters = run.size_quarters,
+            .phase = 0,
+        };
+        const baseline_draw_y: f32 = pen[1] + run.ascent_draw;
+        const map: DeviceMapping = run.map;
+        if (!run.snaps_to_pixels) {
+            // Rotated or flipped: nothing lines up with pixels, so place the
+            // bitmap in draw units and let the transform carry it.
+            const entry: glyph_atlas.Entry = gl.glyphEntry(face, key) orelse {
+                drawBakedCodepoint(gl, run.font, codepoint, pen, run.font_size, run.tint);
+                return;
+            };
+            const texel: f32 = run.texel_to_draw;
+            const dst: Rectangle = .{
+                .x = pen[0] + float(entry.offset_x) * texel,
+                .y = baseline_draw_y + float(entry.offset_y) * texel,
+                .width = float(entry.width) * texel,
+                .height = float(entry.height) * texel,
+            };
+            emitGlyphQuad(gl, entry, dst, run.tint);
+            return;
+        }
+        // Snap in DEVICE space: the pen's x to a quarter pixel (the remainder is
+        // baked into the bitmap as a sub-pixel shift, so spacing stays exact) or
+        // a whole one, the baseline to a whole pixel. Then map the device-space
+        // rectangle back to draw units - the backend's own transform takes it
+        // straight back onto those pixels.
+        const pen_device_x: f32 = map.xx * pen[0] + map.tx;
+        const baseline_device_y: f32 = @round(map.yy * baseline_draw_y + map.ty);
+        var origin_device_x: f32 = @round(pen_device_x);
+        if (run.uses_subpixel_phases) {
+            const whole_px: f32 = @floor(pen_device_x);
+            const phase: u32 = @round((pen_device_x - whole_px) * 4.0);
+            const rounds_up_to_next_px: bool = phase == 4;
+            origin_device_x = if (rounds_up_to_next_px) whole_px + 1.0 else whole_px;
+            key.phase = if (rounds_up_to_next_px) 0 else phase;
+        }
+        const entry: glyph_atlas.Entry = gl.glyphEntry(face, key) orelse {
+            drawBakedCodepoint(gl, run.font, codepoint, pen, run.font_size, run.tint);
+            return;
+        };
+        const texel: f32 = run.texel_to_device;
+        const left_device: f32 = origin_device_x + float(entry.offset_x) * texel;
+        const top_device: f32 = baseline_device_y + float(entry.offset_y) * texel;
+        const dst: Rectangle = .{
+            .x = (left_device - map.tx) / map.xx,
+            .y = (top_device - map.ty) / map.yy,
+            .width = float(entry.width) * texel / map.xx,
+            .height = float(entry.height) * texel / map.yy,
+        };
+        emitGlyphQuad(gl, entry, dst, run.tint);
+    }
+};
+
+/// One textured quad from an atlas page: the same vertex order and attributes
+/// as `drawTexturePro`, bound through the page's own material.
+fn emitGlyphQuad(
+    gl: anytype,
+    entry: glyph_atlas.Entry,
+    dst: Rectangle,
+    tint: Color,
+) void {
+    const glyph_has_ink: bool = entry.width > 0 and entry.height > 0;
+    if (!glyph_has_ink) {
+        return;
+    }
+    gl.bindGlyphPage(entry.page);
+    const page_texels: f32 = float(glyph_atlas.page_size);
+    const u_left: f32 = float(entry.x) / page_texels;
+    const u_right: f32 = float(entry.x + entry.width) / page_texels;
+    const v_top: f32 = float(entry.y) / page_texels;
+    const v_bottom: f32 = float(entry.y + entry.height) / page_texels;
+    gl.begin(.quads);
+    gl.color4ub(tint.r, tint.g, tint.b, tint.a);
+    gl.normal3f(0, 0, 1);
+    gl.texCoord2f(u_left, v_top);
+    gl.vertex2f(dst.x, dst.y);
+    gl.texCoord2f(u_left, v_bottom);
+    gl.vertex2f(dst.x, dst.y + dst.height);
+    gl.texCoord2f(u_right, v_bottom);
+    gl.vertex2f(dst.x + dst.width, dst.y + dst.height);
+    gl.texCoord2f(u_right, v_top);
+    gl.vertex2f(dst.x + dst.width, dst.y);
+    gl.end();
+}
+
 // Drawing (no alloc, side-effect)
-/// Draw a single codepoint at `position`.
+/// Draw a single codepoint at `position` - rasterized at its drawn size when the
+/// font has a face and the backend supports it, else from the baked atlas.
 /// Reads: nothing besides arguments.
 /// Mutates: `gl.*` (rlgl batch - vertices appended).
 pub fn drawCodepoint(
+    gl: anytype,
+    font: Font,
+    codepoint: u21,
+    position: Vec2,
+    font_size: f32,
+    tint: Color,
+) void {
+    const run: GlyphRun = GlyphRun.init(gl, font, font_size, tint);
+    run.drawGlyph(gl, codepoint, getGlyphIndex(font, codepoint), position);
+}
+
+/// Draw a single codepoint from the font's BAKED atlas, scaled to `font_size`.
+fn drawBakedCodepoint(
     gl: anytype,
     font: Font,
     codepoint: u21,
@@ -1481,7 +1883,7 @@ pub fn drawWithFont(
     spacing: f32,
     tint: Color,
 ) void {
-    const scale: f32 = font_size / float(font.baseSize);
+    const run: GlyphRun = GlyphRun.init(gl, font, font_size, tint);
     var off_y: f32 = 0;
     var off_x: f32 = 0;
     var i: usize = 0;
@@ -1495,13 +1897,9 @@ pub fn drawWithFont(
             const is_renderable: bool = dc.codepoint != ' ' and dc.codepoint != '\t';
             if (is_renderable) {
                 const glyph_pos: Vec2 = .{ position[0] + off_x, position[1] + off_y };
-                drawCodepoint(gl, font, dc.codepoint, glyph_pos, font_size, tint);
+                run.drawGlyph(gl, dc.codepoint, idx, glyph_pos);
             }
-            if (font.glyphs[idx].advanceX == 0) {
-                off_x += font.recs[idx].width * scale + spacing;
-            } else {
-                off_x += float(font.glyphs[idx].advanceX) * scale + spacing;
-            }
+            off_x += run.advance(idx) + spacing;
         }
         i += dc.bytes;
     }
@@ -1622,7 +2020,7 @@ pub fn drawCodepoints(
     spacing: f32,
     tint: Color,
 ) void {
-    const scale: f32 = font_size / float(font.baseSize);
+    const run: GlyphRun = GlyphRun.init(gl, font, font_size, tint);
     var off_y: f32 = 0;
     var off_x: f32 = 0;
     for (codepoints) |cp| {
@@ -1634,18 +2032,32 @@ pub fn drawCodepoints(
             const is_renderable: bool = cp != ' ' and cp != '\t';
             if (is_renderable) {
                 const glyph_pos: Vec2 = .{ position[0] + off_x, position[1] + off_y };
-                drawCodepoint(gl, font, cp, glyph_pos, font_size, tint);
+                run.drawGlyph(gl, cp, idx, glyph_pos);
             }
-            if (font.glyphs[idx].advanceX == 0) {
-                off_x += font.recs[idx].width * scale + spacing;
-            } else {
-                off_x += float(font.glyphs[idx].advanceX) * scale + spacing;
-            }
+            off_x += run.advance(idx) + spacing;
         }
     }
 }
 
 // Measurement (no alloc)
+/// One glyph's advance BEFORE scaling to the requested size: font units for a
+/// font with a face (exact at any size - the drawn advance is the same number),
+/// baked-atlas pixels otherwise (the measure path's historical rule: an image
+/// font with no advance measures its rect plus its offset).
+fn unscaledAdvance(
+    font: Font,
+    face: ?*const FontFace,
+    slot: usize,
+) f32 {
+    if (face) |f| {
+        return float(f.advance_units[slot]);
+    }
+    if (font.glyphs[slot].advanceX > 0) {
+        return float(font.glyphs[slot].advanceX);
+    }
+    return font.recs[slot].width + float(font.glyphs[slot].offsetX);
+}
+
 /// Measure the width x height (px) of a string with explicit
 /// font, size, and per-glyph spacing.  Width returned in `.x`,
 /// height in `.y`.  Multi-line strings ('\n' separated) yield
@@ -1664,7 +2076,8 @@ pub fn measureWithFont(
     if (font.texture.id == 0 or s.len == 0) {
         return result;
     }
-    const scale: f32 = font_size / float(font.baseSize);
+    const face: ?*const FontFace = fontFace(font);
+    const scale: f32 = if (face) |f| f.pixelsPerUnit(font_size) else font_size / float(font.baseSize);
     var width: f32 = 0;
     var temp_width: f32 = 0;
     var height: f32 = font_size;
@@ -1677,11 +2090,7 @@ pub fn measureWithFont(
         const idx: usize = getGlyphIndex(font, dc.codepoint);
         i += dc.bytes;
         if (dc.codepoint != '\n') {
-            if (font.glyphs[idx].advanceX > 0) {
-                width += float(font.glyphs[idx].advanceX);
-            } else {
-                width += font.recs[idx].width + float(font.glyphs[idx].offsetX);
-            }
+            width += unscaledAdvance(font, face, idx);
         } else {
             if (temp_width < width) {
                 temp_width = width;
@@ -1744,7 +2153,8 @@ pub fn measureCodepoints(
     if (font.texture.id == 0 or codepoints.len == 0) {
         return result;
     }
-    const scale: f32 = font_size / float(font.baseSize);
+    const face: ?*const FontFace = fontFace(font);
+    const scale: f32 = if (face) |f| f.pixelsPerUnit(font_size) else font_size / float(font.baseSize);
     var width: f32 = 0;
     var temp_width: f32 = 0;
     var height: f32 = font_size;
@@ -1754,11 +2164,7 @@ pub fn measureCodepoints(
         const idx: usize = getGlyphIndex(font, cp);
         if (cp != '\n') {
             glyph_counter += 1;
-            if (font.glyphs[idx].advanceX > 0) {
-                width += float(font.glyphs[idx].advanceX);
-            } else {
-                width += font.recs[idx].width + float(font.glyphs[idx].offsetX);
-            }
+            width += unscaledAdvance(font, face, idx);
         } else {
             if (temp_width < width) {
                 temp_width = width;
@@ -2179,7 +2585,7 @@ pub fn drawTextCodepoints(
     tint: Color,
 ) void {
     // Inline the loop so we don't have to allocate a u21 buffer.
-    const scale: f32 = fontSize / float(font.baseSize);
+    const run: GlyphRun = GlyphRun.init(gl, font, fontSize, tint);
     var off_y: f32 = 0;
     var off_x: f32 = 0;
     for (codepoints) |cp_raw| {
@@ -2190,12 +2596,9 @@ pub fn drawTextCodepoints(
             off_x = 0;
         } else {
             if (cp != ' ' and cp != '\t') {
-                drawCodepoint(gl, font, cp, .{ position[0] + off_x, position[1] + off_y }, fontSize, tint);
+                run.drawGlyph(gl, cp, idx, .{ position[0] + off_x, position[1] + off_y });
             }
-            off_x += if (font.glyphs[idx].advanceX == 0)
-                font.recs[idx].width * scale + spacing
-            else
-                float(font.glyphs[idx].advanceX) * scale + spacing;
+            off_x += run.advance(idx) + spacing;
         }
     }
 }
@@ -2221,7 +2624,8 @@ pub fn measureTextCodepoints(
     if (font.texture.id == 0 or codepoints.len == 0) {
         return result;
     }
-    const scale: f32 = fontSize / float(font.baseSize);
+    const face: ?*const FontFace = fontFace(font);
+    const scale: f32 = if (face) |f| f.pixelsPerUnit(fontSize) else fontSize / float(font.baseSize);
     var width: f32 = 0;
     var temp_width: f32 = 0;
     var height: f32 = fontSize;
@@ -2232,11 +2636,7 @@ pub fn measureTextCodepoints(
         const idx: usize = getGlyphIndex(font, cp);
         if (cp != '\n') {
             glyph_counter += 1;
-            if (font.glyphs[idx].advanceX > 0) {
-                width += float(font.glyphs[idx].advanceX);
-            } else {
-                width += font.recs[idx].width + float(font.glyphs[idx].offsetX);
-            }
+            width += unscaledAdvance(font, face, idx);
         } else {
             if (temp_width < width) {
                 temp_width = width;

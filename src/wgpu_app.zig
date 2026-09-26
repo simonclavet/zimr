@@ -681,6 +681,10 @@ pub const App = struct {
         // gives the RTT and main passes DISTINCT regions.
         self.renderer_2d.?.shapes_batch.vbo_vertex_base = 0;
         self.renderer_2d.?.shapes_batch.ibo_index_base = 0;
+        // Start the glyph cache over here, before any text, if the previous
+        // frame ran out of room (it cannot happen mid-frame: quads already
+        // recorded this frame still point into the atlas).
+        self.renderer_2d.?.glyph_cache.beginFrame();
         _ = Backend.beginFrame(&self.gpu_frame);
         self.frame_begun = true;
     }
@@ -765,6 +769,9 @@ pub const App = struct {
         const backing: wgpu.SurfaceSize = wgpu.getSurfaceSize(self.gpu_frame.surface);
         self.gl.render_w = backing.width;
         self.gl.render_h = backing.height;
+        // Logical -> device px for this pass: text rasterizes its glyphs at the
+        // size they land at on the backing store.
+        self.gl.setDeviceMapping(vp, backing.width, backing.height);
         self.drawing_active = true;
         self.enterFrame2D();
         return &self.gl;
@@ -1058,6 +1065,8 @@ fn reopen2DPass(app: *App) void {
     app.renderer_2d.?.updatePerFrame(&app.gpu_frame, .{ .view_projection = vp });
     app.renderer_2d.?.bindForPass(&app.pass);
     app.pass.batch = &app.renderer_2d.?.shapes_batch;
+    const backing: wgpu.SurfaceSize = wgpu.getSurfaceSize(app.gpu_frame.surface);
+    app.gl.setDeviceMapping(vp, backing.width, backing.height);
     app.enterFrame2D();
 }
 
@@ -3161,6 +3170,8 @@ pub fn beginTextureMode(
     app.renderer_2d.?.bindForPass(&app.pass);
     app.pass.batch = &app.renderer_2d.?.shapes_batch;
     app.target_size = .{ @max(rt.width, 1), @max(rt.height, 1) };
+    // Text drawn into the render texture rasterizes at ITS pixel size.
+    gl.setDeviceMapping(vp, @max(rt.width, 1), @max(rt.height, 1));
 }
 
 /// End offscreen rendering: flush, close the render-texture pass, reopen the backbuffer
@@ -3705,14 +3716,20 @@ pub const UiHost = struct {
     }
 };
 
-/// Load a TTF/OTF font for the WebGPU 2D path: bake an ASCII (32..126) atlas at
-/// `size` px, upload it as a texture, register it, and return a `Font` whose
-/// `texture.id` is the registered id (so `drawText` -> the reusable
-/// `drawWithFont` -> `drawTextureRotated(gl, font.texture, ...)` resolves it via
-/// WgpuGl.setTexture). Caller keeps the Font on its State; the glyph/rec slices
-/// are gpa-owned. Must be called from initState (needs the App's renderer +
-/// device; the renderer is created lazily on first beginDrawing, so this
-/// triggers that).
+/// Load a TTF/OTF font (ASCII 32..126) for the WebGPU 2D path.
+///
+/// Text drawn with it is rasterized at the size it LANDS AT on screen - `size`
+/// x devicePixelRatio x any `.fit` scale, camera zoom or viewport scale - the
+/// first time it is drawn at that size, then kept in the shared glyph cache
+/// (see `glyph_atlas.zig`). So it stays sharp at any drawn size, after a
+/// resize, in fullscreen, at any browser zoom. `size` is the nominal size
+/// (`baseSize` metrics, and the size of the baked fallback atlas the CPU
+/// backends draw from); it does not limit the sizes you can draw at.
+///
+/// The Font keeps a copy of `ttf_bytes`, so the caller's buffer may be freed.
+/// The glyph/rec slices and that copy are gpa-owned (free with `z.unloadFont`).
+/// Must be called from initState (needs the App's renderer + device; the
+/// renderer is created lazily on first beginDrawing, so this triggers that).
 pub fn loadFont(
     f: *Frame,
     gpa: Allocator,
@@ -3755,17 +3772,63 @@ pub fn releaseFont(gl: *WgpuGl, gpa: Allocator, font: Font) void {
 /// (raylib `LoadFontEx` with a `codepoints` array). This is how you get accented
 /// Latin, Greek, Cyrillic, CJK, arrows, box-drawing - anything outside ASCII.
 ///
-/// Only the codepoints you ask for are baked, so the atlas stays small: pass the
-/// ranges the app actually renders, not "all of Unicode". A codepoint the TTF
-/// has no glyph for bakes as the font's fallback/notdef rather than failing.
-/// The slice is consumed during the call (the atlas copies what it needs), so a
-/// stack array is fine.
+/// Only the codepoints you ask for exist in the font (others draw as '?'), so
+/// pass the ranges the app actually renders, not "all of Unicode". A codepoint
+/// the TTF has no glyph for bakes as the font's fallback/notdef rather than
+/// failing. Glyphs are rasterized at their drawn size exactly as for `loadFont`.
+/// The slice is consumed during the call, so a stack array is fine.
 pub fn loadFontEx(
     f: *Frame,
     gpa: Allocator,
     ttf_bytes: []const u8,
     size: i32,
     codepoints: []const u21,
+) !Font {
+    var font: Font = try bakeAtlasFont(f, gpa, ttf_bytes, size, codepoints, .mipmapped);
+    errdefer text2d.unloadFontOwned(gpa, font);
+    const glyph_count: usize = @intCast(font.glyphCount);
+    font.face = try text2d.createFontFace(gpa, ttf_bytes, font.glyphs[0..glyph_count]);
+    return font;
+}
+
+/// raylib's `LoadFontEx` exactly: the atlas is baked ONCE at `size` px (times
+/// the devicePixelRatio, so it is 1:1 at `size` on any screen), point-sampled,
+/// and text at any other size is that atlas scaled. No face, so it is never
+/// rasterized again at the drawn size - use it when magnifying a fixed bitmap
+/// IS the point (the filter demo; a deliberately pixelated look). For ordinary
+/// text use `loadFont`. ASCII 32..126.
+pub fn loadFontBaked(
+    f: *Frame,
+    gpa: Allocator,
+    ttf_bytes: []const u8,
+    size: i32,
+) !Font {
+    var codepoints: [95]u21 = undefined;
+    for (&codepoints, 0..) |*cp, k| {
+        cp.* = @intCast(32 + k);
+    }
+    return bakeAtlasFont(f, gpa, ttf_bytes, size, &codepoints, .point);
+}
+
+/// How a baked atlas is sampled when drawn at a size other than its own.
+const AtlasSampling = enum {
+    /// Linear with a mip chain: soft but stable when minified or magnified.
+    /// The fallback path of a font with a face (the CPU backends, and glyphs
+    /// the glyph cache had no room for).
+    mipmapped,
+    /// Nearest texel: raylib's default. Exact at the baked size, blocky beyond.
+    point,
+};
+
+/// Bake `codepoints` into one atlas at `size` x devicePixelRatio px, upload and
+/// register it, and return the baked `Font` (no face yet).
+fn bakeAtlasFont(
+    f: *Frame,
+    gpa: Allocator,
+    ttf_bytes: []const u8,
+    size: i32,
+    codepoints: []const u21,
+    sampling: AtlasSampling,
 ) !Font {
     const app: *App = appOf(f.gl);
     // Ensure the Renderer2D (which owns the texture registry + device) exists.
@@ -3775,36 +3838,18 @@ pub fn loadFontEx(
     const r: *Renderer2D = &app.renderer_2d.?;
 
     const tt: codecs.truetype.Font = try codecs.truetype.loadFontFromTtf(gpa, ttf_bytes);
-    // Bake the atlas at DEVICE pixels (logical size x devicePixelRatio), not logical
-    // size. The wgpu 2D path renders into the backing store (CSS x DPR); an atlas baked
-    // at logical size gets UPSCALED on a high-DPR phone -> blurry text. Baking at
-    // sizexDPR makes the atlas ~1:1 with the backing -> sharp. baseSize tracks the bake
-    // size, so drawText/measureText still produce LOGICAL sizes (the scale divides it
-    // back out) - transparent to callers, just crisper. DPR = backing/CSS surface size.
-    //
-    // OVERSAMPLE headroom: the atlas is frozen at load-time DPR and never re-baked, so
-    // any later MAGNIFICATION (entering browser fullscreen - a `.fit`-mode app scales its
-    // fixed design surface up to the whole monitor, ~2.4-3x on 1080p, more on 1440p/4K -
-    // moving to a denser monitor, or drawing text bigger than `size`) samples a too-small
-    // atlas -> blur. Baking 3x the currently-needed density gives that magnification
-    // headroom. This is only affordable because the atlas is MIPMAPPED (see
-    // createMipmappedFromPixels): without mips, a 3x atlas would badly alias small text on
-    // minification; with a mip chain the GPU picks a level near the on-screen size, so the
-    // same atlas stays crisp whether the text is tiny (UI labels) or fullscreen-huge. The
-    // multiplier is capped so a high-DPR phone doesn't blow the atlas up (memory is
-    // widthxheight + a ~33% mip tail, so it grows with the square of the multiplier).
-    const oversample: f32 = 3.0;
+    // Bake at DEVICE pixels (size x devicePixelRatio, DPR = backing/CSS), so the
+    // atlas is 1:1 with the backing store at `size`. baseSize carries the bake
+    // height, so drawText/measureText still work in LOGICAL sizes. No oversample:
+    // a font with a face draws from the glyph cache at whatever size it lands at,
+    // and this atlas is only its fallback; a baked-only font is fixed by design.
     const css_sz: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(app.gpu_frame.surface);
     const back_sz: wgpu.SurfaceSize = wgpu.getSurfaceSize(app.gpu_frame.surface);
     const dpr: f32 = if (css_sz.width > 0)
         float(back_sz.width) / float(css_sz.width)
     else
         1.0;
-    // clamp the TOTAL bake density (dpr x oversample) to [1, 4]: 3x headroom on a DPR-1
-    // desktop (where fullscreen magnification bites hardest), still bounded on a DPR-3
-    // phone. baseSize carries the real bake height, so the logical scale stays exact.
-    const bake_mult: f32 = clamp(dpr * oversample, 1.0, 4.0);
-    const bake_size: i32 = @round(float(size) * bake_mult);
+    const bake_size: i32 = @round(float(size) * clamp(dpr, 1.0, 4.0));
     const atlas: text2d.FontAtlas = try text2d.bakeFontAtlas(gpa, &tt, bake_size, codepoints, 1);
     // The atlas image (RGBA8) is uploaded to the GPU; free the CPU copy after.
     defer image_mod.unloadImage(gpa, atlas.image);
@@ -3812,24 +3857,20 @@ pub fn loadFontEx(
     const aw: u32 = @intCast(atlas.image.width);
     const ah: u32 = @intCast(atlas.image.height);
     const pixels: []const u8 = @as([*]const u8, @ptrCast(atlas.image.data.?))[0 .. aw * ah * 4];
-    // Mipmapped, trilinear-sampled glyph atlas. The atlas is baked OVERSAMPLED
-    // (see `oversample` above), so at draw time it is almost always MINIFIED -
-    // and plain bilinear undersamples past ~2x reduction, which is what left the
-    // small on-screen/UI text aliased ("pixelated") even after switching off
-    // NEAREST. A precomputed mip chain lets the GPU pick a level near the
-    // on-screen size, so both tiny UI labels and large fullscreen text stay
-    // crisp. createFromPixels defaults to NEAREST (blocky at any non-1:1 scale).
-    const tex: WgpuTexture = try WgpuTexture.createMipmappedFromPixels(
-        gpa,
-        app.gpu_frame.device,
-        app.gpu_frame.queue,
-        .{
+    const tex: WgpuTexture = switch (sampling) {
+        .mipmapped => try WgpuTexture.createMipmappedFromPixels(
+            gpa,
+            app.gpu_frame.device,
+            app.gpu_frame.queue,
+            .{ .pixels = pixels, .width = aw, .height = ah, .format = .rgba8_unorm },
+        ),
+        .point => WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
             .pixels = pixels,
             .width = aw,
             .height = ah,
-            .format = .rgba8_unorm,
-        },
-    );
+            .label = "baked_font_atlas",
+        }),
+    };
     const tex_id: u32 = r.registerOwnedTexture(tex);
 
     return .{

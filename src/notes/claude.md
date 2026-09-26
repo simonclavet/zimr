@@ -143,6 +143,26 @@ time in a new disguise:
 ★ Before trusting any alignment, ask of BOTH sides: *what exactly does this quaternion measure,
 and is the other side measuring the same thing?* "Both are rest poses" is not enough.
 
+# ★★★ "MAKE A PLAN" MEANS THIS EXACT PROCEDURE
+
+When Simon asks for a plan, it is a specific procedure, not a sketch in the chat:
+
+  1. **Study deeply.** Read the code, the notes, the references and the prior art before
+     proposing anything. "Check whether the reference already solved it", "grep before
+     designing" and "read the solver before planning work on it" all apply here.
+  2. **Brainstorm every possible solution**, including the ones you expect to reject.
+  3. **Pick your preferred choices**, and say why.
+  4. **Write a detailed plan as a `.md` file in `src/notes/`.** The file is the deliverable,
+     not the chat reply.
+  5. **Ask the open decisions ONE AT A TIME.** Each question gives the choices, the pros and
+     cons of each, and your recommendation. Wait for the answer before asking the next one.
+  6. **Revise the plan after each decision**, then list every decision back and get Simon's
+     explicit agreement with all of them before calling the plan final.
+
+★★ **Do not implement until Simon gives permission.** A finished plan with every question
+answered and every decision confirmed is still not permission to start. Neither is `C`: it
+resumes a plan that is already approved, never one still under review.
+
 # ★ "C" MEANS CONTINUE
 
 A message that is just `C` (or `c`) means: **carry on with the current plan, no questions.**
@@ -3268,9 +3288,22 @@ recursive, minus path-prefix carve-outs and a `deletion_skip` full-path list
 - Edit lint sweeps bottom-up — a multi-line edit shifts the lines below it.
 - Improve the linter (`tools/zimrlint.zig`) rather than mechanically satisfying
   its own checks; after any change, re-verify it still fires on a known-bad sample.
-- `decl-order` (declare-before-use for file-scope `fn`/`const`/`var`) is an OPT-IN
-  migration rule, not part of the gate: `zimrlint --decl-order <files>`. The sweep is
-  DONE (1336 hits / 197 files -> 50, all in ui.zig).
+- **OPT-IN RULES (Sep 26).** A short list of zimrlint rules is house taste rather than
+  bug-catching, and runs only when named by `--enable=<tag>`: untyped-local, anon-return,
+  branch-braces, decl-order, fn-args-multiline, module-var, no-qualified-zm,
+  reserved-math-names, prefer-std-alias, ascii-comments (`zimrlint --list-rules` marks them).
+  zimr enables ALL of them for itself except decl-order - `zimr_lint_rules` in build.zig -
+  so nothing changed for this tree. The list exists for apps built on zimr: build.zig's
+  `LintRule` / `addLint` let a project pick the ones it agrees with. Every other rule is
+  always on and cannot be turned off. A `lint:off` naming a tag that is not a rule is itself
+  an error (`unknown-lint-tag`).
+- `decl-order` (declare-before-use for file-scope `fn`/`const`/`var`) is the one opt-in
+  rule zimr does NOT enable: `zig build lint -- --enable=decl-order`. The sweep once got it
+  to 50 hits, all in ui.zig - **but on Sep 26 it measured 1101 again** (zimrnum 108, robot
+  93, zimrphysics2d_demo/scenes 91, ui 51, ...): nothing gated it, and the per-file lint
+  stamps did not record which rules were enabled, so every `--decl-order` run since the
+  sweep skipped all stamped-clean files and printed nothing. Stamps now hash the enabled
+  set. Enabling it for zimr means sweeping those 1101 first.
   **Decision (Simon): ui.zig stays in FEATURE order** — a widget beside its helpers.
   Reordering it into a pure DAG kills only 16 of the 50 while reshuffling ~57% of a
   42k-line file. Do NOT reorder it and do NOT `lint:off` its 50; the rule is off in the
@@ -3405,8 +3438,9 @@ update the `//!` doc in the same turn, like a test.
   `file:line` in the Zig fn's doc comment and enumerate intentional divergences. If
   it isn't on disk and you can't fetch it, ASK — API recall is the failure mode.
 - **One concrete decision per question** — 2-4 options (+ implicit "other"), brief
-  context, and your **(Recommended)** pick. After decisions land, summarize then
-  implement.
+  context, the pros and cons of each, and your **(Recommended)** pick. After decisions
+  land, summarize them, confirm Simon agrees with all of them, and implement only once
+  Simon says go (see "MAKE A PLAN" at the top).
 - **Build the demo in parallel with the API** — land scaffolding from turn 1 of a
   multi-turn step. Every snapshot should be phone-testable.
 - **Allocator policy**: if >80% of a struct's methods can allocate, the `gpa` stays
@@ -4109,7 +4143,7 @@ correct there ⇒ DPR-related, wrong ⇒ mode-related; then log
   and other non-f32/exotic widths keep the raw form). GATING (default on) — the
   whole tree (246 findings / 73 files) was migrated in zimr531, so any new
   `@Vector(N,f32)` fails the gate; `--fix` autofixes wherever `Vec` is bound,
-  `--no-prefer-vec` is the escape hatch.
+  `// lint:off prefer-vec: <why>` is the escape hatch.
 - **Never re-export a zm type through a namespace** (e.g. `pub const Vec2 = zm.Vec2` inside one
   struct that a sibling then borrows as `other.Vec2`). That manufactures a false dependency edge
   between siblings. Every file/section declares its own `const Vec2 = zm.Vec2` (binding name ==
@@ -4119,9 +4153,8 @@ correct there ⇒ DPR-related, wrong ⇒ mode-related; then log
   `WgpuGl.zig`, `SwAdapter.zig`): rename the file CamelCase = the type, top-level
   `const <TypeName> = @This();` (a descriptive alias — NEVER bare `@This()` or `Self` inline),
   fields+methods hoisted to file scope, helper types (Options, Key) nested under it. Importers do
-  `const Canvas = @import("Canvas.zig");`. The `[dup-pub-fn]` lint EXEMPTS file-structs (any file
-  with a col-0 `const X = @This();`), so col-0 `init`/`deinit` can't collide. Multi-export
-  namespaces (`gpu.zig`, `raster.zig`) stay namespaces — don't force them.
+  `const Canvas = @import("Canvas.zig");`. Multi-export namespaces (`gpu.zig`, `raster.zig`)
+  stay namespaces — don't force them.
 - **Graph tooling** (all Zig, no Python — the analysis/codegen purge is complete):
   `tools/import_graph.zig` is the shared library (collectImports, Graph, sccs, levels,
   transitiveReduction); `zig build dag-check` is the level report for top-level `src/*.zig` (by
