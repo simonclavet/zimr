@@ -1213,6 +1213,11 @@ test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit insid
     // range makes a sign flip show up at one end, and a cone narrower than its hinge at both.
     // (A first version sampled every hinge at once and could not attribute anything: one
     // pushed joint moves its whole chain.)
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const pushed_threshold: f32 = 1.0e-4; // rad in one step
     for ([_]TwistHinge{ .first, .last }) |choice| {
@@ -1402,6 +1407,11 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
     // is all that is measured. Printed per method: worst joint error at 0.5, 1 and 2 s, and the
     // worst over the last half second. At 500 Hz AND at 60 Hz: at 60 Hz the explicit spring's
     // stability bound (7.9 Hz, see `stableSpringAccel`) is straddled on purpose.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const at_500 = [_]PoseRun{
         .{
@@ -1550,6 +1560,11 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
     // the whole way down: the reduced side with implicit computed torque on its hinges (a free
     // root has no motor; contacts carry it), the maximal side with its joint motors. Printed:
     // worst joint error against the squat, settled speed, torso height, maximal joint gap.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const dt: f32 = 1.0 / 60.0;
     const steps: u32 = 180; // 3 s
@@ -1712,6 +1727,11 @@ test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, t
     // shape), then in free fall. Start at rest, target the squat, 60 Hz, 10 Hz springs, limits
     // off (so the Stage 0 limit mismatch is not in the way). The reduced side runs the same
     // scenarios with implicit CT through floating-base ID, which is exact without contacts.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const dt: f32 = 1.0 / 60.0;
     const steps: u32 = 120; // 2 s
@@ -1843,6 +1863,11 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
     // damping, a torque limit, and SUBSTEPS - several physics steps per 60 Hz frame, which on a
     // phone cost about what one reduced step does (194 vs 735 us/step, measured on device).
     // The tipped squat drop, holding the squat, 3 s, limits off.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const frame_dt: f32 = 1.0 / 60.0;
     const frames: u32 = 180;
@@ -1914,6 +1939,11 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
     // again after a shove at the torso. A pose hold with no balance control is a stiff statue;
     // a statue stands while its centre of mass stays over its feet, and the shove says how
     // far that is from falling. Printed: seconds upright (torso above 0.8 m), worst joint error.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const dt: f32 = 1.0 / 60.0;
     const frames: u32 = 600; // 10 s

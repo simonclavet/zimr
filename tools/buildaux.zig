@@ -8,7 +8,7 @@
 //! `addRunArtifact`.  See src/notes/zig17_migration.md.
 //!
 //! Subcommands (bodies are faithful ports of the old build.zig make fns):
-//!   dist-copy                                   mirror zig-out/web -> prebuilt/
+//!   dist-copy                                   mirror zig-out/web -> prebuilt/ (minus docs/)
 //!   check-wgsl-clean  <file>                    non-empty, no __unresolved_, no // ERROR:
 
 const std = @import("std");
@@ -40,6 +40,11 @@ fn distCopy(io: std.Io, gpa: Allocator) !void {
         if (entry.kind != .file) {
             continue;
         }
+        // The autodoc bundle (`zig build docs`) is local-only: its sources.tar tops GitHub's
+        // 100 MB per-file limit, so the pages push is rejected if it ships.
+        if (firstSegmentIs(entry.path, "docs")) {
+            continue;
+        }
         const dst: []u8 = try std.fs.path.join(gpa, &.{ "prebuilt", entry.path });
         defer gpa.free(dst);
         try entry.dir.copyFile(entry.basename, cwd, dst, io, .{ .make_path = true });
@@ -48,6 +53,18 @@ fn distCopy(io: std.Io, gpa: Allocator) !void {
     // GitHub Pages runs Jekyll unless the site root holds `.nojekyll`, and Jekyll silently
     // drops every file or directory whose name starts with `_` or `.`.
     try cwd.writeFile(io, .{ .sub_path = "prebuilt/.nojekyll", .data = "" });
+}
+
+/// `path`'s first segment is `dir`, with either separator (the walker yields `\` on Windows).
+fn firstSegmentIs(path: []const u8, dir: []const u8) bool {
+    if (!std.mem.startsWith(u8, path, dir)) {
+        return false;
+    }
+    if (path.len == dir.len) {
+        return true;
+    }
+    const c: u8 = path[dir.len];
+    return c == '/' or c == '\\';
 }
 
 fn die(
@@ -120,8 +137,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 // ---- dist-copy: mirror zig-out/web -> prebuilt/ (port of distCopyMake) ----
-// Pure-Zig recursive copy; wipes prebuilt/ first so removed files don't linger, then
-// drops a `.nojekyll` marker at the root for GitHub Pages.
+// Pure-Zig recursive copy; wipes prebuilt/ first so removed files don't linger, skips
+// the local-only docs/ subtree, then drops a `.nojekyll` marker at the root for GitHub Pages.
 
 // ---- check-wgsl-clean (port of FixtureWgslCheck) ----
 // Same gates spv2wgsl --strict enforces: non-empty, no unresolved refs, no

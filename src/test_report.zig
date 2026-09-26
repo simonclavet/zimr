@@ -15,8 +15,22 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-/// True under `-Dtest-report`. A test can read it to skip work whose only product is its table.
+/// True under `-Dtest-report`. To gate a whole test on it, call `requested` instead.
 pub const enabled: bool = if (@hasDecl(build_options, "test_report")) build_options.test_report else false;
+
+/// `enabled`, as a value the compiler does not fold. A MEASUREMENT test - one whose only product is
+/// its table, asserting nothing - gates on this and skips unless the table is asked for:
+///
+///     if (!report.requested()) {
+///         return error.SkipZigTest;
+///     }
+///
+/// * Not on `enabled` itself: a comptime-false gate makes the `return` unconditional, the compiler
+/// stops analysing the test there, and the rest of its body would go uncompiled - and quietly rot -
+/// between the runs that print it. A call is runtime-known, so the whole body is still checked.
+pub fn requested() bool {
+    return enabled;
+}
 
 /// `std.debug.print`, when `enabled`; nothing otherwise.
 pub fn print(comptime format: []const u8, args: anytype) void {

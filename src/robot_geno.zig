@@ -4281,6 +4281,11 @@ test "robot_geno: R9 and R10, measured early - Geno held and servoed on a floor,
     // What the `geno_track` page shows, measured instead of watched. Nothing is asserted beyond sanity yet:
     // these are the numbers R9 and R10 will be judged by, taken before the reference is lifted per frame
     // (R8) and before joints have cone limits (E1).
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -5122,6 +5127,11 @@ test "robot_geno: S2c - the T-pose HOLDS: standing armature and the capture-poin
 test "robot_geno: the dance's first 5 s - the servo alone, with light joints and with armature 2" {
     // Armature 2 everywhere let Geno stand; the dance is FAST, and heavier joints swing slower. Before training
     // on either robot: the servo alone on the dance's first 5 s, starting every half second.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -5471,6 +5481,11 @@ test "robot_geno: the whole 30 s dance - the servo alone, strong joints, with an
     // the servo alone keeps up with the dance's first 5 s from every start - a ceiling that hides whether the
     // servo's velocity feedforward helps. So the whole 30 s, a start every 2 s, each run capped by the clip's
     // end: how long it keeps up (hips within 35 cm), and the fraction of starts that reach the end.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -5533,6 +5548,11 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
     // Only pairs overlapping AT REST are excluded, so a dance that crosses an arm over the body collides
     // where the capture's actor did not. Launch at 60 frames across the whole dance, step once, and tally:
     // robot-robot pairs (how often, how deep), and any body but a foot or toe touching the floor.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();

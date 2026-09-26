@@ -213,6 +213,9 @@ const contact_col: Color = .{ .r = 240, .g = 200, .b = 60, .a = 255 };
 
 const State = struct {
     gpa: Allocator,
+    /// The spliced MJCF text. **Owned here, not freed after parsing**: the XML reader is
+    /// zero-copy, so `doc`, `robot` and every body name in `imported` are slices into it.
+    xml_text: []u8,
     doc: z.codecs.xml.Document,
     robot: mjcf.Robot,
     imported: rmj.Imported,
@@ -374,7 +377,7 @@ const State = struct {
     cone_worst: f32,
     cone_over: u32,
     font: z.Font,
-    /// The pose being held - a copy of the `home` keyframe's `qpos`.
+    /// The pose being held - the full `qpos` (balls included) as the `home` keyframe posed it.
     home: []f32,
     /// Which DOFs have a motor. See `control`.
     actuated: []bool,
@@ -397,9 +400,11 @@ const State = struct {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
-    const spliced: []u8 = try mjcfWithArm(gpa);
-    defer gpa.free(spliced);
-    s.doc = try z.codecs.xml.parse(gpa, spliced, null);
+    // * KEPT FOR THE STATE'S LIFETIME, freed in `deinit`. It used to be freed on the way out of
+    // this function, which left every name the importer borrowed dangling - `bodyIndex("trunk")`
+    // compared against freed memory every frame and only worked by falling back to body 1.
+    s.xml_text = try mjcfWithArm(gpa);
+    s.doc = try z.codecs.xml.parse(gpa, s.xml_text, null);
     s.robot = try mjcf.readRobot(gpa, &s.doc);
     // * THE PROJECTILES JOIN THE ROBOT'S TREE, which is what makes them able to hit it.
     // A ball in zimrphysics alone would be resolved by a different solver treating the robot
@@ -516,16 +521,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             if (s.imported.model.geom_body[g] != body) {
                 continue;
             }
-
-            // -- * THE ARM'S OWN ACTUATION MASK AND TARGET BUFFER --
-            //
-            // `limbActuation` walks the chain from the gripper to the root, so the mask covers exactly
-            // the four arm joints and nothing else - the legs stay under the torso controller, which is
-            // what keeps the two problems separate and the experiment honest.
-            s.gripper = s.imported.bodyIndex("gripper") orelse 0;
-            s.arm_act = try ctl.limbActuation(gpa, &s.imported.model, s.gripper);
-            s.arm_target = try gpa.alloc(f32, s.imported.model.nq);
-            @memcpy(s.arm_target, s.data.pos[0..s.imported.model.nq]);
             switch (s.imported.model.geom_shape[g]) {
                 // The foot is the sphere at the end of the calf; its offset in the body's
                 // frame is what makes the planted point the FOOT rather than the calf's origin.
@@ -535,6 +530,17 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         }
         s.foot_offset[i] = offset;
     }
+
+    // -- * THE ARM'S OWN ACTUATION MASK AND TARGET BUFFER --
+    //
+    // `limbActuation` walks the chain from the gripper to the root, so the mask covers exactly
+    // the four arm joints and nothing else - the legs stay under the torso controller, which is
+    // what keeps the two problems separate and the experiment honest.
+    // * ONCE, OUTSIDE THE LEG LOOP. It used to sit inside the per-leg geom loop, so both were
+    // allocated once per calf geom and only the last pair was ever freed.
+    s.gripper = s.imported.bodyIndex("gripper") orelse 0;
+    s.arm_act = try ctl.limbActuation(gpa, &s.imported.model, s.gripper);
+    s.arm_target = try gpa.dupe(f32, s.data.pos);
     s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(&s.imported.model));
     s.body_roll = 0;
     s.body_pitch = 0;
@@ -722,6 +728,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.imported.deinit();
     s.robot.deinit();
     s.doc.deinit();
+    gpa.free(s.xml_text);
 }
 
 /// Hold the home pose.

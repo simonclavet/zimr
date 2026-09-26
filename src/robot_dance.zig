@@ -1888,6 +1888,11 @@ test "robot_dance: B3 the PUPPET - and how much of the balance demand filtering 
     // floor. Unfiltered it asked for 5x body weight sideways and -1,470 N vertically - mostly
     // capture jitter. Swept here over the reference's low-pass cutoff, with how far each filter
     // bends the dance (the worst body's rotation away from the unfiltered target).
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -1962,6 +1967,11 @@ test "robot_dance: are the reference's FEET on the floor?" {
     // magnitude after light filtering (0 pulling frames at 5 Hz), but the feet must also BE on the
     // floor when the push is needed - not floating above it, not sunk into it. Per frame: the
     // lowest point of either foot, z = 0 the floor; without and with `RetargetOptions.ground`.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -2163,6 +2173,11 @@ test "robot_dance: R0 - the free root on a FLOOR, assisted, the assist scaled to
     // a real floor through the physics bridge, 60 Hz. The joints get the inverse-dynamics torques
     // for the reference motion; the root an ASSIST - alpha times the residual root rows, the
     // wrench a stick would push with. alpha = 0 is no help at all: DReCon's "open-loop playback".
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
     defer threaded.deinit();
@@ -2210,6 +2225,11 @@ test "robot_dance: S0-S1 - standing on the floor with the consistent controller,
     // for the force to make it. The held standing pose fell over in 1.4 s as a statue (floating-
     // base torques, no floor in the split - servo_ladder section 8.2). Here: humanoid_flex2's own
     // standing pose, grounded, as a ten-second "clip" that never moves; shoved 0 / 0.5 / 1 m/s.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const dt: f32 = 1.0 / 60.0;
     var model: Loaded = undefined;

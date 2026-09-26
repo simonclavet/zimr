@@ -837,11 +837,11 @@ fn update(f: *z.Frame, s: *State) void {
         // spends 90% of its travel above 30 kg where nothing further changes. `SliderOpts`
         // has no log mode, so the exponent is what the widget edits and the value is derived.
         if (u.slider("crate kg", &s.crate_mass_exp, .{ .min = -0.7, .max = 2.5, .fmt = "" })) {
-            s.crate_mass = pow(f32, 10.0, s.crate_mass_exp);
+            s.crate_mass = pow(10.0, s.crate_mass_exp);
             applyCrateMass(s);
         }
         _ = u.slider("motor N·m", &s.motor_limit_exp, .{ .min = 0.5, .max = 2.5, .fmt = "" });
-        s.motor_limit = pow(f32, 10.0, s.motor_limit_exp);
+        s.motor_limit = pow(10.0, s.motor_limit_exp);
         u.text("   {d:.1} kg each   {d:.0} N·m per joint", .{ s.crate_mass, s.motor_limit });
         _ = u.checkbox("physics", &s.physics_on);
         u.sameLine(.{});

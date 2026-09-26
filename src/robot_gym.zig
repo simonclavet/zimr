@@ -990,6 +990,11 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
     // second of the statue (zero actions) is slip. Measured at 60, 120 and 240 Hz physics under the
     // same 30 Hz policy: robot.zig's contacts are soft, and refsafe (section 8.9 of servo_ladder) clamps
     // their time constant to two timesteps - 33 ms at 60 Hz - so a friction constraint may CREEP.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
     const Rate = struct { hz: f32, substeps: u32 };
     const rates = [_]Rate{ .{ .hz = 60, .substeps = 2 }, .{ .hz = 120, .substeps = 4 }, .{ .hz = 240, .substeps = 8 } };

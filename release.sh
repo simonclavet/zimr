@@ -18,6 +18,8 @@
 # serves the files as-is instead of running them through Jekyll.
 #
 # GitHub limits: 100 MB per file (warns above 50 MB), 1 GB per Pages site.
+# The API docs (`zig build docs`) are local-only for that reason: their
+# sources.tar is ~100 MB, so `dist` leaves docs/ out of prebuilt/.
 #
 # Source commits to main are a separate, manual concern - this script does
 # not touch main.  Requires the GitHub remote set up as `origin`

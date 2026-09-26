@@ -2265,6 +2265,11 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     // a number that looked like a pass and measured nothing. This runs with a real ground.
     //
     // Headless on purpose: a gate that needs someone to look at a phone is not a gate.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
 
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
@@ -2600,6 +2605,11 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
     //
     // No IK, no clip, no contacts, no gravity on the root. Just: ask a joint to go somewhere and
     // see whether it arrives.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
 
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
@@ -2899,6 +2909,11 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
     // because "max error 1.449 rad" has been true for many turns and has never once said WHY.
     // A servo that overshoots, one that never arrives and one that is being fought all produce
     // the same summary and completely different traces.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
 
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
@@ -3061,6 +3076,11 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
     //
     // Reported per trial: peak tracking error, the LAG at which it best matches (a servo that
     // trails is a different fault from one that oscillates), and the peak torque and velocity.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
 
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
@@ -3249,6 +3269,11 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
     // that exists**, and it costs one test to find out.
     //
     // See `src/notes/servo_ladder.md` rung 2.
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dtest-report` - and not in every `zig build test`. See `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
     const gpa: Allocator = std.testing.allocator;
 
     var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});

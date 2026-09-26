@@ -48,7 +48,8 @@ zig-out/web/
   manifest.json                      <- regenerated, 158 examples
   <name>/index.html                  <- streaming page (c2js --wasm-url)
   <name>/wgpu_<name>.wasm            <- streamed wasm
-  readme.html, cheatsheet.html, docs/ (already installed here)
+  readme.html, cheatsheet.html (already installed here)
+  docs/                              <- `zig build docs` only; local, never in dist
 ```
 
 ## Plan (phases)

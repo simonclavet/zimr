@@ -392,7 +392,8 @@ Prior arc (`src/notes/mocap_plan.md`, §11-12): BVH/FBX loading, skinning, and t
     zig build test-fast -Dtest-filter="<substring>"  one test by name
     zig build zn-<stem> -Dtest-filter="<substring>"  one root, one test - the fastest loop
     zig build test -Dslow-tests                      also the long simulations and learning curves
-    zig build zn-<stem> -Dtest-report                also print the robot tests' measurement tables
+    zig build zn-<stem> -Dtest-report                also print the robot tests' measurement tables,
+                                                     and run the MEASUREMENT tests, which skip otherwise
 
 ★★★ **`test` IS A SUPERSET OF `test-fast` (Sep 26).** One command runs every test that is quick,
 each binary once and in parallel. `src/tests.zig` no longer runs the robot family - it skips
@@ -406,6 +407,14 @@ whole stderr even when every test passed - headed `run test w` and followed by a
 `failed command:` line - so a few hundred lines of robot tables made a green `zig build test` read
 as red. The tables go through `report.print` (`src/test_report.zig`), silent unless
 `-Dtest-report`. A new report line uses it too; `std.debug.print` in a test brings the noise back.
+
+★★ **A TEST THAT ASSERTS NOTHING IS A MEASUREMENT, AND MEASUREMENTS DO NOT RUN BY DEFAULT.** Twenty
+robot tests printed a table and asserted only `isFinite`, `x == x`, `any or !any`, or their own
+setup - the standing and shove sweeps, the servo-ladder debug rungs, the whole-dance runs - and
+cost simulation time on every run for no check at all (how much: not yet measured). They open with
+`if (!report.requested()) return error.SkipZigTest;` (runtime, so their bodies still compile) and
+run under `-Dtest-report`. A measurement that should guard something gets a real assertion
+instead: `massDiagonal` printed "0 of 27 DOFs disagree" without ever checking it, and now asserts it.
 
 ★★ **`test-fast` COVERS THE SHADER-FREE HALF OF THE ENGINE**: robot, robot_physics,
 robot_control, robot_mpc, robot_scene, urdf, mjcf, robot_urdf, robot_mjcf. Each is its own test

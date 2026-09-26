@@ -6,7 +6,7 @@
 // proc_exit, args_*, environ_*, fd_close), plus our own custom
 // `webgl` / `dom` import modules for canvas, WebGL2, and event input.
 // Build steps:
-//   zig build                       -- runtime + docs only (no example wasms).
+//   zig build                       -- runtime only (no example wasms, no docs).
 //                                      Pass -Dfocus=<list> to also install
 //                                      specific example wasms.
 //   zig build all-examples          -- builds every example wasm into zig-out/web/
@@ -612,11 +612,12 @@ pub fn build(b: *std.Build) void {
     // gone.  See src/notes/zig17_migration.md B2.)
 
     // `zig build all-examples` aggregates every per-example install.
-    // Default `zig build` (b.getInstallStep()) builds runtime + docs only;
+    // Default `zig build` (b.getInstallStep()) builds the runtime only;
     // example wasms ride along only when -Dfocus matches.  Anything that
     // truly needs every wasm (serve, dist, the gallery picker) declares
     // a dependency on this step.  We attach b.getInstallStep() as a
-    // child so the static bundle, zimr.js, and docs come along too.
+    // child so the static bundle and zimr.js come along too.  (API docs
+    // are their own `zig build docs` step, never pulled in here.)
     const all_examples_step: *Step = b.step(
         "all-examples",
         "Build every example wasm into zig-out/web/",
@@ -3431,7 +3432,7 @@ pub fn build(b: *std.Build) void {
     //                               Terminal-friendly "give me the whole
     //                               gallery" entry point.
     //   `zig build serve-only`   -- just starts the server.  Static assets +
-    //                               zimr.js + docs are still installed (via
+    //                               zimr.js are still installed (via
     //                               b.getInstallStep()) so host.html loads;
     //                               example wasms come from the HMR loop
     //                               (focus-aware, see webtests/server.ts)
@@ -3796,14 +3797,6 @@ pub fn build(b: *std.Build) void {
     // Target is wasm32-wasi (matches the real build target so all
     // `extern "webgl" fn` decls type-check) but the generated docs
     // are static HTML+JS, target-independent for the reader.
-    // ---- API documentation (zig's native autodoc).
-    // Builds a no-op library from src/zimr.zig and harvests Zig's
-    // generated HTML+JS doc bundle via `getEmittedDocs()`.  We don't
-    // care about the resulting binary - `-femit-docs` is the actual
-    // ask, and `getEmittedDocs()` enables it.
-    // Target is wasm32-wasi (matches the real build target so all
-    // `extern "webgl" fn` decls type-check) but the generated docs
-    // are static HTML+JS, target-independent for the reader.
     // **Why the lib is named `zimr` not `zimr-docs`** - the autodoc
     // packer at `/opt/zig/lib/docs/wasm/main.zig` decides which file
     // is the module's "root" by either:
@@ -3816,17 +3809,16 @@ pub fn build(b: *std.Build) void {
     // root spot via (a).  Naming the package `zimr` instead lets (c)
     // fire on `zimr/zimr.zig` and pin zimr.zig as the root, which is
     // what the user expects when they navigate the docs.
-    // **Install location is zig-out/web/docs/**, not zig-out/docs/, so
-    // the gallery's `./docs/` link works in the served tree without a
-    // manual copy.  And `b.getInstallStep().dependOn(&install_docs.step)`
-    // wires docs into the default `zig build` so users don't have to
-    // run a second command before `zig build serve` - autodoc caches
-    // when sources don't change, so the cost is near-zero on rebuilds.
-    // Output: zig-out/web/docs/  (browse via `zig build serve`
-    // gallery's "api docs" link).  The bundle uses fetch() for source
-    // viewing, so it must be served over HTTP - opening index.html
-    // via file:// works for navigation but the source-view panel
-    // won't load.
+    // **LOCAL ONLY - `zig build docs`, never the default install or `dist`.**
+    // The bundle's sources.tar is the whole source tree (~100 MB), over
+    // GitHub's 100 MB per-file limit, so shipping it got the pages push
+    // rejected.  It is its own step, and `dist-copy` (tools/buildaux.zig)
+    // skips docs/ so a stale local bundle can't leak into prebuilt/.
+    // **Install location is zig-out/web/docs/**, not zig-out/docs/, so the
+    // dev server serves it: `zig build docs`, then `zig build serve-only`
+    // and open http://localhost:8080/docs/.  The bundle uses fetch() for
+    // source viewing, so it must be served over HTTP - opening index.html
+    // via file:// works for navigation but the source-view panel won't load.
     // GL-retirement P3: docs document the LIVE WebGPU API (zimr),
     // not the retired GL umbrella.
     const docs_lib: *Compile = b.addLibrary(.{
@@ -3842,18 +3834,16 @@ pub fn build(b: *std.Build) void {
         .install_dir = web_install,
         .install_subdir = "docs",
     });
-    // Pull docs into the default install - `zig build` produces a
-    // complete site (examples + bundled runtime + API docs).
-    b.getInstallStep().dependOn(&install_docs.step);
 
-    const docs_step: *Step = b.step("docs", "Generate API documentation in zig-out/web/docs/");
+    const docs_step: *Step = b.step("docs", "Generate API docs in zig-out/web/docs/ (local only, not in dist)");
     docs_step.dependOn(&install_docs.step);
 
     // ---- `zig build dist` -- mirror zig-out/web/ into prebuilt/.
     // `prebuilt/` is gitignored on main; `release.bat` / `release.sh` publish
     // its contents to the orphan `pages` branch that GitHub Pages serves at
     // https://simonclavet.github.io/zimr/.  Pair with `-Dmode=release` for
-    // ReleaseSmall wasm; the release scripts do that for you.
+    // ReleaseSmall wasm; the release scripts do that for you.  The API docs
+    // (`zig build docs`) are deliberately left out - see the docs block above.
     const dist_step: *Step = b.step("dist", "Refresh prebuilt/ from zig-out/web/ for distribution");
     // A pure-Zig recursive copy in the buildaux CLI (the old custom makeFn
     // Step is gone in 0.17).  Avoids the cross-shell quoting/exit-code mess
