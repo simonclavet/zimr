@@ -8,425 +8,7 @@
             name="description"
             content="Your first contact with real-time graphics, taught through zimr: a pure-Zig engine where shaders are Zig functions, the same function runs on the GPU and the CPU, and WebGPU is set up for you. From drawing a circle to raymarched metaballs."
         />
-        <style>
-            :root {
-                --main-font: "Courier New", Courier, monospace;
-                --header-font: "Georgia", "Times New Roman", serif;
-                --bg-page: #1f140e;
-                --bg-paper: #332218;
-                --bg-block: #211510;
-                --bg-block-2: #2c1d14;
-                --text-color: #f0e6d2;
-                --text-muted: #a89684;
-                --text-faint: #7a6a58;
-                --accent-color: #d35f33;
-                --accent-2: #e0a54f;
-                --accent-cool: #6fae9f;
-                --accent-violet: #9a86c4;
-                --border-color: #090604;
-                --shadow-color: #000000;
-                --kw: #e0a54f;
-                --fn: #6fae9f;
-                --num: #d98a6a;
-                --str: #b7c48a;
-                --com: #7a6a58;
-                --type: #c9a6e0;
-            }
-
-            * {
-                box-sizing: border-box;
-            }
-
-            html {
-                scroll-behavior: smooth;
-            }
-
-            body {
-                background-color: var(--bg-page);
-                background-image: radial-gradient(
-                    var(--border-color) 2px,
-                    transparent 2px
-                );
-                background-size: 18px 18px;
-                color: var(--text-color);
-                font-family: var(--main-font);
-                line-height: 1.65;
-                margin: 0;
-                padding: 40px 20px 80px;
-                display: flex;
-                justify-content: center;
-            }
-
-            .page {
-                background-color: var(--bg-paper);
-                max-width: 860px;
-                width: 100%;
-                padding: 44px 48px 56px;
-                border: 4px solid var(--border-color);
-                box-shadow: 14px 14px 0px var(--shadow-color);
-            }
-
-            /* ---- masthead ---- */
-            .eyebrow {
-                font-size: 0.78rem;
-                letter-spacing: 3px;
-                text-transform: uppercase;
-                color: var(--accent-color);
-                margin: 0 0 6px;
-            }
-            h1.title {
-                font-family: var(--header-font);
-                font-size: 3rem;
-                line-height: 1.05;
-                text-transform: lowercase;
-                border-bottom: 6px double var(--border-color);
-                padding-bottom: 14px;
-                margin: 0 0 14px;
-                letter-spacing: -1px;
-            }
-            .lede {
-                font-size: 1.02rem;
-                color: var(--text-color);
-                margin: 0 0 8px;
-            }
-            .lede .muted {
-                color: var(--text-muted);
-            }
-
-            /* ---- table of contents ---- */
-            nav.toc {
-                margin: 26px 0 34px;
-                padding: 18px 20px;
-                background-color: var(--bg-block);
-                border: 2px solid var(--border-color);
-                border-left: 6px solid var(--accent-color);
-            }
-            nav.toc .toc-title {
-                font-size: 0.74rem;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                color: var(--text-muted);
-                margin-bottom: 10px;
-            }
-            nav.toc ol {
-                margin: 0;
-                padding: 0;
-                list-style: none;
-                counter-reset: toc;
-                columns: 2;
-                column-gap: 30px;
-            }
-            nav.toc li {
-                counter-increment: toc;
-                margin: 3px 0;
-                break-inside: avoid;
-                font-size: 0.92rem;
-            }
-            nav.toc li::before {
-                content: counter(toc, decimal-leading-zero);
-                color: var(--accent-color);
-                margin-right: 10px;
-                font-size: 0.8rem;
-            }
-            nav.toc a {
-                color: var(--text-color);
-                text-decoration: none;
-                border-bottom: 1px dotted var(--text-faint);
-            }
-            nav.toc a:hover {
-                color: var(--accent-2);
-                border-bottom-color: var(--accent-2);
-            }
-
-            /* ---- lessons ---- */
-            section.lesson {
-                margin-top: 46px;
-                padding-top: 8px;
-            }
-            .lesson-num {
-                font-family: var(--header-font);
-                font-size: 0.95rem;
-                letter-spacing: 2px;
-                color: var(--accent-color);
-                text-transform: uppercase;
-                display: block;
-                margin-bottom: 2px;
-            }
-            h2.lesson-title {
-                font-family: var(--header-font);
-                font-size: 1.9rem;
-                line-height: 1.15;
-                margin: 0 0 6px;
-                border-bottom: 3px solid var(--border-color);
-                padding-bottom: 10px;
-            }
-            .lesson-goal {
-                font-style: italic;
-                color: var(--accent-2);
-                margin: 0 0 20px;
-                font-size: 0.96rem;
-            }
-            h3 {
-                font-family: var(--header-font);
-                font-size: 1.2rem;
-                color: var(--text-color);
-                margin: 30px 0 8px;
-            }
-
-            p {
-                margin: 14px 0;
-            }
-            a {
-                color: var(--accent-2);
-            }
-            strong {
-                color: var(--accent-2);
-                font-weight: bold;
-            }
-            em {
-                color: var(--text-color);
-            }
-
-            /* ---- inline + block code ---- */
-            code {
-                background-color: var(--bg-block);
-                border: 1px solid var(--border-color);
-                padding: 1px 5px;
-                font-size: 0.9em;
-                color: var(--accent-2);
-            }
-            pre {
-                background-color: var(--bg-block);
-                border: 2px solid var(--border-color);
-                border-left: 6px solid var(--accent-cool);
-                padding: 14px 16px;
-                overflow-x: auto;
-                font-size: 0.82rem;
-                line-height: 1.55;
-                margin: 18px 0;
-            }
-            pre code {
-                background: none;
-                border: none;
-                padding: 0;
-                font-size: inherit;
-                color: var(--text-color);
-            }
-            pre .cap {
-                display: block;
-                color: var(--text-faint);
-                font-size: 0.72rem;
-                text-transform: uppercase;
-                letter-spacing: 1px;
-                margin-bottom: 8px;
-                border-bottom: 1px dotted var(--text-faint);
-                padding-bottom: 5px;
-            }
-            /* syntax colors */
-            .kw {
-                color: var(--kw);
-            }
-            .fn {
-                color: var(--fn);
-            }
-            .ty {
-                color: var(--type);
-            }
-            .nu {
-                color: var(--num);
-            }
-            .st {
-                color: var(--str);
-            }
-            .co {
-                color: var(--com);
-                font-style: italic;
-            }
-
-            /* ---- callouts ---- */
-            .callout {
-                margin: 20px 0;
-                padding: 14px 18px;
-                background-color: var(--bg-block-2);
-                border: 2px solid var(--border-color);
-                border-left: 6px solid var(--accent-2);
-                font-size: 0.94rem;
-            }
-            .callout .tag {
-                display: block;
-                font-size: 0.7rem;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                color: var(--accent-2);
-                margin-bottom: 6px;
-            }
-            .callout.aha {
-                border-left-color: var(--accent-color);
-            }
-            .callout.aha .tag {
-                color: var(--accent-color);
-            }
-            .callout.watch {
-                border-left-color: var(--accent-violet);
-            }
-            .callout.watch .tag {
-                color: var(--accent-violet);
-            }
-
-            /* ---- the signature: three homes diagram ---- */
-            .three-homes {
-                display: grid;
-                grid-template-columns: 1fr 1fr 1fr;
-                gap: 10px;
-                margin: 22px 0;
-            }
-            .home {
-                background-color: var(--bg-block);
-                border: 2px solid var(--border-color);
-                padding: 14px;
-                text-align: center;
-            }
-            .home .where {
-                font-family: var(--header-font);
-                font-size: 1.05rem;
-                color: var(--accent-2);
-                margin-bottom: 4px;
-            }
-            .home .via {
-                font-size: 0.76rem;
-                color: var(--text-muted);
-                line-height: 1.4;
-            }
-            .home .glyph {
-                font-size: 1.5rem;
-                margin-bottom: 6px;
-            }
-            .three-homes .home:nth-child(1) {
-                border-top: 4px solid var(--accent-color);
-            }
-            .three-homes .home:nth-child(2) {
-                border-top: 4px solid var(--accent-cool);
-            }
-            .three-homes .home:nth-child(3) {
-                border-top: 4px solid var(--accent-violet);
-            }
-
-            /* ---- pipeline / flow diagram ---- */
-            .flow {
-                background-color: var(--bg-block);
-                border: 2px solid var(--border-color);
-                padding: 16px;
-                margin: 20px 0;
-                font-size: 0.8rem;
-                overflow-x: auto;
-                white-space: pre;
-                color: var(--text-muted);
-                line-height: 1.5;
-            }
-            .flow .hi {
-                color: var(--accent-2);
-            }
-            .flow .hi2 {
-                color: var(--accent-cool);
-            }
-
-            /* ---- comparison table ---- */
-            table.z {
-                width: 100%;
-                border-collapse: collapse;
-                margin: 20px 0;
-                font-size: 0.86rem;
-            }
-            table.z th,
-            table.z td {
-                border: 2px solid var(--border-color);
-                padding: 8px 11px;
-                text-align: left;
-                vertical-align: top;
-            }
-            table.z th {
-                background-color: var(--bg-block);
-                color: var(--accent-2);
-                text-transform: uppercase;
-                font-size: 0.72rem;
-                letter-spacing: 1px;
-            }
-            table.z td {
-                background-color: var(--bg-block-2);
-            }
-            table.z code {
-                font-size: 0.86em;
-            }
-
-            /* ---- run bar (which homes this snippet runs in) ---- */
-            .runs {
-                display: flex;
-                gap: 8px;
-                margin: 14px 0 2px;
-                flex-wrap: wrap;
-            }
-            .chip {
-                font-size: 0.7rem;
-                letter-spacing: 1px;
-                text-transform: uppercase;
-                padding: 3px 9px;
-                border: 1.5px solid var(--border-color);
-                background: var(--bg-block);
-                color: var(--text-faint);
-            }
-            .chip.on {
-                color: var(--bg-page);
-                font-weight: bold;
-            }
-            .chip.gpu.on {
-                background: var(--accent-color);
-                border-color: var(--accent-color);
-            }
-            .chip.cpu.on {
-                background: var(--accent-cool);
-                border-color: var(--accent-cool);
-            }
-            .chip.ct.on {
-                background: var(--accent-violet);
-                border-color: var(--accent-violet);
-            }
-
-            hr.rule {
-                border: none;
-                border-top: 3px double var(--border-color);
-                margin: 40px 0;
-            }
-
-            footer {
-                margin-top: 54px;
-                padding-top: 20px;
-                border-top: 6px double var(--border-color);
-                color: var(--text-muted);
-                font-size: 0.86rem;
-            }
-            footer a {
-                color: var(--accent-2);
-            }
-
-            @media (max-width: 620px) {
-                .page {
-                    padding: 26px 20px 40px;
-                    box-shadow: 8px 8px 0 var(--shadow-color);
-                }
-                h1.title {
-                    font-size: 2.1rem;
-                }
-                nav.toc ol {
-                    columns: 1;
-                }
-                .three-homes {
-                    grid-template-columns: 1fr;
-                }
-                h2.lesson-title {
-                    font-size: 1.5rem;
-                }
-            }
-        </style>
+<!--docfmt:style-->
     </head>
     <body>
         <main class="page">
@@ -546,34 +128,34 @@
                     <code>while (true)</code>.
                 </p>
 
-                <pre><span class="cap">a complete app — bounce a circle</span><code><span class="kw">const</span> z = <span class="fn">@import</span>(<span class="st">"zimr"</span>);  <span class="co">// the engine: draw*, input, textures…</span>
-<span class="kw">const</span> zm = <span class="fn">@import</span>(<span class="st">"zm"</span>);   <span class="co">// the math: Vec, Mat, dot, normalize…</span>
+                <pre>a complete app — bounce a circle<code class="zig">const z = @import("zimr");  // the engine: draw*, input, textures…
+const zm = @import("zm");   // the math: Vec, Mat, dot, normalize…
 
-<span class="co">// Your state. An ordinary struct. No globals, no singletons.</span>
-<span class="kw">const</span> <span class="ty">State</span> = <span class="kw">struct</span> {
-    pos: zm.<span class="ty">Vec2</span> = .{ <span class="nu">200</span>, <span class="nu">150</span> },
-    vel: zm.<span class="ty">Vec2</span> = .{ <span class="nu">3</span>, <span class="nu">2</span> },
+// Your state. An ordinary struct. No globals, no singletons.
+const State = struct {
+    pos: zm.Vec2 = .{ 200, 150 },
+    vel: zm.Vec2 = .{ 3, 2 },
 };
 
-<span class="kw">pub const</span> app: z.<span class="ty">AppSpec</span>(<span class="ty">State</span>) = .{
-    .config = .{ .window = .{ .title = <span class="st">"bounce"</span>, .width = <span class="nu">800</span>, .height = <span class="nu">450</span> } },
-    .init = initState,   <span class="co">// once, at startup → returns State</span>
-    .update = update,    <span class="co">// every frame → input + draw</span>
+pub const app: z.AppSpec(State) = .{
+    .config = .{ .window = .{ .title = "bounce", .width = 800, .height = 450 } },
+    .init = initState,   // once, at startup → returns State
+    .update = update,    // every frame → input + draw
 };
 
-<span class="kw">fn</span> <span class="fn">initState</span>(gpa: std.mem.<span class="ty">Allocator</span>, f: *z.<span class="ty">Frame</span>) !<span class="ty">State</span> {
-    <span class="kw">return</span> .{}; <span class="co">// defaults are fine here</span>
+fn initState(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    return .{}; // defaults are fine here
 }
 
-<span class="kw">fn</span> <span class="fn">update</span>(f: *z.<span class="ty">Frame</span>, s: *<span class="ty">State</span>) <span class="kw">void</span> {
-    s.pos += s.vel; <span class="co">// Vec2 arithmetic is just +  (see Lesson 06)</span>
-    <span class="kw">if</span> (s.pos[<span class="nu">0</span>] &lt; <span class="nu">20</span> <span class="kw">or</span> s.pos[<span class="nu">0</span>] &gt; <span class="nu">780</span>) s.vel[<span class="nu">0</span>] = -s.vel[<span class="nu">0</span>];
-    <span class="kw">if</span> (s.pos[<span class="nu">1</span>] &lt; <span class="nu">20</span> <span class="kw">or</span> s.pos[<span class="nu">1</span>] &gt; <span class="nu">430</span>) s.vel[<span class="nu">1</span>] = -s.vel[<span class="nu">1</span>];
+fn update(f: *z.Frame, s: *State) void {
+    s.pos += s.vel; // Vec2 arithmetic is just +  (see Lesson 06)
+    if (s.pos[0] &lt; 20 or s.pos[0] &gt; 780) s.vel[0] = -s.vel[0];
+    if (s.pos[1] &lt; 20 or s.pos[1] &gt; 430) s.vel[1] = -s.vel[1];
 
-    z.<span class="fn">beginDrawing</span>(f.gl);
-    z.<span class="fn">clearBackground</span>(f.gl, z.<span class="ty">Color</span>.ray_white);
-    z.<span class="fn">drawCircleV</span>(f.gl, s.pos, <span class="nu">20</span>, z.<span class="ty">Color</span>.maroon);
-    z.<span class="fn">endDrawing</span>(f.gl);
+    z.beginDrawing(f.gl);
+    z.clearBackground(f.gl, z.Color.ray_white);
+    z.drawCircleV(f.gl, s.pos, 20, z.Color.maroon);
+    z.endDrawing(f.gl);
 }</code></pre>
 
                 <p>
@@ -633,12 +215,12 @@
                     the frame holds a <em>snapshot</em> and you ask it questions:
                 </p>
 
-                <pre><span class="cap">input is polled, not pushed at you</span><code><span class="kw">fn</span> <span class="fn">update</span>(f: *z.<span class="ty">Frame</span>, s: *<span class="ty">State</span>) <span class="kw">void</span> {
-    <span class="kw">if</span> (z.<span class="fn">isKeyPressed</span>(f.input, .space)) s.paused = !s.paused; <span class="co">// once, on the down-edge</span>
-    <span class="kw">if</span> (z.<span class="fn">isKeyDown</span>(f.input, .right))  s.pos[<span class="nu">0</span>] += <span class="nu">4</span>;            <span class="co">// every frame it's held</span>
+                <pre>input is polled, not pushed at you<code class="zig">fn update(f: *z.Frame, s: *State) void {
+    if (z.isKeyPressed(f.input, .space)) s.paused = !s.paused; // once, on the down-edge
+    if (z.isKeyDown(f.input, .right))  s.pos[0] += 4;            // every frame it's held
 
-    <span class="kw">const</span> touches: i32 = z.<span class="fn">getTouchPointCount</span>(f.input);        <span class="co">// phones report multitouch</span>
-    <span class="kw">const</span> dt: f32 = <span class="fn">@floatCast</span>(f.time.delta_time);            <span class="co">// seconds since last frame</span>
+    const touches: i32 = z.getTouchPointCount(f.input);        // phones report multitouch
+    const dt: f32 = @floatCast(f.time.delta_time);            // seconds since last frame
     ...
 }</code></pre>
 
@@ -674,19 +256,19 @@
                     <span class="chip cpu on">runs on CPU</span>
                     <span class="chip ct">comptime</span>
                 </div>
-                <pre><span class="cap">a fragment shader that is a gradient</span><code><span class="kw">const</span> zm = <span class="fn">@import</span>(<span class="st">"zm"</span>);
-<span class="kw">const</span> <span class="ty">Vec2</span> = zm.<span class="ty">Vec2</span>;
+                <pre>a fragment shader that is a gradient<code class="zig">const zm = @import("zm");
+const Vec2 = zm.Vec2;
 
-<span class="kw">pub fn</span> <span class="fn">shaderMain</span>(io_in: <span class="ty">Io</span>) <span class="ty">Out</span> {
-    <span class="kw">var</span> out: <span class="ty">Out</span> = <span class="kw">undefined</span>;
+pub fn shaderMain(io_in: Io) Out {
+    var out: Out = undefined;
 
-    <span class="co">// frag_uv is (0,0) at one corner, (1,1) at the opposite corner.</span>
-    <span class="co">// It was handed to us per-pixel, smoothly interpolated. (Lesson 06.)</span>
-    <span class="kw">const</span> uv: <span class="ty">Vec2</span> = io_in.frag_uv;
+    // frag_uv is (0,0) at one corner, (1,1) at the opposite corner.
+    // It was handed to us per-pixel, smoothly interpolated. (Lesson 06.)
+    const uv: Vec2 = io_in.frag_uv;
 
-    <span class="co">// Bottom is warm, top is cool. That's it — a color per pixel.</span>
-    out.final_color = .{ uv[<span class="nu">1</span>], <span class="nu">0.3</span>, <span class="nu">1.0</span> - uv[<span class="nu">1</span>], <span class="nu">1.0</span> };
-    <span class="kw">return</span> out;
+    // Bottom is warm, top is cool. That's it — a color per pixel.
+    out.final_color = .{ uv[1], 0.3, 1.0 - uv[1], 1.0 };
+    return out;
 }</code></pre>
 
                 <p>
@@ -821,23 +403,23 @@ WGSL  →  the browser  →  the GPU
                     stage that every lit 3D material in the engine shares:
                 </p>
 
-                <pre><span class="cap">src/shaders/gbuffer_vs.zig — a real vertex shader</span><code><span class="kw">pub fn</span> <span class="fn">shaderMain</span>(io_in: <span class="ty">Io</span>) <span class="ty">Out</span> {
-    <span class="kw">var</span> out: <span class="ty">Out</span> = <span class="kw">undefined</span>;
+                <pre>src/shaders/gbuffer_vs.zig — a real vertex shader<code class="zig">pub fn shaderMain(io_in: Io) Out {
+    var out: Out = undefined;
 
-    <span class="co">// WHERE this corner lands on screen: multiply the vertex by the</span>
-    <span class="co">// model-view-projection matrix. This one line is 3D graphics.</span>
-    out.position = <span class="fn">mulMatPoint</span>(io_in.u.mvp, io_in.vertex_position);
+    // WHERE this corner lands on screen: multiply the vertex by the
+    // model-view-projection matrix. This one line is 3D graphics.
+    out.position = mulMatPoint(io_in.u.mvp, io_in.vertex_position);
 
-    <span class="co">// Two facts the fragment stage will want, computed here and passed</span>
-    <span class="co">// along as varyings: the world-space position and the world normal.</span>
-    <span class="kw">const</span> world: <span class="ty">Vec</span> = <span class="fn">mulMatPoint</span>(io_in.u.model, io_in.vertex_position);
-    out.frag_world_pos = <span class="ty">Vec3</span>{ world[<span class="nu">0</span>], world[<span class="nu">1</span>], world[<span class="nu">2</span>] };
+    // Two facts the fragment stage will want, computed here and passed
+    // along as varyings: the world-space position and the world normal.
+    const world: Vec = mulMatPoint(io_in.u.model, io_in.vertex_position);
+    out.frag_world_pos = Vec3{ world[0], world[1], world[2] };
 
-    <span class="kw">const</span> n: <span class="ty">Vec3</span> = io_in.vertex_normal;
-    <span class="kw">const</span> wn: <span class="ty">Vec</span> = <span class="fn">mulMatVec</span>(io_in.u.normal_matrix, <span class="fn">vec4</span>(n[<span class="nu">0</span>], n[<span class="nu">1</span>], n[<span class="nu">2</span>], <span class="nu">0.0</span>));
-    out.frag_world_normal = <span class="ty">Vec3</span>{ wn[<span class="nu">0</span>], wn[<span class="nu">1</span>], wn[<span class="nu">2</span>] };
+    const n: Vec3 = io_in.vertex_normal;
+    const wn: Vec = mulMatVec(io_in.u.normal_matrix, vec4(n[0], n[1], n[2], 0.0));
+    out.frag_world_normal = Vec3{ wn[0], wn[1], wn[2] };
 
-    <span class="kw">return</span> out;
+    return out;
 }</code></pre>
 
                 <p>
@@ -884,12 +466,12 @@ WGSL  →  the browser  →  the GPU
                     file:
                 </p>
 
-                <pre><span class="cap">src/shaders/fog_fs_io.zig — the schema (condensed)</span><code><span class="kw">pub const</span> <span class="ty">Ubo</span> = <span class="kw">extern struct</span> {
-    base_color: <span class="ty">Vec</span>,
-    view_pos:   <span class="ty">Vec</span>,   <span class="co">// where the camera is, in world space</span>
-    light_dir:  <span class="ty">Vec</span>,   <span class="co">// which way the light points</span>
-    fog_color:  <span class="ty">Vec</span>,   <span class="co">// what the distance dissolves into</span>
-    params:     <span class="ty">Vec</span>,   <span class="co">// { fog_density, 0, 0, 0 }</span>
+                <pre>src/shaders/fog_fs_io.zig — the schema (condensed)<code class="zig">pub const Ubo = extern struct {
+    base_color: Vec,
+    view_pos:   Vec,   // where the camera is, in world space
+    light_dir:  Vec,   // which way the light points
+    fog_color:  Vec,   // what the distance dissolves into
+    params:     Vec,   // { fog_density, 0, 0, 0 }
 };</code></pre>
 
                 <p>
@@ -902,17 +484,17 @@ WGSL  →  the browser  →  the GPU
                     <span class="chip cpu on">host side</span>
                     <span class="chip gpu">the same struct, in the shader</span>
                 </div>
-                <pre><span class="cap">on the host — fill the block and send it</span><code><span class="co">// Take the shader's uniform type straight from the shader's Io.</span>
-<span class="kw">const</span> <span class="ty">FsUbo</span> = <span class="fn">@FieldType</span>(fog_fs.<span class="ty">Io</span>, <span class="st">"u"</span>);
+                <pre>on the host — fill the block and send it<code class="zig">// Take the shader's uniform type straight from the shader's Io.
+const FsUbo = @FieldType(fog_fs.Io, "u");
 
-<span class="kw">var</span> ubo: <span class="ty">FsUbo</span> = .{
-    .base_color = .{ <span class="nu">0.8</span>, <span class="nu">0.5</span>, <span class="nu">0.3</span>, <span class="nu">1</span> },
-    .light_dir  = .{ <span class="nu">0.4</span>, <span class="nu">0.8</span>, <span class="nu">0.4</span>, <span class="nu">0</span> },
-    .fog_color  = .{ <span class="nu">0.1</span>, <span class="nu">0.1</span>, <span class="nu">0.12</span>, <span class="nu">1</span> },
-    .params     = .{ s.density, <span class="nu">0</span>, <span class="nu">0</span>, <span class="nu">0</span> },
+var ubo: FsUbo = .{
+    .base_color = .{ 0.8, 0.5, 0.3, 1 },
+    .light_dir  = .{ 0.4, 0.8, 0.4, 0 },
+    .fog_color  = .{ 0.1, 0.1, 0.12, 1 },
+    .params     = .{ s.density, 0, 0, 0 },
     ...
 };
-z.wgpu.<span class="fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span class="nu">0</span>, std.mem.<span class="fn">asBytes</span>(&ubo));</code></pre>
+z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, std.mem.asBytes(&ubo));</code></pre>
 
                 <div class="callout aha">
                     <span class="tag">The aha</span>
@@ -953,10 +535,10 @@ z.wgpu.<span class="fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span cla
                     eye reads as shape.
                 </p>
 
-                <pre><span class="cap">the four lines under almost every lit surface</span><code><span class="kw">const</span> normal: <span class="ty">Vec3</span> = <span class="fn">normalize</span>(io_in.frag_world_normal);      <span class="co">// the surface's arrow</span>
-<span class="kw">const</span> light_dir: <span class="ty">Vec3</span> = <span class="fn">normalize</span>(<span class="co">/* toward the light */</span>);
-<span class="kw">const</span> n_dot_l: f32 = <span class="fn">@max</span>(<span class="fn">dot</span>(normal, light_dir), <span class="nu">0.0</span>);   <span class="co">// how much it faces the light</span>
-<span class="kw">const</span> lit: <span class="ty">Vec3</span> = base_color * <span class="fn">@as</span>(<span class="ty">Vec3</span>, <span class="fn">@splat</span>(n_dot_l)); <span class="co">// dim it by that amount</span></code></pre>
+                <pre>the four lines under almost every lit surface<code class="zig">const normal: Vec3 = normalize(io_in.frag_world_normal);      // the surface's arrow
+const light_dir: Vec3 = normalize(/* toward the light */);
+const n_dot_l: f32 = @max(dot(normal, light_dir), 0.0);   // how much it faces the light
+const lit: Vec3 = base_color * @as(Vec3, @splat(n_dot_l)); // dim it by that amount</code></pre>
 
                 <p>
                     Notice <code>dot</code> and <code>normalize</code> are just
@@ -995,29 +577,29 @@ z.wgpu.<span class="fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span cla
                     <span class="chip cpu on">CPU (verified here first)</span>
                     <span class="chip ct">comptime</span>
                 </div>
-                <pre><span class="cap">src/shaders/cel_fs.zig — toon shading, the real thing</span><code><span class="kw">pub fn</span> <span class="fn">shaderMain</span>(io_in: <span class="ty">Io</span>) <span class="ty">Out</span> {
-    <span class="kw">var</span> out: <span class="ty">Out</span> = <span class="kw">undefined</span>;
+                <pre>src/shaders/cel_fs.zig — toon shading, the real thing<code class="zig">pub fn shaderMain(io_in: Io) Out {
+    var out: Out = undefined;
 
-    <span class="kw">const</span> normal: <span class="ty">Vec3</span> = <span class="fn">normalize</span>(io_in.frag_world_normal);
-    <span class="kw">const</span> light_dir: <span class="ty">Vec3</span> = <span class="fn">normalize</span>(<span class="ty">Vec3</span>{
-        io_in.u.light_dir[<span class="nu">0</span>], io_in.u.light_dir[<span class="nu">1</span>], io_in.u.light_dir[<span class="nu">2</span>],
+    const normal: Vec3 = normalize(io_in.frag_world_normal);
+    const light_dir: Vec3 = normalize(Vec3{
+        io_in.u.light_dir[0], io_in.u.light_dir[1], io_in.u.light_dir[2],
     });
-    <span class="kw">const</span> n_dot_l: f32 = <span class="fn">@max</span>(<span class="fn">dot</span>(normal, light_dir), <span class="nu">0.0</span>);
+    const n_dot_l: f32 = @max(dot(normal, light_dir), 0.0);
 
-    <span class="co">// THE PUNCHLINE: snap the smooth 0..1 falloff into `bands` flat</span>
-    <span class="co">// plateaus. floor() is the whole trick — it turns a gradient into steps.</span>
-    <span class="kw">const</span> bands: f32 = <span class="fn">@max</span>(io_in.u.params[<span class="nu">0</span>], <span class="nu">2.0</span>);
-    <span class="kw">const</span> quantized: f32 =
-        <span class="fn">@min</span>(<span class="fn">@floor</span>(n_dot_l * bands), bands - <span class="nu">1.0</span>) / (bands - <span class="nu">1.0</span>);
+    // THE PUNCHLINE: snap the smooth 0..1 falloff into `bands` flat
+    // plateaus. floor() is the whole trick — it turns a gradient into steps.
+    const bands: f32 = @max(io_in.u.params[0], 2.0);
+    const quantized: f32 =
+        @min(@floor(n_dot_l * bands), bands - 1.0) / (bands - 1.0);
 
-    <span class="kw">const</span> lighting: f32 = <span class="fn">@min</span>(ambient_floor + quantized, <span class="nu">1.0</span>);
+    const lighting: f32 = @min(ambient_floor + quantized, 1.0);
     out.final_color = .{
-        io_in.u.base_color[<span class="nu">0</span>] * lighting,
-        io_in.u.base_color[<span class="nu">1</span>] * lighting,
-        io_in.u.base_color[<span class="nu">2</span>] * lighting,
-        <span class="nu">1.0</span>,
+        io_in.u.base_color[0] * lighting,
+        io_in.u.base_color[1] * lighting,
+        io_in.u.base_color[2] * lighting,
+        1.0,
     };
-    <span class="kw">return</span> out;
+    return out;
 }</code></pre>
 
                 <p>
@@ -1061,9 +643,9 @@ z.wgpu.<span class="fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span cla
                     shader that wants those inputs just aliases them:
                 </p>
 
-                <pre><span class="cap">a fragment schema borrowing a shared vertex stage</span><code><span class="co">// src/shaders/fog_fs_io.zig</span>
-<span class="kw">const</span> common = <span class="fn">@import</span>(<span class="st">"gbuffer_common_io.zig"</span>);
-<span class="kw">pub const</span> <span class="ty">Inputs</span> = common.<span class="ty">Interp</span>; <span class="co">// ← "I take exactly what gbuffer_vs emits"</span></code></pre>
+                <pre>a fragment schema borrowing a shared vertex stage<code class="zig">// src/shaders/fog_fs_io.zig
+const common = @import("gbuffer_common_io.zig");
+pub const Inputs = common.Interp; // ← "I take exactly what gbuffer_vs emits"</code></pre>
 
                 <p>
                     That one line means fog, cel shading, terrain banding, the
@@ -1151,17 +733,17 @@ z.wgpu.<span class="fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span cla
                 </p>
 
                 <div class="runs"><span class="chip cpu on">host — init, runs once</span></div>
-                <pre><span class="cap">creating a pipeline (condensed from examples/heightmap)</span><code><span class="co">// 1. GPU memory for the mesh vertices and the uniform blocks.</span>
-<span class="kw">const</span> vbo = z.wgpu.<span class="fn">createBuffer</span>(device, .{ .size = cap, .usage = .{ .vertex = <span class="kw">true</span>, .copy_dst = <span class="kw">true</span> } });
-<span class="kw">const</span> vs_ubo = z.wgpu.<span class="fn">createBuffer</span>(device, .{ .size = <span class="fn">@sizeOf</span>(<span class="ty">VsUbo</span>), .usage = .{ .uniform = <span class="kw">true</span>, .copy_dst = <span class="kw">true</span> } });
+                <pre>creating a pipeline (condensed from examples/heightmap)<code class="zig">// 1. GPU memory for the mesh vertices and the uniform blocks.
+const vbo = z.wgpu.createBuffer(device, .{ .size = cap, .usage = .{ .vertex = true, .copy_dst = true } });
+const vs_ubo = z.wgpu.createBuffer(device, .{ .size = @sizeOf(VsUbo), .usage = .{ .uniform = true, .copy_dst = true } });
 
-<span class="co">// 2. Load the two shaders (compiled from Zig → WGSL by the build).</span>
-<span class="kw">const</span> vs_mod = z.wgpu.<span class="fn">createShaderModuleWgsl</span>(device, gbuffer_vs_wgsl, <span class="st">"gbuffer_vs"</span>);
-<span class="kw">const</span> fs_mod = z.wgpu.<span class="fn">createShaderModuleWgsl</span>(device, terrain_fs_wgsl, <span class="st">"terrain_fs"</span>);
+// 2. Load the two shaders (compiled from Zig → WGSL by the build).
+const vs_mod = z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
+const fs_mod = z.wgpu.createShaderModuleWgsl(device, terrain_fs_wgsl, "terrain_fs");
 
-<span class="co">// 3. The pipeline: vertex layout + shaders + how to draw.</span>
-<span class="kw">const</span> combo = z.gpu.<span class="ty">StateCombo</span>.<span class="fn">fromParts</span>(.triangle_list, .none, .less, .back, .rgba8_unorm, .depth24_plus, <span class="nu">1</span>);
-<span class="kw">const</span> pipeline = z.wgpu.<span class="fn">createRenderPipeline</span>(device, layout, vs_mod, fs_mod, pipe_blob, <span class="st">"hm_pipe"</span>);</code></pre>
+// 3. The pipeline: vertex layout + shaders + how to draw.
+const combo = z.gpu.StateCombo.fromParts(.triangle_list, .none, .less, .back, .rgba8_unorm, .depth24_plus, 1);
+const pipeline = z.wgpu.createRenderPipeline(device, layout, vs_mod, fs_mod, pipe_blob, "hm_pipe");</code></pre>
 
                 <p>
                     Then each frame you fill the uniform buffer (Lesson 07),
@@ -1215,16 +797,16 @@ z.wgpu.<span class="fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span cla
                     describes the scene and then the clever bit:
                 </p>
 
-                <pre><span class="cap">src/shaders/hybrid_raymarch_fs.zig — the header</span><code><span class="co">//! The scene: three metaballs orbiting each other (polynomial</span>
-<span class="co">//! smooth-min union) over an analytically-intersected checkerboard</span>
-<span class="co">//! floor.  Shading is a tetrahedron-gradient normal, Lambert from a</span>
-<span class="co">//! fixed sun, a rim term on the blobs, and distance fade on the floor.</span>
-<span class="co">//!</span>
-<span class="co">//! The hybrid trick: on a hit, the world-space point is projected</span>
-<span class="co">//! through the SAME view-projection the raster pass uses and</span>
-<span class="co">//! clip.z / clip.w goes out through the FragDepth builtin — so</span>
-<span class="co">//! rasterized cubes and these marched blobs depth-test against each</span>
-<span class="co">//! other with zero coordination.</span></code></pre>
+                <pre>src/shaders/hybrid_raymarch_fs.zig — the header<code class="zig">//! The scene: three metaballs orbiting each other (polynomial
+//! smooth-min union) over an analytically-intersected checkerboard
+//! floor.  Shading is a tetrahedron-gradient normal, Lambert from a
+//! fixed sun, a rim term on the blobs, and distance fade on the floor.
+//!
+//! The hybrid trick: on a hit, the world-space point is projected
+//! through the SAME view-projection the raster pass uses and
+//! clip.z / clip.w goes out through the FragDepth builtin — so
+//! rasterized cubes and these marched blobs depth-test against each
+//! other with zero coordination.</code></pre>
 
                 <p>
                     Look at how much of that you can now decode. "Lambert from a
@@ -1272,10 +854,10 @@ z.wgpu.<span class="fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span cla
                     <span class="chip gpu on">GPU (thousands at once)</span>
                     <span class="chip cpu on">CPU (identical loop)</span>
                 </div>
-                <pre><span class="cap">examples/compute_smoke/double_it.zig</span><code><span class="co">/// The kernel. Identical on CPU and GPU; buffers reached via `b_data`.</span>
-<span class="kw">pub fn</span> <span class="fn">double</span>(c: k.<span class="ty">Ctx</span>(<span class="fn">@This</span>())) <span class="kw">void</span> {
-    <span class="kw">if</span> (c.id &gt;= c.params.count) <span class="kw">return</span>; <span class="co">// which element am I? (my worker id)</span>
-    b_data[c.id] = b_data[c.id] * <span class="nu">2.0</span>;
+                <pre>examples/compute_smoke/double_it.zig<code class="zig">/// The kernel. Identical on CPU and GPU; buffers reached via `b_data`.
+pub fn double(c: k.Ctx(@This())) void {
+    if (c.id &gt;= c.params.count) return; // which element am I? (my worker id)
+    b_data[c.id] = b_data[c.id] * 2.0;
 }</code></pre>
 
                 <p>

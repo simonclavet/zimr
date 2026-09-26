@@ -23,6 +23,11 @@ const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
 const rbt = @import("robot.zig");
+const float = zm.float;
+const radFromDeg = zm.radFromDeg;
+const quat_identity = zm.quat_identity;
+const quatFromAxisAngle = zm.quatFromAxisAngle;
+const isFinite = zm.isFinite;
 
 const Vec = zm.Vec;
 const vec = zm.vec;
@@ -33,7 +38,10 @@ const cross = zm.cross;
 const assertf = zm.assertf;
 const dot3 = zm.dot3;
 const length3 = zm.length3;
+const sinRad = zm.sinRad;
 const pi = zm.pi;
+const quat = zm.quat;
+const qmul = zm.qmul;
 
 /// Which velocity DOFs a controller may push on, and how hard.
 pub const Actuation = struct {
@@ -53,7 +61,28 @@ pub const Actuation = struct {
         for (0..model.njnt) |j| {
             switch (model.jnt_type[j]) {
                 .hinge, .slide => powered[model.jnt_dof_adr[j]] = true,
-                .free, .ball => {},
+                // ---- A BALL JOINT IS POWERED NOW, AND A FREE ONE STILL IS NOT ----
+                //
+                // *** THE NOTE ABOVE SAID A BALL JOINT CANNOT BE DRIVEN BY A SCALAR TORQUE, AND
+                // THAT WAS TRUE UNTIL `PoseHold` LEARNED TO DRIVE ONE. It now computes the
+                // rotation carrying the current orientation to the target and applies torque on
+                // all three DOFs - so the premise changed and this switch did not follow.
+                //
+                // The symptom was a character with `kp = 400` on screen and **no torque at
+                // all**: every joint in `humanoid_ball` is a ball joint, so `powered` was false
+                // everywhere and `PoseHold.apply` skipped every one. A limp ragdoll reporting
+                // healthy gains.
+                //
+                // A FREE JOINT IS STILL NOT POWERED and that part of the note stands: a floating
+                // base has no motor by construction, and a controller that forgets it makes the
+                // robot fly.
+                .ball => {
+                    const base: u32 = model.jnt_dof_adr[j];
+                    inline for (0..3) |k| {
+                        powered[base + k] = true;
+                    }
+                },
+                .free => {},
             }
         }
         return .{ .powered = powered, .gpa = gpa };
@@ -87,7 +116,10 @@ pub fn limbActuation(gpa: Allocator, model: *const rbt.Model, tip: u32) !Actuati
             // IK solver allowed to use it "plants the foot" by sliding the whole robot.
             switch (model.jnt_type[dofJoint(model, v)]) {
                 .hinge, .slide => powered[v] = true,
-                .free, .ball => {},
+                // Ball joints are driveable now - see the note in `init`. `v` is already the
+                // DOF here, so each of a ball joint's three is powered as it is visited.
+                .ball => powered[v] = true,
+                .free => {},
             }
         }
     }
@@ -180,6 +212,87 @@ pub const PoseHold = struct {
             // `max_torque` stays in torque units, because a motor's rating is a real quantity
             // that has nothing to do with what it is attached to.
             const inertia: f32 = if (self.scale_by_inertia) rbt.massDiagonal(model, data, v) else 1.0;
+            // ---- A BALL JOINT'S ERROR IS A ROTATION, NOT A SUBTRACTION ----
+            //
+            // The scalar path below reads `target[q] - pos[q]`, which is right for a hinge and
+            // MEANINGLESS for a ball joint: `q` addresses four quaternion components, and the
+            // difference of two quaternions' first components is not an angle.
+            //
+            // The rotation carrying the current orientation to the target is
+            // `target * conj(current)`, and its axis-angle form is a three-vector whose
+            // direction is the axis and whose length is the angle - exactly the shape a torque
+            // on three DOFs wants. **Written here rather than left to the caller** because a
+            // caller that got it wrong would produce a character twitching plausibly toward
+            // nothing.
+            if (model.jnt_type[j] == .ball) {
+                // ---- THE ERROR IS A ROTATION VECTOR, IN THE TARGET'S FRAME ----
+                //
+                // `zm.subQuat(current, target)` is MuJoCo's `mju_subQuat`: it returns the
+                // rotation carrying the target to the current pose, as a vector whose direction
+                // is the axis and whose LENGTH IS THE ANGLE IN RADIANS. The restoring torque is
+                // proportional to its negation.
+                //
+                // *** THE FIRST VERSION OF THIS HAND-ROLLED IT AND GOT THE MAGNITUDE WRONG.
+                // `quatToAxisAngle` returns the quaternion's raw `xyz` as its axis - a vector of
+                // length `sin(theta/2)`, not one - so `axis * angle` gave `sin(theta/2)*theta`
+                // instead of `theta`. Near the target that is QUADRATICALLY too small, making
+                // the controller weakest exactly where it should be most precise, and no amount
+                // of raising `kp` fixes a gain that vanishes with the error.
+                //
+                // ** AND THE FRAME WAS WRONG TOO. It computed `target * conj(current)`, the
+                // error in the WORLD frame, while a ball joint's velocity coordinates live in
+                // the joint's own frame. The two agree only when the parent is unrotated.
+                //
+                // `subQuat` also normalizes both inputs, because an integrated quaternion drifts
+                // off the unit sphere and `conj` stops being the inverse when it does.
+                const current: rbt.Quat = quat(
+                    data.pos[q],
+                    data.pos[q + 1],
+                    data.pos[q + 2],
+                    data.pos[q + 3],
+                );
+                const want: rbt.Quat = quat(
+                    self.target[q],
+                    self.target[q + 1],
+                    self.target[q + 2],
+                    self.target[q + 3],
+                );
+                // ---- `subQuat(want, current)`, NOT `subQuat(current, want)` ----
+                //
+                // *** `subQuat(a, b)` IS THE ROTATION CARRYING `b` TO `a`, EXPRESSED IN b's
+                // FRAME - and its doc says outright that the frame is the part that is easy to
+                // get wrong. A joint's three DOFs live in the CURRENT orientation's frame, so
+                // the error has to be expressed there, which means `current` is the second
+                // argument.
+                //
+                // The first version passed them the other way and negated `kp` to fix the sign.
+                // That gets the magnitude and the sign right and the FRAME wrong, so the torque
+                // points correctly only while the error is small. Measured: survival FELL as
+                // gains rose - 0.75s at kp 800 down to 0.15s at kp 2500 - which is a controller
+                // pushing in an increasingly wrong direction, not one that is merely too stiff.
+                //
+                // This is MuJoCo's own order: `mju_subQuat(res, qdes, qpos)` then `+kp * res`.
+                const err: rbt.Vec = zm.subQuat(want, current);
+
+                // Unrolled at comptime because `err` is a `@Vector` and a vector cannot be
+                // indexed with a runtime value.
+                inline for (0..3) |k| {
+                    const ball_inertia: f32 = if (self.scale_by_inertia)
+                        rbt.massDiagonal(model, data, v + @as(u32, @intCast(k)))
+                    else
+                        1.0;
+                    const torque: f32 = ball_inertia *
+                        (self.kp * err[k] - self.kv * data.vel[v + k]);
+                    // `bias_force` INSIDE the clamp, matching the scalar path exactly.
+                    data.applied_force[v + k] = clamp(
+                        torque + data.bias_force[v + k],
+                        -self.max_torque,
+                        self.max_torque,
+                    );
+                }
+                continue;
+            }
+
             const wanted: f32 = inertia *
                 (self.kp * (self.target[q] - data.pos[q]) - self.kv * data.vel[v]);
             // ★ GRAVITY COMPENSATION IS ADDED, THEN THE TOTAL IS CLAMPED. Clamping only the
@@ -385,7 +498,7 @@ pub const Ik = struct {
             var turn: Vec = vec_zero;
             if (target.orientation) |wanted| {
                 const misalignment: zm.Quat =
-                    zm.qmul(wanted, zm.conjugate(data.body_xrot[target.body]));
+                    qmul(wanted, zm.conjugate(data.body_xrot[target.body]));
                 const shortest: zm.Quat = if (misalignment[3] < 0) -misalignment else misalignment;
                 turn = vec(2 * shortest[0], 2 * shortest[1], 2 * shortest[2]);
                 // ★ ONE NUMBER OUT, POSITION-DOMINANT. The halves are in different units —
@@ -1430,7 +1543,7 @@ test "★ ik: an orientation target aims the jaws, which a position target canno
     const grasp: Vec = vec(0, 0, 0.055);
     const goal: Vec = vec(0.40, 0, 0.50);
     // Jaws pointing straight down: the wrist's local +z onto the world's −z.
-    const jaws_down: zm.Quat = zm.quatFromAxisAngle(vec(0, 1, 0), pi);
+    const jaws_down: zm.Quat = quatFromAxisAngle(vec(0, 1, 0), pi);
 
     const jawDirection = struct {
         fn go(m: *const rbt.Model, d: *rbt.Data, body: u32) Vec {
@@ -2087,4 +2200,1179 @@ test "momentum torques: SKIPPED — free flight is the wrong gate; see the note 
         try expect(size > 1.0e-4);
         try expect(cosine > 0.9);
     }
+}
+
+/// Run the clip open-loop and return how many frames the character stayed up.
+///
+/// Extracted so the gain sweep runs it nine times without nine copies of the loop - and so the
+/// body that the sweep measures is provably the same body every time.
+fn runOpenLoop(
+    model: *const rbt.Model,
+    data: *rbt.Data,
+    world: *zimrphysics.World,
+    proxy: *robot_physics.Bridge,
+    actuation: Actuation,
+    clip: []const rbt.Quat,
+    target: []f32,
+    hold: PoseHold,
+    frames: usize,
+    bodies: usize,
+    substeps: usize,
+    dt: f32,
+    start_height: f32,
+) usize {
+    var survived: usize = 0;
+    for (0..frames) |frame| {
+        const rotations: []const rbt.Quat = clip[frame * bodies ..][0..bodies];
+        for (0..model.njnt) |j| {
+            if (model.jnt_type[j] != .ball) {
+                continue;
+            }
+            const q: u32 = model.jnt_qpos_adr[j];
+            const r: rbt.Quat = rotations[model.jnt_body[j]];
+            inline for (0..4) |k| {
+                target[q + k] = r[k];
+            }
+        }
+        for (0..substeps) |_| {
+            rbt.forward(model, data);
+            proxy.sync(world, model, data) catch return survived;
+            zimrphysics.step(world, dt) catch return survived;
+            proxy.harvest(data);
+            hold.apply(model, data, actuation);
+            rbt.step(model, data);
+        }
+        // FALLEN = the root dropped by half its starting height. Crude and unambiguous: a
+        // knee-bend is not a fall and a character on the floor is.
+        if (data.body_xpos[1][2] < start_height * 0.5) {
+            return survived;
+        }
+        survived += 1;
+    }
+    return survived;
+}
+
+test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
+    // ---- THE STAGE-0 GATE, MEASURED HEADLESSLY ----
+    //
+    // DReCon's premise is that open-loop playback of a retargeted clip is NEARLY a working
+    // controller - "not sufficient for maintained character balance, but comes close". Every
+    // learned method downstream assumes it, because they all learn a CORRECTION to it.
+    //
+    // *** THE FIRST READING OF THIS NUMBER WAS TAKEN WHILE THE CHARACTER WAS FALLING THROUGH
+    // THE FLOOR. It reported nine seconds of survival because nothing was there to fall onto -
+    // a number that looked like a pass and measured nothing. This runs with a real ground.
+    //
+    // Headless on purpose: a gate that needs someone to look at a phone is not a gate.
+    const gpa: Allocator = std.testing.allocator;
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    const paths: struct {
+        robot: []const u8,
+        clip: []const u8,
+        tpose: []const u8,
+    } = .{
+        .robot = "src/tests/fixtures/robot/humanoid_ball.xml",
+        .clip = "examples/geno_dance/dance1_20s.bvh",
+        .tpose = "assets/Geno_stance.bvh",
+    };
+
+    const Read = struct {
+        fn all(a: Allocator, w: std.Io, path: []const u8) ![]u8 {
+            var file: std.Io.File = std.Io.Dir.cwd().openFile(w, path, .{}) catch return error.SkipZigTest;
+            defer file.close(w);
+            const info: std.Io.File.Stat = try file.stat(w);
+            const bytes: []u8 = try a.alloc(u8, info.size);
+            _ = try file.readPositionalAll(w, bytes, 0);
+            return bytes;
+        }
+    };
+
+    const robot_bytes: []u8 = Read.all(gpa, io, paths.robot) catch return;
+    defer gpa.free(robot_bytes);
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, robot_bytes, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .gravity = vec(0, 0, -9.81),
+        .max_contacts = 256,
+    });
+    defer imported.deinit();
+    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    defer data.deinit();
+    rbt.forward(&imported.model, &data);
+
+    const bodies: usize = imported.model.nbody;
+
+    // ---- the ground, in its own physics world ----
+    var world: zimrphysics.World = try .init(gpa, 256);
+    defer world.deinit(gpa);
+    world.gravity = vec(0, 0, -9.81);
+    const ground: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(8, 8, 0.5), .convex_radius = 0.01 },
+    });
+    _ = try world.createBody(.{ .shape = ground, .position = vec(0, 0, -0.5), .motion_type = .static });
+    var proxy: robot_physics.Bridge = try .init(gpa, &world, &imported.model, &data, 256);
+    defer proxy.deinit(&world);
+    proxy.listen(&world);
+
+    // ---- the clip, retargeted ----
+    const clip_bytes: []u8 = Read.all(gpa, io, paths.clip) catch return;
+    defer gpa.free(clip_bytes);
+    const tpose_bytes: []u8 = Read.all(gpa, io, paths.tpose) catch return;
+    defer gpa.free(tpose_bytes);
+    var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, clip_bytes, null);
+    defer capture.deinit();
+    var tpose: codecs.bvh.Data = try codecs.bvh.parse(gpa, tpose_bytes, null);
+    defer tpose.deinit();
+
+    const human_joints: usize = capture.joints.len;
+    const human_names: [][]const u8 = try gpa.alloc([]const u8, human_joints);
+    defer gpa.free(human_names);
+    for (capture.joints, 0..) |joint, i| {
+        human_names[i] = joint.name;
+    }
+    const human_of_body: []i32 = try gpa.alloc(i32, bodies);
+    defer gpa.free(human_of_body);
+    try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, human_names, human_of_body);
+
+    const robot_reference: []rbt.Quat = try gpa.alloc(rbt.Quat, bodies);
+    defer gpa.free(robot_reference);
+    rbt.referenceOrientationsFromRest(&imported.model, &data, robot_reference);
+    const human_reference: []rbt.Quat = try gpa.alloc(rbt.Quat, human_joints);
+    defer gpa.free(human_reference);
+    try rmj.tPoseGlobalRotations(gpa, &tpose, human_names, human_reference);
+    const rest_alignment: []rbt.Quat = try gpa.alloc(rbt.Quat, bodies);
+    defer gpa.free(rest_alignment);
+    codecs.bvh.restAlignmentOffsets(human_of_body, human_reference, robot_reference, rest_alignment);
+
+    const body_parents: []i32 = try gpa.alloc(i32, bodies);
+    defer gpa.free(body_parents);
+    for (0..bodies) |b| {
+        body_parents[b] = if (b == 0) -1 else @intCast(imported.model.body_parent[b]);
+    }
+
+    const frames: usize = @min(capture.frame_count, 600);
+    const clip: []rbt.Quat = try gpa.alloc(rbt.Quat, frames * bodies);
+    defer gpa.free(clip);
+    {
+        const human_local: []rbt.Quat = try gpa.alloc(rbt.Quat, human_joints);
+        defer gpa.free(human_local);
+        const human_global: []rbt.Quat = try gpa.alloc(rbt.Quat, human_joints);
+        defer gpa.free(human_global);
+        const robot_global: []rbt.Quat = try gpa.alloc(rbt.Quat, bodies);
+        defer gpa.free(robot_global);
+        for (0..frames) |frame| {
+            const row: []const f32 = capture.motion[frame * capture.channel_count ..][0..capture.channel_count];
+            var cursor: usize = 0;
+            for (capture.joints, 0..) |joint, index| {
+                const values: []const f32 = row[cursor..][0..joint.channels.len];
+                cursor += joint.channels.len;
+                var rotation: rbt.Quat = quat_identity;
+                for (joint.channels, 0..) |channel, k| {
+                    const angle: f32 = radFromDeg(values[k]);
+                    const axis: ?rbt.Vec = switch (channel) {
+                        .x_rotation => vec(1, 0, 0),
+                        .y_rotation => vec(0, 1, 0),
+                        .z_rotation => vec(0, 0, 1),
+                        else => null,
+                    };
+                    if (axis) |rotation_axis| {
+                        rotation = zm.qmul(rotation, quatFromAxisAngle(rotation_axis, angle));
+                    }
+                }
+                human_local[index] = rotation;
+                human_global[index] = if (joint.parent < 0)
+                    human_local[index]
+                else
+                    zm.qmul(human_global[@intCast(joint.parent)], human_local[index]);
+            }
+            codecs.bvh.retargetRotations(
+                body_parents,
+                human_of_body,
+                human_global,
+                rest_alignment,
+                clip[frame * bodies ..][0..bodies],
+                robot_global,
+            );
+        }
+    }
+
+    // ---- run it ----
+    const target: []f32 = try gpa.alloc(f32, imported.model.nq);
+    defer gpa.free(target);
+    @memcpy(target, data.pos);
+
+    var actuation: Actuation = try Actuation.init(gpa, &imported.model);
+    defer actuation.deinit();
+
+    const dt: f32 = 1.0 / 240.0;
+    const substeps_per_frame: usize = 4;
+    const start_height: f32 = data.body_xpos[1][2];
+    // ---- THE CHARACTER STARTS ON THE CLIP'S FIRST FRAME, NOT IN ITS REST POSE ----
+    //
+    // *** THE FIRST VERSION OF THIS MEASUREMENT STARTED FROM `qpos0` - a T-pose - while the PD
+    // target was the clip's frame 0, a dance pose. The controller then had to cross that entire
+    // gap in one step, which is a shove at t = 0 that has nothing to do with whether the clip is
+    // trackable. **Reference state initialisation is not an optimisation here, it is the
+    // difference between measuring the clip and measuring a lurch.**
+    //
+    // Both papers reset to a frame of the reference for exactly this reason.
+    const start_pose: []f32 = try gpa.dupe(f32, data.pos);
+    defer gpa.free(start_pose);
+    {
+        const rotations: []const rbt.Quat = clip[0..bodies];
+        for (0..imported.model.njnt) |j| {
+            const q: u32 = imported.model.jnt_qpos_adr[j];
+            const r: rbt.Quat = rotations[imported.model.jnt_body[j]];
+            switch (imported.model.jnt_type[j]) {
+                // A free joint's qpos is position then quaternion, so the rotation starts at
+                // `q + 3`. The ROOT's orientation comes from the clip too - leaving it at the
+                // rest pose starts the character facing whatever direction `qpos0` faced, which
+                // is a shove in yaw before the first step.
+                .free => inline for (0..4) |k| {
+                    start_pose[q + 3 + k] = r[k];
+                },
+                .ball => inline for (0..4) |k| {
+                    start_pose[q + k] = r[k];
+                },
+                else => {},
+            }
+        }
+    }
+
+    // ---- SWEEP THE GAINS, BECAUSE THEY WERE BORROWED FROM A STATIC-POSE DEMO ----
+    //
+    // `examples/humanoid` tuned kp = 400, kv = 20 to HOLD A POSE. Tracking a moving reference is
+    // a different problem: the target is never where the character is, so the same stiffness
+    // that holds a pose steadily may fight a clip that keeps moving away from it.
+    //
+    // Cheap to answer now that the measurement is headless - the whole sweep is one test run,
+    // where on a phone it is one rebuild per guess.
+    // Refined around kp 400 / kv 20, where the coarse sweep peaked SHARPLY - 5.00s against
+    // 0.18s two steps away in either direction. A peak that narrow is worth resolving, and it is
+    // also a warning: a controller this sensitive to its gains is not a robust one yet.
+    const gains = [_][2]f32{
+        .{ 100, 10 },  .{ 200, 20 },  .{ 400, 20 },
+        .{ 400, 40 },  .{ 800, 40 },  .{ 800, 60 },
+        .{ 1500, 60 }, .{ 2500, 80 }, .{ 4000, 100 },
+    };
+    var best_s: f32 = 0;
+    var best_kp: f32 = 0;
+    var best_kv: f32 = 0;
+
+    for (gains) |pair| {
+        @memcpy(data.pos, start_pose);
+        @memset(data.vel, 0);
+        rbt.forward(&imported.model, &data);
+        const survived: usize = runOpenLoop(
+            &imported.model,
+            &data,
+            &world,
+            &proxy,
+            actuation,
+            clip,
+            target,
+            // ---- `scale_by_inertia` STAYS OFF HERE, AND THAT IS A MEASURED CHOICE ----
+            //
+            // Turning it on turns `kp` into frequency units and makes one gain serve limbs of
+            // very different mass, which is right in principle. **Measured, it took standing
+            // survival from 10.00s to 0.53s** - the gains that balance are in torque units and
+            // the good region moves when the units do.
+            //
+            // So it is left off here and offered as a TOGGLE in `dance_track`, where tracking
+            // and balance can be looked at separately. Changing a default that makes the one
+            // number you can measure worse is not a fix.
+            PoseHold{ .target = target, .kp = pair[0], .kv = pair[1] },
+            frames,
+            bodies,
+            substeps_per_frame,
+            dt,
+            start_height,
+        );
+        const seconds: f32 = float(survived) / 60.0;
+        // lint:off debug-print: the sweep IS this test's deliverable.
+        std.debug.print("    kp {d:>5.0}  kv {d:>3.0}  ->  {d:.2}s\n", .{ pair[0], pair[1], seconds });
+        if (seconds > best_s) {
+            best_s = seconds;
+            best_kp = pair[0];
+            best_kv = pair[1];
+        }
+    }
+
+    const survived_frames: usize = @trunc(best_s * 60.0);
+
+    const survived_s: f32 = float(survived_frames) / 60.0;
+
+    // lint:off debug-print: the NUMBER is this test's deliverable, not its pass/fail.
+    std.debug.print(
+        "\n  stage 0: open-loop survived {d:.2}s of {d:.2}s   root z {d:.3} -> {d:.3}\n",
+        .{
+            survived_s,
+            float(frames) / 60.0,
+            start_height,
+            data.body_xpos[1][2],
+        },
+    );
+
+    // ---- the assertion ----
+    //
+    // Loose on purpose. This is a REGRESSION guard, not the bar: it catches the character
+    // collapsing instantly, which is what a broken retarget or wrong gains look like, and says
+    // nothing about whether nine seconds or two is the right answer. The number itself is the
+    // deliverable and it is printed by `robot-bench`, not asserted here.
+    try expect(survived_s > 0.1);
+    try expect(isFinite(data.body_xpos[1][2]));
+}
+
+test "stage 0 debug: does the IK solve wind joints past their limits" {
+    // ---- 1825 DEGREES OF JOINT ERROR IS NOT A SERVO ERROR ----
+    //
+    // *** A HINGE CANNOT BE THIRTY-ONE RADIANS FROM ITS TARGET IN ANY USEFUL SENSE - that is
+    // five full turns. Either the IK is producing wound-up angles, or the ragdoll's joints are
+    // spinning, and the two want completely different fixes.
+    //
+    // This asks the first question alone: run the solve over the whole clip and report each
+    // hinge's range against its declared limit. **The solve is deterministic and needs no
+    // physics**, so the answer costs one test run rather than a device round trip.
+    const gpa: Allocator = std.testing.allocator;
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    const Read = struct {
+        fn all(a: Allocator, w: std.Io, path: []const u8) ![]u8 {
+            var file: std.Io.File = std.Io.Dir.cwd().openFile(w, path, .{}) catch return error.SkipZigTest;
+            defer file.close(w);
+            const info: std.Io.File.Stat = try file.stat(w);
+            const bytes: []u8 = try a.alloc(u8, info.size);
+            _ = try file.readPositionalAll(w, bytes, 0);
+            return bytes;
+        }
+    };
+
+    const robot_bytes: []u8 = Read.all(gpa, io, "src/tests/fixtures/robot/humanoid_flex.xml") catch return;
+    defer gpa.free(robot_bytes);
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, robot_bytes, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{ .gravity = vec(0, 0, -9.81) });
+    defer imported.deinit();
+
+    const m: *const rbt.Model = &imported.model;
+
+    // lint:off debug-print: the table IS this test's deliverable.
+    // lint:off debug-print: the table IS this test's deliverable.
+    std.debug.print("\n  hinge limits as the model declares them:\n", .{});
+    var unlimited: usize = 0;
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] != .hinge) {
+            continue;
+        }
+        if (m.jnt_range[j]) |range| {
+            // lint:off debug-print: the table IS this test's deliverable.
+            std.debug.print("    joint {d:>2} on {s:<16} [{d:>7.2} .. {d:>7.2}] rad\n", .{
+                j,
+                imported.names[m.jnt_body[j]],
+                range[0],
+                range[1],
+            });
+        } else {
+            unlimited += 1;
+        }
+    }
+
+    // *** AN UNLIMITED HINGE CAN WIND FOREVER, and a PD target that winds with it produces
+    // exactly the number on screen. If this count is high, the model is the answer.
+    // lint:off debug-print: the table IS this test's deliverable.
+    std.debug.print("    UNLIMITED hinges: {d}\n", .{unlimited});
+
+    try expect(m.njnt > 0);
+}
+
+test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen" {
+    // ---- THE SMALLEST POSSIBLE SERVO QUESTION ----
+    //
+    // Simon's suggestion, and the right one: 1825 degrees of error on a twenty-four joint
+    // character says nothing about WHICH part is broken. **One elbow, everything else held at
+    // rest, a constant target - if that does not track, nothing downstream can.**
+    //
+    // No IK, no clip, no contacts, no gravity on the root. Just: ask a joint to go somewhere and
+    // see whether it arrives.
+    const gpa: Allocator = std.testing.allocator;
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+        io,
+        "src/tests/fixtures/robot/humanoid_flex.xml",
+        .{},
+    ) catch return;
+    defer file.close(io);
+    const info: std.Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    defer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, bytes, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    // ---- 1/2000 s, NOT THE DEFAULT 1/240 ----
+    //
+    // *** A PD WITH POSITIVE DAMPING CANNOT SUSTAIN A LIMIT CYCLE UNLESS ENERGY IS BEING
+    // INJECTED, and an explicit integrator does exactly that when the step is long relative to
+    // the controller's stiffness. **This is the last suspect that does not require the
+    // controller to be wrong**, and it is one number to test.
+    //
+    // If the oscillation dies here, the servo was always correct and the timestep was the bug -
+    // which would also explain why gain did not monotonically help: a stiffer controller
+    // destabilises sooner at a fixed step.
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .gravity = vec(0, 0, -9.81),
+        .timestep = 1.0 / 2000.0,
+    });
+    defer imported.deinit();
+    const m: *const rbt.Model = &imported.model;
+
+    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    defer data.deinit();
+    rbt.forward(m, &data);
+
+    // The right elbow: `lower_arm_right`'s only hinge, limits [-2.62, 0.35].
+    var elbow: usize = 0;
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] == .hinge and
+            std.mem.eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
+        {
+            elbow = j;
+            break;
+        }
+    }
+    try expect(elbow != 0);
+
+    const target: []f32 = try gpa.dupe(f32, data.pos);
+    defer gpa.free(target);
+    const goal: f32 = -1.0; // comfortably inside [-2.62, 0.35]
+    target[m.jnt_qpos_adr[elbow]] = goal;
+
+    var actuation: Actuation = try Actuation.init(gpa, m);
+    defer actuation.deinit();
+
+    // ** THE ROOT IS PINNED EVERY STEP, so this measures the servo and nothing else - no
+    // balance, no falling, no contact. The character hangs in space and is asked to bend one arm.
+    const root_q: u32 = m.jnt_qpos_adr[0];
+    const root_v: u32 = m.jnt_dof_adr[0];
+    const rest_root: [7]f32 = .{
+        data.pos[root_q],     data.pos[root_q + 1], data.pos[root_q + 2], data.pos[root_q + 3],
+        data.pos[root_q + 4], data.pos[root_q + 5], data.pos[root_q + 6],
+    };
+
+    const Trial = struct { kp: f32, kv: f32, inertia: bool, quadruped_style: bool = false };
+    const trials = [_]Trial{
+        .{ .kp = 100, .kv = 10, .inertia = false },
+        .{ .kp = 400, .kv = 20, .inertia = false },
+        .{ .kp = 800, .kv = 40, .inertia = false },
+        .{ .kp = 100, .kv = 10, .inertia = true },
+        .{ .kp = 400, .kv = 20, .inertia = true },
+        .{ .kp = 100, .kv = 10, .inertia = false, .quadruped_style = true },
+        .{ .kp = 400, .kv = 20, .inertia = false, .quadruped_style = true },
+        .{ .kp = 800, .kv = 40, .inertia = false, .quadruped_style = true },
+    };
+
+    // lint:off debug-print: the table IS this test's deliverable.
+    // lint:off debug-print: the table IS this test's deliverable.
+    std.debug.print("\n  one elbow, target {d:.2} rad, root pinned, 2 s:\n", .{goal});
+
+    for (trials) |trial| {
+        @memcpy(data.pos, target);
+        data.pos[m.jnt_qpos_adr[elbow]] = 0; // start away from the goal
+        @memset(data.vel, 0);
+        rbt.forward(m, &data);
+
+        const hold: PoseHold = .{
+            .target = target,
+            .kp = trial.kp,
+            .kv = trial.kv,
+            .scale_by_inertia = trial.inertia,
+        };
+        var worst_after_settle: f32 = 0;
+        var earlier_amplitude: f32 = 0;
+        // ---- TEN SECONDS, AND THE LAST SECOND COMPARED AGAINST THE ONE BEFORE ----
+        //
+        // *** THE FINAL ANGLES SCATTER AROUND THE GOAL - -1.49, -0.52, -0.78, -1.21 - SO THE
+        // SERVO REACHES ROUGHLY THE RIGHT PLACE AND DOES NOT STAY. That is an oscillation, and
+        // "settled error" was reading its amplitude.
+        //
+        // Two seconds cannot tell a slow convergence from a limit cycle. Ten can: if the
+        // amplitude in the last second is smaller than in the second before, it is settling; if
+        // it is the same, it never will.
+        for (0..20000) |step| {
+            // ---- THE QUADRUPED'S OWN SERVO, INLINE, AS A CONTROL ----
+            //
+            // `examples/quadruped` stands a Go1 with this and it works. It is structurally the
+            // same PD as `PoseHold` with ONE difference: it adds `bias_force` OUTSIDE the clamp,
+            // where `PoseHold` adds it inside. Running both here says whether that placement is
+            // the whole story.
+            if (trial.quadruped_style) {
+                @memset(data.applied_force, 0);
+                for (0..m.njnt) |j| {
+                    if (m.jnt_type[j] != .hinge) {
+                        continue;
+                    }
+                    const q: u32 = m.jnt_qpos_adr[j];
+                    const v: u32 = m.jnt_dof_adr[j];
+                    const wanted: f32 = trial.kp * (target[q] - data.pos[q]) - trial.kv * data.vel[v];
+                    data.applied_force[v] = clamp(wanted, -1000.0, 1000.0) + data.bias_force[v];
+                }
+            } else {
+                hold.apply(m, &data, actuation);
+            }
+            rbt.step(m, &data);
+
+            inline for (0..7) |k| {
+                data.pos[root_q + k] = rest_root[k];
+            }
+            inline for (0..6) |k| {
+                data.vel[root_v + k] = 0;
+            }
+            // ** `forward` AFTER PINNING, OR THE MASS MATRIX IS STALE. Writing qpos directly
+            // invalidates everything derived from it, and `scale_by_inertia` reads
+            // `massDiagonal` - which indexes a mass matrix belonging to the previous state. The
+            // first version of this test crashed there, which is the pin's bug and not the
+            // servo's.
+            rbt.forward(m, &data);
+
+            // Ignore the first second: a servo is allowed to take time to arrive. What matters
+            // is where it ENDS UP, not how it got there.
+            const err: f32 = @abs(data.pos[m.jnt_qpos_adr[elbow]] - goal);
+            if (step >= 16000 and step < 18000) {
+                if (err > earlier_amplitude) {
+                    earlier_amplitude = err;
+                }
+            }
+            if (step >= 18000) {
+                if (err > worst_after_settle) {
+                    worst_after_settle = err;
+                }
+            }
+        }
+        // lint:off debug-print: the table IS this test's deliverable.
+        // ---- WHERE IT ENDS UP, NOT JUST HOW FAR OFF ----
+        //
+        // *** "SETTLED ERROR 0.85 RAD" IS TWO COMPLETELY DIFFERENT BUGS DEPENDING ON THE FINAL
+        // ANGLE. Ending at -0.15 means the joint barely moved and torque is not arriving.
+        // Ending at -1.85 means it overshot and is oscillating. Ending exactly at -2.62 means
+        // it is jammed against its limit. **The error alone cannot tell them apart, and three
+        // turns have been spent not knowing which.**
+        const final: f32 = data.pos[m.jnt_qpos_adr[elbow]];
+        // lint:off debug-print: the table IS this test's deliverable.
+        std.debug.print(
+            "    kp {d:>4.0}  kv {d:>3.0}  {s:<12}  ->  ends {d:>6.3}  amp 8-9s {d:.3}  9-10s {d:.3}  {s}\n",
+            .{
+                trial.kp,
+                trial.kv,
+                if (trial.inertia) "inertia ON" else "inertia off",
+                final,
+                earlier_amplitude,
+                worst_after_settle,
+                // A flat amplitude is only a limit cycle if the amplitude MATTERS. At 0.002
+                // rad the servo has converged and is sitting in numerical noise - calling that
+                // a limit cycle was the label lying about a result it was not written for.
+                if (worst_after_settle < 0.02)
+                    "CONVERGED"
+                else if (worst_after_settle < earlier_amplitude * 0.8)
+                    "settling"
+                else
+                    "LIMIT CYCLE",
+            },
+        );
+        // *** WHERE IT ENDED UP, NOT JUST HOW FAR OFF. An error of 2.1 rad from a goal of -1.0
+        // means the joint sits at +1.1 - OUTSIDE its own declared limit of [-2.62, 0.35], and on
+        // the opposite side from where it was asked to go. "Did not reach" and "went the wrong
+        // way and through a wall" are different bugs and the error magnitude hides which.
+        // lint:off debug-print: the table IS this test's deliverable.
+        std.debug.print("         ended at {d:>7.3} rad   (goal {d:.2}, limit [{d:.2} .. {d:.2}])\n", .{
+            data.pos[m.jnt_qpos_adr[elbow]],
+            goal,
+            if (m.jnt_range[elbow]) |r| r[0] else -99,
+            if (m.jnt_range[elbow]) |r| r[1] else 99,
+        });
+    }
+
+    try expect(isFinite(data.pos[m.jnt_qpos_adr[elbow]]));
+}
+
+test "stage 0 debug: are excluded body pairs actually colliding" {
+    // ---- `<exclude>` IS IN THE MJCF AND NOTHING READS IT ----
+    //
+    // *** `humanoid_flex.xml` EXCLUDES `waist_lower` FROM BOTH THIGHS, AND `src/mjcf.zig` HAS NO
+    // `exclude` HANDLING AT ALL. Those capsules overlap at the hip in the rest pose, so without
+    // the exclusion they sit in permanent deep penetration - and a solver asked to separate two
+    // bodies that are meant to overlap answers with a large force, every step, for ever.
+    //
+    // Simon's suggestion, and it is checkable without physics: place the character at rest and
+    // ask how far the excluded pairs interpenetrate.
+    const gpa: Allocator = std.testing.allocator;
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+        io,
+        "src/tests/fixtures/robot/humanoid_flex.xml",
+        .{},
+    ) catch return;
+    defer file.close(io);
+    const info: std.Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    defer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, bytes, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{ .gravity = vec(0, 0, -9.81) });
+    defer imported.deinit();
+    const m: *const rbt.Model = &imported.model;
+
+    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    defer data.deinit();
+    rbt.forward(m, &data);
+
+    // Distance between the two bodies' origins against the sum of their geom radii. Crude - a
+    // capsule is not a sphere - but a gap far smaller than the radii means they overlap however
+    // it is measured.
+    const pairs = [_][2][]const u8{
+        .{ "waist_lower", "thigh_right" },
+        .{ "waist_lower", "thigh_left" },
+    };
+
+    // lint:off debug-print: the table IS this test's deliverable.
+    std.debug.print("\n  excluded pairs, at rest:\n", .{});
+    for (pairs) |pair| {
+        var a_body: ?u32 = null;
+        var b_body: ?u32 = null;
+        for (0..m.nbody) |b| {
+            if (std.mem.eql(u8, imported.names[b], pair[0])) {
+                a_body = @intCast(b);
+            }
+            if (std.mem.eql(u8, imported.names[b], pair[1])) {
+                b_body = @intCast(b);
+            }
+        }
+        if (a_body == null or b_body == null) {
+            continue;
+        }
+        const gap: f32 = length3(data.body_xpos[a_body.?] - data.body_xpos[b_body.?]);
+
+        var radii: f32 = 0;
+        for (0..m.ngeom) |g| {
+            if (m.geom_body[g] != a_body.? and m.geom_body[g] != b_body.?) {
+                continue;
+            }
+            radii += switch (m.geom_shape[g]) {
+                .capsule => |c| c.radius,
+                .sphere => |sp| sp.radius,
+                else => 0,
+            };
+        }
+        // lint:off debug-print: the table IS this test's deliverable.
+        std.debug.print("    {s:<14} .. {s:<14}  centres {d:.3} m   radii sum {d:.3} m   {s}\n", .{
+            pair[0],
+            pair[1],
+            gap,
+            radii,
+            if (gap < radii) "OVERLAPPING" else "clear",
+        });
+    }
+
+    try expect(m.nbody > 0);
+}
+
+test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
+    // ---- THE RIG SIMON ASKED FOR: ONE ARM, AND SEE WHAT THE MOTOR ACTUALLY DOES ----
+    //
+    // Everything except the right arm is held at its target after every step, and the root is
+    // pinned. So the only moving parts are three shoulder hinges and an elbow, and anything that
+    // goes wrong has nowhere to hide.
+    //
+    // *** IT PRINTS THE TRAJECTORY, NOT A SUMMARY. Angle, velocity and torque at intervals -
+    // because "max error 1.449 rad" has been true for many turns and has never once said WHY.
+    // A servo that overshoots, one that never arrives and one that is being fought all produce
+    // the same summary and completely different traces.
+    const gpa: Allocator = std.testing.allocator;
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+        io,
+        "src/tests/fixtures/robot/humanoid_flex.xml",
+        .{},
+    ) catch return;
+    defer file.close(io);
+    const info: std.Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    defer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, bytes, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .gravity = vec(0, 0, -9.81),
+        .timestep = 1.0 / 2000.0,
+    });
+    defer imported.deinit();
+    const m: *const rbt.Model = &imported.model;
+
+    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    defer data.deinit();
+    rbt.forward(m, &data);
+
+    // The right arm: everything on `upper_arm_right` and `lower_arm_right`.
+    var free_joint: [8]usize = undefined;
+    var free_count: usize = 0;
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] != .hinge) {
+            continue;
+        }
+        const body_name: []const u8 = imported.names[m.jnt_body[j]];
+        if (std.mem.eql(u8, body_name, "upper_arm_right") or
+            std.mem.eql(u8, body_name, "lower_arm_right"))
+        {
+            free_joint[free_count] = j;
+            free_count += 1;
+        }
+    }
+    try expect(free_count >= 2);
+
+    const target: []f32 = try gpa.dupe(f32, data.pos);
+    defer gpa.free(target);
+    const watched: usize = free_joint[free_count - 1]; // the elbow, last in the chain
+    const goal: f32 = -1.0;
+    target[m.jnt_qpos_adr[watched]] = goal;
+
+    const frozen: []f32 = try gpa.dupe(f32, data.pos);
+    defer gpa.free(frozen);
+
+    var actuation: Actuation = try Actuation.init(gpa, m);
+    defer actuation.deinit();
+
+    const hold: PoseHold = .{ .target = target, .kp = 800.0, .kv = 40.0 };
+
+    // ---- HOW MANY JOINTS CAN BE DRIVEN AT ONCE BEFORE IT BREAKS ----
+    //
+    // *** THE ARM ALONE IS PERFECT: -0.998 against a goal of -1.000, velocity zero, torque
+    // 0.06 Nm. So the servo is correct and driving TWENTY-FOUR of them is not. That is a
+    // coupling question, and the way to answer it is to unfreeze the body a piece at a time and
+    // watch where the trace stops settling.
+    //
+    // `free_bodies` grows each round; everything outside it is held. The first round that does
+    // not settle names the part that cannot be driven with the rest.
+    const groups = [_][]const []const u8{
+        &.{ "upper_arm_right", "lower_arm_right" },
+        &.{ "upper_arm_right", "lower_arm_right", "upper_arm_left", "lower_arm_left" },
+        &.{
+            "upper_arm_right", "lower_arm_right", "upper_arm_left",
+            "lower_arm_left",  "waist_lower",     "pelvis",
+            "thigh_right",     "shin_right",      "thigh_left",
+            "shin_left",
+        },
+    };
+
+    // lint:off debug-print: the trace IS this test's deliverable.
+    std.debug.print("\n  unfreezing progressively, elbow -> {d:.2} rad, kp 800 kv 40:\n", .{goal});
+
+    for (groups, 0..) |group, round| {
+        @memcpy(data.pos, frozen);
+        @memset(data.vel, 0);
+        rbt.forward(m, &data);
+
+        var settled: f32 = 0;
+        var peak_speed: f32 = 0;
+        for (0..4000) |step| {
+            hold.apply(m, &data, actuation);
+            rbt.step(m, &data);
+
+            // ---- HOLD EVERY JOINT NOT IN THIS ROUND'S GROUP ----
+            //
+            // ** RESTORING qpos AND ZEROING qvel. The frozen joints still contribute their
+            // inertia through the mass matrix but cannot move - so this removes their MOTION as
+            // a suspect without removing the mass that coupling acts through.
+            for (0..m.njnt) |j| {
+                if (m.jnt_type[j] != .hinge) {
+                    continue;
+                }
+                var in_group: bool = false;
+                for (group) |name| {
+                    if (std.mem.eql(u8, imported.names[m.jnt_body[j]], name)) {
+                        in_group = true;
+                    }
+                }
+                if (in_group) {
+                    continue;
+                }
+                data.pos[m.jnt_qpos_adr[j]] = frozen[m.jnt_qpos_adr[j]];
+                data.vel[m.jnt_dof_adr[j]] = 0;
+            }
+            const root_q: u32 = m.jnt_qpos_adr[0];
+            const root_v: u32 = m.jnt_dof_adr[0];
+            inline for (0..7) |k| {
+                data.pos[root_q + k] = frozen[root_q + k];
+            }
+            inline for (0..6) |k| {
+                data.vel[root_v + k] = 0;
+            }
+            rbt.forward(m, &data);
+
+            const speed: f32 = @abs(data.vel[m.jnt_dof_adr[watched]]);
+            if (step >= 2000 and speed > peak_speed) {
+                peak_speed = speed;
+            }
+            if (step >= 3800) {
+                const err: f32 = @abs(data.pos[m.jnt_qpos_adr[watched]] - goal);
+                settled = @max(settled, err);
+            }
+        }
+
+        // lint:off debug-print: the trace IS this test's deliverable.
+        std.debug.print("    round {d}: {d:>2} bodies free  ->  elbow err {d:.4} rad  peak speed {d:>7.2}  {s}\n", .{
+            round,
+            group.len,
+            settled,
+            peak_speed,
+            if (settled < 0.02) "SETTLED" else "unstable",
+        });
+    }
+
+    try expect(isFinite(data.pos[m.jnt_qpos_adr[watched]]));
+}
+
+test "stage 0 debug: can one elbow follow a MOVING target, everything else frozen" {
+    // ---- THE WIN WE NEED, OR THE REASON THERE ISN'T ONE ----
+    //
+    // Simon: fix every bone except the right arm, servo the elbow, limit velocities, and watch
+    // what the motor actually does.
+    //
+    // *** A SINE INSTEAD OF THE CLIP, ON PURPOSE. The dance needs the whole retarget pipeline,
+    // and if the servo cannot follow a smooth 0.5 Hz sine inside the joint's own range then it
+    // cannot follow a dance either - and the sine has no retarget, no IK and no contact to
+    // blame. **A controller that fails the easy version does not need the hard version run.**
+    //
+    // Reported per trial: peak tracking error, the LAG at which it best matches (a servo that
+    // trails is a different fault from one that oscillates), and the peak torque and velocity.
+    const gpa: Allocator = std.testing.allocator;
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+        io,
+        "src/tests/fixtures/robot/humanoid_flex.xml",
+        .{},
+    ) catch return;
+    defer file.close(io);
+    const info: std.Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    defer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, bytes, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+
+    const rate: f32 = 2000.0;
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .gravity = vec(0, 0, -9.81),
+        .timestep = 1.0 / rate,
+    });
+    defer imported.deinit();
+    const m: *const rbt.Model = &imported.model;
+
+    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    defer data.deinit();
+    rbt.forward(m, &data);
+
+    var elbow: usize = 0;
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] == .hinge and
+            std.mem.eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
+        {
+            elbow = j;
+            break;
+        }
+    }
+    try expect(elbow != 0);
+
+    const eq: u32 = m.jnt_qpos_adr[elbow];
+    const ev: u32 = m.jnt_dof_adr[elbow];
+    const range: [2]f32 = m.jnt_range[elbow].?;
+
+    // A sine that stays comfortably inside the joint's range, so a limit is never the answer.
+    const centre: f32 = 0.5 * (range[0] + range[1]);
+    const swing: f32 = 0.35 * (range[1] - range[0]);
+    const hz: f32 = 0.5;
+
+    const rest: []f32 = try gpa.dupe(f32, data.pos);
+    defer gpa.free(rest);
+    const target: []f32 = try gpa.dupe(f32, data.pos);
+    defer gpa.free(target);
+
+    var actuation: Actuation = try Actuation.init(gpa, m);
+    defer actuation.deinit();
+
+    // ** EVERY OTHER JOINT IS FROZEN, NOT MERELY UNPOWERED. Leaving them free lets the arm's
+    // reaction swing the whole body, and then a tracking error is really a body-motion error
+    // wearing a disguise. Frozen, the elbow is the only thing that can move.
+    const Trial = struct { kp: f32, kv: f32, vlimit: f32 };
+    const trials = [_]Trial{
+        // Bracketing the CLIFF. Measured: torque is 2.6 Nm at kp 400 and 1000.0 - the ceiling -
+        // at kp 1600, a 385-fold jump that is not gradual saturation. The example runs 800, so
+        // where exactly the ceiling starts biting is the number that matters.
+        .{ .kp = 100, .kv = 10, .vlimit = 0 },
+        .{ .kp = 200, .kv = 15, .vlimit = 0 },
+        .{ .kp = 400, .kv = 20, .vlimit = 0 },
+        .{ .kp = 600, .kv = 30, .vlimit = 0 },
+        .{ .kp = 800, .kv = 40, .vlimit = 0 },
+        .{ .kp = 1200, .kv = 60, .vlimit = 0 },
+        .{ .kp = 1600, .kv = 80, .vlimit = 0 },
+    };
+
+    // lint:off debug-print: the table IS this test's deliverable.
+    std.debug.print(
+        "\n  right elbow, {d:.1} Hz sine within [{d:.2}, {d:.2}], all other joints frozen, {d:.0} Hz:\n",
+        .{ hz, range[0], range[1], rate },
+    );
+
+    for (trials) |trial| {
+        @memcpy(data.pos, rest);
+        @memset(data.vel, 0);
+        data.pos[eq] = centre;
+        rbt.forward(m, &data);
+
+        var peak_err: f32 = 0;
+        var peak_torque: f32 = 0;
+        var peak_vel: f32 = 0;
+        const steps: usize = @trunc(rate * 6.0);
+
+        for (0..steps) |step| {
+            const t: f32 = float(step) / rate;
+            const want: f32 = centre + swing * sinRad(2.0 * pi * hz * t);
+            target[eq] = want;
+
+            const hold: PoseHold = .{ .target = target, .kp = trial.kp, .kv = trial.kv };
+            hold.apply(m, &data, actuation);
+
+            if (@abs(data.applied_force[ev]) > peak_torque) {
+                peak_torque = @abs(data.applied_force[ev]);
+            }
+            rbt.step(m, &data);
+
+            // ---- FREEZE EVERYTHING BUT THE ELBOW, AFTER THE STEP ----
+            //
+            // The step integrates all of them; this puts every one back except the elbow. It
+            // is the same trick as `pinRootInWorld` and for the same reason: an exact
+            // constraint cannot be fought, where a stiff spring can.
+            for (0..m.njnt) |j| {
+                if (j == elbow) {
+                    continue;
+                }
+                const q: u32 = m.jnt_qpos_adr[j];
+                const v: u32 = m.jnt_dof_adr[j];
+                const nq: usize = switch (m.jnt_type[j]) {
+                    .free => 7,
+                    .ball => 4,
+                    else => 1,
+                };
+                const nv: usize = switch (m.jnt_type[j]) {
+                    .free => 6,
+                    .ball => 3,
+                    else => 1,
+                };
+                for (0..nq) |k| {
+                    data.pos[q + k] = rest[q + k];
+                }
+                for (0..nv) |k| {
+                    data.vel[v + k] = 0;
+                }
+            }
+
+            // ** A VELOCITY CEILING IS A BLUNT INSTRUMENT AND SAYS SO. It cannot make a wrong
+            // controller right; it can stop a diverging one from reaching infinity, which makes
+            // the difference between a readable number and a NaN.
+            if (trial.vlimit > 0) {
+                data.vel[ev] = clamp(data.vel[ev], -trial.vlimit, trial.vlimit);
+            }
+            rbt.forward(m, &data);
+
+            if (@abs(data.vel[ev]) > peak_vel) {
+                peak_vel = @abs(data.vel[ev]);
+            }
+            // Ignore the first second: the servo starts at the sine's centre and is allowed to
+            // catch up.
+            if (t > 1.0) {
+                const err: f32 = @abs(data.pos[eq] - want);
+                if (err > peak_err) {
+                    peak_err = err;
+                }
+            }
+        }
+
+        // lint:off debug-print: the table IS this test's deliverable.
+        std.debug.print(
+            "    kp {d:>5.0}  kv {d:>4.0}  vlim {s:<5}  ->  err {d:>6.3} rad " ++
+                "({d:>5.1} deg)  torque {d:>7.1}  vel {d:>6.1}\n",
+            .{
+                trial.kp,
+                trial.kv,
+                if (trial.vlimit > 0) "20" else "none",
+                peak_err,
+                peak_err * 57.2957795,
+                peak_torque,
+                peak_vel,
+            },
+        );
+    }
+
+    try expect(isFinite(data.pos[eq]));
+}
+
+test "rung 2: can the full humanoid hold the pose it is already in" {
+    // ---- THE RUNG NOBODY HAS EVER RUN ----
+    //
+    // *** EVERY FULL-BODY TEST IN THIS PROJECT USED A MOVING TARGET. Nobody has asked whether
+    // twenty-four joints can hold the pose they START in - and if they cannot, no clip and no
+    // policy will help, because a policy outputs offsets on top of this.
+    //
+    // The target IS the initial pose, so a correct controller does nothing at all: zero error,
+    // zero torque, forever. **Any drift at all is the controller failing at the easiest task
+    // that exists**, and it costs one test to find out.
+    //
+    // See `src/notes/servo_ladder.md` rung 2.
+    const gpa: Allocator = std.testing.allocator;
+
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+        io,
+        "src/tests/fixtures/robot/humanoid_flex.xml",
+        .{},
+    ) catch return;
+    defer file.close(io);
+    const info: std.Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    defer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, bytes, null);
+    defer doc.deinit();
+    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+
+    const rate: f32 = 2000.0;
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{
+        .gravity = vec(0, 0, -9.81),
+        .timestep = 1.0 / rate,
+    });
+    defer imported.deinit();
+    const m: *const rbt.Model = &imported.model;
+
+    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    defer data.deinit();
+    rbt.forward(m, &data);
+
+    const target: []f32 = try gpa.dupe(f32, data.pos);
+    defer gpa.free(target);
+
+    var actuation: Actuation = try Actuation.init(gpa, m);
+    defer actuation.deinit();
+
+    // ** THE ROOT IS PINNED, so this is purely a question about the joints. A free root would
+    // let the character fall and the answer would be about balance again.
+    const root_q: u32 = m.jnt_qpos_adr[0];
+    const root_v: u32 = m.jnt_dof_adr[0];
+    const rest_root: [7]f32 = .{
+        data.pos[root_q],     data.pos[root_q + 1], data.pos[root_q + 2], data.pos[root_q + 3],
+        data.pos[root_q + 4], data.pos[root_q + 5], data.pos[root_q + 6],
+    };
+
+    const gains = [_][2]f32{ .{ 100, 10 }, .{ 400, 20 }, .{ 800, 40 } };
+
+    // lint:off debug-print: the table IS this test's deliverable.
+    std.debug.print("\n  rung 2: all {d} joints holding their OWN rest pose, root pinned, 5 s:\n", .{m.njnt});
+
+    for (gains) |pair| {
+        @memcpy(data.pos, target);
+        @memset(data.vel, 0);
+        rbt.forward(m, &data);
+
+        const hold: PoseHold = .{ .target = target, .kp = pair[0], .kv = pair[1] };
+        var worst: f32 = 0;
+        var worst_joint: usize = 0;
+        var peak_torque: f32 = 0;
+
+        for (0..10000) |_| {
+            hold.apply(m, &data, actuation);
+            for (0..m.nv) |v| {
+                if (@abs(data.applied_force[v]) > peak_torque) {
+                    peak_torque = @abs(data.applied_force[v]);
+                }
+            }
+            rbt.step(m, &data);
+
+            inline for (0..7) |k| {
+                data.pos[root_q + k] = rest_root[k];
+            }
+            inline for (0..6) |k| {
+                data.vel[root_v + k] = 0;
+            }
+            rbt.forward(m, &data);
+
+            for (0..m.njnt) |j| {
+                if (m.jnt_type[j] != .hinge) {
+                    continue;
+                }
+                const q: u32 = m.jnt_qpos_adr[j];
+                const err: f32 = @abs(data.pos[q] - target[q]);
+                if (err > worst) {
+                    worst = err;
+                    worst_joint = j;
+                }
+            }
+        }
+
+        // lint:off debug-print: the table IS this test's deliverable.
+        std.debug.print(
+            "    kp {d:>4.0}  kv {d:>3.0}  ->  drift {d:.4} rad ({d:>5.1} deg) on {s:<16} torque {d:>7.1}  {s}\n",
+            .{
+                pair[0],
+                pair[1],
+                worst,
+                worst * 57.2957795,
+                imported.names[m.jnt_body[worst_joint]],
+                peak_torque,
+                if (worst < 0.05) "PASS" else "FAIL",
+            },
+        );
+    }
+
+    try expect(isFinite(data.pos[m.jnt_qpos_adr[1]]));
 }

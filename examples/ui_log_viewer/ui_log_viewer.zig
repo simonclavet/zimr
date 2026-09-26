@@ -346,13 +346,15 @@ fn update(f: *z.Frame, s: *State) void {
 
         var i: usize = 0;
         while (i < s.line_count) : (i += 1) {
-            const line = s.lines[i].text();
+            const line: []const u8 = s.lines[i].text();
             // Filter check FIRST - skip the textColored entirely if
             // the line doesn't pass.  Cheaper than rendering then
             // hiding, and (more importantly) the filtered-out rows
             // don't consume layout height, so the visible result is
             // a properly-condensed list.
-            if (!s.filter.passFilter(line)) continue;
+            if (!s.filter.passFilter(line)) {
+                continue;
+            }
             s.visible_count += 1;
 
             u.textColored(s.severities[i].color(), "{s}", .{line});

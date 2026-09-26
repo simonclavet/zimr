@@ -56,7 +56,9 @@ fn juliaPixel(zx0: f32, zy0: f32) [4]u8 {
     while (iter < max_iter) : (iter += 1) {
         zx2 = zx * zx;
         zy2 = zy * zy;
-        if (zx2 + zy2 > BAIL_R2) break;
+        if (zx2 + zy2 > BAIL_R2) {
+            break;
+        }
         const zxy_new: f32 = 2 * zx * zy + c_y;
         const zx_new: f32 = zx2 - zy2 + c_x;
         zx = zx_new;
@@ -120,7 +122,9 @@ pub fn main() !void {
         }
         const t1: i128 = monotonicNs();
         const ms: f64 = float64(t1 - t0) / 1_000_000.0;
-        if (ms < best_ms) best_ms = ms;
+        if (ms < best_ms) {
+            best_ms = ms;
+        }
     }
 
     const png_bytes: []u8 = try sw.codecs.png.encode(gpa, buf, width, height);

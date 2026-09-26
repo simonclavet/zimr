@@ -25,14 +25,20 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
+const clamp = zm.clamp;
 const rbt = @import("robot.zig");
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
 const rmj = @import("robot_mjcf.zig");
+const zimrphysics = @import("zimrphysics.zig");
+const rphys = @import("robot_physics.zig");
 const profiler = @import("profiler.zig");
 const eql = std.mem.eql;
 
 const go1_xml = @embedFile("tests/fixtures/robot/go1/go1.xml");
+const humanoid_flex_xml = @embedFile("tests/fixtures/robot/humanoid_flex.xml");
+const humanoid_flex2_xml = @embedFile("tests/fixtures/robot/humanoid_flex2.xml");
+const humanoid_ball_xml = @embedFile("tests/fixtures/robot/humanoid_ball.xml");
 const kuka = @import("tests/fixtures/robot/kuka_iiwa.zig");
 
 const vec = zm.vec;
@@ -139,7 +145,7 @@ const Hold = struct {
             const q: u32 = model.jnt_qpos_adr[j];
             const v: u32 = model.jnt_dof_adr[j];
             const wanted: f32 = self.kp * (self.home[q] - data.pos[q]) - self.kv * data.vel[v];
-            data.applied_force[v] = zm.clamp(wanted, -self.limit, self.limit) + data.bias_force[v];
+            data.applied_force[v] = clamp(wanted, -self.limit, self.limit) + data.bias_force[v];
         }
     }
 };
@@ -461,6 +467,270 @@ pub fn main() !void {
         // Only for PGS: the breakdown is about where a step goes, and running it twice
         // for two solvers doubles the output to show one differing row.
         profileStages("Go1 standing, " ++ @tagName(algorithm), &imported.model, &d, hold);
+    }
+
+    // ---- 5. THE HUMANOID, WHICH IS THE NUMBER drecon2.md's BUDGET RESTS ON ----
+    //
+    // Every wall-clock estimate in that plan assumed 20-40 us/step for `humanoid_flex`,
+    // extrapolated from the KUKA at `nv = 7` and never measured. The whole ten-minute target is
+    // downstream of it: collection cost sets how much data a training run can afford, and if
+    // this reads 200 us rather than 20, the plan needs a different character rather than a
+    // better learner.
+    //
+    // FIRST READING: nv 29, 8890 ns/step, 469x realtime - and **nc 0**.
+    //
+    // *** THE CONTACT COUNT IS ZERO, SO THIS IS THE FREE-FALL COST AND NOT THE WHOLE STORY.
+    // The character is loaded above the floor and 20,000 steps at 2 ms is 40 seconds of
+    // simulated time, so it should have landed - that it reports no contacts means the T-pose
+    // starts high enough, or the feet miss, or the model ships without contact geometry that
+    // reaches the floor. **Whichever it is, the expensive regime is unmeasured.**
+    //
+    // The bound from case 4 is the useful thing meanwhile: a Go1 at nv 18 with SIXTEEN contacts
+    // costs 9829 ns under PGS against a contact-free humanoid at nv 29 costing 8890. A humanoid
+    // in contact has two feet, so far fewer rows than sixteen - **budget 20-35 us/step and
+    // treat that as an upper bound rather than a measurement.**
+    //
+    // Recorded rather than hidden because `drecon2.md`'s entire wall-clock budget is downstream
+    // of this number, and a benchmark that reports the cheap half of a regime while looking
+    // like it reports both is the failure this codebase keeps finding.
+    {
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_flex_xml, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var imported: rmj.Imported = try rmj.build(gpa, &robot, .{});
+        defer imported.deinit();
+
+        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        defer d.deinit();
+        rbt.forward(&imported.model, &d);
+
+        benchmark("5. humanoid_flex, settling", &imported.model, &d, steps_per_case / 10);
+    }
+
+    // ---- 6. THE BALL-JOINT VARIANT, which drecon2.md 0g recommends for retargeting ----
+    //
+    //  has 7 ball joints and toes where  has skewed hinge pairs.
+    // Ball joints take a capture's quaternion as it is rather than projecting it onto two
+    // non-orthogonal axes - better fidelity, and the question here is what it costs.
+    {
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_flex2_xml, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var imported: rmj.Imported = try rmj.build(gpa, &robot, .{});
+        defer imported.deinit();
+        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        defer d.deinit();
+        rbt.forward(&imported.model, &d);
+        benchmark("6. humanoid_flex2, ball joints", &imported.model, &d, steps_per_case / 10);
+    }
+
+    // ---- 7. EVERY JOINT A BALL, which is what a retarget actually wants ----
+    //
+    // A capture gives a full quaternion per joint. Ball joints take it directly, so there is no
+    // decomposition onto hinge axes and nothing is projected away - which removes a whole
+    // function that would otherwise sit between the retarget and the physics.
+    //
+    // Anatomically wrong: a knee does not swivel. That costs nothing for TRACKING, because the
+    // reference clip only ever asks for poses a human made, so the extra freedoms are never
+    // commanded. It costs something if the character has to stay plausible while FALLING, which
+    // is why hinges come back later where the constraint matters.
+    {
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_ball_xml, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var imported: rmj.Imported = try rmj.build(gpa, &robot, .{});
+        defer imported.deinit();
+        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        defer d.deinit();
+        rbt.forward(&imported.model, &d);
+        benchmark("7. humanoid_ball, all ball", &imported.model, &d, steps_per_case / 10);
+    }
+
+    // ---- DOES THE ALL-BALL HUMANOID ACTUALLY FALL AND LAND? ----
+    //
+    // Case 7 above reports `nc 0` because it runs with the DEFAULT gravity, which is Y-down
+    // while an MJCF model is Z-up - so the character accelerates sideways forever and never
+    // meets the floor. That is exactly the bug `dance_track` shipped with, and the benchmark
+    // was reproducing it silently.
+    //
+    // This runs the same model with the gravity an imported scene is supposed to have, and
+    // reports where the root ends up. **A character that falls and lands is the cheapest
+    // possible proof that gravity, contact and the solver are all doing something.**
+    {
+        var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_ball_xml, null);
+        defer doc.deinit();
+        var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
+        defer robot.deinit();
+        var imported: rmj.Imported = try rmj.build(gpa, &robot, .{
+            .gravity = vec(0, 0, -9.81),
+            // 32 SATURATED - the humanoid's fifteen capsules on a floor filled the event array
+            // exactly, and one more would have tripped `pushContact`. A default sized for a
+            // quadruped's four feet is not sized for a character lying down.
+            .max_contacts = 256,
+        });
+        defer imported.deinit();
+        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        defer d.deinit();
+        rbt.forward(&imported.model, &d);
+
+        // MEASURED Sep 15: zero geoms land on body 0, so an imported MJCF has NO GROUND -
+        // `robot_mjcf` imports a robot and leaves the scene to the caller, which is why
+        // `examples/humanoid` builds a `zimrphysics` world with a static box and bridges into
+        // it. Until a scene exists the character falls forever, and this reports exactly that.
+        const start_z: f32 = d.body_xpos[1][2];
+        var lowest_z: f32 = start_z;
+        var contacts_seen: usize = 0;
+        for (0..2000) |_| {
+            rbt.step(&imported.model, &d);
+            const z_now: f32 = d.body_xpos[1][2];
+            if (z_now < lowest_z) {
+                lowest_z = z_now;
+            }
+            if (d.contact_count > 0) {
+                contacts_seen += 1;
+            }
+        }
+        // ---- THE SMALLEST POSSIBLE CASE: ONE CUBE, ONE FLOOR ----
+        //
+        // The humanoid runs lock `swept_count` at ZERO in both native and wasm, so the bridge
+        // never reports a contact - and the native character lands anyway, which means whatever
+        // stops it is not coming through `harvest`. Before believing anything about a
+        // nineteen-body character, ask whether ONE BOX falls onto ONE FLOOR and is caught.
+        //
+        // If this reports contacts, the bridge works and the humanoid setup is wrong. If it
+        // reports none, the bridge is the thing to fix and every humanoid run so far has been
+        // measuring the wrong subject.
+        {
+            const Cube: type = rbt.Spec(.{
+                // Z-down, because the floor is at z = -0.5. The DEFAULT is Y-down and the first
+                // version of this test used it - the cube fell along Y, never met the floor, and
+                // reported a final z of exactly 1.000 because z was never the falling axis. The
+                // same mistake as the humanoid, caught here only because a cube that does not
+                // move at all is obvious in a way a drifting character is not.
+                .options = .{ .gravity = vec(0, 0, -9.81) },
+                .bodies = &.{.{
+                    .name = "block",
+                    .joints = &.{.{ .name = "drop", .kind = .free }},
+                    .geoms = &.{.{
+                        .shape = .{ .box = .{ .half_extent = vec(0.2, 0.2, 0.2) } },
+                        .mass = 1.0,
+                    }},
+                }},
+            });
+            var cube_model: rbt.Model = try Cube.build(gpa);
+            defer cube_model.deinit();
+            var cd: rbt.Data = try rbt.Data.init(gpa, &cube_model);
+            defer cd.deinit();
+            cd.pos[2] = 1.0;
+            rbt.forward(&cube_model, &cd);
+
+            var cube_world: zimrphysics.World = try .init(gpa, 16);
+            defer cube_world.deinit(gpa);
+            cube_world.gravity = vec(0, 0, -9.81);
+            const flat: zimrphysics.ShapeId = try cube_world.shapes.add(gpa, .{
+                .box = .{ .half_extent = vec(4, 4, 0.5), .convex_radius = 0.01 },
+            });
+            _ = try cube_world.createBody(.{
+                .shape = flat,
+                .position = vec(0, 0, -0.5),
+                .motion_type = .static,
+            });
+            var cube_proxy: rphys.Bridge = try .init(gpa, &cube_world, &cube_model, &cd, 16);
+            defer cube_proxy.deinit(&cube_world);
+            cube_proxy.listen(&cube_world);
+
+            var cube_swept: usize = 0;
+            var cube_contacts: usize = 0;
+            for (0..1000) |_| {
+                rbt.forward(&cube_model, &cd);
+                try cube_proxy.sync(&cube_world, &cube_model, &cd);
+                try zimrphysics.step(&cube_world, 1.0 / 240.0);
+                cube_proxy.harvest(&cd);
+                rbt.step(&cube_model, &cd);
+                if (cube_proxy.swept_count > cube_swept) {
+                    cube_swept = cube_proxy.swept_count;
+                }
+                if (cd.contact_count > 0) {
+                    cube_contacts += 1;
+                }
+            }
+            // lint:off debug-print: a native benchmark whose output is the deliverable.
+            std.debug.print(
+                "   cube drop:    start z 1.000  final z {d:.3}  contact {d}/1000  peak swept {d}\n",
+                .{ cd.pos[2], cube_contacts, cube_swept },
+            );
+        }
+
+        // ---- AND AGAIN WITH A GROUND, THROUGH THE PHYSICS BRIDGE ----
+        //
+        // The run above proves the character falls forever without a scene. This one adds what
+        // `examples/humanoid` adds - a static box in a `zimrphysics` world, the robot mirrored
+        // into it by a `Bridge` - and reports whether that is enough to catch it.
+        {
+            var world: zimrphysics.World = try .init(gpa, 256);
+            defer world.deinit(gpa);
+            world.gravity = vec(0, 0, -9.81);
+            const ground: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
+                .box = .{ .half_extent = vec(8, 8, 0.5), .convex_radius = 0.01 },
+            });
+            _ = try world.createBody(.{
+                .shape = ground,
+                .position = vec(0, 0, -0.5),
+                .motion_type = .static,
+            });
+
+            var d2: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+            defer d2.deinit();
+            rbt.forward(&imported.model, &d2);
+            var proxy: rphys.Bridge = try .init(gpa, &world, &imported.model, &d2, 256);
+            defer proxy.deinit(&world);
+            proxy.listen(&world);
+
+            var grounded_low: f32 = d2.body_xpos[1][2];
+            var grounded_contacts: usize = 0;
+            // The number `dance_track` panics on in wasm: what `harvest` is asked to push,
+            // against `Data.contacts.len`. If the peak exceeds the capacity, the assert in
+            // `pushContact` is the panic and the fix is a bigger buffer.
+            var peak_swept: usize = 0;
+            var peak_events: usize = 0;
+            for (0..2000) |_| {
+                rbt.forward(&imported.model, &d2);
+                try proxy.sync(&world, &imported.model, &d2);
+                try zimrphysics.step(&world, 1.0 / 240.0);
+                proxy.harvest(&d2);
+                rbt.step(&imported.model, &d2);
+                const z2: f32 = d2.body_xpos[1][2];
+                if (z2 < grounded_low) {
+                    grounded_low = z2;
+                }
+                if (d2.contact_count > 0) {
+                    grounded_contacts += 1;
+                }
+                if (proxy.swept_count > peak_swept) {
+                    peak_swept = proxy.swept_count;
+                }
+                // The OTHER array `harvest` pushes from. `pushContact`'s assert measures the
+                // SUM of the two against `Data.contacts.len`, and reporting only `swept` - which
+                // the example's panel did at first - hides exactly the half that overflows.
+                if (proxy.event_count > peak_events) {
+                    peak_events = proxy.event_count;
+                }
+            }
+            // lint:off debug-print: a native benchmark whose output is the deliverable.
+            std.debug.print(
+                "   with ground:  final z {d:.3}  contact {d}/2000  peak swept {d} + events {d} of {d}\n",
+                .{ d2.body_xpos[1][2], grounded_contacts, peak_swept, peak_events, d2.contacts.len },
+            );
+        }
+
+        // lint:off debug-print: a native benchmark whose output is the deliverable.
+        std.debug.print(
+            "   ragdoll drop: start z {d:.3}  final z {d:.3}  lowest {d:.3}  frames with contact {d}/2000\n",
+            .{ start_z, d.body_xpos[1][2], lowest_z, contacts_seen },
+        );
     }
 
     // lint:off debug-print: a native benchmark whose output is the deliverable

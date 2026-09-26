@@ -5,84 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Robot dynamics, from the ground up — building a MuJoCo-class simulator in Zig</title>
 <meta name="description" content="A course in articulated-body dynamics taught through a working implementation: spatial algebra, the mass matrix, recursive Newton-Euler, Jacobians, contact as a constraint, two solvers, four integrators, MJCF import, sensors and control — every code block checked against the shipped source." />
-<style>
-:root{
-  --main-font:"Courier New",Courier,monospace;
-  --header-font:"Georgia","Times New Roman",serif;
-  --bg-page:#1f140e; --bg-paper:#332218; --bg-block:#261912;
-  --text-color:#f0e6d2; --text-muted:#a89684;
-  --accent-color:#d35f33;
-  --accent-gen:#4fb3a5;
-  --border-color:#090604; --shadow-color:#000;
-}
-*{box-sizing:border-box}
-html{overflow-x:clip}
-body{
-  background-color:var(--bg-page);
-  background-image:radial-gradient(var(--border-color) 2px,transparent 2px);
-  background-size:16px 16px;
-  color:var(--text-color); font-family:var(--main-font); line-height:1.6;
-  margin:0; padding:40px 20px; display:flex; justify-content:center;
-}
-.doc{
-  background-color:var(--bg-paper); max-width:940px; width:100%; padding:40px;
-  border:4px solid var(--border-color); box-shadow:12px 12px 0 var(--shadow-color);
-}
-h1{font-family:var(--header-font); font-size:2.6rem; line-height:1.08; margin:0 0 6px 0}
-.sub{font-size:1.02rem; font-style:italic; color:var(--accent-gen); margin:0 0 8px 0}
-.meta{font-size:.84rem; color:var(--text-muted); margin:0 0 26px 0}
-h2{
-  font-family:var(--header-font); color:var(--accent-color);
-  border-bottom:2px solid var(--border-color); padding-bottom:6px;
-  margin:46px 0 14px 0; font-size:1.65rem;
-}
-h2 .num{color:var(--text-muted); font-size:1rem; margin-right:10px}
-h3{
-  font-family:var(--header-font); font-size:1.18rem; margin:28px 0 8px 0;
-  text-decoration:underline; text-decoration-color:var(--accent-gen); text-underline-offset:5px;
-}
-p{margin:0 0 14px 0}
-code{background:var(--bg-block); padding:1px 5px; border-radius:2px; font-size:.94em}
-pre{
-  background:var(--bg-block); border-left:4px solid var(--accent-gen);
-  padding:14px 16px; overflow-x:auto; font-size:.82rem; line-height:1.5; margin:0 0 16px 0;
-}
-pre code{background:none; padding:0}
-pre.bad{border-left-color:var(--accent-color)}
-a{color:var(--accent-gen)}
-strong{color:#fff}
-ul,ol{margin:0 0 14px 0; padding-left:22px}
-li{margin-bottom:6px}
-.lede{
-  border-left:4px solid var(--accent-color); padding:2px 0 2px 16px;
-  color:var(--text-muted); font-size:1.02rem; margin:0 0 22px 0;
-}
-.note{background:var(--bg-block); border:2px dashed var(--border-color); padding:14px 16px; margin:0 0 18px 0; font-size:.94rem}
-.note b{color:var(--accent-gen)}
-.eq{background:var(--bg-block); border:2px solid var(--border-color); padding:16px; text-align:center;
-    font-size:1.2rem; margin:0 0 16px 0; font-family:var(--header-font)}
-.eq em{color:var(--accent-gen); font-style:normal}
-table{border-collapse:collapse; width:100%; margin:0 0 18px 0; font-size:.86rem}
-th,td{border:1px solid var(--border-color); padding:7px 9px; text-align:left; vertical-align:top}
-th{background:var(--bg-block); font-family:var(--header-font); color:var(--accent-color)}
-.file{font-size:.78rem; color:var(--text-muted); margin:0 0 4px 0; letter-spacing:1px; text-transform:uppercase}
-hr{border:none; border-top:2px solid var(--border-color); margin:38px 0}
-.foot{color:var(--text-muted); font-size:.86rem; margin-top:34px}
-@media (max-width:600px){
-  body{padding:14px 8px}
-  .doc{padding:22px 16px; box-shadow:6px 6px 0 var(--shadow-color)}
-  h1{font-size:1.8rem}
-  pre{font-size:.72rem}
-  .eq{font-size:.95rem}
-}
-@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-
-.parts{margin-top:14px}
-.parts p{margin:0 0 12px 0;line-height:1.8}
-.parts a{color:var(--accent-gen);text-decoration:none;border-bottom:1px dotted var(--accent-gen)}
-.parts a:hover{color:var(--accent-color);border-bottom-color:var(--accent-color)}
-h2{scroll-margin-top:16px}
-</style>
+<!--docfmt:style-->
 </head>
 <body>
 <div class="doc">
@@ -250,7 +173,7 @@ to the current error. The maths is derived from scratch; no prior optimal-contro
 
 <p>zimr's linter reserves a vocabulary of maths names: using <code>zm.dot3</code> qualified inside a function body is an error, because the house rule is to bind it once at the top and then write maths that reads like maths.</p>
 
-<pre><code>const zm = @import("zm");
+<pre><code class="zig">const zm = @import("zm");
 
 // zm keywords must be bound at file scope (the linter enforces it), and binding them here
 // also keeps the maths below readable as maths.
@@ -266,7 +189,7 @@ const length3 = zm.length3;
 const normalize3 = zm.normalize3;
 const qmul = zm.qmul;
 const rotate = zm.rotate;
-const atan2 = zm.atan2;
+const atan2Rad = zm.atan2Rad;
 const maxInt = zm.maxInt;
 const pi = zm.pi;
 const assertf = zm.assertf;</code></pre>
@@ -277,7 +200,7 @@ const assertf = zm.assertf;</code></pre>
 
 <p>A rigid body's motion has six components; so does the force on it. Both are 6-vectors, and the whole file's sign convention hangs on their ordering:</p>
 
-<pre><code>//     ANGULAR FIRST, then linear.  (MuJoCo calls this `rot:lin`.)
+<pre><code class="zig">//     ANGULAR FIRST, then linear.  (MuJoCo calls this `rot:lin`.)
 //
 // We store them as two `Vec` rather than a `[6]f32`. The fourth lane goes unused, which
 // costs a little memory and buys the whole zm vocabulary — `cross`, `dot3`, `splat` — and
@@ -287,7 +210,7 @@ const assertf = zm.assertf;</code></pre>
 
 <h3>Motion and Force: same shape, different types</h3>
 
-<pre><code>/// A spatial motion vector: an angular velocity (or acceleration) and a linear one, both
+<pre><code class="zig">/// A spatial motion vector: an angular velocity (or acceleration) and a linear one, both
 /// expressed about a common reference point. Twists live here.
 pub const Motion = struct {
     ang: Vec = vec_zero,
@@ -322,7 +245,7 @@ pub const Force = struct {
 
 <h3>Where motion and force meet</h3>
 
-<pre><code>/// The pairing of a motion and a force — the only way the two types legally meet, and the
+<pre><code class="zig">/// The pairing of a motion and a force — the only way the two types legally meet, and the
 /// reason they are separate types. `dot6(v, f)` is the rate of work `f` does moving at `v`.
 /// Named for MuJoCo's `mju_dot6` rather than `dot`, because it is emphatically not the
 /// vector dot product: it contracts a 6-vector against its DUAL.
@@ -334,7 +257,7 @@ pub fn dot6(m: Motion, f: Force) f32 {
 
 <h3>The two cross products</h3>
 
-<pre><code>/// Spatial cross product for MOTION vectors: `v × m`. This is what carries a velocity
+<pre><code class="zig">/// Spatial cross product for MOTION vectors: `v × m`. This is what carries a velocity
 /// down a kinematic chain — a child's velocity is its parent's plus its own joint motion,
 /// and the coupling term is exactly this.
 pub fn crossMotion(v: Motion, m: Motion) Motion {
@@ -359,7 +282,7 @@ pub fn crossForce(v: Motion, f: Force) Force {
 
 <h3>Spatial inertia: ten numbers</h3>
 
-<pre><code>/// A rigid body's spatial inertia, in the ten-parameter form MuJoCo uses:
+<pre><code class="zig">/// A rigid body's spatial inertia, in the ten-parameter form MuJoCo uses:
 ///
 ///     [  I      skew(h) ]     I = rotational inertia about the reference point
 ///     [ -skew(h)  m·1   ]     h = m · (centre of mass − reference point)
@@ -393,7 +316,7 @@ pub const Inertia = struct {
 
 <p>The property is pinned by a test that checks the algebra rather than a number:</p>
 
-<pre><code>test "spatial algebra: composite inertia is a plain sum" {
+<pre><code class="zig">test "spatial algebra: composite inertia is a plain sum" {
     // This is the property CRB depends on: two bodies in a shared frame add up.
     const a: Inertia = .{ .diag = vec(1, 2, 3), .off = vec(0.1, 0.2, 0.3), .h = vec(1, 0, 0), .mass = 5 };
     const b: Inertia = .{ .diag = vec(4, 5, 6), .off = vec(0.4, 0.5, 0.6), .h = vec(0, 2, 0), .mass = 7 };
@@ -408,7 +331,7 @@ pub const Inertia = struct {
 
 <h3>Applying an inertia</h3>
 
-<pre><code>    /// Apply this inertia to a motion, giving the momentum (or, with an acceleration in,
+<details class="src-fold"><summary><code>fn mul</code><span class="faint"> · 75 lines</span></summary><pre><code class="zig">    /// Apply this inertia to a motion, giving the momentum (or, with an acceleration in,
     /// the force out). The expanded form of the 6×6 above.
     pub fn mul(self: Inertia, m: Motion) Force {
         // Rotational block: the symmetric tensor times the angular part.
@@ -482,7 +405,7 @@ pub const Inertia = struct {
             .h = h + d * splat(m),
             .mass = m,
         };
-    }</code></pre>
+    }</code></pre></details>
 
 <p>Read it against the 2×2 block matrix in the doc comment and every term lines up: the symmetric tensor on the diagonal, <code>skew(h)</code> and its negative off it, <code>m·1</code> in the corner. Writing the matrix in the comment is what makes the expanded arithmetic checkable by eye.</p>
 
@@ -492,7 +415,7 @@ pub const Inertia = struct {
 
 <p>The direction is worth stating explicitly. "Translate by <code>offset</code>" has two plausible readings: move the <em>body</em>, or move the <em>reference point</em>. They differ by a sign, both compile, and both pass a test written against the same misunderstanding. So the doc comment states which one, twice:</p>
 
-<pre><code>    /// Translate the BODY by `offset`, keeping the reference point fixed — equivalently,
+<details class="src-fold"><summary><code>fn translate</code><span class="faint"> · 62 lines</span></summary><pre><code class="zig">    /// Translate the BODY by `offset`, keeping the reference point fixed — equivalently,
     /// move the reference point by `−offset`. Used to place each body's own inertia into
     /// the tree's shared frame.
     ///
@@ -553,13 +476,13 @@ pub const Inertia = struct {
             .h = h + d * splat(m),
             .mass = m,
         };
-    }</code></pre>
+    }</code></pre></details>
 
 <p>The rewrite was prompted by readability rather than by a failing test, which is a sufficient reason on its own for something called from the middle of a tree pass in three later phases.</p>
 
 <p>Then it got pinned twice: once against the textbook answer, once against an invariant that keeps working even if the internals change.</p>
 
-<pre><code>test "spatial algebra: translate is the parallel-axis theorem" {
+<pre><code class="zig">test "spatial algebra: translate is the parallel-axis theorem" {
     // A point mass at the origin, moved so the reference point sits 2 m away on X. The
     // textbook answer is m·d² about the two axes perpendicular to the offset, and zero
     // about the offset axis itself.
@@ -590,7 +513,7 @@ pub const Inertia = struct {
 
 <p>A robot is described with designated struct literals, like everything else in zimr. Start with the four kinds of freedom, which are the only four:</p>
 
-<pre><code>/// The four kinds of degree of freedom, and the only four. A body with no joint is welded
+<pre><code class="zig">/// The four kinds of degree of freedom, and the only four. A body with no joint is welded
 /// to its parent, which is free and exact — no constraint needed.
 pub const JointType = enum {
     /// 7 position coords (xyz + quat), 6 velocity coords. Only on a child of the world.
@@ -626,7 +549,7 @@ pub const JointType = enum {
 
 <h3>A joint</h3>
 
-<pre><code>    /// Travel limits `[lo, hi]`, in the joint's own units. `null` means unlimited.
+<pre><code class="zig">    /// Travel limits `[lo, hi]`, in the joint's own units. `null` means unlimited.
     range: ?[2]f32 = null,
     /// How the limit pushes back, and how hard. Only consulted when `range` is set.
     limit_softness: Softness = .{},
@@ -642,7 +565,7 @@ pub const JointType = enum {
 
 <h3>A body</h3>
 
-<pre><code>pub const BodySpec = struct {
+<pre><code class="zig">pub const BodySpec = struct {
     name: []const u8,
     parent: ?[]const u8 = null,
     /// Pose relative to the parent's frame.
@@ -663,7 +586,7 @@ pub const JointType = enum {
 
 <p>Sites are the other thing that re-read caught. Nothing consumes them until phase 5, but they are declared now for the same reason:</p>
 
-<pre><code>/// A massless, collisionless frame on a body. Sites are where actuators push, where
+<pre><code class="zig">/// A massless, collisionless frame on a body. Sites are where actuators push, where
 /// tendons route, where sensors sit, and what Jacobians target. Nothing consumes them
 /// until phase 5, but retrofitting them would touch every index table.
 pub const SiteSpec = struct {
@@ -676,7 +599,7 @@ pub const SiteSpec = struct {
 
 <p>This is the double pendulum from the tests — the same model the MuJoCo oracle generates reference values for, and the one phase 3 will draw:</p>
 
-<pre><code>const DoublePendulum = Spec(.{
+<pre><code class="zig">const DoublePendulum = Spec(.{
     .bodies = &amp;.{
         .{
             .name = "upper",
@@ -708,7 +631,7 @@ pub const SiteSpec = struct {
 
 <h3>Names become an enum</h3>
 
-<pre><code>/// Turn a list of comptime names into an exhaustive enum whose tag values are the index
+<pre><code class="zig">/// Turn a list of comptime names into an exhaustive enum whose tag values are the index
 /// into that list. `@backingInt(E.foo)` is therefore the array index, for free.
 fn NamesEnum(comptime names: []const []const u8) type {
     if (names.len == 0) {
@@ -733,7 +656,7 @@ fn NamesEnum(comptime names: []const []const u8) type {
 
 <p>This is the payoff for the comptime layer. Each check exists because the runtime symptom would have been much worse than the message:</p>
 
-<pre><code>    comptime {
+<pre><code class="zig">    comptime {
         if (spec.bodies.len == 0) {
             @compileError("robot: a model needs at least one body");
         }
@@ -765,7 +688,7 @@ fn NamesEnum(comptime names: []const []const u8) type {
 
 <p>Notice the loop bound: <code>spec.bodies[0..bi]</code>. It checks that the parent exists <em>and</em> that it was declared earlier, in one pass, because "declared earlier" is the property the algorithms actually need.</p>
 
-<pre><code>            for (b.joints) |j| {
+<details class="src-fold"><summary><code>const len_sq</code><span class="faint"> · 62 lines</span></summary><pre><code class="zig">            for (b.joints) |j| {
                 // A free joint IS the six degrees of freedom of a floating base. Putting
                 // one deeper in the tree, or beside another joint, is always a modelling
                 // mistake rather than an exotic mechanism.
@@ -826,11 +749,11 @@ fn NamesEnum(comptime names: []const []const u8) type {
                         @compileError("robot: joint '" ++ j.name ++ "' has negative armature");
                     }
                 }
-            }</code></pre>
+            }</code></pre></details>
 
 <p>And the one that matters most:</p>
 
-<pre><code>            // A body that moves must have inertia, or the mass matrix is singular and the
+<details class="src-fold"><summary><code>const ixx</code><span class="faint"> · 44 lines</span></summary><pre><code class="zig">            // A body that moves must have inertia, or the mass matrix is singular and the
             // factorization divides by zero. Catch it here with the body's name rather
             // than as a NaN three phases downstream.
             if (b.inertial) |inertial| {
@@ -873,13 +796,13 @@ fn NamesEnum(comptime names: []const []const u8) type {
             } else if (b.joints.len &gt; 0 and b.geoms.len == 0) {
                 @compileError("robot: body '" ++ b.name ++
                     "' has joints but no geoms, so it has no mass — the mass matrix would be singular");
-            }</code></pre>
+            }</code></pre></details>
 
 <p>A massless moving body produces a singular <code>M</code>. Without this check the failure is a NaN appearing during factorization in phase 2, with nothing pointing at the model. With it, the message names the body and the reason.</p>
 
 <h3>Counting DOFs and coordinates</h3>
 
-<pre><code>    const Counts = struct { nq: u32, nv: u32, njnt: u32, nsite: u32, ngeom: u32, na: u32 };
+<details class="src-fold"><summary><code>const Counts</code><span class="faint"> · 52 lines</span></summary><pre><code class="zig">    const Counts = struct { nq: u32, nv: u32, njnt: u32, nsite: u32, ngeom: u32, na: u32 };
     const counts: Counts = comptime blk: {
         var nq: u32 = 0;
         var nv: u32 = 0;
@@ -930,13 +853,13 @@ fn NamesEnum(comptime names: []const []const u8) type {
         const frozen = names;
         break :blk frozen;
     };
-    comptime assertUniqueNames(&amp;site_names, "site");</code></pre>
+    comptime assertUniqueNames(&amp;site_names, "site");</code></pre></details>
 
 <p>The named <code>Counts</code> struct exists because zimr's <code>untyped-local</code> rule wanted a type annotation on <code>counts</code>, and an anonymous struct literal has no name to write. The rule pushed toward a named type, which reads better than the anonymous version did.</p>
 
 <h3>What Spec() hands back</h3>
 
-<pre><code>    return struct {
+<pre><code class="zig">    return struct {
         /// The spec this was built from, kept so `build` needs no arguments beyond an
         /// allocator and so tooling can introspect a model type.
         pub const model_spec: ModelSpec = spec;
@@ -959,7 +882,7 @@ fn NamesEnum(comptime names: []const []const u8) type {
 
 <p>Which makes the whole API this:</p>
 
-<pre class="sketch"><code>const Arm = robot.Spec(.{ .bodies = &amp;.{ ... } });   // comptime: validated, named
+<pre class="sketch"><code class="zig">const Arm = robot.Spec(.{ .bodies = &amp;.{ ... } });   // comptime: validated, named
 var model: robot.Model = try Arm.build(gpa);       // runtime: ordinary struct
 var data: robot.Data = try robot.Data.init(gpa, &amp;model);
 data.setJointPos(&amp;model, Arm.Joint.elbow, 0.75);   // compile-checked</code></pre>
@@ -968,14 +891,14 @@ data.setJointPos(&amp;model, Arm.Joint.elbow, 0.75);   // compile-checked</code>
 
 <p><code>Model</code> is flat parallel arrays indexed by body, joint or DOF — exactly <code>mjModel</code>'s shape. Not a tree of structs, because every algorithm here is a linear sweep over one of those index spaces, and because a flat model is what a batched GPU rollout will want.</p>
 
-<pre><code>/// The index of the world body. Its parent is itself.
+<pre><code class="zig">/// The index of the world body. Its parent is itself.
 pub const world_body: u32 = 0;</code></pre>
 
 <p>Body 0 is a real body — massless, jointless, at the origin — rather than a special case. That means "parent" is never optional in the hot paths, and a walk up the tree terminates naturally because the world is its own parent.</p>
 
 <h3>The sparsity table</h3>
 
-<pre><code>    // ---- degrees of freedom ----
+<pre><code class="zig">    // ---- degrees of freedom ----
     /// The DOF immediately above this one in the tree, or `no_dof` at a root. This chain
     /// IS the sparsity pattern of the mass matrix: `M[i][j]` is nonzero exactly when `j`
     /// is `i` or one of its ancestors.
@@ -997,7 +920,7 @@ pub const world_body: u32 = 0;</code></pre>
 
 <p>Building it is a pair of chain walks:</p>
 
-<pre><code>    // ---- mass-matrix sparsity ----
+<pre><code class="zig">    // ---- mass-matrix sparsity ----
     // Row i holds one entry per DOF on i's path to the root, i included. Storing the
     // chain root-first with the diagonal last is what lets `crb` walk it backwards with a
     // single decrementing cursor.
@@ -1028,7 +951,7 @@ pub const world_body: u32 = 0;</code></pre>
 
 <h3>Welds are transparent to the chain</h3>
 
-<pre><code>/// The last DOF belonging to `body`, walking up until a body with DOFs is found. That is
+<pre><code class="zig">/// The last DOF belonging to `body`, walking up until a body with DOFs is found. That is
 /// the DOF a child's first DOF chains onto — welded bodies are transparent here, which is
 /// exactly what makes a weld free.
 fn lastDofOf(m: *const Model, body: u32) u32 {
@@ -1046,7 +969,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 
 <p>A body with no joints is rigidly part of its parent. In a maximal-coordinate engine that costs a weld constraint the solver has to enforce every step. Here it costs <em>nothing</em>: the DOF chain simply skips it. That is the thesis of the whole file, in eight lines, and it has a test:</p>
 
-<pre><code>test "welded bodies are transparent to the dof chain" {
+<pre><code class="zig">test "welded bodies are transparent to the dof chain" {
     // The middle body has no joint, so it is rigidly part of its parent. Its child's DOF
     // must chain onto the FIRST body's DOF, skipping the weld entirely.
     ...
@@ -1056,7 +979,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 
 <h3>The chain, built</h3>
 
-<pre><code>            const ndof: u32 = j.kind.dofCount();
+<pre><code class="zig">            const ndof: u32 = j.kind.dofCount();
             for (0..ndof) |k| {
                 const d: u32 = dof_n + @as(u32, @intCast(k));
                 m.dof_body[d] = bi;
@@ -1075,7 +998,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 
 <h3>qpos0, and a quaternion detail</h3>
 
-<pre><code>            // qpos0: everything rests at zero except a quaternion, which rests at identity.
+<pre><code class="zig">            // qpos0: everything rests at zero except a quaternion, which rests at identity.
             // zm stores a quat as (x, y, z, w), so the w lane is the one that starts at 1.
             switch (j.kind) {
                 .free =&gt; {
@@ -1118,7 +1041,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 
 <p><code>Data</code> is everything that changes. Its fields are grouped by <strong>which pipeline stage writes them</strong>, and each group says so — because the pipeline is imperative, and knowing what is stale is part of using this correctly:</p>
 
-<pre><code>    // ---- written by `crb` / `factorM` (phase 2) ----
+<pre><code class="zig">    // ---- written by `crb` / `factorM` (phase 2) ----
     /// Composite inertia of each body's subtree.
     crb: []Inertia,
     /// Lower triangle of M, packed by the model's sparsity tables. Length `mass_nonzero_count`.
@@ -1134,7 +1057,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 
 <p>Both <code>Model</code> and <code>Data</code> carve their arrays from an arena, so <code>deinit</code> is one call instead of a forty-line errdefer ladder. The obvious way to write that does not work:</p>
 
-<pre class="bad"><code>// WRONG — this leaks every allocation.
+<pre class="bad"><code class="zig">// WRONG — this leaks every allocation.
 arena: std.heap.ArenaAllocator,
 
 fn buildFromSpec(gpa: Allocator, comptime spec: ModelSpec) !Model {
@@ -1146,7 +1069,7 @@ fn buildFromSpec(gpa: Allocator, comptime spec: ModelSpec) !Model {
 
 <p>An <code>ArenaAllocator</code> is <strong>not movable</strong> once an <code>Allocator</code> has been taken from it, because that allocator stores the arena struct's <em>address</em>. Copying the struct into the returned <code>Model</code> leaves every allocation registered with a stack object that is about to vanish, and <code>deinit</code> on the copy frees nothing. It compiles, it runs, and it leaks everything.</p>
 
-<pre><code>    /// Owns every table below, so `deinit` is one call rather than a forty-line errdefer
+<pre><code class="zig">    /// Owns every table below, so `deinit` is one call rather than a forty-line errdefer
     /// ladder.
     ///
     /// The pointer is not decoration: an `ArenaAllocator` is NOT movable once an
@@ -1156,7 +1079,7 @@ fn buildFromSpec(gpa: Allocator, comptime spec: ModelSpec) !Model {
     /// see the wgpu_bringup use-after-scope note in claude.md.)
     arena: *std.heap.ArenaAllocator,</code></pre>
 
-<pre><code>    pub fn deinit(self: *Model) void {
+<pre><code class="zig">    pub fn deinit(self: *Model) void {
         const gpa: Allocator = self.arena.child_allocator;
         self.arena.deinit();
         gpa.destroy(self.arena);
@@ -1167,7 +1090,7 @@ fn buildFromSpec(gpa: Allocator, comptime spec: ModelSpec) !Model {
 
 <h3>Indexing by enum or by integer</h3>
 
-<pre><code>/// Accept either a generated enum or a plain index, so a comptime-specified model and a
+<pre><code class="zig">/// Accept either a generated enum or a plain index, so a comptime-specified model and a
 /// runtime-loaded one share the same API. The enum's tag value IS the index, by
 /// construction in `NamesEnum`.
 fn jointIndex(joint: anytype) u32 {
@@ -1180,7 +1103,7 @@ fn jointIndex(joint: anytype) u32 {
 
 <p>This is the hybrid decision made concrete. A hand-written model gets <code>Arm.Joint.elbow</code> and a compile error if it misspells it; a URDF-loaded model passes an integer; both call the same accessor. Neither pays anything at runtime.</p>
 
-<pre><code>    /// Read a scalar joint's position. Only valid for hinge and slide — a ball or free
+<pre><code class="zig">    /// Read a scalar joint's position. Only valid for hinge and slide — a ball or free
     /// joint has no single number, and asking for one is a programming error.
     pub fn jointPos(self: *const Data, m: *const Model, joint: anytype) f32 {
         const ji: u32 = jointIndex(joint);
@@ -1201,7 +1124,7 @@ fn jointIndex(joint: anytype) u32 {
 
 <p>Three functions are the only legal bridges, and everything else must go through them. Integration first:</p>
 
-<pre><code>/// Advance `pos` by `vel` over `dt`, respecting the geometry of each joint type.
+<pre><code class="zig">/// Advance `pos` by `vel` over `dt`, respecting the geometry of each joint type.
 pub fn integratePos(m: *const Model, pos: []f32, vel: []const f32, dt: f32) void {
     assertf(pos.len == m.nq, @src(), "pos has {d} entries, model wants {d}", .{ pos.len, m.nq });
     assertf(vel.len == m.nv, @src(), "vel has {d} entries, model wants {d}", .{ vel.len, m.nv });
@@ -1230,7 +1153,7 @@ pub fn integratePos(m: *const Model, pos: []f32, vel: []const f32, dt: f32) void
 
 <h3>Rotating a quaternion by an angular velocity</h3>
 
-<pre><code>/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
+<pre><code class="zig">/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
 /// rotation the velocity describes over the interval, then compose.
 fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
     const speed: f32 = length3(w);
@@ -1249,7 +1172,7 @@ fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
 
 <h3>The inverse, and the double cover</h3>
 
-<pre><code>/// The angular velocity that rotates `from` into `to` over `1/inv_dt` seconds.
+<pre><code class="zig">/// The angular velocity that rotates `from` into `to` over `1/inv_dt` seconds.
 fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
     // Relative rotation in `from`'s frame, matching the composition order above.
     const inv_from: Quat = .{ -from[0], -from[1], -from[2], from[3] };
@@ -1263,18 +1186,18 @@ fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
     if (sin_half &lt; 1.0e-12) {
         return vec_zero;
     }
-    const angle: f32 = 2.0 * atan2(sin_half, rel[3]);
+    const angle: f32 = 2.0 * atan2Rad(sin_half, rel[3]);
     const axis: Vec = vec(rel[0], rel[1], rel[2]) / splat(sin_half);
     return axis * splat(angle * inv_dt);
 }</code></pre>
 
 <p>The <code>if (rel[3] &lt; 0.0)</code> flip is the double cover showing up in practice: <code>q</code> and <code>−q</code> name the same rotation, so without the flip a small rotation can be reported as a 350° one in the opposite direction. Everything still runs; the velocities are just occasionally enormous and backwards.</p>
 
-<p>Note also <code>atan2(sin_half, rel[3])</code> rather than <code>2·acos(rel[3])</code>. Both give the angle; <code>atan2</code> keeps its precision as the angle approaches zero, which is the case that occurs on literally every timestep.</p>
+<p>Note also <code>atan2Rad(sin_half, rel[3])</code> rather than <code>2·acos(rel[3])</code>. Both give the angle; <code>atan2Rad</code> keeps its precision as the angle approaches zero, which is the case that occurs on literally every timestep.</p>
 
 <h3>Renormalization</h3>
 
-<pre><code>/// Renormalize every quaternion in `pos`. Integration walks a quaternion off the unit
+<pre><code class="zig">/// Renormalize every quaternion in `pos`. Integration walks a quaternion off the unit
 /// sphere a little each step, and the error compounds, so this runs after every advance.
 pub fn normalizeQuats(m: *const Model, pos: []f32) void {
     for (0..m.njnt) |ji| {
@@ -1296,7 +1219,7 @@ pub fn normalizeQuats(m: *const Model, pos: []f32) void {
 
 <p>The normalization itself moved into a shared helper once phase 1 needed the same fallback a third time. Three copies of "renormalize, or return identity if it has collapsed" is three chances to get the collapse threshold subtly different:</p>
 
-<pre><code>/// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
+<pre><code class="zig">/// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
 /// user input both walk quaternions off the unit sphere, and a zero-norm quaternion has no
 /// orientation to recover — identity keeps the simulation running instead of emitting NaN.
 fn normalizeQuat(q: Quat) Quat {
@@ -1310,7 +1233,7 @@ fn normalizeQuat(q: Quat) Quat {
 
 <p>The round trip, which validates both halves of §7 at once:</p>
 
-<pre><code>test "position coordinates: integrate then differentiate is a round trip" {
+<pre><code class="zig">test "position coordinates: integrate then differentiate is a round trip" {
     // A free joint exercises both halves: ordinary translation and the quaternion path.
     ...
     const dt: f32 = 0.01;
@@ -1330,7 +1253,7 @@ fn normalizeQuat(q: Quat) Quat {
 
 <p>And the drift test, which runs long enough to matter:</p>
 
-<pre><code>test "position coordinates: quaternions stay on the unit sphere" {
+<pre><code class="zig">test "position coordinates: quaternions stay on the unit sphere" {
     ...
     // Spin hard, for a long time, on a deliberately awkward axis.
     d.vel[0] = 7.0;
@@ -1351,7 +1274,7 @@ fn normalizeQuat(q: Quat) Quat {
 
 <p>One place the code stops short, and says so:</p>
 
-<pre><code>fn geomsToBodyMass(geoms: []const GeomSpec) BodyMass {
+<pre><code class="zig">fn geomsToBodyMass(geoms: []const GeomSpec) BodyMass {
     var total: Inertia = .zero;
     for (geoms) |g| {
         const gm: f32 = g.mass orelse (shapeVolume(g.shape) * g.density);
@@ -1384,7 +1307,7 @@ fn normalizeQuat(q: Quat) Quat {
 
 <p>First, the type the whole pass is written in. A pose is a real concept here rather than an implementation detail — bodies, joints and sites all have one, and composing them is the operation the tree walk is made of:</p>
 
-<pre><code>/// A rigid placement in some frame. Named rather than anonymous because a pose is a real
+<pre><code class="zig">/// A rigid placement in some frame. Named rather than anonymous because a pose is a real
 /// concept here — bodies, joints and sites all have one, and `compose` is how they relate.
 pub const Pose = struct {
     pos: Vec = vec_zero,
@@ -1409,7 +1332,7 @@ pub const Pose = struct {
 
 <p>The doc comment on <code>compose</code> earns its place. <code>qmul(a, b)</code> applies <code>b</code> first, so <code>parent.compose(local)</code> reads "start at the parent, then go local" — the direction a tree walk actually travels. Swap the operands and it compiles, runs, and puts every body in the wrong place in a way that still looks like a robot.</p>
 
-<pre><code>/// Forward kinematics: world pose of every body, joint anchor, joint axis and site.
+<details class="src-fold"><summary><code>fn kinematics</code><span class="faint"> · 95 lines</span></summary><pre><code class="zig">/// Forward kinematics: world pose of every body, joint anchor, joint axis and site.
 ///
 /// Bodies are visited in index order, which IS parent-before-child because `Spec()`
 /// rejects any spec where a parent is declared after its child. That single validation
@@ -1503,20 +1426,20 @@ pub fn kinematics(m: *const Model, d: *Data) void {
     }
 
     d.stage = .position;
-}</code></pre>
+}</code></pre></details>
 
 <h3>Differentiating against the accumulated velocity</h3>
 
 <p>Look at the hinge case:</p>
 
-<pre class="sketch"><code>rot = qmul(rot, local);
+<pre class="sketch"><code class="zig">rot = qmul(rot, local);
 // Off-centre correction: put the origin back where it must be for
 // the anchor not to have moved.
 pos = anchor - rotate(rot, m.jnt_pos[ji]);</code></pre>
 
 <p>A hinge does <strong>not</strong> rotate a body about the body's own origin — it rotates it about the <em>anchor</em>. So after composing the rotation we recompute where the origin must be for the anchor to have stayed put. Drop those two lines and every joint whose anchor is off the body origin swings the body through an arc it should never take. Almost every real robot joint is off-centre, so this is not an edge case, and it is why the test that isolates it exists:</p>
 
-<pre><code>test "kinematics: a hinge rotates about its ANCHOR, not the body origin" {
+<pre><code class="zig">test "kinematics: a hinge rotates about its ANCHOR, not the body origin" {
     // The off-centre correction, isolated. A hinge whose anchor sits 1 m out along X,
     // turned a quarter turn about Z, must swing the body origin onto the Y axis — if the
     // correction were missing the origin would stay put and only the orientation change.</code></pre>
@@ -1525,14 +1448,14 @@ pos = anchor - rotate(rot, m.jnt_pos[ji]);</code></pre>
 
 <h3>Checked against MuJoCo</h3>
 
-<pre><code>test "kinematics: body positions match MuJoCo" {
+<pre><code class="zig">test "kinematics: body positions match MuJoCo" {
     // THE test for phase 1. `reference.zig` is generated from real MuJoCo by
     // scripts/robot_oracle.py, so this compares our forward kinematics against an
     // independent implementation rather than against my own arithmetic.</code></pre>
 
 <p>And the loop guards against the worst failure mode a data-driven test has:</p>
 
-<pre><code>    // A silently-empty loop would pass this test while checking nothing.
+<pre><code class="zig">    // A silently-empty loop would pass this test while checking nothing.
     try expect(compared >= 3);</code></pre>
 
 <h2 id="s11"><span class="num">11</span>Two details: quaternion drift and the world body</h2>
@@ -1541,7 +1464,7 @@ pos = anchor - rotate(rot, m.jnt_pos[ji]);</code></pre>
 
 <p>A capsule is a cylinder plus two hemispherical caps, and the caps are the subtle part. A hemisphere's transverse moment <code>(2/5)m·r²</code> — the number you will find quoted — is measured about the centre of its <strong>flat face</strong>. The parallel-axis theorem needs it about the <strong>centroid</strong>, which sits <code>3r/8</code> away. Using <code>2/5</code> directly double-counts <code>m·(3r/8)²</code>.</p>
 
-<pre><code>            //   * A hemisphere's transverse moment about the CENTRE OF ITS FLAT FACE is
+<pre><code class="zig">            //   * A hemisphere's transverse moment about the CENTRE OF ITS FLAT FACE is
             //     (2/5)m·r², the same as a full sphere, by symmetry.
             //   * Its centroid is NOT there — it sits 3r/8 out along the axis.
             //   * Parallel axis moves an inertia between a point and the CENTROID, so
@@ -1556,7 +1479,7 @@ pos = anchor - rotate(rot, m.jnt_pos[ji]);</code></pre>
 
 <p>Zig caps comptime loop iterations to catch runaway evaluation, and the default of 1000 is reached by a perfectly ordinary humanoid — the validation pass alone is bodies × joints × geoms, and name-uniqueness is quadratic. A model of about eighteen bodies will not compile without raising it.</p>
 
-<pre><code>/// A comptime evaluation budget that scales with the model, rather than a magic number
+<pre><code class="zig">/// A comptime evaluation budget that scales with the model, rather than a magic number
 /// that works until someone builds a slightly larger robot. The quadratic term is real:
 /// `assertUniqueNames` compares every name against every later one.
 fn quotaFor(comptime spec: ModelSpec) u32 {
@@ -1585,7 +1508,7 @@ fn quotaFor(comptime spec: ModelSpec) u32 {
 
 <p>Phase 1's second half, and where the representation chosen in §2 pays off.</p>
 
-<pre><code>/// Build the shared frame each kinematic tree's dynamics are expressed in, and put every
+<details class="src-fold"><summary><code>fn comPos</code><span class="faint"> · 94 lines</span></summary><pre><code class="zig">/// Build the shared frame each kinematic tree's dynamics are expressed in, and put every
 /// body's inertia and every DOF's motion axis into it.
 ///
 /// WHY A SHARED FRAME AT ALL. Two inertias can only be added when they are expressed about
@@ -1678,11 +1601,11 @@ pub fn comPos(m: *const Model, d: *Data) void {
             },
         }
     }
-}</code></pre>
+}</code></pre></details>
 
 <p>The <code>dofAboutAxis</code> helper is three lines and carries the whole intuition for what a motion vector <em>is</em>:</p>
 
-<pre><code>/// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
+<pre><code class="zig">/// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
 /// `offset` from the axis. Rotating about a line that does not pass through the origin
 /// moves the origin too, and `axis × offset` is exactly how much.
 fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
@@ -1693,7 +1616,7 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
 
 <p><code>mjModel</code> stores each body's inertia as three principal moments plus a quaternion — seven numbers, and producing them requires diagonalizing a symmetric 3×3 with a Jacobi iteration. We already store the full symmetric tensor in six numbers, so we can rotate it directly and never diagonalize:</p>
 
-<pre><code>    /// Re-express this inertia in a frame rotated by `q`. The rotational block transforms
+<pre><code class="zig">    /// Re-express this inertia in a frame rotated by `q`. The rotational block transforms
     /// by similarity, `I' = R·I·Rᵀ`, and the first moment just rotates.
     ///
     /// This is the function that lets us skip MuJoCo's principal-axis storage entirely.
@@ -1734,7 +1657,7 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
 
 <p>One line in that function deserves attention out of proportion to its size:</p>
 
-<pre class="sketch"><code>// This is not pedantry: using the columns computes `Rᵀ·I·R` instead, which has the
+<pre class="sketch"><code class="zig">// This is not pedantry: using the columns computes `Rᵀ·I·R` instead, which has the
 // same eigenvalues and a plausible-looking diagonal, so the error hides in the
 // off-diagonal terms alone.</code></pre>
 
@@ -1793,7 +1716,7 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
 
 <p>The composite inertias are nearly free, because <code>comPos</code> (§12b) already put every body's inertia in <strong>one shared frame</strong>. The composite of a subtree is then the <em>sum</em> of its parts. A backward pass over the tree, adding ten floats per body:</p>
 
-<pre><code>    // ---- composite inertias: a backward sum over the tree ----
+<pre><code class="zig">    // ---- composite inertias: a backward sum over the tree ----
     // Start each body holding its own inertia, then fold children into parents walking
     // backwards. Because a parent always has a lower index, one reverse pass suffices.
     //
@@ -1815,7 +1738,7 @@ fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
 
 <h3>The code</h3>
 
-<pre><code>/// Composite Rigid Body: build the joint-space inertia matrix M.
+<details class="src-fold"><summary><code>fn crb</code><span class="faint"> · 66 lines</span></summary><pre><code class="zig">/// Composite Rigid Body: build the joint-space inertia matrix M.
 ///
 /// THE IDEA, which is genuinely simple once seen. Suppose only DOF `i` accelerates and
 /// every other joint is locked. Then everything below `i` moves as ONE RIGID BODY — that
@@ -1880,7 +1803,7 @@ pub fn crb(m: *const Model, d: *Data) void {
         // literally diagonal regularization that happens to be true.
         d.mass_matrix[row + nnz - 1] += m.dof_armature[i];
     }
-}</code></pre>
+}</code></pre></details>
 
 <p>Note the cursor arithmetic in the inner loop. The row is stored root-first with the diagonal <em>last</em>, but walking <em>up</em> from <code>i</code> visits the diagonal <em>first</em> — so <code>slot</code> starts at the end and decrements. That storage order was chosen back in §5's <code>M_colind</code> specifically so this loop could be a single decrement. Two sections apart, one decision.</p>
 
@@ -1894,7 +1817,7 @@ pub fn crb(m: *const Model, d: *Data) void {
 
 <p><strong>2. Assert the properties that make it a mass matrix at all.</strong> These keep testing when the numbers legitimately change:</p>
 
-<pre><code>test "crb: M is symmetric, positive definite, and configuration-dependent" {
+<details class="src-fold"><summary><code>const gpa</code><span class="faint"> · 36 lines</span></summary><pre><code class="zig">test "crb: M is symmetric, positive definite, and configuration-dependent" {
     // Invariants, which keep testing when the numbers legitimately change. Together they
     // say "this is a mass matrix" without reference to any particular model.
     const gpa: Allocator = std.testing.allocator;
@@ -1929,11 +1852,11 @@ pub fn crb(m: *const Model, d: *Data) void {
         if (pi_ == 0) {
             folded_diag = dense[0];
         }
-    }</code></pre>
+    }</code></pre></details>
 
 <p>Symmetry says energy does not care which order you name two DOFs in. Positive-definiteness says every motion carries positive kinetic energy — checked via Sylvester's criterion, where the <em>determinant</em> condition is the one that catches a matrix that is merely positive on the diagonal. And then the one that would be embarrassing to omit:</p>
 
-<pre><code>    // Configuration-dependent, and in the right DIRECTION: straight out (q2 = 0) the arm
+<pre><code class="zig">    // Configuration-dependent, and in the right DIRECTION: straight out (q2 = 0) the arm
     // has more inertia about the shoulder than folded (q2 = 2.4 rad). If M were constant
     // the whole file would be pointless, so this is worth asserting rather than assuming.
     try expect(folded_diag &gt; dense[0]);</code></pre>
@@ -1964,7 +1887,7 @@ pub fn crb(m: *const Model, d: *Data) void {
 
 <p>And because rows are stored root-first, a prefix in the tree is a prefix in <em>memory</em>. The update to row <code>i</code> is a contiguous run starting at <code>i</code>'s row address, aligned element for element with the head of row <code>k</code> — no index translation, no scatter, just a strided add of two runs. That alignment is why §5 chose root-first-with-the-diagonal-last, several sections before anything needed it.</p>
 
-<pre><code>pub fn factorM(m: *const Model, d: *Data) void {
+<details class="src-fold"><summary><code>fn factorM</code><span class="faint"> · 46 lines</span></summary><pre><code class="zig">pub fn factorM(m: *const Model, d: *Data) void {
     d.requireStage(.position, "factorM");
     @memcpy(d.qLD, d.mass_matrix);
 
@@ -2009,7 +1932,7 @@ pub fn crb(m: *const Model, d: *Data) void {
     }
 
     d.stage = .position;
-}</code></pre>
+}</code></pre></details>
 
 <p>The loop runs <em>backward</em> over rows because elimination proceeds from the leaves inward: a DOF can only be eliminated once everything depending on it is gone, and children always have higher indices than their parents. The assert on the pivot is not defensive noise — <code>M</code> is positive definite, so a non-positive pivot means the model itself is degenerate, and every number computed after that point would be meaningless.</p>
 
@@ -2017,7 +1940,7 @@ pub fn crb(m: *const Model, d: *Data) void {
 
 <p>Three passes, one per factor, in the order that undoes them:</p>
 
-<pre><code>/// Assemble the active constraint rows for the current state.
+<details class="src-fold"><summary><code>fn makeConstraints</code><span class="faint"> · 65 lines</span></summary><pre><code class="zig">/// Assemble the active constraint rows for the current state.
 ///
 /// A limit end is ACTIVE when the joint is within `margin` of it. The distance is measured
 /// per END, not to the nearest one:
@@ -2081,7 +2004,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
             d.constraint_count = row + 1;
         }
     }
-}</code></pre>
+}</code></pre></details>
 
 <p>Note what is <em>absent</em>: no iteration, no tolerance, no convergence check. This is a direct solve. Contrast a maximal-coordinate engine, which reaches the same answer by iterating a solver until joint errors are small enough — that difference is the entire trade §0 described, appearing here as the presence or absence of a <code>while (!converged)</code>.</p>
 
@@ -2089,7 +2012,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 
 <p>The factorization produces <code>D</code>, and the spread of <code>D</code> tracks the condition number of <code>M</code> closely enough to be useful. Since we computed it anyway, the diagnostic is free:</p>
 
-<pre><code>pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
+<pre><code class="zig">pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
     if (m.nv == 0) {
         return 1.0;
     }
@@ -2134,7 +2057,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 
 <p>So each motion axis has a rate of change, and it is a spatial cross product:</p>
 
-<pre><code>pub fn comVel(m: *const Model, d: *Data) void {
+<pre><code class="zig">pub fn comVel(m: *const Model, d: *Data) void {
     d.requireStage(.position, "comVel");
     d.cvel[world_body] = .zero;
 
@@ -2180,7 +2103,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 
 <p>Run RNE with the true joint accelerations and it computes the torques that produce them — that is <em>inverse</em> dynamics. Run it with <code>v̇ = 0</code> and it computes the torques needed to produce <em>no</em> acceleration, which is exactly <code>c(q,v)</code>: gravity, Coriolis and centrifugal, and nothing else. One routine serves both, and forward dynamics uses the second form.</p>
 
-<pre><code>fn rne(m: *const Model, d: *Data, out: []f32) void {
+<details class="src-fold"><summary><code>fn rne</code><span class="faint"> · 44 lines</span></summary><pre><code class="zig">fn rne(m: *const Model, d: *Data, out: []f32) void {
     d.requireStage(.velocity, "rne");
 
     // Scratch, sized by the model. Both are per-body spatial quantities that never leave
@@ -2223,7 +2146,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
     for (0..m.nv) |i| {
         out[i] = dot6(d.cdof[i], cfrc[m.dof_body[i]]);
     }
-}</code></pre>
+}</code></pre></details>
 
 <p>The per-body force is <code>f = I·a + v ×* (I·v)</code>. The first term is familiar. The second is gyroscopic, and it is why <code>crossForce</code> exists as a separate operator back in §2 — the duality that looked like pedantry there is doing real work here.</p>
 
@@ -2237,7 +2160,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 
 <p>RNE can compute <code>M·a + c</code> in a single recursion if you feed it an acceleration, and MuJoCo's <code>mj_rne</code> offers exactly that. We do not use it:</p>
 
-<pre><code>pub fn inverseDynamics(m: *const Model, d: *Data, acc: []const f32, out: []f32) void {
+<pre><code class="zig">pub fn inverseDynamics(m: *const Model, d: *Data, acc: []const f32, out: []f32) void {
     d.requireStage(.velocity, "inverseDynamics");
     mulM(m, d, acc, out);
     for (0..m.nv) |i| {
@@ -2251,7 +2174,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 
 <h3>Forward dynamics</h3>
 
-<pre><code>pub fn forwardDynamics(m: *const Model, d: *Data) void {
+<pre><code class="zig">pub fn forwardDynamics(m: *const Model, d: *Data) void {
     d.requireStage(.velocity, "forwardDynamics");
     for (0..m.nv) |i| {
         d.acc[i] = d.applied_force[i] + d.actuator_force[i] + d.passive_force[i] - d.bias_force[i];
@@ -2264,7 +2187,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 
 <h2 id="s17"><span class="num">17</span>Stepping and testing the integrator</h2>
 
-<pre><code>pub fn forward(m: *const Model, d: *Data) void {
+<details class="src-fold"><summary><code>fn forward</code><span class="faint"> · 100 lines</span></summary><pre><code class="zig">pub fn forward(m: *const Model, d: *Data) void {
     kinematics(m, d);
     comPos(m, d);
     crb(m, d);
@@ -2363,11 +2286,11 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
     }
     integratePos(m, d.pos, vel_sum, dt);
     normalizeQuats(m, d.pos);
-}</code></pre>
+}</code></pre></details>
 
 <h3>Semi-implicit Euler</h3>
 
-<pre><code>fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
+<pre><code class="zig">fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
     for (0..m.nv) |i| {
         d.vel[i] += dt * d.acc[i];
     }
@@ -2383,7 +2306,7 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
 
 <p><strong>Energy.</strong> With no damping, no actuation and no contact, total mechanical energy is exactly conserved in the continuous problem. Any drift is the integrator's, which makes it a direct measurement of integration quality:</p>
 
-<pre><code>    // RK4 must be tight over 10 s of chaotic motion.
+<pre><code class="zig">    // RK4 must be tight over 10 s of chaotic motion.
     try expect(drift[0] &lt; 0.001);
     // And it must be better than Euler -- which is the whole reason it costs four
     // evaluations per step.
@@ -2422,7 +2345,7 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
 
 <p>That is the whole computation — the work was done in <code>comPos</code>.</p>
 
-<pre><code>pub fn jacPoint(
+<pre><code class="zig">pub fn jacPoint(
     m: *const Model,
     d: *const Data,
     body: u32,
@@ -2461,7 +2384,7 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
 
 <h3>The transpose</h3>
 
-<pre><code>pub fn applyForceAtPoint(
+<pre><code class="zig">pub fn applyForceAtPoint(
     m: *const Model,
     d: *const Data,
     body: u32,
@@ -2484,7 +2407,7 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
 
 <p><strong>1. Finite differences &mdash; the cheapest strong test in the project.</strong> A Jacobian is <em>by definition</em> the derivative of the forward kinematics, so nudge each joint and measure where the point went. No reference values, no oracle, and it independently validates the frame conventions of &sect;10 and &sect;12: if <code>cdof</code> were built about the wrong origin or with a flipped sign, the derivative would not match.</p>
 
-<pre><code>        const eps: f32 = 1.0e-4;
+<pre><code class="zig">        const eps: f32 = 1.0e-4;
         for (0..m.nv) |i| {
             // Central difference: second-order accurate, so the tolerance can be tight.
             var moved: [2]Vec = undefined;
@@ -2510,7 +2433,7 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
 
 <p><strong>4. A case you can check by hand.</strong> Hold the arm straight down and push the tip sideways with 1 N. The shoulder must feel 1 N &times; 0.9 m and the elbow 1 N &times; 0.4 m &mdash; lever arms you could measure with a ruler:</p>
 
-<pre><code>    // Hinges are about +Z, the tip is 0.9 m below the shoulder and 0.4 m below the elbow,
+<pre><code class="zig">    // Hinges are about +Z, the tip is 0.9 m below the shoulder and 0.4 m below the elbow,
     // and a +X force at -Y produces a +Z torque of |r| * |f|.
     try expectApproxEqAbs(@as(f32, 0.9), torque[0], 1.0e-4);
     try expectApproxEqAbs(@as(f32, 0.4), torque[1], 1.0e-4);</code></pre>
@@ -3016,7 +2939,7 @@ This is the third time the same distinction has decided a design — &sect;7 for
 
 <p>The same recursion as it is actually written. The gradient first — note the term that is easy to leave out:</p>
 
-<pre><code>        const knot_delta: []const f32 = problem.knot_error[t * ndx ..][0..ndx];
+<pre><code class="zig">        const knot_delta: []const f32 = problem.knot_error[t * ndx ..][0..ndx];
         for (0..ndx) |i| {
             var sum: f32 = problem.cost.state[i] * knot_delta[i];
             for (0..ndx) |r| {
@@ -3027,7 +2950,7 @@ This is the third time the same distinction has decided a design — &sect;7 for
 
 <p>The first line of the sum is <span class="eq">l<sub>x</sub></span> — the running cost's own gradient — and the loop is <span class="eq">Aᵀ·V<sub>x</sub></span>. Then the gains, which is where <span class="eq">Q<sub>uu</sub></span> gets inverted:</p>
 
-<pre><code>        @memcpy(s.q_uu_factor, s.q_uu);
+<pre><code class="zig">        @memcpy(s.q_uu_factor, s.q_uu);
         if (!cholesky(s.q_uu_factor, nu)) {
             return false;
         }
@@ -3076,7 +2999,7 @@ Measured: the returned gain was <b>−1.711 against a correct −3.240</b>, a fa
 
 <p>At the optimum <span class="eq">k → 0</span> and both terms vanish. If the model expects nothing, we are done — keep these gains, they are the undamped answer. If it expects a great deal and the line search still cannot deliver, <em>then</em> the model is wrong and regularization should rise:</p>
 
-<pre><code>        const predicted: f32 = predicted_step.improvement();
+<pre><code class="zig">        const predicted: f32 = predicted_step.improvement();
         if (predicted <= opt.tolerance * @max(@abs(initial), 1.0)) {
             keepGains(plan);
             converged = true;

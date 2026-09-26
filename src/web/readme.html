@@ -6,368 +6,29 @@
         <title>zimr</title>
         <meta
             name="description"
-            content="A zig port of raylib, imgui, implot, box2d, jolt for wasm/webgpu.
+            content="A zig port of raylib, imgui, implot, box2d / jolt physics and MuJoCo-style robot dynamics for wasm/webgpu.
+            Reads FBX and BVH for models and animation, retargets motion capture onto robots, and carries a numpy/jax/pandas-shaped
+            numerics library that trains neural networks — attention, transformers, PPO and SAC — on the GPU via compute shaders in zig.
             Includes transpilers from zig to wgsl (gpu) and javascript (web) so we can live in a pure zig world."
         />
-        <style>
-            :root {
-                --main-font: "Courier New", Courier, monospace;
-                --header-font: "Georgia", "Times New Roman", serif;
-                --bg-page: #1f140e;
-                --bg-paper: #332218;
-                --bg-block: #261912;
-                --text-color: #f0e6d2;
-                --text-muted: #a89684;
-                --accent-color: #d35f33;
-                --border-color: #090604;
-                --shadow-color: #000000;
-            }
-
-            * {
-                box-sizing: border-box;
-            }
-
-            body {
-                background-color: var(--bg-page);
-                background-image: radial-gradient(
-                    var(--border-color) 2px,
-                    transparent 2px
-                );
-                background-size: 16px 16px;
-                color: var(--text-color);
-                font-family: var(--main-font);
-                line-height: 1.6;
-                margin: 0;
-                padding: 40px 20px;
-                display: flex;
-                justify-content: center;
-            }
-
-            /* 100vw (the full-bleed demo embed) counts the scrollbar, so the
-               breakout is a few px wider than the client area. Clip it at the
-               root -- on <body> the rule does not propagate to the viewport.
-               `clip` rather than `hidden`: it does not make the root a scroll
-               container, so nothing can scroll sideways, even from script. */
-            html {
-                overflow-x: clip;
-            }
-
-            .blog-container {
-                background-color: var(--bg-paper);
-                max-width: 820px;
-                width: 100%;
-                padding: 40px;
-                border: 4px solid var(--border-color);
-                box-shadow: 12px 12px 0px var(--shadow-color);
-            }
-
-            h1.title {
-                font-family: var(--header-font);
-                font-size: 2.8rem;
-                line-height: 1.1;
-                text-transform: lowercase;
-                border-bottom: 6px double var(--border-color);
-                padding-bottom: 10px;
-                margin-top: 0;
-                margin-bottom: 10px;
-                letter-spacing: -1px;
-                color: var(--text-color);
-            }
-
-            h2.subtitle {
-                font-family: var(--main-font);
-                font-size: 1.05rem;
-                font-style: italic;
-                font-weight: normal;
-                margin-top: 0;
-                margin-bottom: 20px;
-                color: var(--accent-color);
-                line-height: 1.4;
-            }
-
-            nav.toplinks {
-                margin: 0 0 30px 0;
-                padding: 12px 0;
-                border-top: 2px solid var(--border-color);
-                border-bottom: 2px solid var(--border-color);
-                display: flex;
-                flex-wrap: wrap;
-                gap: 8px 20px;
-                font-size: 0.95rem;
-            }
-
-            nav.toplinks a {
-                text-decoration: none;
-                border: 2px solid var(--accent-color);
-                padding: 4px 10px;
-                background-color: var(--bg-block);
-            }
-
-            nav.toplinks a:hover {
-                background-color: var(--accent-color);
-                color: var(--bg-paper);
-            }
-
-            /* The one link that LEAVES the page (every other entry is an
-               in-page anchor), so it reads as the primary call to action. */
-            nav.toplinks a.offsite {
-                background-color: var(--accent-color);
-                color: var(--bg-paper);
-                font-weight: bold;
-            }
-
-            nav.toplinks a.offsite:hover {
-                background-color: var(--bg-block);
-                color: var(--text-color);
-            }
-
-            .wip-warning {
-                border: 4px solid var(--accent-color);
-                background-color: var(--bg-block);
-                padding: 14px 18px;
-                margin: 25px 0 30px 0;
-                box-shadow: 6px 6px 0px var(--shadow-color);
-                font-size: 1rem;
-                line-height: 1.5;
-            }
-
-            .wip-warning strong {
-                text-transform: uppercase;
-                letter-spacing: 1px;
-                color: var(--accent-color);
-                display: block;
-                font-family: var(--header-font);
-                font-size: 1.15rem;
-                margin-bottom: 6px;
-            }
-
-            h3 {
-                font-family: var(--header-font);
-                font-size: 1.4rem;
-                background-color: var(--border-color);
-                color: var(--text-color);
-                display: inline-block;
-                padding: 4px 10px;
-                margin-top: 40px;
-                margin-bottom: 15px;
-                border: 2px solid var(--text-color);
-            }
-
-            h4 {
-                font-family: var(--header-font);
-                font-size: 1.15rem;
-                text-decoration: underline;
-                text-decoration-color: var(--accent-color);
-                text-underline-offset: 4px;
-                text-transform: lowercase;
-                margin-top: 25px;
-                margin-bottom: 10px;
-            }
-
-            p {
-                font-size: 1rem;
-                margin-bottom: 20px;
-                text-align: left;
-            }
-
-            a {
-                color: var(--accent-color);
-                text-decoration: underline;
-                font-weight: bold;
-            }
-
-            a:hover {
-                background-color: var(--accent-color);
-                color: var(--bg-paper);
-                text-decoration: none;
-            }
-
-            code {
-                background-color: var(--bg-block);
-                border: 1px solid var(--border-color);
-                padding: 1px 5px;
-                font-size: 0.92em;
-                color: var(--text-color);
-            }
-
-            pre {
-                background-color: var(--bg-block);
-                border: 2px solid var(--border-color);
-                border-left: 6px solid var(--accent-color);
-                padding: 15px 18px;
-                margin: 20px 0;
-                overflow-x: auto;
-                box-shadow: 4px 4px 0px var(--shadow-color);
-                font-size: 0.9rem;
-                line-height: 1.45;
-            }
-
-            pre code {
-                background: none;
-                border: none;
-                padding: 0;
-                font-size: inherit;
-            }
-
-            /* Zig syntax highlighting. Spans are emitted at BUILD TIME by
-               tools/highlight.zig (std.zig.Tokenizer) when readme.html is
-               installed — no runtime JS. Colors stay within the earthy
-               palette so code reads as part of the page, not against it. */
-            .tok-kw {
-                color: #e0794a;
-            }
-            .tok-builtin {
-                color: #c9a15f;
-            }
-            .tok-str {
-                color: #9bad6a;
-            }
-            .tok-num {
-                color: #cf8e6d;
-            }
-            .tok-comment {
-                color: #857260;
-                font-style: italic;
-            }
-
-            blockquote {
-                border-left: 6px solid var(--accent-color);
-                margin: 30px 0;
-                padding: 15px 20px;
-                background-color: var(--bg-block);
-                font-style: italic;
-                box-shadow: 4px 4px 0px var(--shadow-color);
-            }
-
-            ul {
-                border: 2px dashed var(--accent-color);
-                padding: 18px 20px 18px 40px;
-                background-color: var(--bg-block);
-                list-style-type: square;
-                margin-bottom: 25px;
-            }
-
-            ul li {
-                margin-bottom: 8px;
-            }
-
-            table {
-                border-collapse: collapse;
-                width: 100%;
-                margin: 20px 0;
-                font-size: 0.88rem;
-                background-color: var(--bg-block);
-                box-shadow: 4px 4px 0px var(--shadow-color);
-            }
-
-            table th,
-            table td {
-                border: 2px solid var(--border-color);
-                padding: 8px 10px;
-                text-align: left;
-                vertical-align: top;
-            }
-
-            table th {
-                background-color: var(--border-color);
-                color: var(--text-color);
-                font-family: var(--header-font);
-                font-weight: bold;
-            }
-
-            hr {
-                border: none;
-                border-top: 4px double var(--border-color);
-                margin: 50px 0;
-            }
-
-            .disclaimer {
-                margin-top: 50px;
-                padding: 25px;
-                border: 2px solid var(--accent-color);
-                background-color: var(--bg-block);
-                box-shadow: 6px 6px 0px var(--shadow-color);
-            }
-
-            .disclaimer h3 {
-                margin-top: 0;
-            }
-
-            @media (max-width: 600px) {
-                body {
-                    padding: 15px;
-                    background-image: none;
-                }
-                .blog-container {
-                    border-width: 2px;
-                    box-shadow: 6px 6px 0px var(--shadow-color);
-                    padding: 25px 18px;
-                }
-                h1.title {
-                    font-size: 2.1rem;
-                }
-                pre {
-                    font-size: 0.82rem;
-                    padding: 12px;
-                }
-                table {
-                    font-size: 0.82rem;
-                }
-            }
-
-            .demo-embed {
-                margin: 26px 0;
-                border: 4px solid var(--border-color);
-                box-shadow: 8px 8px 0px var(--shadow-color);
-                background-color: var(--bg-block);
-            }
-            .demo-embed iframe {
-                display: block;
-                width: 100%;
-                aspect-ratio: 3 / 2;
-                border: 0;
-            }
-
-            /* Break out of the centered text column and span the viewport edge
-               to edge. The margins cancel the container's half-width and the
-               body padding, so the figure lands at x=0 at any width. Side
-               border and the offset shadow are dropped -- both would sit off
-               screen at full bleed. */
-            .demo-embed.full-bleed {
-                width: 100vw;
-                margin-left: calc(50% - 50vw);
-                margin-right: calc(50% - 50vw);
-                border-left: 0;
-                border-right: 0;
-                box-shadow: none;
-            }
-            .demo-embed.full-bleed iframe {
-                aspect-ratio: 16 / 9;
-            }
-            .demo-embed.full-bleed figcaption {
-                /* Keep the caption reading like body text, not edge-to-edge. */
-                max-width: 820px;
-                margin: 0 auto;
-            }
-            .demo-embed figcaption {
-                padding: 9px 13px;
-                border-top: 2px solid var(--border-color);
-                color: var(--text-muted);
-                font-size: 0.85rem;
-                line-height: 1.5;
-            }
-        </style>
+<!--docfmt:style-->
     </head>
     <body>
         <div class="blog-container">
             <h1 class="title">zimr</h1>
             <h2 class="subtitle">
-                A zig port of raylib, imgui, implot2d/3d, and box2d / jolt
-                physics for wasm/webgpu. Includes transpilers from zig to wgsl
-                (gpu shaders/compute) and javascript, plus peer-to-peer
-                multiplayer over WebRTC &mdash; the browser host, the web
-                workers, and the signaling server are Zig too &mdash; so we can
-                live in a pure zig world.
+                A zig port of raylib, imgui, implot2d/3d and box2d / jolt
+                physics for wasm/webgpu, with MuJoCo-style robot dynamics, FBX
+                and BVH loading for models and animation, motion-capture
+                retargeting onto those robots, and a numerics library shaped
+                like numpy, jax and pandas that trains neural networks &mdash;
+                attention and transformer blocks, the distributions generative
+                models are built from, PPO and SAC for reinforcement learning
+                &mdash; on the GPU, through compute shaders written in the same
+                zig. Transpilers from zig to wgsl and to javascript, and
+                peer-to-peer multiplayer over WebRTC whose browser host, web
+                workers and signaling server are Zig too, are what make that one
+                language all the way down.
             </h2>
 
             <nav class="toplinks">
@@ -467,14 +128,14 @@
             </p>
 
             <p>
-                Size, for calibration: about 206,000 lines of Zig under
-                <code>src/</code> (66 top-level files plus a
-                <code>src/shaders/</code> directory of 106), 265 example
-                programs, ~1,900 unit tests, and a locked SPIR-V&rarr;WGSL
-                fixture corpus of 91 shaders run via
+                Size, for calibration: about 308,000 lines of Zig under
+                <code>src/</code> (83 top-level files plus a
+                <code>src/shaders/</code> directory of 118), 297 example
+                programs, about 2,700 <code>test</code> blocks, and a locked
+                SPIR-V&rarr;WGSL fixture corpus of 190 entries run via
                 <code>zig build corpus</code>. The transpilers are themselves
-                large: <code>src/spv2wgsl.zig</code> is ~11,500 lines and
-                <code>tools/c2js.zig</code> is ~9,400. The toolchain is pinned
+                large: <code>src/spv2wgsl.zig</code> is ~11,900 lines and
+                <code>tools/c2js.zig</code> is ~9,800. The toolchain is pinned
                 to a specific <strong>Zig 0.17 dev</strong> build; other
                 versions are not expected to work.
             </p>
@@ -594,9 +255,12 @@ browser host / bridge         zig  --(zig build-obj, -ofmt=c)--&gt;  C --(c2js)-
                 module-level mutable globals: every subsystem threads its
                 state through explicit pointers, so two instances never share
                 hidden state. The source is one Zig module with an enforced
-                acyclic dependency graph. And the discipline is mechanical: a
+                acyclic dependency graph: no two files may import each other,
+                directly or through others, even though Zig would allow it
+                &mdash; the linter's <code>import-cycle</code> rule fails the
+                build on the import that closes a loop. And the discipline is mechanical: a
                 per-change test gate, a custom AST linter
-                (<code>tools/lint_zimr</code>) that repairs mechanical style
+                (<code>tools/zimrlint.zig</code>) that repairs mechanical style
                 violations in place, and the transpiler-corpus and headless
                 smoke checks that keep the GPU and CPU paths honest. The point
                 of one language is that one set of tools &mdash; one compiler,
@@ -641,15 +305,31 @@ fn update(f: *z.Frame, s: *State) void {
 
             <p>
                 The lifecycle is three functions and no more.
-                <code>init(gpa, f) !State</code> runs once &mdash; load fonts,
+                <code>init(gpa, f, s) !void</code> runs once &mdash; load fonts,
                 build meshes, create render textures, do one-time GPU uploads
-                &mdash; and returns the initial state by value.
+                &mdash; and builds the state <em>in place</em>: it fills
+                <code>s.* = .{ ... }</code> with an exhaustive literal, so a
+                forgotten field is still a compile error, and only then takes
+                interior pointers such as <code>&amp;s.font</code>, which stay
+                valid because <code>s</code> is already at its final address.
                 <code>update(f, s)</code> runs every frame and is where all
                 input, simulation, and drawing live.
                 <code>deinit(gpa, s)</code> frees what init allocated. State is
-                an ordinary struct returned by value: no globals, no hidden
+                an ordinary struct owned by the host: no globals, no hidden
                 singletons; two instances of the same app would not share a
                 byte.
+            </p>
+
+            <p>
+                Examples run under <code>.memory = .managed</code>, the default,
+                which makes <code>deinit</code> part of the contract: the leak
+                test runs each app's lifecycle twice and checks that both the
+                GPU handle census and the live CPU bytes return to where they
+                started. The state <code>init</code> receives is zeroed memory
+                rather than a literal, so a field default in the
+                <code>State</code> declaration only takes effect through that
+                <code>s.* = .{ ... }</code> assignment &mdash; assigning fields
+                one at a time skips it.
             </p>
 
             <p>
@@ -809,6 +489,7 @@ drawScene(&sw, s);</code></pre>
             </p>
 
             <h3 id="shaders">Shaders in Zig</h3>
+            <p class="tut"><a href="shader-authoring-tutorial.html">Two ways to write a shader</a> &mdash; the Zig-to-WGSL path against hand-written WGSL, and when each is right.</p>
 
             <p>
                 A shader is an ordinary Zig function over a typed input/output
@@ -1183,6 +864,7 @@ s.ui_host.render(f);                                   // sliders on top</code><
             </p>
 
             <h3 id="compute">GPU compute (kompute)</h3>
+            <p class="tut"><a href="gpu-compute-tutorial.html">One Zig function, two machines</a> &mdash; writing a kernel once and running it on both the CPU and the GPU, and what has to be true for that to work.</p>
 
             <p>
                 Compute kernels are also Zig. A kernel file declares a
@@ -1254,6 +936,7 @@ const pos_buf = pipe.fieldBuffer(.pos).?;</code></pre>
             </p>
 
             <h3 id="numerics">Numerics, deep learning and RL (zimrnum)</h3>
+            <p class="tut"><a href="zimrnum-tutorial.html">The zimrnum walkthrough</a> &mdash; what exists, what does not, and why each piece is shaped the way it is. Its reference table is checked against <code>src/zimrnum.zig</code> by a test in that file.</p>
 
             <p>
                 <code>zimrnum</code> is a numerics library in the same Zig, built on
@@ -1559,6 +1242,7 @@ while (try tiles.next(tile_buf)) |landed| {
             </p>
 
             <h3 id="threed">3D and assets</h3>
+            <p class="tut"><a href="rtt-tutorial.html">Render to texture</a> &mdash; offscreen targets, and the passes that read them back.</p>
 
             <p>
                 The 3D path covers retained meshes, glTF loading (pure-Zig
@@ -1760,6 +1444,8 @@ z.plot_ui.show(u, &s.plot, .{ 520, 320 }, &series, .{
             </p>
 
             <h3 id="physics">The physics engines</h3>
+                        <p class="tut"><a href="robots.html">Robot dynamics, from the ground up</a> &mdash; a course on articulated-body simulation, from <code>M(q)v&#775; + c = &tau; + J<sup>T</sup>f</code> through kinematics, the mass matrix, contact and trajectory optimization. Its code blocks are checked against <code>src/robot.zig</code> by <code>zig build doc-sync</code>, so they cannot quote drifted source.</p>
+            <p class="tut"><a href="mujoco-tutorial.html">MuJoCo, and how it becomes robot.zig</a> &mdash; what MuJoCo's model and data structures contain, and how each part maps onto the Zig port.</p>
 
             <p>
                 Three of them, all pure Zig, none with a GPU dependency &mdash;
@@ -1912,7 +1598,7 @@ Go1 standing    nv 18   12313 ns/step  (pgs)   22273 ns/step  (newton)</code></p
                 <code>src/robot.zig</code>:
             </p>
 
-            <pre><code>const scale = robot.captureScale(&amp;model, frame);
+            <pre><code class="zig">const scale = robot.captureScale(&amp;model, frame);
 const n = robot.buildPointSamples(&amp;model, inputs, &amp;samples);
 robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
 
@@ -2073,6 +1759,7 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
             </p>
 
             <h3 id="machinery">Under the hood: host, WebGPU layer, rasterizer</h3>
+            <p class="tut"><a href="wgpu-ports-tutorial.html">The WebGPU ports</a> &mdash; what the host layer actually had to provide, one port at a time.</p>
 
             <p>
                 The entire browser side is one Zig file,
@@ -2118,202 +1805,23 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
                 a red build rather than a device-only glitch.
             </p>
 
-            <h3 id="docs">Long-form walkthroughs</h3>
-
+            <h3 id="docs">The long-form walkthroughs, in one place</h3>
             <p>
-                Six standalone pages, each building one subsystem from first
-                principles rather than documenting its API. They ship alongside this
-                page.
+                Seven standalone pages, each building one subsystem from first
+                principles rather than documenting its API. Each is linked from
+                the section it belongs to above; this is the index.
             </p>
-
-            <ul>
-                <li>
-                    <a href="robots.html"
-                        >Robot dynamics, from the ground up</a
-                    >
-                    &mdash; a course on articulated-body simulation, from
-                    <code>M(q)v&#775; + c = &tau; + J<sup>T</sup>f</code> through
-                    kinematics, the mass matrix, contact and trajectory
-                    optimization, ending with three worked examples. Its code blocks
-                    are checked against <code>src/robot.zig</code> by
-                    <code>zig build doc-sync</code>, so they cannot quote drifted
-                    source.
-                </li>
-                <li>
-                    <a href="mujoco-tutorial.html">MuJoCo, and how it becomes robot.zig</a>
-                    &mdash; what MuJoCo's model and data structures contain, and how
-                    each part maps onto the Zig port.
-                </li>
-                <li>
-                    <a href="gpu-compute-tutorial.html">GPU compute: one Zig function, two machines</a>
-                    &mdash; writing a kernel once and running it on the CPU and the
-                    GPU, and what has to be true for that to work.
-                </li>
-                <li>
-                    <a href="shader-authoring-tutorial.html">Two ways to write a shader</a>
-                    &mdash; the Zig-to-WGSL path against hand-written WGSL, and when
-                    each is the right choice.
-                </li>
-                <li>
-                    <a href="rtt-tutorial.html">Render to texture</a>
-                    &mdash; offscreen targets, and the passes that read them back.
-                </li>
-                <li>
-                    <a href="zimrnum-tutorial.html">zimrnum</a>
-                    &mdash; the numerics, statistics, deep-learning and RL library:
-                    what exists, what does not, and why each piece is shaped the way
-                    it is. Its reference table is checked against
-                    <code>src/zimrnum.zig</code> by a test in that file, so it cannot
-                    name a declaration the library no longer has.
-                </li>
-                <li>
-                    <a href="wgpu-ports-tutorial.html">WebGPU ports</a>
-                    &mdash; how a C or C++ graphics library is brought across to Zig
-                    and WebGPU without a translation layer.
-                </li>
+            <ul class="tut-index">
+                <li><a href="robots.html">Robot dynamics, from the ground up</a> &mdash; articulated-body simulation, end to end</li>
+                <li><a href="mujoco-tutorial.html">MuJoCo, and how it becomes robot.zig</a></li>
+                <li><a href="gpu-compute-tutorial.html">One Zig function, two machines</a> &mdash; GPU compute</li>
+                <li><a href="shader-authoring-tutorial.html">Two ways to write a shader</a></li>
+                <li><a href="rtt-tutorial.html">Render to texture</a></li>
+                <li><a href="zimrnum-tutorial.html">zimrnum</a> &mdash; numerics, deep learning and RL</li>
+                <li><a href="wgpu-ports-tutorial.html">The WebGPU ports</a></li>
+                <li><a href="tutorial.html">A graphics tutorial, from your first triangle</a></li>
+                <li><a href="files.html">The file atlas</a> &mdash; every file, its size, and what imports it</li>
             </ul>
-
-            <h3 id="layout">Source layout</h3>
-
-            <table>
-                <thead>
-                    <tr>
-                        <th>area</th>
-                        <th>files</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>umbrella module examples import</td>
-                        <td><code>src/zimr.zig</code> (as <code>@import("zimr")</code>)</td>
-                    </tr>
-                    <tr>
-                        <td>math + shader vocabulary</td>
-                        <td><code>src/zimrmath.zig</code> (as <code>@import("zm")</code>)</td>
-                    </tr>
-                    <tr>
-                        <td>app loop, frame, raylib surface</td>
-                        <td><code>src/wgpu_app.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>engine shaders (Zig, one pair per stage)</td>
-                        <td><code>src/shaders/*.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>2D batching</td>
-                        <td><code>src/renderer_2d.zig</code> + <code>src/gpu_iface.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>3D</td>
-                        <td><code>src/draw3d.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>Zig&rarr;WGSL transpiler</td>
-                        <td><code>src/spv2wgsl.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>descriptor serialization + pipeline cache</td>
-                        <td><code>src/gpu.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>GPU compute</td>
-                        <td><code>src/kompute.zig</code> + <code>src/compute_host.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>physics</td>
-                        <td><code>src/zimrphysics.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>profiler</td>
-                        <td><code>src/profiler.zig</code> + <code>src/profiler_ui.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>browser host (Zig)</td>
-                        <td><code>src/bridge.zig</code>; transpiler <code>tools/c2js.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>Dear ImGui / plots</td>
-                        <td><code>src/ui.zig</code>, <code>src/plot*.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>software rasterizer</td>
-                        <td><code>src/raster.zig</code>, <code>src/raster_shader.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>style linter</td>
-                        <td><code>tools/lint_zimr.zig</code></td>
-                    </tr>
-                    <tr>
-                        <td>examples</td>
-                        <td>one directory each under <code>examples/</code></td>
-                    </tr>
-                </tbody>
-            </table>
-
-            <h3 id="build">Building</h3>
-
-            <p>
-                Every example has two build steps: <code>&lt;name&gt;</code>
-                builds a wasm plus an HTML page plus the JavaScript host into
-                <code>zig-out/</code>, and
-                <code>&lt;name&gt;-standalone</code> inlines all of that into
-                one self-contained <code>.html</code> file &mdash; the fastest
-                way to try anything, including on a phone. Step names are
-                kebab-case; the same name in <code>-Dfocus</code> is the
-                snake_case directory name. There is also a
-                <code>launcher</code> example that bundles the flagship demos
-                behind a fullscreen menu in a single standalone HTML.
-            </p>
-
-            <pre><code># build one example (wasm + page + JS host) under zig-out/
-zig build shapes-showcase
-
-# the same example as one self-contained .html file
-zig build shader-effects-standalone
-
-# release build: ReleaseSmall with zimr asserts + the profiler kept on
-zig build fluid-gpu-standalone -Dmode=release
-# ship build: ReleaseSmall, asserts off, profiler stripped
-zig build fluid-gpu-standalone -Dmode=ship
-
-# native pixel-verify targets (render the demo's look on the CPU, no browser)
-zig build cel-shading-verify
-zig build shader-effects-verify
-zig build shadowmap-sw-verify</code></pre>
-
-            <p>Project tooling and gates:</p>
-
-            <pre><code># unit tests + example typecheck (~1,900 tests); filter by name or glob
-zig build test
-zig build test -Dfocus=ui_*
-
-# transpiler gates: SPIR-V->WGSL fixture corpus, and Zig->JS vs a reference
-zig build corpus
-zig build c2js-diff
-
-# headless wasm smoke of one example (boots it, runs frames, profiles the
-# host calls, and fails on same-buffer-same-offset double writes in a frame)
-zig build smoke-test -Dfocus=shader_effects
-
-# style gate (zig fmt --check + the AST linter), module graph, docs, server
-zig build lint-check
-zig build dag-check
-zig build docs
-zig build serve</code></pre>
-
-            <p>
-                The inner loop stays fast because most checks need no browser:
-                a single example typechecks in well under a second, and the
-                CPU pixel-verify targets answer "does it look right" before any
-                device round-trip. Headless smoke cannot see GPU validation
-                errors, so anything visual is finally confirmed by opening a
-                <code>-standalone</code> &mdash; on a phone when touch or the
-                tile-based-GPU paths are involved, since those are exactly what
-                a desktop never exercises. <code>-Dmode=</code> selects
-                <code>debug</code> / <code>release</code> /
-                <code>ship</code> as in the block above;
-                <code>-Dfocus=</code> filters build, typecheck, and smoke.
-            </p>
 
             <h3 id="walkthroughs">More walkthroughs: the 2D and UI side</h3>
 
@@ -2395,10 +1903,11 @@ zig build serve</code></pre>
             <h3 id="examples">Examples</h3>
 
             <p>
-                There are 265 examples, each a single file at
+                There are 297 examples, each rooted at
                 <code>examples/&lt;name&gt;/&lt;name&gt;.zig</code> with no
                 shared state, so any one reads top to bottom as a complete
-                program. Categories and representative steps:
+                program; a few larger ones keep helpers or assets beside that
+                file. Categories and representative steps:
             </p>
 
             <table>

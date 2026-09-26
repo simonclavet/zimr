@@ -30,6 +30,12 @@
 //! cannot hold.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
@@ -279,7 +285,13 @@ fn update(f: *z.Frame, s: *State) void {
     while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
         rbt.forward(m, &s.data);
         if (s.physics_on) {
+            // These two can only fail by running out of memory: the frame callback that contains them
+            // returns `void` by the engine's design, so there is nothing to propagate to. Swallowing
+            // leaves the world un-stepped for one frame, which is the least-bad outcome available here -
+            // and is why the rule wants it said out loud rather than written silently.
+            // lint:off catch-suppression: OOM only, void callback - see above
             s.bridge.sync(&s.world, m, &s.data) catch {};
+            // lint:off catch-suppression: OOM only, void callback - see above
             zp.step(&s.world, timestep) catch {};
             s.bridge.harvest(&s.data);
         } else {

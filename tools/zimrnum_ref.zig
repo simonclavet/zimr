@@ -491,7 +491,11 @@ const notes = [_]Note{
         .text = "slice * sigmoid(slice). No backward: znum hand-derives one.",
     },
     .{ .name = "swiglu", .text = "The same, gated by SiLU. Every recent transformer uses it." },
-    .{ .name = "Gate", .text = "sigmoid or silu, chosen at comptime." },
+    .{
+        .name = "Gate",
+        .text = "In a cell, one gate's two matrices and its bias; in a gated unit, " ++
+            "which nonlinearity.",
+    },
     .{
         .name = "ppoClipLoss",
         .text = "PPO as a LOSS. The clip acts in the backward: a clipped step gets ZERO.",
@@ -529,6 +533,471 @@ const notes = [_]Note{
         .text = "The forget bias starts at ONE: 44x the memory after ten steps.",
     },
     .{
+        .name = "linearLearningRate",
+        .text = "Straight-line decay - what PPO actually uses. On-policy data is thrown away " ++
+            "each update, so late steps want a rate genuinely near zero, not near a floor.",
+    },
+    .{
+        .name = "linearOverFraction",
+        .text = "The fraction of training elapsed, so a caller annealing the rate AND the clip " ++
+            "range uses ONE schedule rather than two that can drift apart.",
+    },
+    .{
+        .name = "CartpoleOutcome",
+        .text = "What one step earned and whether the episode ended. Named so callers can hold " ++
+            "it - an anonymous return cannot be stored or passed on.",
+    },
+    .{
+        .name = "CartpoleTask",
+        .text = "`hold` or `swingup` - NOT one task with two rewards. Swingup starts hanging, " ++
+            "pays `cos(angle)`, and has NO angle termination: the pole is meant to rotate.",
+    },
+    .{
+        .name = "cartpoleOutcome",
+        .text = "Reward and termination for one state under a task. Scalar-first, so the batch " ++
+            "and a SPIR-V kernel call the same function.",
+    },
+    .{
+        .name = "cartpoleTaskStep",
+        .text = "A continuous step under a named task. The dynamics never change - a task " ++
+            "changes what is rewarded and what ends an episode.",
+    },
+    .{
+        .name = "cartpoleTaskReset",
+        .text = "Where the pole starts, which is the whole difference: near upright for hold, " ++
+            "near pi for swingup.",
+    },
+    .{
+        .name = "cartpoleContinuousStepBatch",
+        .text = "A whole batch of environments, one row each. Collection is embarrassingly " ++
+            "parallel and is where on-policy RL spends its wall clock.",
+    },
+    .{
+        .name = "cartpoleContinuousStep",
+        .text = "Cartpole under a CONTINUOUS force. A harder credit-assignment problem than " ++
+            "the discrete task, and the one every real actuator poses.",
+    },
+    .{
+        .name = "cartpoleObserve",
+        .text = "State into the flat vector a network takes. The ONE place the ordering is " ++
+            "fixed - train on one order and evaluate on another and the shapes still match.",
+    },
+    .{
+        .name = "cartpole_state_dim",
+        .text = "Four: cart, cart rate, pole angle, pole rate. Named because a policy's input " ++
+            "width has to match it.",
+    },
+    .{
+        .name = "cartpole_action_dim",
+        .text = "One: a force in newtons.",
+    },
+    .{
+        .name = "offPolicyUpdate",
+        .text = "ONE loop for SAC, TD3 and DQN: sample, descend, then let the target follow. " ++
+            "The follow is AFTER the step - before it moves the goal the batch was aimed at.",
+    },
+    .{
+        .name = "OffPolicyModel",
+        .text = "Where to write and what to descend, off-policy. The three algorithms differ " ++
+            "only in the TARGET the caller computes, never in the loop.",
+    },
+    .{
+        .name = "ppoUpdate",
+        .text = "The full PPO update: normalise once, shuffle per epoch, recompute the policy " ++
+            "per minibatch, step. The recomputation is WHY PPO has multiple epochs.",
+    },
+    .{
+        .name = "PpoModel",
+        .text = "Where to write and what to descend. The caller owns the architecture; the " ++
+            "update owns the loop - the same split `Fitting` uses for supervised training.",
+    },
+    .{
+        .name = "setPpoClipInputs",
+        .text = "Refresh a clip node's old log-probs and advantages. `ppoClipLoss` COPIES them, " ++
+            "so without this a minibatch loop optimises against the first stride forever.",
+    },
+    .{
+        .name = "klGaussianDiag",
+        .text = "The EXACT KL between two diagonal Gaussians. KL(new||old) - the direction is " ++
+            "the point, and swapping it computes something real, different, and silent.",
+    },
+    .{
+        .name = "ObsNormalizer",
+        .text = "Running mean/variance for a policy's input. WELFORD, not sum-of-squares: a " ++
+            "joint held near 1.5 rad with sd 0.01 makes the naive variance go negative.",
+    },
+    .{
+        .name = "apply",
+        .text = "Normalise, PURELY. It never touches the statistics, so evaluation cannot drift " ++
+            "into a normalisation the policy never trained with.",
+    },
+    .{
+        .name = "observe",
+        .text = "Fold one observation into the running statistics. Collection only - the split " ++
+            "from `apply` is what makes evaluation correct by construction.",
+    },
+    .{
+        .name = "deterministic",
+        .text = "The evaluation action: `tanh(mean)`, no noise. The MODE, not the mean of the " ++
+            "squashed distribution - tanh is not linear, so those differ.",
+    },
+    .{
+        .name = "greedy",
+        .text = "The discrete evaluation action. Ties go to the lowest index - not because that " ++
+            "is better, but because it is DECIDED and therefore reproducible.",
+    },
+    .{
+        .name = "gradientOf",
+        .text = "A gradient AS A GRAPH NODE, so it can be squared, summed and differentiated " ++
+            "again. What a gradient penalty needs, and what `backward` cannot give.",
+    },
+    .{
+        .name = "sinusoidalEmbedding",
+        .text = "A timestep or position as sinusoids at geometrically spaced frequencies - far " ++
+            "apart where behaviour should differ, close where it should not.",
+    },
+    .{
+        .name = "classifierFreeGuidance",
+        .text = "Extrapolate a conditional prediction away from an unconditional one. Both 0 " ++
+            "and 1 are fixed points; only beyond 1 does anything happen.",
+    },
+    .{
+        .name = "emaUpdate",
+        .text = "`polyakUpdate` under the name its other users know. Takes DECAY, the large " ++
+            "number, where polyak takes follow, the small one - they differ by exactly 1.",
+    },
+    .{
+        .name = "adaptiveLayerNorm",
+        .text = "LayerNorm whose gain and bias come from a conditioning signal - how a timestep " ++
+            "or a goal reaches a whole layer. The gain is `1 + c`, so zero is the identity.",
+    },
+    .{
+        .name = "NoiseSchedule",
+        .text = "`linear` or `cosine`. Linear destroys the signal early, so half the model's " ++
+            "capacity goes to steps that are already noise; cosine keeps it alive longer.",
+    },
+    .{
+        .name = "betaSchedule",
+        .text = "How much variance each diffusion step adds - a statement about where the model " ++
+            "spends its capacity.",
+    },
+    .{
+        .name = "alphasCumprod",
+        .text = "The cumulative signal fraction. Computed ONCE - recomputing the product inside " ++
+            "a sampling loop makes generation quadratic in the step count.",
+    },
+    .{
+        .name = "addNoise",
+        .text = "The forward process. The two coefficients square to one, so variance is " ++
+            "preserved at every timestep - which is what lets ONE model handle them all.",
+    },
+    .{
+        .name = "diffusionReverseStep",
+        .text = "One reverse step. DDPM and DDIM are ONE update with a parameter - `eta` is how " ++
+            "much fresh noise enters, zero deterministic, one the original chain.",
+    },
+    .{
+        .name = "x0FromEpsilon",
+        .text = "The clean sample from a noise prediction - the partner of `epsilonFromX0`.",
+    },
+    .{
+        .name = "epsilonFromX0",
+        .text = "Recover the noise from a prediction of the clean sample. Models predict one of " ++
+            "the two and the sampling loops need the other.",
+    },
+    .{
+        .name = "scaledDotProductAttention",
+        .text = "`softmax(QK^T/sqrt(d))V`, composed from tape ops so there is no new backward. " ++
+            "The `1/sqrt(d)` is the part people drop, and dropping it makes wider models train worse.",
+    },
+    .{
+        .name = "encoderBlock",
+        .text = "One PRE-norm transformer block. Pre-norm leaves a path from input to output " ++
+            "through no normalisation, so gradient reaches the first layer undiminished.",
+    },
+    .{
+        .name = "EncoderWeights",
+        .text = "One block's six projections, named - because six `Var`s in a row is six chances " ++
+            "to swap two, and swapping `wq` with `wk` computes attention backwards and still trains.",
+    },
+    .{
+        .name = "dtwDistance",
+        .text = "Dynamic Time Warping: the same motion at a different SPEED costs zero, which " ++
+            "frame-by-frame comparison cannot say. A metric, not a loss - no gradient.",
+    },
+    .{
+        .name = "trackingKernel",
+        .text = "`weight * exp(-alpha * |error|)`. Maps every term into (0,1] so `weight` sets " ++
+            "importance deliberately, instead of whichever quantity has the largest units.",
+    },
+    .{
+        .name = "mixRewards",
+        .text = "Task and style by weight. Named because HIL adds the style reward to the " ++
+            "TRACKING mode too - the detail that bridges its two modes.",
+    },
+    .{
+        .name = "squashCorrection",
+        .text = "SAC's tanh log-density correction, written the stable way. The textbook form " ++
+            "is log(0) at a saturated action - which is where a converged policy lives.",
+    },
+    .{
+        .name = "discriminatorReward",
+        .text = "The adversarial style reward, `-log(1 - D)`. The floor binds when the policy " ++
+            "is WINNING - an unbounded reward collapses the run at the moment it succeeds.",
+    },
+    .{
+        .name = "l2NormalizeRows",
+        .text = "Scale each row to unit length. Without it ASE's encoder reward stops being a " ++
+            "cosine and the diversity objective becomes a magnitude contest.",
+    },
+    .{
+        .name = "advantageWeights",
+        .text = "AWR's per-sample weights, bounded BOTH ways. Uncapped, one outlier owns the " ++
+            "batch; unfloored, a below-average minibatch weighs zero and looks converged.",
+    },
+    .{
+        .name = "maskedMean",
+        .text = "Mean over the kept entries. An empty mask is an ERROR - returning zero for " ++
+            "nothing-selected is wrong in the direction that hides.",
+    },
+    .{
+        .name = "stepParameters",
+        .text = "Descend every parameter once. The one place the optimiser lives, which is what " ++
+            "makes swapping SGD for Adam a small change.",
+    },
+    .{
+        .name = "reduceRows",
+        .text = "Fold each row to one number - sum, max or mean. The tape had no axis " ++
+            "reduction, so this was open-coded as a matmul-with-ones in five places.",
+    },
+    .{
+        .name = "RowReduction",
+        .text = "Which fold `reduceRows` applies. `mean` is composed from `sum` and a scale, " ++
+            "not a third op - two implementations of one derivative is how they drift.",
+    },
+    .{
+        .name = "squaredRowNorm",
+        .text = "`sum(x^2)` per row - the shape a gradient penalty is measured in.",
+    },
+    .{
+        .name = "rowDot",
+        .text = "`sum(a*b)` per row. A cosine similarity when both sides are unit-length, " ++
+            "which is what an encoder reward assumes and normalisation is responsible for.",
+    },
+    .{
+        .name = "min",
+        .text = "Elementwise minimum on the tape - the pessimism TD3 and DroQ are built on. The " ++
+            "whole gradient goes to the winner; ties go left, never half to each.",
+    },
+    .{
+        .name = "klGaussianDiag",
+        .text = "Gaussian KL to a FIXED reference, on the tape - a motion prior or a trust " ++
+            "region. The reference is a constant so the optimiser cannot train it to agree.",
+    },
+    .{
+        .name = "categoricalLogProb",
+        .text = "Per-sample discrete log-probability on the tape.  reduces to a " ++
+            "scalar and PPO needs one per sample - a mean cannot be un-meaned.",
+    },
+    .{
+        .name = "squashedReparameterize",
+        .text = "SAC's reparameterised action AND its log-prob, on the tape. The tanh " ++
+            "correction uses the softplus form: the textbook one is log(0) at a saturated action.",
+    },
+    .{
+        .name = "SquashedDraw",
+        .text = "What `squashedReparameterize` returns - the action for the critic, the " ++
+            "log-probability for the entropy term.",
+    },
+    .{
+        .name = "diagGaussianLogProb",
+        .text = "A diagonal Gaussian's log-density ON THE TAPE - the missing link between a " ++
+            "network that outputs mean/log_std and a loss that can be descended.",
+    },
+    .{
+        .name = "RolloutBuffer",
+        .text = "A fixed-horizon on-policy rollout. REFUSES TO WRAP: GAE is a backward " ++
+            "recurrence, so overwriting the start corrupts every advantage built on it.",
+    },
+    .{
+        .name = "record",
+        .text = "One step. `terminal` and `truncated` are separate arguments because they do " ++
+            "different things to the recurrence - one kills the bootstrap, one only the trace.",
+    },
+    .{
+        .name = "advantages",
+        .text = "GAE over what was recorded. Output slices must be exactly `len` long - a short " ++
+            "one is a shape error, not a silent partial rollout.",
+    },
+    .{
+        .name = "logProbs",
+        .text = "The log-probabilities the ACTING policy assigned. PPO's ratio is against these, " ++
+            "not a recomputed value - the policy has moved by update time.",
+    },
+    .{
+        .name = "capacity",
+        .text = "The rollout's horizon. Fixed at init; `record` fails rather than wrapping.",
+    },
+    .{
+        .name = "isFull",
+        .text = "Whether the horizon is complete and the rollout is ready to update from.",
+    },
+    .{
+        .name = "clear",
+        .text = "Start a new rollout. `len` bounds every read, so stale values below it are " ++
+            "unreachable rather than needing to be zeroed.",
+    },
+    .{
+        .name = "OrnsteinUhlenbeck",
+        .text = "Exploration noise CORRELATED IN TIME. Independent noise on a torque averages " ++
+            "to nothing against a mass - the joint never reaches the states a sustained push would.",
+    },
+    .{
+        .name = "forActionDim",
+        .text = "SAC's target entropy from the action dimensionality. A diagonal Gaussian's " ++
+            "entropy is a SUM over dimensions, so the target has to scale with them.",
+    },
+    .{
+        .name = "ppoEpoch",
+        .text = "One PPO epoch: shuffle, walk, gather, objective, average. Statistics are " ++
+            "weighted by minibatch SIZE, so the short final stride does not skew `approx_kl`.",
+    },
+    .{
+        .name = "MinibatchOrder",
+        .text = "The shuffled minibatch walk every on-policy update needs, owned ONCE - znum has " ++
+            "two copies, 61% identical and already diverged.",
+    },
+    .{
+        .name = "reshuffle",
+        .text = "Fisher-Yates for one epoch. Resets to identity first, so (rng, epoch) NAMES a " ++
+            "permutation instead of depending on what ran before.",
+    },
+    .{
+        .name = "strides",
+        .text = "Strides per epoch, counting a SHORT final one - dropping it would silently " ++
+            "discard up to size-1 samples every epoch.",
+    },
+    .{
+        .name = "ppoClipSample",
+        .text = "PPO's clipped surrogate for ONE sample - the whole algorithm in five lines. " ++
+            "Scalar-first so a SPIR-V kernel can call the same function the CPU loop does.",
+    },
+    .{
+        .name = "validate",
+        .text = "Refuses a transition that is both terminal AND truncated - a contradiction the " ++
+            "caller does not know it has, because the two flags arrive from different places.",
+    },
+    .{
+        .name = "bootstraps",
+        .text = "Whether the target reaches into the next state. TRUE for a truncated step: the " ++
+            "world did not end, only the looking did.",
+    },
+    .{
+        .name = "numericalGrad",
+        .text = "Central difference for losses the TAPE cannot see. Owns the restore-exactly " ++
+            "bookkeeping, which is where the mistakes live.",
+    },
+    .{
+        .name = "numericalGradWorst",
+        .text = "The same sweep reporting one worst-case ratio instead of a tensor.",
+    },
+    .{
+        .name = "hessenberg",
+        .text = "Zero below the first subdiagonal, from BOTH sides - one side would keep the " ++
+            "shape and lose the eigenvalues.",
+    },
+    .{
+        .name = "eig",
+        .text = "General real matrices, so eigenvalues may be complex. Real Schur form: a " ++
+            "2x2 block IS a conjugate pair. Values only, not vectors.",
+    },
+    .{
+        .name = "Dataset",
+        .text = "Rows of inputs paired with rows of targets. Row counts checked at construction.",
+    },
+    .{
+        .name = "LoaderOptions",
+        .text = "Batch size, shuffle, seed. Shuffle off makes a run reproducible in order too.",
+    },
+    .{
+        .name = "DataLoader",
+        .text = "Whole batches only - the graph's leaf is a fixed height, so a short tail cannot run.",
+    },
+    .{
+        .name = "numBatches",
+        .text = "rows / batch, truncated. Never rounds up to a batch that cannot be fed.",
+    },
+    .{
+        .name = "reshuffle",
+        .text = "Start an epoch. Permutes an index array, never the caller's data.",
+    },
+    .{
+        .name = "Fitting",
+        .text = "What fit needs: the graph, the input and target LEAVES, the loss, weights and nodes.",
+    },
+    .{
+        .name = "Fit",
+        .text = "Epochs, Adam hyperparameters, weight decay.",
+    },
+    .{
+        .name = "FitReport",
+        .text = "Both ends of the curve plus the final epoch's mean, which one unlucky batch cannot skew.",
+    },
+    .{
+        .name = "fit",
+        .text = "The training loop, written ONCE. A hand-rolled one that skips a layer still shows a falling loss.",
+    },
+    .{
+        .name = "BiLSTM",
+        .text = "Both directions, joined per position. Separate weights each way - 24 parameters.",
+    },
+    .{
+        .name = "StackedLSTM",
+        .text = "Layers reading layers. The stack fixes the widths, so they cannot fail to meet.",
+    },
+    .{
+        .name = "parameterCount",
+        .text = "Twelve per layer. `run` fills a slice of exactly this length or errors.",
+    },
+    .{
+        .name = "LSTM",
+        .text = "The cell over a sequence. Binds the weights ONCE - that is what makes it BPTT.",
+    },
+    .{
+        .name = "GruCell",
+        .text = "Nine weights, not twelve. No gate is biased open: the update gate sits on BOTH " ++
+            "sides of the interpolation, so opening it would shut the candidate out.",
+    },
+    .{
+        .name = "GRU",
+        .text = "The GRU over a sequence. Binds once, threads one state instead of two.",
+    },
+    .{
+        .name = "Bound",
+        .text = "The cell's weights bound ONCE - twelve for the LSTM, nine for the GRU. " ++
+            "Re-binding per step is the silent bug.",
+    },
+    .{
+        .name = "BoundGate",
+        .text = "One gate's three nodes, already on the tape.",
+    },
+    .{
+        .name = "bind",
+        .text = "Put the cell's weights on the tape, once, before the sequence loop.",
+    },
+    .{
+        .name = "stepBound",
+        .text = "One timestep using weights ALREADY bound, so the gradient accumulates across time.",
+    },
+    .{
+        .name = "zeroState",
+        .text = "A (batch, hidden) tensor of zeros, for the start of a sequence.",
+    },
+    .{
+        .name = "run",
+        .text = "The sequence loop. Threads the state rather than storing it, so call order cannot lie.",
+    },
+    .{
         .name = "Attention",
         .text = "Whether it can see the future is an ARGUMENT. Scale from the shape.",
     },
@@ -541,8 +1010,7 @@ const notes = [_]Note{
         .text = "PRE-norm: the residual path is clear, so no warmup is needed.",
     },
     .{ .name = "Look", .text = "everywhere or backward_only. Required at every call." },
-    .{ .name = "Gate", .text = "One gate reads both the input and the previous hidden state." },
-    .{ .name = "Stepped", .text = "hidden AND cell - two states, and confusing them is the classic bug." },
+    .{ .name = "Stepped", .text = "One timestep's output: hidden AND cell for the LSTM, hidden alone for the GRU." },
     .{ .name = "step", .text = "One timestep, built from tape ops so the gradient is free." },
     .{ .name = "Use", .text = "training or inference. Required at every attach." },
     .{ .name = "observe", .text = "Moves the running statistics. Separate, because attach only reads." },
@@ -864,6 +1332,64 @@ fn noteFor(name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Names carrying more than one note.
+///
+/// `noteFor` returns the FIRST match, so a second entry under the same name is dead text that
+/// renders nowhere - and nothing said so. It was found by hand: `Gate` had two notes, and every
+/// `Gate` row in the table (including `LstmCell`'s and `GruCell`'s) was rendering the gated
+/// unit's "sigmoid or silu, chosen at comptime" while the note actually written for the cells
+/// sat unused. `Stepped` and `Bound` had the same shape once the GRU arrived, each asserting the
+/// LSTM's parameter count over the GRU's rows.
+///
+/// This REPORTS rather than fails. The design in the comment on `notes` is deliberate - one note
+/// covering both owners, with the signature column telling them apart - and it is right for
+/// generic names like `init`. It only breaks when a note makes an owner-SPECIFIC claim, which is
+/// a judgement per name rather than something a scanner can settle. So the list is printed, and
+/// each entry is a question for a human: is one note true of every owner, or does the text need
+/// to widen?
+fn reportDuplicateNotes(gpa: Allocator) !void {
+    var seen: std.ArrayList([]const u8) = .empty;
+    defer seen.deinit(gpa);
+    var reported: usize = 0;
+    for (notes, 0..) |entry, i| {
+        var already: bool = false;
+        for (notes[0..i]) |earlier| {
+            if (std.mem.eql(u8, earlier.name, entry.name)) {
+                already = true;
+                break;
+            }
+        }
+        if (!already) {
+            continue;
+        }
+        var listed: bool = false;
+        for (seen.items) |s| {
+            if (std.mem.eql(u8, s, entry.name)) {
+                listed = true;
+                break;
+            }
+        }
+        if (listed) {
+            continue;
+        }
+        try seen.append(gpa, entry.name);
+        reported += 1;
+    }
+    if (reported == 0) {
+        return;
+    }
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(gpa);
+    for (seen.items) |s| {
+        try line.appendSlice(gpa, s);
+        try line.append(gpa, ' ');
+    }
+    std.debug.print(
+        "zimrnum_ref: {d} name(s) carry more than one note; only the FIRST renders: {s}\n",
+        .{ reported, line.items },
+    );
+}
+
 /// Append `text` with the three characters that would otherwise be markup escaped.
 fn appendEscaped(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
     for (text) |c| {
@@ -968,13 +1494,23 @@ fn insertSourceFolds(
 
     var out: std.ArrayList(u8) = .empty;
     var cursor: usize = 0;
-    const example_open: []const u8 = "<pre><code>";
+    // ── `<pre><code` WITHOUT THE CLOSING `>` ──
+    //
+    // This was `"<pre><code>"`, an exact match, and then the docs restyling gave every block a
+    // `class="zig"`. **148 of the tutorial's 241 example blocks silently stopped being checked**
+    // - the scanner found 93 and reported success, so nothing said a word. The arity check has
+    // been running on a minority of the document ever since.
+    //
+    // Matching the prefix and skipping to the `>` is what `doc-sync` had to be taught for the
+    // same reason; the two scanners had the same bug three weeks apart.
+    const example_open: []const u8 = "<pre><code";
     const example_close: []const u8 = "</code></pre>";
     while (std.mem.indexOfPos(u8, clean, cursor, example_open)) |hit| {
         if (hit >= prose_end) {
             break;
         }
-        const body_at: usize = hit + example_open.len;
+        const tag_end: usize = std.mem.indexOfPos(u8, clean, hit, ">") orelse break;
+        const body_at: usize = tag_end + 1;
         const body_end: usize = std.mem.indexOfPos(u8, clean, body_at, example_close) orelse break;
         const after: usize = body_end + example_close.len;
         try out.appendSlice(gpa, clean[cursor..after]);
@@ -1005,6 +1541,9 @@ fn insertSourceFolds(
             if (clean[stop] == '(') {
                 var depth: usize = 0;
                 var given: usize = 0;
+                var arg_start: usize = 0;
+                var arg_text: std.ArrayList([]const u8) = .empty;
+                defer arg_text.deinit(gpa);
                 var in_arg: bool = false;
                 // A COMMA INSIDE A STRING IS NOT AN ARGUMENT SEPARATOR
                 //
@@ -1045,6 +1584,7 @@ fn insertSourceFolds(
                             depth -= 1;
                             if (depth == 0) {
                                 if (in_arg) {
+                                    try arg_text.append(gpa, trimArg(clean[arg_start..walk_at]));
                                     given += 1;
                                 }
                                 break;
@@ -1052,12 +1592,16 @@ fn insertSourceFolds(
                         },
                         ',' => if (depth == 1) {
                             if (in_arg) {
+                                try arg_text.append(gpa, trimArg(clean[arg_start..walk_at]));
                                 given += 1;
                             }
                             in_arg = false;
                         },
                         ' ', '\n' => {},
                         else => if (depth == 1) {
+                            if (!in_arg) {
+                                arg_start = walk_at;
+                            }
                             in_arg = true;
                         },
                     }
@@ -1073,6 +1617,31 @@ fn insertSourceFolds(
                                     "it takes {d}. Fix the example or the function.",
                                 .{ name, given, wants },
                             );
+                        }
+
+                        // ── TYPE SLOTS, now that the arity agrees ──
+                        //
+                        // Only the `comptime …: type` positions are judged. A scalar type name
+                        // in a VALUE slot, or a literal in a TYPE slot, is wrong whatever the
+                        // surrounding types resolve to - no type checker needed. Everything
+                        // else is left alone deliberately: an identifier could name either.
+                        if (arg_text.items.len == decl.type_params.len) {
+                            for (arg_text.items, decl.type_params, 0..) |arg, is_type_slot, idx| {
+                                if (is_type_slot and isClearlyNotAType(arg)) {
+                                    std.process.fatal(
+                                        "zimrnum_ref: the tutorial passes `{s}` as argument {d} " ++
+                                            "of zn.{s}, but that parameter is `comptime …: type`.",
+                                        .{ arg, idx + 1, name },
+                                    );
+                                }
+                                if (!is_type_slot and isScalarTypeName(arg)) {
+                                    std.process.fatal(
+                                        "zimrnum_ref: the tutorial passes the TYPE `{s}` as " ++
+                                            "argument {d} of zn.{s}, which takes a value there.",
+                                        .{ arg, idx + 1, name },
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -1098,9 +1667,9 @@ fn insertSourceFolds(
                 if (!std.mem.eql(u8, decl.name, name)) {
                     continue;
                 }
-                try body.appendSlice(gpa, "<details><summary><code>");
+                try body.appendSlice(gpa, "<details class=\"src-fold\"><summary><code>");
                 try body.appendSlice(gpa, name);
-                try body.appendSlice(gpa, "</code></summary><pre class=\"zn-code\"><code>");
+                try body.appendSlice(gpa, "</code></summary><pre><code class=\"zig\">");
                 try appendEscaped(gpa, &body, decl.source);
                 try body.appendSlice(gpa, "</code></pre></details>\n");
                 emitted.* += 1;
@@ -1131,7 +1700,53 @@ const Extract = struct {
     /// written `zn.takeRows(gpa, column, rows)` when the signature gained a `comptime T` still
     /// attaches its fold and still reads plausibly, and a reader who copies it loses an hour.
     params: ?usize,
+    /// Which parameter positions are `comptime <name>: type`.
+    ///
+    /// Arity alone cannot tell `zn.mean(f64, t)` from `zn.mean(t, f64)` - both are two
+    /// arguments and both attach their fold. A TYPE parameter is the one position where the
+    /// distinction is visible without a type checker: `f64` in a value slot, or a literal in a
+    /// type slot, is wrong no matter what the surrounding types resolve to.
+    type_params: []const bool,
 };
+
+/// The scalar type names an argument can be spelled with. A bare one of these in a slot that is
+/// NOT `comptime …: type` is the mistake this catches; anything else - an identifier, a call,
+/// `Tensor(f64)` - is left alone, because deciding those needs the compiler.
+const scalar_type_names = [_][]const u8{
+    "f16",  "f32",   "f64",   "f80",  "f128",      "i8",  "i16", "i32",
+    "i64",  "i128",  "isize", "u1",   "u8",        "u16", "u32", "u64",
+    "u128", "usize", "bool",  "void", "anyopaque",
+};
+
+/// An argument's source text, minus surrounding whitespace and any trailing comment.
+fn trimArg(raw: []const u8) []const u8 {
+    var text: []const u8 = std.mem.trim(u8, raw, " \t\n\r");
+    if (std.mem.indexOf(u8, text, "//")) |cut| {
+        text = std.mem.trim(u8, text[0..cut], " \t\n\r");
+    }
+    return text;
+}
+
+fn isScalarTypeName(text: []const u8) bool {
+    for (scalar_type_names) |name| {
+        if (std.mem.eql(u8, text, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// True for a literal that CANNOT be a type: a number, an enum literal, a string, a `&`-ref.
+/// Deliberately narrow - an identifier might name a type, so it is not listed.
+fn isClearlyNotAType(text: []const u8) bool {
+    if (text.len == 0) {
+        return false;
+    }
+    return switch (text[0]) {
+        '0'...'9', '.', '"', '\'', '&', '-' => true,
+        else => false,
+    };
+}
 
 /// Every top-level declaration in `path`, with its exact span.
 ///
@@ -1203,6 +1818,34 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
             }
             param_count = counted;
         }
+
+        // ── WHICH PARAMETERS ARE `comptime <name>: type` ──
+        //
+        // Walked from the fn proto rather than the token stream used above, because the proto
+        // hands back each parameter's type NODE and the answer is then exact: the type
+        // expression is the single token `type`. A token scan would have to re-derive where one
+        // parameter ends and the next begins, which is the part the arity counter above already
+        // gets subtly wrong on nested parens.
+        var type_flags: std.ArrayList(bool) = .empty;
+        if (tag == .fn_decl) {
+            var proto_buf: [1]std.zig.Ast.Node.Index = undefined;
+            if (ast.fullFnProto(&proto_buf, node)) |proto| {
+                var params: std.zig.Ast.full.FnProto.Iterator = proto.iterate(&ast);
+                while (params.next()) |param| {
+                    const is_type: bool = blk: {
+                        const type_node: std.zig.Ast.Node.Index =
+                            param.type_expr orelse break :blk false;
+                        const first: std.zig.Ast.TokenIndex = ast.firstToken(type_node);
+                        const last: std.zig.Ast.TokenIndex = ast.lastToken(type_node);
+                        if (first != last) {
+                            break :blk false;
+                        }
+                        break :blk std.mem.eql(u8, ast.tokenSlice(first), "type");
+                    };
+                    try type_flags.append(gpa, is_type);
+                }
+            }
+        }
         const first: std.zig.Ast.TokenIndex = ast.firstToken(node);
         const last: std.zig.Ast.TokenIndex = ast.lastToken(node);
         var begin: usize = ast.tokenStart(first);
@@ -1223,7 +1866,12 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
         const decl_line: []const u8 = source[ast.tokenStart(first)..@min(ast.tokenStart(first) + 200, source.len)];
         const line_end: usize = std.mem.indexOfScalar(u8, decl_line, '\n') orelse decl_line.len;
         const name: []const u8 = declName(decl_line[0..line_end]) orelse continue;
-        try out.append(gpa, .{ .name = name, .source = text, .params = param_count });
+        try out.append(gpa, .{
+            .name = name,
+            .source = text,
+            .params = param_count,
+            .type_params = try type_flags.toOwnedSlice(gpa),
+        });
     }
     return out.items;
 }
@@ -1408,6 +2056,10 @@ pub fn main(init: std.process.Init) !void {
     try out.appendSlice(gpa, rows.items);
     try out.appendSlice(gpa, doc_with_folds[rows_end..]);
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = doc_path, .data = out.items });
+
+    // A second note under a name already used is dead text, because `noteFor` returns the first.
+    // Reported, not fatal - see the note on `reportDuplicateNotes`.
+    try reportDuplicateNotes(gpa);
 
     // A declaration with no note is the one failure this tool can still have, so it names them
     // rather than leaving a silently blank column.

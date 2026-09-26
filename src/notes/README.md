@@ -1,3 +1,3 @@
 # zimr
 
-<https://simonclavet.codeberg.page/Zimr/readme.html>
+<https://simonclavet.github.io/zimr/readme.html>

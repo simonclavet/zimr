@@ -152,7 +152,7 @@ fn update(f: *z.Frame, s: *State) void {
                     var buf: [128]u8 = undefined;
                     var i: usize = range.start;
                     while (i < range.end) : (i += 1) {
-                        const t = rowText(&buf, i);
+                        const t: []const u8 = rowText(&buf, i);
                         u.text("{s}", .{t});
                         submitted += 1;
                     }
@@ -162,7 +162,7 @@ fn update(f: *z.Frame, s: *State) void {
                 var buf: [128]u8 = undefined;
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
-                    const t = rowText(&buf, i);
+                    const t: []const u8 = rowText(&buf, i);
                     u.text("{s}", .{t});
                     submitted += 1;
                 }

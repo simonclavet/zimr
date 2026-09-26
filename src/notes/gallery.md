@@ -6,7 +6,7 @@ Restore the examples gallery: a static page listing all examples as cards
 buttons + a name/function search box. Clicking a card runs that example,
 **streaming its `.wasm` as a separate file** (NOT a fat self-contained
 standalone). `zig build serve` serves the whole thing locally; `zig build dist`
-emits it for the codeberg deploy.
+emits it for the GitHub Pages deploy.
 
 Reference of the old rendered page: the saved view-source the gallery looked like
 before (Downloads/view-source_..._Zimr_.html) — its inline `<script type=module>`
@@ -67,7 +67,7 @@ zig-out/web/
 4. **Wire serve/dist.** `all-examples` (or a new `site` step) assembles the serve
    root (gallery + manifest + per-example streaming pages + wasm). `zig build
    serve` roots there already. `zig build dist` emits the same tree into
-   `prebuilt/` for codeberg.
+   `prebuilt/` for GitHub Pages.
 
 ## First provable slice
 - Phase 1 on ONE example (e.g. `shapes_showcase`): streaming page + wasm under

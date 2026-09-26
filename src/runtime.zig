@@ -261,11 +261,11 @@ pub const core = struct {
         time: *TimeState,
         fps: *FpsState,
     ) void {
-        time.base = nowFn() / 1000.0; // ms → s
-        time.current = 0;
-        time.previous = 0;
-        time.delta_time = 0;
-        time.frameCounter = 0;
+        // A clock RESET, not raw memory: everything back to its default - except the target frame time,
+        // which `setTargetFPS` may have set before (a restart must keep it). Named, so what survives a
+        // reset is written down rather than implied by which fields a list of assignments forgot.
+        const target: f64 = time.target;
+        time.* = .{ .base = nowFn() / 1000.0, .target = target }; // ms -> s
         fps.* = .{};
     }
 
@@ -651,13 +651,21 @@ pub const core = struct {
             gpa.free(df.bytes);
         };
         while (i < count) : (i += 1) {
-            const blen = dom.dropped_file_byte_len(i);
-            const nlen = dom.dropped_file_name_len(i);
+            // Lengths come back from the host FIRST, so the buffers can be sized exactly before the
+            // second call copies into them - the bridge cannot allocate on zimr's behalf.
+            const blen: u32 = dom.dropped_file_byte_len(i);
+            const nlen: u32 = dom.dropped_file_name_len(i);
             const bytes = try gpa.alloc(u8, @intCast(blen));
             errdefer gpa.free(bytes);
             const name = try gpa.alloc(u8, @intCast(nlen));
-            if (blen > 0) dom.dropped_file_bytes(i, bytes.ptr, blen);
-            if (nlen > 0) dom.dropped_file_name(i, name.ptr, nlen);
+            // A zero-length file or name is legal; skipping the copy avoids handing the host a
+            // pointer into a zero-sized allocation.
+            if (blen > 0) {
+                dom.dropped_file_bytes(i, bytes.ptr, blen);
+            }
+            if (nlen > 0) {
+                dom.dropped_file_name(i, name.ptr, nlen);
+            }
             out[@intCast(i)] = .{ .name = name, .bytes = bytes };
         }
         return out;
@@ -3011,7 +3019,9 @@ pub const input = struct {
         // pass-through path the JS shim depends on for unrecognized keys.
         var i: i32 = 1;
         while (i <= 16) : (i += 1) {
-            const got = getKeyPressed(&state) orelse return error.TestExpectedKey;
+            // The queue must yield exactly as many keys as were pushed, in order - running dry
+            // early is a failure, not an empty result.
+            const got: KeyboardKey = getKeyPressed(&state) orelse return error.TestExpectedKey;
             try expect(@backingInt(got) == i);
         }
         try expect(getKeyPressed(&state) == null); // Exhausted.
@@ -3414,8 +3424,12 @@ pub const input = struct {
         // Frames 2-30: holding.
         var f: usize = 2;
         while (f <= 30) : (f += 1) {
-            if (isKeyPressed(&state, K_A)) pressed_count += 1;
-            if (isKeyReleased(&state, K_A)) released_count += 1;
+            if (isKeyPressed(&state, K_A)) {
+                pressed_count += 1;
+            }
+            if (isKeyReleased(&state, K_A)) {
+                released_count += 1;
+            }
             _testEndFrame(&state);
         }
 
@@ -3431,8 +3445,12 @@ pub const input = struct {
 
         // Frames 32-60: idle.
         while (f <= 60) : (f += 1) {
-            if (isKeyPressed(&state, K_A)) pressed_count += 1;
-            if (isKeyReleased(&state, K_A)) released_count += 1;
+            if (isKeyPressed(&state, K_A)) {
+                pressed_count += 1;
+            }
+            if (isKeyReleased(&state, K_A)) {
+                released_count += 1;
+            }
             _testEndFrame(&state);
         }
 
@@ -4513,7 +4531,7 @@ pub const effects = struct {
             const r: Rng = b.rng();
             var i: usize = 0;
             while (i < 100) : (i += 1) {
-                const v = r.value(10, 20);
+                const v: i32 = r.value(10, 20);
                 try expect(v >= 10 and v <= 20);
             }
         }
@@ -4523,7 +4541,7 @@ pub const effects = struct {
             const r: Rng = b.rng();
             var i: usize = 0;
             while (i < 100) : (i += 1) {
-                const f = r.float01();
+                const f: f32 = r.float01();
                 try expect(f >= 0.0 and f < 1.0);
             }
         }
@@ -4571,7 +4589,9 @@ pub const effects = struct {
             var diffs: usize = 0;
             var i: usize = 0;
             while (i < 50) : (i += 1) {
-                if (a.rng().value(0, 1000) != b.rng().value(0, 1000)) diffs += 1;
+                if (a.rng().value(0, 1000) != b.rng().value(0, 1000)) {
+                    diffs += 1;
+                }
             }
             // Vanishingly unlikely all 50 collide by chance.
             try expect(diffs > 30);
@@ -4582,7 +4602,7 @@ pub const effects = struct {
             const r: Rng = s.rng();
             var i: usize = 0;
             while (i < 100) : (i += 1) {
-                const f = r.float01();
+                const f: f32 = r.float01();
                 try expect(f >= 0.0 and f < 1.0);
             }
         }
@@ -4618,7 +4638,11 @@ pub const effects = struct {
             var falses: usize = 0;
             var i: usize = 0;
             while (i < 100) : (i += 1) {
-                if (r.boolean()) trues += 1 else falses += 1;
+                if (r.boolean()) {
+                    trues += 1;
+                } else {
+                    falses += 1;
+                }
             }
             try expect(trues > 0 and falses > 0);
         }
@@ -4628,7 +4652,9 @@ pub const effects = struct {
             const r: Rng = s.rng();
             var i: usize = 0;
             while (i < 50) : (i += 1) {
-                const v = r.value(20, 10);
+                // Inverted range: `min` above `max`. The contract is that the bounds are sorted
+                // internally rather than trapping, so this must still land inside [10, 20].
+                const v: i32 = r.value(20, 10);
                 try expect(v >= 10 and v <= 20);
             }
         }

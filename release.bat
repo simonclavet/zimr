@@ -7,14 +7,19 @@ REM main stays source-only: prebuilt/ is gitignored and never committed to
 REM main.  This script builds prebuilt/, then publishes ITS CONTENTS to a
 REM single-commit (orphan) `pages` branch and force-pushes it.  Because the
 REM branch is rewritten from scratch each run, history never accumulates -
-REM the 1.1 GB gallery costs one copy on the remote instead of growing main
-REM (and blowing past Codeberg's repo-size budget).
+REM the gallery costs one copy on the remote instead of growing main.
 REM
-REM Codeberg serves the `pages` branch at
-REM   https://simonclavet.codeberg.page/Zimr/
+REM GitHub Pages serves the `pages` branch (Settings -> Pages -> Deploy from
+REM a branch -> `pages`, `/ (root)`) at
+REM   https://simonclavet.github.io/zimr/
+REM `zig build dist` writes a `.nojekyll` marker into prebuilt/ so Pages
+REM serves the files as-is instead of running them through Jekyll.
+REM
+REM GitHub limits: 100 MB per file (warns above 50 MB), 1 GB per Pages site.
 REM
 REM Source commits to main are a separate, manual concern - this script does
-REM not touch main.  Requires the Codeberg remote set up as `origin`.
+REM not touch main.  Requires the GitHub remote set up as `origin`
+REM (https://github.com/simonclavet/zimr.git).
 
 setlocal enabledelayedexpansion
 
@@ -30,7 +35,7 @@ git rev-parse --is-inside-work-tree >nul 2>nul
 if errorlevel 1 (
     echo.
     echo prebuilt\ refreshed.  Not a git repo - skipping pages publish.
-    echo Initialize git + add the Codeberg remote, then re-run.
+    echo Initialize git + add the GitHub remote, then re-run.
     exit /b 0
 )
 
@@ -80,5 +85,5 @@ if errorlevel 1 (
 
 echo.
 echo Release complete.  pages branch updated (main untouched).
-echo Live gallery: https://simonclavet.codeberg.page/Zimr/
+echo Live gallery: https://simonclavet.github.io/zimr/
 endlocal

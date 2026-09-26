@@ -49,7 +49,14 @@ fn update(f: *z.Frame, s: *State) void {
     }
     if (s.dragging) {
         s.ready = true;
+        // NOT `clamp`: `@max(lo, @min(hi, v))` applies the UPPER bound first, and `clamp` applies
+        // the lower first. They agree only while lo <= hi, and here they need not - drag the rect
+        // near the right edge and `w - s.rec.x` falls BELOW `handle_size`. The current form then
+        // yields `handle_size`, keeping the rect grabbable; `clamp` would yield the smaller upper
+        // bound and the handle would vanish.
+        // lint:off clamp-pattern: bounds can invert - see above
         s.rec.width = @max(handle_size, @min(mouse[0] - s.rec.x, w - s.rec.x));
+        // lint:off clamp-pattern: same as the width above
         s.rec.height = @max(handle_size, @min(mouse[1] - s.rec.y, h - s.rec.y));
         if (z.isMouseButtonReleased(f.input, .left)) {
             s.dragging = false;

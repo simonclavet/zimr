@@ -412,27 +412,31 @@ fn recurseHull(p1: Vec2, p2: Vec2, points: []const Vec2) Hull {
     var right_count: usize = 0;
 
     var best_index: usize = 0;
-    var best_distance: f32 = cross2(points[best_index] - p1, edge);
-    if (best_distance > 0.0) {
+    var best_signed_distance: f32 = cross2(points[best_index] - p1, edge);
+    if (best_signed_distance > 0.0) {
         right_points[right_count] = points[best_index];
         right_count += 1;
     }
 
     var i: usize = 1;
     while (i < points.len) : (i += 1) {
-        const distance: f32 = cross2(points[i] - p1, edge);
-        if (distance > best_distance) {
+        // SIGNED, and the sign is what the `> 0.0` test below reads: `edge` is a unit vector,
+        // so the 2D cross product gives the perpendicular distance from the p1->p2 line with a
+        // positive value meaning 'to the right of it'. A plain `distance` would both shadow
+        // `zm.distance2` and make `distance > 0.0` read as a tautology.
+        const signed_distance: f32 = cross2(points[i] - p1, edge);
+        if (signed_distance > best_signed_distance) {
             best_index = i;
-            best_distance = distance;
+            best_signed_distance = signed_distance;
         }
-        if (distance > 0.0) {
+        if (signed_distance > 0.0) {
             right_points[right_count] = points[i];
             right_count += 1;
         }
     }
 
     // No point is meaningfully off the edge — this edge is already a hull edge.
-    if (best_distance < 2.0 * linear_slop) {
+    if (best_signed_distance < 2.0 * linear_slop) {
         return hull;
     }
 
@@ -597,8 +601,11 @@ pub fn computeHull(input: []const Vec2) Hull {
             const s2: Vec2 = hull.points[ib];
             const s3: Vec2 = hull.points[ic];
             const r: Vec2 = normalizeOrZero2(s3 - s1);
-            const distance: f32 = cross2(s2 - s1, r);
-            if (distance <= 2.0 * linear_slop) {
+            // `r` is a UNIT vector, so the 2D cross product is the perpendicular distance of s2
+            // from the line s1->s3. Named `perp_distance` rather than `distance` because the bare
+            // name shadows `zm.distance2`, and because it is the distance to a LINE, not a point.
+            const perp_distance: f32 = cross2(s2 - s1, r);
+            if (perp_distance <= 2.0 * linear_slop) {
                 // s2 is collinear: shift the tail down over it.
                 var j: usize = ib;
                 while (j < hull.count - 1) : (j += 1) {
@@ -2654,7 +2661,9 @@ fn findMaxSeparation(poly: *const Polygon, other: *const Polygon) MaxSeparation 
         var j: usize = 0;
         while (j < other.count) : (j += 1) {
             const projection: f32 = dot2(normal, other.vertices[j] - vertex);
-            if (projection < deepest) deepest = projection;
+            if (projection < deepest) {
+                deepest = projection;
+            }
         }
         if (deepest > max_separation) {
             max_separation = deepest;
@@ -3321,7 +3330,9 @@ pub fn collideChainSegmentAndPolygon(
             var i: usize = 0;
             while (i < count) : (i += 1) {
                 const s: f32 = dot2(params.normal0, vertices[i] - p1);
-                if (s < s0) s0 = s;
+                if (s < s0) {
+                    s0 = s;
+                }
             }
             if (s0 > edge_separation) {
                 edge_separation = s0;
@@ -3333,7 +3344,9 @@ pub fn collideChainSegmentAndPolygon(
             var i: usize = 0;
             while (i < count) : (i += 1) {
                 const s: f32 = dot2(params.normal2, vertices[i] - p2);
-                if (s < s2) s2 = s;
+                if (s < s2) {
+                    s2 = s;
+                }
             }
             if (s2 > edge_separation) {
                 edge_separation = s2;
@@ -3348,7 +3361,9 @@ pub fn collideChainSegmentAndPolygon(
             var i: usize = 0;
             while (i < count) : (i += 1) {
                 const n: Vec2 = normals[i];
-                if (classifyNormal(params, -n) != .admit) continue;
+                if (classifyNormal(params, -n) != .admit) {
+                    continue;
+                }
                 const p: Vec2 = vertices[i];
                 const s: f32 = @min(dot2(n, p2 - p), dot2(n, p1 - p));
                 if (s > polygon_separation) {
@@ -5541,7 +5556,9 @@ fn applyRestitution(
             // relative_velocity is the (negative) approach speed captured in prepare.
             const approaching_too_slowly: bool = point.relative_velocity > -threshold;
             const never_touched: bool = point.total_normal_impulse == 0.0;
-            if (approaching_too_slowly or never_touched) continue;
+            if (approaching_too_slowly or never_touched) {
+                continue;
+            }
 
             const anchor_a: Vec2 = point.anchor_a;
             const anchor_b: Vec2 = point.anchor_b;
@@ -7858,7 +7875,9 @@ const ConstraintGraph = struct {
         if (type_a == .dynamic and type_b == .dynamic) {
             var c: u32 = 0;
             while (c < graph_dynamic_color_count) : (c += 1) {
-                if (self.getBit(c, body_a) or self.getBit(c, body_b)) continue;
+                if (self.getBit(c, body_a) or self.getBit(c, body_b)) {
+                    continue;
+                }
                 self.setBit(c, body_a);
                 self.setBit(c, body_b);
                 return c;
@@ -7866,14 +7885,18 @@ const ConstraintGraph = struct {
         } else if (type_a == .dynamic) {
             var c: u32 = graph_overflow_index - 1;
             while (c >= 1) : (c -= 1) {
-                if (self.getBit(c, body_a)) continue;
+                if (self.getBit(c, body_a)) {
+                    continue;
+                }
                 self.setBit(c, body_a);
                 return c;
             }
         } else if (type_b == .dynamic) {
             var c: u32 = graph_overflow_index - 1;
             while (c >= 1) : (c -= 1) {
-                if (self.getBit(c, body_b)) continue;
+                if (self.getBit(c, body_b)) {
+                    continue;
+                }
                 self.setBit(c, body_b);
                 return c;
             }
@@ -9678,7 +9701,9 @@ fn wakeIslandsTouchingActive(world: *World) void {
             const c: *const Contact = &world.contacts.data[contact_key >> 1];
             const edge: u32 = contact_key & 1;
             contact_key = if (edge == 0) c.edge_a.next_key else c.edge_b.next_key;
-            if (c.flags.touching == false) continue;
+            if (c.flags.touching == false) {
+                continue;
+            }
             const other: BodyIndex = if (edge == 0) c.body_b else c.body_a;
             if (world.bodies.data[other].motion_type == .dynamic and world.bodies.data[other].asleep) {
                 wakeBody(world, other);
@@ -10343,7 +10368,9 @@ fn rayCastPolygon(shape: Polygon, input: *const RayCastInput) CastOutput {
             const numerator: f32 = dot2(shape.normals[i], vertex - p1);
             const denominator: f32 = dot2(shape.normals[i], d);
             if (denominator == 0.0) {
-                if (numerator < 0.0) return output;
+                if (numerator < 0.0) {
+                    return output;
+                }
             } else {
                 if (denominator < 0.0 and numerator < lower * denominator) {
                     lower = numerator / denominator;
@@ -10352,7 +10379,9 @@ fn rayCastPolygon(shape: Polygon, input: *const RayCastInput) CastOutput {
                     upper = numerator / denominator;
                 }
             }
-            if (upper < lower) return output;
+            if (upper < lower) {
+                return output;
+            }
         }
 
         if (index >= 0) {
@@ -12525,7 +12554,10 @@ pub fn castShapeClosest(
     var t: usize = 0;
     while (t < 3) : (t += 1) {
         boxCastTree(&bp.trees[t], &input, filter.mask, castShapeClosestCallback, &ctx);
-        if (ctx.hit) input.max_fraction = ctx.result.fraction; // carry the clip across trees
+        // carry the clip across trees
+        if (ctx.hit) {
+            input.max_fraction = ctx.result.fraction;
+        }
     }
     return if (ctx.hit) ctx.result else null;
 }
@@ -13274,11 +13306,19 @@ pub fn draw(world: *World, dd: *const DebugDraw) !void {
     if (dd.draw_mass) {
         var i: u32 = 0;
         while (i < world.capacity) : (i += 1) {
-            if (seen[i] == false) continue;
+            if (seen[i] == false) {
+                continue;
+            }
             const b: *const Body = &world.bodies.data[i];
-            if (b.motion_type != .dynamic) continue;
-            if (dd.draw_line) |f| f(b.center0, b.center, colors.white_smoke, dd.context);
-            if (dd.draw_transform) |f| f(.{ .q = b.transform.q, .p = b.center }, dd.context);
+            if (b.motion_type != .dynamic) {
+                continue;
+            }
+            if (dd.draw_line) |f| {
+                f(b.center0, b.center, colors.white_smoke, dd.context);
+            }
+            if (dd.draw_transform) |f| {
+                f(.{ .q = b.transform.q, .p = b.center }, dd.context);
+            }
         }
     }
 }
@@ -13319,19 +13359,29 @@ fn drawContact(world: *World, dd: *const DebugDraw, c: *const Contact) void {
         const p: Vec2 = if (dd.draw_anchor_a) center_a + mp.anchor_a else center_b + mp.anchor_b;
         if (dd.draw_contacts) {
             if (mp.separation > linear_slop) {
-                if (dd.draw_point) |f| f(p, 5.0, colors.gainsboro, dd.context);
+                if (dd.draw_point) |f| {
+                    f(p, 5.0, colors.gainsboro, dd.context);
+                }
             } else if (mp.persisted == false) {
-                if (dd.draw_point) |f| f(p, 10.0, colors.green, dd.context);
+                if (dd.draw_point) |f| {
+                    f(p, 10.0, colors.green, dd.context);
+                }
             } else {
-                if (dd.draw_point) |f| f(p, 5.0, colors.blue, dd.context);
+                if (dd.draw_point) |f| {
+                    f(p, 5.0, colors.blue, dd.context);
+                }
             }
         }
         if (dd.draw_contact_normals) {
-            if (dd.draw_line) |f| f(p, mulAdd2(p, axis_scale, normal), colors.dim_gray, dd.context);
+            if (dd.draw_line) |f| {
+                f(p, mulAdd2(p, axis_scale, normal), colors.dim_gray, dd.context);
+            }
         } else if (dd.draw_contact_forces) {
             const force: f32 = 0.5 * mp.total_normal_impulse * world.inv_dt;
             const tip: Vec2 = mulAdd2(p, dd.force_scale * force, normal);
-            if (dd.draw_line) |f| f(p, tip, colors.magenta, dd.context);
+            if (dd.draw_line) |f| {
+                f(p, tip, colors.magenta, dd.context);
+            }
         }
     }
 }
@@ -13543,7 +13593,9 @@ pub fn collideMover(
     var t: usize = 0;
     while (t < 3) : (t += 1) {
         bp.trees[t].query(aabb, filter.mask, moverCollideCallback, &ctx);
-        if (ctx.stop) return;
+        if (ctx.stop) {
+            return;
+        }
     }
 }
 const MoverCastContext = struct {
@@ -13610,7 +13662,9 @@ pub fn castMover(
     var t: usize = 0;
     while (t < 3) : (t += 1) {
         boxCastTree(&bp.trees[t], &input, filter.mask, moverCastCallback, &ctx);
-        if (ctx.fraction == 0.0) break;
+        if (ctx.fraction == 0.0) {
+            break;
+        }
         input.max_fraction = ctx.fraction; // carry the clip across trees
     }
     return ctx.fraction;
@@ -14044,7 +14098,12 @@ fn solveWide(
             var delta_lambda: FloatW = -block.rolling_mass * (b.w - a.w);
             const lambda: FloatW = block.rolling_impulse;
             const max_lambda: FloatW = block.rolling_resistance * total_normal;
-            block.rolling_impulse = @max(@min(lambda + delta_lambda, max_lambda), -max_lambda);
+            // Symmetric cap at +/- max_lambda. `clamp` applies the LOWER bound first where the old
+            // `@max(@min(v, hi), lo)` applied the upper first; the two agree only while lo <= hi, so
+            // this substitution rests on `max_lambda >= 0`. It holds: `rolling_resistance` is a
+            // non-negative material property times a radius, and both accumulated normal impulses
+            // are `@max(..., zeroW)` at the point they are stored.
+            block.rolling_impulse = clamp(lambda + delta_lambda, -max_lambda, max_lambda);
             delta_lambda = block.rolling_impulse - lambda;
             a.w -= block.inv_inertia_a * delta_lambda;
             b.w += block.inv_inertia_b * delta_lambda;

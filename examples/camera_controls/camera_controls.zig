@@ -13,6 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const float = zm.float;
 
 const Camera3D = zm.Camera3D;
 const Color = zm.Color;
@@ -76,10 +77,10 @@ fn update(f: *z.Frame, s: *State) void {
     while (gx <= grid_n) : (gx += 2) {
         var gz: i32 = -grid_n;
         while (gz <= grid_n) : (gz += 2) {
-            const h: f32 = @mod(zm.float(gx * 7 + gz * 13 + 200), 360.0);
+            const h: f32 = @mod(float(gx * 7 + gz * 13 + 200), 360.0);
             const col: Color = z.colorFromHSV(h, 0.65, 0.95);
-            const fy: f32 = 0.5 + 0.25 * @sin(f.time.time + zm.float(gx + gz));
-            z.drawCube(f.gl, pointVec(zm.float(gx), fy, zm.float(gz)), .{
+            const fy: f32 = 0.5 + 0.25 * @sin(f.time.time + float(gx + gz));
+            z.drawCube(f.gl, pointVec(float(gx), fy, float(gz)), .{
                 .size = vec(1, 1 + fy, 1),
                 .color = col,
             });

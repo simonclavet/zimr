@@ -710,13 +710,13 @@ fn renderStride(s: *State, basis: *const CamBasis) void {
     while (y < rt_h) : (y += move_stride) {
         var x: i32 = 0;
         while (x < rt_w) : (x += move_stride) {
-            const ray = pixelRay(rng, basis, x, y);
+            const ray: Ray = pixelRay(rng, basis, x, y);
             // Shallower depth while moving (cap at 3) - the extra
             // bounces are invisible in motion + halve the per-ray
             // work.
             const depth: u32 = @min(3, @as(u32, @intCast(s.params.max_depth)));
-            const color = rayColor(rng, ray, &s.world, s.params, depth);
-            const display = tonemap(color);
+            const color: Vec = rayColor(rng, ray, &s.world, s.params, depth);
+            const display: Color = tonemap(color);
             // Splat this color across the move_stride × move_stride
             // pixel block.
             var dy: i32 = 0;
@@ -741,8 +741,8 @@ fn renderOneSample(s: *State, basis: *const CamBasis) void {
         var x: i32 = 0;
         while (x < rt_w) : (x += 1) {
             const idx: usize = @intCast(y * rt_w + x);
-            const ray = pixelRay(rng, basis, x, y);
-            const sample = rayColor(rng, ray, &s.world, s.params, @intCast(s.params.max_depth));
+            const ray: Ray = pixelRay(rng, basis, x, y);
+            const sample: Vec = rayColor(rng, ray, &s.world, s.params, @intCast(s.params.max_depth));
             s.accum[idx] = (s.accum[idx] + sample);
         }
     }

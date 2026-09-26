@@ -65,6 +65,7 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const allocPrint = std.fmt.allocPrint;
+const bufPrint = std.fmt.bufPrint;
 const endsWith = std.mem.endsWith;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
@@ -83,6 +84,13 @@ const Index = Ast.Node.Index;
 /// `replacement` is spliced in their place. A pure deletion uses `""`. Only
 /// rules whose repair is unambiguous attach one; everything else leaves it
 /// null and is reported for a human to fix by hand.
+///
+/// A rule hands `emitFix` a BORROWED replacement - a static string, a slice of
+/// the source, or a temporary it frees itself. `emitFixLC` copies it after the
+/// suppression check, and the `Issue` owns the copy. That split is the point:
+/// a rule that pre-allocated its replacement leaked it every time the line
+/// carried a `lint:off`, because the early return dropped a string the rule
+/// had already handed over.
 const Fix = struct {
     start: u32,
     end: u32,
@@ -94,9 +102,19 @@ const Issue = struct {
     line: u32, // 1-based
     col: u32, // 1-based
     tag: []const u8, // static string
-    message: []u8, // owned by issues arena
+    message: []u8, // owned - freed by `deinit`
     rule: u8, // claude.md rule number, 0 for bonus checks
-    fix: ?Fix = null, // present ⇒ `--fix` can repair this mechanically
+    fix: ?Fix = null, // present ⇒ `--fix` can repair this mechanically; replacement owned
+
+    /// Frees everything an issue owns: its message and its fix's replacement.
+    /// Every list of issues is torn down through this one function, so an owned
+    /// field added later has exactly one place to be freed.
+    fn deinit(self: Issue, gpa: Allocator) void {
+        gpa.free(self.message);
+        if (self.fix) |fix| {
+            gpa.free(fix.replacement);
+        }
+    }
 };
 
 /// A module's own declaration of how importers should name it, from a top-of-file
@@ -273,11 +291,20 @@ fn lineSuppressedByDirective(
     line_idx: u32,
     tag: []const u8,
 ) bool {
-    // `std-math` has NO opt-out: the only sanctioned fix is wrapping
-    // the function in zimrmath (gated on !is_gpu, with a GPU branch).
-    // A `// lint:off std-math` must NOT silence it.
+    // ── `std-math`: A FILE-LEVEL OPT-OUT ONLY, NEVER A PER-LINE ONE ──
+    //
+    // The ban exists for exactly one reason: std.math is host-only and does not reliably lower
+    // to SPIR-V. A file that can never reach a shader has no portability exposure, and applying
+    // the rule there is following it past its reason - it costs a real dependency and buys
+    // nothing. The standalone transpilers are that case: `c2js` gained a whole `zm` import for
+    // ONE `zm.nan(f64)`, which is a module dependency for a constant.
+    //
+    // But the escape is deliberately file-level. "This file never reaches a GPU" is a property
+    // of the whole file, declared at the top where a reviewer sees it. A per-line `lint:off`
+    // would let one call be silenced inside a file that IS shader-reachable, which is precisely
+    // the hazard the ban was written to stop - and it would be invisible 4000 lines down.
     if (eql(u8, tag, "std-math")) {
-        return false;
+        return fileSuppressedByDirective(source, tag);
     }
     if (fileSuppressedByDirective(source, tag)) {
         return true;
@@ -356,6 +383,7 @@ const Ctx = struct {
             return;
         }
         const msg: []u8 = try allocPrint(self.alloc, fmt, args);
+        errdefer self.alloc.free(msg);
         try self.issues.append(self.alloc, .{
             .file = self.path,
             .line = line,
@@ -402,6 +430,14 @@ const Ctx = struct {
             return;
         }
         const msg: []u8 = try allocPrint(self.alloc, fmt, args);
+        errdefer self.alloc.free(msg);
+        // The issue owns a COPY of the replacement, made only once the issue is known
+        // to be kept (see `Fix`). The caller's slice may be static, borrowed from a
+        // source buffer that dies before `--fix` splices, or a temporary it frees.
+        const replacement_owned: []u8 = try self.alloc.dupe(u8, fix.replacement);
+        errdefer self.alloc.free(replacement_owned);
+        var fix_owned: Fix = fix;
+        fix_owned.replacement = replacement_owned;
         try self.issues.append(self.alloc, .{
             .file = self.path,
             .line = line,
@@ -409,7 +445,7 @@ const Ctx = struct {
             .tag = tag,
             .message = msg,
             .rule = rule,
-            .fix = fix,
+            .fix = fix_owned,
         });
     }
 
@@ -556,7 +592,11 @@ const keywords = std.StaticStringMap(void).initComptime(.{
     .{ "vec2", {} },         .{ "vec3", {} },          .{ "vec4", {} },
     // constants
               .{ "pi", {} },
-    .{ "tau", {} },          .{ "phi", {} },           .{ "nan", {} },            .{ "inf", {} },
+    // `phi` is NOT reserved, deliberately: it means an SSA phi node in spv2wgsl and the
+    // azimuthal angle in spherical coordinates, both of which predate and outnumber the
+    // golden ratio here. Reserving it made every angle named `phi` a violation. The
+    // constant is `golden_ratio` now, and that is what is reserved.
+    .{ "tau", {} },          .{ "golden_ratio", {} },  .{ "nan", {} },            .{ "inf", {} },
     .{ "sqrt2", {} },        .{ "sqrt1_2", {} },       .{ "euler", {} },          .{ "log2e", {} },
     .{ "log10e", {} },       .{ "ln2", {} },           .{ "ln10", {} },           .{ "two_sqrtpi", {} },
     .{ "rad_per_deg", {} },  .{ "deg_per_rad", {} },
@@ -600,6 +640,30 @@ const RuleNote = struct {
 };
 
 const rule_notes = [_]RuleNote{
+    .{
+        .tag = "import-cycle",
+        .title = "import-cycle - files must not import each other, directly or through others",
+        .body =
+        \\Zig accepts it: a module's files are analysed lazily, so two files that
+        \\import each other compile. It still costs. The two files become one unit -
+        \\neither can be read, tested or moved without the other - and every test
+        \\root that reaches one compiles both closures. `robot_mjcf` <-> `robot_physics`
+        \\is why test-fast re-ran the same few hundred tests under several roots.
+        \\
+        \\The shapes it takes, and the fix for each:
+        \\  * shared TYPES living in the file that also holds the entry point -
+        \\    move the entry point up into its own file (zspv's CLI, zspv_main.zig);
+        \\  * a TEST that needs a higher-level file - move the test up, into a file
+        \\    that already depends on both (the Go1 gate, into robot_physics);
+        \\  * a file importing ITSELF to qualify its own names - `@This()`.
+        \\
+        \\Only `@import("*.zig")` paths are resolved; named modules are wired in
+        \\build.zig and invisible here. Files outside this run are not seen, so the
+        \\full-tree gate is the run that counts. A reviewed, deliberate back edge
+        \\carries `// lint:off import-cycle: <why>` on its import line and is then
+        \\left out of the graph.
+        ,
+    },
     .{
         .tag = "raw-pass-state-bind",
         .title = "raw-pass-state-bind - bind pipeline/bind-groups through the PassState cache",
@@ -1074,6 +1138,26 @@ const rule_notes = [_]RuleNote{
         ,
     },
     .{
+        .tag = "whole-init-first",
+        .title = "whole-init-first - fill uninitialised memory with ONE whole-struct write",
+        .body =
+        \\Memory from `allocator.create(T)` is uninitialised, and so is whatever an
+        \\in-place `init*(self: *T, ...)` is handed (`var x: T = undefined; x.init()`).
+        \\Field DEFAULTS are applied only by a struct literal - never to memory
+        \\written field by field - so `self.a = ...; self.b = ...` leaves every
+        \\defaulted field it skips, and every field it forgets, as garbage the
+        \\compiler cannot see (a counter reading 13470109670760158464 on a phone).
+        \\
+        \\So the FIRST write through such a pointer must be the whole struct:
+        \\`self.* = .{ .gpa = gpa, .items = undefined, ... }` - the compiler then
+        \\applies every default and rejects any field left out; fields filled in
+        \\later are spelled `= undefined` in the literal, visibly.  `x.* = undefined`
+        \\is the footgun written out and fires too.  A method called on the pointer
+        \\first (`try x.init(...)`) hands initialisation over and ends the check
+        \\(an `init*` method is checked in its own right).
+        ,
+    },
+    .{
         .tag = "returned-stack-reference",
         .title = "returned-stack-reference - never return a pointer to a local",
         .body =
@@ -1372,6 +1456,36 @@ fn childNodes(
         .shl_sat,
         .@"orelse",
         .@"catch",
+        // ── ASSIGNMENTS. Their absence here was a silent hole in EVERY rule ──
+        //
+        // `childNodes` ends in `else => return buf[0..0]`, so an unhandled tag reports no
+        // children and its whole subtree goes unvisited by every check in this file. `.assign`
+        // was unhandled, which meant `o = std.math.clamp(x, 0, 1);` was invisible to `std-math`
+        // - a rule that documents itself as having no opt-out, guarding GPU portability. It was
+        // found by grepping the tree for violations the linter reported zero of, and it had been
+        // hiding real ones: `src/zimrphysics.zig` calls `std.math.sign` three times, all on the
+        // right of an assignment.
+        //
+        // Compound assignments are included for the same reason - `x += std.math.pi` is no more
+        // visible than `x = std.math.pi` was.
+        .assign,
+        .assign_add,
+        .assign_add_sat,
+        .assign_add_wrap,
+        .assign_bit_and,
+        .assign_bit_or,
+        .assign_bit_xor,
+        .assign_div,
+        .assign_mod,
+        .assign_mul,
+        .assign_mul_sat,
+        .assign_mul_wrap,
+        .assign_shl,
+        .assign_shl_sat,
+        .assign_shr,
+        .assign_sub,
+        .assign_sub_sat,
+        .assign_sub_wrap,
         => {
             const lhs, const rhs = data.node_and_node;
             buf[0] = lhs;
@@ -3008,7 +3122,9 @@ fn checkFloatFromInt(
     const x_end: usize = ast.tokenStart(x_last) + ast.tokenSlice(x_last).len;
     const x_src: []const u8 = ctx.source[x_start..x_end];
 
+    // A temporary: `emitFix` copies it if the issue is kept, so it is freed here either way.
     const replacement: []const u8 = try allocPrint(ctx.alloc, "{s}({s})", .{ helper, x_src });
+    defer ctx.alloc.free(replacement);
 
     try ctx.emitFix(
         ast.nodeMainToken(node),
@@ -3409,6 +3525,140 @@ fn collectStackRef(
 }
 
 // Per-function driver: collect the body's locals, then flag any `return &<local>`.
+/// whole-init-first: after `name` comes to point at uninitialised memory, scan `stmts` in order for the first
+/// write through it. `name.* = <not undefined>` is right and ends the scan; `name.field = ...` (or
+/// `name.* = undefined`) fires; a method called on `name` hands initialisation over and ends it.
+fn checkFirstWrite(ctx: Ctx, name: []const u8, stmts: []const Index, why: []const u8) !void {
+    const ast: *const Ast = ctx.ast;
+    for (stmts) |stmt| {
+        if (ast.nodeTag(stmt) == .assign) {
+            const lhs: Index, const rhs: Index = ast.nodeData(stmt).node_and_node;
+            if (ast.nodeTag(lhs) == .deref and isIdentifierNamed(ast, ast.nodeData(lhs).node, name)) {
+                const undef: bool = ast.nodeTag(rhs) == .identifier and
+                    eql(u8, ast.tokenSlice(ast.nodeMainToken(rhs)), "undefined");
+                if (undef) {
+                    try ctx.emitAt(
+                        ast.firstToken(stmt),
+                        "whole-init-first",
+                        0,
+                        "`{s}.* = undefined` applies no field defaults ({s}); write `{s}.* = .{{ ... }}` instead",
+                        .{ name, why, name },
+                    );
+                }
+                return;
+            }
+            if (ast.nodeTag(lhs) == .field_access) {
+                const obj: Index, const field_tok: u32 = ast.nodeData(lhs).node_and_token;
+                if (isIdentifierNamed(ast, obj, name)) {
+                    try ctx.emitAt(
+                        ast.firstToken(stmt),
+                        "whole-init-first",
+                        0,
+                        "`{s}.{s} = ...` before `{s}.* = .{{ ... }}` ({s}): defaults never apply to it and a " ++
+                            "forgotten field stays garbage - write the whole struct first, later fields `= undefined`",
+                        .{ name, ast.tokenSlice(field_tok), name, why },
+                    );
+                    return;
+                }
+            }
+        }
+        if (callsMethodOn(ast, stmt, name)) {
+            return;
+        }
+    }
+}
+
+fn isIdentifierNamed(ast: *const Ast, node: Index, name: []const u8) bool {
+    return ast.nodeTag(node) == .identifier and eql(u8, ast.tokenSlice(ast.nodeMainToken(node)), name);
+}
+
+/// Whether `stmt` is (a `try` of) a call of a method on `name`: `name.init(...)`.
+fn callsMethodOn(ast: *const Ast, stmt: Index, name: []const u8) bool {
+    const inner: Index = if (ast.nodeTag(stmt) == .@"try") ast.nodeData(stmt).node else stmt;
+    const fn_expr: Index = switch (ast.nodeTag(inner)) {
+        .call, .call_comma => ast.nodeData(inner).node_and_extra[0],
+        .call_one, .call_one_comma => ast.nodeData(inner).node_and_opt_node[0],
+        else => return false,
+    };
+    if (ast.nodeTag(fn_expr) != .field_access) {
+        return false;
+    }
+    const obj: Index, _ = ast.nodeData(fn_expr).node_and_token;
+    return isIdentifierNamed(ast, obj, name);
+}
+
+/// The name a declaration binds when its value is (a `try` of) `<anything>.create(...)`.
+fn createdName(ast: *const Ast, stmt: Index) ?[]const u8 {
+    const vd: Ast.full.VarDecl = ast.fullVarDecl(stmt) orelse return null;
+    const init_node: Index = vd.ast.init_node.unwrap() orelse return null;
+    const inner: Index = if (ast.nodeTag(init_node) == .@"try") ast.nodeData(init_node).node else init_node;
+    const fn_expr: Index = switch (ast.nodeTag(inner)) {
+        .call, .call_comma => ast.nodeData(inner).node_and_extra[0],
+        .call_one, .call_one_comma => ast.nodeData(inner).node_and_opt_node[0],
+        else => return null,
+    };
+    if (ast.nodeTag(fn_expr) != .field_access) {
+        return null;
+    }
+    _, const method_tok: u32 = ast.nodeData(fn_expr).node_and_token;
+    if (!eql(u8, ast.tokenSlice(method_tok), "create")) {
+        return null;
+    }
+    return ast.tokenSlice(vd.ast.mut_token + 1);
+}
+
+/// whole-init-first, the create form: in one block, every `x = ... .create(...)` and what follows it.
+fn checkCreateFirstWrite(ctx: Ctx, stmts: []const Index) !void {
+    for (stmts, 0..) |stmt, i| {
+        if (createdName(ctx.ast, stmt)) |name| {
+            try checkFirstWrite(ctx, name, stmts[i + 1 ..], "memory from create() is uninitialised");
+        }
+    }
+}
+
+/// whole-init-first, the init form: `fn init*(self: *T, ...)` - the caller may hand it undefined memory.
+fn checkInitFirstWrite(ctx: Ctx, proto: Ast.full.FnProto, body: Index) !void {
+    const ast: *const Ast = ctx.ast;
+    const name_tok: u32 = proto.name_token orelse return;
+    if (!std.mem.startsWith(u8, ast.tokenSlice(name_tok), "init")) {
+        return;
+    }
+    var it: Ast.full.FnProto.Iterator = proto.iterate(ast);
+    const first: Ast.full.FnProto.Param = it.next() orelse return;
+    const param_tok: u32 = first.name_token orelse return;
+    const type_expr: Index = first.type_expr orelse return;
+    const ptr: Ast.full.PtrType = ast.fullPtrType(type_expr) orelse return;
+    if (ptr.size != .one) {
+        return;
+    }
+    const bs: BlockSlice = blockStmts(ast, body);
+    try checkFirstWrite(ctx, ast.tokenSlice(param_tok), bs.items(), "an init's pointer may be undefined memory");
+}
+
+/// whole-init-first over EVERY node of the file, not through the walk: the walk does not descend into a struct
+/// returned by a generic type function (`fn Box(comptime T: type) type { return struct { ... } }`) - where much
+/// of the engine's init code lives, the resident learner's included - so neither would this rule.
+fn runWholeInitFirst(ctx: Ctx) !void {
+    const ast: *const Ast = ctx.ast;
+    var i: usize = 0;
+    while (i < ast.nodes.len) : (i += 1) {
+        const n: Index = @fromBackingInt(@intCast(i));
+        switch (ast.nodeTag(n)) {
+            .block, .block_semicolon, .block_two, .block_two_semicolon => {
+                const bs: BlockSlice = blockStmts(ast, n);
+                try checkCreateFirstWrite(ctx, bs.items());
+            },
+            .fn_decl => {
+                var buf: [1]Index = undefined;
+                const proto: Ast.full.FnProto = ast.fullFnProto(&buf, n) orelse continue;
+                _, const body: Index = ast.nodeData(n).node_and_node;
+                try checkInitFirstWrite(ctx, proto, body);
+            },
+            else => {},
+        }
+    }
+}
+
 fn checkReturnedStackRef(ctx: Ctx, body: Index) !void {
     var locals: ArrayList([]const u8) = .empty;
     defer locals.deinit(ctx.alloc);
@@ -3981,7 +4231,12 @@ fn walkNode(
             _, const body = ast.nodeData(node).node_and_node;
             try walkNode(ctx, body, pos, fn_depth);
         },
-        .@"while" => {
+        // `.while_cont` is the `while (i < n) : (i += 1)` form and is a DIFFERENT tag from
+        // `.while_simple`. It appeared in neither this switch nor `childNodes`, so its body was
+        // never walked by ANY rule - and a counted loop is exactly where numeric code lives.
+        // `src/image.zig:515` calls `std.math.clamp` inside one, and `zig build lint` has
+        // reported clean for as long as that line has existed.
+        .@"while", .while_cont => {
             const w: Ast.full.While = ast.fullWhile(node).?;
             try walkNode(ctx, w.ast.then_expr, pos, fn_depth);
             if (w.ast.else_expr.unwrap()) |e| {
@@ -4487,9 +4742,8 @@ fn runRedundantImports(ctx: Ctx) !void {
             const lt: u32 = ast.lastToken(node);
             const end: u32 = ast.tokenStart(lt) + @as(u32, @intCast(ast.tokenSlice(lt).len));
             // `names[k]` borrows `ast.source`, which is gone by the time `--fix`
-            // splices; the issues arena outlives it.
-            const alias_owned: []const u8 = try ctx.alloc.dupe(u8, names[k]);
-            const fix: Fix = .{ .start = ast.tokenStart(ft), .end = end, .replacement = alias_owned };
+            // splices - `emitFix` keeps its own copy, so borrowing is safe here.
+            const fix: Fix = .{ .start = ast.tokenStart(ft), .end = end, .replacement = names[k] };
             try ctx.emitFix(
                 ft,
                 "redundant-import",
@@ -5186,6 +5440,32 @@ fn runChecks(ctx: Ctx) !void {
     for (ctx.ast.rootDecls()) |decl| {
         try walkNode(ctx, decl, .container, 0);
     }
+
+    // ── ★★★ std-math IS SWEPT OVER EVERY NODE, NOT WALKED ──
+    //
+    // `childNodes` enumerates tags and returns NO children for anything unlisted, and `walkNode`
+    // visits only some children of the tags it does handle - `if`/`while` bodies but never their
+    // CONDITIONS, for instance. Every gap is a place a rule silently does not apply, and they
+    // were found one at a time by grepping for violations the linter reported zero of:
+    // `.assign` right-hand sides, `.while_cont` bodies, positional `.{ a, b, c }` initialisers,
+    // `if (std.math.isNan(x))` conditions. Each fix revealed the next.
+    //
+    // `std-math` is the rule that cannot afford any of them: it has no `lint:off`, and what it
+    // guards is that zimr's math compiles for SPIR-V at all. So it does not participate in the
+    // walk. It runs over EVERY node index in the file, which is complete by construction and
+    // cannot develop a new blind spot when an unfamiliar syntax shape appears.
+    //
+    // The other rules stay on the walk because they need `pos` (statement vs expression) or
+    // `fn_depth`, which a flat sweep does not have. Widening them is worth doing and is a
+    // separate job: each newly-reached node is a violation that has to be either fixed or
+    // baselined, and doing it rule-by-rule keeps that reviewable.
+    {
+        var node_index: u32 = 0;
+        while (node_index < ctx.ast.nodes.len) : (node_index += 1) {
+            const n: Index = @fromBackingInt(@intCast(node_index));
+            try checkStdMath(ctx, n, ctx.ast.nodeTag(n));
+        }
+    }
     // Two checks operate on the whole file in one go rather than
     // node-by-node, so they live outside the walk.
     try runLineLength(ctx);
@@ -5195,6 +5475,7 @@ fn runChecks(ctx: Ctx) !void {
     try runSamplerDiscipline(ctx);
     try runCanonicalAlias(ctx);
     try runImportAtRoot(ctx);
+    try runWholeInitFirst(ctx);
     try runRedundantImports(ctx);
     try runUnusedPrivateGlobals(ctx);
     try runScreamingConsts(ctx);
@@ -5648,6 +5929,26 @@ fn scanArrayMult(
 
 const Args = struct {
     files: ArrayList([]const u8),
+    /// `--baseline <path>` grandfathers the violations a tree already has.
+    ///
+    /// WHY THIS EXISTS. `childNodes` returned no children for `.assign` and `.while_cont`, so
+    /// every rule in this file silently skipped assignment right-hand sides and the bodies of
+    /// `while (i < n) : (i += 1)` loops. Fixing the walk exposed 606 pre-existing violations -
+    /// the tree was never clean, the walk was just blind, and the "after all rules cleared"
+    /// comment on the hard gate below was true only of what the walker could see.
+    ///
+    /// Reverting the fix would re-hide real bugs; failing on all 606 would leave every build red
+    /// and the gate would get switched off. So: a RATCHET. The baseline records a count per
+    /// (file, tag); anything at or under it is grandfathered, anything ABOVE it fails. New code
+    /// is held to the rule from today, the backlog is visible in one file, and burning it down
+    /// is a matter of deleting lines.
+    ///
+    /// Keyed by (file, tag) rather than by line, so an unrelated edit that moves a line does not
+    /// spuriously fail.
+    baseline_path: ?[]const u8 = null,
+    /// `--write-baseline` regenerates that file from the current tree instead of checking
+    /// against it. Run it only when deliberately accepting a new backlog.
+    write_baseline: bool = false,
     /// `--decl-order` opts in to the (migration-stage) decl-order rule. It is
     /// OFF by default so the standing lint gate stays green while files are
     /// reorganised into declare-before-use order incrementally.
@@ -5749,6 +6050,17 @@ fn parseArgs(alloc: Allocator, argv: []const [:0]const u8) !Args {
         if (eql(u8, argv[i], "--decl-order-only")) {
             a.decl_order = true;
             a.decl_order_only = true;
+            continue;
+        }
+        if (eql(u8, argv[i], "--baseline")) {
+            i += 1;
+            if (i < argv.len) {
+                a.baseline_path = argv[i];
+            }
+            continue;
+        }
+        if (eql(u8, argv[i], "--write-baseline")) {
+            a.write_baseline = true;
             continue;
         }
         if (eql(u8, argv[i], "--fix")) {
@@ -5881,8 +6193,25 @@ fn applyFixes(gpa: Allocator, source: []const u8, fixes: []const Fix) ![]u8 {
 /// with overlapping edits dropped (deferred to a later pass).
 fn collectFixes(gpa: Allocator, issues: []const Issue, out: *ArrayList(Fix)) !void {
     out.clearRetainingCapacity();
+    // ★ Deleting an unused declaration waits for a pass with nothing else to do. Another fix in
+    // the same pass may be about to USE it - `float-from-int` writes `float(x)` against the
+    // `const float = zm.float;` that `unused-global` wants gone - and applying both broke the
+    // file, so the parse guard discarded the whole pass and neither fix ever landed. The fix loop
+    // re-analyses after every pass, so a declaration that is still unused goes one pass later.
+    var other_fixes_pending: bool = false;
+    for (issues) |is| {
+        const is_other_fix: bool = is.fix != null and !eql(u8, is.tag, "unused-global");
+        if (is_other_fix) {
+            other_fixes_pending = true;
+            break;
+        }
+    }
     for (issues) |is| {
         if (is.fix) |fx| {
+            const deferred: bool = other_fixes_pending and eql(u8, is.tag, "unused-global");
+            if (deferred) {
+                continue;
+            }
             try out.append(gpa, fx);
         }
     }
@@ -5926,10 +6255,15 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
         var issues: ArrayList(Issue) = .empty;
         defer {
             for (issues.items) |is| {
-                gpa.free(is.message);
+                is.deinit(gpa);
             }
             issues.deinit(gpa);
         }
+        // This is the --fix RE-SCAN of a file just rewritten. A failure here means the rewrite
+        // produced something unanalysable, and the loop's own parse-guard already refuses to keep
+        // such a file - so the useful response is to stop proposing fixes for this pass, which is
+        // exactly what leaving `issues` empty does.
+        // lint:off catch-suppression: deliberate - see above
         _ = analyzeSource(gpa, path, cur_z, args, &issues) catch {};
         gpa.free(cur_z);
 
@@ -5991,7 +6325,173 @@ fn printIssues(
     }
 }
 
-pub fn main(init: std.process.Init) !void {
+/// One `@import("x.zig")` between two files of this run, and where it is written.
+const ImportEdge = struct {
+    from: u32,
+    to: u32,
+    line: u32,
+    col: u32,
+};
+
+/// ── `import-cycle`: the one rule that needs every file at once ──
+///
+/// Builds the graph of `@import("*.zig")` edges between the files of this run - each path
+/// resolved against the importing file, so `../robot.zig` and `robot.zig` meet - and reports
+/// every edge that closes a cycle, with the whole cycle in the message. An import carrying
+/// `// lint:off import-cycle: <why>` is a reviewed back edge and is left out of the graph, so a
+/// suppression does not depend on which way the search happened to walk.
+///
+/// It reads every input itself, like the alias registry, instead of riding the per-file loop:
+/// that loop skips stamped-clean files, and a cycle is usually two files each clean on its own.
+/// Roots are visited in sorted-path order, so the edge reported for a cycle is the same on
+/// every machine.
+fn checkImportCycles(
+    gpa: Allocator,
+    io: std.Io,
+    files: []const []const u8,
+    out_issues: *ArrayList(Issue),
+) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+
+    const keys: [][]const u8 = try arena.alloc([]const u8, files.len);
+    var index_of: std.StringHashMap(u32) = .init(arena);
+    for (files, 0..) |path, i| {
+        keys[i] = try std.fs.path.resolveAlloc(arena, &.{path});
+        try index_of.put(keys[i], @intCast(i));
+    }
+
+    var edges: ArrayList(ImportEdge) = .empty;
+    const out_edges: []ArrayList(u32) = try arena.alloc(ArrayList(u32), files.len);
+    @memset(out_edges, .empty);
+    for (files, 0..) |path, i| {
+        // ★ NO `isSkipped` here. That list exempts generated data from STYLE rules, but a
+        // generated fixture that imports `robot.zig` is still a dependency - skipping it hid the
+        // `robot.zig` <-> `kuka_iiwa.zig` cycle on this rule's first run.
+        const bytes: []u8 = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited) catch continue;
+        const source: [:0]u8 = try arena.allocSentinel(u8, bytes.len, 0);
+        @memcpy(source, bytes);
+        const dir: []const u8 = std.fs.path.dirname(keys[i]) orelse ".";
+
+        var tokenizer: std.zig.Tokenizer = .init(source);
+        var line: u32 = 1;
+        var line_start: usize = 0;
+        var scanned: usize = 0;
+        while (true) {
+            const token: std.zig.Token = tokenizer.next();
+            if (token.tag == .eof) {
+                break;
+            }
+            const is_import: bool = token.tag == .builtin and
+                eql(u8, source[token.loc.start..token.loc.end], "@import");
+            if (!is_import) {
+                continue;
+            }
+            while (scanned < token.loc.start) : (scanned += 1) {
+                if (source[scanned] == '\n') {
+                    line += 1;
+                    line_start = scanned + 1;
+                }
+            }
+            const paren: std.zig.Token = tokenizer.next();
+            const literal: std.zig.Token = tokenizer.next();
+            const names_a_file: bool = paren.tag == .l_paren and literal.tag == .string_literal and
+                endsWith(u8, source[literal.loc.start..literal.loc.end], ".zig\"");
+            if (!names_a_file) {
+                continue; // std, builtin, or a named module wired in build.zig
+            }
+            if (lineSuppressedByDirective(source, line, "import-cycle")) {
+                continue; // a reviewed back edge: not part of the graph
+            }
+            const target_text: []const u8 = source[literal.loc.start + 1 .. literal.loc.end - 1];
+            const target_key: []const u8 = try std.fs.path.resolveAlloc(arena, &.{ dir, target_text });
+            const target: u32 = index_of.get(target_key) orelse continue; // not in this run
+            try out_edges[i].append(arena, @intCast(edges.items.len));
+            try edges.append(arena, .{
+                .from = @intCast(i),
+                .to = target,
+                .line = line,
+                .col = @intCast(token.loc.start - line_start + 1),
+            });
+        }
+    }
+
+    const order: []u32 = try arena.alloc(u32, files.len);
+    for (order, 0..) |*slot, i| {
+        slot.* = @intCast(i);
+    }
+    std.mem.sort(u32, order, keys, struct {
+        fn lessByPath(paths: [][]const u8, a: u32, b: u32) bool {
+            return std.mem.lessThan(u8, paths[a], paths[b]);
+        }
+    }.lessByPath);
+
+    // Iterative DFS: a back edge - one into a file still on the current path - closes a cycle.
+    const VisitState = enum { unvisited, on_path, finished };
+    const state: []VisitState = try arena.alloc(VisitState, files.len);
+    @memset(state, .unvisited);
+    const PathFrame = struct { file: u32, next_edge: usize };
+    var dfs_path: ArrayList(PathFrame) = .empty;
+    for (order) |root| {
+        if (state[root] != .unvisited) {
+            continue;
+        }
+        state[root] = .on_path;
+        try dfs_path.append(arena, .{ .file = root, .next_edge = 0 });
+        while (dfs_path.items.len > 0) {
+            const top: *PathFrame = &dfs_path.items[dfs_path.items.len - 1];
+            const outgoing: []const u32 = out_edges[top.file].items;
+            if (top.next_edge == outgoing.len) {
+                state[top.file] = .finished;
+                _ = dfs_path.pop();
+                continue;
+            }
+            const edge: ImportEdge = edges.items[outgoing[top.next_edge]];
+            top.next_edge += 1; // before any append below moves `top`
+            switch (state[edge.to]) {
+                .unvisited => {
+                    state[edge.to] = .on_path;
+                    try dfs_path.append(arena, .{ .file = edge.to, .next_edge = 0 });
+                },
+                .finished => {},
+                .on_path => {
+                    // The cycle is the path from where `edge.to` sits on it, down to here.
+                    var first_on_cycle: usize = 0;
+                    while (dfs_path.items[first_on_cycle].file != edge.to) {
+                        first_on_cycle += 1;
+                    }
+                    var chain: ArrayList(u8) = .empty;
+                    for (dfs_path.items[first_on_cycle..]) |frame| {
+                        try chain.appendSlice(arena, std.fs.path.basename(files[frame.file]));
+                        try chain.appendSlice(arena, " -> ");
+                    }
+                    try chain.appendSlice(arena, std.fs.path.basename(files[edge.to]));
+                    const imports_itself: bool = edge.from == edge.to;
+                    const message: []u8 = if (imports_itself)
+                        try allocPrint(gpa, "{s} - a file reaches its own names through @This()", .{chain.items})
+                    else
+                        try allocPrint(gpa, "this import closes a cycle: {s}", .{chain.items});
+                    errdefer gpa.free(message);
+                    try out_issues.append(gpa, .{
+                        .file = files[edge.from],
+                        .line = edge.line,
+                        .col = edge.col,
+                        .tag = "import-cycle",
+                        .message = message,
+                        .rule = 0,
+                    });
+                },
+            }
+        }
+    }
+}
+
+/// Returns the exit code rather than calling `std.process.exit`, so every path out -
+/// the failing one included - unwinds the defers and reaches `start.zig`'s leak check.
+/// An `exit(1)` skipped it, which made a leak visible only on a CLEAN tree: the
+/// suppressed-fix leak above surfaced exactly because the tree lints clean.
+pub fn main(init: std.process.Init) !u8 {
     const gpa: Allocator = init.gpa;
     const arena: Allocator = init.arena.allocator();
     const io: std.Io = init.io;
@@ -6003,7 +6503,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (args.files.items.len == 0) {
         std.debug.print("usage: zimrlint <file.zig> [<file2.zig> ...]\n", .{});
-        return;
+        return 0;
     }
 
     // ---- Per-file mtime cache setup --------------------------------
@@ -6050,6 +6550,37 @@ pub fn main(init: std.process.Init) !void {
     };
 
     var total_issues: usize = 0;
+
+    // The grandfathered counts, keyed "<path>\t<tag>". Empty unless --baseline was given, in
+    // which case every rule behaves exactly as it did before the ratchet existed.
+    var baseline: std.StringHashMap(usize) = .init(gpa);
+    defer {
+        var it = baseline.keyIterator();
+        while (it.next()) |k| {
+            gpa.free(k.*);
+        }
+        baseline.deinit();
+    }
+    if (args.baseline_path) |bp| {
+        if (!args.write_baseline) {
+            const text: []u8 = std.Io.Dir.cwd().readFileAlloc(io, bp, gpa, .unlimited) catch &.{};
+            defer gpa.free(text);
+            var lines = std.mem.splitScalar(u8, text, '\n');
+            while (lines.next()) |line| {
+                const trimmed: []const u8 = std.mem.trim(u8, line, " \t\r");
+                if (trimmed.len == 0 or trimmed[0] == '#') {
+                    continue;
+                }
+                const last_tab: usize = std.mem.lastIndexOfScalar(u8, trimmed, '\t') orelse continue;
+                const count: usize = std.fmt.parseInt(usize, trimmed[last_tab + 1 ..], 10) catch continue;
+                const key: []u8 = try gpa.dupe(u8, trimmed[0..last_tab]);
+                try baseline.put(key, count);
+            }
+        }
+    }
+    var baseline_buf: std.Io.Writer.Allocating = .init(gpa);
+    defer baseline_buf.deinit();
+    const baseline_out: *std.Io.Writer = &baseline_buf.writer;
     var out_buf: [4096]u8 = undefined;
     // Violations + fix notes go to STDERR, not out: when lint runs as a
     // build GATE (a dependency of a compile), Zig's Run step surfaces a failed
@@ -6125,7 +6656,7 @@ pub fn main(init: std.process.Init) !void {
             var fix_issues: ArrayList(Issue) = .empty;
             defer {
                 for (fix_issues.items) |is| {
-                    gpa.free(is.message);
+                    is.deinit(gpa);
                 }
                 fix_issues.deinit(gpa);
             }
@@ -6180,14 +6711,59 @@ pub fn main(init: std.process.Init) !void {
         var issues: ArrayList(Issue) = .empty;
         defer {
             for (issues.items) |is| {
-                gpa.free(is.message);
+                is.deinit(gpa);
             }
             issues.deinit(gpa);
         }
 
         const has_parse_errors: bool = try analyzeSource(gpa, path, source_z, &args, &issues);
-        try printIssues(out, &seen_tags, issues.items);
-        total_issues += issues.items.len;
+
+        // ── THE RATCHET ──
+        // Grandfathered issues are counted, recorded, and not reported. Anything ABOVE the
+        // recorded count for a (file, tag) is new and fails. See `Args.baseline_path`.
+        var kept: ArrayList(Issue) = .empty;
+        defer kept.deinit(gpa);
+        if (baseline.count() > 0 or args.write_baseline) {
+            var per_tag: std.StringHashMap(usize) = .init(gpa);
+            defer per_tag.deinit();
+            for (issues.items) |is| {
+                const seen_before: usize = per_tag.get(is.tag) orelse 0;
+                try per_tag.put(is.tag, seen_before + 1);
+                if (args.write_baseline) {
+                    continue;
+                }
+                // Built in a stack buffer rather than allocated: this runs once per issue per
+                // file, the two parts are a path and a static tag, and an allocation here has to
+                // be freed on every exit path including the two `continue`s. A fixed buffer has
+                // no exit paths to get wrong.
+                var key_buf: [512]u8 = undefined;
+                const key: []const u8 = bufPrint(
+                    &key_buf,
+                    "{s}\t{s}",
+                    .{ path, is.tag },
+                ) catch {
+                    // Absurdly long path: report rather than silently grandfather.
+                    try kept.append(gpa, is);
+                    continue;
+                };
+                const allowance: usize = baseline.get(key) orelse 0;
+                if (seen_before < allowance) {
+                    continue; // within the grandfathered count
+                }
+                try kept.append(gpa, is);
+            }
+            if (args.write_baseline) {
+                var it: std.StringHashMap(usize).Iterator = per_tag.iterator();
+                while (it.next()) |e| {
+                    try baseline_out.print("{s}\t{s}\t{d}\n", .{ path, e.key_ptr.*, e.value_ptr.* });
+                }
+            }
+        } else {
+            try kept.appendSlice(gpa, issues.items);
+        }
+
+        try printIssues(out, &seen_tags, kept.items);
+        total_issues += kept.items.len;
 
         // Cache write: stamp only when clean (never on parse errors — we want a
         // re-check next run).
@@ -6200,7 +6776,33 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    if (total_issues > 0) {
+    if (args.write_baseline) {
+        if (args.baseline_path) |bp| {
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = bp, .data = baseline_buf.written() });
+            try out.print("wrote baseline: {s}\n", .{bp});
+        }
+        try out.flush();
+        return 0;
+    }
+
+    // ── import-cycle: the one cross-file rule. It runs over EVERY input, after the per-file
+    // reports, because the loop above skips stamped-clean files and a cycle is usually two clean
+    // files. Not ratcheted: the baseline is per (file, rule), and a cycle belongs to no one file.
+    {
+        var cycle_issues: ArrayList(Issue) = .empty;
+        defer {
+            for (cycle_issues.items) |is| {
+                is.deinit(gpa);
+            }
+            cycle_issues.deinit(gpa);
+        }
+        try checkImportCycles(gpa, io, args.files.items, &cycle_issues);
+        try printIssues(out, &seen_tags, cycle_issues.items);
+        total_issues += cycle_issues.items.len;
+    }
+
+    const has_issues: bool = total_issues > 0;
+    if (has_issues) {
         try out.print(
             "\n{d} issues in {d} files\n",
             .{ total_issues, args.files.items.len },
@@ -6208,16 +6810,13 @@ pub fn main(init: std.process.Init) !void {
     }
     try out.flush();
 
-    // Hard gate (turn 379, after all rules cleared).  Non-zero exit
-    // means `zig build lint` and `zig build lint-check` fail on any
-    // issue.  Before this turn zimrlint always returned 0; the
-    // cleanup arc through turn 378 cleared every existing hit, so
-    // we can now enforce.
-    if (total_issues > 0) {
-        std.process.exit(1);
+    // The hard gate: any issue is a non-zero exit, so `zig build lint`, `lint-check`
+    // and every compile gated on lint fail on it.
+    if (has_issues) {
+        return 1;
     }
+    return 0;
 }
-// (cache-bust: force fresh lint-tool compile after a corrupt cached SIGILL binary)
 
 // ============================================================================
 // Tests -- a tiny in-file rule harness.  Run: `zig test tools/zimrlint.zig`.
@@ -6303,6 +6902,66 @@ test "returned-stack-reference stays quiet on return &self.field" {
 
 test "returned-stack-reference stays quiet on return &arr[i]" {
     try expectClean("fn f(arr: []u32, i: usize) *u32 {\n    return &arr[i];\n}\n", "returned-stack-reference");
+}
+
+test "whole-init-first fires on create then field writes" {
+    try expectFires(
+        "const S = struct { a: u32, b: u32 = 7 };\n" ++
+            "fn make(gpa: std.mem.Allocator) !*S {\n    const s: *S = try gpa.create(S);\n" ++
+            "    s.a = 1;\n    return s;\n}\n",
+        "whole-init-first",
+    );
+}
+
+test "whole-init-first stays quiet on create then a whole write" {
+    try expectClean(
+        "const S = struct { a: u32, b: u32 = 7 };\n" ++
+            "fn make(gpa: std.mem.Allocator) !*S {\n    const s: *S = try gpa.create(S);\n" ++
+            "    s.* = .{ .a = 1 };\n    s.a = 2;\n    return s;\n}\n",
+        "whole-init-first",
+    );
+}
+
+test "whole-init-first fires on an init writing a field first" {
+    try expectFires(
+        "const S = struct {\n    a: u32,\n    b: u32 = 7,\n" ++
+            "    fn init(self: *S) void {\n        self.a = 1;\n    }\n};\n",
+        "whole-init-first",
+    );
+}
+
+test "whole-init-first fires on self.* = undefined" {
+    try expectFires(
+        "const S = struct {\n    a: u32,\n" ++
+            "    fn init(self: *S) void {\n        self.* = undefined;\n        self.a = 1;\n    }\n};\n",
+        "whole-init-first",
+    );
+}
+
+test "whole-init-first stays quiet when a method takes the initialisation over" {
+    try expectClean(
+        "const S = struct {\n    a: u32,\n    fn init(self: *S) void {\n        self.* = .{ .a = 1 };\n    }\n};\n" ++
+            "fn make(gpa: std.mem.Allocator) !*S {\n    const s: *S = try gpa.create(S);\n" ++
+            "    s.init();\n    s.a = 2;\n    return s;\n}\n",
+        "whole-init-first",
+    );
+}
+
+test "whole-init-first reaches inside a generic type function's struct" {
+    try expectFires(
+        "fn Box(comptime T: type) type {\n    return struct {\n        a: T,\n" ++
+            "        fn make(gpa: std.mem.Allocator) !*@This() {\n" ++
+            "            const s: *@This() = try gpa.create(@This());\n            s.a = 1;\n" ++
+            "            return s;\n        }\n    };\n}\n",
+        "whole-init-first",
+    );
+}
+
+test "whole-init-first stays quiet on a non-init method writing fields" {
+    try expectClean(
+        "const S = struct {\n    a: u32,\n    fn reset(self: *S) void {\n        self.a = 0;\n    }\n};\n",
+        "whole-init-first",
+    );
 }
 
 test "returned-stack-reference stays quiet on return &global" {
@@ -6590,6 +7249,7 @@ test "tags asserted by the harness are documented in rule_notes" {
         "branch-braces",
         "untyped-local",
         "returned-stack-reference",
+        "whole-init-first",
         "catch-suppression",
         "prefer-assert-unreachable",
         "no-catch-return",

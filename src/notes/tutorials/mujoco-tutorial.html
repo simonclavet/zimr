@@ -5,115 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>MuJoCo, and how it becomes robot.zig</title>
 <meta name="description" content="A detailed tutorial on MuJoCo's reduced-coordinate physics, and a plan for a Zig- and zimr-idiomatic robot.zig that complements zimrphysics.zig." />
-<style>
-:root{
-  --main-font:"Courier New",Courier,monospace;
-  --header-font:"Georgia","Times New Roman",serif;
-  --bg-page:#1f140e; --bg-paper:#332218; --bg-block:#261912;
-  --text-color:#f0e6d2; --text-muted:#a89684;
-  --accent-color:#d35f33;   /* maximal coordinates / Jolt / zimrphysics */
-  --accent-gen:#4fb3a5;     /* generalized coordinates / MuJoCo / robot.zig */
-  --border-color:#090604; --shadow-color:#000;
-}
-*{box-sizing:border-box}
-html{overflow-x:clip}
-body{
-  background-color:var(--bg-page);
-  background-image:radial-gradient(var(--border-color) 2px,transparent 2px);
-  background-size:16px 16px;
-  color:var(--text-color); font-family:var(--main-font); line-height:1.6;
-  margin:0; padding:40px 20px; display:flex; justify-content:center;
-}
-.doc{
-  background-color:var(--bg-paper); max-width:900px; width:100%; padding:40px;
-  border:4px solid var(--border-color); box-shadow:12px 12px 0 var(--shadow-color);
-}
-h1{
-  font-family:var(--header-font); font-size:2.7rem; line-height:1.08;
-  margin:0 0 6px 0; color:var(--text-color);
-}
-.sub{
-  font-size:1.02rem; font-style:italic; color:var(--accent-gen);
-  margin:0 0 26px 0; line-height:1.45;
-}
-h2{
-  font-family:var(--header-font); color:var(--accent-color);
-  border-bottom:2px solid var(--border-color); padding-bottom:6px;
-  margin:44px 0 14px 0; font-size:1.7rem;
-}
-h3{
-  font-family:var(--header-font); font-size:1.22rem; color:var(--text-color);
-  margin:26px 0 8px 0; text-decoration:underline; text-decoration-color:var(--accent-gen);
-  text-underline-offset:5px;
-}
-p{margin:0 0 14px 0}
-code{background:var(--bg-block); padding:1px 5px; border-radius:2px; font-size:.94em}
-pre{
-  background:var(--bg-block); border-left:4px solid var(--accent-gen);
-  padding:14px 16px; overflow-x:auto; font-size:.86rem; line-height:1.45;
-  margin:0 0 16px 0;
-}
-pre code{background:none; padding:0}
-a{color:var(--accent-gen)}
-strong{color:#fff}
-ul,ol{margin:0 0 14px 0; padding-left:22px}
-li{margin-bottom:6px}
-.eq{
-  background:var(--bg-block); border:2px solid var(--border-color);
-  padding:18px; text-align:center; font-size:1.24rem; margin:0 0 16px 0;
-  font-family:var(--header-font); letter-spacing:.4px;
-}
-.eq em{color:var(--accent-gen); font-style:normal}
-.lede{
-  border-left:4px solid var(--accent-color); padding:2px 0 2px 16px;
-  color:var(--text-muted); font-size:1.02rem; margin:0 0 22px 0;
-}
-table{border-collapse:collapse; width:100%; margin:0 0 18px 0; font-size:.88rem}
-th,td{border:1px solid var(--border-color); padding:7px 9px; text-align:left; vertical-align:top}
-th{background:var(--bg-block); font-family:var(--header-font); color:var(--accent-color)}
-td.max{color:var(--accent-color)}
-td.gen{color:var(--accent-gen)}
-.note{
-  background:var(--bg-block); border:2px dashed var(--border-color);
-  padding:14px 16px; margin:0 0 18px 0; font-size:.94rem;
-}
-.note b{color:var(--accent-gen)}
-/* ---- the signature: the pipeline spine ---- */
-.spine{margin:0 0 22px 0; border-left:3px solid var(--border-color); padding-left:0}
-.phase{margin:0 0 4px 0}
-.phase-name{
-  font-family:var(--header-font); font-size:.82rem; letter-spacing:2.5px;
-  text-transform:uppercase; color:var(--text-muted);
-  padding:14px 0 4px 18px; border-left:3px solid var(--accent-color); margin-left:-3px;
-}
-.stage{display:flex; gap:12px; padding:3px 0 3px 18px; border-left:3px solid transparent; margin-left:-3px}
-.stage:hover{border-left-color:var(--accent-gen); background:rgba(79,179,165,.05)}
-.n{
-  color:var(--accent-gen); font-size:.82rem; min-width:26px; text-align:right;
-  padding-top:2px; flex-shrink:0;
-}
-.what{font-size:.92rem; flex:1}
-.what .fn{color:var(--text-muted); font-size:.85em}
-.tag{
-  font-size:.68rem; letter-spacing:1px; text-transform:uppercase; padding:1px 6px;
-  border:1px solid currentColor; border-radius:2px; align-self:flex-start;
-  margin-top:3px; flex-shrink:0;
-}
-.t-port{color:var(--accent-gen)}
-.t-reuse{color:var(--accent-color)}
-.t-skip{color:#6b5a4a}
-.legend{font-size:.82rem; color:var(--text-muted); margin:0 0 26px 0}
-.legend span{margin-right:16px}
-hr{border:none; border-top:2px solid var(--border-color); margin:38px 0}
-.foot{color:var(--text-muted); font-size:.86rem; margin-top:34px}
-@media (max-width:600px){
-  body{padding:14px 8px}
-  .doc{padding:22px 16px; box-shadow:6px 6px 0 var(--shadow-color)}
-  h1{font-size:1.9rem}
-  .eq{font-size:1rem; padding:12px}
-}
-@media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
-</style>
+<!--docfmt:style-->
 </head>
 <body>
 <div class="doc">
@@ -338,7 +230,7 @@ With <code>M</code> and <code>c</code> in hand, <b>forward dynamics is a single 
 
 <p>A robot's <em>structure</em> does not change while it runs. Its tree, its joint types, <code>nq</code>, <code>nv</code>, and therefore the entire sparsity pattern of <code>M</code>, are all known before the program starts. Zig can know them at compile time.</p>
 
-<pre><code>const Arm = robot.Model(.{
+<pre><code class="zig">const Arm = robot.Model(.{
     .bodies = .{
         .{ .name = "base",     .parent = null,       .inertia = &hellip; },
         .{ .name = "upper",    .parent = "base",     .joint = .{ .hinge = .{ .axis = zm.vec3(0,0,1) } } },
@@ -372,7 +264,7 @@ Arm.step(&amp;data, dt);</code></pre>
 
 <p>So robot.zig should not port collision at all. It should consume it:</p>
 
-<pre><code>// zimrphysics owns: shapes, GJK/SAT, the BVH broad-phase, manifolds.
+<pre><code class="zig">// zimrphysics owns: shapes, GJK/SAT, the BVH broad-phase, manifolds.
 // robot.zig owns:   the tree, M, c, J, actuators, the constraint solve.
 //
 // The seam is one function: a contact manifold in, constraint rows out.

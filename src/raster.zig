@@ -52,6 +52,22 @@ const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
+
+/// ── LANE BATCHES, NOT GEOMETRIC VECTORS ──
+///
+/// Four PIXELS' worth of one scalar. The software rasteriser walks a scanline four pixels at a
+/// time, so `Lane4f` holds one edge-function value per pixel, `Lane4b` one inside/outside bit,
+/// and `Lane4u8` one colour channel.
+///
+/// `zm.Vec` is ALSO `@Vector(4, f32)` and the `prefer-vec` rule would rather see it here - but
+/// the two mean opposite things. `Vec` is ONE point carrying x/y/z/w; these are FOUR points
+/// carrying a single component each. Writing `Vec` would make `e0_v` read as one edge function's
+/// four components rather than four pixels' edge values, which is the reverse of the truth, so
+/// the rule is declined here deliberately and named instead.
+// lint:off prefer-vec: a SIMD lane batch, not zimr's central vector type - see above
+const Lane4f = @Vector(4, f32);
+const Lane4b = @Vector(4, bool);
+const Lane4u8 = @Vector(4, u8);
 const radFromTurns = zm.radFromTurns;
 const Color = zm.Color;
 const Mat = zm.Mat;
@@ -354,8 +370,8 @@ fn byteFromUnitFloat(v: f32) u8 {
 
 /// 4-wide SIMD analog of `byteFromUnitFloat`.  Same saturation
 /// semantics - clamps each lane to `[0, 255]` then converts to
-/// `u8` - but operates on a `@Vector(4, f32)` and produces a
-/// `@Vector(4, u8)`.  Used by the rasterizer's SIMD inner loops
+/// `u8` - but operates on a `Lane4f` and produces a
+/// `Lane4u8`.  Used by the rasterizer's SIMD inner loops
 /// to pack four interpolated lane colors at once.
 /// Skips the NaN guard from the scalar version: barycentric-
 /// interpolated colors at our magnitudes can't produce NaN (no
@@ -370,7 +386,7 @@ fn byteFromUnitFloat(v: f32) u8 {
 /// Two clamps + a multiply + a saturating truncation - about
 /// four cycles instead of the scalar version's three branches
 /// per lane.
-fn byteFromUnitFloatVec(v: Vec) @Vector(4, u8) {
+fn byteFromUnitFloatVec(v: Vec) Lane4u8 {
     const zero: Vec = @splat(0);
     const one: Vec = @splat(1);
     const scale: Vec = @splat(255.0);
@@ -3104,19 +3120,19 @@ pub const Context = struct {
 
                 while (px < simd_end) : (px += 4) {
                     // Edge functions for the four lanes.
-                    const e0_v: @Vector(4, f32) =
-                        @as(@Vector(4, f32), @splat(e0_row)) + de0_dx_v * lane_offsets;
-                    const e1_v: @Vector(4, f32) =
-                        @as(@Vector(4, f32), @splat(e1_row)) + de1_dx_v * lane_offsets;
-                    const e2_v: @Vector(4, f32) =
-                        @as(@Vector(4, f32), @splat(e2_row)) + de2_dx_v * lane_offsets;
+                    const e0_v: Lane4f =
+                        @as(Lane4f, @splat(e0_row)) + de0_dx_v * lane_offsets;
+                    const e1_v: Lane4f =
+                        @as(Lane4f, @splat(e1_row)) + de1_dx_v * lane_offsets;
+                    const e2_v: Lane4f =
+                        @as(Lane4f, @splat(e2_row)) + de2_dx_v * lane_offsets;
 
                     // Inside mask.  Three vector compares
                     // ANDed lane-wise.  CCW: all edges ≥ 0;
                     // CW: all edges ≤ 0.  The result is a
-                    // `@Vector(4, bool)` we use to gate
+                    // `Lane4b` we use to gate
                     // per-lane writes.
-                    const inside: @Vector(4, bool) = if (ccw)
+                    const inside: Lane4b = if (ccw)
                         (e0_v >= zero_v) & (e1_v >= zero_v) & (e2_v >= zero_v)
                     else
                         (e0_v <= zero_v) & (e1_v <= zero_v) & (e2_v <= zero_v);
@@ -3127,19 +3143,19 @@ pub const Context = struct {
                     // computation entirely.  `@reduce(.Or, ...)`
                     // ORs all lanes into a single bool.
                     if (@reduce(.Or, inside)) {
-                        const b0_v: @Vector(4, f32) = e1_v * inv_area_v;
-                        const b1_v: @Vector(4, f32) = e2_v * inv_area_v;
-                        const b2_v: @Vector(4, f32) = e0_v * inv_area_v;
+                        const b0_v: Lane4f = e1_v * inv_area_v;
+                        const b1_v: Lane4f = e2_v * inv_area_v;
+                        const b2_v: Lane4f = e0_v * inv_area_v;
 
-                        const cr_v: @Vector(4, f32) = b0_v * v0_r + b1_v * v1_r + b2_v * v2_r;
-                        const cg_v: @Vector(4, f32) = b0_v * v0_g + b1_v * v1_g + b2_v * v2_g;
-                        const cb_v: @Vector(4, f32) = b0_v * v0_b + b1_v * v1_b + b2_v * v2_b;
-                        const ca_v: @Vector(4, f32) = b0_v * v0_a + b1_v * v1_a + b2_v * v2_a;
+                        const cr_v: Lane4f = b0_v * v0_r + b1_v * v1_r + b2_v * v2_r;
+                        const cg_v: Lane4f = b0_v * v0_g + b1_v * v1_g + b2_v * v2_g;
+                        const cb_v: Lane4f = b0_v * v0_b + b1_v * v1_b + b2_v * v2_b;
+                        const ca_v: Lane4f = b0_v * v0_a + b1_v * v1_a + b2_v * v2_a;
 
-                        const r_bytes: @Vector(4, u8) = byteFromUnitFloatVec(cr_v);
-                        const g_bytes: @Vector(4, u8) = byteFromUnitFloatVec(cg_v);
-                        const b_bytes: @Vector(4, u8) = byteFromUnitFloatVec(cb_v);
-                        const a_bytes: @Vector(4, u8) = byteFromUnitFloatVec(ca_v);
+                        const r_bytes: Lane4u8 = byteFromUnitFloatVec(cr_v);
+                        const g_bytes: Lane4u8 = byteFromUnitFloatVec(cg_v);
+                        const b_bytes: Lane4u8 = byteFromUnitFloatVec(cb_v);
+                        const a_bytes: Lane4u8 = byteFromUnitFloatVec(ca_v);
 
                         // Per-lane scalar 4-byte writes for the
                         // inside lanes.  Wasm SIMD has no
@@ -3215,7 +3231,7 @@ pub const Context = struct {
                 var ca: f32 = b0 * v0.color[3] + b1 * v1.color[3] + b2 * v2.color[3];
 
                 if (comptime cfg.texture) {
-                    const tex = bound_tex.?;
+                    const tex: *const Texture = bound_tex.?;
                     // Perspective-correct UV interp.  Linearly
                     // interpolate `(u/w, v/w, 1/w)` via barycentric
                     // weights - these three quantities ARE
@@ -3634,25 +3650,25 @@ pub const Context = struct {
                 // shave another few cycles but obscures the data
                 // flow; defer to a later turn if profiling shows
                 // it matters.
-                const lane_offsets: @Vector(4, f32) = .{ 0, 1, 2, 3 };
-                const dcr_dx_v: @Vector(4, f32) = @splat(dcr_dx);
-                const dcg_dx_v: @Vector(4, f32) = @splat(dcg_dx);
-                const dcb_dx_v: @Vector(4, f32) = @splat(dcb_dx);
-                const dca_dx_v: @Vector(4, f32) = @splat(dca_dx);
-                const dcr_dx_4: @Vector(4, f32) = @splat(dcr_dx * 4);
-                const dcg_dx_4: @Vector(4, f32) = @splat(dcg_dx * 4);
-                const dcb_dx_4: @Vector(4, f32) = @splat(dcb_dx * 4);
-                const dca_dx_4: @Vector(4, f32) = @splat(dca_dx * 4);
-                var cr_v: @Vector(4, f32) = @as(@Vector(4, f32), @splat(cr)) + dcr_dx_v * lane_offsets;
-                var cg_v: @Vector(4, f32) = @as(@Vector(4, f32), @splat(cg)) + dcg_dx_v * lane_offsets;
-                var cb_v: @Vector(4, f32) = @as(@Vector(4, f32), @splat(cb)) + dcb_dx_v * lane_offsets;
-                var ca_v: @Vector(4, f32) = @as(@Vector(4, f32), @splat(ca)) + dca_dx_v * lane_offsets;
+                const lane_offsets: Lane4f = .{ 0, 1, 2, 3 };
+                const dcr_dx_v: Lane4f = @splat(dcr_dx);
+                const dcg_dx_v: Lane4f = @splat(dcg_dx);
+                const dcb_dx_v: Lane4f = @splat(dcb_dx);
+                const dca_dx_v: Lane4f = @splat(dca_dx);
+                const dcr_dx_4: Lane4f = @splat(dcr_dx * 4);
+                const dcg_dx_4: Lane4f = @splat(dcg_dx * 4);
+                const dcb_dx_4: Lane4f = @splat(dcb_dx * 4);
+                const dca_dx_4: Lane4f = @splat(dca_dx * 4);
+                var cr_v: Lane4f = @as(Lane4f, @splat(cr)) + dcr_dx_v * lane_offsets;
+                var cg_v: Lane4f = @as(Lane4f, @splat(cg)) + dcg_dx_v * lane_offsets;
+                var cb_v: Lane4f = @as(Lane4f, @splat(cb)) + dcb_dx_v * lane_offsets;
+                var ca_v: Lane4f = @as(Lane4f, @splat(ca)) + dca_dx_v * lane_offsets;
 
                 while (px + 4 <= max_x) : (px += 4) {
-                    const r_bytes: @Vector(4, u8) = byteFromUnitFloatVec(cr_v);
-                    const g_bytes: @Vector(4, u8) = byteFromUnitFloatVec(cg_v);
-                    const b_bytes: @Vector(4, u8) = byteFromUnitFloatVec(cb_v);
-                    const a_bytes: @Vector(4, u8) = byteFromUnitFloatVec(ca_v);
+                    const r_bytes: Lane4u8 = byteFromUnitFloatVec(cr_v);
+                    const g_bytes: Lane4u8 = byteFromUnitFloatVec(cg_v);
+                    const b_bytes: Lane4u8 = byteFromUnitFloatVec(cb_v);
+                    const a_bytes: Lane4u8 = byteFromUnitFloatVec(ca_v);
 
                     inline for (0..4) |lane| {
                         const px_idx: u32 = row_offset + @as(u32, @intCast(px)) + @as(u32, lane);
@@ -4287,7 +4303,8 @@ test "era II: clear with .color = true fills the color buffer to clear_color" {
     try expectEqual(@as(usize, 64), buf.len);
     var i: usize = 0;
     while (i < 16) : (i += 1) {
-        const off = i * 4;
+        // Four bytes per pixel (RGBA8), so pixel `i` starts at byte `i * 4`.
+        const off: usize = i * 4;
         try expectEqual(@as(u8, 10), buf[off]);
         try expectEqual(@as(u8, 20), buf[off + 1]);
         try expectEqual(@as(u8, 30), buf[off + 2]);
@@ -6631,7 +6648,7 @@ test "era III: corner classification handles arbitrary submit order" {
 // ---- SIMD path tests
 // `quadKernel`'s `simdEligible()` configurations (today: BASE
 // only - no depth, no texture, no blend) take a 4-wide
-// `@Vector(4, f32)` inner-loop pass that processes four pixels
+// `Lane4f` inner-loop pass that processes four pixels
 // at a time, plus a scalar tail for the 0-3 leftover pixels
 // when the row width isn't a multiple of 4.  The math is
 // equivalent to the scalar path; both should produce the same
@@ -6936,8 +6953,15 @@ test "era III: perspective-correct UV - non-W=1 vertices interp correctly" {
         var px: i32 = 0;
         while (px < 32) : (px += 1) {
             const sample: [4]u8 = pixelAtRgba8(&ctx, px, py);
-            if (sample[0] > 200 and sample[2] < 50) found_red = true;
-            if (sample[2] > 200 and sample[0] < 50) found_blue = true;
+            // Channel-dominance test, not an exact colour match: the rasteriser interpolates and
+            // the blend may have touched these pixels, so the assertion is 'red clearly beats blue
+            // here' rather than a specific RGBA triple that any filtering change would break.
+            if (sample[0] > 200 and sample[2] < 50) {
+                found_red = true;
+            }
+            if (sample[2] > 200 and sample[0] < 50) {
+                found_blue = true;
+            }
         }
     }
     try expect(found_red);

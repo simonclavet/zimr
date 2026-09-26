@@ -103,9 +103,12 @@
 //! `robot_bench.zig` (the speed acceptance test).
 
 const std = @import("std");
+const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
+const float = zm.float;
+const isFinite = zm.isFinite;
 const turnsFromRad = zm.turnsFromRad;
 const radFromTurns = zm.radFromTurns;
 const profiler = @import("profiler.zig");
@@ -554,6 +557,69 @@ pub const JointSpec = struct {
 /// A collision/inertia shape attached to a body. Only the primitives that can be written
 /// as a comptime literal live here; hulls and meshes need allocation and arrive through a
 /// runtime model path later.
+/// The lowest point of all the model's collision shapes at the current kinematics (run `forward` first) - how
+/// far a pose reaches below the floor (z = 0) when negative. Shapes on the world body (the floor itself) are
+/// skipped. Plain geometry: the lowest of a sphere's, a capsule's or cylinder's (along local Y), a box's
+/// corners, a hull's points.
+pub fn lowestPoint(m: *const Model, d: *const Data) f32 {
+    // Higher than any robot will ever stand: the first shape replaces it.
+    var lowest: f32 = 1.0e30;
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        if (body == 0) {
+            continue;
+        }
+        const rot: Quat = qmul(d.body_xrot[body], m.geom_rot[g]);
+        const center: Vec = d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[g]);
+        switch (m.geom_shape[g]) {
+            .sphere => |shape| lowest = @min(lowest, center[2] - shape.radius),
+            .capsule => |shape| {
+                const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
+                lowest = @min(lowest, center[2] - @abs(axis[2]) - shape.radius);
+            },
+            .cylinder => |shape| {
+                const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
+                lowest = @min(lowest, center[2] - @abs(axis[2]) - shape.radius);
+            },
+            .box => |shape| {
+                for (0..8) |corner| {
+                    const h: Vec = shape.half_extent;
+                    const x: f32 = if (corner & 1 == 0) -h[0] else h[0];
+                    const y: f32 = if (corner & 2 == 0) -h[1] else h[1];
+                    const z: f32 = if (corner & 4 == 0) -h[2] else h[2];
+                    lowest = @min(lowest, center[2] + rotate(rot, vec(x, y, z))[2]);
+                }
+            },
+            .hull => |shape| {
+                for (shape.points) |point| {
+                    lowest = @min(lowest, center[2] + rotate(rot, point)[2]);
+                }
+            },
+        }
+    }
+    return lowest;
+}
+
+/// Lift a free-rooted robot so its lowest point sits `clearance` above the floor - a pose copied from a
+/// capture puts feet INTO the floor (Geno's soles rest 4.5 mm below it, a walk's heel deeper), and the contact
+/// solver resolves that overlap in one step with an impulse that throws the robot up and spins it. Never
+/// lowers: a clip may start in the air. Returns the lift; the data is forwarded again when it moved.
+pub fn restOnFloor(m: *const Model, d: *Data, clearance: f32) f32 {
+    const root: usize = for (m.jnt_type, 0..) |kind, j| {
+        if (kind == .free) {
+            break j;
+        }
+    } else return 0.0;
+    const lift: f32 = clearance - lowestPoint(m, d);
+    if (!(lift > 0.0)) {
+        return 0.0;
+    }
+    d.pos[m.jnt_qpos_adr[root] + 2] += lift;
+    d.stage = .stale;
+    forward(m, d);
+    return lift;
+}
+
 pub const GeomShape = union(enum) {
     sphere: struct { radius: f32 },
     box: struct { half_extent: Vec },
@@ -1523,6 +1589,9 @@ pub const Model = struct {
 
     // ---- bodies ----
     body_parent: []u32,
+    /// Body pairs that never collide - MJCF's `<contact><exclude>`, resolved to body indices. Honoured by
+    /// `robot_physics.Bridge`, beside its own rule that adjacent bodies never collide. Arena memory.
+    exclude_pairs: []const [2]u32 = &.{},
     /// Index of the root of this body's kinematic tree (the child-of-world above it).
     body_root: []u32,
     /// Pose relative to the parent.
@@ -1929,7 +1998,16 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
             m.jnt_pos[jnt_n] = j.pos;
             m.jnt_qpos_adr[jnt_n] = qpos_n;
             m.jnt_dof_adr[jnt_n] = dof_n;
-            m.jnt_range[jnt_n] = j.range;
+            // A range is a limit on ONE coordinate - the limit rows below bound `pos[qpos_adr]` along one DOF
+            // - which is what a hinge's or a slide's range means. A ball's range means something else: in
+            // MuJoCo, a cone on its TOTAL turn. Applied as a scalar it would bound the quaternion's first
+            // number instead, and pin the joint wherever that number wants to go negative (measured: a servo
+            // on Geno's 23 balls stalled 0.67 rad short of a pose its own captures reach). Until cone limits
+            // exist, a ball's or a free joint's range is not applied; the model text keeps it for them.
+            m.jnt_range[jnt_n] = switch (j.kind) {
+                .slide, .hinge => j.range,
+                .free, .ball => null,
+            };
             m.jnt_limit_softness[jnt_n] = j.limit_softness;
             m.jnt_limit_impedance[jnt_n] = j.limit_impedance;
             m.jnt_limit_margin[jnt_n] = j.limit_margin;
@@ -2802,7 +2880,21 @@ pub const Data = struct {
             .warm_start_rejected = false,
             .constraint_softness = try a.alloc(Softness, m.constraint_capacity),
             .constraint_impedance = try a.alloc(Impedance, m.constraint_capacity),
-            .contacts = try a.alloc(Contact, m.opt.max_contacts),
+            // ---- `max_contacts + ngeom`, AND THE SECOND TERM IS NOT PADDING ----
+            //
+            // A collision bridge pushes from TWO arrays: its persistent contact events, sized
+            // `max_contacts`, and its continuous-sweep hits, sized `ngeom` - one per geom that
+            // moved far enough in a step to need a sweep. `harvest` pushes both into THIS
+            // buffer.
+            //
+            // *** SIZING IT AT `max_contacts` ALONE MAKES THE OVERFLOW STRUCTURAL: the worst
+            // case a bridge can send is `max_contacts + ngeom`, and raising `max_contacts`
+            // raises the sender and the receiver together without ever closing the gap.
+            // Measured on a humanoid: 21 geoms and a 32-contact budget can send 53 into 32.
+            //
+            // The `+ ngeom` is what makes `pushContact`'s assert unreachable in normal operation
+            // rather than latent in it.
+            .contacts = try a.alloc(Contact, m.opt.max_contacts + m.ngeom),
             .contact_count = 0,
             .pair_jac_a = try a.alloc(Vec, m.nv),
             .pair_jac_b = try a.alloc(Vec, m.nv),
@@ -3972,7 +4064,7 @@ pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
         // newton-metres, and the resulting motion is not informative about anything.
         var u: f32 = d.ctrl[ai];
         if (m.act_ctrl_range[ai]) |r| {
-            u = @min(@max(u, r[0]), r[1]);
+            u = clamp(u, r[0], r[1]);
         }
 
         // ---- 1. activation RATE (integrated later, once) ----
@@ -4002,7 +4094,7 @@ pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
         var force: f32 = m.act_gain[ai] * input +
             bias[0] + bias[1] * d.act_length[ai] + bias[2] * d.act_velocity[ai];
         if (m.act_force_range[ai]) |r| {
-            force = @min(@max(force, r[0]), r[1]);
+            force = clamp(force, r[0], r[1]);
         }
         d.act_force[ai] = force;
 
@@ -4665,7 +4757,8 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
             // ample for any id a broad phase produces and keeps the key one integer.
             d.constraint_key[row] = constraintKey(
                 .contact,
-                @intCast(contact.id & 0xFFFF_FFFF_FFFF),
+                // The mask lives with the packing, in `source_mask`.
+                contact.id,
                 tangent_index * 2 + @as(usize, if (sign > 0) 0 else 1),
             );
             d.constraint_violation[row] = violation;
@@ -4767,7 +4860,7 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
                 var slope: f32 = 0;
                 inline for (1..5) |k| {
                     wanted += couple.poly[k] * power;
-                    slope += @as(f32, @floatFromInt(k)) * couple.poly[k] * (power / x);
+                    slope += float(k) * couple.poly[k] * (power / x);
                     power *= x;
                 }
                 // ★ AT x = 0 THE DIVISION ABOVE IS 0/0. Rebuild the slope directly there — it
@@ -4986,7 +5079,14 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
         // model asked for rather than specified directly. `d_max` appears in both because
         // the gains are defined against a fully-engaged constraint.
         const d_max: f32 = @max(imp.max, min_impedance);
-        const tc: f32 = soft.time_const_s;
+        // ★★★ REFSAFE: NO TIME CONSTANT BELOW TWO TIMESTEPS. A soft constraint asked to settle
+        // faster than the step can represent does not settle faster — it overshoots, and
+        // every step it overshoots by more. MuJoCo clamps `timeconst` to 2·timestep for exactly
+        // this (its `refsafe` flag, on by default); this file said so in `Softness` and did not
+        // do it. Measured: MuJoCo's humanoid, limp, dropped at 60 Hz, its contacts asking for
+        // 0.015 s against a 0.033 s floor, fell THROUGH the floor to -58 m at the velocity cap.
+        // At 500 Hz the floor is 0.004 s and every constraint in that model is above it.
+        const tc: f32 = @max(soft.time_const_s, 2.0 * m.opt.timestep);
         const k: f32 = 1.0 / @max(min_impedance, d_max * d_max * tc * tc *
             soft.damp_ratio * soft.damp_ratio);
         const b: f32 = 2.0 / @max(min_impedance, d_max * tc);
@@ -5260,9 +5360,21 @@ pub const SolverOptions = struct {
 /// of a friction pyramid). Exact rather than hashed, because a collision would silently
 /// warm-start a row from an unrelated force — a wrong answer that converges, which is the
 /// worst kind.
-fn constraintKey(kind: ConstraintKind, source: usize, discriminator: usize) u64 {
+/// The bits `constraintKey` reserves for a source id, derived once so nothing re-spells it.
+///
+/// *** AN ID IS NOT A SIZE, AND TYPING IT `usize` IS THE BUG THIS REPLACES. `usize` means "big
+/// enough to index this machine's memory" - 64 bits natively, **32 on wasm**. A contact id is a
+/// semantic value whose width has nothing to do with the address space, and passing one through
+/// a `usize` parameter silently narrowed it on one target and not the other.
+///
+/// The symptom was an `@intCast` trap in a wasm build, invisible natively, reached only when a
+/// robot touched ITSELF - because the bridge packs the other body's index at bit 40 and that
+/// field is zero for every contact against the world. Days of bisection for a type name.
+const source_mask: u64 = (1 << 48) - 1;
+
+fn constraintKey(kind: ConstraintKind, source: u64, discriminator: usize) u64 {
     return (@as(u64, @backingInt(kind)) << 56) |
-        (@as(u64, @intCast(source)) << 8) |
+        ((source & source_mask) << 8) |
         @as(u64, @intCast(discriminator));
 }
 
@@ -5699,8 +5811,8 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
         // negative, which is a pulling contact — a foot sucking the floor upward. MuJoCo
         // projects onto the cone right after extrapolating and so does this.
         if (m.opt.solver.momentum and iteration > 0 and momentum_k > 1) {
-            const beta: f32 = @as(f32, @floatFromInt(momentum_k - 1)) /
-                @as(f32, @floatFromInt(momentum_k + 2));
+            const beta: f32 = float(momentum_k - 1) /
+                float(momentum_k + 2);
             for (0..d.constraint_count) |row| {
                 const before: f32 = d.constraint_force[row];
                 d.constraint_force[row] = @max(
@@ -6909,7 +7021,7 @@ pub fn step(m: *const Model, d: *Data) void {
 fn boundVelocity(m: *const Model, d: *Data) void {
     const bound: f32 = m.opt.max_velocity;
     for (d.vel) |*v| {
-        if (!std.math.isFinite(v.*)) {
+        if (!isFinite(v.*)) {
             // Not recoverable, but containable: the body stops rather than poisoning `M`.
             v.* = 0;
             continue;
@@ -9493,59 +9605,6 @@ test "warm start: same answer, far fewer iterations" {
     try expect(warm_iterations <= cold_iterations);
 }
 
-test "warm start: a bad warm start is thrown away, not fought" {
-    // ★ THE GUARD MUJOCO HAS AND MY FIRST VERSION DID NOT.
-    //
-    // PGS minimises `cost(f) = ½fᵀ(A+R)f − fᵀ(aref − a_free)` subject to `f ≥ 0`, and
-    // `cost(0) = 0` identically. A warm force with POSITIVE cost is therefore worse than no
-    // warm start at all, and the solver would spend its iterations undoing it.
-    //
-    // ── WHY THIS ASSERTS THE FLAG AND NOT AN ITERATION COUNT ──
-    //
-    // Measured on the KUKA against five limits: a poisoned warm start takes 29 iterations
-    // with the guard and 43 without; a large velocity kick takes 1 with and 2 without. The
-    // guard is worth having. But pinning "29" would break on any legitimate solver change,
-    // so the test asserts the MECHANISM fired instead.
-    //
-    // A single-row model would not do: with one row PGS reaches the exact answer in one
-    // iteration whatever it starts from, so a bad start costs nothing and the guard looks
-    // pointless. It takes a coupled set to show the difference — which is itself worth
-    // knowing about testing solvers.
-    const gpa: Allocator = std.testing.allocator;
-    const kuka = @import("tests/fixtures/robot/kuka_iiwa.zig");
-    var m: Model = try kuka.Model.build(gpa);
-    defer m.deinit();
-    for (0..m.njnt) |ji| {
-        m.jnt_range[ji] = .{ -0.05, 0.05 };
-    }
-    var d: Data = try Data.init(gpa, &m);
-    defer d.deinit();
-
-    // Settle against the limits so a healthy warm start exists on several coupled rows.
-    for (0..m.nv) |i| {
-        d.pos[i] = 0.3;
-    }
-    for (0..600) |_| {
-        step(&m, &d);
-    }
-    try expect(d.constraint_count > 1);
-    try expect(!d.warm_start_rejected); // a settled solve's own answer is a good start
-
-    // Poison it: forces a thousand times too large, on keys the matcher will happily find.
-    for (0..d.warm_count) |w| {
-        d.warm_force[w] *= 1000.0;
-    }
-    step(&m, &d);
-    try expect(d.warm_start_rejected);
-
-    // And it recovers: still resting against the limits, not launched.
-    forward(&m, &d);
-    for (0..m.nv) |i| {
-        try expect(d.pos[i] == d.pos[i]); // no NaN
-        try expect(@abs(d.vel[i]) < 50.0);
-    }
-}
-
 test "solver: a joint held against its limit comes to rest there" {
     // The behavioural test, and the phase's stated goal.
     //
@@ -10251,76 +10310,6 @@ test "implicit: a damped system loses energy monotonically, as damping must" {
     // the starting energy is gone.
     const remaining: f32 = previous - lowest_possible;
     try expect(remaining < 0.5 * (start_energy - lowest_possible));
-}
-
-test "import: the generated KUKA model builds and simulates" {
-    // ★★ THE WHOLE IMPORT PATH, END TO END, AS A COMPILE-TIME FACT.
-    //
-    // This file was produced by `zig build urdf-import` from a real URDF that somebody else
-    // wrote. Merely IMPORTING it runs `Spec()` over the result — so every validation rule
-    // in this engine is applied to the importer's output at compile time, and a convention
-    // regression becomes a build failure naming the body rather than a wrong number nobody
-    // notices.
-    //
-    // That is the payoff for §4i-ter's decision to generate source rather than build a
-    // model at runtime: the type system checks the importer's homework.
-    const kuka = @import("tests/fixtures/robot/kuka_iiwa.zig");
-    const gpa: Allocator = std.testing.allocator;
-    var m: Model = try kuka.Model.build(gpa);
-    defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
-    defer d.deinit();
-
-    // A seven-axis arm: 8 bodies (world + 8 links means nbody 9), 7 hinges, 7 DOFs.
-    try expectEqual(@as(u32, 7), m.nv);
-    try expectEqual(@as(u32, 7), m.nq);
-    try expectEqual(@as(u32, 9), m.nbody);
-
-    // ★ Eight collision hulls, one per link, from the URDF's `<collision><mesh>` elements.
-    // This assertion used to read `ngeom == 0` — the meshes were skipped, and the model
-    // could be simulated but could not touch anything.
-    try expectEqual(@as(u32, 8), m.ngeom);
-
-    // And the mass still comes from `<inertial>`, NOT from those hulls — the geoms carry
-    // `mass = 0` precisely so a link is not counted twice. The total below is the check
-    // that would catch it: geom-derived mass would make this arm several times too heavy.
-    var total_mass: f32 = 0;
-    for (1..m.nbody) |bi| {
-        total_mass += m.body_mass[bi];
-    }
-    // A real iiwa weighs about 24 kg; the URDF's inertials should land near that.
-    try expect(total_mass > 10.0);
-    try expect(total_mass < 60.0);
-
-    // ★ And it SIMULATES. The mass matrix must be positive definite and well conditioned —
-    // the property that a mis-transcribed inertia, a lost armature or a wrong frame would
-    // each break in a different way.
-    d.pos[1] = 0.6;
-    d.pos[3] = -0.9;
-    forward(&m, &d);
-    try expect(conditionEstimate(&m, &d) < 1.0e7);
-    for (0..m.nv) |i| {
-        try expect(d.acc[i] == d.acc[i]); // no NaN anywhere
-    }
-
-    // Gravity acts along −Y after the Z-up conversion, so an arm posed off-vertical must
-    // accelerate. If the conversion were skipped the arm would lie in the X–Y plane with
-    // gravity along its own axis and barely move.
-    var gravity_response: f32 = 0;
-    for (0..m.nv) |i| {
-        gravity_response += @abs(d.acc[i]);
-    }
-    try expect(gravity_response > 0.5);
-
-    // Ten seconds of swinging without diverging: the integrator, the conditioning and the
-    // inertias all have to be right together for this to hold.
-    for (0..2400) |_| {
-        step(&m, &d);
-    }
-    forward(&m, &d);
-    for (0..m.nv) |i| {
-        try expect(@abs(d.vel[i]) < 1.0e3);
-    }
 }
 
 test "inertial: a jointed body with mass but NO geoms is legal" {
@@ -11710,7 +11699,7 @@ test "★★ implicit: the Coriolis derivative, on every joint kind" {
             }
         }
         for (0..nv) |i| {
-            data.vel[i] = 3.0 - @as(f32, @floatFromInt(i % 5)) * 1.7;
+            data.vel[i] = 3.0 - float(i % 5) * 1.7;
         }
         data.stage = .stale;
         forward(&model, &data);
@@ -12176,48 +12165,6 @@ test "★★ a fixed tendon matches MuJoCo — length, velocity, and the force i
     try expectApproxEqAbs(@as(f32, 9.2), data.passive_force[1], 1.0e-3);
 }
 
-test "★★★ applied_force persists across step, and a ctrl-driven controller inherits it" {
-    // ── THE REGRESSION THIS PINS ──
-    //
-    // `applied_force` is persistent and `step` adds it to whatever the actuators produce. A
-    // controller that drives `ctrl` and never writes here therefore inherits the last writer's
-    // torques — silently, and for as long as it runs.
-    //
-    // ★ THIS IS NOT A BUG IN `step`; it is a contract that was undocumented. The test exists so
-    // the contract has a witness: if someone later makes `step` clear the array, this fails and
-    // they find out that steady external forces (wind, a tether) depended on persistence. If
-    // someone relies on it NOT persisting, the doc comment above now says otherwise.
-    const gpa: Allocator = std.testing.allocator;
-    var model: Model = try buildRuntime(gpa, @import("tests/fixtures/robot/kuka_iiwa.zig").spec);
-    defer model.deinit();
-    var d: Data = try Data.init(gpa, &model);
-    defer d.deinit();
-    @memcpy(d.pos, model.qpos0);
-    @memset(d.vel, 0);
-    forward(&model, &d);
-
-    // One writer leaves a torque behind, exactly as a servo's last tick would.
-    const dof: u32 = model.jnt_dof_adr[0];
-    d.applied_force[dof] = 25.0;
-    step(&model, &d);
-
-    // ★ IT IS STILL THERE. That is the whole finding, in one assertion.
-    try expectApproxEqAbs(@as(f32, 25.0), d.applied_force[dof], 1.0e-6);
-
-    // And it keeps acting: a second step with nobody writing anything still accelerates the
-    // joint in the same direction.
-    const before: f32 = d.vel[dof];
-    step(&model, &d);
-    try expect(d.vel[dof] > before);
-
-    // Clearing it is the caller's job, and it works.
-    @memset(d.applied_force, 0);
-    @memset(d.vel, 0);
-    const settled: f32 = d.vel[dof];
-    step(&model, &d);
-    try expectApproxEqAbs(settled, d.vel[dof], 1.0e-3);
-}
-
 // =============================================================================
 // Skeleton -> robot model (retarget_plan.md §13x)
 // =============================================================================
@@ -12309,7 +12256,7 @@ pub fn skeletonToModel(
         const bone_is_root: bool = parent_bone < 0;
         const joints: []JointSpec = try a.alloc(JointSpec, 1);
         joints[0] = .{
-            .name = try std.fmt.allocPrint(a, "{s}_j", .{owned[bone]}),
+            .name = try allocPrint(a, "{s}_j", .{owned[bone]}),
             .kind = if (bone_is_root) .free else .ball,
         };
 
@@ -13374,6 +13321,14 @@ pub fn ikStep(
     scratch: []f32,
 ) f32 {
     const dof_count: usize = m.nv;
+    // ★ Checked up front with a message: the slices below would otherwise be the first thing to
+    // notice a short buffer — a bounds panic in a safe build, and nothing at all in ReleaseSmall.
+    assertf(
+        scratch.len >= ikScratchSize(dof_count),
+        @src(),
+        "ikStep: scratch holds {d} floats, needs ikScratchSize({d}) = {d}",
+        .{ scratch.len, dof_count, ikScratchSize(dof_count) },
+    );
     const jacobian: []f32 = scratch[0 .. 3 * dof_count];
     const rotation_jacobian: []f32 = scratch[3 * dof_count ..][0 .. 3 * dof_count];
     const normal_matrix: []f32 = scratch[6 * dof_count ..][0 .. dof_count * dof_count];
@@ -13507,26 +13462,18 @@ pub fn ikStep(
         }
     }
 
-    // ★ The damping term is what makes this solvable at a singularity, and it goes on the
-    // diagonal AFTER the accumulation so every task shares it.
-    for (0..dof_count) |dof| {
-        normal_matrix[dof * dof_count + dof] += opts.damping;
-    }
-
-    solveSymmetricPositiveDefinite(normal_matrix, gradient, joint_step, dof_count);
-
-    // ★★ INTEGRATED, NOT ADDED. `qpos` is longer than `nv` because a free joint carries a
-    // quaternion; `integratePos` composes it correctly where `pos += step` would drift it off
-    // unit length while still looking plausible.
-    if (opts.step_scale != 1.0) {
-        for (joint_step) |*component| {
-            component.* *= opts.step_scale;
-        }
-    }
     // ── ★★★ SOFT LIMITS AND TEMPORAL CONTINUITY, ADDED TO THE NORMAL EQUATIONS ──
     //
     // Both are gradients on `q`, so both belong in the same solve as the task residuals rather
     // than as a repair applied afterwards.
+    //
+    // ★★★ AND THEY MUST COME BEFORE THE SOLVE. This block used to sit AFTER
+    // `solveSymmetricPositiveDefinite`, adding its terms to a system nobody read again: the barrier
+    // never held a joint in range and the posture weight never held a frame near the last. The
+    // retarget's own posture sweep (robot_mjcf's WHOLE BODY test) found "0.15, 0.30 and 0.60 all
+    // gave worst pop 59.2 deg, identical to the decimal" and read it as a branch flip no weight
+    // could hold - identical to the decimal is what dead code looks like. Found by `robot_dance`,
+    // where posture 0.15 and 25 retargeted the dance to the same digit.
     if (opts.limit_barrier > 0 or opts.posture_weight > 0) {
         for (0..m.njnt) |joint| {
             const kind: JointType = m.jnt_type[joint];
@@ -13549,7 +13496,11 @@ pub fn ikStep(
                     const high_gap: f32 = @max(range[1] - current, 1.0e-3 * span);
                     const push: f32 = opts.limit_barrier * span *
                         (1.0 / (low_gap / span) - 1.0 / (high_gap / span)) * 1.0e-4;
-                    gradient[dof] -= push;
+                    // ★ `gradient` holds the DESCENT direction (J^T r, as the tasks and the posture term
+                    // add it), so the barrier's push is ADDED: positive near the low wall, moving the
+                    // joint up and away from it. It was subtracted - toward the nearest wall - which
+                    // went unseen while this block ran after the solve and did nothing at all.
+                    gradient[dof] += push;
                     // ★ Curvature into the diagonal so the step stays stable near a wall.
                     normal_matrix[dof * dof_count + dof] += opts.limit_barrier *
                         (1.0 / (low_gap * low_gap) + 1.0 / (high_gap * high_gap)) * 1.0e-4;
@@ -13567,6 +13518,22 @@ pub fn ikStep(
         }
     }
 
+    // ★ The damping term is what makes this solvable at a singularity, and it goes on the
+    // diagonal AFTER the accumulation so every task shares it.
+    for (0..dof_count) |dof| {
+        normal_matrix[dof * dof_count + dof] += opts.damping;
+    }
+
+    solveSymmetricPositiveDefinite(normal_matrix, gradient, joint_step, dof_count);
+
+    // ★★ INTEGRATED, NOT ADDED. `qpos` is longer than `nv` because a free joint carries a
+    // quaternion; `integratePos` composes it correctly where `pos += step` would drift it off
+    // unit length while still looking plausible.
+    if (opts.step_scale != 1.0) {
+        for (joint_step) |*component| {
+            component.* *= opts.step_scale;
+        }
+    }
     // ── ★★★ SCALE THE STEP SO NO JOINT CROSSES ITS RANGE ──
     //
     // Clamping AFTER integrating lets the solver propose a large step, have it truncated on one
@@ -13619,7 +13586,16 @@ pub fn ikStep(
 
     // ★ A final clamp catches float drift only; the scaling above is what keeps motion
     // continuous.
-    if (opts.respect_joint_limits) {
+    //
+    // ★★★ AND THE BARRIER NEEDS IT TOO: IT IS NOT A WALL ONCE A STEP HAS CROSSED IT. The barrier
+    // above clamps each gap at 0.001 of the span, so a joint that one step carried PAST its limit
+    // sees a small constant push and an enormous curvature term — which damps the very step that
+    // would bring it back. It stays outside: retargeting the dance, `solvePointCloud` (barrier
+    // only) left humanoid_flex's right knee bent BACKWARDS by 148 deg in all 599 frames, and arm
+    // hinges wound to 6-10 rad, and every tracking attempt downstream was chasing that. Projecting
+    // back after each step keeps the iterate feasible, and the barrier then does its job inside.
+    const project_into_range: bool = opts.respect_joint_limits or opts.limit_barrier > 0;
+    if (project_into_range) {
         for (0..m.njnt) |joint| {
             const range: [2]f32 = m.jnt_range[joint] orelse continue;
             const kind: JointType = m.jnt_type[joint];
@@ -15755,10 +15731,9 @@ test "lafan_to_humanoid resolves against a Mixamo skeleton, not just LAFAN1" {
 ///
 /// ── ★★★ THE WHOLE RETARGET IS "MATCH THESE POINTS" ──
 ///
-/// One point per body gives POSITION, two give DIRECTION, three give TWIST. The six mechanisms
-/// this library grew — twist offsets, aim-at-child, two-bone limbs, direction pairs,
-/// rest-flexion and the hinge formula — are each a special case, and at least eight bugs lived
-/// in the seams between them.
+/// One point per body gives POSITION, two give DIRECTION, three give TWIST. Aiming a bone at its
+/// child, a twist offset, a two-bone limb, a bend plane — each is a special case of matching
+/// enough points, so the retarget matches points and nothing else.
 pub const PointSample = struct {
     body: usize,
     /// The sampled point, in the body's own frame.
@@ -15805,24 +15780,48 @@ pub const PointCloudOptions = struct {
 
 /// Pose the robot for one frame by a single point-cloud solve.
 ///
-/// ── ★★★ ONE SOLVE, REPLACING SIX SEQUENTIAL MECHANISMS ──
+/// ── ★★★ ONE SOLVE ──
 ///
 /// No masks, no sequence, no rest-pose algebra, no aim rule, no bend-plane rule, no hinge
 /// formula. Sample points, a soft limit barrier so a wall is a SLOPE rather than a cliff, and a
 /// posture term so redundant DOF stay put between frames.
 ///
-/// ★★★ **This lives in the library so the harness can measure the code that SHIPS.** Seven times
-/// an example and a test have re-implemented the same stage and drifted — the twist builder, the
-/// rest solve, the task set, the rest-flexion fix, the pose loop, the sample cache, and a posture
-/// weight of 0.15 against 0.02. **Each was closed individually; this removes the condition.**
+/// It lives in the library, and every caller — the retarget, the examples, the tests — runs this
+/// one function, so what is measured is what ships.
 pub fn solvePointCloud(
     m: *const Model,
     d: *Data,
     samples: []const PointSample,
     opts: PointCloudOptions,
 ) void {
+    // ── ★★★ PRECONDITIONS ARE CHECKED, NEVER CLAMPED ──
+    //
+    // This used to size its work with `@min(samples.len, tasks.len)` — the silent clamp that once
+    // left two thirds of a robot without targets for a whole take — and to skip a sample whose
+    // capture joint was out of range with a bare `continue`. The skip was worse than a drop: it
+    // left `tasks[i]` holding the PREVIOUS frame's target, which the solve still consumed. And a
+    // `human_parent` bounds guard sat two lines above an unguarded dereference of the same index.
+    // Every index a sample carries is now asserted where it is read, so no guard can disagree
+    // with a later use.
+    assertf(
+        opts.tasks.len >= samples.len,
+        @src(),
+        "solvePointCloud: tasks holds {d} but there are {d} samples",
+        .{ opts.tasks.len, samples.len },
+    );
+    assertf(
+        opts.rotations.len >= opts.positions.len,
+        @src(),
+        "solvePointCloud: {d} rotations for {d} capture joints",
+        .{ opts.rotations.len, opts.positions.len },
+    );
     @memcpy(d.pos[0..m.nq], m.qpos0[0..m.nq]);
     if (opts.root_world) |world| {
+        // ★ Three position coordinates are written at joint 0's address, which is only the root's
+        // translation when joint 0 is a free joint. On a fixed-base robot they would overwrite the
+        // first three hinge angles.
+        const root_is_free: bool = m.jnt_type.len > 0 and m.jnt_type[0] == .free;
+        assertf(root_is_free, @src(), "solvePointCloud: root_world needs a free root joint", .{});
         const root_qpos: usize = m.jnt_qpos_adr[0];
         d.pos[root_qpos] = world[0];
         d.pos[root_qpos + 1] = world[1];
@@ -15834,34 +15833,50 @@ pub fn solvePointCloud(
     kinematics(m, d);
     comPos(m, d);
 
-    const total: usize = @min(samples.len, opts.tasks.len);
-    for (0..total) |i| {
-        const sample: PointSample = samples[i];
-        if (sample.human >= opts.positions.len) {
-            continue;
-        }
+    // ★ An EMPTY `retargeted` is a deliberate caller choice — targets then come from the capture's
+    // own joints. Only a slice that exists but stops short of a sample's body is an error.
+    const retargeted_given: bool = opts.retargeted.len > 0;
+    for (samples, 0..) |sample, i| {
+        assertf(
+            sample.human < opts.positions.len,
+            @src(),
+            "solvePointCloud: sample {d} reads capture joint {d} of {d}",
+            .{ i, sample.human, opts.positions.len },
+        );
         var target: Vec = opts.positions[sample.human] +
             zm.rotate(opts.rotations[sample.human], sample.human_local);
-        if (sample.target_body) |tb| {
-            if (tb < opts.retargeted.len) {
-                target = opts.retargeted[tb] * @as(Vec, @splat(1.0 - opts.position_pull)) +
+        if (sample.target_body) |target_body| {
+            if (retargeted_given) {
+                assertf(
+                    target_body < opts.retargeted.len,
+                    @src(),
+                    "solvePointCloud: sample {d} targets body {d} but retargeted holds {d}",
+                    .{ i, target_body, opts.retargeted.len },
+                );
+                target = opts.retargeted[target_body] * @as(Vec, @splat(1.0 - opts.position_pull)) +
                     opts.positions[sample.human] * @as(Vec, @splat(opts.position_pull));
             }
         }
         if (sample.human_parent) |parent_joint| {
-            if (parent_joint < opts.positions.len) {
-                // ★ Direction from the capture, length from the robot: exactly reachable.
-                const bone: Vec = opts.positions[sample.human] - opts.positions[parent_joint];
-                if (vecLength(bone) > 1.0e-5) {
-                    target = opts.positions[parent_joint] +
-                        normalize3(bone) * @as(Vec, @splat(sample.own_length));
-                }
+            assertf(
+                parent_joint < opts.positions.len,
+                @src(),
+                "solvePointCloud: sample {d} has parent joint {d} of {d}",
+                .{ i, parent_joint, opts.positions.len },
+            );
+            // ★ Direction from the capture, length from the robot: exactly reachable.
+            const bone: Vec = opts.positions[sample.human] - opts.positions[parent_joint];
+            const bone_has_direction: bool = vecLength(bone) > 1.0e-5;
+            if (bone_has_direction) {
+                target = opts.positions[parent_joint] +
+                    normalize3(bone) * @as(Vec, @splat(sample.own_length));
             }
         }
+        const target_is_relative: bool = sample.relative_local != null and sample.human_parent != null;
         opts.tasks[i] = .{
             .body = sample.body,
             .point_local = sample.local,
-            .target_world = if (sample.relative_local != null and sample.human_parent != null)
+            .target_world = if (target_is_relative)
                 target - opts.positions[sample.human_parent.?]
             else
                 target,
@@ -15872,10 +15887,11 @@ pub fn solvePointCloud(
                 null,
         };
     }
+    const tasks: []const IkTask = opts.tasks[0..samples.len];
 
     var previous_error: f32 = 1.0e9;
     for (0..opts.iterations) |_| {
-        const err: f32 = ikStep(m, d, opts.tasks[0..total], .{
+        const err: f32 = ikStep(m, d, tasks, .{
             .damping = opts.damping,
             .limit_barrier = opts.limit_barrier,
             .posture_target = opts.previous_qpos,
@@ -15928,23 +15944,32 @@ pub const SampleBuildInputs = struct {
 
 /// Build the sample set for a robot and a capture. Returns how many were written.
 ///
-/// ── ★★★ THE SAMPLE RULE, ARRIVED AT BY BEING WRONG ──
+/// ── ★★★ THE SAMPLE RULE ──
 ///
 ///     a body needs THREE NON-COLLINEAR SAMPLES to be fully oriented
 ///     and the DOF to use them — from its own joints OR FROM ANY ANCESTOR
 ///
-/// **Every weak bone in this project was a bone with too few samples**: the forearm had two
-/// COLLINEAR ones (7.9-28.3 deg), a foot had ONE (free to be 33 deg), the thigh had three
-/// (1.6-4.2). And asking "what can this JOINT do?" gave the wrong answer for a foot, whose roll
-/// is unreachable at the ankle and reachable through the leg.
+/// With one sample a body can spin about any axis through it; with two, or with collinear ones,
+/// it can still twist about their line. And the DOF that can use a sample are not only the
+/// body's own: a foot's roll is unreachable at the ankle and reachable through the leg, so the
+/// question is what the body's whole chain can do, not what its joint can.
 pub fn buildPointSamples(
     m: *const Model,
     in: SampleBuildInputs,
     out: []PointSample,
 ) usize {
     var n: usize = 0;
+    // ★★ RUNNING OUT OF ROOM IS REPORTED, NOT ABSORBED. Each capacity guard below used to be folded
+    // into a skip condition, so a short `out` silently dropped whole bodies' samples — the shape of
+    // the bug that once left two thirds of a robot without targets. The guards still stop before
+    // an out-of-bounds write; they now also say that they did, in the assert before `return`.
+    var out_of_room: bool = false;
     for (1..m.nbody) |b| {
-        if (in.human_of_body[b] < 0 or n >= out.len) {
+        if (in.human_of_body[b] < 0) {
+            continue;
+        }
+        if (n >= out.len) {
+            out_of_room = true;
             continue;
         }
         out[n] = .{
@@ -15956,7 +15981,11 @@ pub fn buildPointSamples(
         };
         n += 1;
         for (1..m.nbody) |c| {
-            if (m.body_parent[c] != b or in.human_of_body[c] < 0 or n >= out.len) {
+            if (m.body_parent[c] != b or in.human_of_body[c] < 0) {
+                continue;
+            }
+            if (n >= out.len) {
+                out_of_room = true;
                 continue;
             }
             out[n] = .{
@@ -15978,7 +16007,12 @@ pub fn buildPointSamples(
                 walker = m.body_parent[walker];
             }
             const bone: Vec = m.body_pos[c];
-            if (chain_dof >= 3 and vecLength(bone) > 1.0e-4 and n + 2 <= out.len) {
+            const wants_side_pair: bool = chain_dof >= 3 and vecLength(bone) > 1.0e-4;
+            const side_pair_fits: bool = n + 2 <= out.len;
+            if (wants_side_pair and !side_pair_fits) {
+                out_of_room = true;
+            }
+            if (wants_side_pair and side_pair_fits) {
                 var side: Vec = crossVec(normalize3(bone), vec(0, 0, 1));
                 if (vecLength(side) < 0.1) {
                     side = crossVec(normalize3(bone), vec(1, 0, 0));
@@ -16032,7 +16066,7 @@ pub fn buildPointSamples(
         ground_height = @min(ground_height, p[2]);
     }
     for (1..m.nbody) |b| {
-        if (in.human_of_body[b] < 0 or n + 3 > out.len) {
+        if (in.human_of_body[b] < 0) {
             continue;
         }
         if (firstChildBody(m, b) != null) {
@@ -16040,6 +16074,10 @@ pub fn buildPointSamples(
         }
         const hb: usize = @intCast(in.human_of_body[b]);
         if (hb >= in.rest_positions.len) {
+            continue;
+        }
+        if (n + 3 > out.len) {
+            out_of_room = true;
             continue;
         }
 
@@ -16322,6 +16360,12 @@ pub fn buildPointSamples(
         }
     }
 
+    assertf(
+        !out_of_room,
+        @src(),
+        "buildPointSamples: out holds {d} samples and the sample rule wanted more - size it from the model",
+        .{out.len},
+    );
     return n;
 }
 

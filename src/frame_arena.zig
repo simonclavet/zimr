@@ -19,6 +19,7 @@
 //! `allocator()`, `reset(mode)` and `deinit()` mirror the arena, so only the
 //! `init` site changes.
 const std = @import("std");
+const expectEqual = std.testing.expectEqual;
 const zm = @import("zm");
 const assertf = zm.assertf;
 const Allocator = std.mem.Allocator;
@@ -155,6 +156,6 @@ test "FrameArena resets the tally and stays under ceiling" {
         const buf: []u8 = try a.alloc(u8, 256);
         _ = buf;
         _ = fa.reset(.retain_capacity);
-        try std.testing.expectEqual(@as(usize, 0), fa.live_bytes);
+        try expectEqual(@as(usize, 0), fa.live_bytes);
     }
 }

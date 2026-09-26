@@ -1,0 +1,385 @@
+<!--
+  humanoid_flex.xml — humanoid.xml adapted to Geno, with ONE degree of freedom added per arm.
+
+  ============================================================================
+  RESULT
+  ============================================================================
+                        stock      flex 1 (ranges)   flex 2 (this file)
+      torso axis          -            9.0 deg          6.8 deg
+      upper arm           -           11.3              8.4
+      forearm             -           11.2              4.7      (best possible 1.1-2.8)
+      worst single-frame pop         59.0             14.3       from 155 originally
+
+  ★★★ THE POP COLLAPSED 59 -> 14 BECAUSE OF THE THIRD SHOULDER AXIS. The last pops were a
+  BRANCH FLIP between two clamped configurations that satisfied the targets nearly equally — a
+  posture term provably could not hold it (0.15, 0.30 and 0.60 all gave 59.2 to the decimal).
+  A third axis removes the pinning that creates the two branches.
+
+  ★★ THE FOREARM COLLAPSED 11.2 -> 4.7 BECAUSE OF THE ARM LENGTHS. Its bones were 1.24-1.29x the
+  capture's; now 0.99-1.03. Total skeleton ratio 1.076 -> 0.997.
+
+  ============================================================================
+  WHAT THIS IS FOR
+  ============================================================================
+  Retargeting the Geno mocap onto stock `humanoid.xml` reaches, on frames where
+  no joint is at a limit:
+
+      torso spine   EXACT        thigh 1.2-3.0 deg      shin 2.9-3.6 deg
+      ankle within 7 mm          foot 11-13 deg
+
+  and on frames where a joint IS at a limit it degrades to thigh 10.2, shin
+  21.2, ankle 0.127 m, foot 78.6. **The mathematics is not the limiting factor;
+  the joint ranges are.** Every edit below names the measurement that motivated
+  it.
+
+  ============================================================================
+  WHAT IS NOT CHANGED
+  ============================================================================
+  - No bodies added or removed. **Exactly ONE joint added per arm** — the DOF
+    count goes from 21 to 23, and nothing else in the model gains freedom.
+  - Leg proportions untouched: measured 0.98-1.08 against the capture already.
+  - `qpos0` untouched, so the arms still rest folded at 109.5 deg of elbow. That
+    is a rest pose, not a limit, and the retarget handles it correctly.
+
+  ★★ Flex 1 deliberately withheld the third shoulder axis so that RANGE and
+  SHAPE could be told apart. It answered that question — ranges fixed the legs
+  and did nothing for the pops — so the structural change is now justified by a
+  measurement rather than a guess.
+  - `qpos0` is untouched, so the arms still rest folded at 109.5 deg of elbow.
+    That is a rest pose, not a limit, and the retarget handles it correctly.
+
+  ============================================================================
+  HOW TO READ A RESULT FROM THIS FILE
+  ============================================================================
+  If a number improves here, the stock robot's RANGE was the constraint. If it
+  does not, the constraint is structural and no range edit will reach it.
+-->
+<!-- Copyright 2021 DeepMind Technologies Limited
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+-->
+
+<mujoco model="Humanoid Flex 2">
+  <option timestep="0.005"/>
+
+  <visual>
+    <map force="0.1" zfar="30"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global offwidth="2560" offheight="1440" elevation="-20" azimuth="120"/>
+  </visual>
+
+  <statistic center="0 0 0.7"/>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1=".3 .5 .7" rgb2="0 0 0" width="32" height="512"/>
+    <texture name="body" type="cube" builtin="flat" mark="cross" width="128" height="128" rgb1="0.8 0.6 0.4" rgb2="0.8 0.6 0.4" markrgb="1 1 1"/>
+    <material name="body" texture="body" texuniform="true" rgba="0.8 0.6 .4 1"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+    <material name="grid" texture="grid" texrepeat="1 1" texuniform="true" reflectance=".2"/>
+  </asset>
+
+  <default>
+    <motor ctrlrange="-1 1" ctrllimited="true"/>
+    <default class="body">
+
+      <!-- geoms -->
+      <geom type="capsule" condim="1" friction=".7" solimp=".9 .99 .003" solref=".015 1" material="body" group="1"/>
+      <default class="thigh">
+        <geom size=".06"/>
+      </default>
+      <default class="shin">
+        <geom fromto="0 0 0 0 0 -.3"  size=".049"/>
+      </default>
+      <default class="foot">
+        <geom size=".027"/>
+        <default class="foot1">
+          <geom fromto="-.07 -.01 0 .14 -.03 0"/>
+        </default>
+        <default class="foot2">
+          <geom fromto="-.07 .01 0 .14  .03 0"/>
+        </default>
+      </default>
+      <default class="arm_upper">
+        <geom size=".04"/>
+      </default>
+      <default class="arm_lower">
+        <geom size=".031"/>
+      </default>
+      <default class="hand">
+        <geom type="sphere" size=".04"/>
+      </default>
+
+      <!-- joints -->
+      <joint type="hinge" damping=".2" stiffness="1" armature=".01" limited="true" solimplimit="0 .99 .01"/>
+      <default class="joint_big">
+        <joint damping="5" stiffness="10"/>
+        <!-- =================================================================
+             HIP_X: -30..10  ->  -60..45
+             Only FORTY degrees of travel on the abduction axis, and the hip was
+             pinned on the two frames where the whole leg failed (thigh 10.2 and
+             2.3 deg, ankle 0.034 and 0.127 m). The frames where it had room
+             retargeted to thigh 1.2-3.0 deg and ankle within 7 mm.
+             ================================================================= -->
+        <default class="hip_x">
+          <joint range="-60 45"/>
+        </default>
+        <!-- =================================================================
+             HIP_Z: -60..35  ->  -80..60
+             Widened with hip_x so the three hip axes cover a rounder region;
+             a dance turns the leg as well as spreading it.
+             ================================================================= -->
+        <default class="hip_z">
+          <joint range="-80 60"/>
+        </default>
+        <default class="hip_y">
+          <joint axis="0 1 0" range="-150 20"/>
+        </default>
+        <default class="joint_big_stiff">
+          <joint stiffness="20"/>
+        </default>
+      </default>
+      <default class="knee">
+        <joint pos="0 0 .02" axis="0 -1 0" range="-160 2"/>
+      </default>
+      <!-- ===================================================================
+           ANKLE: -50..50  ->  -75..75
+           Pinned on the frame with the worst foot error (30.3 deg). The foot is
+           the only part of the robot that touches the ground, so its angle is
+           what reads as standing rather than sliding.
+           =================================================================== -->
+      <default class="ankle">
+        <joint range="-75 75"/>
+        <default class="ankle_y">
+          <joint pos="0 0 .08" axis="0 1 0" stiffness="6"/>
+        </default>
+        <default class="ankle_x">
+          <joint pos="0 0 .04" stiffness="3"/>
+        </default>
+      </default>
+      <!-- ===================================================================
+           SHOULDER: -85..60  ->  -150..150
+           Measured on the Geno dance: a shoulder joint sat AT its limit on
+           three frames of four, and the arm's direction error was 10-31 deg
+           with the one unpinned frame the best of them. The pair of diagonal
+           axes covers a patch of directions, not a sphere, and this capture
+           asks for directions outside it.
+           =================================================================== -->
+      <default class="shoulder">
+        <joint range="-150 150"/>
+      </default>
+      <!-- ===================================================================
+           ELBOW: -100..50  ->  -150..20
+           The arm rests BENT at 109.5 deg, and bend = rest + qpos, so the old
+           range reached 9.5..159.5 deg of bend but clamped at -100 on half the
+           sampled frames. -150 lets the arm straighten fully; +20 is kept small
+           because a human elbow does not hyperextend.
+           =================================================================== -->
+      <default class="elbow">
+        <joint range="-150 20" stiffness="0"/>
+      </default>
+    </default>
+  </default>
+
+  <worldbody>
+    <geom name="floor" size="0 0 .05" type="plane" material="grid" condim="3"/>
+    <light name="spotlight" mode="targetbodycom" target="torso" diffuse=".8 .8 .8" specular="0.3 0.3 0.3" pos="0 -6 4" cutoff="30"/>
+    <light name="top" pos="0 0 2" mode="trackcom"/>
+    <body name="torso" pos="0 0 1.282" childclass="body">
+      <camera name="back" pos="-3 0 1" xyaxes="0 -1 0 1 0 2" mode="trackcom"/>
+      <camera name="side" pos="0 -3 1" xyaxes="1 0 0 0 1 2" mode="trackcom"/>
+      <freejoint name="root"/>
+      <geom name="torso" fromto="0 -.07 0 0 .07 0" size=".07"/>
+      <geom name="waist_upper" fromto="-.01 -.06 -.12 -.01 .06 -.12" size=".06"/>
+      <body name="head" pos="0 0 .19">
+        <geom name="head" type="sphere" size=".09"/>
+        <camera name="egocentric" pos=".09 0 0" xyaxes="0 -1 0 .1 0 1" fovy="80"/>
+      </body>
+      <body name="waist_lower" pos="-.01 0 -.26">
+        <geom name="waist_lower" fromto="0 -.06 0 0 .06 0" size=".06"/>
+        <joint name="abdomen_z" pos="0 0 .065" axis="0 0 1" range="-45 45" class="joint_big_stiff"/>
+        <joint name="abdomen_y" pos="0 0 .065" axis="0 1 0" range="-75 30" class="joint_big"/>
+        <body name="pelvis" pos="0 0 -.165">
+          <joint name="abdomen_x" pos="0 0 .1" axis="1 0 0" range="-35 35" class="joint_big"/>
+          <geom name="butt" fromto="-.02 -.07 0 -.02 .07 0" size=".09"/>
+          <body name="thigh_right" pos="0 -.1 -.04">
+            <joint name="hip_x_right" axis="1 0 0" class="hip_x"/>
+            <joint name="hip_z_right" axis="0 0 1" class="hip_z"/>
+            <joint name="hip_y_right" class="hip_y"/>
+            <geom name="thigh_right" fromto="0 0 0 0 .01 -.34" class="thigh"/>
+            <body name="shin_right" pos="0 .01 -.4">
+              <joint name="knee_right" class="knee"/>
+              <geom name="shin_right" class="shin"/>
+              <!-- ★★★ FOOT PITCH: TRIED AND REVERTED — I CONFLATED TWO DIFFERENT THINGS.
+           Geno's ankle-to-toe points 24.6 degrees below horizontal, and I pitched the robot's
+           foot to match. **That angle is a fact about Geno's SKELETON — its toe joint sits below
+           its ankle — not about how its SOLE meets the floor.** Geno's foot is flat WITH that
+           angled bone, because the sole is below both joints.
+           Pitching the robot's sole to match a skeletal line put the sole 21 degrees nose-down,
+           which is exactly what the device then showed: feet pointing into the ground while the
+           character's were flat.
+           ★ The real requirement is a WORLD constraint, not a capture one: every residual in the
+           objective compares the robot to the CAPTURE, and "flat on the ground" compares it to
+           the FLOOR. That needs a term of its own, not a rest-pose tweak. -->
+      <body name="foot_right" pos="0 0 -.39">
+                <joint name="ankle_y_right" class="ankle_y"/>
+                <joint name="ankle_x_right" class="ankle_x" axis="1 0 .5"/>
+                <geom name="foot1_right" class="foot1"/>
+                <geom name="foot2_right" class="foot2"/>
+              </body>
+            </body>
+          </body>
+          <body name="thigh_left" pos="0 .1 -.04">
+            <joint name="hip_x_left" axis="-1 0 0" class="hip_x"/>
+            <joint name="hip_z_left" axis="0 0 -1" class="hip_z"/>
+            <joint name="hip_y_left" class="hip_y"/>
+            <geom name="thigh_left" fromto="0 0 0 0 -.01 -.34" class="thigh"/>
+            <body name="shin_left" pos="0 -.01 -.4">
+              <joint name="knee_left" class="knee"/>
+              <geom name="shin_left" fromto="0 0 0 0 0 -.3" class="shin"/>
+              <body name="foot_left" pos="0 0 -.39">
+                <joint name="ankle_y_left" class="ankle_y"/>
+                <joint name="ankle_x_left" class="ankle_x" axis="-1 0 -.5"/>
+                <geom name="foot1_left" class="foot1"/>
+                <geom name="foot2_left" class="foot2"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <!-- SHOULDER SPAN NARROWED: the robot's torso is wider than Geno's, so its two shoulder
+             samples were asked to sit closer together than they physically could and the solve
+             answered by SKEWING the torso. .17 -> .145 matches the capture's span. -->
+        <body name="upper_arm_right" pos="0 -.145 .06">
+        <joint name="shoulder1_right" axis="2 1 1"  class="shoulder"/>
+        <joint name="shoulder2_right" axis="0 -1 1" class="shoulder"/>
+          <!-- THIRD SHOULDER AXIS: +1 DOF, the ONLY dof added anywhere.
+               Measured: two diagonal axes sweep a PATCH of directions, not a sphere. The arm was
+               pinned at its limits on 3 frames of 4, its best-possible error was 29.6 deg where
+               the solver achieved 29.6 (the model, not the solve), and the last 59-degree pop is
+               a BRANCH FLIP between two clamped configurations that satisfy the targets equally.
+               A posture term cannot fix that; a third axis removes the pinning that causes it. -->
+          <joint name="shoulder3_right" axis="1 0 0" class="shoulder"/>
+        <geom name="upper_arm_right" fromto="0 0 0 .128 -.128 -.128" class="arm_upper"/>
+        <!-- ARMS SHORTENED 20%: measured 1.24-1.29x the capture's while the legs fit within 8%.
+             A PROPORTION difference, which no single scale corrects — the robot's hand ended up
+             further out than Geno's with matching directions, and the free root slid ~10 cm to
+             spread the residual. .18 -> .144 makes the bone .249 against the capture's .251. -->
+        <body name="lower_arm_right" pos=".144 -.144 -.144">
+          <joint name="elbow_right" axis="0 -1 1" class="elbow"/>
+          <geom name="lower_arm_right" fromto=".01 .01 .01 .17 .17 .17" class="arm_lower"/>
+          <body name="hand_right" pos=".144 .144 .144">
+            <geom name="hand_right" zaxis="1 1 1" class="hand"/>
+          </body>
+        </body>
+      </body>
+      <body name="upper_arm_left" pos="0 .145 .06">
+        <joint name="shoulder1_left" axis="-2 1 -1" class="shoulder"/>
+        <joint name="shoulder2_left" axis="0 -1 -1"  class="shoulder"/>
+          <!-- THIRD SHOULDER AXIS: +1 DOF. Two diagonal axes sweep a PATCH, not a sphere; the arm
+               was pinned on 3 frames of 4 with best-possible == achieved (the model, not the
+               solve), and the last 59-degree pop is a BRANCH FLIP a posture term cannot hold. -->
+          <joint name="shoulder3_left" axis="1 0 0" class="shoulder"/>
+        <geom name="upper_arm_left" fromto="0 0 0 .128 .128 -.128" class="arm_upper"/>
+        <body name="lower_arm_left" pos=".144 .144 -.144">
+          <joint name="elbow_left" axis="0 -1 -1" class="elbow"/>
+          <geom name="lower_arm_left" fromto=".01 -.01 .01 .17 -.17 .17" class="arm_lower"/>
+          <body name="hand_left" pos=".144 -.144 .144">
+            <geom name="hand_left" zaxis="1 -1 1" class="hand"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <contact>
+    <exclude body1="waist_lower" body2="thigh_right"/>
+    <exclude body1="waist_lower" body2="thigh_left"/>
+  </contact>
+
+  <tendon>
+    <fixed name="hamstring_right" limited="true" range="-0.3 2">
+      <joint joint="hip_y_right" coef=".5"/>
+      <joint joint="knee_right" coef="-.5"/>
+    </fixed>
+    <fixed name="hamstring_left" limited="true" range="-0.3 2">
+      <joint joint="hip_y_left" coef=".5"/>
+      <joint joint="knee_left" coef="-.5"/>
+    </fixed>
+  </tendon>
+
+  <actuator>
+    <motor name="abdomen_z"       gear="40"  joint="abdomen_z"/>
+    <motor name="abdomen_y"       gear="40"  joint="abdomen_y"/>
+    <motor name="abdomen_x"       gear="40"  joint="abdomen_x"/>
+    <motor name="hip_x_right"     gear="40"  joint="hip_x_right"/>
+    <motor name="hip_z_right"     gear="40"  joint="hip_z_right"/>
+    <motor name="hip_y_right"     gear="120" joint="hip_y_right"/>
+    <motor name="knee_right"      gear="80"  joint="knee_right"/>
+    <motor name="ankle_y_right"   gear="20"  joint="ankle_y_right"/>
+    <motor name="ankle_x_right"   gear="20"  joint="ankle_x_right"/>
+    <motor name="hip_x_left"      gear="40"  joint="hip_x_left"/>
+    <motor name="hip_z_left"      gear="40"  joint="hip_z_left"/>
+    <motor name="hip_y_left"      gear="120" joint="hip_y_left"/>
+    <motor name="knee_left"       gear="80"  joint="knee_left"/>
+    <motor name="ankle_y_left"    gear="20"  joint="ankle_y_left"/>
+    <motor name="ankle_x_left"    gear="20"  joint="ankle_x_left"/>
+    <motor name="shoulder1_right" gear="20"  joint="shoulder1_right"/>
+    <motor name="shoulder2_right" gear="20"  joint="shoulder2_right"/>
+    <motor name="elbow_right"     gear="40"  joint="elbow_right"/>
+    <motor name="shoulder1_left"  gear="20"  joint="shoulder1_left"/>
+    <motor name="shoulder2_left"  gear="20"  joint="shoulder2_left"/>
+    <motor name="elbow_left"      gear="40"  joint="elbow_left"/>
+  </actuator>
+
+  <keyframe>
+    <!--
+    The values below are split into rows for readibility:
+      torso position
+      torso orientation
+      spinal
+      right leg
+      left leg
+      arms
+    -->
+    <key name="squat"
+         qpos="0 0 0.596
+               0.988015 0 0.154359 0
+               0 0.4 0
+               -0.25 -0.5 -2.5 -2.65 -0.8 0.56
+               -0.25 -0.5 -2.5 -2.65 -0.8 0.56
+               0 0 0 0 0 0"/>
+    <key name="stand_on_left_leg"
+         qpos="0 0 1.21948
+               0.971588 -0.179973 0.135318 -0.0729076
+               -0.0516 -0.202 0.23
+               -0.24 -0.007 -0.34 -1.76 -0.466 -0.0415
+               -0.08 -0.01 -0.37 -0.685 -0.35 -0.09
+               0.109 -0.067 -0.7 -0.05 0.12 0.16"/>
+    <key name="prone"
+         qpos="0.4 0 0.0757706
+               0.7325 0 0.680767 0
+               0 0.0729 0
+               0.0077 0.0019 -0.026 -0.351 -0.27 0
+               0.0077 0.0019 -0.026 -0.351 -0.27 0
+               0.56 -0.62 -1.752
+               0.56 -0.62 -1.752"/>
+    <key name="supine"
+         qpos="-0.4 0 0.08122
+               0.722788 0 -0.69107 0
+               0 -0.25 0
+               0.0182 0.0142 0.3 0.042 -0.44 -0.02
+               0.0182 0.0142 0.3 0.042 -0.44 -0.02
+               0.186 -0.73 -1.73
+               0.186 -0.73 -1.73"/>
+  </keyframe>
+</mujoco>

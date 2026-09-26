@@ -22,6 +22,7 @@
 //! Usage: mesh_bake <in.glb> <out.zig> <grid> <tex_edge>
 
 const std = @import("std");
+const zm = @import("zm");
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const codecs = @import("codecs");
@@ -152,8 +153,8 @@ fn decimate(
     grid: u32,
 ) !Decimated {
     // ---- pass 1: bbox ----
-    var bb_min: [3]f32 = .{ std.math.floatMax(f32), std.math.floatMax(f32), std.math.floatMax(f32) };
-    var bb_max: [3]f32 = .{ -std.math.floatMax(f32), -std.math.floatMax(f32), -std.math.floatMax(f32) };
+    var bb_min: [3]f32 = .{ zm.floatMax(f32), zm.floatMax(f32), zm.floatMax(f32) };
+    var bb_max: [3]f32 = .{ -zm.floatMax(f32), -zm.floatMax(f32), -zm.floatMax(f32) };
     var vi: usize = 0;
     while (vi < vertex_count) : (vi += 1) {
         var axis: usize = 0;
@@ -180,7 +181,7 @@ fn decimate(
             }
         }
         const key: u32 = cell[0] + cell[1] * grid + cell[2] * grid * grid;
-        const slot = try clusters.getOrPutValue(gpa, key, .{});
+        const slot: @TypeOf(clusters).GetOrPutResult = try clusters.getOrPutValue(gpa, key, .{});
         cell_of_vertex[vi] = @intCast(slot.index);
         const c: *Cluster = slot.value_ptr;
         c.count += 1;
@@ -210,7 +211,7 @@ fn decimate(
         var sorted: [3]u32 = .{ a, b, c };
         std.mem.sort(u32, &sorted, {}, std.sort.asc(u32));
         const tri_key: u64 = (@as(u64, sorted[0]) << 42) | (@as(u64, sorted[1]) << 21) | sorted[2];
-        const entry = try seen_triangles.getOrPut(gpa, tri_key);
+        const entry: @TypeOf(seen_triangles).GetOrPutResult = try seen_triangles.getOrPut(gpa, tri_key);
         if (entry.found_existing) {
             continue;
         }

@@ -91,7 +91,7 @@ fn computeHilbertStep(order: i32, index_in: i32) Vec2 {
         switch (hilbert_index) {
             // Bottom-left quadrant: swap x and y.
             0 => {
-                const tmp = vect[0];
+                const tmp: f32 = vect[0];
                 vect[0] = vect[1];
                 vect[1] = tmp;
             },
@@ -106,7 +106,7 @@ fn computeHilbertStep(order: i32, index_in: i32) Vec2 {
             },
             // Bottom-right quadrant: rotate 180° within sub-grid.
             3 => {
-                const tmp = len_v - 1 - vect[0];
+                const tmp: f32 = len_v - 1 - vect[0];
                 vect[0] = 2 * len_v - 1 - vect[1];
                 vect[1] = tmp;
             },
@@ -205,7 +205,7 @@ fn update(f: *z.Frame, state: *State) void {
     var i: usize = 1;
     while (i <= visible and i < state.path.len) : (i += 1) {
         const hue = (float(i) / stroke_total) * 360.0;
-        const stroke_color = z.colorFromHSV(hue, 1.0, 1.0);
+        const stroke_color: Color = z.colorFromHSV(hue, 1.0, 1.0);
         f.gl.line(state.path[i], state.path[i - 1], .{ .color = stroke_color, .thickness = state.thickness });
     }
 

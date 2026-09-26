@@ -280,6 +280,10 @@ fn hasExport(exports: Handle, name: []const u8) bool {
     return false;
 }
 
+/// The runner's default cap on a page's call log (`webtests/runner.mjs`, `MAX_LOG`); past it, calls are
+/// dropped and anything counted from the log is incomplete.
+const runner_log_cap: u32 = 500_000;
+
 fn logLen(id_h: Handle) u32 {
     const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
     return @trunc(js_get_num(log, "length", 6));
@@ -370,7 +374,7 @@ fn printByType(_: []const u8) void {
         const nm: []const u8 = tally_counts.names[best_idx][0..tally_counts.name_len[best_idx]];
         const cnt_f: f64 = @floatFromInt(tally_counts.count[best_idx]);
         const per: u32 = @trunc(cnt_f / denom);
-        const seg = bufPrint(out[w..], "{s}={d}  ", .{ nm, per }) catch break;
+        const seg: []const u8 = bufPrint(out[w..], "{s}={d}  ", .{ nm, per }) catch break;
         w += seg.len;
         tally_counts.count[best_idx] = 0; // consume
     }
@@ -521,11 +525,30 @@ fn smoke(path: []const u8, label: []const u8) bool {
     var f: u32 = 0;
     var clobber: ClobberScan = .{};
     var frame_start: u32 = init_calls;
+    // Live CPU bytes at the halfway frame and the last: memory that grows every frame and is freed only at
+    // deinit passes the lifecycle check below, yet kills a page that runs for minutes (the counting
+    // allocator's exact total - no fragmentation noise). Growth per frame is reported, not failed on.
+    const counts_live: bool = hasExport(exports, "runnerLiveBytes");
+    var live_mid: f64 = 0;
     while (f < st.frames) : (f += 1) {
         _ = js_call3(host(), "sutCall", 7, id_h, s("update"), js_num(1.0 / 60.0));
         const frame_end: u32 = logLen(id_h);
         clobber.scanFrame(id_h, frame_start, frame_end, f);
         frame_start = frame_end;
+        if (counts_live and f + 1 == st.frames / 2) {
+            live_mid = js_to_num(js_call2(host(), "sutCall", 7, id_h, s("runnerLiveBytes")));
+        }
+    }
+    if (counts_live and st.frames >= 4) {
+        const live_end: f64 = js_to_num(js_call2(host(), "sutCall", 7, id_h, s("runnerLiveBytes")));
+        const half: f64 = @floatFromInt(st.frames - st.frames / 2);
+        var lbuf: [200]u8 = undefined;
+        const line: []const u8 = bufPrint(
+            &lbuf,
+            "    live CPU bytes: {d:.0} at frame {d}, {d:.0} at frame {d} - {d:.1} bytes a frame",
+            .{ live_mid, st.frames / 2, live_end, st.frames, (live_end - live_mid) / half },
+        ) catch "    live CPU bytes: (unprintable)";
+        print(line);
     }
     const total_calls: u32 = logLen(id_h);
     last_id = id_h;
@@ -570,7 +593,22 @@ fn smoke(path: []const u8, label: []const u8) bool {
             // two lifecycles; any positive growth (c2 > c1) is a per-lifecycle leak.
             const managed: bool = hasExport(exports, "runnerMemoryMode") and
                 js_to_num(js_call2(host(), "sutCall", 7, id_h, s("runnerMemoryMode"))) > 0.5;
-            if (managed) {
+            // The handle balances are COUNTED FROM THE CALL LOG, and the runner caps it (500,000 entries by
+            // default; `--max-log=N`) and drops every call past that. A long run fills it, the second
+            // teardown's destroy calls are never recorded, and every live handle looks leaked - the "leaks"
+            // three long-run pages showed (Sep 25), each identical to its RUNNING state. A full log cannot
+            // judge a lifecycle: say so, and do not fail.
+            const capped: bool = logLen(id_h) >= runner_log_cap;
+            if (managed and capped) {
+                var cb: [200]u8 = undefined;
+                print(bufPrint(
+                    &cb,
+                    "    lifecycle leak check SKIPPED: the call log reached its cap ({d} entries) - pass " ++
+                        "--max-log=N, or fewer frames, to judge it",
+                    .{runner_log_cap},
+                ) catch "    lifecycle leak check skipped: call log capped");
+            }
+            if (managed and !capped) {
                 var lb: [256]u8 = undefined;
                 var lw: usize = 0;
                 var k: usize = 0;
@@ -634,7 +672,10 @@ fn smoke(path: []const u8, label: []const u8) bool {
         }
         const managed_final: bool = hasExport(exports, "runnerMemoryMode") and
             js_to_num(js_call2(host(), "sutCall", 7, id_h, s("runnerMemoryMode"))) > 0.5;
-        if (residual and managed_final) {
+        // Counted from the call log too: once it is capped, the shutdown's destroy calls may be missing.
+        if (residual and managed_final and logLen(id_h) >= runner_log_cap) {
+            print("    shutdown cleanliness check SKIPPED: the call log reached its cap");
+        } else if (residual and managed_final) {
             printFail(label, "ENGINE NOT CLEAN after runnerShutdown (residual handles listed above)");
             return false;
         }
@@ -675,6 +716,14 @@ const ClobberScan = struct {
         var buf: [512]u8 = undefined;
         while (i < end) : (i += 1) {
             const entry: []const u8 = jsStrInto(js_get_index(log, i), &buf);
+            // A SUBMISSION consumes every write before it: WebGPU orders `writeBuffer` and `submit` on one
+            // queue timeline, so "write, submit, write" to the same bytes is correct - each write reaches
+            // the work submitted after it (the PPO trainer's minibatches do exactly this). Only a repeat
+            // with NO submission between is dead: no GPU work could ever have seen the first write.
+            if (startsWith(u8, entry, "js_queue_submit(")) {
+                self.n = 0;
+                continue;
+            }
             const prefix: []const u8 = "js_queue_write_buffer(";
             if (!startsWith(u8, entry, prefix)) {
                 continue;

@@ -44,6 +44,10 @@ fn distCopy(io: std.Io, gpa: Allocator) !void {
         defer gpa.free(dst);
         try entry.dir.copyFile(entry.basename, cwd, dst, io, .{ .make_path = true });
     }
+
+    // GitHub Pages runs Jekyll unless the site root holds `.nojekyll`, and Jekyll silently
+    // drops every file or directory whose name starts with `_` or `.`.
+    try cwd.writeFile(io, .{ .sub_path = "prebuilt/.nojekyll", .data = "" });
 }
 
 fn die(
@@ -116,7 +120,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 // ---- dist-copy: mirror zig-out/web -> prebuilt/ (port of distCopyMake) ----
-// Pure-Zig recursive copy; wipes prebuilt/ first so removed files don't linger.
+// Pure-Zig recursive copy; wipes prebuilt/ first so removed files don't linger, then
+// drops a `.nojekyll` marker at the root for GitHub Pages.
 
 // ---- check-wgsl-clean (port of FixtureWgslCheck) ----
 // Same gates spv2wgsl --strict enforces: non-empty, no unresolved refs, no

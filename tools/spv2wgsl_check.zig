@@ -141,9 +141,11 @@ fn checkWgslStructural(wgsl: []const u8) ?[]const u8 {
     var in_string: bool = false;
     var i: usize = 0;
     while (i < wgsl.len) : (i += 1) {
-        const c = wgsl[i];
+        const c: u8 = wgsl[i];
         if (in_line_comment) {
-            if (c == '\n') in_line_comment = false;
+            if (c == '\n') {
+                in_line_comment = false;
+            }
             continue;
         }
         if (in_block_comment) {
@@ -154,7 +156,9 @@ fn checkWgslStructural(wgsl: []const u8) ?[]const u8 {
             continue;
         }
         if (in_string) {
-            if (c == '"') in_string = false;
+            if (c == '"') {
+                in_string = false;
+            }
             continue;
         }
         if (c == '/' and i + 1 < wgsl.len and wgsl[i + 1] == '/') {
@@ -283,14 +287,16 @@ fn scanKnownBugs(arena: Allocator, wgsl: []const u8) ![]Diag {
 
     var i: usize = 1;
     while (i < lines.items.len) : (i += 1) {
-        const cur = trim(lines.items[i]);
-        const prev = trim(lines.items[i - 1]);
+        const cur: []const u8 = trim(lines.items[i]);
+        const prev: []const u8 = trim(lines.items[i - 1]);
         // Looking for `}\nphiN = ...;`.  `prev` is the just-closed
         // brace line; `cur` is the line that starts with `phiN = `.
         if (!eql(u8, prev, "}")) {
             continue;
         }
-        const phi_name = parsePhiAssign(cur) orelse continue;
+        // `parsePhiAssign` returns the phi's NAME, or null when the line is not a phi assignment
+        // at all - the `orelse continue` is the 'not interesting' path, not an error.
+        const phi_name: []const u8 = parsePhiAssign(cur) orelse continue;
 
         // Walk backward from i-2: track relative depth.  Start at 1
         // because we're "inside" the just-closed scope.  Increment on
@@ -302,8 +308,11 @@ fn scanKnownBugs(arena: Allocator, wgsl: []const u8) ![]Diag {
         var j: usize = i;
         while (j > 0) {
             j -= 1;
-            if (j == i - 1) continue; // skip the `}` line itself
-            const t = trim(lines.items[j]);
+            // skip the `}` line itself
+            if (j == i - 1) {
+                continue;
+            }
+            const t: []const u8 = trim(lines.items[j]);
             // Adjust depth for braces on this line.  Count them all,
             // not just at start/end (some lines have both `} else {`).
             for (t) |c| switch (c) {
@@ -326,11 +335,11 @@ fn scanKnownBugs(arena: Allocator, wgsl: []const u8) ![]Diag {
         }
 
         if (opener_line) |opener| {
-            const open_text = trim(lines.items[opener]);
+            const open_text: []const u8 = trim(lines.items[opener]);
             const is_if = startsWith(u8, open_text, "if (") or
                 startsWith(u8, open_text, "} else if (");
             if (is_if and set_inside_if) {
-                const msg = try allocPrint(
+                const msg: []u8 = try allocPrint(
                     arena,
                     "phi-overwrite-after-if: {s} set in if then overwritten at line {d}",
                     .{ phi_name, i + 1 },
@@ -368,7 +377,7 @@ fn scanErrorMarkers(arena: Allocator, wgsl: []const u8) ![]Diag {
     var it = std.mem.splitScalar(u8, wgsl, '\n');
     var line_no: u32 = 1;
     while (it.next()) |line| : (line_no += 1) {
-        const trimmed = trim(line);
+        const trimmed: []const u8 = trim(line);
         if (std.mem.indexOf(u8, trimmed, "// ERROR:") != null or
             std.mem.indexOf(u8, trimmed, "UNHANDLED") != null)
         {
@@ -791,7 +800,7 @@ pub fn main(init: std.process.Init) !void {
     var targets: ArrayList(struct { name: []const u8, path: []const u8 }) = .empty;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
-        const a = args[i];
+        const a: []const u8 = args[i];
         if (eql(u8, a, "all")) {
             for (try listOurCorpus(arena, io)) |p| {
                 const name: []const u8 = std.fs.path.basename(std.fs.path.dirname(p) orelse p);

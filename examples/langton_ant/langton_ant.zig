@@ -21,6 +21,8 @@ const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const tau = zm.tau;
+const clamp = zm.clamp;
 const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
@@ -295,10 +297,10 @@ fn drawCornerArc(
     const exit_ang: f32 = atan2Rad(cyf + 0.5 * outd[1] - oy, cxf + 0.5 * outd[0] - ox);
     var sweep: f32 = exit_ang - entry_ang;
     while (sweep > zm.pi) {
-        sweep -= zm.tau;
+        sweep -= tau;
     }
     while (sweep < -zm.pi) {
-        sweep += zm.tau;
+        sweep += tau;
     }
 
     const segs: usize = 8;
@@ -341,7 +343,7 @@ fn screenToWorld(s: *const State, f: *z.Frame, p: Vec2) Vec2 {
 /// read it after, shift the camera by the difference.
 fn zoomAbout(s: *State, f: *z.Frame, factor: f32, focus: Vec2) void {
     const before: Vec2 = screenToWorld(s, f, focus);
-    s.zoom = std.math.clamp(s.zoom * factor, 1.0, 40.0);
+    s.zoom = clamp(s.zoom * factor, 1.0, 40.0);
     const after: Vec2 = screenToWorld(s, f, focus);
     s.cam_x += before[0] - after[0];
     s.cam_y += before[1] - after[1];

@@ -499,7 +499,7 @@ pub fn coverageToSdf(gpa: Allocator, image: Image, spread: f32) !void {
         const inside: bool = cov_u >= 128;
         // distance to the edge = distance to the nearest opposite-region cell.
         const d2: i64 = if (inside) edtDist2(grid_out[i]) else edtDist2(grid_in[i]);
-        const dist: f32 = @sqrt(@as(f32, @floatFromInt(d2)));
+        const dist: f32 = @sqrt(float(d2));
         var signed: f32 = if (inside) dist else -dist;
         // Anti-aliased sub-texel refinement. The binary 8SSEDT only knows the
         // edge to ±1 texel — that quantization is what makes magnified curves
@@ -508,15 +508,15 @@ pub fn coverageToSdf(gpa: Allocator, image: Image, spread: f32) !void {
         // or beside the boundary, trust that sub-texel value instead of the
         // integer distance; farther texels keep the propagated distance.
         if (dist <= 1.5) {
-            const cov: f32 = @as(f32, @floatFromInt(cov_u)) / 255.0;
+            const cov: f32 = float(cov_u) / 255.0;
             signed = (cov - 0.5) * 2.0;
         }
         const norm: f32 = 0.5 + signed / (2.0 * spread_safe);
-        const a: f32 = std.math.clamp(norm, 0.0, 1.0);
+        const a: f32 = clamp(norm, 0.0, 1.0);
         data[i * 4 + 0] = 255;
         data[i * 4 + 1] = 255;
         data[i * 4 + 2] = 255;
-        data[i * 4 + 3] = @intFromFloat(@round(a * 255.0));
+        data[i * 4 + 3] = @round(a * 255.0);
     }
 }
 
@@ -2051,7 +2051,7 @@ pub fn imageClearBackground(dst: *Image, color: Color) void {
     const data: [*]u8 = @ptrCast(dst.data.?);
     var i: usize = 1;
     while (i < total) : (i *= 2) {
-        const copy = @min(i, total - i);
+        const copy: usize = @min(i, total - i);
         @memcpy(data[i * bpp ..][0 .. copy * bpp], data[0 .. copy * bpp]);
     }
 }
@@ -3779,7 +3779,7 @@ pub fn imageFormat(
     while (i < px_count) : (i += 1) {
         const src_pixel: *anyopaque = @ptrCast(src + i * old_stride);
         const dst_pixel: *anyopaque = @ptrCast(dst + i * new_stride);
-        const c = getPixelColor(src_pixel, old_format_int);
+        const c: Color = getPixelColor(src_pixel, old_format_int);
         setPixelColor(dst_pixel, c, new_format_int);
     }
 

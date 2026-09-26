@@ -30,6 +30,7 @@ const compute_pass = wgpu.compute_pass;
 const shader_introspect = @import("shader_introspect.zig");
 const jobs = @import("jobs.zig");
 const zm = @import("zm");
+const float = zm.float;
 const Vec2 = zm.Vec2;
 const assertf = zm.assertf;
 const assertUnreachable = zm.assertUnreachable;
@@ -373,6 +374,17 @@ pub fn Compute(comptime M: type) type {
             /// clobber (queue timeline keeps only the last write). Deduping keeps
             /// a single write while preserving the per-dispatch submit barriers.
             uniform_synced: ?Params = null,
+            /// ── RECORDING (`beginRecording` .. `submitRecording`) ──
+            /// The open encoder every recorded dispatch goes into; the params TABLE (a GPU buffer
+            /// its slots are uploaded to in ONE write, and copied from into `uniform` before each
+            /// dispatch, on the GPU timeline); its CPU side; and the slots used.
+            rec_enc: wgpu.CommandEncoderHandle = .invalid,
+            rec_table: wgpu.BufferHandle = .invalid,
+            rec_slots: []Params = &.{},
+            rec_count: u32 = 0,
+            /// Where the open recording's slots start: the table is a RING across recordings, so
+            /// two recordings in one frame never write the same bytes of it (see `flushRecording`).
+            rec_base: u32 = 0,
             read: wgpu.BufferRead = .invalid,
             have_read: bool = false,
             /// How many dispatches have been submitted, and how many are reflected in
@@ -396,6 +408,10 @@ pub fn Compute(comptime M: type) type {
             mirrored: u64 = 0,
             /// The dispatch count at the moment the in-flight copy was encoded.
             copy_at: u64 = 0,
+            /// Bytes the in-flight copy packs into `staging` (each field's first
+            /// `element_count` elements, back to back), and that `element_count`.
+            read_bytes: u32 = 0,
+            read_count: usize = 0,
             /// Heap-allocated CPU readback buffer (the whole Buffers struct).
             /// Heap, NOT inline-by-value: Buffers can be megabytes (20k particles
             /// here ≈ 1.3 MB), and an inline field makes the whole Compute value
@@ -474,6 +490,15 @@ pub fn Compute(comptime M: type) type {
                 }
                 if (gp.uniform != .invalid) {
                     wgpu.destroyBuffer(gp.uniform);
+                }
+                // An open recording at teardown is a missing `submitRecording`: its encoder would
+                // leak, and its dispatches never run.
+                assertf(gp.rec_enc == .invalid, @src(), "deinit with a recording open (no submitRecording)", .{});
+                if (gp.rec_table != .invalid) {
+                    wgpu.destroyBuffer(gp.rec_table);
+                }
+                if (gp.rec_slots.len > 0) {
+                    gp.gpa.free(gp.rec_slots);
                 }
                 if (gp.staging != .invalid) {
                     wgpu.destroyBuffer(gp.staging);
@@ -562,6 +587,12 @@ pub fn Compute(comptime M: type) type {
                     .label = "kbuf_" ++ fname,
                 });
             }
+            // ★ A FAILED INIT MUST NOT LEAK THEM. Everything below can fail (a kernel whose WGSL
+            // declares no bindings fails `parseBindings`), and the caller never gets a `Self` to
+            // deinit - the smoke runner's lifecycle check saw exactly these, buffer+7 per cycle.
+            errdefer for (field_bufs) |fb| {
+                wgpu.destroyBuffer(fb);
+            };
             var bindings: [field_count]u32 = undefined;
             var uniform_binding: u32 = 0;
             try parseBindings(kernels, &bindings, &uniform_binding);
@@ -879,6 +910,49 @@ pub fn Compute(comptime M: type) type {
             }
         }
 
+        /// `upload` at an ELEMENT offset into the field, not at its start.
+        ///
+        /// ★ Two steps in one frame that upload their inputs to DISJOINT ranges of one field stay
+        /// correct under any model of the queue - including one where every write in a frame lands
+        /// before the frame's submission, as with a renderer's single frame encoder, where two writes
+        /// to the same (buffer, offset) clobber each other. SuperTrack's world and policy steps each
+        /// upload only their own region with this.
+        pub fn uploadAt(
+            self: *Self,
+            comptime field: Field,
+            offset: usize,
+            data: []const ElemOf(field),
+        ) void {
+            assertf(
+                offset + data.len <= @field(M.g.B, @tagName(field)).len,
+                @src(),
+                "uploadAt to '" ++ @tagName(field) ++ "': {d} + {d} elements exceeds capacity {d}",
+                .{ offset, data.len, @field(M.g.B, @tagName(field)).len },
+            );
+            switch (self.backend) {
+                .cpu => {
+                    const dst: *@TypeOf(@field(M.g.B, @tagName(field))) = &@field(M.g.B, @tagName(field));
+                    @memcpy(dst[offset..][0..data.len], data);
+                },
+                .worker => {
+                    if (comptime @hasDecl(M, "kernels")) {
+                        const wk: *Worker = &(self.worker orelse {
+                            assertUnreachable(@src(), "uploadAt: .worker needs initWorker(gpa)", .{});
+                            return;
+                        });
+                        const dst = &@field(wk.mirror.*, @tagName(field));
+                        @memcpy(dst[offset..][0..data.len], data);
+                    }
+                },
+                .gpu => {
+                    const fi: usize = fieldIndex(@tagName(field));
+                    const byte_offset: u32 = @intCast(offset * @sizeOf(ElemOf(field)));
+                    const gp: *Gpu = &self.gpu.?;
+                    wgpu.queueWriteBuffer(gp.queue, gp.field_bufs[fi], byte_offset, std.mem.sliceAsBytes(data));
+                },
+            }
+        }
+
         pub fn upload(self: *Self, comptime field: Field, data: []const ElemOf(field)) void {
             assertf(
                 data.len <= @field(M.g.B, @tagName(field)).len,
@@ -949,6 +1023,86 @@ pub fn Compute(comptime M: type) type {
             }
             wgpu.queueWriteBuffer(gp.queue, gp.uniform, 0, std.mem.asBytes(&self.params));
             gp.uniform_synced = self.params;
+        }
+
+        /// Slots in the params table: past this many dispatches a recording submits what it has
+        /// and carries on in a new one.
+        const recording_slots: u32 = 2048;
+
+        /// ── MANY DISPATCHES, ONE SUBMISSION, EACH WITH ITS OWN PARAMS ──
+        ///
+        /// Until `submitRecording`, every `run` is RECORDED rather than submitted: its params go
+        /// into a slot of a params table, a copy of that slot into the uniform is encoded before
+        /// it, and the dispatch follows in its own compute pass - all in one command encoder,
+        /// submitted once, with the table uploaded in one `writeBuffer` just before (queue writes
+        /// land before the submission that follows them). Unbatched `run` is one submission per
+        /// dispatch - and a per-layer SuperTrack iteration is ~1,050 dispatches (a fused one, 8).
+        /// `beginBatch` shares ONE params value, so it cannot carry per-dispatch offsets.
+        /// Pipelines, bind groups and WGSL are untouched: the uniform is still the uniform,
+        /// filled on the GPU timeline instead.
+        ///
+        /// ★ Upload a recording's inputs BEFORE `beginRecording`, or at least before the dispatches
+        /// that read them: a `writeBuffer` issued mid-recording lands before the WHOLE recording
+        /// executes, not between its dispatches. On the CPU and worker backends `run` executes
+        /// at once, as always - the same results, so every CPU-twin check covers this path.
+        pub fn beginRecording(self: *Self) void {
+            if (self.backend != .gpu) {
+                return;
+            }
+            const gp: *Gpu = &self.gpu.?;
+            const idle: bool = gp.rec_enc == .invalid and gp.batch_enc == .invalid;
+            assertf(idle, @src(), "beginRecording: a recording or batch is already open", .{});
+            // Each half of the table guarded by its OWN existence: allocating the CPU side whenever
+            // the GPU side was missing would leak it on a retry.
+            if (gp.rec_slots.len == 0) {
+                gp.rec_slots = gp.gpa.alloc(Params, recording_slots) catch {
+                    // Without the CPU side there is nothing to upload: stay unrecorded (correct,
+                    // only slower).
+                    return;
+                };
+            }
+            if (gp.rec_table == .invalid) {
+                gp.rec_table = wgpu.createBuffer(gp.dev, .{
+                    .size = recording_slots * @sizeOf(Params),
+                    .usage = .{ .copy_src = true, .copy_dst = true },
+                    .label = "kompute_params_table",
+                });
+            }
+            gp.rec_enc = wgpu.createCommandEncoder(gp.dev);
+            gp.rec_count = 0;
+        }
+
+        /// Upload the params table and submit everything recorded since `beginRecording`.
+        pub fn submitRecording(self: *Self) void {
+            if (self.backend != .gpu) {
+                return;
+            }
+            const gp: *Gpu = &self.gpu.?;
+            if (gp.rec_enc == .invalid) {
+                return; // beginRecording stayed unrecorded (no table): nothing is open
+            }
+            flushRecording(gp);
+        }
+
+        fn flushRecording(gp: *Gpu) void {
+            if (gp.rec_count > 0) {
+                const used: []const Params = gp.rec_slots[gp.rec_base..][0..gp.rec_count];
+                const at: u32 = gp.rec_base * @sizeOf(Params);
+                wgpu.queueWriteBuffer(gp.queue, gp.rec_table, at, std.mem.sliceAsBytes(used));
+            }
+            const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.rec_enc);
+            submitDispatch(gp, cmd);
+            gp.rec_enc = .invalid;
+            // ★ The next recording continues AFTER these slots. Restarting at slot 0 made two
+            // recordings in a frame (SuperTrack's world and policy steps) write the table's same
+            // bytes twice: correct by WebGPU's queue ordering (each write lands before the
+            // submission after it), but a clobber under the smoke runner's frame model, and
+            // needlessly fragile. A ring costs nothing.
+            gp.rec_base = (gp.rec_base + gp.rec_count) % recording_slots;
+            gp.rec_count = 0;
+            // The uniform now holds the LAST slot's params, written on the GPU: the host's record
+            // of what it holds is stale, and an unbatched `run` must upload its own again.
+            gp.uniform_synced = null;
         }
 
         pub fn beginBatch(self: *Self, params: Params) void {
@@ -1132,6 +1286,29 @@ pub fn Compute(comptime M: type) type {
                     const pipeline: wgpu.ComputePipelineHandle = gp.pipelines[ki];
                     const bind_group: wgpu.BindGroupHandle = gp.bind_groups[ki];
                     gp.kernel_last_n[ki] = n; // for describe()
+                    if (gp.rec_enc != .invalid) {
+                        // Recording: this dispatch's params into the next table slot, a copy of
+                        // that slot into the uniform, and the dispatch in its own pass - all in
+                        // the ONE open encoder. The copies execute in order on the GPU timeline,
+                        // so every dispatch sees exactly its own params.
+                        if (gp.rec_base + gp.rec_count == recording_slots) {
+                            // The ring's end: submit what is recorded, carry on from its start.
+                            flushRecording(gp);
+                            gp.rec_base = 0;
+                            gp.rec_enc = wgpu.createCommandEncoder(gp.dev);
+                        }
+                        const slot: u32 = gp.rec_base + gp.rec_count;
+                        gp.rec_slots[slot] = self.params;
+                        const size: u32 = @sizeOf(Params);
+                        wgpu.copyBufferToBuffer(gp.rec_enc, gp.rec_table, slot * size, gp.uniform, 0, size);
+                        const rp: wgpu.ComputePassEncoderHandle = compute_pass.begin(gp.rec_enc);
+                        compute_pass.setPipeline(rp, pipeline);
+                        compute_pass.setBindGroup(rp, 0, bind_group);
+                        compute_pass.dispatchWorkgroups(rp, .{ .x = workgroups });
+                        compute_pass.end(rp);
+                        gp.rec_count += 1;
+                        return;
+                    }
                     if (gp.batch_enc != .invalid) {
                         // Open batch: encode into the shared pass. Params were
                         // written once at beginBatch (all batched dispatches share
@@ -1225,6 +1402,43 @@ pub fn Compute(comptime M: type) type {
             }
         }
 
+        /// The bytes of a field's first `count` elements (the whole field when it has fewer),
+        /// rounded up to the 4 bytes a buffer copy requires.
+        fn prefixBytes(comptime fname: []const u8, count: usize) u32 {
+            const F = @FieldType(Buffers, fname);
+            const whole: u64 = @sizeOf(F);
+            if (@typeInfo(F) != .array) {
+                return @intCast(whole);
+            }
+            const elem: u64 = @sizeOf(@typeInfo(F).array.child);
+            const len: u64 = @typeInfo(F).array.len;
+            const bytes: u64 = @min(@as(u64, count), len) * elem;
+            return @intCast(@min(whole, (bytes + 3) / 4 * 4));
+        }
+
+        /// The packed copy sits at the mirror's start; move each field's prefix up to the
+        /// field's own offset. LAST FIELD FIRST: a packed offset never exceeds the real one, so
+        /// a destination only ever covers bytes already moved or never used.
+        fn unpackPrefixes(mirror_bytes: []u8, count: usize) void {
+            var packed_ends: [buffer_field_names.len]u32 = undefined;
+            var at: u32 = 0;
+            inline for (buffer_field_names, 0..) |fname, fi| {
+                at += prefixBytes(fname, count);
+                packed_ends[fi] = at;
+            }
+            comptime var fi: usize = buffer_field_names.len;
+            inline while (fi > 0) {
+                fi -= 1;
+                const fname: []const u8 = buffer_field_names[fi];
+                const bytes: usize = @intCast(prefixBytes(fname, count));
+                const from: usize = @intCast(packed_ends[fi] - bytes);
+                const to: usize = @offsetOf(Buffers, fname);
+                if (bytes > 0 and from != to) {
+                    std.mem.copyBackwards(u8, mirror_bytes[to..][0..bytes], mirror_bytes[from..][0..bytes]);
+                }
+            }
+        }
+
         pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
             // Variable-count fields (pos/vel/…) are sized to capacity and slice to
             // the live `element_count`; fixed fields (grid_counts, cell_start) must
@@ -1265,7 +1479,9 @@ pub fn Compute(comptime M: type) type {
                 .gpu => {
                     const gp: *Gpu = &self.gpu.?;
                     if (gp.read != .invalid and wgpu.bufferReadPoll(gp.read)) {
-                        wgpu.bufferReadInto(gp.read, std.mem.asBytes(gp.mirror));
+                        const mirror_bytes: []u8 = std.mem.asBytes(gp.mirror);
+                        wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
+                        unpackPrefixes(mirror_bytes, gp.read_count);
                         wgpu.bufferReadRelease(gp.read);
                         gp.read = .invalid;
                         gp.have_read = true;
@@ -1284,20 +1500,33 @@ pub fn Compute(comptime M: type) type {
                         // submits a COPY, not a dispatch. Counting it would make the mirror
                         // appear to reflect work that was never run.
                         gp.copy_at = gp.submitted;
+                        // ★★ ONLY WHAT `readLatest` CAN RETURN: each field's first
+                        // `element_count` elements, packed back to back. This copied every field
+                        // WHOLE - 7 MiB a readback for the zn_mlp kit's 1 MiB fields, mapped and
+                        // copied into wasm memory up to 60 times a second, to return 6 KB of
+                        // weights. The data a caller sees is unchanged: it was always sliced to
+                        // `element_count`.
+                        const count: usize = self.element_count;
                         const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                        var packed_at: u32 = 0;
                         inline for (buffer_field_names, 0..) |fname, fi| {
-                            wgpu.copyBufferToBuffer(
-                                enc,
-                                gp.field_bufs[fi],
-                                0,
-                                gp.staging,
-                                @offsetOf(Buffers, fname),
-                                @sizeOf(@FieldType(Buffers, fname)),
-                            );
+                            const bytes: u32 = prefixBytes(fname, count);
+                            if (bytes > 0) {
+                                wgpu.copyBufferToBuffer(enc, gp.field_bufs[fi], 0, gp.staging, packed_at, bytes);
+                            }
+                            packed_at += bytes;
                         }
                         const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
                         wgpu.queueSubmit(gp.queue, cmd);
-                        gp.read = wgpu.bufferReadStart(gp.staging, @sizeOf(Buffers));
+                        gp.read_bytes = packed_at;
+                        gp.read_count = count;
+                        if (packed_at > 0) {
+                            gp.read = wgpu.bufferReadStart(gp.staging, packed_at);
+                        } else {
+                            // Nothing to return (element_count 0): the copy is trivially complete.
+                            gp.mirrored = gp.copy_at;
+                            gp.have_read = true;
+                        }
                     }
                     if (!gp.have_read) {
                         return null;
@@ -1531,4 +1760,51 @@ test "unboundUsedBinding passes when the layout covers every used binding" {
         \\fn k() { let _x: S8 = P; }
     ;
     try expect(unboundUsedBinding(unused, &.{0}) == null);
+}
+
+test "Compute readback: each field's element_count prefix, packed, unpacks to its own offset" {
+    // The GPU arm copies only each field's first `element_count` elements, back to back, into
+    // the staging buffer, reads that into the mirror's START, and moves each prefix up to its
+    // field's offset, last field first. Pack exactly as the encode does, unpack, and every
+    // field's prefix must hold its own values - including a field shorter than the count.
+    const M = struct {
+        pub const config = .{ .max = 64, .workgroup = 64 };
+        pub const Buffers = extern struct { a: [16]f32, b: [8]u32, c: [16]f32 };
+        pub const Params = extern struct {
+            count: u32,
+            _pad0: u32 = 0,
+            _pad1: u32 = 0,
+            _pad2: u32 = 0,
+        };
+        pub const g = struct {
+            pub var B: Buffers = undefined;
+            pub var P: Params = undefined;
+        };
+    };
+    const C = Compute(M);
+    const count: usize = 10; // past b's 8: b is copied whole
+    var source: M.Buffers = undefined;
+    for (&source.a, 0..) |*v, i| {
+        v.* = 100.0 + float(i);
+    }
+    for (&source.b, 0..) |*v, i| {
+        v.* = 200 + @as(u32, @intCast(i));
+    }
+    for (&source.c, 0..) |*v, i| {
+        v.* = 300.0 + float(i);
+    }
+    var mirror: M.Buffers = std.mem.zeroes(M.Buffers);
+    const bytes: []u8 = std.mem.asBytes(&mirror);
+    // Pack as the encode does.
+    var at: usize = 0;
+    inline for (.{ "a", "b", "c" }) |fname| {
+        const n: usize = C.prefixBytes(fname, count);
+        @memcpy(bytes[at..][0..n], std.mem.asBytes(&@field(source, fname))[0..n]);
+        at += n;
+    }
+    try expectEqual(@as(usize, 10 * 4 + 8 * 4 + 10 * 4), at);
+    C.unpackPrefixes(bytes, count);
+    try expectEqualSlices(f32, source.a[0..10], mirror.a[0..10]);
+    try expectEqualSlices(u32, source.b[0..8], mirror.b[0..8]);
+    try expectEqualSlices(f32, source.c[0..10], mirror.c[0..10]);
 }

@@ -386,8 +386,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         };
         var k: usize = 0;
         while (k < 3) : (k += 1) {
-            if (p[k] < mn[k]) mn[k] = p[k];
-            if (p[k] > mx[k]) mx[k] = p[k];
+            if (p[k] < mn[k]) {
+                mn[k] = p[k];
+            }
+            if (p[k] > mx[k]) {
+                mx[k] = p[k];
+            }
         }
     }
     const bidx: []u16 = try gpa.alloc(u16, bic);

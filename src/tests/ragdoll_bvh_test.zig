@@ -34,6 +34,7 @@
 
 const std = @import("std");
 const zm = @import("zm");
+const normalize3 = zm.normalize3;
 const codecs = @import("codecs");
 const rbt = @import("robot");
 
@@ -220,7 +221,7 @@ test "retarget: a skeleton onto ITSELF reproduces the source pose exactly" {
     for (0..n) |i| {
         const t: f32 = float(i) * 0.137;
         src_local[i] = zm.quatFromAxisAngle(
-            zm.normalize3(vec(@sin(t) + 1.1, @cos(t * 1.7), @sin(t * 0.3) - 0.4)),
+            normalize3(vec(@sin(t) + 1.1, @cos(t * 1.7), @sin(t * 0.3) - 0.4)),
             0.2 + 0.15 * @sin(t * 2.1),
         );
     }

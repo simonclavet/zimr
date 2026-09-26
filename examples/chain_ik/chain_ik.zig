@@ -30,10 +30,17 @@
 //! damping too small to condition the problem and one that does — which is the table above.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
+const float = zm.float;
 const rbt = z.robot;
 const ctl = z.robot_control;
 const mjcf = z.mjcf;
@@ -206,7 +213,7 @@ fn drawChain(s: *State, gl: *z.WgpuGl) void {
     var previous_edge: Vec = vec(3.0, 0, 0);
     var i: usize = 1;
     while (i <= 72) : (i += 1) {
-        const a: f32 = 2.0 * pi * @as(f32, @floatFromInt(i)) / 72.0;
+        const a: f32 = 2.0 * pi * float(i) / 72.0;
         const edge: Vec = vec(3.0 * @cos(a), 3.0 * @sin(a), 0);
         z.drawLine3D(gl, previous_edge, edge, reach_colour);
         previous_edge = edge;

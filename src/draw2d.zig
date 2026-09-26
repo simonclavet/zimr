@@ -314,8 +314,8 @@ fn emitFan(
     const fseg: f32 = @floatFromInt(seg);
     var i: u32 = 0;
     while (i < seg) : (i += 1) {
-        const t0_turns: f32 = a0_turns + (a1_turns - a0_turns) * @as(f32, @floatFromInt(i)) / fseg;
-        const t1_turns: f32 = a0_turns + (a1_turns - a0_turns) * @as(f32, @floatFromInt(i + 1)) / fseg;
+        const t0_turns: f32 = a0_turns + (a1_turns - a0_turns) * float(i) / fseg;
+        const t1_turns: f32 = a0_turns + (a1_turns - a0_turns) * float(i + 1) / fseg;
         gl.vertex2f(cx, cy);
         gl.vertex2f(cx + r * cosTurns(t0_turns), cy + r * sinTurns(t0_turns));
         gl.vertex2f(cx + r * cosTurns(t1_turns), cy + r * sinTurns(t1_turns));
@@ -468,8 +468,8 @@ pub fn ringFilled(
     const fseg: f32 = @floatFromInt(seg);
     var i: u32 = 0;
     while (i < seg) : (i += 1) {
-        const t0_turns: f32 = start_turns + (end_turns - start_turns) * @as(f32, @floatFromInt(i)) / fseg;
-        const t1_turns: f32 = start_turns + (end_turns - start_turns) * @as(f32, @floatFromInt(i + 1)) / fseg;
+        const t0_turns: f32 = start_turns + (end_turns - start_turns) * float(i) / fseg;
+        const t1_turns: f32 = start_turns + (end_turns - start_turns) * float(i + 1) / fseg;
         const c0: f32 = cosTurns(t0_turns);
         const s0: f32 = sinTurns(t0_turns);
         const c1: f32 = cosTurns(t1_turns);
@@ -734,8 +734,8 @@ fn emitArcLines(
     const fseg: f32 = @floatFromInt(seg);
     var i: u32 = 0;
     while (i < seg) : (i += 1) {
-        const t0_turns: f32 = a0_turns + (a1_turns - a0_turns) * @as(f32, @floatFromInt(i)) / fseg;
-        const t1_turns: f32 = a0_turns + (a1_turns - a0_turns) * @as(f32, @floatFromInt(i + 1)) / fseg;
+        const t0_turns: f32 = a0_turns + (a1_turns - a0_turns) * float(i) / fseg;
+        const t1_turns: f32 = a0_turns + (a1_turns - a0_turns) * float(i + 1) / fseg;
         const p0: Vec2 = .{ cx + r * cosTurns(t0_turns), cy + r * sinTurns(t0_turns) };
         const p1: Vec2 = .{ cx + r * cosTurns(t1_turns), cy + r * sinTurns(t1_turns) };
         lineEmit(gl, p0, p1, color, thick);

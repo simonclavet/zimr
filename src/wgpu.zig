@@ -1269,28 +1269,26 @@ pub const render_pass = struct {
     // in scope (e.g., low-level test code) and matches WebGPU's own
     // shape where the pass encoder is itself the receiver.
 
-    const wgpu = @import("wgpu.zig");
-
     /// Begin a render pass on the given encoder, drawing to `color_view`
     /// (typically the surface's current backbuffer view, or a render-
     /// texture view for offscreen rendering).
     pub const BeginDesc = struct {
-        encoder: wgpu.CommandEncoderHandle,
-        color_view: wgpu.TextureViewHandle,
-        clear: ?wgpu.ColorF32 = null,
-        load_op: wgpu.LoadOp = .load,
-        store_op: wgpu.StoreOp = .store,
-        depth_view: ?wgpu.TextureViewHandle = null,
+        encoder: CommandEncoderHandle,
+        color_view: TextureViewHandle,
+        clear: ?ColorF32 = null,
+        load_op: LoadOp = .load,
+        store_op: StoreOp = .store,
+        depth_view: ?TextureViewHandle = null,
         /// MSAA resolve target: when set, the multisampled `color_view` is
         /// resolved into this 1-sample, sampleable view at pass end.
-        resolve_view: ?wgpu.TextureViewHandle = null,
+        resolve_view: ?TextureViewHandle = null,
         label: []const u8 = "render_pass",
     };
 
-    pub fn begin(desc: BeginDesc) wgpu.RenderPassEncoderHandle {
+    pub fn begin(desc: BeginDesc) RenderPassEncoderHandle {
         // If a clear color is set, override load_op to .clear.
-        const load_op: wgpu.LoadOp = if (desc.clear != null) wgpu.LoadOp.clear else desc.load_op;
-        const clear = desc.clear orelse wgpu.ColorF32{ .r = 0, .g = 0, .b = 0, .a = 1 };
+        const load_op: LoadOp = if (desc.clear != null) LoadOp.clear else desc.load_op;
+        const clear = desc.clear orelse ColorF32{ .r = 0, .g = 0, .b = 0, .a = 1 };
 
         return @fromBackingInt(@intCast(wgpu_js.begin_render_pass(
             @backingInt(desc.encoder),
@@ -1306,7 +1304,7 @@ pub const render_pass = struct {
         )));
     }
 
-    pub fn end(pass: wgpu.RenderPassEncoderHandle) void {
+    pub fn end(pass: RenderPassEncoderHandle) void {
         wgpu_js.render_pass_end(@backingInt(pass));
     }
 
@@ -1315,18 +1313,18 @@ pub const render_pass = struct {
     /// depth attachment.  The G-buffer pass of deferred rendering is the
     /// canonical caller: three attachments, one geometry walk.
     pub const BeginMrtDesc = struct {
-        encoder: wgpu.CommandEncoderHandle,
-        color_views: []const wgpu.TextureViewHandle,
-        clear: ?wgpu.ColorF32 = null,
-        load_op: wgpu.LoadOp = .load,
-        store_op: wgpu.StoreOp = .store,
-        depth_view: ?wgpu.TextureViewHandle = null,
+        encoder: CommandEncoderHandle,
+        color_views: []const TextureViewHandle,
+        clear: ?ColorF32 = null,
+        load_op: LoadOp = .load,
+        store_op: StoreOp = .store,
+        depth_view: ?TextureViewHandle = null,
         label: []const u8 = "mrt_render_pass",
     };
 
-    pub fn beginMrt(desc: BeginMrtDesc) wgpu.RenderPassEncoderHandle {
-        const load_op: wgpu.LoadOp = if (desc.clear != null) wgpu.LoadOp.clear else desc.load_op;
-        const clear = desc.clear orelse wgpu.ColorF32{ .r = 0, .g = 0, .b = 0, .a = 1 };
+    pub fn beginMrt(desc: BeginMrtDesc) RenderPassEncoderHandle {
+        const load_op: LoadOp = if (desc.clear != null) LoadOp.clear else desc.load_op;
+        const clear = desc.clear orelse ColorF32{ .r = 0, .g = 0, .b = 0, .a = 1 };
         // Handles are enum(u32) — reinterpret the slice as the raw u32 array
         // the bridge reads from wasm memory (max 8, on the stack).
         var raw: [8]u32 = undefined;
@@ -1348,8 +1346,8 @@ pub const render_pass = struct {
     }
 
     pub fn setPipeline(
-        pass: wgpu.RenderPassEncoderHandle,
-        pipeline: wgpu.RenderPipelineHandle,
+        pass: RenderPassEncoderHandle,
+        pipeline: RenderPipelineHandle,
     ) void {
         wgpu_js.render_pass_set_pipeline(
             @backingInt(pass),
@@ -1358,9 +1356,9 @@ pub const render_pass = struct {
     }
 
     pub fn setBindGroup(
-        pass: wgpu.RenderPassEncoderHandle,
+        pass: RenderPassEncoderHandle,
         group_index: u32,
-        bind_group: wgpu.BindGroupHandle,
+        bind_group: BindGroupHandle,
     ) void {
         wgpu_js.render_pass_set_bind_group(
             @backingInt(pass),
@@ -1371,13 +1369,13 @@ pub const render_pass = struct {
 
     pub const VertexBufferBinding = struct {
         slot: u32,
-        buffer: wgpu.BufferHandle,
+        buffer: BufferHandle,
         offset: u64 = 0,
         size: u64 = ~@as(u64, 0), // sentinel meaning "rest of buffer"
     };
 
     pub fn setVertexBuffer(
-        pass: wgpu.RenderPassEncoderHandle,
+        pass: RenderPassEncoderHandle,
         binding: VertexBufferBinding,
     ) void {
         wgpu_js.render_pass_set_vertex_buffer(
@@ -1390,14 +1388,14 @@ pub const render_pass = struct {
     }
 
     pub const IndexBufferBinding = struct {
-        buffer: wgpu.BufferHandle,
-        format: wgpu.IndexFormat,
+        buffer: BufferHandle,
+        format: IndexFormat,
         offset: u64 = 0,
         size: u64 = ~@as(u64, 0),
     };
 
     pub fn setIndexBuffer(
-        pass: wgpu.RenderPassEncoderHandle,
+        pass: RenderPassEncoderHandle,
         binding: IndexBufferBinding,
     ) void {
         wgpu_js.render_pass_set_index_buffer(
@@ -1416,7 +1414,7 @@ pub const render_pass = struct {
         first_instance: u32 = 0,
     };
 
-    pub fn draw(pass: wgpu.RenderPassEncoderHandle, desc: DrawDesc) void {
+    pub fn draw(pass: RenderPassEncoderHandle, desc: DrawDesc) void {
         wgpu_js.render_pass_draw(
             @backingInt(pass),
             desc.vertex_count,
@@ -1434,7 +1432,7 @@ pub const render_pass = struct {
         first_instance: u32 = 0,
     };
 
-    pub fn drawIndexed(pass: wgpu.RenderPassEncoderHandle, desc: DrawIndexedDesc) void {
+    pub fn drawIndexed(pass: RenderPassEncoderHandle, desc: DrawIndexedDesc) void {
         wgpu_js.render_pass_draw_indexed(
             @backingInt(pass),
             desc.index_count,
@@ -1448,7 +1446,7 @@ pub const render_pass = struct {
     /// Restrict subsequent draws to the rect (x, y, w, h) in BACKING pixels
     /// (origin top-left). The caller computes backing px from logical coords.
     pub fn setScissorRect(
-        pass: wgpu.RenderPassEncoderHandle,
+        pass: RenderPassEncoderHandle,
         x: u32,
         y: u32,
         w: u32,
@@ -1712,16 +1710,14 @@ pub const compute_pass = struct {
     // time on a single encoder.  Begin/end ordering is the user's (or
     // `GpuFrame.beginComputePass` helper's) responsibility.
 
-    const wgpu = @import("wgpu.zig");
-
-    pub fn begin(encoder: wgpu.CommandEncoderHandle) wgpu.ComputePassEncoderHandle {
+    pub fn begin(encoder: CommandEncoderHandle) ComputePassEncoderHandle {
         if (comptime !is_wasm) {
             return .invalid;
         }
         return @fromBackingInt(@intCast(externs.js_encoder_begin_compute_pass(@backingInt(encoder))));
     }
 
-    pub fn end(pass: wgpu.ComputePassEncoderHandle) void {
+    pub fn end(pass: ComputePassEncoderHandle) void {
         if (comptime !is_wasm) {
             return;
         }
@@ -1729,8 +1725,8 @@ pub const compute_pass = struct {
     }
 
     pub fn setPipeline(
-        pass: wgpu.ComputePassEncoderHandle,
-        pipeline: wgpu.ComputePipelineHandle,
+        pass: ComputePassEncoderHandle,
+        pipeline: ComputePipelineHandle,
     ) void {
         if (comptime !is_wasm) {
             return;
@@ -1742,9 +1738,9 @@ pub const compute_pass = struct {
     }
 
     pub fn setBindGroup(
-        pass: wgpu.ComputePassEncoderHandle,
+        pass: ComputePassEncoderHandle,
         group_index: u32,
-        bind_group: wgpu.BindGroupHandle,
+        bind_group: BindGroupHandle,
     ) void {
         if (comptime !is_wasm) {
             return;
@@ -1759,7 +1755,7 @@ pub const compute_pass = struct {
     pub const Dispatch = struct { x: u32, y: u32 = 1, z: u32 = 1 };
 
     pub fn dispatchWorkgroups(
-        pass: wgpu.ComputePassEncoderHandle,
+        pass: ComputePassEncoderHandle,
         d: Dispatch,
     ) void {
         if (comptime !is_wasm) {
@@ -1838,14 +1834,12 @@ pub const storage_buffer = struct {
     // explicitly.  This keeps StorageBuffer testable without spinning up
     // a full frame.
 
-    const wgpu = @import("wgpu.zig");
-
     /// Generic typed storage buffer.  `T` is the element type.
     pub fn StorageBuffer(comptime T: type) type {
         return struct {
             const Self = @This();
 
-            buffer: wgpu.BufferHandle = .invalid,
+            buffer: BufferHandle = .invalid,
             count: u32 = 0,
             gpa: ?Allocator = null,
 
@@ -1854,25 +1848,25 @@ pub const storage_buffer = struct {
 
             pub const CreateDesc = struct {
                 count: u32,
-                usage: wgpu.BufferUsage = .{ .storage = true, .copy_dst = true },
+                usage: BufferUsage = .{ .storage = true, .copy_dst = true },
                 label: []const u8 = "storage_buf",
             };
 
             pub const CreateWithDataDesc = struct {
                 data: []const T,
-                usage: wgpu.BufferUsage = .{ .storage = true, .copy_dst = true },
+                usage: BufferUsage = .{ .storage = true, .copy_dst = true },
                 label: []const u8 = "storage_buf",
             };
 
             /// Allocate the underlying GPU buffer.  `count` elements of `T`.
             /// Initial contents undefined.
             pub fn create(
-                device: wgpu.DeviceHandle,
+                device: DeviceHandle,
                 gpa: Allocator,
                 desc: CreateDesc,
             ) Self {
                 const size_bytes = @as(u64, desc.count) * element_size;
-                const buf = wgpu.createBuffer(device, .{
+                const buf = createBuffer(device, .{
                     .size = size_bytes,
                     .usage = desc.usage,
                     .label = desc.label,
@@ -1882,8 +1876,8 @@ pub const storage_buffer = struct {
 
             /// Allocate + initial-upload.  Convenience for the common case.
             pub fn createWithData(
-                device: wgpu.DeviceHandle,
-                queue: wgpu.QueueHandle,
+                device: DeviceHandle,
+                queue: QueueHandle,
                 gpa: Allocator,
                 desc: CreateWithDataDesc,
             ) Self {
@@ -1892,7 +1886,7 @@ pub const storage_buffer = struct {
                     .usage = desc.usage,
                     .label = desc.label,
                 });
-                wgpu.queueWriteBuffer(
+                queueWriteBuffer(
                     queue,
                     self.buffer,
                     0,
@@ -1904,12 +1898,12 @@ pub const storage_buffer = struct {
             /// Overwrite `data.len` elements starting at `offset_elements`.
             pub fn write(
                 self: Self,
-                queue: wgpu.QueueHandle,
+                queue: QueueHandle,
                 offset_elements: u32,
                 data: []const T,
             ) void {
                 assert(offset_elements + data.len <= self.count, @src());
-                wgpu.queueWriteBuffer(
+                queueWriteBuffer(
                     queue,
                     self.buffer,
                     @as(u64, offset_elements) * element_size,
@@ -1934,7 +1928,7 @@ pub const storage_buffer = struct {
 
             pub fn deinit(self: *Self) void {
                 if (self.gpa != null) {
-                    wgpu.destroyBuffer(self.buffer);
+                    destroyBuffer(self.buffer);
                     self.* = .{};
                 }
             }
@@ -1945,7 +1939,7 @@ pub const storage_buffer = struct {
     /// because bind groups can hold storage buffers of any element type
     /// at the same binding slot.
     pub const StorageBufferBinding = struct {
-        buffer: wgpu.BufferHandle,
+        buffer: BufferHandle,
         offset: u64,
         size: u64,
     };

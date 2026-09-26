@@ -17,6 +17,7 @@ const Allocator = std.mem.Allocator;
 /// default so release standalones don't print over the scene.
 const log_pbr3d: bool = false;
 const zm = @import("zm");
+const maxInt = zm.maxInt;
 const sinTurns = zm.sinTurns;
 const cosTurns = zm.cosTurns;
 const Quat = zm.Quat;
@@ -505,7 +506,7 @@ fn parametricWeldNormals(
     var v: usize = 0;
     while (v < vcount) : (v += 1) {
         const key: [3]i32 = parametricKey(verts[v * 3], verts[v * 3 + 1], verts[v * 3 + 2]);
-        const gop = try map.getOrPut(key);
+        const gop: @TypeOf(map).GetOrPutResult = try map.getOrPut(key);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{ 0, 0, 0 };
         }
@@ -1730,7 +1731,7 @@ pub fn meshWeld(
             .{ mesh.normals[v * 3 + 0], mesh.normals[v * 3 + 1], mesh.normals[v * 3 + 2] }
         else
             .{ 0, 0, 0 };
-        const gop = try bucket_to_survivor.getOrPut(bucket);
+        const gop: @TypeOf(bucket_to_survivor).GetOrPutResult = try bucket_to_survivor.getOrPut(bucket);
         if (gop.found_existing) {
             // fold this vertex into the survivor — sum normals so we can average
             const survivor: u16 = gop.value_ptr.*;
@@ -3064,9 +3065,11 @@ pub const Cube3D = struct {
         // Longitude circles (constant azimuth), stepped in polar angle.
         var sj: u32 = 0;
         while (sj < ns) : (sj += 1) {
-            const phi: f32 = 2.0 * pi * float(sj) / float(ns);
-            const cph: f32 = @cos(phi);
-            const sph: f32 = @sin(phi);
+            // The AZIMUTH around the sphere, not `zm.phi` - which is the golden ratio. Sharing the
+            // name with a well-known constant of a different value is the trap this rename avoids.
+            const azimuth: f32 = 2.0 * pi * float(sj) / float(ns);
+            const cph: f32 = @cos(azimuth);
+            const sph: f32 = @sin(azimuth);
             var rj: u32 = 0;
             while (rj < nr) : (rj += 1) {
                 const t0: f32 = pi * float(rj) / float(nr);
@@ -4575,12 +4578,24 @@ pub fn getMeshBoundingBox(mesh: Mesh) BoundingBox {
             const x: f32 = mesh.vertices[i * 3 + 0];
             const y: f32 = mesh.vertices[i * 3 + 1];
             const zc: f32 = mesh.vertices[i * 3 + 2];
-            if (x < minv[0]) minv[0] = x;
-            if (y < minv[1]) minv[1] = y;
-            if (zc < minv[2]) minv[2] = zc;
-            if (x > maxv[0]) maxv[0] = x;
-            if (y > maxv[1]) maxv[1] = y;
-            if (zc > maxv[2]) maxv[2] = zc;
+            if (x < minv[0]) {
+                minv[0] = x;
+            }
+            if (y < minv[1]) {
+                minv[1] = y;
+            }
+            if (zc < minv[2]) {
+                minv[2] = zc;
+            }
+            if (x > maxv[0]) {
+                maxv[0] = x;
+            }
+            if (y > maxv[1]) {
+                maxv[1] = y;
+            }
+            if (zc > maxv[2]) {
+                maxv[2] = zc;
+            }
         }
     }
     return .{ .min = minv, .max = maxv };
@@ -6617,7 +6632,7 @@ pub const pbr3d = struct {
             defer mesh.deinit(gpa);
 
             const vertex_count: usize = mesh.vertexCount();
-            if (vertex_count > std.math.maxInt(u16)) {
+            if (vertex_count > maxInt(u16)) {
                 // The PBR pipeline indexes with u16. Bigger meshes need the
                 // u32 index path (not yet wired) or decimation upstream.
                 return error.TooManyVertices;
@@ -7994,7 +8009,7 @@ pub fn loadBvhSkeletalClip(
     data: codecs.bvh.Data,
 ) errors.LoadError!BvhSkeletalClip {
     const bone_count: usize = data.joints.len;
-    if (bone_count == 0 or bone_count > @as(usize, @intCast(std.math.maxInt(i32)))) {
+    if (bone_count == 0 or bone_count > @as(usize, @intCast(maxInt(i32)))) {
         return errors.LoadError.InvalidDimensions;
     }
 
@@ -8863,7 +8878,7 @@ fn fbxMeshToEngine(
     node_to_world: [16]f64,
 ) errors.LoadError!Mesh {
     const vertex_count: usize = source.vertexCount();
-    if (vertex_count > std.math.maxInt(u16)) {
+    if (vertex_count > maxInt(u16)) {
         return errors.LoadError.InvalidDimensions;
     }
 

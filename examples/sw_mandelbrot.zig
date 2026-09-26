@@ -107,9 +107,11 @@ const MandelbrotFs = struct {
         while (iter < MAX_ITER) : (iter += 1) {
             zx2 = zx * zx;
             zy2 = zy * zy;
-            if (zx2 + zy2 > BAIL_R2) break;
-            const zxy_new = 2 * zx * zy + cy;
-            const zx_new = zx2 - zy2 + cx;
+            if (zx2 + zy2 > BAIL_R2) {
+                break;
+            }
+            const zxy_new: f32 = 2 * zx * zy + cy;
+            const zx_new: f32 = zx2 - zy2 + cx;
             zx = zx_new;
             zy = zxy_new;
         }
@@ -299,10 +301,12 @@ pub fn main() !void {
     var i: u32 = 0;
     while (i < ITERS) : (i += 1) {
         ctx.clear(.{ .color = true });
-        const start_ns = monotonicNs();
+        const start_ns: i128 = monotonicNs();
         ps.sw_dispatch.?.flush_batch(@ptrCast(&ctx), @ptrCast(&ps));
-        const elapsed_ns = monotonicNs() - start_ns;
-        if (elapsed_ns < min_ns) min_ns = elapsed_ns;
+        const elapsed_ns: i128 = monotonicNs() - start_ns;
+        if (elapsed_ns < min_ns) {
+            min_ns = elapsed_ns;
+        }
     }
     const elapsed_ms: f64 = float64(min_ns) / 1_000_000.0;
 

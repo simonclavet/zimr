@@ -42,6 +42,7 @@ const Allocator = std.mem.Allocator;
 const raster = @import("raster.zig");
 const raster_pixel = @import("raster_pixel.zig");
 const zm = @import("zm");
+const clamp = zm.clamp;
 const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
 const float64 = zm.float64;
@@ -683,8 +684,16 @@ pub fn rasterizeTriangles(
             // reasoning above) for front-face culling.
             const cov: TriCoverage = setupTriCoverage(sx0, sy0, sx1, sy1, sx2, sy2) orelse continue;
             switch (comptime opts.front_face) {
-                .ccw => if (!cov.swapped) continue,
-                .cw => if (cov.swapped) continue,
+                .ccw => {
+                    if (!cov.swapped) {
+                        continue;
+                    }
+                },
+                .cw => {
+                    if (cov.swapped) {
+                        continue;
+                    }
+                },
                 .none => {},
             }
 
@@ -1037,10 +1046,10 @@ pub fn rasterizeToTarget(
                     const out: FsModule.Out = FsModule.shaderMain(fs_io);
                     const c: Vec = @field(out, out_field_name);
                     img[pixel_index] = .{
-                        @trunc(std.math.clamp(c[0], 0.0, 1.0) * 255.0),
-                        @trunc(std.math.clamp(c[1], 0.0, 1.0) * 255.0),
-                        @trunc(std.math.clamp(c[2], 0.0, 1.0) * 255.0),
-                        @trunc(std.math.clamp(c[3], 0.0, 1.0) * 255.0),
+                        @trunc(clamp(c[0], 0.0, 1.0) * 255.0),
+                        @trunc(clamp(c[1], 0.0, 1.0) * 255.0),
+                        @trunc(clamp(c[2], 0.0, 1.0) * 255.0),
+                        @trunc(clamp(c[3], 0.0, 1.0) * 255.0),
                     };
                 }
             }

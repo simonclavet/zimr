@@ -16,7 +16,13 @@ const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const clamp = zm.clamp;
 const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const render = @import("render.zig");
 
 const Vec = zm.Vec;
@@ -449,7 +455,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Fixed-timestep stepping for both the character and the cubes.
     const fixed_dt: f32 = 1.0 / 60.0;
-    s.phys_accum += zm.clamp(f.time.delta_time, 0.0, 0.1);
+    s.phys_accum += clamp(f.time.delta_time, 0.0, 0.1);
     var sub: u32 = 0;
     while (s.phys_accum >= fixed_dt and sub < 4) : (sub += 1) {
         zp.characterExtendedUpdate(
@@ -459,7 +465,13 @@ fn update(f: *z.Frame, s: *State) void {
             vec(0.0, -9.81, 0.0),
             .{},
             arena,
+            // These two can only fail by running out of memory: the frame callback that contains them
+            // returns `void` by the engine's design, so there is nothing to propagate to. Swallowing
+            // leaves the world un-stepped for one frame, which is the least-bad outcome available here -
+            // and is why the rule wants it said out loud rather than written silently.
+            // lint:off catch-suppression: OOM only, void callback - see above
         ) catch {};
+        // lint:off catch-suppression: OOM only, void callback - see above
         zp.step(&s.world, fixed_dt) catch {};
         s.phys_accum -= fixed_dt;
     }

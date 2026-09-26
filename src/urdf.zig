@@ -33,6 +33,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
+const float = zm.float;
 const codecs = @import("codecs.zig");
 
 const Vec = zm.Vec;
@@ -837,9 +838,12 @@ pub fn hullPoints(
         var best_dot: f32 = -1.0e30;
         for (0..point_count) |i| {
             const v: Vec = vec(vertices[i * 3], vertices[i * 3 + 1], vertices[i * 3 + 2]);
-            const dot: f32 = dot3(direction, v);
-            if (dot > best_dot) {
-                best_dot = dot;
+            // Support function: the vertex furthest along `direction`. Named `projection` rather
+            // than `dot` because the bare name shadows zimrmath's, and because what it measures is
+            // how far this vertex projects onto the search direction.
+            const projection: f32 = dot3(direction, v);
+            if (projection > best_dot) {
+                best_dot = projection;
                 best = i;
             }
         }
@@ -1255,7 +1259,7 @@ test "hullPoints: a cube reduces to its eight corners, whatever the cloud" {
     // ...plus a grid of interior and surface points that must all be discarded.
     var i: i32 = -4;
     while (i <= 4) : (i += 1) {
-        const t_: f32 = @as(f32, @floatFromInt(i)) / 5.0;
+        const t_: f32 = float(i) / 5.0;
         try vertices.appendSlice(gpa, &.{ t_, t_, t_, t_, 0, 0, 0, t_, 0, 0, 0, t_ });
     }
 

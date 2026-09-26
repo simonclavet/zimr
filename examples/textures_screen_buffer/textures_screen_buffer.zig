@@ -89,7 +89,9 @@ fn update(f: *z.Frame, s: *State) void {
         while (xx < w) : (xx += 1) {
             const i: usize = xx + y * w;
             var ci: u8 = s.index_buffer[i];
-            if (ci == 0) continue;
+            if (ci == 0) {
+                continue;
+            }
             s.index_buffer[i] = 0;
             const move: i32 = rng.intRangeAtMost(i32, 0, 2) - 1;
             const new_x: i32 = @as(i32, @intCast(xx)) + move;

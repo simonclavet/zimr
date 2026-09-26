@@ -82,7 +82,9 @@ pub fn main(init: std.process.Init) !void {
     var i: usize = 0;
     while (i < ast.nodes.len) : (i += 1) {
         const node: Index = @fromBackingInt(@intCast(i));
-        if (ast.nodeTag(node) != .identifier) continue;
+        if (ast.nodeTag(node) != .identifier) {
+            continue;
+        }
         const use_tok: u32 = ast.nodeMainToken(node);
         const nm: []const u8 = ast.tokenSlice(use_tok);
         const used: usize = name2idx.get(nm) orelse continue;
@@ -92,12 +94,25 @@ pub fn main(init: std.process.Init) !void {
         var hi: usize = n;
         while (lo < hi) {
             const mid: usize = (lo + hi) / 2;
-            if (ftok[mid] <= use_tok) lo = mid + 1 else hi = mid;
+            // Upper-bound binary search: narrow to the first token index PAST `use_tok`.
+            if (ftok[mid] <= use_tok) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
         }
-        if (lo == 0) continue;
+        if (lo == 0) {
+            continue;
+        }
         const enc: usize = lo - 1;
-        if (use_tok > ltok[enc]) continue; // in inter-decl trivia (defensive)
-        if (enc == used) continue; // self-reference (incl. the decl's own name tok)
+        // in inter-decl trivia (defensive)
+        if (use_tok > ltok[enc]) {
+            continue;
+        }
+        // self-reference (incl. the decl's own name tok)
+        if (enc == used) {
+            continue;
+        }
         try edges[enc].put(used, {});
     }
 

@@ -431,14 +431,18 @@ fn step(s: *State) void {
                 var slot: u32 = start;
                 while (slot < end) : (slot += 1) {
                     const j: u32 = s.grid_indices[slot];
-                    if (j == i) continue;
+                    if (j == i) {
+                        continue;
+                    }
 
                     const r: Vec2 = s.positions[j] - p_i;
                     const r_sq: f32 = r[0] * r[0] + r[1] * r[1];
                     // Only skip exact co-location (numerical NaN
                     // guard).  Threshold lowered from 0.01 → 0.0001
                     // — anything past r ≈ 0.01 px gives a sane r̂.
-                    if (r_sq >= h_sq or r_sq < 0.0001) continue;
+                    if (r_sq >= h_sq or r_sq < 0.0001) {
+                        continue;
+                    }
 
                     const r_dist: f32 = @sqrt(r_sq);
                     const inv_r: f32 = 1.0 / r_dist;
@@ -591,11 +595,15 @@ fn step(s: *State) void {
                 var slot: u32 = start;
                 while (slot < end) : (slot += 1) {
                     const j: u32 = s.grid_indices[slot];
-                    if (j == i) continue;
+                    if (j == i) {
+                        continue;
+                    }
 
                     const r: Vec2 = s.positions[j] - p_i;
                     const r_sq: f32 = r[0] * r[0] + r[1] * r[1];
-                    if (r_sq >= h_sq) continue;
+                    if (r_sq >= h_sq) {
+                        continue;
+                    }
 
                     const one_minus_q: f32 = 1.0 - @sqrt(r_sq) * inv_h;
                     const omq_sq: f32 = one_minus_q * one_minus_q;
@@ -664,11 +672,15 @@ fn step(s: *State) void {
                 var slot: u32 = start;
                 while (slot < end) : (slot += 1) {
                     const j: u32 = s.grid_indices[slot];
-                    if (j == i) continue;
+                    if (j == i) {
+                        continue;
+                    }
 
                     const r: Vec2 = s.positions[j] - p_i;
                     const r_sq: f32 = r[0] * r[0] + r[1] * r[1];
-                    if (r_sq >= h_sq) continue;
+                    if (r_sq >= h_sq) {
+                        continue;
+                    }
 
                     var r_hat: Vec2 = undefined;
                     var r_dist: f32 = undefined;

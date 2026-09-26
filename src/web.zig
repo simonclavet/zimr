@@ -2096,6 +2096,19 @@ pub const userfile = struct {
         accept_len: u32,
     ) void;
     extern "dom" fn js_userfile_hide_picker() void;
+    extern "dom" fn js_userfile_offer(
+        ptr: [*]const u8,
+        len: u32,
+        name_ptr: [*]const u8,
+        name_len: u32,
+    ) void;
+    extern "dom" fn js_userfile_set_save_rect(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) void;
+    extern "dom" fn js_userfile_hide_save() void;
 
     /// How many completed files are waiting. Poll this each frame.
     pub fn pendingCount() u32 {
@@ -2158,6 +2171,46 @@ pub const userfile = struct {
             return;
         }
         js_userfile_set_picker_rect(x, y, w, h, accept.ptr, @intCast(accept.len));
+    }
+
+    // ── And the other direction: a file the page hands to the user. ──
+    //
+    // The same gesture rule applies, the other way round: a mobile browser saves a file only from
+    // inside a genuine user gesture, so a Save button drawn in wasm cannot trigger the download
+    // itself - by the time the frame notices the tap, the gesture has expired. Instead the page
+    // OFFERS the file ahead of time (`offerDownload`, as often as it likes; the previous file is
+    // released each time), and a real, transparent `<a download>` sits over its Save button
+    // (`setSaveRect`, every frame the button is shown). The tap lands on the anchor, and the file
+    // it hands over is whatever was offered last.
+
+    /// Make `bytes` the file a tap on the Save overlay downloads, named `name`. Copied at once:
+    /// the caller may free or reuse `bytes` as soon as this returns.
+    pub fn offerDownload(bytes: []const u8, name: []const u8) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_userfile_offer(bytes.ptr, @intCast(bytes.len), name.ptr, @intCast(name.len));
+    }
+
+    /// Park the Save overlay over the rectangle where the page draws its Save button.
+    pub fn setSaveRect(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_userfile_set_save_rect(x, y, w, h);
+    }
+
+    /// Hide the Save overlay, so it stops intercepting taps once the button is gone.
+    pub fn hideSave() void {
+        if (comptime !is_wasm) {
+            return;
+        }
+        js_userfile_hide_save();
     }
 
     /// Hide the overlay, so it stops intercepting taps once the button is gone.

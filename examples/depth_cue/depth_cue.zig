@@ -12,6 +12,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const clamp = zm.clamp;
 const float = zm.float;
 const Camera3D = zm.Camera3D;
 const Color = zm.Color;
@@ -48,7 +49,7 @@ fn grayByDistance(px: f32, py: f32, pz: f32, cam: Camera3D) Color {
     const dist: f32 = @sqrt(dx * dx + dy * dy + dz * dz);
 
     var t: f32 = (dist - near_d) / (far_d - near_d);
-    t = @max(0.0, @min(1.0, t));
+    t = clamp(t, 0.0, 1.0);
     const bright: f32 = 1.0 - t; // near = bright
 
     // 12 → floor keeps the far end visible rather than pure black.

@@ -31,11 +31,21 @@
 //! is a real hazard, so this one shows you both.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const ui = z.ui;
 const zm = @import("zm");
+const mulMat = zm.mulMat;
+const isFinite = zm.isFinite;
+const log10 = zm.log10;
+const pow = zm.pow;
 const rbt = z.robot;
 const zp = z.zimrphysics;
 const bridge_mod = z.robot_physics;
@@ -327,8 +337,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .fastest_ever = 0,
         .crate_mass = crate_mass_default,
         .motor_limit = motor_limit_default,
-        .crate_mass_exp = std.math.log10(crate_mass_default),
-        .motor_limit_exp = std.math.log10(motor_limit_default),
+        .crate_mass_exp = log10(crate_mass_default),
+        .motor_limit_exp = log10(motor_limit_default),
 
         .kp = 64, // ω² for ω = 8 rad/s
         .kv = 16, // 2ζω for ζ = 1
@@ -488,7 +498,7 @@ fn advanceTrajectory(s: *State, dt: f32) void {
     const target: [7]f32 = poses[s.pose].angles;
     for (&s.commanded, target) |*commanded, want| {
         const delta: f32 = want - commanded.*;
-        commanded.* += zm.clamp(delta, -step, step);
+        commanded.* += clamp(delta, -step, step);
     }
 }
 
@@ -827,11 +837,11 @@ fn update(f: *z.Frame, s: *State) void {
         // spends 90% of its travel above 30 kg where nothing further changes. `SliderOpts`
         // has no log mode, so the exponent is what the widget edits and the value is derived.
         if (u.slider("crate kg", &s.crate_mass_exp, .{ .min = -0.7, .max = 2.5, .fmt = "" })) {
-            s.crate_mass = std.math.pow(f32, 10.0, s.crate_mass_exp);
+            s.crate_mass = pow(f32, 10.0, s.crate_mass_exp);
             applyCrateMass(s);
         }
         _ = u.slider("motor N·m", &s.motor_limit_exp, .{ .min = 0.5, .max = 2.5, .fmt = "" });
-        s.motor_limit = std.math.pow(f32, 10.0, s.motor_limit_exp);
+        s.motor_limit = pow(f32, 10.0, s.motor_limit_exp);
         u.text("   {d:.1} kg each   {d:.0} N·m per joint", .{ s.crate_mass, s.motor_limit });
         _ = u.checkbox("physics", &s.physics_on);
         u.sameLine(.{});
@@ -871,7 +881,7 @@ fn update(f: *z.Frame, s: *State) void {
         const mesh_index: usize = bi - 1;
         if (s.show_meshes and mesh_index < s.meshes.len) {
             const at: Vec = s.data.body_xpos[bi];
-            s.transform[0] = zm.mulMat(
+            s.transform[0] = mulMat(
                 zm.translation(at[0], at[1], at[2]),
                 zm.quatToMat(s.data.body_xrot[bi]),
             );
@@ -928,7 +938,7 @@ fn update(f: *z.Frame, s: *State) void {
     // where an axis-aligned `drawCube` would keep it bolt upright and hide the tumble.
     for (0..crate_count) |i| {
         const body: u32 = crateBody(i);
-        s.transform[0] = zm.mulMat(
+        s.transform[0] = mulMat(
             zm.translation(s.data.body_xpos[body][0], s.data.body_xpos[body][1], s.data.body_xpos[body][2]),
             zm.quatToMat(s.data.body_xrot[body]),
         );
@@ -989,7 +999,7 @@ fn applyCrateMass(s: *State) void {
         // the model stays finite. Cheap, and it removes one candidate from the next hunt.
         const current: f32 = s.model.body_mass[body];
         const scale: f32 = if (current > 1.0e-9) s.crate_mass / current else 0.0;
-        if (scale == 0.0 or !std.math.isFinite(scale)) {
+        if (scale == 0.0 or !isFinite(scale)) {
             std.log.warn("crate {d}: mass {d} cannot be scaled to {d}; leaving it alone", .{
                 i,
                 current,

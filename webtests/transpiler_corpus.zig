@@ -337,7 +337,7 @@ export fn _start() void {
     // size-sort ascending (simple insertion sort; n is small)
     var a: u32 = 1;
     while (a < st.n) : (a += 1) {
-        const key = st.results[a];
+        const key: ShaderResult = st.results[a];
         var b: i64 = @as(i64, a) - 1;
         while (b >= 0 and st.results[@intCast(b)].size_bytes > key.size_bytes) {
             st.results[@intCast(b + 1)] = st.results[@intCast(b)];
@@ -353,11 +353,13 @@ export fn _start() void {
     var wgsl_buf: [262144]u8 = undefined;
     i = 0;
     while (i < st.n) : (i += 1) {
-        const out = transpileOne(pathOf(st.results[i]), &wgsl_buf);
+        // Null means the transpiler panicked or errored on this input - distinct from producing
+        // WGSL that merely still has unresolved references.
+        const out: ?[]const u8 = transpileOne(pathOf(st.results[i]), &wgsl_buf);
         if (out) |wgsl| {
             st.results[i].wgsl_lines = countLines(wgsl);
             md5Hex(wgsl, &st.results[i].wgsl_md5);
-            const scan = scanWgsl(wgsl);
+            const scan: Scan = scanWgsl(wgsl);
             st.results[i].unresolved_total = scan.total;
             st.results[i].unresolved_distinct = scan.distinct;
             st.results[i].status = if (scan.total == 0) .ok_clean else .ok_gaps;
@@ -463,11 +465,13 @@ fn statusScore(status: Status) u32 {
 fn sortByStatusThenSize() void {
     var a: u32 = 1;
     while (a < st.n) : (a += 1) {
-        const key = st.results[a];
+        const key: ShaderResult = st.results[a];
         var b: i64 = @as(i64, a) - 1;
         while (b >= 0) {
-            const cur = st.results[@intCast(b)];
-            const swap = statusScore(cur.status) > statusScore(key.status) or
+            const cur: ShaderResult = st.results[@intCast(b)];
+            // Insertion sort by status then size: a WORSE status sorts first so failures surface at
+            // the top of the report, and equal statuses fall back to the smaller shader.
+            const swap: bool = statusScore(cur.status) > statusScore(key.status) or
                 (statusScore(cur.status) == statusScore(key.status) and cur.size_bytes > key.size_bytes);
             if (!swap) {
                 break;
@@ -572,7 +576,7 @@ fn refreshFixture() void {
     var first: bool = true;
     var i: u32 = 0;
     while (i < st.n) : (i += 1) {
-        const r = st.results[i];
+        const r: ShaderResult = st.results[i];
         if (r.status != .ok_clean) {
             continue;
         }
@@ -583,7 +587,7 @@ fn refreshFixture() void {
             w += 1;
         }
         first = false;
-        const seg = bufPrint(json[w..], "    \"{s}\": \"{s}\"", .{ r.md5, r.wgsl_md5 }) catch break;
+        const seg: []const u8 = bufPrint(json[w..], "    \"{s}\": \"{s}\"", .{ r.md5, r.wgsl_md5 }) catch break;
         w += seg.len;
     }
 
@@ -634,7 +638,7 @@ fn refreshFixture() void {
                 w += 1;
             }
             first = false;
-            const seg = bufPrint(json[w..], "    \"{s}\": \"{s}\"", .{ old_key, old_val }) catch break;
+            const seg: []const u8 = bufPrint(json[w..], "    \"{s}\": \"{s}\"", .{ old_key, old_val }) catch break;
             w += seg.len;
             carried += 1;
         }
@@ -705,7 +709,7 @@ fn checkFixture() void {
             );
             continue;
         }
-        const live = st.results[@intCast(live_idx)];
+        const live: ShaderResult = st.results[@intCast(live_idx)];
         if (live.status != .ok_clean and live.status != .ok_gaps) {
             regressions += 1;
             printf("  \u{2717} REGRESSION: {s}... was clean, now failed", .{spv_md5[0..@min(spv_md5.len, 8)]});

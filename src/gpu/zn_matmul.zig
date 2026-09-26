@@ -116,7 +116,12 @@ pub fn matmul_tiled(id: u32) void {
             // 0 — always a valid element — and zeroes its contribution, with no branch at all.
             const a_at: u32 = (row * params.kdim + a_col) * a_ok;
             const b_at: u32 = (b_row * params.n + col) * b_ok;
+            // The two casts below decline `zm.float`: taking the rule's advice would mean giving this
+            // kernel a `zm` dependency it does not otherwise have - it imports `kompute` and nothing
+            // else. Two casts in a branch-free inner loop are not worth a module edge.
+            // lint:off float-from-int: see above
             shared_a[lid] = ba[a_at] * @as(f32, @floatFromInt(a_ok));
+            // lint:off float-from-int: see above
             shared_b[lid] = bb[b_at] * @as(f32, @floatFromInt(b_ok));
             k.workgroupBarrier();
 

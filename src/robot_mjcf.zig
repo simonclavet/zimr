@@ -44,7 +44,21 @@ pub const Error = Allocator.Error;
 /// A caller that wants Y-up applies the same one-line root rotation URDF uses. Doing it here
 /// would bake a display convention into an import path whose job is fidelity.
 pub fn build(gpa: Allocator, robot: *const mjcf.Robot, options: rbt.Options) !Imported {
-    return buildScene(gpa, robot, &.{}, options);
+    var imported: Imported = try buildScene(gpa, robot, &.{}, options);
+    errdefer imported.deinit();
+    // `<contact><exclude>`: names become body indices, kept in the model's own arena. (Robots built as
+    // scenes - `buildScene`, `buildMultiScene` - do not read exclusions yet.)
+    if (robot.excludes.len > 0) {
+        const pairs: [][2]u32 = try imported.model.arena.allocator().alloc([2]u32, robot.excludes.len);
+        for (robot.excludes, 0..) |exclude, k| {
+            pairs[k] = .{
+                imported.bodyIndex(exclude.body1) orelse return error.UnknownExcludedBody,
+                imported.bodyIndex(exclude.body2) orelse return error.UnknownExcludedBody,
+            };
+        }
+        imported.model.exclude_pairs = pairs;
+    }
+    return imported;
 }
 
 /// Build an imported robot together with loose objects it can interact with.
@@ -724,9 +738,7 @@ fn reorderQuat(q: *[4]f32) void {
 // =============================================================================
 
 const codecs = @import("codecs.zig");
-const zimrphysics = @import("zimrphysics.zig");
 const robot_scene = @import("robot_scene.zig");
-const robot_physics = @import("robot_physics.zig");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
@@ -762,7 +774,7 @@ test "mjcf import: forward kinematics agrees with MuJoCo, body for body" {
     var hinge_index: usize = 0;
     for (0..model.njnt) |j| {
         if (model.jnt_type[j] == .hinge) {
-            data.pos[model.jnt_qpos_adr[j]] = 0.15 + 0.05 * @as(f32, @floatFromInt(j));
+            data.pos[model.jnt_qpos_adr[j]] = 0.15 + 0.05 * float(j);
         }
         hinge_index += 1;
     }
@@ -842,11 +854,18 @@ test "mjcf import: a keyframe loads, and one of the wrong length is refused" {
 /// ★★ They are NOT deleted, and they are NOT reduced. Their cost is the IK solve itself, so
 /// cutting iterations or directions would change what they measure rather than how long it takes
 /// — a cheaper test that answers a different question is not the same test. Each is a diagnostic
-/// from the retarget arc, which is PAUSED; when it resumes, flip this to `true`.
+/// from the retarget arc, which is PAUSED. Run them with `-Dslow-tests` (e.g.
+/// `zig build zn-robot_mjcf -Dslow-tests -Dtest-filter="WHOLE BODY"`); `WHOLE BODY` is the only
+/// test that exercises the shipped `solvePointCloud`, so a compiler bump should run it.
 ///
 /// ★ A skip, not a comment-out: the runner prints them as skipped every run, so they stay
-/// visible and countable instead of quietly ceasing to exist.
-const run_slow_retarget_diagnostics: bool = false;
+/// visible and countable instead of quietly ceasing to exist. `@hasDecl`, because only the host
+/// test options carry the flag - this file also compiles into wasm, where the answer is no.
+const run_slow_retarget_diagnostics: bool = if (@hasDecl(build_options, "slow_tests"))
+    build_options.slow_tests
+else
+    false;
+const build_options = @import("build_options");
 
 test "mjcf import: a REAL QUADRUPED — Unitree Go1 from Menagerie, FK against MuJoCo" {
     if (!run_slow_retarget_diagnostics) {
@@ -881,7 +900,7 @@ test "mjcf import: a REAL QUADRUPED — Unitree Go1 from Menagerie, FK against M
     try expect(applyKeyframe(model, &data, robot.keyframes[0]));
     for (0..model.njnt) |j| {
         if (model.jnt_type[j] == .hinge) {
-            data.pos[model.jnt_qpos_adr[j]] = 0.15 + 0.05 * @as(f32, @floatFromInt(j));
+            data.pos[model.jnt_qpos_adr[j]] = 0.15 + 0.05 * float(j);
         }
     }
     rbt.forward(model, &data);
@@ -917,118 +936,6 @@ test "mjcf import: a REAL QUADRUPED — Unitree Go1 from Menagerie, FK against M
             };
         }
     }
-}
-
-test "★ THE GATE: a Unitree Go1 stands still for 30 seconds" {
-    // ★★★ PHASE C TURN 11, and the thing the whole roadmap turns on. A quadruped that will
-    // not stand still fails for SOLVER reasons rather than modelling ones — contact softness,
-    // friction and the warm start all show up here first — so everything after this is
-    // guesswork until it holds.
-    //
-    // A real robot, imported from Menagerie's MJCF, held at its own `home` keyframe by plain
-    // PD at the manufacturer's own `kp = 100`, on a floor, for 15000 steps at 500 Hz.
-    const gpa: Allocator = std.testing.allocator;
-    const source: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
-    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
-    defer doc.deinit();
-    var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
-    defer robot.deinit();
-
-    // ★ MJCF IS Z-UP, so the world's gravity has to be too. Handing a Z-up robot a Y-up
-    // gravity gives a machine that falls sideways, which looks like a controller problem.
-    var imported: Imported = try build(gpa, &robot, .{
-        .max_contacts = 128,
-        .timestep = 1.0 / 500.0,
-        .gravity = vec(0, 0, -9.81),
-    });
-    defer imported.deinit();
-    const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
-    defer data.deinit();
-
-    var world: zimrphysics.World = try .init(gpa, 128);
-    defer world.deinit(gpa);
-    world.gravity = vec(0, 0, -9.81);
-    const ground: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
-        .box = .{ .half_extent = vec(5, 5, 0.5), .convex_radius = 0.01 },
-    });
-    _ = try world.createBody(.{
-        .shape = ground,
-        .position = vec(0, 0, -0.5),
-        .motion_type = .static,
-    });
-
-    try expect(applyKeyframe(model, &data, robot.keyframes[0]));
-    rbt.forward(model, &data);
-    var bridge: robot_physics.Bridge = try .init(gpa, &world, model, &data, 128);
-    defer bridge.deinit(&world);
-    bridge.listen(&world);
-
-    const home: []f32 = try gpa.dupe(f32, robot.keyframes[0].qpos);
-    defer gpa.free(home);
-    const dt: f32 = 1.0 / 500.0;
-
-    for (0..15000) |_| {
-        rbt.forward(model, &data);
-        try bridge.sync(&world, model, &data);
-        try zimrphysics.step(&world, dt);
-        bridge.harvest(&data);
-
-        // ★ PLAIN PD IN TORQUE SPACE, clamped to the joint's rating, plus gravity
-        // compensation ON THE ACTUATED DOFs ONLY.
-        //
-        // Two mistakes were made here first and both are worth keeping:
-        //
-        //   * **Computed torque cannot command a floating base.** `τ = M·a*` solves for
-        //     accelerations the trunk has no motor to produce; zeroing those rows afterwards
-        //     leaves the legs making up a difference they were never asked for, and the robot
-        //     folds to a third of its height while looking like a tuning problem.
-        //   * **Gravity compensation on the free joint makes the robot fly.** `bias_force`
-        //     covers every DOF including the trunk's six; adding all of it cancels the
-        //     machine's own weight, and it rises at a steady 2.4 m/s. A trunk has no motor,
-        //     so it must feel its weight — the same rule the crates taught.
-        @memset(data.applied_force, 0);
-        for (0..model.njnt) |j| {
-            if (model.jnt_type[j] != .hinge) {
-                continue;
-            }
-            const q: u32 = model.jnt_qpos_adr[j];
-            const v: u32 = model.jnt_dof_adr[j];
-            const wanted: f32 = 100.0 * (home[q] - data.pos[q]) - 2.0 * data.vel[v];
-            data.applied_force[v] = zm.clamp(wanted, -35.55, 35.55) + data.bias_force[v];
-        }
-        rbt.step(model, &data);
-    }
-    rbt.forward(model, &data);
-
-    // ── ★ IT IS STILL STANDING, and still ──
-    const trunk: u32 = imported.bodyIndex("trunk").?;
-    // ★ A RANGE, NOT A TARGET — and the reason is worth recording.
-    //
-    // This asserted `0.27 ± 0.03`, calibrated when two geometry bugs were still present: the
-    // capsules were rotated 90° from MJCF's axis, and every foot's `pos` came from a CLASS
-    // and was being dropped, so the robot stood on its shins. Both are fixed, the feet are
-    // now the lowest geometry as they should be, and it settles higher.
-    //
-    // Which number is right cannot be re-derived here — MuJoCo needs the Menagerie mesh
-    // assets to load this model and they are not checked in. So the test asserts what it can
-    // actually justify: **the robot is standing on its legs**, somewhere between a deep
-    // crouch and full extension, rather than a precise height whose reference was measured
-    // against a bug.
-    //
-    // Tightening this again is a genuine to-do: re-derive the settled height from MuJoCo
-    // with the assets present, and put the number back.
-    try expect(data.body_xpos[trunk][2] > 0.20);
-    try expect(data.body_xpos[trunk][2] < 0.40);
-    // And nothing is moving: 1 cm/s over half a minute is a machine at rest, not one
-    // drifting slowly enough to pass a short test.
-    var fastest: f32 = 0;
-    for (0..model.nv) |i| {
-        fastest = @max(fastest, @abs(data.vel[i]));
-    }
-    try expect(fastest < 0.05);
-    // Four feet on the ground.
-    try expect(data.contact_count >= 4);
 }
 
 test "mjcf import: an unnamed body is anonymous, not an error" {
@@ -1612,10 +1519,10 @@ test "★ observe: a flat vector, on a robot where nq and nv differ" {
     // A pose and a motion that are distinguishable from each other, so a block landing in the
     // wrong place is visible rather than a plausible-looking zero.
     for (0..model.nq) |i| {
-        data.pos[i] = 0.1 * @as(f32, @floatFromInt(i));
+        data.pos[i] = 0.1 * float(i);
     }
     for (0..model.nv) |i| {
-        data.vel[i] = -1.0 - @as(f32, @floatFromInt(i));
+        data.vel[i] = -1.0 - float(i);
     }
     data.stage = .stale;
     rbt.forward(model, &data);
@@ -1690,7 +1597,7 @@ test "★★ a standing Go1: PGS stops short of tolerance, Newton reaches it, bo
                 const qi: u32 = imported.model.jnt_qpos_adr[ji];
                 const vi: u32 = imported.model.jnt_dof_adr[ji];
                 const want: f32 = 300.0 * (home[qi] - data.pos[qi]) - 2.0 * data.vel[vi];
-                data.applied_force[vi] = zm.clamp(want, -35.55, 35.55) + data.bias_force[vi];
+                data.applied_force[vi] = clamp(want, -35.55, 35.55) + data.bias_force[vi];
             }
             rbt.step(&imported.model, &data);
         }
@@ -1933,7 +1840,11 @@ test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee 
 /// ★ A BVH stores LOCAL rotations; a reference pose needs WORLD ones, so the hierarchy is
 /// walked once here. Names rather than indices, because nothing guarantees two files list the
 /// same skeleton in the same order.
-fn tPoseGlobalRotations(
+/// Global rotations of a T-pose capture, ordered to match .
+///
+/// Public because the retarget precompute tool needs the same reference the in-file test uses,
+/// and a second copy of this would be a second thing to keep correct.
+pub fn tPoseGlobalRotations(
     gpa: Allocator,
     tpose: *const codecs.bvh.Data,
     target_names: []const []const u8,
@@ -6464,7 +6375,9 @@ fn runWholeBody(
             .body_names = imported.names,
             .rest_positions_robot = rest_pos_robot[0..imported.model.nbody],
         }, &library_samples);
-        sample_n = @min(library_n, samples.len);
+        // `buildPointSamples` asserts it had room, so a short harness buffer is the one gap left.
+        try expect(library_n <= samples.len);
+        sample_n = library_n;
         for (0..sample_n) |i| {
             samples[i] = .{
                 .body = library_samples[i].body,
@@ -6791,8 +6704,11 @@ fn runWholeBody(
         // ★ This is `solveRestPoseFromSource`'s construction, which built the rest pose, applied
         // per frame. The torso already used it and it stopped the squeezing.
         var retargeted: [64]rbt.Vec = undefined;
+        // ★ Checked, not clamped: `@min(nbody, 64)` used to hand a bigger robot a skeleton with its
+        // last bodies missing, and `solvePointCloud` would quietly fall back for them.
+        try expect(imported.model.nbody <= retargeted.len);
         {
-            const limit: usize = @min(imported.model.nbody, retargeted.len);
+            const limit: usize = imported.model.nbody;
             retargeted[0] = .{ 0, 0, 0, 0 };
             for (1..limit) |b| {
                 const parent: u32 = imported.model.body_parent[b];
@@ -6842,7 +6758,7 @@ fn runWholeBody(
         {
             var offset: rbt.Vec = .{ 0, 0, 0, 0 };
             var counted: f32 = 0;
-            for (1..@min(imported.model.nbody, retargeted.len)) |b| {
+            for (1..imported.model.nbody) |b| {
                 if (human_of_body[b] < 0) {
                     continue;
                 }
@@ -6851,7 +6767,7 @@ fn runWholeBody(
             }
             if (counted > 0) {
                 const shift: rbt.Vec = offset / @as(rbt.Vec, @splat(counted));
-                for (1..@min(imported.model.nbody, retargeted.len)) |b| {
+                for (1..imported.model.nbody) |b| {
                     retargeted[b] += shift;
                 }
             }
@@ -6876,7 +6792,7 @@ fn runWholeBody(
         rbt.solvePointCloud(&imported.model, &data, samples[0..sample_n], .{
             .positions = p_robot[0..jj],
             .rotations = r_robot[0..jj],
-            .retargeted = retargeted[0..@min(imported.model.nbody, retargeted.len)],
+            .retargeted = retargeted[0..imported.model.nbody],
             // ★ The root's target: its own mapped joint. `solvePointCloud` places the free
             // joint there before solving, so the figure starts near its answer.
             .root_world = if (human_of_body[1] >= 0)

@@ -1497,7 +1497,61 @@ const ZimrWgpu = struct {
         desc.set("code", modString(wgsl_ptr, wgsl_len));
         desc.set("label", modString(label_ptr, label_len));
         const module: Value = g.boot.gpu_device.call("createShaderModule", .{desc});
+
+        // ---- ASK THE SHADER MODULE WHAT WAS WRONG WITH IT ----
+        //
+        // `createShaderModule` never throws. A module that failed to compile is returned as a
+        // live object, and the first thing anyone hears about it is the CASCADE, one call later:
+        //
+        //     [Invalid ShaderModule "diff_forward"] is invalid due to a previous error.
+        //      - While validating compute stage ...
+        //
+        // "a previous error" is the actual message, and without this it is never printed. Two
+        // device round-trips were spent reading transpiler output by eye because of that.
+        //
+        // `getCompilationInfo()` is where Dawn puts the real diagnostic, with a line and column
+        // into the WGSL it rejected. It is a Promise and this bridge call is synchronous, so the
+        // report is attached and left to fire: the handle returns immediately, the pipeline
+        // still fails, and the useful message lands on the same error surface a moment later.
+        // Order on screen is not the point - having the message at all is.
+        reportShaderCompilation(module);
+
         return @floatFromInt(tblInsert(module));
+    }
+
+    /// Attach a diagnostic reporter to a freshly created shader module.
+    ///
+    /// Errors go to `window.__wzFail`, the page's existing full-screen error surface, so a
+    /// compile failure paints the same way an uncaught exception does. Warnings are left to the
+    /// console: a warning that paints over the app is a warning nobody keeps.
+    fn reportShaderCompilation(module: Value) void {
+        const fun: Value = global().get("Function");
+        const reporter: Value = fun.new(.{
+            str("m"),
+            str(
+                \\if (!m) { return; }
+                \\if (!m.getCompilationInfo) {
+                \\  if (window.__wzFail) { window.__wzFail("no getCompilationInfo on this device"); }
+                \\  return;
+                \\}
+                \\m.getCompilationInfo().then(function (info) {
+                \\  var out = [];
+                \\  for (var i = 0; i < info.messages.length; i++) {
+                \\    var g = info.messages[i];
+                \\    if (g.type !== "error") { console.warn("[wgsl] " + g.message); continue; }
+                \\    out.push("WGSL " + g.type + " at line " + g.lineNum + ":" + g.linePos +
+                \\             " of \"" + (m.label || "?") + "\"\n  " + g.message);
+                \\  }
+                \\  if (out.length && window.__wzFail) { window.__wzFail(out.join("\n\n")); }
+                \\  else if (info.messages.length === 0 && m.label && window.__wzNoteOk) {
+                \\    window.__wzNoteOk(m.label);
+                \\  }
+                \\}).catch(function (e) {
+                \\  if (window.__wzFail) { window.__wzFail("getCompilationInfo failed: " + e); }
+                \\});
+            ),
+        });
+        _ = reporter.call("call", .{ global(), module });
     }
     fn jsDeviceCreateSampler(
         _: f64,
@@ -3073,7 +3127,7 @@ const ZimrBoot = struct {
         if (n > out_cap) {
             return 0;
         }
-        _ = modU8(@intFromFloat(out_ptr), @intFromFloat(n)).call("set", .{bytes});
+        _ = modU8(@trunc(out_ptr), @trunc(n)).call("set", .{bytes});
         return n;
     }
 
@@ -3089,7 +3143,7 @@ const ZimrBoot = struct {
         if (n > out_cap) {
             return 0;
         }
-        _ = modU8(@intFromFloat(out_ptr), @intFromFloat(n)).call("set", .{bytes});
+        _ = modU8(@trunc(out_ptr), @trunc(n)).call("set", .{bytes});
         _ = g.userfile.queue.call("shift", .{});
         return n;
     }
@@ -3135,6 +3189,61 @@ const ZimrBoot = struct {
         ovSetPx(st, "top", y);
         ovSetPx(st, "width", w);
         ovSetPx(st, "height", h);
+    }
+
+    /// The Save overlay: created once, a real `<a>` so a tap on it is a genuine gesture - which a
+    /// mobile browser requires before it will save a file, exactly as it does before opening a
+    /// picker.
+    fn ufEnsureSaveAnchor() void {
+        if (g.userfile.save.h != 0) {
+            return;
+        }
+        const el: Value = document().j.call("createElement", .{str("a")});
+        const st: Value = el.get("style");
+        st.set("position", str("fixed"));
+        st.set("opacity", str("0"));
+        st.set("zIndex", str("99998"));
+        st.set("cursor", str("pointer"));
+        st.set("display", str("none"));
+        _ = document().body().j.call("appendChild", .{el});
+        g.userfile.save = el;
+    }
+
+    /// Make `bytes` the file the Save overlay hands over, named `name`. The Blob takes a COPY of
+    /// wasm memory, so the caller may reuse its buffer the moment this returns.
+    fn ufOffer(ptr: f64, len: f64, name_ptr: f64, name_len: f64) void {
+        ufEnsureSaveAnchor();
+        const view: Value = modU8(@trunc(ptr), @trunc(len));
+        const copy: Value = global().get("Uint8Array").new(.{view});
+        const parts: Value = global().get("Array").new(.{});
+        _ = parts.call("push", .{copy});
+        const opts: Value = global().get("Object").new(.{});
+        opts.set("type", str("application/octet-stream"));
+        const blob: Value = global().get("Blob").new(.{ parts, opts });
+        if (g.userfile.save_url.h != 0) {
+            _ = global().get("URL").call("revokeObjectURL", .{g.userfile.save_url});
+        }
+        const url: Value = global().get("URL").call("createObjectURL", .{blob});
+        g.userfile.save_url = url;
+        g.userfile.save.set("href", url);
+        g.userfile.save.set("download", modStr(js_num(name_ptr), js_num(name_len)));
+    }
+
+    fn ufSetSaveRect(x: f64, y: f64, w: f64, h: f64) void {
+        ufEnsureSaveAnchor();
+        const st: Value = g.userfile.save.get("style");
+        st.set("display", str("block"));
+        ovSetPx(st, "left", x);
+        ovSetPx(st, "top", y);
+        ovSetPx(st, "width", w);
+        ovSetPx(st, "height", h);
+    }
+
+    fn ufHideSave() void {
+        if (g.userfile.save.h == 0) {
+            return;
+        }
+        g.userfile.save.get("style").set("display", str("none"));
     }
 
     fn ufHidePicker() void {
@@ -3781,6 +3890,9 @@ const ZimrBoot = struct {
                     dom.set("js_userfile_discard_next", funcNum(&ZimrBoot.ufDiscardNext));
                     dom.set("js_userfile_set_picker_rect", funcNum(&ZimrBoot.ufSetPickerRect));
                     dom.set("js_userfile_hide_picker", funcNum(&ZimrBoot.ufHidePicker));
+                    dom.set("js_userfile_offer", funcNum(&ZimrBoot.ufOffer));
+                    dom.set("js_userfile_set_save_rect", funcNum(&ZimrBoot.ufSetSaveRect));
+                    dom.set("js_userfile_hide_save", funcNum(&ZimrBoot.ufHideSave));
                     // WebSocket client (P2P signaling — see src/net.zig).
                     dom.set("js_ws_open", funcNum(&ZimrWgpu.jsWsOpen));
                     dom.set("js_ws_state", funcNum(&ZimrWgpu.jsWsState));
@@ -5651,6 +5763,11 @@ const UserFile = struct {
     queue: Value = .{ .h = 0 },
     /// The transparent `<input type="file">` parked over the caller's Load button.
     input: Value = .{ .h = 0 },
+    /// The transparent `<a download>` parked over the caller's Save button, and the object URL
+    /// it currently points at - revoked whenever a newer file replaces it, so offering a fresh
+    /// file every few seconds does not leak the old ones.
+    save: Value = .{ .h = 0 },
+    save_url: Value = .{ .h = 0 },
     /// Drop listeners are attached once, lazily — attaching them at boot would mean every
     /// page paid for a feature almost none of them use.
     listening: bool = false,

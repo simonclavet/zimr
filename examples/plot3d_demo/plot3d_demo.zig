@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const splat = zm.splat;
 const float = zm.float;
 const ui = z.ui_real;
 const p3 = z.plot3d;
@@ -121,7 +122,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     rebuildSurface(s, 0.0);
     // Scale the built-in ±0.5 unit cube up to ±0.8 plot units.
     for (p3.cube_vtx, 0..) |v, i| {
-        s.cube_v[i] = v * zm.splat(1.6);
+        s.cube_v[i] = v * splat(1.6);
     }
 }
 

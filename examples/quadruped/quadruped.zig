@@ -18,10 +18,17 @@
 //! from `<position kp="100" forcerange="-35.55 35.55">` in `go1.xml`).
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
+const length3 = zm.length3;
 const sinTurns = zm.sinTurns;
 const rbt = z.robot;
 const zp = z.zimrphysics;
@@ -1376,7 +1383,7 @@ fn update(f: *z.Frame, s: *State) void {
             for (0..4) |i| {
                 const at: Vec = s.data.body_xpos[s.foot_body[i]] +
                     zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
-                slip += zm.length3(at - s.planted[i]);
+                slip += length3(at - s.planted[i]);
             }
             s.foot_slip = slip;
             for (0..s.data.contact_count) |c| {
@@ -1487,7 +1494,7 @@ fn update(f: *z.Frame, s: *State) void {
             // ★ THE DRIFT IS THE SCORE. A gimbal that visibly wobbles is a gimbal that failed,
             // and the number says by how much — which is the quantity a planner with preview
             // would have to beat.
-            s.arm_error = zm.length3(s.data.body_xpos[s.gripper] - goal);
+            s.arm_error = length3(s.data.body_xpos[s.gripper] - goal);
             s.hold_error = s.arm_error;
             if (s.routine_clock > 1.5) {
                 s.hold_worst = @max(s.hold_worst, s.arm_error);

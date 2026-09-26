@@ -48,6 +48,38 @@ const pairs = [_]Pair{
             "src/robot_mpc.zig",
         },
     },
+    .{
+        // Robot motion capture: every module it explains, and (from its second chapter) the
+        // compiled examples file it quotes its usage code from.
+        .doc = "src/notes/tutorials/robot-mocap-tutorial.html",
+        .srcs = &.{
+            "src/robot_dance.zig",
+            "src/robot_gym.zig",
+            "src/robot_supertrack.zig",
+            "src/robot_latent.zig",
+            "src/robot_track.zig",
+            "src/kit_mlp.zig",
+            "src/robot_world.zig",
+            "src/robot_supertrack.zig",
+            "src/robot_geno.zig",
+            "src/robot_latent_kit.zig",
+            "src/robot_latent_kit_tests.zig",
+            "src/robot_track_resident.zig",
+            "src/robot_track_resident_tests.zig",
+            "src/robot_policy.zig",
+            "src/robot_ppo_track.zig",
+            "examples/getup_train/getup_train.zig",
+            "src/robot_maximal.zig",
+            "src/gpu/zn_mlp.zig",
+            "src/compute_host.zig",
+            "src/robot.zig",
+            "src/codecs.zig",
+            "src/robot_mocap_tutorial.zig",
+            "src/zimrphysics.zig",
+            "examples/cartpole_duel/cartpole_duel.zig",
+            "tools/lafan_db.zig",
+        },
+    },
 };
 
 /// Replace the HTML entities a code block can legally contain. Deliberately not a general
@@ -135,10 +167,15 @@ fn checkPair(gpa: Allocator, io: std.Io, pair: Pair) !Report {
             continue;
         }
 
-        // Strip the inner <code> wrapper if present.
+        // Strip the inner <code> wrapper if present.  It now usually carries a
+        // language class (`<code class="zig">`) so docfmt highlights it at build
+        // time, so skip to the tag's `>` rather than matching a fixed opener —
+        // matching `<code>` exactly made every classed block read as drifted.
         var body: []const u8 = doc[body_start..close];
-        if (startsWith(u8, body, "<code>")) {
-            body = body["<code>".len..];
+        if (startsWith(u8, body, "<code")) {
+            if (indexOf(u8, body, ">")) |gt| {
+                body = body[gt + 1 ..];
+            }
         }
         if (endsWith(u8, body, "</code>")) {
             body = body[0 .. body.len - "</code>".len];

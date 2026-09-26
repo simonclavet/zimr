@@ -338,7 +338,7 @@ fn update(f: *z.Frame, s: *State) void {
     // ---- widgets ----
     s.width = slider(f, wsx0, wsx1, sy, s.width, 2, 120, s.drag == drag_width);
     const seg_f: f32 = slider(f, ssx0, ssx1, sy, float(s.segments), 2, 64, s.drag == drag_segs);
-    s.segments = @intFromFloat(@round(seg_f));
+    s.segments = @round(seg_f);
 
     // toggle box
     f.gl.rect(toggle, .{ .color = if (s.show_curve) skyblue else surface });

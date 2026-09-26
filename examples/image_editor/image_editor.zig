@@ -8,6 +8,7 @@
 //! texture). Panels are drawn via the rl-immediate textured-quad path.
 const std = @import("std");
 const zm = @import("zm");
+const clamp = zm.clamp;
 const float = zm.float;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -142,9 +143,9 @@ fn update(f: *z.Frame, state: *State) void {
             const y: f32 = float(i / w);
             const r: f32 = (x / float(state.live_image.width)) * 255.0 * wave;
             const g: f32 = (y / float(state.live_image.height)) * 255.0 * wave;
-            pixels[i * 4 + 0] = @trunc(@max(0.0, @min(255.0, r)));
-            pixels[i * 4 + 1] = @trunc(@max(0.0, @min(255.0, g)));
-            pixels[i * 4 + 2] = @trunc(@max(0.0, @min(255.0, 128.0 * wave)));
+            pixels[i * 4 + 0] = @trunc(clamp(r, 0.0, 255.0));
+            pixels[i * 4 + 1] = @trunc(clamp(g, 0.0, 255.0));
+            pixels[i * 4 + 2] = @trunc(clamp(128.0 * wave, 0.0, 255.0));
             pixels[i * 4 + 3] = 255;
         }
         z.updateTexture(f.gl, state.live_tex, state.live_image);

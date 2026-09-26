@@ -147,7 +147,7 @@ pub fn shaderMain(io_in: Io) Out {
             if (i >= count) {
                 break;
             }
-            const geom = io_in.u.sphere_geom[i];
+            const geom: Vec = io_in.u.sphere_geom[i];
             const radius: f32 = geom[3];
             if (radius <= 0.0) {
                 continue;
@@ -167,7 +167,7 @@ pub fn shaderMain(io_in: Io) Out {
         }
 
         const hi: u32 = hit_i;
-        const geom = io_in.u.sphere_geom[hi];
+        const geom: Vec = io_in.u.sphere_geom[hi];
         const center: Vec = vec(geom[0], geom[1], geom[2]);
         const radius: f32 = geom[3];
         const point: Vec = ro + rd * splat(best_t);
@@ -176,7 +176,7 @@ pub fn shaderMain(io_in: Io) Out {
         if (!front_face) {
             normal = -normal;
         }
-        const am = io_in.u.sphere_albedo[hi];
+        const am: Vec = io_in.u.sphere_albedo[hi];
         const albedo: Vec = vec(am[0], am[1], am[2]);
         const mat: f32 = am[3];
         const param: f32 = io_in.u.sphere_extra[hi][0];

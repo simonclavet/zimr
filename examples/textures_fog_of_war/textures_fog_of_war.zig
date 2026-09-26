@@ -8,6 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const clamp = zm.clamp;
 const float = zm.float;
 const Color = zm.Color;
 const c = Color;
@@ -107,16 +108,16 @@ fn update(f: *z.Frame, s: *State) void {
             s.player[1] += (dy / dist) * 5;
         }
     }
-    s.player[0] = std.math.clamp(s.player[0], 0, map_w - player_size);
-    s.player[1] = std.math.clamp(s.player[1], 0, map_h - player_size);
+    s.player[0] = clamp(s.player[0], 0, map_w - player_size);
+    s.player[1] = clamp(s.player[1], 0, map_h - player_size);
 
     for (s.tile_fog) |*t| {
         if (t.* == 1) {
             t.* = 2;
         }
     }
-    s.tile_x = @intFromFloat((s.player[0] + tile_size / 2) / tile_size);
-    s.tile_y = @intFromFloat((s.player[1] + tile_size / 2) / tile_size);
+    s.tile_x = @trunc((s.player[0] + tile_size / 2) / tile_size);
+    s.tile_y = @trunc((s.player[1] + tile_size / 2) / tile_size);
     var y: i32 = s.tile_y - visibility;
     while (y < s.tile_y + visibility) : (y += 1) {
         var x: i32 = s.tile_x - visibility;

@@ -7,6 +7,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const float = zm.float;
 const common = @import("example_common");
 
 const Vec2 = zm.Vec2;
@@ -215,7 +216,7 @@ fn update(f: *z.Frame, s: *State) void {
     // Board: two vertical bars and two horizontal bars.
     var k: usize = 1;
     while (k < 3) : (k += 1) {
-        const off: f32 = @as(f32, @floatFromInt(k)) * lay.cell;
+        const off: f32 = float(k) * lay.cell;
         const side: f32 = lay.cell * 3.0;
         f.gl.line(
             .{ lay.x + off, lay.y },

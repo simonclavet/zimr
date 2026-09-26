@@ -37,7 +37,7 @@ test "leak: gen/free image - 100 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 100) : (i += 1) {
-        const img = try image.genImageColor(ta, 32, 32, .{ .r = 100, .g = 50, .b = 200, .a = 255 });
+        const img: Image = try image.genImageColor(ta, 32, 32, .{ .r = 100, .g = 50, .b = 200, .a = 255 });
         image.unloadImage(ta, img);
     }
 }
@@ -46,7 +46,7 @@ test "leak: gen/resize/free chain - 50 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        var img = try image.genImageColor(ta, 16, 16, .{ .r = 80, .g = 80, .b = 80, .a = 255 });
+        var img: Image = try image.genImageColor(ta, 16, 16, .{ .r = 80, .g = 80, .b = 80, .a = 255 });
         try image.imageResize(ta, &img, 32, 32);
         image.unloadImage(ta, img);
     }
@@ -58,7 +58,7 @@ test "leak: gen/full-transform-chain/free - 25 iterations" {
     while (i < 25) : (i += 1) {
         // Build a 32×32 image, run it through 5 different transforms,
         // then free.  Any errdefer or freeImageData mismatch leaks.
-        var img = try image.genImageColor(ta, 32, 32, .{ .r = 50, .g = 100, .b = 150, .a = 255 });
+        var img: Image = try image.genImageColor(ta, 32, 32, .{ .r = 50, .g = 100, .b = 150, .a = 255 });
         try image.imageResize(ta, &img, 64, 64);
         try image.imageRotateCW(ta, &img);
         try image.imageCrop(ta, &img, .{ .x = 8, .y = 8, .width = 32, .height = 32 });
@@ -72,8 +72,8 @@ test "leak: imageCopy roundtrip - 50 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const src = try image.genImageColor(ta, 12, 12, .{ .r = 200, .g = 100, .b = 50, .a = 255 });
-        const dst = try image.imageCopy(ta, src);
+        const src: Image = try image.genImageColor(ta, 12, 12, .{ .r = 200, .g = 100, .b = 50, .a = 255 });
+        const dst: Image = try image.imageCopy(ta, src);
         image.unloadImage(ta, src);
         image.unloadImage(ta, dst);
     }
@@ -83,8 +83,8 @@ test "leak: imageFromImage extract - 50 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const src = try image.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
-        const sub = try image.imageFromImage(ta, src, .{ .x = 1, .y = 1, .width = 4, .height = 4 });
+        const src: Image = try image.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
+        const sub: Image = try image.imageFromImage(ta, src, .{ .x = 1, .y = 1, .width = 4, .height = 4 });
         image.unloadImage(ta, src);
         image.unloadImage(ta, sub);
     }
@@ -94,7 +94,7 @@ test "leak: gen/blur/free - exercises gpa scratch buffers" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 20) : (i += 1) {
-        var img = try image.genImageColor(ta, 16, 16, .{ .r = 200, .g = 200, .b = 200, .a = 255 });
+        var img: Image = try image.genImageColor(ta, 16, 16, .{ .r = 200, .g = 200, .b = 200, .a = 255 });
         try image.imageBlurGaussian(ta, &img, 2);
         image.unloadImage(ta, img);
     }
@@ -164,7 +164,7 @@ test "leak: gen/free mesh - 25 iterations across mesh types" {
         try draw3d.genMeshTangents(ta, &cube_repeat);
         draw3d.unloadMesh(ta, cube_repeat);
 
-        const plane = try draw3d.genMeshPlane(ta, 1.0, 1.0, 2, 2);
+        const plane: types.Mesh = try draw3d.genMeshPlane(ta, 1.0, 1.0, 2, 2);
         draw3d.unloadMesh(ta, plane);
     }
 }
@@ -177,7 +177,7 @@ test "leak: loadImageColors round-trip - 50 iterations" {
 
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const colors = try draw3d.loadImageColors(ta, src);
+        const colors: []Color = try draw3d.loadImageColors(ta, src);
         defer ta.free(colors);
         try expect(colors.len == 64);
         try expect(colors[0].r == 30);
@@ -204,7 +204,9 @@ test "leak: per-frame arena reset pattern - 100 frames" {
     var frame_count: usize = 0;
     while (frame_count < 100) : (frame_count += 1) {
         _ = frame_arena.reset(.retain_capacity);
-        const fa = frame_arena.allocator();
+        // A fresh handle each frame: `reset` invalidates the previous allocator's state, so
+        // reusing one taken before the reset would hand out pointers into released memory.
+        const fa: Allocator = frame_arena.allocator();
 
         // Simulate a per-frame allocation pattern: two small,
         // one medium scratch buffer.

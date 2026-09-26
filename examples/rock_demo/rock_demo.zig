@@ -65,7 +65,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawGrid(f.gl, 12, 1.0);
     var i: usize = 0;
     while (i < rock_count) : (i += 1) {
-        const p = placements[i];
+        const p: RockPlacement = placements[i];
         z.drawModel(f.gl, s.rocks[i], p.position, p.scale, .{
             .r = p.tint[0],
             .g = p.tint[1],

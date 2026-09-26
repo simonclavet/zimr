@@ -48,7 +48,8 @@ const InstallFile = std.Build.Step.InstallFile;
 const Options = std.Build.Step.Options;
 const LazyPath = std.Build.LazyPath;
 const ResolvedTarget = std.Build.ResolvedTarget;
-const builtin = @import("builtin");
+// (`builtin` was imported only for the disk-space switch, which now lives in
+//  tools/fs_space.zig. Removed rather than left as an unused import.)
 
 // Pure-CPU modules that have host-runnable unit tests.  Anything that
 // touches WebGL or browser globals is excluded.
@@ -76,57 +77,60 @@ const test_files = [_][]const u8{
 /// to `zig-out/wgpu/`, not `zig-out/wgpu-bringup/`, so it's intentionally
 /// omitted — it predates the per-demo dir convention.)
 pub const example_steps = [_][]const u8{
-    "3d-probe",                      "audio-basic",            "audio-stream-synth",            "ball-physics",
-    "basic",                         "billboards",             "textures-background-scrolling", "bouncing-ball",
-    "box-collisions",                "bridge-classic-probe",   "bridge-slice",                  "camera2d",
-    "bone-socket",                   "circle-sector-drawing",  "clock-of-clocks",               "collision-area",
-    "color-wheel",                   "colors-palette",         "composer-drum",                 "comptime-julia",
-    "comptime-mandelbrot",           "compute-particles",      "compute-smoke",                 "cube-demo",
-    "cube-sidebyside",               "cube3d",                 "cubicmap",                      "damaged-helmet",
-    "dashed-line",                   "digital-clock",          "double-pendulum",               "dynamic-mesh",
-    "depth-cue",                     "depth-rendering",        "easings-ball",                  "easings-box",
-    "easings-rectangles",            "easings-testbed",        "ecs-boids",                     "ecs-solar-system",
-    "ellipse-collision",             "first-person-camera",    "fluid-gpu",                     "fluid-sort",
-    "following-eyes",                "forward-kinematics",     "fractal-tree",                  "gallery",
-    "gallery-all",                   "gestures-demo",          "gestures-testbed",              "gltf-simple",
-    "gltf-textured",                 "hello-world",            "heightmap",                     "helmet-sw",
-    "decal-sw",                      "hilbert-curve",          "image-editor",                  "imgui-phone-demo",
-    "input-keys",                    "input-mouse",            "input-mouse-wheel",             "input-multitouch",
-    "input-virtual-controls",        "instancing",             "julia",                         "julia-gallery",
-    "keys",                          "lambert-demo",           "launcher",                      "life",
-    "lines-bezier",                  "lines-drawing",          "logo-raylib",                   "logo-raylib-anim",
-    "mandel-julia",                  "mandel-sidebyside",      "math-angle-rotation",           "math-sine-cosine",
-    "models-animation-blend-custom", "models3d",               "music-streaming",               "obj-bunny",
-    "obj-simple",                    "particles",              "pbr-demo",                      "penrose-tile",
-    "physics-sidebyside",            "pie-chart",              "pipeline-array",                "pipeline-basic",
-    "pipeline-bloom",                "pipeline-constants",     "pipeline-instancing",           "pipeline-mipmap",
-    "pipeline-msaa",                 "pipeline-postprocess",   "pipeline-rendertarget",         "pipeline-sampler",
-    "pipeline-settings",             "pipeline-storage",       "pipeline-uniforms",             "plot-demo",
-    "point-rendering",               "plot3d-demo",            "plot3d-gallery",                "png-demo",
-    "procgen-noise",                 "raytracer",              "rectangle-advanced",            "rectangle-scaling",
-    "recursive-hud",                 "render-texture",         "ring-drawing",                  "rounded-rectangle",
-    "rt-shader",                     "rt-sidebyside",          "shader-inspection",             "shadowmap",
-    "shadow-sidebyside",             "shapes-demo",            "shapes-showcase",               "shared-smoke",
-    "sidebyside",                    "simple-particles",       "deferred-render",               "depth-writing",
-    "fog-rendering",                 "hybrid-render",          "shadowmap-sw",                  "skinned-mesh",
-    "skybox",                        "sph-fluid-2d",           "splines-drawing",               "split-screen",
-    "starfield",                     "starfield-effect",       "text-field",                    "text-layout",
-    "text-on-texture",               "texture-readback",       "textured-cube",                 "textured-curve",
-    "tile-smoke",                    "touch-paint",            "trails",                        "triangle-gradient",
-    "triangle-strip",                "ui-animation-gallery",   "ui-canvas-demo",                "ui-clipper",
-    "ui-code-editor",                "ui-color-picker",        "ui-combo-custom",               "ui-custom-rendering",
-    "ui-custom-widget",              "ui-data-grid-phone",     "ui-demo",                       "ui-dev-tools",
-    "ui-dock-basic",                 "ui-dock-persistence",    "ui-dock-simple",                "ui-drag-drop-demo",
-    "ui-drag-drop-flags-tour",       "ui-drag-drop-source",    "ui-drawlists",                  "ui-full-showcase",
-    "ui-imgui-extras",               "ui-input-callbacks",     "ui-input-flags-zoo-phone",      "ui-input-query-demo",
-    "ui-kanban-board",               "ui-log-skeleton",        "ui-log-viewer",                 "ui-mini-plot-smoke",
-    "ui-minimal-button",             "ui-minimal-one-context", "ui-mouse-drag",                 "ui-multiselect-finder",
-    "ui-notes-phone",                "ui-panes",               "ui-persistence",                "ui-phone-gestures",
-    "ui-plot",                       "ui-plotting-basic",      "ui-polish",                     "ui-pomodoro-phone",
-    "ui-primitives-zoo-phone",       "ui-shortcuts",           "ui-smoke-button",               "ui-tabbar-tour",
-    "ui-tables-basic",               "ui-tables-demo",         "ui-tables-scroll",              "ui-widgets-data-types",
-    "ui-window-menubar",             "vao-multibuffer",        "vector-angle",                  "wireframe",
-    "writing-anim",                  "zimrphysics-demo",       "zimrphysics2d-demo",            "tic-tac-toe",
+    "3d-probe",                      "audio-basic",           "audio-stream-synth",            "ball-physics",
+    "weight_store",                  "dance_track",           "dance_track",                   "basic",
+    "geno_fit",                      "geno_track",            "getup_frames",                  "track_train",
+    "geno_train",                    "geno_ppo",              "getup_train",                   "billboards",
+    "textures-background-scrolling", "bouncing-ball",         "box-collisions",                "bridge-classic-probe",
+    "bridge-slice",                  "camera2d",              "bone-socket",                   "circle-sector-drawing",
+    "clock-of-clocks",               "collision-area",        "color-wheel",                   "colors-palette",
+    "composer-drum",                 "comptime-julia",        "comptime-mandelbrot",           "compute-particles",
+    "compute-smoke",                 "cube-demo",             "cube-sidebyside",               "cube3d",
+    "cubicmap",                      "damaged-helmet",        "dashed-line",                   "digital-clock",
+    "double-pendulum",               "dynamic-mesh",          "depth-cue",                     "depth-rendering",
+    "easings-ball",                  "easings-box",           "easings-rectangles",            "easings-testbed",
+    "ecs-boids",                     "ecs-solar-system",      "ellipse-collision",             "first-person-camera",
+    "fluid-gpu",                     "fluid-sort",            "following-eyes",                "forward-kinematics",
+    "fractal-tree",                  "gallery",               "gallery-all",                   "gestures-demo",
+    "gestures-testbed",              "gltf-simple",           "gltf-textured",                 "hello-world",
+    "heightmap",                     "helmet-sw",             "decal-sw",                      "hilbert-curve",
+    "image-editor",                  "imgui-phone-demo",      "input-keys",                    "input-mouse",
+    "input-mouse-wheel",             "input-multitouch",      "input-virtual-controls",        "instancing",
+    "julia",                         "julia-gallery",         "keys",                          "lambert-demo",
+    "launcher",                      "life",                  "lines-bezier",                  "lines-drawing",
+    "logo-raylib",                   "logo-raylib-anim",      "mandel-julia",                  "mandel-sidebyside",
+    "math-angle-rotation",           "math-sine-cosine",      "models-animation-blend-custom", "models3d",
+    "music-streaming",               "obj-bunny",             "obj-simple",                    "particles",
+    "pbr-demo",                      "penrose-tile",          "physics-sidebyside",            "pie-chart",
+    "pipeline-array",                "pipeline-basic",        "pipeline-bloom",                "pipeline-constants",
+    "pipeline-instancing",           "pipeline-mipmap",       "pipeline-msaa",                 "pipeline-postprocess",
+    "pipeline-rendertarget",         "pipeline-sampler",      "pipeline-settings",             "pipeline-storage",
+    "pipeline-uniforms",             "plot-demo",             "point-rendering",               "plot3d-demo",
+    "plot3d-gallery",                "png-demo",              "procgen-noise",                 "raytracer",
+    "rectangle-advanced",            "rectangle-scaling",     "recursive-hud",                 "render-texture",
+    "ring-drawing",                  "rounded-rectangle",     "rt-shader",                     "rt-sidebyside",
+    "shader-inspection",             "shadowmap",             "shadow-sidebyside",             "shapes-demo",
+    "shapes-showcase",               "shared-smoke",          "sidebyside",                    "simple-particles",
+    "deferred-render",               "depth-writing",         "fog-rendering",                 "hybrid-render",
+    "shadowmap-sw",                  "skinned-mesh",          "skybox",                        "sph-fluid-2d",
+    "splines-drawing",               "split-screen",          "starfield",                     "starfield-effect",
+    "text-field",                    "text-layout",           "text-on-texture",               "texture-readback",
+    "textured-cube",                 "textured-curve",        "tile-smoke",                    "touch-paint",
+    "trails",                        "triangle-gradient",     "triangle-strip",                "ui-animation-gallery",
+    "ui-canvas-demo",                "ui-clipper",            "ui-code-editor",                "ui-color-picker",
+    "ui-combo-custom",               "ui-custom-rendering",   "ui-custom-widget",              "ui-data-grid-phone",
+    "ui-demo",                       "ui-dev-tools",          "ui-dock-basic",                 "ui-dock-persistence",
+    "ui-dock-simple",                "ui-drag-drop-demo",     "ui-drag-drop-flags-tour",       "ui-drag-drop-source",
+    "ui-drawlists",                  "ui-full-showcase",      "ui-imgui-extras",               "ui-input-callbacks",
+    "ui-input-flags-zoo-phone",      "ui-input-query-demo",   "ui-kanban-board",               "ui-log-skeleton",
+    "ui-log-viewer",                 "ui-mini-plot-smoke",    "ui-minimal-button",             "ui-minimal-one-context",
+    "ui-mouse-drag",                 "ui-multiselect-finder", "ui-notes-phone",                "ui-panes",
+    "ui-persistence",                "ui-phone-gestures",     "ui-plot",                       "ui-plotting-basic",
+    "ui-polish",                     "ui-pomodoro-phone",     "ui-primitives-zoo-phone",       "ui-shortcuts",
+    "ui-smoke-button",               "ui-tabbar-tour",        "ui-tables-basic",               "ui-tables-demo",
+    "ui-tables-scroll",              "ui-widgets-data-types", "ui-window-menubar",             "vao-multibuffer",
+    "vector-angle",                  "wireframe",             "writing-anim",                  "zimrphysics-demo",
+    "zimrphysics2d-demo",            "tic-tac-toe",
 };
 
 /// Explicit catalog of every example shader that goes through the
@@ -374,6 +378,9 @@ pub fn build(b: *std.Build) void {
     // codecs (re-exported from zimr) uses @import("zm"); wire it so the
     // wgpu demos can call gltf.parse / meshesFromGltf / jpeg.decode.
     zimr_mod.addImport("zm", zimrmath_mod);
+    // zimrnum for the engine's own learners (`robot_gym.PpoTrainer`). It depends on `zm` and
+    // `kompute` only, so this adds no cycle, and Zig analyses it only where it is used.
+    zimr_mod.addImport("zn", zimrnum_mod);
 
     // Now that zimrmath_mod exists, give shader_interface the zm alias (see the
     // note at its declaration above). Every context that pulls shader_interface
@@ -420,6 +427,27 @@ pub fn build(b: *std.Build) void {
     // (host tests) uses false; the wgpu modules get a clone with true
     // (build_opts_wgpu, below), so the SAME ui.zig compiles for both backends.
     build_opts.addOption(bool, "ui_backend_wgpu", false);
+    // `-Dslow-tests`: also run the tests a module skips by default because a few of them cost most
+    // of its run (robot_mjcf's retarget diagnostics: three tests, 23.7 of 29.5 s). A compiler bump
+    // or an arc close turns it on from the command line - it used to mean editing a constant in
+    // the source, and the only test of the shipped `solvePointCloud` lived behind it. Host tests
+    // only: the wasm options never carry it, and readers check for it with `@hasDecl`.
+    const slow_tests: bool = b.option(
+        bool,
+        "slow-tests",
+        "Also run the slow diagnostic tests that are skipped by default (retarget)",
+    ) orelse false;
+    build_opts.addOption(bool, "slow_tests", slow_tests);
+    // `-Dtrain-chunk`: run the TRAINING tests - a few minutes of learning that resume from a
+    // checkpoint on disk and save one when they finish. Never part of the slow suite: a test suite
+    // that takes a different amount of time depending on what is lying in `train/` is not a test
+    // suite. Each run is one chunk of a long job; run it again to carry on.
+    const train_chunk: bool = b.option(
+        bool,
+        "train-chunk",
+        "Run the resumable training chunks (robot_ppo_track), one chunk per invocation",
+    ) orelse false;
+    build_opts.addOption(bool, "train_chunk", train_chunk);
 
     // Options for the WebGPU modules: same as build_opts but ui_backend_wgpu=true.
     const build_opts_wgpu: *Options = b.addOptions();
@@ -599,6 +627,35 @@ pub fn build(b: *std.Build) void {
     // rewrote it.  (The C++ SPIR-V tools stay in tools/ behind the
     // path + tools_subbuild shape; they're genuinely external.)
     const host_target: ResolvedTarget = b.graph.host;
+
+    // ── `zig build measure`, then `measure <label> <command...>` ──
+    //
+    // Replaces `scripts/measure.sh`. Records wall time, peak RSS, cache delta and free-disk
+    // delta to /tmp/measure.log, which is where every timing quoted in claude.md and the plans
+    // came from - so the format is deliberately unchanged and old rows stay comparable.
+    const measure_exe: *Compile = b.addExecutable(.{
+        .name = "measure",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/measure.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    // INSTALLED, not run through the build. This Zig's `Build` has no `b.args`, so a step
+    // cannot forward trailing `--` arguments - and `measure` is useless without them. It goes
+    // to `tools/zig-out/bin`, which `.zenv.sh` already puts on PATH:
+    //
+    //     zig build measure          once, to build it
+    //     measure gate zig build gate -Dautofix=false -j1
+    const measure_install: *Step.InstallArtifact = b.addInstallArtifact(measure_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "../tools/zig-out/bin" } },
+    });
+    const measure_step: *Step = b.step(
+        "measure",
+        "Build the timing harness into tools/zig-out/bin (then: measure <label> <command...>)",
+    );
+    measure_step.dependOn(&measure_install.step);
+
     // Host-side tool executables (pure-Zig, built by the main build as named
     // artifacts; an external consumer can `dep.artifact("c2js")` etc.). Grouped
     // into buildTools, which returns the set; destructured back to the local
@@ -613,7 +670,6 @@ pub fn build(b: *std.Build) void {
     const cheatsheet_exe: *Compile = tools.cheatsheet;
     const buildaux_exe: *Compile = tools.buildaux;
     const mesh_bake_exe: *Compile = tools.mesh_bake;
-    const highlight_exe: *Compile = tools.highlight;
 
     // native_plot_png: a small, native, pure-Zig program that renders a
     // publication-quality plot straight to `plot.png` via `zimr.Canvas`
@@ -675,6 +731,25 @@ pub fn build(b: *std.Build) void {
         "Measure robot.zig step cost on four models (native, ReleaseFast)",
     );
     robot_bench_step.dependOn(&robot_bench_run.step);
+
+    // clip-bake: the tracking clips retargeted, filtered, windowed and lifted ONCE, into the
+    // compact binaries the training pages embed (`examples/getup_train/*.zclip`). Every file is
+    // read back and compared with the clip it came from before the tool reports it written.
+    // `zig build clip-bake` - rerun it whenever the retarget, the filter or the lift changes.
+    const clip_bake_exe: *Compile = b.addExecutable(.{
+        .name = "clip_bake",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/robot_clip_bake.zig"),
+            .target = host_target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    clip_bake_exe.root_module.addImport("zm", zimrmath_mod);
+    clip_bake_exe.root_module.addOptions("build_options", build_opts_wgpu);
+    const clip_bake_run: *Run = b.addRunArtifact(clip_bake_exe);
+    clip_bake_run.has_side_effects = true;
+    const clip_bake_step: *Step = b.step("clip-bake", "Bake the tracking clips into the pages' compact binaries");
+    clip_bake_step.dependOn(&clip_bake_run.step);
 
     // shadowmap-sw-verify: the NATIVE gate for the shadow-map side-by-side's
     // comptime corner.  Compiling this exe bakes `scene.bakeCorner` at comptime
@@ -1011,42 +1086,20 @@ pub fn build(b: *std.Build) void {
     // the GL gallery picker index.html + per-example host.html + the
     // WebGL runtime bundle are gone — the wgpu examples each carry
     // their own page, and standalones bake src/bridge.zig.)
+    const docfmt_exe: *Compile = tools.docfmt;
+    const readme_step: *Step = b.step("readme", "Generate zig-out/web/readme.html (shared style + highlighting)");
+    const doc_pages_step: *Step = b.step("doc-pages", "Generate every styled doc page into zig-out/web");
+    // The gate is fed the SAME list the loop below installs, one addFileArg per
+    // page, so a page cannot be published without being checked.
+    const doc_gate_run: *Run = b.addRunArtifact(tools.doc_gate);
+    doc_gate_run.step.name = "doc-gate (one stylesheet, no script, no network)";
+    const doc_gate_step: *Step = b.step("doc-gate", "Check every published page against the shared doc style");
+    doc_gate_step.dependOn(&doc_gate_run.step);
+
+    // Non-HTML static content: copied verbatim.
     inline for (.{
-        // index.html is the examples GALLERY landing page (manifest-driven:
-        // module filter + name/function search, cards link to the streamed
-        // per-example page at web/<name>/). Served at the root of zig-out/web.
-        .{ "src/web/index.html", "index.html" },
-        // readme.html is NOT here — it's piped through the `highlight` tool
-        // just below (build-time Zig syntax highlighting) rather than copied
-        // verbatim.
-        // cheatsheet.html is regenerated at repo root by the pure-Zig
-        // `zig build cheatsheet` step (tools/cheatsheet.zig, wired just
-        // below). Pulled into the install pipeline so `zig build dist`
-        // carries it into `prebuilt/` alongside readme.html.
-        .{ "cheatsheet.html", "cheatsheet.html" },
         // manifest.json drives the gallery's filter/star/description UI.
         .{ "src/web/manifest.json", "manifest.json" },
-        // Long-form walkthroughs, linked from readme.html. These are standalone
-        // pages under `src/notes/tutorials/`; staging them flat as `<name>.html`
-        // keeps the readme's links relative and avoids shipping the whole notes
-        // tree, most of which is working material rather than documentation.
-        //
-        // `robots.html` is checked against `src/robot.zig` by `zig build doc-sync`
-        // on every build, so what ships here cannot quote drifted source.
-        // The from-scratch graphics tutorial, which readme.html has linked to
-        // since before this list existed. The link was dead: the file lives in
-        // `src/web/` but was never staged.
-        .{ "src/web/tutorial.html", "tutorial.html" },
-        .{ "src/notes/tutorials/robots.html", "robots.html" },
-        .{ "src/notes/tutorials/mujoco-tutorial.html", "mujoco-tutorial.html" },
-        .{ "src/notes/tutorials/gpu-compute-tutorial.html", "gpu-compute-tutorial.html" },
-        .{ "src/notes/tutorials/rtt-tutorial.html", "rtt-tutorial.html" },
-        .{ "src/notes/tutorials/shader_authoring_tutorial.html", "shader-authoring-tutorial.html" },
-        .{ "src/notes/tutorials/wgpu-ports-tutorial.html", "wgpu-ports-tutorial.html" },
-        // The zimrnum library tutorial. Its reference table is checked against
-        // `src/zimrnum.zig` by a test in that file (it `@embedFile`s this page), so what
-        // ships here cannot name a declaration the library no longer has.
-        .{ "src/notes/tutorials/zimrnum-tutorial.html", "zimrnum-tutorial.html" },
         // Runtime assets fetched by examples via `f.loader.loadFileData`.
         .{ "assets/smiley.png", "assets/smiley.png" },
     }) |pair| {
@@ -1057,26 +1110,65 @@ pub fn build(b: *std.Build) void {
         smoke_install_step.dependOn(&inst_smoke.step);
     }
 
-    // readme.html: the project landing page (README content in dark-brutalist
-    // style; README.md just links here).  Piped through the `highlight` tool
-    // (tools/highlight.zig) instead of copied verbatim, so every
-    // <pre><code class="language-zig"> block is syntax-highlighted at build
-    // time with std.zig.Tokenizer — the served page stays pure HTML+CSS, no
-    // runtime JS.
-    {
-        const hl: *Run = b.addRunArtifact(highlight_exe);
-        hl.setStdIn(.{ .lazy_path = b.path("src/web/readme.html") });
-        const readme_out: LazyPath = hl.captureStdOut(.{});
-        const readme_inst: *InstallFile = b.addInstallFileWithDir(readme_out, web_install, "readme.html");
-        b.getInstallStep().dependOn(&readme_inst.step);
-        const readme_smoke: *InstallFile = b.addInstallFileWithDir(readme_out, smoke_install, "readme.html");
-        smoke_install_step.dependOn(&readme_smoke.step);
-        // Standalone step so you can regenerate just the highlighted page
-        // (zig build readme -> zig-out/web/readme.html) without triggering the
-        // full install graph (shader pipeline, lint, every example).
-        const readme_step: *Step = b.step("readme", "Generate zig-out/web/readme.html with Zig syntax highlighting");
-        readme_step.dependOn(&readme_inst.step);
+    // EVERY published doc page goes through `docfmt` (tools/docfmt.zig) rather
+    // than being copied: it injects THE shared stylesheet at the page's
+    // `<!--docfmt:style-->` marker and highlights every
+    // <pre><code class="zig|language-zig|wgsl"> block with std.zig.Tokenizer (or
+    // the small WGSL lexer in the same file).  All of it happens at build time,
+    // so each served page stays pure HTML+CSS: no runtime JS, no webfont fetch,
+    // and one constant to edit when a colour changes.  See
+    // `src/notes/docs_style_plan.md`.
+    //
+    // Ordering note: the pages are standalone under three different directories
+    // in the repo and land flat here as `<name>.html`, which keeps readme.html's
+    // links relative and avoids shipping the whole notes tree.
+    //
+    // `robots.html` is checked against `src/robot.zig` by `zig build doc-sync`
+    // on every build, so what ships here cannot quote drifted source.
+    // `zimrnum-tutorial.html`'s reference table is checked against
+    // `src/zimrnum.zig` by a test in that file (it `@embedFile`s the page), so
+    // what ships cannot name a declaration the library no longer has.
+    // `cheatsheet.html` is regenerated at repo root by `zig build cheatsheet`.
+    inline for (.{
+        // The examples GALLERY landing page (manifest-driven: module filter +
+        // name/function search, cards link to web/<name>/).
+        .{ "src/web/index.html", "index.html" },
+        // The project landing page, with the launcher running live in an iframe.
+        .{ "src/web/readme.html", "readme.html" },
+        .{ "cheatsheet.html", "cheatsheet.html" },
+        // The from-scratch graphics tutorial readme.html links to.
+        .{ "src/web/tutorial.html", "tutorial.html" },
+        .{ "src/notes/tutorials/robots.html", "robots.html" },
+        .{ "src/notes/tutorials/mujoco-tutorial.html", "mujoco-tutorial.html" },
+        .{ "src/notes/tutorials/gpu-compute-tutorial.html", "gpu-compute-tutorial.html" },
+        .{ "src/notes/tutorials/rtt-tutorial.html", "rtt-tutorial.html" },
+        .{ "src/notes/tutorials/shader_authoring_tutorial.html", "shader-authoring-tutorial.html" },
+        .{ "src/notes/tutorials/wgpu-ports-tutorial.html", "wgpu-ports-tutorial.html" },
+        .{ "src/notes/tutorials/zimrnum-tutorial.html", "zimrnum-tutorial.html" },
+        // Robot motion capture: capture -> retarget -> servo -> balance -> learned tracking.
+        .{ "src/notes/tutorials/robot-mocap-tutorial.html", "robot-mocap-tutorial.html" },
+        // The per-file atlas, generated as HTML by `zig build files-html`.
+        .{ "src/notes/files.html", "files.html" },
+    }) |pair| {
+        doc_gate_run.addFileArg(b.path(pair[0]));
+        const fmt_run: *Run = b.addRunArtifact(docfmt_exe);
+        fmt_run.setStdIn(.{ .lazy_path = b.path(pair[0]) });
+        const page_out: LazyPath = fmt_run.captureStdOut(.{});
+        const inst: *InstallFile = b.addInstallFileWithDir(page_out, web_install, pair[1]);
+        b.getInstallStep().dependOn(&inst.step);
+        const inst_smoke: *InstallFile = b.addInstallFileWithDir(page_out, smoke_install, pair[1]);
+        smoke_install_step.dependOn(&inst_smoke.step);
+        doc_pages_step.dependOn(&inst.step);
+        if (comptime std.mem.eql(u8, pair[1], "readme.html")) {
+            // Standalone step so you can regenerate just the landing page
+            // without triggering the full install graph (shader pipeline, lint,
+            // every example).
+            readme_step.dependOn(&inst.step);
+        }
     }
+
+    // (readme.html is produced by the docfmt loop above, along with every other
+    // doc page; `zig build readme` still regenerates just that one.)
 
     // Shared runtime JS: ONE web/zimr.js (the transpiled bridge) that every
     // served example page references via <script src="../zimr.js"> (--external-js
@@ -1603,6 +1695,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "tracking", .title = "zimr - WebGPU - preview beats feedback" },
         .{ .name = "friction_slope", .title = "zimr - WebGPU - does friction obey Coulomb?" },
         .{ .name = "humanoid", .title = "zimr - WebGPU - humanoid from MJCF" },
+        .{ .name = "ragdoll_compare", .title = "zimr - WebGPU - ragdolls: reduced vs maximal" },
+        .{ .name = "rl_humanoid", .title = "zimr - WebGPU - PPO learning to walk, live" },
         .{ .name = "instancing", .title = "zimr - WebGPU - instancing" },
         .{ .name = "gestures_demo", .title = "zimr - WebGPU - gestures" },
         .{ .name = "gestures_testbed", .title = "zimr - WebGPU - gestures testbed" },
@@ -1636,6 +1730,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "procgen_noise", .title = "zimr - WebGPU - procgen noise" },
         .{ .name = "image_editor", .title = "zimr - WebGPU - image editor" },
         .{ .name = "textured_curve", .title = "zimr - WebGPU - textured curve" },
+        .{ .name = "dance_track", .title = "zimr - dance_track" },
         .{ .name = "basic", .title = "zimr - WebGPU - basic" },
         .{ .name = "ui_minimal_button", .title = "zimr - WebGPU - minimal button" },
         .{ .name = "ui_phone_gestures", .title = "zimr - WebGPU - phone gestures" },
@@ -1977,6 +2072,284 @@ pub fn build(b: *std.Build) void {
         // `.compute_kernels`. No separate list or builder — adding compute to any
         // example above is just adding this one field.
         .{
+            // PPO learning a cartpole hold with its update on the GPU (zn_mlp), beside MPC
+            // planning on the CPU - the same robot.zig cartpole on both sides.
+            .name = "cartpole_duel",
+            .title = "zimr - cartpole: PPO on the GPU vs MPC on the CPU",
+            .compute_kernels = &.{
+                .{
+                    .basename = "zn_mlp",
+                    .source_path = "src/gpu/zn_mlp.zig",
+                    .entries = &.{
+                        "dense_fwd",
+                        "act_bwd",
+                        "dense_bwd_x",
+                        "dense_bwd_w",
+                        "mse_bwd",
+                        "mse_value",
+                        "adam",
+                        "ppo_mean_grad",
+                        "ppo_logstd_grad",
+                        // The page's pipeline table is built from the module's whole kernel
+                        // list, so every kernel is registered, SAC's included.
+                        "squash_fwd",
+                        "squash_logp",
+                        "sac_target",
+                        "min_route",
+                        "squash_bwd",
+                        "squash_logstd_grad",
+                        "alpha_grad",
+                        "polyak",
+                        "cp_wm_input",
+                        "cp_wm_input_bwd",
+                        "cp_force",
+                        "cp_force_bwd",
+                        "cp_step",
+                        "cp_step_bwd",
+                        "cp_track_bwd",
+                        "add_block",
+                        "lat_advance",
+                        "lat_take",
+                        "lat_gather",
+                        "lat_act",
+                        "lat_act_bwd",
+                        "st_policy_fwd",
+                        "st_policy_bwd",
+                        "st_world_fwd",
+                        "st_world_bwd",
+                        "st_reduce",
+                    },
+                },
+            },
+        },
+        .{
+            // Geno's own skeleton moved by the captures, with the collision shapes fitted to its
+            // skinned mesh riding on its bones - the new robot's body, judged by eye before it is
+            // ever simulated.
+            .name = "geno_fit",
+            .title = "zimr - Geno's body, on the captures",
+        },
+        .{
+            // Geno as a physical robot: its model from the fixture, on a floor, pulled through a copied
+            // clip by the tracking task's own servo - no learning, just how far a spring alone gets.
+            .name = "geno_track",
+            .title = "zimr - Geno, servoing a copied clip",
+        },
+        .{
+            // The get-up reference on the robot, frame by frame: no physics, no learning - just what
+            // the tracking pages ask a character to follow, and what its feet are doing while they do.
+            .name = "getup_frames",
+            .title = "zimr - the get-up reference, frame by frame",
+        },
+        .{
+            // SuperTrack on the device: the characters stepped on the CPU, the ring, the world model
+            // and the policy all resident on the GPU. Its kernels are the kit's - the three dense
+            // stages with their backward pairs, the loss, Adam, and the latent model's own five.
+            .name = "track_train",
+            .title = "zimr - SuperTrack, learned on this device",
+            .compute_kernels = &.{
+                .{
+                    .basename = "zn_mlp",
+                    .source_path = "src/gpu/zn_mlp.zig",
+                    .entries = &.{
+                        "dense_fwd",
+                        "act_bwd",
+                        "dense_bwd_x",
+                        "dense_bwd_w",
+                        "mse_bwd",
+                        "mse_value",
+                        "adam",
+                        "ppo_mean_grad",
+                        "ppo_logstd_grad",
+                        // The page's pipeline table is built from the module's whole kernel
+                        // list, so every kernel is registered, SAC's included.
+                        "squash_fwd",
+                        "squash_logp",
+                        "sac_target",
+                        "min_route",
+                        "squash_bwd",
+                        "squash_logstd_grad",
+                        "alpha_grad",
+                        "polyak",
+                        "cp_wm_input",
+                        "cp_wm_input_bwd",
+                        "cp_force",
+                        "cp_force_bwd",
+                        "cp_step",
+                        "cp_step_bwd",
+                        "cp_track_bwd",
+                        "add_block",
+                        "lat_advance",
+                        "lat_take",
+                        "lat_gather",
+                        "lat_act",
+                        "lat_act_bwd",
+                        "st_policy_fwd",
+                        "st_policy_bwd",
+                        "st_world_fwd",
+                        "st_world_bwd",
+                        "st_reduce",
+                    },
+                    .wants_zimrnum = true,
+                },
+            },
+        },
+        .{
+            // SuperTrack on the device: the characters stepped on the CPU, the ring, the world model
+            // and the policy all resident on the GPU. Its kernels are the kit's - the three dense
+            // stages with their backward pairs, the loss, Adam, and the latent model's own five.
+            .name = "geno_train",
+            .title = "zimr - SuperTrack on Geno, learned on this device",
+            .compute_kernels = &.{
+                .{
+                    .basename = "zn_mlp",
+                    .source_path = "src/gpu/zn_mlp.zig",
+                    .entries = &.{
+                        "dense_fwd",
+                        "act_bwd",
+                        "dense_bwd_x",
+                        "dense_bwd_w",
+                        "mse_bwd",
+                        "mse_value",
+                        "adam",
+                        "ppo_mean_grad",
+                        "ppo_logstd_grad",
+                        // The page's pipeline table is built from the module's whole kernel
+                        // list, so every kernel is registered, SAC's included.
+                        "squash_fwd",
+                        "squash_logp",
+                        "sac_target",
+                        "min_route",
+                        "squash_bwd",
+                        "squash_logstd_grad",
+                        "alpha_grad",
+                        "polyak",
+                        "cp_wm_input",
+                        "cp_wm_input_bwd",
+                        "cp_force",
+                        "cp_force_bwd",
+                        "cp_step",
+                        "cp_step_bwd",
+                        "cp_track_bwd",
+                        "add_block",
+                        "lat_advance",
+                        "lat_take",
+                        "lat_gather",
+                        "lat_act",
+                        "lat_act_bwd",
+                        "st_policy_fwd",
+                        "st_policy_bwd",
+                        "st_world_fwd",
+                        "st_world_bwd",
+                        "st_reduce",
+                    },
+                    .wants_zimrnum = true,
+                },
+            },
+        },
+        .{
+            // PPO learning a cartpole hold with its update on the GPU (zn_mlp), beside MPC
+            // planning on the CPU - the same robot.zig cartpole on both sides.
+            .name = "getup_train",
+            .title = "zimr - getting up, learned on this device",
+            .compute_kernels = &.{
+                .{
+                    .basename = "zn_mlp",
+                    .source_path = "src/gpu/zn_mlp.zig",
+                    .entries = &.{
+                        "dense_fwd",
+                        "act_bwd",
+                        "dense_bwd_x",
+                        "dense_bwd_w",
+                        "mse_bwd",
+                        "mse_value",
+                        "adam",
+                        "ppo_mean_grad",
+                        "ppo_logstd_grad",
+                        // The page's pipeline table is built from the module's whole kernel
+                        // list, so every kernel is registered, SAC's included.
+                        "squash_fwd",
+                        "squash_logp",
+                        "sac_target",
+                        "min_route",
+                        "squash_bwd",
+                        "squash_logstd_grad",
+                        "alpha_grad",
+                        "polyak",
+                        "cp_wm_input",
+                        "cp_wm_input_bwd",
+                        "cp_force",
+                        "cp_force_bwd",
+                        "cp_step",
+                        "cp_step_bwd",
+                        "cp_track_bwd",
+                        "add_block",
+                        "lat_advance",
+                        "lat_take",
+                        "lat_gather",
+                        "lat_act",
+                        "lat_act_bwd",
+                        "st_policy_fwd",
+                        "st_policy_bwd",
+                        "st_world_fwd",
+                        "st_world_bwd",
+                        "st_reduce",
+                    },
+                },
+            },
+        },
+        .{
+            // PPO learning a cartpole hold with its update on the GPU (zn_mlp), beside MPC
+            // planning on the CPU - the same robot.zig cartpole on both sides.
+            .name = "geno_ppo",
+            .title = "zimr - PPO on Geno, learned on this device",
+            .compute_kernels = &.{
+                .{
+                    .basename = "zn_mlp",
+                    .source_path = "src/gpu/zn_mlp.zig",
+                    .entries = &.{
+                        "dense_fwd",
+                        "act_bwd",
+                        "dense_bwd_x",
+                        "dense_bwd_w",
+                        "mse_bwd",
+                        "mse_value",
+                        "adam",
+                        "ppo_mean_grad",
+                        "ppo_logstd_grad",
+                        // The page's pipeline table is built from the module's whole kernel
+                        // list, so every kernel is registered, SAC's included.
+                        "squash_fwd",
+                        "squash_logp",
+                        "sac_target",
+                        "min_route",
+                        "squash_bwd",
+                        "squash_logstd_grad",
+                        "alpha_grad",
+                        "polyak",
+                        "cp_wm_input",
+                        "cp_wm_input_bwd",
+                        "cp_force",
+                        "cp_force_bwd",
+                        "cp_step",
+                        "cp_step_bwd",
+                        "cp_track_bwd",
+                        "add_block",
+                        "lat_advance",
+                        "lat_take",
+                        "lat_gather",
+                        "lat_act",
+                        "lat_act_bwd",
+                        "st_policy_fwd",
+                        "st_policy_bwd",
+                        "st_world_fwd",
+                        "st_world_bwd",
+                        "st_reduce",
+                    },
+                },
+            },
+        },
+        .{
             // The XOR network trained on the GPU and the CPU in lockstep, one step per frame. The
             // whole step is eight dispatches over one buffer set; only the loss comes back. See
             // src/notes/zimrnum_plan.md stage C.
@@ -1985,6 +2358,7 @@ pub fn build(b: *std.Build) void {
             .compute_kernels = &.{
                 .{
                     .basename = "zn_train",
+                    .source_path = "src/gpu/zn_train.zig",
                     .entries = &.{
                         "fwd_hidden",
                         "fwd_out",
@@ -2006,6 +2380,7 @@ pub fn build(b: *std.Build) void {
             .compute_kernels = &.{
                 .{
                     .basename = "zn_binary",
+                    .source_path = "src/gpu/zn_binary.zig",
                     // `cartpole_step` calls `zn.cartpoleStep` rather than restating it.
                     .wants_zimrnum = true,
                     // ★ One entry per line: `zig fmt` column-aligns a list whose items share a line, and
@@ -2013,6 +2388,12 @@ pub fn build(b: *std.Build) void {
                     // kernel files' own `kernels` lists are formatted the same way for the same
                     // reason.
                     .entries = &.{
+                        "squash_correction",
+                        "polyak_follow",
+                        "adam_step_warm",
+                        "disc_reward",
+                        "ppo_clip",
+                        "cartpole_pole",
                         "add",
                         "mul",
                         "sub",
@@ -2051,6 +2432,7 @@ pub fn build(b: *std.Build) void {
                 },
                 .{
                     .basename = "zn_matmul",
+                    .source_path = "src/gpu/zn_matmul.zig",
                     .entries = &.{
                         "matmul",
                         "matmul_tiled",
@@ -2060,7 +2442,9 @@ pub fn build(b: *std.Build) void {
                 },
                 .{
                     .basename = "zn_unary",
+                    .source_path = "src/gpu/zn_unary.zig",
                     .entries = &.{
+                        "nan_direct",
                         "relu",
                         "sigmoid",
                         "tanhf",
@@ -2488,6 +2872,29 @@ pub fn build(b: *std.Build) void {
     const doc_sync_run: *Run = b.addRunArtifact(doc_sync_exe);
     doc_sync_run.setCwd(b.path("."));
     doc_sync_step.dependOn(&doc_sync_run.step);
+    // doc-folds: a tutorial's code blocks are GENERATED from the source - each block names its
+    // declaration (data-src / data-decl) and tools/doc_folds.zig fills it in, plus a reference
+    // table of every public declaration. `zig build doc-folds` rewrites them; the gate (below)
+    // does it too, or only checks with -Dautofix=false. Add a page here when it starts tagging.
+    const doc_folds_exe: *Compile = b.addExecutable(.{
+        .name = "doc_folds",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/doc_folds.zig"),
+            .target = b.graph.host,
+            .optimize = .debug,
+        }),
+    });
+    const doc_folds_pages = [_][]const u8{"src/notes/tutorials/robot-mocap-tutorial.html"};
+    const doc_folds_step: *Step = b.step(
+        "doc-folds",
+        "regenerate the tutorials' code blocks and reference from the source",
+    );
+    const doc_folds_fix: *Run = b.addRunArtifact(doc_folds_exe);
+    doc_folds_fix.setCwd(b.path("."));
+    doc_folds_fix.has_side_effects = true;
+    doc_folds_fix.addArg("--fix");
+    doc_folds_fix.addArgs(&doc_folds_pages);
+    doc_folds_step.dependOn(&doc_folds_fix.step);
 
     // c2js CANARY: the marker gate catches C that c2js KNOWS it cannot model;
     // this catches C it models WRONGLY. The battery is transpiled the normal way
@@ -2748,7 +3155,10 @@ pub fn build(b: *std.Build) void {
     const smoke_cmd: *Run = b.addSystemCommand(&.{ "node", "webtests/runner.mjs" });
     smoke_cmd.addFileArg(smoke_logic_js);
     smoke_cmd.addArg("--web-dir=zig-out/wgpu-smoke/web");
-    smoke_cmd.addArg("--frames=60");
+    // `-Dsmoke-frames=N`: how many frames each page runs (default 60). Hundreds of frames expose what
+    // grows per frame - the harness prints live CPU bytes at the halfway frame and the last.
+    const smoke_frames: u32 = b.option(u32, "smoke-frames", "Frames each smoke-test page runs (default 60)") orelse 60;
+    smoke_cmd.addArg(b.fmt("--frames={d}", .{smoke_frames}));
     if (smoke_focus.len > 0) {
         // wgpu_smoke.ts doesn't know the `tier-a` magic value (only
         // matchesFocus does), so expand it to the literal wgpu example
@@ -2839,6 +3249,16 @@ pub fn build(b: *std.Build) void {
     const gen_files_md_step: *Step = b.step("files-md", "Regenerate src/notes/files.md atlas");
     gen_files_md_step.dependOn(&gen_files_md_run.step);
 
+    // files-html: render that atlas as src/notes/files.html, which the docfmt
+    // loop then styles like every other page. Depends on files-md so the two
+    // cannot disagree.
+    const files_html_run: *Run = b.addRunArtifact(tools.files_html);
+    files_html_run.step.name = "files-html (render src/notes/files.html from the atlas)";
+    files_html_run.has_side_effects = true;
+    files_html_run.step.dependOn(&gen_files_md_run.step);
+    const files_html_step: *Step = b.step("files-html", "Regenerate src/notes/files.html from files.md");
+    files_html_step.dependOn(&files_html_run.step);
+
     const tier_a_check_step: *Step = b.step(
         "tier-a-check",
         "The combined per-turn audit: test + smoke + wgpu-smoke, all focused on tier-a.",
@@ -2887,6 +3307,87 @@ pub fn build(b: *std.Build) void {
     );
     wgpu_check.dependOn(&transpiler_corpus_cmd.step);
     wgpu_check.dependOn(&wgpu_smoke_cmd.step);
+
+    // ── zm's GPU branch, actually verified rather than asserted ──
+    //
+    // zimrmath is the one module allowed to touch std.math, on the deal that each wrapper carries
+    // a hand-rolled GPU branch "verified to compile for a shader". Nothing enforced that clause: a
+    // helper counted as verified if some shader happened to call it, so the least-used ones were
+    // the least checked. `src/shaders/zm_gpu_probe.zig` calls them on a VECTOR type from a real
+    // SPIR-V entry point, and this step compiles it with the same flags the shader pipeline uses.
+    //
+    // It earned its place immediately: `nan`, `inf`, `floatMax`, `floatMin` and `floatEps` take a
+    // type rather than a value, and every one was a compile error for `@Vector(4, f32)` - the type
+    // a shader actually computes in.
+    const zm_gpu_probe: *Run = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "build-obj",
+        "-target",
+        "spirv32-vulkan",
+        "-mcpu",
+        "vulkan_v1_2",
+        "-fno-llvm",
+        "-fno-lld",
+        "-O",
+        "ReleaseFast",
+        "-ofmt=spirv",
+        "--dep",
+        "zm",
+    });
+    zm_gpu_probe.addPrefixedFileArg("-Mroot=", b.path("src/shaders/zm_gpu_probe.zig"));
+    zm_gpu_probe.addPrefixedFileArg("-Mzm=", b.path("src/zimrmath.zig"));
+    _ = zm_gpu_probe.addPrefixedOutputFileArg("-femit-bin=", "zm_gpu_probe.spv");
+    zm_gpu_probe.step.name = "zm-gpu (zimrmath compiles for SPIR-V, on vectors)";
+    const zm_gpu_step: *Step = b.step("zm-gpu", "Compile zimrmath for SPIR-V through a probe shader");
+    zm_gpu_step.dependOn(&zm_gpu_probe.step);
+    wgpu_check.dependOn(&zm_gpu_probe.step);
+
+    // ---- THE SAME TRIPWIRE FOR ZIMRNUM'S RL ARITHMETIC ----
+    //
+    // `zimrnum.zig` is shader-FREE by design - that is what keeps it a `test-fast` root - but
+    // shader-free is not shader-INCOMPATIBLE, and nothing held the difference. The op sweep
+    // covers 92 kernels and NOT ONE reinforcement-learning operation, so PPO's surrogate and
+    // the off-policy targets had never been compiled for a device at all.
+    //
+    // They are written scalar-first (`ppoClipSample`: no allocation, no error union, no slice)
+    // precisely so a kernel can call the SAME function the CPU loop calls. Two transcriptions
+    // of one formula is how a CPU/GPU comparison becomes circular. This proves the shape stays
+    // callable; the sweep would prove the ANSWERS agree, and no RL row is in it yet.
+    const zn_rl_gpu_probe: *Run = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "build-obj",
+        "-target",
+        "spirv32-vulkan",
+        "-mcpu",
+        "vulkan_v1_2",
+        "-fno-llvm",
+        "-fno-lld",
+        "-O",
+        "ReleaseFast",
+        "-ofmt=spirv",
+        "--dep",
+        "zm",
+        "--dep",
+        "zn",
+        "-Mroot=src/shaders/zn_rl_gpu_probe.zig",
+        "-Mzm=src/zimrmath.zig",
+        "--dep",
+        "zm",
+        "-Mzn=src/zimrnum.zig",
+        "-femit-bin=.zig-cache/zn_rl_gpu_probe.spv",
+    });
+    zn_rl_gpu_probe.step.name = "zn-rl-gpu (zimrnum's RL arithmetic compiles for SPIR-V)";
+    const zn_rl_gpu_step: *Step = b.step(
+        "zn-rl-gpu",
+        "Compile zimrnum's RL scalar arithmetic for SPIR-V through a probe shader",
+    );
+    zn_rl_gpu_step.dependOn(&zn_rl_gpu_probe.step);
+    wgpu_check.dependOn(&zn_rl_gpu_probe.step);
+    // Doc style tripwire: every published page keeps one shared stylesheet, no
+    // <script>, no webfont fetch. Cheap (four greps over eleven files), and it
+    // is the only thing standing between the uniform docs and the five palettes
+    // they came from — see `src/notes/docs_style_plan.md`.
+    wgpu_check.dependOn(&doc_gate_run.step);
     // Binding/structural WGSL tripwire: run the validator over every shader in
     // the corpus. Depends on wgpu_smoke_cmd so the shaders are compiled into
     // .zig-cache first (the tool walks the cache, like transpiler_corpus does).
@@ -3068,21 +3569,60 @@ pub fn build(b: *std.Build) void {
             // They were NOT here, so the only way to run 127 + 170 tests was a hand-typed
             // `zig test --dep zm --dep kompute -Mroot=... -Mzm=... -Mkompute=...`. A gate you
             // have to remember the command line for is a gate that gets skipped.
-            "src/zimrmath.zig",
-            "src/zimrnum.zig",
+            // (These two were listed TWICE - once here and once at the top of this list - so
+            // `test-fast` built and ran both of them twice over. Removed; the per-root steps
+            // below would not even configure with a duplicate, which is how it surfaced.)
             // ★ The retarget integration test: real BVH -> real ragdoll. It belongs here
             // because `codecs.zig` needs only `zm` too — the whole animation-to-robot path is
             // shader-free, which is what makes it testable in seconds.
             "src/tests/ragdoll_bvh_test.zig",
+            // The GPU sweep's CPU reference and the table that judges it. Its closure is
+            // `zm` + `zn`, so it belongs in this tier: the row invariants - no duplicated
+            // (kernel, input) pair, no negative tolerance, no out_len past the buffer - are
+            // checkable with no device at all, and every one of them would make the device
+            // comparison meaningless before it ever ran.
+            "src/gpu/zn_conformance.zig",
+            // ★★ The robot family's tests, compiled once and run once: it imports every robot
+            // root above, and `test-fast` runs it INSTEAD of them (they keep their `zn-` steps).
+            // Its import list is read back by `robotTestsMembers`, so it is the one list.
+            "src/robot_tests.zig",
+            // Stage 0 of `src/notes/ragdoll_compare_plan.md`: the humanoid in maximal coordinates.
+            "src/robot_maximal.zig",
+            // The retargeted dance as target poses, and how well each engine follows them.
+            "src/robot_dance.zig",
+            // Humanoid locomotion as an RL environment: pose-offset actions on the Tracker.
+            "src/robot_gym.zig",
+            // The GPU learning kit's proofs on its CPU twin (zn_mlp imported by path, which a
+            // file of the zimr module may not do - see the file's header).
+            "src/gpu_learn_tests.zig",
+            "src/kit_mlp.zig",
+            "src/robot_track.zig",
+            "src/robot_world.zig",
+            "src/robot_supertrack.zig",
+            "src/robot_latent.zig",
+            "src/robot_geno.zig",
+            "src/robot_latent_kit_tests.zig",
+            "src/robot_track_resident_tests.zig",
+            "src/robot_policy.zig",
+            "src/robot_ppo_track_tests.zig",
+            "src/robot_mocap_tutorial.zig",
+            // SuperTrack alone (a supervised world model + a policy through it) on the cartpole.
         };
+        const robot_tests_members: []const []const u8 = robotTestsMembers(b);
         for (fast_test_roots) |root| {
             // ★ The module ROOT is the file itself, so a test under `src/tests/` reaching a
             // sibling with `@import("../x.zig")` would escape the module path. Those tests
             // import through `src/` instead — see `ragdoll_bvh_test.zig`.
+            // Tests run ReleaseSafe: optimised, with every bounds and overflow check still armed,
+            // which is what a test is for. A TRAINING chunk is different - it is the same code,
+            // already proven by those tests, run for hours - so under `-Dtrain-chunk` it builds
+            // ReleaseFast. Zig's ReleaseFast does not relax floating point, so the numbers are
+            // the same; only the checks are gone.
+            const fast_optimize: std.builtin.OptimizeMode = if (train_chunk) .ReleaseFast else .ReleaseSafe;
             const fast_mod: *Module = b.createModule(.{
                 .root_source_file = b.path(root),
                 .target = native_target,
-                .optimize = .ReleaseSafe,
+                .optimize = fast_optimize,
             });
             fast_mod.addImport("zm", zimrmath_mod);
             fast_mod.addImport("build_options", build_opts.createModule());
@@ -3091,13 +3631,13 @@ pub fn build(b: *std.Build) void {
             const codecs_mod: *Module = b.createModule(.{
                 .root_source_file = b.path("src/codecs.zig"),
                 .target = native_target,
-                .optimize = .ReleaseSafe,
+                .optimize = fast_optimize,
             });
             codecs_mod.addImport("zm", zimrmath_mod);
             const robot_mod: *Module = b.createModule(.{
                 .root_source_file = b.path("src/robot.zig"),
                 .target = native_target,
-                .optimize = .ReleaseSafe,
+                .optimize = fast_optimize,
             });
             robot_mod.addImport("zm", zimrmath_mod);
             robot_mod.addImport("build_options", build_opts.createModule());
@@ -3106,11 +3646,48 @@ pub fn build(b: *std.Build) void {
             // `zimrnum` authors its GPU kernels through the kompute DSL, so it needs the same
             // one shared kompute module every compute example uses.
             fast_mod.addImport("kompute", kompute_mod);
+            // `src/gpu/zn_conformance.zig` holds the CPU reference the GPU sweep is judged
+            // against, so it imports zimrnum itself. Offered to every fast root for the same
+            // reason `codecs` and `robot` are: cheaper than a second list to keep in step.
+            fast_mod.addImport("zn", zimrnum_mod);
             const ft: *Compile = b.addTest(.{ .root_module = fast_mod });
             if (test_filter) |f| {
                 ft.filters = b.allocator.dupe([]const u8, &.{f}) catch @panic("OOM");
             }
-            test_fast_step.dependOn(&b.addRunArtifact(ft).step);
+            const fast_run: *Run = b.addRunArtifact(ft);
+            // A training chunk exists for what it writes to `train/`, which the build cache cannot see:
+            // the same binary with the same arguments would otherwise be a cached, skipped run - no
+            // output and no learning. With `-Dtrain-chunk`, every run happens.
+            if (train_chunk) {
+                fast_run.has_side_effects = true;
+            }
+            // A root `src/robot_tests.zig` imports is compiled and run THERE, once, as part of
+            // the union - adding it here as well would compile its closure a second time.
+            var aggregated_elsewhere: bool = false;
+            for (robot_tests_members) |member| {
+                if (eql(u8, member, root)) {
+                    aggregated_elsewhere = true;
+                }
+            }
+            if (!aggregated_elsewhere) {
+                test_fast_step.dependOn(&fast_run.step);
+            }
+
+            // ── A STEP PER ROOT, because `test-fast` rebuilds all six ──
+            //
+            // Working on zimrnum means recompiling zimrmath, robot, codecs and physics
+            // alongside it for no reason: 71-212 s against 43 s for the one module that
+            // changed, 7 s with `-Dtest-filter`. The step name is the file stem, so
+            // `src/zimrnum.zig` gives `zig build zn-zimrnum`.
+            //
+            // ★ These are for ITERATION. `zig build test-fast` is what the gate runs, and it
+            // is what catches a break in a module you did not think you had touched - which
+            // has happened more than once this arc.
+            const stem: []const u8 = std.fs.path.stem(root);
+            const one_name: []const u8 = b.fmt("zn-{s}", .{stem});
+            const one_desc: []const u8 = b.fmt("Tests for {s} ALONE - the fast iteration loop", .{root});
+            const one_step: *Step = b.step(one_name, one_desc);
+            one_step.dependOn(&fast_run.step);
         }
 
         const t: *Compile = b.addTest(.{ .root_module = test_mod });
@@ -3245,18 +3822,17 @@ pub fn build(b: *std.Build) void {
     docs_step.dependOn(&install_docs.step);
 
     // ---- `zig build dist` -- mirror zig-out/web/ into prebuilt/.
-    // `prebuilt/` is committed to the repo so visitors can clone and
-    // run `serve.bat` without Zig/Bun, and Codeberg Pages can serve
-    // the gallery straight from the repo.  Pair with `-Drelease=true`
-    // for ReleaseSmall wasm; `release.bat` does that for you.
+    // `prebuilt/` is gitignored on main; `release.bat` / `release.sh` publish
+    // its contents to the orphan `pages` branch that GitHub Pages serves at
+    // https://simonclavet.github.io/zimr/.  Pair with `-Dmode=release` for
+    // ReleaseSmall wasm; the release scripts do that for you.
     const dist_step: *Step = b.step("dist", "Refresh prebuilt/ from zig-out/web/ for distribution");
-    // Custom make step: pure-Zig recursive copy.  Avoids the cross-shell
-    // quoting/exit-code mess of xcopy/cp wrappers - and works the same
-    // on Windows, Linux, and macOS without a builtin.os.tag branch.
-    // dist mirrors zig-out/web/ to prebuilt/ (committed; serves the published
-    // Codeberg Pages gallery) via the buildaux CLI — the old custom makeFn Step
-    // is gone in 0.17.  Depend on all_examples_step (not just
-    // b.getInstallStep()) so the mirror always has every wasm.
+    // A pure-Zig recursive copy in the buildaux CLI (the old custom makeFn
+    // Step is gone in 0.17).  Avoids the cross-shell quoting/exit-code mess
+    // of xcopy/cp wrappers and works the same on Windows, Linux and macOS.
+    // It also writes `prebuilt/.nojekyll` so GitHub Pages skips Jekyll.
+    // Depend on all_examples_step (not just b.getInstallStep()) so the
+    // mirror always has every wasm.
     const dist_copy: *Run = b.addRunArtifact(buildaux_exe);
     dist_copy.addArg("dist-copy");
     dist_copy.step.dependOn(all_examples_step);
@@ -3298,6 +3874,20 @@ pub fn build(b: *std.Build) void {
     // not a main-build Compile, so it can't be run via addRunArtifact — which
     // would handle the suffix for us — hence this explicit, suffix-aware path.)
     const lint_run: *Run = b.addRunArtifact(zimrlint_exe);
+    // ── THE LINT RATCHET ──
+    //
+    // `childNodes` returned no children for `.assign` and `.while_cont`, so every rule in
+    // zimrlint silently skipped assignment right-hand sides and `while (i < n) : (i += 1)`
+    // bodies. Fixing the walk exposed 594 pre-existing violations: the tree was never clean, the
+    // walker was blind, and the hard gate's "after all rules cleared" was true only of what it
+    // could see.
+    //
+    // `tools/lint_baseline.tsv` grandfathers those by (file, rule) COUNT. Anything above the
+    // recorded count fails, so new code is held to every rule from today while the backlog stays
+    // visible in one file and shrinks by deleting lines. Regenerate deliberately, never
+    // casually: `zimrlint --baseline tools/lint_baseline.tsv --write-baseline <files...>`.
+    lint_run.addArg("--baseline");
+    lint_run.addFileArg(b.path("tools/lint_baseline.tsv"));
 
     // Install-path twin of `lint_run`.  Default `zig build` lints via
     // THIS Run so the lint can be gated behind a green compile (wired at
@@ -3305,6 +3895,13 @@ pub fn build(b: *std.Build) void {
     // `lint-check` steps — which share `lint_run` — to build the whole
     // project first.  Same file set; only the dependencies differ.
     const lint_run_install: *Run = b.addRunArtifact(zimrlint_exe);
+    lint_run_install.addArg("--baseline");
+    lint_run_install.addFileArg(b.path("tools/lint_baseline.tsv"));
+    // The `fix` step's lint: the same files and baseline, ALWAYS in `--fix` mode. The only lint run that
+    // rewrites sources - and it runs only when `zig build fix` is asked for by name.
+    const lint_fix: *Run = b.addRunArtifact(zimrlint_exe);
+    lint_fix.addArg("--baseline");
+    lint_fix.addFileArg(b.path("tools/lint_baseline.tsv"));
 
     // Smoke check: compile `tests/fixture_fs.zig` end-to-end and
     // assert the output begins with `#version 300 es`.  Wired into
@@ -3364,8 +3961,8 @@ pub fn build(b: *std.Build) void {
     const autofix: bool = b.option(
         bool,
         "autofix",
-        "Auto-apply mechanical lint fixes + zig fmt before compiling (default true; false = strict check gate).",
-    ) orelse true;
+        "Auto-apply mechanical lint fixes + zig fmt before each gated compile (default false: gates only check).",
+    ) orelse false;
     // `-Dgate` (default true): whether the lint/fmt gate precedes every wasm compile at all.
     //
     // ── ★★★ WHY THIS EXISTS, AND WHY THE DEFAULT STAYS AGGRESSIVE ──
@@ -3384,17 +3981,23 @@ pub fn build(b: *std.Build) void {
     //
     // ★ It does NOT disable the `lint` or `fmt` STEPS. `zig build lint` and `zig fmt` are always
     // available and always run; this only removes the implicit dependency edge.
+    //
+    // ── ★★★ CHANGED (Simon, Sep 25): BUILDING IS NOT GATED; ARTIFACTS AND THE END OF A TURN ARE ──
+    //
+    // A gate on every compile - worse, an autofixing one that rewrote files mid-iteration - cost more
+    // than it caught: a page build reformatted a file between reading it and the next exact-text edit.
+    // So an ordinary build (tests, smoke tests, release pages) neither checks nor touches style. Lint
+    // and fmt stay MANDATORY where it matters, and always as CHECKS that never rewrite anything:
+    //   - every `*-standalone` page, `dist`, and `check` depend on `lint-check` (fmt --check + lint);
+    //   - `-Dmode=ship` turns the per-compile gate back on for everything it builds;
+    //   - `zig build check` is the end-of-turn command;
+    //   - `zig build fix` is the ONE step that rewrites sources (lint --fix, then zig fmt) - by name only.
+    // `-Dgate=true` still gates every wasm compile on demand.
     const gate: bool = b.option(
         bool,
         "gate",
-        "Run the lint/fmt gate before each wasm compile (default true; false = skip it for fast iteration).",
-    ) orelse true;
-    if (!gate) {
-        std.debug.print(
-            "zimr: -Dgate=false - lint and fmt are NOT running. Run `zig build check` (no flags) before finishing.\n",
-            .{},
-        );
-    }
+        "Gate every wasm compile on lint + fmt --check (default: only in -Dmode=ship).",
+    ) orelse (mode == .ship);
     const has_file_arg: bool = lint_files_opt != null;
     // Dependency-safe: this scan walks zimr's own tree via cwd-relative paths,
     // which only resolve when zimr is the ROOT project. When zimr is consumed as
@@ -3522,6 +4125,7 @@ pub fn build(b: *std.Build) void {
                 }
                 lint_run.addFileArg(b.path(path));
                 lint_run_install.addFileArg(b.path(path));
+                lint_fix.addFileArg(b.path(path));
             }
         }
         // Top-level build.zig is included.  It uses build-helper
@@ -3530,6 +4134,7 @@ pub fn build(b: *std.Build) void {
         // near the top of build.zig and src/shader_codegen.zig.
         lint_run.addFileArg(b.path("build.zig"));
         lint_run_install.addFileArg(b.path("build.zig"));
+        lint_fix.addFileArg(b.path("build.zig"));
     }
     // Explicit file subset (from -Dlint-files) when the default scan
     // was skipped above.
@@ -3538,6 +4143,7 @@ pub fn build(b: *std.Build) void {
         while (it.next()) |f| {
             lint_run.addFileArg(b.path(f));
             lint_run_install.addFileArg(b.path(f));
+            lint_fix.addFileArg(b.path(f));
         }
     }
     // Forward any remaining flags (--quiet, --only=, --skip=) to the
@@ -3545,6 +4151,8 @@ pub fn build(b: *std.Build) void {
     // (configurer/maker split), which is fine: only the exe parses them.
     lint_run.addPassthruArgs();
     lint_run_install.addPassthruArgs();
+    lint_fix.addPassthruArgs();
+    lint_fix.addArg("--fix");
     // Autofix: the install-path lint Run (the one gating every compile) runs in
     // `--fix` mode so a default `zig build` repairs mechanical issues in place
     // rather than failing on them. The standalone `lint` / `lint-check` steps
@@ -3634,6 +4242,19 @@ pub fn build(b: *std.Build) void {
     gate_step.dependOn(lint_check_step);
     gate_step.dependOn(test_fast_step);
     gate_step.dependOn(wgpu_check);
+    // The tutorials can't drift from the code. First their code blocks are regenerated from the
+    // source (in place with the default -Dautofix, like `zig fmt`; strictly checked with
+    // -Dautofix=false), then every quoted line is checked to exist in the source (doc-sync).
+    const gate_doc_folds: *Run = b.addRunArtifact(doc_folds_exe);
+    gate_doc_folds.setCwd(b.path("."));
+    gate_doc_folds.has_side_effects = true;
+    gate_doc_folds.addArg(if (autofix) "--fix" else "--check");
+    gate_doc_folds.addArgs(&doc_folds_pages);
+    const gate_doc_sync: *Run = b.addRunArtifact(doc_sync_exe);
+    gate_doc_sync.setCwd(b.path("."));
+    gate_doc_sync.has_side_effects = true;
+    gate_doc_sync.step.dependOn(&gate_doc_folds.step);
+    gate_step.dependOn(&gate_doc_sync.step);
     // NOT the smokes: `smoke-test` needs `-Dfocus=<example>` and there is no "all" value, so
     // they stay one command per example - `zig build smoke-test -Dfocus=zimrnum_field`. The
     // full audit including them is `tier-a-check`; this step is the fast one that should run
@@ -3784,8 +4405,34 @@ pub fn build(b: *std.Build) void {
     // Bare `zig build` (install) is mostly a JS bundle + static files with no
     // Compile of its own, so depend on the gates directly too — otherwise a
     // compile-less install would skip the style check entirely.
-    b.getInstallStep().dependOn(&fmt_check_install.step);
-    b.getInstallStep().dependOn(&lint_run_install.step);
+    if (gate) {
+        b.getInstallStep().dependOn(&fmt_check_install.step);
+        b.getInstallStep().dependOn(&lint_run_install.step);
+    }
+    // ARTIFACTS REQUIRE A CLEAN TREE: every `*-standalone` page, `dist` and `check` depend on the
+    // non-mutating `lint-check` (fmt --check + lint). The compile may run beside it; the step fails
+    // unless both pass - fix with `zig build fix`.
+    for (b.top_level_steps.values()) |tls| {
+        const name: []const u8 = tls.step.name;
+        if (std.mem.endsWith(u8, name, "-standalone") or std.mem.eql(u8, name, "dist") or
+            std.mem.eql(u8, name, "check"))
+        {
+            tls.step.dependOn(lint_check_step);
+        }
+    }
+    // `zig build fix`: the ONE step that rewrites sources - lint's mechanical fixes, then zig fmt tidies
+    // what they leave. Never implied by any other step.
+    const fmt_after_fix: *Run = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "fmt",
+        "src",
+        "examples",
+        "build.zig",
+        "tools/zimrlint.zig",
+    });
+    fmt_after_fix.step.dependOn(&lint_fix.step);
+    const fix_step: *Step = b.step("fix", "Rewrite sources: lint --fix, then zig fmt (the only step that edits files)");
+    fix_step.dependOn(&fmt_after_fix.step);
 }
 
 /// The host-side tool executables, built once and shared. Returned as a set
@@ -3804,7 +4451,9 @@ const Tools = struct {
     dag: *Compile,
     gen_vscode: *Compile,
     gen_files_md: *Compile,
-    highlight: *Compile,
+    docfmt: *Compile,
+    files_html: *Compile,
+    doc_gate: *Compile,
 };
 
 fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module) Tools {
@@ -3836,7 +4485,7 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
     const zspv_tool_exe: *Compile = b.addExecutable(.{
         .name = "zspv",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zspv.zig"),
+            .root_source_file = b.path("tools/zspv_main.zig"),
             .target = host_target,
             .optimize = .ReleaseSafe,
         }),
@@ -3851,9 +4500,11 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/zimrlint.zig"),
             .target = host_target,
-            // ReleaseSafe, NOT ReleaseFast: this dev Zig miscompiles zimrlint
-            // under ReleaseFast (SIGILL on every input). Debug + ReleaseSafe
-            // both run clean; ReleaseSafe keeps it fast. Revisit on Zig upgrade.
+            // ReleaseSafe, NOT ReleaseFast, for two reasons. The durable one: `std.process.Init`
+            // hands `main` a leak-checking `SafeAllocator` only in Debug/ReleaseSafe, and that
+            // checker is what found zimrlint leaking the replacement text of every suppressed
+            // autofix (2163). The historical one: an earlier dev Zig miscompiled zimrlint under
+            // ReleaseFast (SIGILL on every input) - not re-tested since, and no longer the reason.
             .optimize = .ReleaseSafe,
         }),
     });
@@ -3922,6 +4573,10 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         }),
     });
     mesh_bake_exe.root_module.addImport("codecs", mesh_bake_codecs_mod);
+    // zm too: mesh_bake seeds its bounding box from `floatMax`, and std.math is banned
+    // everywhere - a host-only tool is no exception, because the point is that ONE math module
+    // is the answer to "where does this live", not that portability happens to not bite here.
+    mesh_bake_exe.root_module.addImport("zm", zimrmath_mod);
 
     // bvh_trim: cut a frame range out of a mocap capture, using zimr's OWN bvh codec, so the
     // clip `mocap_viewer` embeds is a reproducible product of the round trip the tests assert
@@ -3940,6 +4595,33 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         }),
     });
     bvh_trim_exe.root_module.addImport("codecs", bvh_trim_codecs_mod);
+    // lafan_db: LAFAN1 locomotion out of Holden's motion-matching database.bin and into BVH clips,
+    // each one verified by reading it back (tools/lafan_db.zig). Run it with arguments:
+    //     zig build lafan-db -- <database.bin> <out_dir> <seconds>
+    const lafan_db_exe: *Compile = b.addExecutable(.{
+        .name = "lafan_db",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/lafan_db.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    lafan_db_exe.root_module.addImport("codecs", bvh_trim_codecs_mod);
+    lafan_db_exe.root_module.addImport("zm", zimrmath_mod);
+    // bvh_trim has been the way assets are cut since it was written; give it a step so the
+    // command in an asset's README is the command you actually run.
+    const bvh_trim_step: *Step = b.step("bvh-trim", "cut a frame range out of a BVH file");
+    const bvh_trim_run: *Run = b.addRunArtifact(bvh_trim_exe);
+    bvh_trim_run.setCwd(b.path("."));
+    bvh_trim_run.has_side_effects = true;
+    bvh_trim_run.addPassthruArgs();
+    bvh_trim_step.dependOn(&bvh_trim_run.step);
+    const lafan_db_step: *Step = b.step("lafan-db", "convert LAFAN1 locomotion from Holden's database.bin into BVH");
+    const lafan_db_run: *Run = b.addRunArtifact(lafan_db_exe);
+    lafan_db_run.setCwd(b.path("."));
+    lafan_db_run.has_side_effects = true;
+    lafan_db_run.addPassthruArgs();
+    lafan_db_step.dependOn(&lafan_db_run.step);
 
     // dag_check: the file-level import-graph DAG gate (replaces the old
     // scripts/check_dag.py).  Tokenizer-based @import scan, Tarjan SCC, no
@@ -3975,13 +4657,37 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
             .optimize = .ReleaseSafe,
         }),
     });
-    // highlight: build-time Zig syntax highlighter for readme.html.  stdin ->
-    // stdout filter; wraps <pre><code class="language-zig"> tokens in spans via
-    // std.zig.Tokenizer so the served page needs no runtime JS.  std-only.
-    const highlight_exe: *Compile = b.addExecutable(.{
-        .name = "highlight",
+    // doc_gate: fail the build if a published page grows its own <style>, a
+    // <script>, a webfont fetch, or loses its docfmt marker.  Fed the same page
+    // list build.zig installs.  std-only.
+    const doc_gate_exe: *Compile = b.addExecutable(.{
+        .name = "doc_gate",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/highlight.zig"),
+            .root_source_file = b.path("tools/doc_gate.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    // files_html: render src/notes/files.md as src/notes/files.html, the styled
+    // per-file atlas.  Handles only the markdown the atlas uses; the mermaid
+    // fence stays a <pre> because rendering it would mean shipping mermaid.js.
+    const files_html_exe: *Compile = b.addExecutable(.{
+        .name = "files_html",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/files_html.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    // docfmt: build-time formatter for every published doc page.  stdin ->
+    // stdout filter; injects THE shared stylesheet at the `<!--docfmt:style-->`
+    // marker and wraps <pre><code class="zig|language-zig|wgsl"> tokens in spans
+    // via std.zig.Tokenizer (or its own small WGSL lexer), so a served page
+    // needs no runtime JS and fetches no webfont.  std-only.
+    const docfmt_exe: *Compile = b.addExecutable(.{
+        .name = "docfmt",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/docfmt.zig"),
             .target = host_target,
             .optimize = .ReleaseSafe,
         }),
@@ -4000,7 +4706,9 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         .dag = dag_check_exe,
         .gen_vscode = gen_vscode_exe,
         .gen_files_md = gen_files_md_exe,
-        .highlight = highlight_exe,
+        .docfmt = docfmt_exe,
+        .files_html = files_html_exe,
+        .doc_gate = doc_gate_exe,
     };
 }
 
@@ -4993,19 +5701,52 @@ pub const AppContext = struct {
         // THE SHARED MODULE — not a fresh one. Minting one here per example is what produced
         // `kompute0` and made two compute examples unable to share a page. See its creation site.
         user_mod.addImport("kompute", ctx.kompute_mod);
+
+        // The conformance table - the CPU reference the GPU sweep is judged against - is engine
+        // code (`src/gpu/zn_conformance.zig`), not part of any example. Offered to every app
+        // that takes compute kernels; the field sweep is the one that uses it today.
+        const conformance_mod: *Module = b.createModule(.{
+            .root_source_file = b.path("src/gpu/zn_conformance.zig"),
+        });
+        conformance_mod.addImport("zm", ctx.zimrmath_mod);
+        conformance_mod.addImport("zn", ctx.zimrnum_mod);
+        user_mod.addImport("zn_conformance", conformance_mod);
         const under: []const u8 = name;
         for (kernels) |k| {
+            const kernel_src: LazyPath = if (k.source_path) |custom|
+                b.path(custom)
+            else
+                b.path(b.fmt("examples/{s}/{s}.zig", .{ under, k.basename }));
+
+            // ---- THE KERNEL'S ZIG SOURCE, AS A NAMED MODULE ----
+            //
+            // `addComputeKernelImports` below provides only the COMPILED WGSL, as
+            // `<entry>_wgsl`. The Zig source was reached by a RELATIVE import in the example
+            // - `@import("zn_matmul.zig")` - which is what tied the kernels to living beside
+            // the example that used them. They are 2,185 lines whose whole closure is
+            // `kompute` + `zm`; that is library code, and it belongs under `src/`.
+            //
+            // Exposed here as `@import("<basename>")` so the caller no longer cares where the
+            // file sits, which is the entire blocker to moving it.
+            const kernel_mod: *Module = b.createModule(.{ .root_source_file = kernel_src });
+            kernel_mod.addImport("kompute", ctx.kompute_mod);
+            kernel_mod.addImport("zm", ctx.zimrmath_mod);
+            if (k.wants_zimrnum) {
+                kernel_mod.addImport("zn", ctx.zimrnum_mod);
+            }
+            user_mod.addImport(k.basename, kernel_mod);
+
             if (k.entries) |entries| {
                 ctx.shader_pipeline.addComputeKernelImports(
                     user_mod,
-                    b.path(b.fmt("examples/{s}/{s}.zig", .{ under, k.basename })),
+                    kernel_src,
                     entries,
                     k.wants_zimrnum,
                 );
             } else {
                 ctx.shader_pipeline.addComputeImport(
                     user_mod,
-                    b.path(b.fmt("examples/{s}/{s}.zig", .{ under, k.basename })),
+                    kernel_src,
                     b.fmt("{s}_wgsl", .{k.basename}),
                 );
             }
@@ -5237,6 +5978,24 @@ const ComputeKernel = struct {
     /// rather than a transcription of it. Opt-in per kernel because Zig rejects a
     /// `--dep` for a module the file does not import.
     wants_zimrnum: bool = false,
+    /// Where the kernel source lives, when it is NOT `examples/<app>/<basename>.zig`.
+    ///
+    /// ---- WHY THIS EXISTS ----
+    ///
+    /// zimrnum's GPU half is 2,185 lines across `zn_unary`, `zn_binary`, `zn_matmul` and
+    /// `zn_train`, and every one imports `kompute` and `zm` and NOTHING else - no `zimr`, no
+    /// example harness. That is library code by every test that matters, and it sits under
+    /// `examples/` for one reason: this path was a format string with `examples/` baked in.
+    ///
+    /// The rule that kept it there - "zimrnum must stay shader-free" - is real and load-bearing,
+    /// but it constrains a MODULE'S IMPORT CLOSURE, not a directory. `src/zimrnum.zig` importing
+    /// only `std` and `zm` is what makes it a `test-fast` root; a SEPARATE module under `src/`
+    /// that imports `kompute` does not touch that closure at all. The fear was of the wrong
+    /// thing.
+    ///
+    /// This field is the whole mechanical difference. With it, moving a kernel into the engine is
+    /// a file move plus one line here, rather than a build rewrite.
+    source_path: ?[]const u8 = null,
 };
 
 fn addWgpuStandalone(
@@ -5338,6 +6097,38 @@ fn collectShaderFiles(b: *std.Build) ![][]const u8 {
     return paths.toOwnedSlice(b.allocator);
 }
 
+/// The fast test roots `src/robot_tests.zig` stands in for: each `@import("x.zig")` it makes, as
+/// `src/x.zig`. Read at configure time so that file is the ONE list. A robot file it does not
+/// import stays a `test-fast` member of its own - the failure direction is a test run twice, never
+/// a test not run - and an unreadable file gives the empty list for the same reason.
+fn robotTestsMembers(b: *std.Build) []const []const u8 {
+    b.graph.poisonCache(); // a source file read at configure time; see collectShaderFiles
+    const io: std.Io = b.graph.io;
+    const aggregate_path: []const u8 = "src/robot_tests.zig";
+    // lint:off catch-suppression: missing file -> no roots aggregated -> every root runs itself
+    const text: []u8 = b.root.root_dir.handle.readFileAlloc(io, aggregate_path, b.allocator, .unlimited) catch {
+        return &.{};
+    };
+    const import_open: []const u8 = "@import(\"";
+    var members: ArrayList([]const u8) = .empty;
+    var lines: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        const code: []const u8 = std.mem.trimStart(u8, line, " ");
+        if (startsWith(u8, code, "//")) {
+            continue;
+        }
+        const at: usize = std.mem.indexOf(u8, code, import_open) orelse continue;
+        const rest: []const u8 = code[at + import_open.len ..];
+        const close: usize = std.mem.indexOfScalar(u8, rest, '"') orelse continue;
+        const target: []const u8 = rest[0..close];
+        if (!endsWith(u8, target, ".zig")) {
+            continue;
+        }
+        members.append(b.allocator, b.fmt("src/{s}", .{target})) catch @panic("OOM");
+    }
+    return members.toOwnedSlice(b.allocator) catch @panic("OOM");
+}
+
 /// `@floatFromInt` to f64. The lint prefers `zm.float64`, but build.zig is the
 /// build SCRIPT — it has no `zm` module in scope and pulling zimrmath into the
 /// build graph to convert four integers would be a silly dependency.
@@ -5347,82 +6138,19 @@ fn f64of(x: u64) f64 {
 }
 
 /// Free-space report for the filesystem holding the build root.
-const DiskSpace = struct {
-    free_bytes: u64,
-    /// Percent USED, computed the way `df` does it — (blocks - bfree) over
-    /// (blocks - bfree + bavail) — so the number here matches the number the
-    /// developer sees in a terminal. Reserved-for-root blocks are excluded from
-    /// "available" but counted in "used", which is why this is not simply
-    /// 1 - free/total.
-    used_pct: f64,
-};
+const DiskSpace = fs_space.DiskSpace;
 
-/// x86_64 Linux `struct statfs`. Zig's std exposes the syscall NUMBER but no
-/// wrapper and no struct, so the ABI is spelled out here. Stable since forever.
-const LinuxStatfs = extern struct {
-    f_type: i64,
-    f_bsize: i64,
-    f_blocks: u64,
-    f_bfree: u64,
-    f_bavail: u64,
-    f_files: u64,
-    f_ffree: u64,
-    f_fsid: [2]i32,
-    f_namelen: i64,
-    f_frsize: i64,
-    f_flags: i64,
-    f_spare: [4]i64,
-};
+const fs_space = @import("tools/fs_space.zig");
 
-const Kernel32 = struct {
-    extern "kernel32" fn GetDiskFreeSpaceExA(
-        directory_name: ?[*:0]const u8,
-        free_bytes_available_to_caller: ?*u64,
-        total_number_of_bytes: ?*u64,
-        total_number_of_free_bytes: ?*u64,
-    ) callconv(.winapi) c_int;
-};
-
-/// Returns null when we cannot measure — in which case the caller does NOT block
-/// the build. Never fail a developer's build over our own inability to stat a
-/// filesystem.
+/// Free space, from the ONE hand-declared kernel ABI in this repo.
+///
+/// This was three declarations and a switch right here - `LinuxStatfs`, a `kernel32` extern,
+/// and `diskSpace()`. `tools/measure.zig` then grew a SECOND copy that was Linux-only and
+/// returned 0 rather than null on an unsupported platform, which reads as "disk full" instead
+/// of "did not measure". A hand-written kernel struct is exactly the thing not to have two of,
+/// so it lives in `tools/fs_space.zig` and both callers go through it.
 fn diskSpace() ?DiskSpace {
-    switch (builtin.os.tag) {
-        .linux => {
-            var st: LinuxStatfs = undefined;
-            const rc: usize = std.os.linux.syscall2(
-                .statfs,
-                @intFromPtr("."),
-                @intFromPtr(&st),
-            );
-            if (@as(isize, @bitCast(rc)) < 0 or st.f_bsize <= 0) {
-                return null;
-            }
-            const bsize: u64 = @intCast(st.f_bsize);
-            const used_blocks: u64 = st.f_blocks -| st.f_bfree;
-            const denom: u64 = used_blocks + st.f_bavail;
-            if (denom == 0) {
-                return null;
-            }
-            return .{
-                .free_bytes = st.f_bavail * bsize,
-                .used_pct = 100.0 * f64of(used_blocks) / f64of(denom),
-            };
-        },
-        .windows => {
-            var avail: u64 = 0;
-            var total: u64 = 0;
-            if (Kernel32.GetDiskFreeSpaceExA(".", &avail, &total, null) == 0 or total == 0) {
-                return null;
-            }
-            const used: u64 = total -| avail;
-            return .{
-                .free_bytes = avail,
-                .used_pct = 100.0 * f64of(used) / f64of(total),
-            };
-        },
-        else => return null,
-    }
+    return fs_space.query();
 }
 
 /// Guard against the ONLY failure that actually matters: running out of disk

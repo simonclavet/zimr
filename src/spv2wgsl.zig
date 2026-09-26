@@ -1,4 +1,8 @@
 //! lint:alias spv2wgsl
+//! lint:off std-math: spv2wgsl is a host-only transpiler - SPIR-V in, WGSL text out. It never
+//! runs on a device, so the GPU-portability reason for the std.math ban does not apply, and
+//! `std.math` costs nothing here: `std` is already imported, so unlike a `zm` dependency this
+//! adds no module edge and leaves the file as extractable as it was.
 // spv2wgsl.zig — minimal SPIR-V to WGSL converter.
 //
 // =============================================================================
@@ -767,6 +771,10 @@ const State = struct {
     inst_off: ArrayList(u32) = .empty,
 
     header_buf: ArrayList(u8) = .empty,
+
+    /// Bit patterns already given a `var<private>` by `nonFiniteName`, so a module
+    /// using NaN in five places declares it once.
+    nonfinite_emitted: std.AutoHashMapUnmanaged(u32, void) = .empty,
     body_buf: ArrayList(u8) = .empty,
 
     /// Structural struct dedup: emitted struct BODY (the `{ ... }` text) -> the
@@ -1118,11 +1126,14 @@ fn readSpvString(
     var byte_count: usize = 0;
     var done: bool = false;
     while (offset + n_words < words.len and !done) : (n_words += 1) {
-        const w = words[offset + n_words];
+        // SPIR-V packs literal strings four bytes per 32-bit word, little-endian and
+        // nul-terminated. This first pass only MEASURES - it walks to the nul so the output
+        // can be allocated exactly - and writes nothing.
+        const word: u32 = words[offset + n_words];
         var b: u32 = 0;
         while (b < 4) : (b += 1) {
             const shift: u5 = @intCast(b * 8);
-            const byte: u8 = @truncate(w >> shift);
+            const byte: u8 = @truncate(word >> shift);
             if (byte == 0) {
                 done = true;
                 break;
@@ -1139,11 +1150,12 @@ fn readSpvString(
     var written: usize = 0;
     var wi: u32 = 0;
     outer: while (wi < n_words) : (wi += 1) {
-        const w = words[offset + wi];
+        // Second pass, same unpacking, now copying into the exact-sized buffer.
+        const word: u32 = words[offset + wi];
         var b: u32 = 0;
         while (b < 4) : (b += 1) {
             const shift: u5 = @intCast(b * 8);
-            const byte: u8 = @truncate(w >> shift);
+            const byte: u8 = @truncate(word >> shift);
             if (byte == 0) {
                 break :outer;
             }
@@ -1292,9 +1304,31 @@ fn renderConstant(
         // integer — e.g. `select(1, 0, cond)` for an f32 result fails
         // naga with "expected f32, got i32".  Force a fractional part
         // so the spelling is always a float literal.
+        // ---- NaN AND INFINITY HAVE NO WGSL LITERAL AT ALL ----
+        //
+        // This is the bug that made `[Invalid ShaderModule "diff_forward"]` on a real device.
+        // `{d}` renders a NaN as the text `nan`, and the guard below saw the `n`, concluded the
+        // spelling already had a marker, and returned it UNCHANGED. The emitted WGSL was
+        // `return nan;` - and `nan` is not an identifier, a keyword, or a literal in WGSL. The
+        // module failed to compile, and the failure surfaced only as a pipeline-creation error
+        // on the device, because nothing upstream parses the WGSL it produces.
+        //
+        // The old comment called `.eEnN` an "inf/nan marker", so the case was KNOWN to reach
+        // here - it was just handled by passing the text through, which is only correct for a
+        // language that can spell these. WGSL cannot: the spec has no NaN or infinity literal,
+        // deliberately, because a shader may be compiled with fast-math assumptions that make
+        // them unrepresentable.
+        //
+        // A bitcast from the exact bit pattern is the sanctioned spelling and is what every
+        // other WGSL producer emits. It also preserves WHICH NaN and the sign of the infinity,
+        // which a literal could not have done anyway.
         const s_int: []const u8 = try allocPrint(arena, "{d}", .{f});
         if (std.mem.indexOfAny(u8, s_int, ".eEnN") == null) {
-            // No decimal point, exponent, or inf/nan marker → append ".0".
+            // No decimal point, exponent, or inf/nan marker -> append ".0" so WGSL reads it as
+            // a float rather than an AbstractInt. `nN` catches the `nan`/`inf` spellings, which
+            // must NOT get a ".0" - they never reach a device anyway, because `emitConstant`
+            // intercepts every non-finite f32 before this is called and routes it through
+            // `nonFiniteName`. This branch is the finite path only.
             return allocPrint(arena, "{s}.0", .{s_int});
         }
         return s_int;
@@ -1645,13 +1679,97 @@ fn emitTypeSampledImage(s: *State, ops: []const u32) void {
     });
 }
 
+test "renderConstant: a whole-valued float keeps its fractional part" {
+    // ---- THE BUG THIS PINS ----
+    //
+    // `{d}` renders a NaN as the text `nan`, and the old guard checked the spelling for
+    // any of ".eEnN" to decide it was already formatted - so `nan` and `inf` were returned
+    // VERBATIM. The emitted WGSL was `return nan;`, which is not an identifier, a keyword
+    // or a literal in WGSL.
+    //
+    // Nothing upstream parses the WGSL this file produces, so the failure surfaced only on
+    // a real device, as `[Invalid ShaderModule "diff_forward"] is invalid due to a previous
+    // error` at pipeline creation. Every kernel that touched `zm.nan` was affected; the
+    // sweep's `diff` row is the one that reached a browser.
+    // An ARENA, because that is the parameter's contract: `renderConstant` allocates the
+    // intermediate `{d}` spelling and leaves it for the arena rather than freeing it, so a
+    // checking allocator reports a leak production does not have. It reported exactly one
+    // byte - the "1" of the "1.0" case below.
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+
+    // NON-FINITE VALUES NEVER REACH HERE. `emitConstant` intercepts them and routes them
+    // through `nonFiniteName`, because the fix has to be a module-scope `var<private>` and this
+    // function can only return an expression. See `nonFiniteName` for why a `bitcast` of a
+    // literal is not enough - Tint const-folds it and rejects the result.
+    //
+    // What this test pins is the FINITE path, and specifically that a whole-valued float keeps
+    // its fractional part.
+
+    // Infinity has the same problem and the same fix, and the SIGN has to survive - a
+    // literal could not have carried it even if WGSL had one.
+    // WGSL reads `1` as an AbstractInt and `1.0` as a float, and an f32 constant spelled as an
+    // integer fails with "expected f32, got i32".
+    const one: u32 = 0x3F80_0000;
+    const one_text: []const u8 = try renderConstant(arena, "f32", &.{one});
+    try expectEqualStrings("1.0", one_text);
+}
+
+/// A NaN or infinity, as a HELPER FUNCTION returning its bit pattern.
+///
+/// ---- WHY A `var` AND NOT A LITERAL, AND NOT EVEN A `bitcast` ----
+///
+/// WGSL has no NaN or infinity literal, so the value has to come from a bit pattern. The
+/// obvious spelling is `bitcast<f32>(2143289344u)` - and Tint rejects that too:
+///
+///     :156:10 error: value nan cannot be represented as 'f32'
+///       return bitcast<f32>(2143289344u);
+///
+/// **A `bitcast` of a LITERAL is a const-expression**, so Tint folds it at compile time, and a
+/// WGSL const-expression must be representable. The value being unrepresentable is exactly the
+/// point, so const-evaluation can never be allowed to reach it.
+///
+/// A module-scope `var<private> x: f32 = bitcast<f32>(...)` does NOT fix it: a module-scope
+/// initializer must ALSO be a const-expression, so the same fold and the same rejection.
+///
+/// A FUNCTION-SCOPE `var` is the escape. It is runtime storage, so `bitcast<f32>(b)` where `b`
+/// is a `var` is a runtime expression and the constant evaluator never sees it. The device has
+/// no trouble with NaN at all - only the COMPILER'S const-eval does, and this is how every
+/// other WGSL producer gets a NaN past it.
+///
+/// One helper per distinct bit pattern, named for it, so a module using NaN five times emits it
+/// once and `+inf` never collides with `-inf`.
+fn nonFiniteName(s: *State, bits: u32) ![]const u8 {
+    const call_text: []const u8 = try allocPrint(s.arena, "nonfinite_{d}()", .{bits});
+    if (s.nonfinite_emitted.contains(bits)) {
+        return call_text;
+    }
+    try s.nonfinite_emitted.put(s.arena, bits, {});
+    try bprint(
+        &s.header_buf,
+        s.arena,
+        "fn nonfinite_{d}() -> f32 {{\n  var b: u32 = {d}u;\n  return bitcast<f32>(b);\n}}\n",
+        .{ bits, bits },
+    );
+    return call_text;
+}
+
 fn emitConstant(s: *State, ops: []const u32) !void {
     // Layout: result_type, result_id, literal_words...
     const tid: u32 = ops[0];
     const result: u32 = ops[1];
     const ti: *const IdInfo = lookupType(s, tid);
     const lit_words: []const u32 = ops[2..];
-    const text: []const u8 = try renderConstant(s.arena, ti.wgsl_name, lit_words);
+    const text: []const u8 = blk: {
+        if (std.mem.eql(u8, ti.wgsl_name, "f32") and lit_words.len >= 1) {
+            const f: f32 = @bitCast(lit_words[0]);
+            if (!std.math.isFinite(f)) {
+                break :blk try nonFiniteName(s, lit_words[0]);
+            }
+        }
+        break :blk try renderConstant(s.arena, ti.wgsl_name, lit_words);
+    };
     setId(s, result, .{
         .kind = .constant,
         .type_id = tid,
@@ -2031,6 +2149,94 @@ fn rootVariableOf(s: *State, def_off: []const u32, start_id: u32) u32 {
 /// Fix in the kernel: dispatch an exact multiple of the workgroup size and
 /// guard the per-lane WORK (`if (in_range) { ... }`) instead of early-returning
 /// before the barrier. See kompute.zig `workgroupBarrier`.
+/// Read the emitted WGSL back and refuse to hand over something a device will reject.
+///
+/// ---- WHY THIS EXISTS: THREE DEVICE ROUND-TRIPS ----
+///
+/// Nothing in this repo parsed the WGSL this file produces. A `diff` kernel emitted `return nan;`
+/// - not an identifier, keyword or literal in WGSL - and every gate passed: `zig build check`,
+/// the transpiler corpus, the smoke test, the SPIR-V probe. The failure surfaced on a phone, as
+/// `[Invalid ShaderModule "diff_forward"] is invalid due to a previous error`, which does not
+/// name the error. Fixing it by inspection produced a SECOND invalid spelling, which took
+/// another round trip, and only then did asking `getCompilationInfo()` reveal the real message.
+///
+/// This is not a WGSL validator and is not trying to be one. It is a short list of spellings
+/// THIS TRANSPILER has actually emitted and a device has actually rejected. Each entry earned
+/// its place by costing a debugging cycle; the point is that the second occurrence costs a build
+/// failure instead.
+///
+/// ---- THE RULE BEHIND BOTH ENTRIES ----
+///
+/// WGSL cannot spell NaN or infinity, and it cannot CONST-EVALUATE to one either. A
+/// const-expression must be representable, so `bitcast<f32>(2143289344u)` is rejected exactly as
+/// the bare token is - the fold happens before anyone asks whether a device could cope. Only a
+/// value that reaches the bitcast through runtime storage survives, which is why `nonFiniteName`
+/// emits a function with a `var` in it.
+fn checkNonFiniteConstants(wgsl: []const u8) !void {
+    // 1. A bare `nan` / `inf` / `-inf` where a value belongs. Anchored on `return ` and `= ` so
+    //    an identifier that merely CONTAINS the letters - `nan_helper`, `infinity_mask` - does
+    //    not trip it.
+    const bare = [_][]const u8{
+        "return nan;", "return inf;", "return -inf;",
+        "= nan;",      "= inf;",      "= -inf;",
+        " nan)",       " inf)",       " -inf)",
+    };
+    for (bare) |needle| {
+        if (std.mem.indexOf(u8, wgsl, needle) != null) {
+            return error.WgslNonFiniteLiteral;
+        }
+    }
+
+    // 2. A `bitcast<f32>(<literal>u)` whose bits are non-finite. This is the spelling that looks
+    //    like the fix and is not: it is a const-expression, so it folds and is rejected. The
+    //    sanctioned form routes the bits through a function-scope `var`, which this never sees
+    //    because the operand is then an identifier rather than a literal.
+    const marker: []const u8 = "bitcast<f32>(";
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, wgsl, at, marker)) |hit| {
+        const arg_start: usize = hit + marker.len;
+        at = arg_start;
+        var end: usize = arg_start;
+        while (end < wgsl.len and wgsl[end] >= '0' and wgsl[end] <= '9') {
+            end += 1;
+        }
+        if (end == arg_start) {
+            continue; // not a literal - an identifier or an expression, which is the good case
+        }
+        const bits: u32 = std.fmt.parseInt(u32, wgsl[arg_start..end], 10) catch continue;
+        const value: f32 = @bitCast(bits);
+        if (!std.math.isFinite(value)) {
+            return error.WgslNonFiniteConstExpr;
+        }
+    }
+}
+
+test "checkNonFiniteConstants: the two spellings a device has actually rejected" {
+    // Both of these shipped. The first reached a phone; the second was written as its fix and
+    // reached the same phone. Neither is caught by anything else in this repo.
+    try expectError(
+        error.WgslNonFiniteLiteral,
+        checkNonFiniteConstants("fn f() -> f32 {\n  return nan;\n}\n"),
+    );
+    try expectError(
+        error.WgslNonFiniteConstExpr,
+        checkNonFiniteConstants("fn f() -> f32 {\n  return bitcast<f32>(2143289344u);\n}\n"),
+    );
+
+    // The sanctioned form passes: the bits reach the bitcast through a `var`, so the operand is
+    // an identifier and there is nothing for the const evaluator to fold.
+    try checkNonFiniteConstants(
+        "fn nonfinite_2143289344() -> f32 {\n  var b: u32 = 2143289344u;\n  return bitcast<f32>(b);\n}\n",
+    );
+
+    // And a FINITE bitcast is ordinary code that must not be flagged - reinterpreting bits is a
+    // normal thing for a shader to do.
+    try checkNonFiniteConstants("fn f() -> f32 {\n  return bitcast<f32>(1065353216u);\n}\n");
+
+    // An identifier that merely contains the letters is not a literal.
+    try checkNonFiniteConstants("fn f() -> f32 {\n  return nan_helper();\n}\n");
+}
+
 fn checkBarrierUniformity(s: *State) !void {
     var i: usize = 0;
     var in_func: bool = false;
@@ -2063,11 +2269,15 @@ fn checkBarrierUniformity(s: *State) !void {
                     const ops: []const u32 = types.operandsAt(s.spirv, off);
                     const callee: []const u8 = if (ops.len >= 3 and ops[2] < s.ids.len) s.ids[ops[2]].wgsl_name else "";
                     if (isBarrierHelperName(callee) and saw_return) {
-                        std.debug.print(
+                        // `std.log.warn`, not `std.debug.print`: the latter bypasses `std_options`
+                        // and its raw-stderr writer traps under ReleaseSmall on wasm - and spv2wgsl
+                        // itself runs inside the wasm transpiler. The other diagnostics in this
+                        // file already use `std.log.warn`.
+                        std.log.warn(
                             "spv2wgsl: workgroupBarrier() is preceded by an early `return` " ++
                                 "— non-uniform control flow. The barrier will not synchronise on " ++
                                 "real GPUs (shared reads return zero). Restructure the kernel so no " ++
-                                "lane returns before the barrier (see kompute.zig workgroupBarrier).\n",
+                                "lane returns before the barrier (see kompute.zig workgroupBarrier).",
                             .{},
                         );
                         return error.BarrierInNonUniformControlFlow;
@@ -2990,7 +3200,10 @@ pub const block_table = struct {
                         // the SPIR-V spec.  No enum variant in `types.zig`
                         // for it (the linear emitter never needed special
                         // handling).  Check the raw value.
-                        if (@backingInt(t_op) == 255) break; // OpUnreachable
+                        // OpUnreachable
+                        if (@backingInt(t_op) == 255) {
+                            break;
+                        }
                         // Ordinary body instruction; skip.
                     },
                 }
@@ -8042,10 +8255,13 @@ fn markHoistedResults(
         // value defined in a nested if-body feeds a loop-header phi via
         // the back-edge / continue block.)
         if (op == .Phi) {
-            var pi: usize = 2;
-            while (pi + 1 < ops.len) : (pi += 2) {
-                const pval: u32 = ops[pi];
-                const ppred: u32 = ops[pi + 1];
+            // `pair`, not `pi`: OpPhi's operands come in (value, predecessor) PAIRS, and the
+            // loop steps by two. (It was `pi` until a `zm` import briefly made that a shadow of
+            // `zm.pi`; the import is gone, the better name stayed.)
+            var pair: usize = 2;
+            while (pair + 1 < ops.len) : (pair += 2) {
+                const pval: u32 = ops[pair];
+                const ppred: u32 = ops[pair + 1];
                 if (@as(usize, pval) >= def_block.len) {
                     continue;
                 }
@@ -8252,7 +8468,11 @@ fn emitOneFunction(
             if (ht.wgsl_name.len != 0) {
                 try bprint(&s.body_buf, s.arena, "  var {s}: {s};\n", .{ hname, ht.wgsl_name });
             }
-            used_local_names.put(hname, {}) catch {};
+            // `try`, not `catch {}`: this set is what keeps two locals in one WGSL scope from
+            // taking the same name. A dropped insert does not fail here - it fails later, as
+            // emitted shader source with a duplicate `var`, which is a far worse place to
+            // discover an allocation failure.
+            try used_local_names.put(hname, {});
         }
     }
 
@@ -8287,7 +8507,9 @@ fn emitOneFunction(
             while (used_local_names.contains(vname)) : (dedup_n += 1) {
                 vname = try allocPrint(s.arena, "{s}_{d}", .{ raw_vname, dedup_n });
             }
-            used_local_names.put(vname, {}) catch {};
+            // Same reason as the helper-name insert above: dropping this makes the dedup loop
+            // directly above it silently useless the next time round.
+            try used_local_names.put(vname, {});
             setId(s, result_id, .{
                 .kind = .variable,
                 .type_id = ptr_tid,
@@ -8322,18 +8544,28 @@ fn pass4_functions(s: *State) !void {
     {
         var k: usize = 0;
         while (k < s.inst_off.items.len) : (k += 1) {
-            const off = s.inst_off.items[k];
-            const w0 = s.spirv[off];
-            const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
+            const off: u32 = s.inst_off.items[k];
+            // A SPIR-V instruction's first word packs the opcode in its low 16 bits and the
+            // word count in its high 16 - hence `opcodeOf` rather than a plain compare.
+            const first_word: u32 = s.spirv[off];
+            const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(first_word)));
             switch (op) {
                 .Function => {
-                    const ops = types.operandsAt(s.spirv, off);
-                    const ret_type = ops[0];
-                    const result = ops[1];
-                    if (result == s.entry.func_id) continue; // entry has special name
-                    if (s.ids[result].kind != .unknown and s.ids[result].wgsl_name.len != 0) continue;
+                    // `OpFunction` operands: [0] is the RESULT TYPE id, [1] the result id.
+                    const ops: []const u32 = types.operandsAt(s.spirv, off);
+                    const ret_type: u32 = ops[0];
+                    const result: u32 = ops[1];
+                    // entry has special name
+                    if (result == s.entry.func_id) {
+                        continue;
+                    }
+                    if (s.ids[result].kind != .unknown and s.ids[result].wgsl_name.len != 0) {
+                        continue;
+                    }
                     const existing_name = s.ids[result].wgsl_name;
-                    const fname = if (existing_name.len != 0)
+                    // Keep a name the module already carried (from OpName debug info); otherwise
+                    // synthesise one from the id, which is unique by construction.
+                    const fname: []const u8 = if (existing_name.len != 0)
                         existing_name
                     else
                         try allocPrint(s.arena, "fn_{d}", .{result});
@@ -9437,8 +9669,8 @@ pub const sccp = struct {
     fn seedConstants(an: *Analyzer, fn_k: usize) !void {
         var k: usize = 0;
         while (k < fn_k) : (k += 1) {
-            const off = an.inst_off[k];
-            const op = opAt(an.spirv, off);
+            const off: u32 = an.inst_off[k];
+            const op: u32 = opAt(an.spirv, off);
             switch (op) {
                 TestOp.constant_true => try an.a.values.put(an.arena, an.spirv[off + 2], .{ .konst = 1 }),
                 TestOp.constant_false,
@@ -10655,6 +10887,15 @@ pub fn convertSpirvToWgslEntry(
     try final.appendSlice(arena, state.body_buf.items);
     const out: []const u8 = try final.toOwnedSlice(arena);
 
+    // ---- A HARD CHECK, UNLIKE `checkOutputClosure` BELOW ----
+    //
+    // That one runs only in debug and only WARNS, returning the bad WGSL anyway on the grounds
+    // that "the browser's WGSL frontend rejects it at pipeline creation if it actually matters".
+    // It does matter, and the rejection names no cause: this exact reasoning is how three device
+    // round-trips were spent on a NaN literal. There is no use for WGSL that cannot compile, so
+    // this one fails the build, in every mode.
+    try checkNonFiniteConstants(out);
+
     // ---------------------------------------------------------------------------
     // GUARD RAIL: every `var phiN` declared must be ASSIGNED at least once.
     //
@@ -10949,7 +11190,7 @@ pub const wgsl_check = struct {
         // comments.  WGSL has block comments that nest, so we track that.
         var i: usize = 0;
         while (i < wgsl.len) : (i += 1) {
-            const c = wgsl[i];
+            const c: u8 = wgsl[i];
 
             if (c == '\n') {
                 line += 1;
@@ -10976,7 +11217,7 @@ pub const wgsl_check = struct {
                 col += 1;
                 var depth: u32 = 1;
                 while (i < wgsl.len and depth > 0) : (i += 1) {
-                    const cc = wgsl[i];
+                    const cc: u8 = wgsl[i];
                     if (cc == '\n') {
                         line += 1;
                         col = 1;
@@ -10996,7 +11237,10 @@ pub const wgsl_check = struct {
                 if (depth != 0 and first_error == null) {
                     first_error = .{ .line = line, .col = col, .msg = "unterminated block comment" };
                 }
-                if (i > 0) i -= 1; // outer loop will i+=1
+                // outer loop will i+=1
+                if (i > 0) {
+                    i -= 1;
+                }
                 continue;
             }
 
@@ -11006,11 +11250,15 @@ pub const wgsl_check = struct {
             if (c == '"') {
                 i += 1;
                 while (i < wgsl.len and wgsl[i] != '"') : (i += 1) {
-                    if (wgsl[i] == '\\' and i + 1 < wgsl.len) i += 1;
+                    if (wgsl[i] == '\\' and i + 1 < wgsl.len) {
+                        i += 1;
+                    }
                     if (wgsl[i] == '\n') {
                         line += 1;
                         col = 1;
-                    } else col += 1;
+                    } else {
+                        col += 1;
+                    }
                 }
                 continue;
             }
@@ -11236,7 +11484,9 @@ pub const wgsl_check = struct {
         {
             var pos: usize = 0;
             while (lines.next()) |line| : (line_count += 1) {
-                if (line_count >= line_starts.len) break;
+                if (line_count >= line_starts.len) {
+                    break;
+                }
                 line_starts[line_count] = pos;
                 pos += line.len + 1; // +1 for the '\n'
             }
@@ -11244,17 +11494,26 @@ pub const wgsl_check = struct {
 
         var i: usize = 1;
         while (i < line_count) : (i += 1) {
-            const cur = trimLine(wgsl, line_starts[0..], i, line_count);
-            const prev = trimLine(wgsl, line_starts[0..], i - 1, line_count);
+            // A peephole over the EMITTED WGSL text, not the SPIR-V: it looks for a `phiN = ...`
+            // assignment sitting directly after a closing brace, which is the shape the phi
+            // lowering leaves behind and which some drivers mis-scope.
+            const cur: []const u8 = trimLine(wgsl, line_starts[0..], i, line_count);
+            const prev: []const u8 = trimLine(wgsl, line_starts[0..], i - 1, line_count);
 
-            if (!std.mem.eql(u8, prev, "}")) continue;
-            if (!startsWith(u8, cur, "phi")) continue;
+            if (!std.mem.eql(u8, prev, "}")) {
+                continue;
+            }
+            if (!startsWith(u8, cur, "phi")) {
+                continue;
+            }
 
             // Extract the phi name (up to ` = `).
             const eq = std.mem.indexOf(u8, cur, " = ") orelse continue;
-            const phi_name = cur[0..eq];
+            const phi_name: []const u8 = cur[0..eq];
             // Must be entirely phi[0-9]+
-            if (phi_name.len < 4) continue;
+            if (phi_name.len < 4) {
+                continue;
+            }
             var ok = true;
             for (phi_name[3..]) |c| {
                 if (!ascii.isDigit(c)) {
@@ -11262,7 +11521,9 @@ pub const wgsl_check = struct {
                     break;
                 }
             }
-            if (!ok) continue;
+            if (!ok) {
+                continue;
+            }
 
             // Walk backward from i-2 finding the matching `if (...) {`,
             // counting brace depth.  Inside the matched if's body, look
@@ -11281,7 +11542,7 @@ pub const wgsl_check = struct {
             while (true) : (if (j == 0) break else {
                 j -= 1;
             }) {
-                const ln = trimLine(wgsl, line_starts[0..], j, line_count);
+                const ln: []const u8 = trimLine(wgsl, line_starts[0..], j, line_count);
                 // At depth 1, look for the phi assignment.
                 if (depth == 1 and isAssignTo(ln, phi_name)) {
                     set_inside = true;
@@ -11296,11 +11557,15 @@ pub const wgsl_check = struct {
                     // really IS an `if (` opener (not e.g. `} else {`,
                     // a function `{`, or a `loop {`).
                     if (isIfOpenerLine(ln)) {
-                        if (set_inside) count += 1;
+                        if (set_inside) {
+                            count += 1;
+                        }
                     }
                     break;
                 }
-                if (j == 0) break;
+                if (j == 0) {
+                    break;
+                }
             }
         }
         return count;

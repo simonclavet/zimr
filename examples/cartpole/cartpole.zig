@@ -29,6 +29,12 @@
 //! is an honest thing for a demo to show.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
@@ -395,7 +401,7 @@ fn update(f: *z.Frame, s: *State) void {
     // far less of it horizontally than a desktop does, so a fixed distance frames the scene for
     // one and crops it for the other.
     const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
-    s.cam.distance = zm.clamp(2.4 / @max(0.35, aspect), 2.2, 6.0);
+    s.cam.distance = clamp(2.4 / @max(0.35, aspect), 2.2, 6.0);
     const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 8.0 });
     z.beginMode3D(gl, cam);
     drawScene(s, gl);

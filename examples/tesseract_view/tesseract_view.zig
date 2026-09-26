@@ -100,7 +100,9 @@ fn update(f: *z.Frame, s: *State) void {
         while (j < 16) : (j += 1) {
             var same: u32 = 0;
             inline for (0..4) |k| {
-                if (corners[i][k] == corners[j][k]) same += 1;
+                if (corners[i][k] == corners[j][k]) {
+                    same += 1;
+                }
             }
             if (same == 3) {
                 z.drawLine3D(f.gl, p, proj[j], maroon);

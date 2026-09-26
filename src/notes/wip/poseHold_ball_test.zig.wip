@@ -1,0 +1,68 @@
+test "control: PoseHold drives a ball joint toward its target, the short way round" {
+    // ---- THE PROPERTY, BEFORE ANYTHING DRIVES A CHARACTER WITH IT ----
+    //
+    // A ball joint's pose error is a ROTATION, not a subtraction. The scalar path reads
+    // `target[q] - pos[q]`, which for a quaternion is the difference of two first components
+    // and is not an angle. This checks the rotation path instead, on the two cases that can be
+    // silently wrong: the direction of the correction, and which way round it goes.
+    const gpa: Allocator = std.testing.allocator;
+
+    // A one-ball-joint model is enough - the question is about one joint's arithmetic.
+    const Spec = rbt.Spec(.{
+        .bodies = &.{
+            .{
+                .name = "link",
+                .joints = &.{.{ .name = "swivel", .kind = .ball }},
+                .geoms = &.{.{
+                    .shape = .{ .box = .{ .half_extent = vec(0.1, 0.1, 0.1) } },
+                    .mass = 1.0,
+                }},
+            },
+        },
+    });
+    var model: rbt.Model = try Spec.build(gpa);
+    defer model.deinit();
+    var data: rbt.Data = try rbt.Data.init(gpa, &model);
+    defer data.deinit();
+
+    const q: u32 = model.jnt_qpos_adr[0];
+    const v: u32 = model.jnt_dof_adr[0];
+
+    // Target: a quarter turn about +Z. Current: identity.
+    // x-y-z-w, matching `robot.zig`'s storage. `zm.quat(x, y, z, w)` already returns that
+    // order, so the target is copied straight across and identity is (0, 0, 0, 1).
+    var target: [4]f32 = .{ 0, 0, 0, 1 };
+    const want = zm.quatFromAxisAngle(zm.vec(0, 0, 1), 0.5);
+    inline for (0..4) |i| {
+        target[i] = want[i];
+    }
+
+    data.pos[q] = 0;
+    data.pos[q + 1] = 0;
+    data.pos[q + 2] = 0;
+    data.pos[q + 3] = 1;
+    @memset(data.vel, 0);
+    rbt.forward(&model, &data);
+
+    const hold: PoseHold = .{ .target = &target, .kp = 100.0, .kv = 0.0, .scale_by_inertia = false };
+    var actuation: Actuation = try Actuation.init(gpa, &model);
+    defer actuation.deinit();
+    hold.apply(&model, &data, actuation);
+
+    // ** THE TORQUE POINTS ALONG +Z, because that is the axis carrying identity to the target.
+    // A controller that subtracted components would produce torque on the wrong axes entirely.
+    try std.testing.expect(data.applied_force[v + 2] > 0);
+    try std.testing.expect(@abs(data.applied_force[v]) < @abs(data.applied_force[v + 2]));
+    try std.testing.expect(@abs(data.applied_force[v + 1]) < @abs(data.applied_force[v + 2]));
+
+    // ** AND THE SHORT WAY ROUND. A target just past a half turn is CLOSER the other way, and
+    // a controller taking the long way would spin a limb the wrong side of a joint to reach a
+    // pose it was already beside.
+    const far = zm.quatFromAxisAngle(zm.vec(0, 0, 1), 6.0);
+    inline for (0..4) |i| {
+        target[i] = far[i];
+    }
+    hold.apply(&model, &data, actuation);
+    try std.testing.expect(data.applied_force[v + 2] < 0);
+}
+

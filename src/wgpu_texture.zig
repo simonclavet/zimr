@@ -138,7 +138,9 @@ pub const WgpuTexture = struct {
             const next: []u8 = try gpa.alloc(u8, nw * nh * 4);
             boxDownsampleRgba8(cur, w, h, next, nw, nh);
             wgpu.queueWriteTextureLevel(queue, tex, nw, nh, nw * 4, next, level);
-            if (cur_owned) |b| gpa.free(b);
+            if (cur_owned) |b| {
+                gpa.free(b);
+            }
             cur_owned = next;
             cur = next;
             w = nw;
@@ -262,10 +264,10 @@ pub const WgpuTexture = struct {
         while (y < size) : (y += 1) {
             var x: u32 = 0;
             while (x < size) : (x += 1) {
-                const cell_x = x / cell;
-                const cell_y = y / cell;
-                const is_a = (cell_x ^ cell_y) & 1 == 0;
-                const color = if (is_a) a else b;
+                const cell_x: u32 = x / cell;
+                const cell_y: u32 = y / cell;
+                const is_a: bool = (cell_x ^ cell_y) & 1 == 0;
+                const color: [4]u8 = if (is_a) a else b;
                 const off = (@as(usize, y) * size + @as(usize, x)) * 4;
                 pixels[off + 0] = color[0];
                 pixels[off + 1] = color[1];
@@ -505,8 +507,8 @@ test "WgpuTexture.createCheckerboard produces correct pattern bytes" {
     while (y < size) : (y += 1) {
         var x: u32 = 0;
         while (x < size) : (x += 1) {
-            const is_a = ((x / cell) ^ (y / cell)) & 1 == 0;
-            const color = if (is_a) a else b;
+            const is_a: bool = ((x / cell) ^ (y / cell)) & 1 == 0;
+            const color: [4]u8 = if (is_a) a else b;
             const off = (@as(usize, y) * size + @as(usize, x)) * 4;
             pixels[off + 0] = color[0];
             pixels[off + 1] = color[1];

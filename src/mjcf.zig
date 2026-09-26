@@ -874,6 +874,9 @@ pub const Robot = struct {
     geoms: []Geom,
     actuators: []Actuator,
     keyframes: []Keyframe,
+    /// Body pairs that must never collide, from `<contact><exclude body1="" body2=""/>` - MuJoCo's way to
+    /// spare two bodies that are NOT adjacent (adjacent ones are spared anyway) but overlap by design.
+    excludes: []const Exclude = &.{},
     /// `<asset>`'s meshes, by the name geoms refer to them by. The vertices are NOT loaded —
     /// see `MeshAsset`.
     meshes: []MeshAsset,
@@ -944,6 +947,7 @@ pub fn readRobot(gpa: Allocator, doc: *const codecs.xml.Document) Error!Robot {
         .geoms = try geoms.toOwnedSlice(a),
         .actuators = try readActuators(a, doc, &defaults),
         .keyframes = try readKeyframes(a, doc),
+        .excludes = try readExcludes(a, doc),
         .meshes = try readMeshAssets(a, doc),
         .sensors = try readSensors(a, doc),
         .sites = owned_sites,
@@ -1364,6 +1368,12 @@ pub const Actuator = struct {
 /// ships four — `squat`, `stand_on_left_leg`, `prone`, `supine` — and Menagerie models almost
 /// always ship a `home`. Starting from one is the difference between debugging a controller
 /// and debugging a fall.
+/// One `<contact><exclude>`: two bodies, by name, that never collide.
+pub const Exclude = struct {
+    body1: []const u8,
+    body2: []const u8,
+};
+
 pub const Keyframe = struct {
     name: []const u8,
     /// Generalized positions, in the model's own `qpos` order. Empty if the key omits them.
@@ -1434,6 +1444,26 @@ pub fn readKeyframes(
             .qvel = try readFloatList(a, doc.attribute(child, "qvel")),
             .ctrl = try readFloatList(a, doc.attribute(child, "ctrl")),
         });
+    }
+    return out.toOwnedSlice(a);
+}
+
+/// Read `<contact>`'s `<exclude>` entries. A missing body name is an error the build reports, when
+/// names become bodies; here an entry lacking either attribute is simply not an exclusion.
+fn readExcludes(
+    a: Allocator,
+    doc: *const codecs.xml.Document,
+) Error![]const Exclude {
+    var out: std.ArrayListUnmanaged(Exclude) = .empty;
+    const block: *const codecs.xml.Element =
+        doc.child(doc.rootElement(), "contact") orelse return out.toOwnedSlice(a);
+    for (doc.childrenOf(block)) |*child| {
+        if (!std.mem.eql(u8, child.name, "exclude")) {
+            continue;
+        }
+        const first: []const u8 = doc.attribute(child, "body1") orelse continue;
+        const second: []const u8 = doc.attribute(child, "body2") orelse continue;
+        try out.append(a, .{ .body1 = first, .body2 = second });
     }
     return out.toOwnedSlice(a);
 }

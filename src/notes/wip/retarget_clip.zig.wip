@@ -1,0 +1,228 @@
+//! tools/retarget_clip.zig - retarget a BVH capture onto a robot ONCE, and save the answer.
+//!
+//! WHY A TOOL AND NOT A STARTUP STEP
+//!
+//! Retargeting is deterministic: the same capture and the same robot give the same joint angles
+//! every time, so doing it at startup means paying for it on every run and every device.
+//!
+//! It is also the step most likely to be wrong in a way that is hard to see. A bad joint match
+//! produces a character that moves plausibly and incorrectly, and debugging that inside a
+//! training loop - where a bad reference and a bad policy look identical - is the worst place
+//! for it. **Precomputing turns a runtime risk into a file somebody can look at.**
+//!
+//! THE CHAIN, WHICH WAS COPIED FROM A PASSING TEST RATHER THAN RECONSTRUCTED
+//!
+//! `robot_mjcf.zig` carries "retarget: the real dance drives humanoid.xml", which does exactly
+//! this for one frame and checks every joint. A first draft of this tool guessed the API from
+//! the names and got the rest alignment wrong - identity instead of a real T-pose offset - which
+//! would have produced plausible incorrect motion. The order below is that test's order.
+//!
+//!     resolveMatchTable              table + body names + human names -> human_of_body
+//!     referenceOrientationsFromRest  the ROBOT's T-pose, from its own rest
+//!     parse(Geno_stance.bvh)         the HUMAN's T-pose, a separate capture
+//!     tPoseGlobalRotations           that capture -> per-joint global rotations
+//!     restAlignmentOffsets           two T-poses -> per-body alignment
+//!     -- per frame --
+//!     decode channels -> human_local -> compose up the tree -> human_global
+//!     retargetRotations              -> robot local rotations
+//!
+//! THE OUTPUT FORMAT, `ZRC1`
+//!
+//!     magic     "ZRC1"      4 bytes, SNIFFED not trusted
+//!     version   u32
+//!     frames    u32
+//!     bodies    u32         robot bodies, not human joints
+//!     fps       f32
+//!     rotations frames x bodies x 4 f32, local, w-x-y-z
+//!
+//! Shapes in the header rather than only a version, for the same reason the weights format has
+//! them: a clip loaded against a robot with a different body count is not a version mismatch,
+//! it is a silent reinterpretation of every number in the file.
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const codecs = @import("codecs");
+const zm = @import("zm");
+const rbt = @import("robot");
+// By PATH, not as a module.  is not a module in this build - it is reached
+// through the same file set as `robot`, which is how `robot_control.zig` and `robot_mpc.zig`
+// import it. Declaring it as a separate module makes the compiler see one file in two modules.
+const rmj = @import("../src/robot_mjcf.zig");
+
+const magic: [4]u8 = .{ 'Z', 'R', 'C', '1' };
+const format_version: u32 = 1;
+
+/// `humanoid_flex2`, not `humanoid_flex`, and the reason is measured in `drecon2.md` 0g.
+///
+/// A BVH gives a full QUATERNION per joint. `humanoid_flex` receives that on skewed hinge pairs
+/// - `axis="2 1 1"` for the shoulder - so every rotation is projected onto two non-orthogonal
+/// axes and whatever lies outside their span is discarded. `humanoid_flex2` has seven ball
+/// joints, which take the quaternion as it is, plus toes. It costs 1.9x per step (nv 43 against
+/// 29) and both resolve the same match table completely.
+const robot_path: []const u8 = "src/tests/fixtures/robot/humanoid_flex2.xml";
+const clip_path: []const u8 = "examples/geno_dance/dance1_20s.bvh";
+const tpose_path: []const u8 = "assets/Geno_stance.bvh";
+const out_path: []const u8 = "assets/dance1_humanoid.zrc";
+
+fn readAll(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
+    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const info: std.Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    _ = try file.readPositionalAll(io, bytes, 0);
+    return bytes;
+}
+
+fn appendU32(gpa: Allocator, out: *std.ArrayList(u8), value: u32) !void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    try out.appendSlice(gpa, &bytes);
+}
+
+fn appendF32(gpa: Allocator, out: *std.ArrayList(u8), value: f32) !void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, @bitCast(value), .little);
+    try out.appendSlice(gpa, &bytes);
+}
+
+/// One frame of the capture, as global rotations per human joint.
+fn humanGlobalsAtFrame(
+    capture: *const codecs.bvh.Data,
+    frame: usize,
+    local: []rbt.Quat,
+    global: []rbt.Quat,
+) void {
+    const row: []const f32 = capture.motion[frame * capture.channel_count ..][0..capture.channel_count];
+    var cursor: usize = 0;
+    for (capture.joints, 0..) |joint, index| {
+        const values: []const f32 = row[cursor..][0..joint.channels.len];
+        cursor += joint.channels.len;
+        var rotation: rbt.Quat = zm.quat_identity;
+        for (joint.channels, 0..) |channel, k| {
+            const angle: f32 = zm.radFromDeg(values[k]);
+            const axis: ?rbt.Vec = switch (channel) {
+                .x_rotation => zm.vec(1, 0, 0),
+                .y_rotation => zm.vec(0, 1, 0),
+                .z_rotation => zm.vec(0, 0, 1),
+                else => null,
+            };
+            if (axis) |rotation_axis| {
+                rotation = zm.qmul(rotation, zm.quatFromAxisAngle(rotation_axis, angle));
+            }
+        }
+        local[index] = rotation;
+        // Compose up the tree. A BVH lists parents before children, so one forward pass is
+        // enough and no sorting is needed.
+        global[index] = if (joint.parent < 0)
+            local[index]
+        else
+            zm.qmul(global[@intCast(joint.parent)], local[index]);
+    }
+}
+
+pub fn main() !void {
+    var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena_state.deinit();
+    const gpa: Allocator = arena_state.allocator();
+
+    var threaded: std.Io.Threaded = .init(gpa);
+    defer threaded.deinit();
+    const io: std.Io = threaded.io();
+
+    // ---- the robot ----
+    var doc: codecs.xml.Document = try codecs.xml.parse(gpa, try readAll(gpa, io, robot_path), null);
+    defer doc.deinit();
+    var robot: rmj.mjcf.Robot = try rmj.mjcf.readRobot(gpa, &doc);
+    defer robot.deinit();
+    var imported: rmj.Imported = try rmj.build(gpa, &robot, .{});
+    defer imported.deinit();
+    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    defer data.deinit();
+    rbt.forward(&imported.model, &data);
+
+    const bodies: usize = imported.model.nbody;
+
+    // ---- the capture, and the human T-pose that aligns it ----
+    var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, try readAll(gpa, io, clip_path), null);
+    defer capture.deinit(gpa);
+    var tpose: codecs.bvh.Data = try codecs.bvh.parse(gpa, try readAll(gpa, io, tpose_path), null);
+    defer tpose.deinit(gpa);
+
+    const human_joints: usize = capture.joints.len;
+    const frames: usize = capture.frame_count;
+    const human_names: [][]const u8 = try gpa.alloc([]const u8, human_joints);
+    for (capture.joints, 0..) |joint, i| {
+        human_names[i] = joint.name;
+    }
+
+    std.debug.print(
+        "retarget_clip: {d} bodies, {d} human joints, {d} frames\n",
+        .{ bodies, human_joints, frames },
+    );
+
+    // ---- the correspondence and the rest alignment ----
+    const human_of_body: []i32 = try gpa.alloc(i32, bodies);
+    try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, imported.names, human_names, human_of_body);
+
+    var matched: usize = 0;
+    for (human_of_body) |entry| {
+        if (entry >= 0) matched += 1;
+    }
+    std.debug.print("  matched {d} of {d} bodies\n", .{ matched, bodies });
+
+    // A table that matches nothing writes a file of rest poses - a character standing still,
+    // which reads as a boring animation rather than as an error.
+    if (matched < 8) {
+        std.debug.print("  REFUSING: too few matched bodies to be a real retarget\n", .{});
+        return error.MatchTableTooSparse;
+    }
+
+    const robot_reference: []rbt.Quat = try gpa.alloc(rbt.Quat, bodies);
+    rbt.referenceOrientationsFromRest(&imported.model, &data, robot_reference);
+    const human_reference: []rbt.Quat = try gpa.alloc(rbt.Quat, human_joints);
+    try rmj.tPoseGlobalRotations(gpa, &tpose, human_names, human_reference);
+    const rest_alignment: []rbt.Quat = try gpa.alloc(rbt.Quat, bodies);
+    codecs.bvh.restAlignmentOffsets(human_of_body, human_reference, robot_reference, rest_alignment);
+
+    // ---- every frame ----
+    const body_parents: []i32 = try gpa.alloc(i32, bodies);
+    for (0..bodies) |body| {
+        body_parents[body] = if (body == 0) -1 else @intCast(imported.model.body_parent[body]);
+    }
+    const human_local: []rbt.Quat = try gpa.alloc(rbt.Quat, human_joints);
+    const human_global: []rbt.Quat = try gpa.alloc(rbt.Quat, human_joints);
+    const robot_global: []rbt.Quat = try gpa.alloc(rbt.Quat, bodies);
+    const out_rotations: []rbt.Quat = try gpa.alloc(rbt.Quat, frames * bodies);
+
+    for (0..frames) |frame| {
+        humanGlobalsAtFrame(&capture, frame, human_local, human_global);
+        codecs.bvh.retargetRotations(
+            body_parents,
+            human_of_body,
+            human_global,
+            rest_alignment,
+            out_rotations[frame * bodies ..][0..bodies],
+            robot_global,
+        );
+    }
+
+    // ---- write it ----
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    try out.appendSlice(gpa, &magic);
+    try appendU32(gpa, &out, format_version);
+    try appendU32(gpa, &out, @intCast(frames));
+    try appendU32(gpa, &out, @intCast(bodies));
+    try appendF32(gpa, &out, 1.0 / capture.frame_time);
+    for (out_rotations) |q| {
+        try appendF32(gpa, &out, q[3]);
+        try appendF32(gpa, &out, q[0]);
+        try appendF32(gpa, &out, q[1]);
+        try appendF32(gpa, &out, q[2]);
+    }
+
+    var out_file: std.Io.File = try std.Io.Dir.cwd().createFile(io, out_path, .{});
+    defer out_file.close(io);
+    try out_file.writeAll(io, out.items);
+    std.debug.print("  wrote {s} - {d} bytes\n", .{ out_path, out.items.len });
+}

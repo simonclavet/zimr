@@ -8,6 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const float = zm.float;
 const Vec = zm.Vec;
 const common = @import("example_common");
 
@@ -55,10 +56,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     while (gz < grid) : (gz += 1) {
         var gx: usize = 0;
         while (gx < grid) : (gx += 1) {
-            const s0: f32 = zm.float(gx) / zm.float(grid);
-            const s1: f32 = zm.float(gx + 1) / zm.float(grid);
-            const t0: f32 = zm.float(gz) / zm.float(grid);
-            const t1: f32 = zm.float(gz + 1) / zm.float(grid);
+            const s0: f32 = float(gx) / float(grid);
+            const s1: f32 = float(gx + 1) / float(grid);
+            const t0: f32 = float(gz) / float(grid);
+            const t1: f32 = float(gz + 1) / float(grid);
             const x0: f32 = (s0 - 0.5) * span;
             const x1: f32 = (s1 - 0.5) * span;
             const y0: f32 = (t0 - 0.5) * span;

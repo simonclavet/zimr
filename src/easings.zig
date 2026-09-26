@@ -453,9 +453,9 @@ test "easings: elastic stays finite across the range" {
     var i: u32 = 0;
     while (i <= 100) : (i += 1) {
         const t = float(i) / 100.0;
-        const a = elasticIn(t);
-        const b = elasticOut(t);
-        const c = elasticInOut(t);
+        const a: f32 = elasticIn(t);
+        const b: f32 = elasticOut(t);
+        const c: f32 = elasticInOut(t);
         try expect(isFinite(a));
         try expect(isFinite(b));
         try expect(isFinite(c));

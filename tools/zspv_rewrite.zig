@@ -333,7 +333,7 @@ pub fn discover(alloc: Allocator, mod: zspv.Module) !Discovery {
     if (zsample2d_func_id != 0) {
         var i: usize = 0;
         while (i < mod.instructions.len) : (i += 1) {
-            const instr = mod.instructions[i];
+            const instr: zspv.Instruction = mod.instructions[i];
             if (instr.opcode == Op.op_function and
                 instr.operands.len >= 2 and
                 instr.operands[1] == zsample2d_func_id)
@@ -358,7 +358,7 @@ pub fn discover(alloc: Allocator, mod: zspv.Module) !Discovery {
     if (zsample2d_level_func_id != 0) {
         var i: usize = 0;
         while (i < mod.instructions.len) : (i += 1) {
-            const instr = mod.instructions[i];
+            const instr: zspv.Instruction = mod.instructions[i];
             if (instr.opcode == Op.op_function and instr.operands.len >= 2 and
                 instr.operands[1] == zsample2d_level_func_id)
             {
@@ -1199,7 +1199,7 @@ pub fn rewriteSamplersWgsl(
             // duplicates.  The synthesized sampler half is ALWAYS new
             // (the rewriter created its variable id this run), so its
             // decorations always come from us.
-            var pair_it_for_decs = pairs.valueIterator();
+            var pair_it_for_decs: @TypeOf(pairs).ValueIterator = pairs.valueIterator();
             while (pair_it_for_decs.next()) |pair| {
                 // Was the texture's binding+set discovered from
                 // existing decorations?  If yes, those OpDecorate
@@ -1433,7 +1433,9 @@ pub fn rewriteSamplersWgsl(
             const tex_name_words: []u32 = try packString(alloc, pair.name_stripped);
             const tex_name_operands: []u32 = try alloc.alloc(u32, 1 + tex_name_words.len);
             tex_name_operands[0] = pair.original_var_id;
-            for (tex_name_words, 0..) |w, j| tex_name_operands[1 + j] = w;
+            for (tex_name_words, 0..) |w, j| {
+                tex_name_operands[1 + j] = w;
+            }
             try new_instrs.append(alloc, .{
                 .opcode = Op.op_name,
                 .operands = tex_name_operands,
@@ -1448,7 +1450,9 @@ pub fn rewriteSamplersWgsl(
             const samp_name_words: []u32 = try packString(alloc, sampler_name);
             const samp_name_operands: []u32 = try alloc.alloc(u32, 1 + samp_name_words.len);
             samp_name_operands[0] = pair.new_sampler_var_id;
-            for (samp_name_words, 0..) |w, j| samp_name_operands[1 + j] = w;
+            for (samp_name_words, 0..) |w, j| {
+                samp_name_operands[1 + j] = w;
+            }
             try new_instrs.append(alloc, .{
                 .opcode = Op.op_name,
                 .operands = samp_name_operands,
@@ -1546,7 +1550,7 @@ pub fn rewriteSamplersWgsl(
     if (collected_new_var_ids.items.len > 0) {
         var j: usize = 0;
         while (j < new_instrs.items.len) : (j += 1) {
-            const instr = new_instrs.items[j];
+            const instr: zspv.Instruction = new_instrs.items[j];
             if (instr.opcode != Op.op_entry_point) {
                 continue;
             }
@@ -1554,7 +1558,9 @@ pub fn rewriteSamplersWgsl(
             const old_len: usize = instr.operands.len;
             const extra: usize = collected_new_var_ids.items.len;
             const expanded: []u32 = try alloc.alloc(u32, old_len + extra);
-            for (instr.operands, 0..) |op, idx| expanded[idx] = op;
+            for (instr.operands, 0..) |op, idx| {
+                expanded[idx] = op;
+            }
             for (collected_new_var_ids.items, 0..) |sid, idx| {
                 expanded[old_len + idx] = sid;
             }

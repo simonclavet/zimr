@@ -21,6 +21,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const sinRad = zm.sinRad;
 const float = zm.float;
 const common = @import("example_common");
 const Mat = zm.Mat;
@@ -235,8 +236,8 @@ fn update(f: *z.Frame, s: *State) void {
     while (i < joint_count) : (i += 1) {
         const fi: f32 = float(i);
         // Phase-shifted sway about Z plus a gentle bend about X down the chain.
-        const ang_z: f32 = std.math.sin(t * 1.6 + fi * 0.7) * 0.42;
-        const ang_x: f32 = std.math.sin(t * 1.1 + fi * 0.5) * 0.18;
+        const ang_z: f32 = sinRad(t * 1.6 + fi * 0.7) * 0.42;
+        const ang_x: f32 = sinRad(t * 1.1 + fi * 0.5) * 0.18;
         const local_rot: Mat = mulMat(rotationZ(ang_z), rotationX(ang_x));
 
         // Rotation applied at this joint (rigid -> good for normals too).

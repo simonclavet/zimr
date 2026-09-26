@@ -21,6 +21,12 @@
 //! **Shove** it, and pick a keyframe — the model ships four, including standing on one leg.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
@@ -624,16 +630,16 @@ fn control(s: *State) void {
         if (mass <= 0) {
             continue;
         }
-        com += s.data.body_xipos[b] * zm.splat(mass);
+        com += s.data.body_xipos[b] * splat(mass);
         robot_mass += mass;
     }
     if (robot_mass <= 0) {
         return;
     }
-    com *= zm.splat(1.0 / robot_mass);
+    com *= splat(1.0 / robot_mass);
     ctl.comJacobian(m, &s.data, s.com_jac, s.com_scratch);
     for (0..s.robot_dof_count) |v| {
-        com_vel += s.com_jac[v] * zm.splat(s.data.vel[v]);
+        com_vel += s.com_jac[v] * splat(s.data.vel[v]);
     }
 
     var x: [mpc.lipm_state_dim]f32 = @splat(0);
@@ -1075,7 +1081,7 @@ fn settleFoot(s: *State, foot: u32) void {
         const axis: Vec = zm.rotate(zm.qmul(s.data.body_xrot[foot], m.geom_rot[g]), capsule_axis);
         const centre: Vec = s.data.body_xpos[foot] + zm.rotate(s.data.body_xrot[foot], m.geom_pos[g]);
         inline for ([_]f32{ -1.0, 1.0 }) |end| {
-            lowest = @min(lowest, (centre + axis * zm.splat(end * half))[2] - radius);
+            lowest = @min(lowest, (centre + axis * splat(end * half))[2] - radius);
         }
     }
     s.data.pos[m.jnt_qpos_adr[0] + 2] -= lowest;

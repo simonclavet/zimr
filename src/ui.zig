@@ -58,6 +58,13 @@ const hsvToRgb3 = zm.hsvToRgb3;
 const rgbToHsv3 = zm.rgbToHsv3;
 const acosRad = zm.acosRad;
 const atan2Rad = zm.atan2Rad;
+/// `clamp(v, lo, hi)` is `min(hi, max(lo, v))` - it applies the LOWER bound first.
+///
+/// The scroll code used to write `@max(0, @min(scroll_max_y, v))`, which applies the UPPER
+/// bound first. The two agree only while `hi >= lo`; with a negative `hi` the old form returns
+/// 0 and `clamp` returns `hi`. That substitution is safe here because every `scroll_max_*` is
+/// itself assigned as `@max(0, content - viewport)`, so it can never be below zero - if that
+/// ever stops being true, these clamps change meaning silently.
 const clamp = zm.clamp;
 const float = zm.float;
 const floori = zm.floori;
@@ -6737,7 +6744,9 @@ fn containsIgnoreCaseAscii(haystack: []const u8, needle: []const u8) bool {
                 break;
             }
         }
-        if (match) return true;
+        if (match) {
+            return true;
+        }
     }
     return false;
 }
@@ -6846,19 +6855,23 @@ pub const TextFilter = struct {
 
         var k: usize = 0;
         while (k < self.segment_count) : (k += 1) {
-            const seg = self.segments[k];
+            const seg: Segment = self.segments[k];
             assertf(
                 seg.start + seg.len <= self.buf_len,
                 @src(),
                 "TextFilter.passFilter: segment {d} range {d}+{d} exceeds buf_len={d}",
                 .{ k, seg.start, seg.len, self.buf_len },
             );
-            const needle = self.buf[seg.start .. seg.start + seg.len];
-            const hit = containsIgnoreCaseAscii(text, needle);
+            const needle: []const u8 = self.buf[seg.start .. seg.start + seg.len];
+            const hit: bool = containsIgnoreCaseAscii(text, needle);
             if (seg.negate) {
-                if (hit) return false;
+                if (hit) {
+                    return false;
+                }
             } else {
-                if (hit) return true;
+                if (hit) {
+                    return true;
+                }
             }
         }
         // No include matched. If includes existed at all, default-deny.
@@ -7147,7 +7160,7 @@ fn renderScrollbar(ctx: *UiContext, w: *Window) void {
             const grab_dy: f32 = @floatCast(ctx.active_id_press_value);
             const new_thumb_y: f32 = mp[1] - grab_dy;
             const new_t: f32 = (new_thumb_y - track_y) / @max(1, track_h - thumb_h);
-            w.scroll_y = @max(0, @min(w.scroll_max_y, new_t * w.scroll_max_y));
+            w.scroll_y = clamp(new_t * w.scroll_max_y, 0, w.scroll_max_y);
         } else {
             ctx.active_id = 0;
         }
@@ -7244,7 +7257,7 @@ fn renderScrollbarX(ctx: *UiContext, w: *Window) void {
             const grab_dx: f32 = ctx.active_id_press_x;
             const new_thumb_x: f32 = mp[0] - grab_dx;
             const new_t: f32 = (new_thumb_x - track_x) / @max(1, track_w - thumb_w);
-            w.scroll_x = @max(0, @min(w.scroll_max_x, new_t * w.scroll_max_x));
+            w.scroll_x = clamp(new_t * w.scroll_max_x, 0, w.scroll_max_x);
         } else {
             ctx.active_id = 0;
         }
@@ -8377,7 +8390,7 @@ fn endChildImpl(ctx: *UiContext) void {
         ctx.mouse_wheel_consumed = true;
     }
     // Clamp scroll_y to its valid range.
-    child.scroll_y = @max(0, @min(child.scroll_y, child.scroll_max_y));
+    child.scroll_y = clamp(child.scroll_y, 0, child.scroll_max_y);
 
     // ---- Pop the content clip + render scrollbar -------------------
     // Order matters: pop the clip BEFORE rendering the scrollbar so
@@ -9010,9 +9023,11 @@ fn textWrappedImpl(
     while (i < full.len) : (i += 1) {
         // Find end of current word (or end of string).
         if (full[i] == ' ' or full[i] == '\n' or i + 1 == full.len) {
-            const word_end = if (full[i] == ' ' or full[i] == '\n') i else i + 1;
-            const candidate = full[line_start..word_end];
-            const candidate_w = measureTextS(ctx, candidate)[0];
+            // EXCLUSIVE end. A space or newline is not part of the word, so the slice stops AT it;
+            // at end-of-string there is no separator to exclude, so it stops one past.
+            const word_end: usize = if (full[i] == ' ' or full[i] == '\n') i else i + 1;
+            const candidate: []const u8 = full[line_start..word_end];
+            const candidate_w: f32 = measureTextS(ctx, candidate)[0];
             if (candidate_w > max_width and line_end > line_start) {
                 // Emit the previous-good line, restart from after it.
                 const slice: []u8 = full[line_start..line_end];
@@ -9020,7 +9035,11 @@ fn textWrappedImpl(
                 line_y += ctx.style.font_size;
                 // Skip leading spaces
                 line_start = line_end;
-                while (line_start < full.len and full[line_start] == ' ') line_start += 1;
+                // Skip the spaces that separated the wrapped word, so the next line starts on a glyph
+                // rather than inheriting the break's whitespace as leading indent.
+                while (line_start < full.len and full[line_start] == ' ') {
+                    line_start += 1;
+                }
                 line_end = line_start;
             } else {
                 line_end = word_end;
@@ -10710,8 +10729,10 @@ fn drawTriangleIndicator(
         const cy: f32 = rect.y + rect.height / 2;
         var i: f32 = 0;
         while (i < 4) : (i += 1) {
-            const strip_w = rect.width - i * 2;
-            const strip_x = rect.x + i;
+            // One inset 1px strip per pass, shrinking by 2 each time (one pixel off each side) and
+            // stepping in by 1 - four nested rectangles drawn as a soft border.
+            const strip_w: f32 = rect.width - i * 2;
+            const strip_x: f32 = rect.x + i;
             drawRectFilled(ctx, .{ .x = strip_x, .y = cy - 2 + i, .width = strip_w, .height = 1 }, col);
         }
     } else {
@@ -10719,8 +10740,8 @@ fn drawTriangleIndicator(
         const cx: f32 = rect.x + rect.width / 2;
         var i: f32 = 0;
         while (i < 4) : (i += 1) {
-            const strip_h = rect.height - i * 2;
-            const strip_y = rect.y + i;
+            const strip_h: f32 = rect.height - i * 2;
+            const strip_y: f32 = rect.y + i;
             drawRectFilled(ctx, .{ .x = cx - 2 + i, .y = strip_y, .width = 1, .height = strip_h }, col);
         }
     }
@@ -13314,7 +13335,7 @@ fn closeListBox(ctx: *UiContext) void {
         list_box.scroll_y -= ctx.input.mouse_wheel_y * wheel_speed;
         ctx.mouse_wheel_consumed = true;
     }
-    list_box.scroll_y = @max(0, @min(list_box.scroll_y, list_box.scroll_max_y));
+    list_box.scroll_y = clamp(list_box.scroll_y, 0, list_box.scroll_max_y);
 
     // Pop content clip, then render scrollbar (so the scrollbar
     // isn't clipped out alongside the content).
@@ -18683,7 +18704,7 @@ pub const Ui = struct {
     /// or "jump to top" buttons. ImGui: `SetScrollY(scroll_y)`.
     pub fn setScrollY(self: Ui, y: f32) void {
         const w: *Window = self.ctx.current_window orelse return;
-        w.scroll_y = @max(0, @min(y, w.scroll_max_y));
+        w.scroll_y = clamp(y, 0, w.scroll_max_y);
     }
 
     // ---- X-axis scroll accessors --------------------
@@ -18715,7 +18736,7 @@ pub const Ui = struct {
     /// Imgui: `SetScrollX(scroll_x)`.
     pub fn setScrollX(self: Ui, x: f32) void {
         const w: *Window = self.ctx.current_window orelse return;
-        w.scroll_x = @max(0, @min(x, w.scroll_max_x));
+        w.scroll_x = clamp(x, 0, w.scroll_max_x);
     }
 
     /// Adjust scroll so the current cursor position appears at
@@ -18736,7 +18757,7 @@ pub const Ui = struct {
         const cursor_content_y: f32 = w.layout.cursor_pos[1] + w.scroll_y - inner_origin_y;
         const viewport_h: f32 = @max(0, w.size[1] - ctx.style.title_bar_height - ctx.style.window_padding[1]);
         const desired: f32 = cursor_content_y - ratio * viewport_h;
-        w.scroll_y = @max(0, @min(desired, w.scroll_max_y));
+        w.scroll_y = clamp(desired, 0, w.scroll_max_y);
     }
 
     /// Like `setScrollHereY` but with an explicit content-area
@@ -18752,7 +18773,7 @@ pub const Ui = struct {
         const ctx: *UiContext = self.ctx;
         const viewport_h: f32 = @max(0, w.size.y - ctx.style.title_bar_height - ctx.style.window_padding.y);
         const desired: f32 = local_y - ratio * viewport_h;
-        w.scroll_y = @max(0, @min(desired, w.scroll_max_y));
+        w.scroll_y = clamp(desired, 0, w.scroll_max_y);
     }
 
     /// Write text to the system clipboard. Sync from caller's
@@ -26714,8 +26735,10 @@ fn tableHeadersRowImpl(ctx: *UiContext) void {
                     // just below. Optional UX flair.
                     if (rank > 0) {
                         var rank_buf: [4]u8 = undefined;
-                        const rs = bufPrint(&rank_buf, "{d}", .{rank + 1}) catch rank_buf[0..0];
-                        drawTextAtS(ctx, .{ ax - 8, cell.y + padding[1] }, rs, header_text_col);
+                        // Sort-rank badge, 1-based for display. On overflow the empty slice draws nothing,
+                        // which is the right failure for a decoration.
+                        const rank_text: []const u8 = bufPrint(&rank_buf, "{d}", .{rank + 1}) catch rank_buf[0..0];
+                        drawTextAtS(ctx, .{ ax - 8, cell.y + padding[1] }, rank_text, header_text_col);
                     }
                     break;
                 }
@@ -27696,10 +27719,16 @@ fn cursorIndexFromX(
     var i: usize = 1;
     var prev_w: f32 = 0;
     while (i <= s.len) : (i += 1) {
-        const w = measureTextS(ctx, s[0..i])[0];
-        const midpoint = (prev_w + w) / 2;
-        if (local_x < midpoint) return i - 1;
-        prev_w = w;
+        // Width of the prefix ending at `i`. Index [0] is the X component of the measured size.
+        const width_here: f32 = measureTextS(ctx, s[0..i])[0];
+        // The cursor snaps to whichever glyph BOUNDARY is nearer, so the decision point is
+        // halfway across the glyph, not at its edge - clicking a character's left half puts
+        // the caret before it and the right half after it.
+        const midpoint: f32 = (prev_w + width_here) / 2;
+        if (local_x < midpoint) {
+            return i - 1;
+        }
+        prev_w = width_here;
     }
     return s.len;
 }
@@ -31994,7 +32023,9 @@ test "button_repeat fires after initial delay then at rate" {
         defer h.close();
         ui.pushItemFlag(.{ .button_repeat = true });
         defer ui.popItemFlag();
-        if (ui.button("inc", .{})) early_count += 1;
+        if (ui.button("inc", .{})) {
+            early_count += 1;
+        }
     }
     // Below 400ms delay → no repeats fired.
     try expectEqual(@as(u32, 0), early_count);
@@ -32016,7 +32047,9 @@ test "button_repeat fires after initial delay then at rate" {
         defer h.close();
         ui.pushItemFlag(.{ .button_repeat = true });
         defer ui.popItemFlag();
-        if (ui.button("inc", .{})) repeat_count += 1;
+        if (ui.button("inc", .{})) {
+            repeat_count += 1;
+        }
     }
     // Expect at least 3 repeats fired (conservative - exact count
     // depends on phase alignment of the 50ms cadence against
@@ -32502,7 +32535,7 @@ test "cursorIndexFromX: monotonic - later x ⇒ greater-or-equal index" {
     var prev: usize = 0;
     var x: f32 = 0;
     while (x <= 200) : (x += 5) {
-        const got = cursorIndexFromX(&ctx, "hello world", x);
+        const got: usize = cursorIndexFromX(&ctx, "hello world", x);
         try expect(got >= prev);
         prev = got;
     }
@@ -34192,10 +34225,18 @@ test "tabs persisted across frames" {
         defer h.close();
         _ = ui.beginTabBar("bar", .{});
         defer ui.endTabBar();
-        if (frame == 0) bar_id = hashStr(h.win.id, "bar");
-        if (ui.beginTabItem("A", null, .{})) ui.endTabItem();
-        if (ui.beginTabItem("B", null, .{})) ui.endTabItem();
-        if (ui.beginTabItem("C", null, .{})) ui.endTabItem();
+        if (frame == 0) {
+            bar_id = hashStr(h.win.id, "bar");
+        }
+        if (ui.beginTabItem("A", null, .{})) {
+            ui.endTabItem();
+        }
+        if (ui.beginTabItem("B", null, .{})) {
+            ui.endTabItem();
+        }
+        if (ui.beginTabItem("C", null, .{})) {
+            ui.endTabItem();
+        }
     }
     const state: *TabBarState = ctx.tab_bar_state.getPtr(bar_id) orelse unreachable;
     try expectEqual(@as(usize, 3), state.tabs.items.len);
@@ -37985,7 +38026,8 @@ test "lineColToByte: round-trips byteToLineCol" {
     var pos: usize = 0;
     while (pos <= buf.len) : (pos += 1) {
         const lc: LineCol = byteToLineCol(buf, pos);
-        const back = lineColToByte(buf, lc);
+        // Round-trip: byte -> (line, col) -> byte must land exactly where it started.
+        const back: usize = lineColToByte(buf, lc);
         try expectEqual(pos, back);
     }
 }

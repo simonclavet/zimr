@@ -59,7 +59,9 @@ fn mandelbrotEscape(
     while (iter < max_iter) : (iter += 1) {
         zx2 = zx * zx;
         zy2 = zy * zy;
-        if (zx2 + zy2 > BAIL_R2) break;
+        if (zx2 + zy2 > BAIL_R2) {
+            break;
+        }
         const zxy_new: f32 = 2 * zx * zy + cy;
         const zx_new: f32 = zx2 - zy2 + cx;
         zx = zx_new;

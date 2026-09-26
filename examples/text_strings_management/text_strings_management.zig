@@ -18,6 +18,7 @@ const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const clamp = zm.clamp;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const float = zm.float;
@@ -227,8 +228,8 @@ fn settle(s: *State, vw: f32, vh: f32, dt: f32) void {
         s.chips[i].vel[0] *= 0.86;
         s.chips[i].vel[1] *= 0.86;
         const w: f32 = chipWidth(s, &s.chips[i]);
-        s.chips[i].pos[0] = std.math.clamp(s.chips[i].pos[0], w * 0.5, vw - w * 0.5);
-        s.chips[i].pos[1] = std.math.clamp(s.chips[i].pos[1], chip_h * 0.5 + 64, vh - chip_h * 0.5 - 96);
+        s.chips[i].pos[0] = clamp(s.chips[i].pos[0], w * 0.5, vw - w * 0.5);
+        s.chips[i].pos[1] = clamp(s.chips[i].pos[1], chip_h * 0.5 + 64, vh - chip_h * 0.5 - 96);
     }
 }
 

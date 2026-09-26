@@ -24,6 +24,12 @@
 //! a single matrix function; getting them wrong is no longer something an example can do.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;
 const mulMat = zm.mulMat;
@@ -36,6 +42,7 @@ const clamp = zm.clamp;
 const pi = zm.pi;
 const z = @import("zimr");
 const zm = @import("zm");
+const assertf = zm.assertf;
 const ui = z.ui_real;
 const mjcf = z.mjcf;
 const d3 = z.draw3d;
@@ -2710,7 +2717,7 @@ fn poseRobot(s: *State, frame: usize) void {
         .{
             .positions = positions_robot[0..joint_count],
             .rotations = rotations_robot[0..joint_count],
-            .retargeted = retargeted[0..@min(s.robot.model.nbody, retargeted.len)],
+            .retargeted = retargeted[0..s.robot.model.nbody],
             .root_world = rootBodyWorldPosition(s, positions_robot[0..joint_count]),
             .position_pull = s.robot_position_pull,
             .previous_qpos = if (s.robot_has_previous) s.robot_previous_qpos else null,
@@ -4223,7 +4230,13 @@ fn buildRetargetedSkeleton(
     out: []Vec,
 ) void {
     const model: *const z.robot.Model = &s.robot.model;
-    const limit: usize = @min(model.nbody, out.len);
+    // ★ Checked, not clamped: a robot with more bodies than `out` holds used to lose its last
+    // bodies' targets without a word.
+    assertf(model.nbody <= out.len, @src(), "retargeted skeleton: {d} bodies, room for {d}", .{
+        model.nbody,
+        out.len,
+    });
+    const limit: usize = model.nbody;
     out[0] = .{ 0, 0, 0, 0 };
     for (1..limit) |b| {
         const parent: u32 = model.body_parent[b];

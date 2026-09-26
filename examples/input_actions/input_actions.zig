@@ -28,6 +28,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const clamp = zm.clamp;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const c = z.colors;
@@ -237,8 +238,8 @@ fn applyActions(
     const min_y: f32 = play.y;
     const max_x: f32 = play.x + play.width - size;
     const max_y: f32 = play.y + play.height - size;
-    p[0] = std.math.clamp(p[0], min_x, max_x);
-    p[1] = std.math.clamp(p[1], min_y, max_y);
+    p[0] = clamp(p[0], min_x, max_x);
+    p[1] = clamp(p[1], min_y, max_y);
     return p;
 }
 

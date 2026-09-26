@@ -88,15 +88,21 @@ fn step(s: *State) void {
             while (dy <= 1) : (dy += 1) {
                 var dx: i32 = -1;
                 while (dx <= 1) : (dx += 1) {
-                    if (dx == 0 and dy == 0) continue;
+                    if (dx == 0 and dy == 0) {
+                        continue;
+                    }
                     const nx = @as(i32, @intCast(x)) + dx;
                     const ny = @as(i32, @intCast(y)) + dy;
-                    if (nx < 0 or nx >= grid_w or ny < 0 or ny >= grid_h) continue;
-                    if (s.cur[idx(@intCast(nx), @intCast(ny))] != 0) n += 1;
+                    if (nx < 0 or nx >= grid_w or ny < 0 or ny >= grid_h) {
+                        continue;
+                    }
+                    if (s.cur[idx(@intCast(nx), @intCast(ny))] != 0) {
+                        n += 1;
+                    }
                 }
             }
-            const alive = s.cur[idx(x, y)] != 0;
-            const survives = (alive and (n == 2 or n == 3)) or (!alive and n == 3);
+            const alive: bool = s.cur[idx(x, y)] != 0;
+            const survives: bool = (alive and (n == 2 or n == 3)) or (!alive and n == 3);
             s.next[idx(x, y)] = if (survives) 1 else 0;
         }
     }

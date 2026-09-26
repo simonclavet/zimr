@@ -2558,7 +2558,7 @@ test "Basis spline produces a smooth curve (no NaNs)" {
     const p4 = Vec2{ 30, 0 };
     var t: f32 = 0;
     while (t <= 1.0) : (t += 0.1) {
-        const p = getSplinePointBasis(p1, p2, p3, p4, t);
+        const p: Vec2 = getSplinePointBasis(p1, p2, p3, p4, t);
         try expect(isFinite(p[0]) and isFinite(p[1]));
     }
 }

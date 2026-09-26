@@ -23,7 +23,7 @@
 const std = @import("std");
 const z = @import("zimr");
 const zn = @import("zn");
-const zn_train = @import("zn_train.zig");
+const zn_train = @import("zn_train");
 
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;

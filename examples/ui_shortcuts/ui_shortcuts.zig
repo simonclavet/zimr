@@ -128,7 +128,7 @@ fn update(f: *z.Frame, s: *State) void {
     const row_pad: i32 = 4;
     var i: usize = 0;
     while (i < bindings.len) : (i += 1) {
-        const bind = bindings[i];
+        const bind: Binding = bindings[i];
         const row_y: i32 = 96 + @as(i32, @intCast(i)) * (row_h + row_pad);
         const fired: bool = u.shortcut(bind.chord, bind.opts);
         if (fired) {
@@ -154,7 +154,7 @@ fn update(f: *z.Frame, s: *State) void {
 
         // Fire count on the right.
         var buf: [32]u8 = undefined;
-        const count_text = bufPrint(&buf, "fires: {d}", .{s.fires[i]}) catch "?";
+        const count_text: []const u8 = bufPrint(&buf, "fires: {d}", .{s.fires[i]}) catch "?";
         const cx: f32 = float(sw - 130);
         const cy: f32 = float(row_y + 10);
         f.gl.text(.{ cx, cy }, count_text, .{ .size = 12, .color = label_color, .font = &s.font });

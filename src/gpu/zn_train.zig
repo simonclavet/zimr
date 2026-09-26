@@ -19,6 +19,7 @@
 
 const k = @import("kompute");
 const zm = @import("zm");
+const float = zm.float;
 
 pub const config = k.Config{ .max = 4096, .workgroup = 64 };
 
@@ -132,7 +133,7 @@ pub fn loss_grad(id: u32) void {
         return;
     }
     const diff: f32 = b_act[offY() + id] - b_in[offT() + id];
-    b_dact[id] = 2.0 * diff / @as(f32, @floatFromInt(params.samples));
+    b_dact[id] = 2.0 * diff / float(params.samples);
 }
 
 /// The loss itself, for the host to read, WITH THE STEP IT BELONGS TO beside it.
@@ -159,7 +160,7 @@ pub fn loss_value(id: u32) void {
         const d: f32 = b_act[offY() + i] - b_in[offT() + i];
         acc += d * d;
     }
-    b_loss[0] = acc / @as(f32, @floatFromInt(total));
+    b_loss[0] = acc / float(total);
     // ★ `step + 1`, so that a readback of the untouched buffer — all zeros, before any
     // dispatch has landed — reads as "no step yet" rather than as step 0 with a loss of 0. On
     // the device that zero readback arrived first and claimed step 0's slot; the real step-0

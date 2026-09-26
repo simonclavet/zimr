@@ -69,3 +69,26 @@ pub fn backdrop(
 pub fn center(w: f32, h: f32) Vec2 {
     return .{ w * 0.5, h * 0.5 };
 }
+
+/// A panic handler that says what happened, for examples to install in one line.
+///
+/// ---- WHY EVERY EXAMPLE SHOULD HAVE THIS ----
+///
+/// A Zig safety check in a wasm build traps as a bare `RuntimeError: unreachable`: no message,
+/// no stack, no line. **Six turns of debugging in `drecon2.md` went to bisecting a panic that
+/// named itself the moment a handler was installed** - an `@intCast` overflow in
+/// `robot.addContactRows`, found in one build after days of elimination.
+///
+/// An example is the ROOT MODULE of its own wasm binary, so `pub const panic` in the example is
+/// the handler Zig uses. That means this cannot live here as a declaration - each example needs
+/// one line:
+///
+///     pub const panic = std.debug.FullPanic(common.reportPanic);
+///
+/// ** THE MESSAGE GOES TO THE BROWSER CONSOLE, not to the page. A panic has already happened,
+/// and the drawing path is exactly what cannot be trusted to report it.
+pub fn reportPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    _ = first_trace_addr;
+    z.web.dom.log(.err, msg);
+    @trap();
+}

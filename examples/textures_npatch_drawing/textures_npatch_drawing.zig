@@ -13,6 +13,7 @@ const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
+const float = zm.float;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -55,8 +56,8 @@ fn makeNinePatch(gpa: Allocator) !z.Image {
                 if (ex < b and ey < b) {
                     const cx: f32 = if (x < b) 7.0 else @floatFromInt(w - 8);
                     const cy: f32 = if (y < b) 7.0 else @floatFromInt(h - 8);
-                    const dx: f32 = @as(f32, @floatFromInt(x)) - cx;
-                    const dy: f32 = @as(f32, @floatFromInt(y)) - cy;
+                    const dx: f32 = float(x) - cx;
+                    const dy: f32 = float(y) - cy;
                     if (dx * dx + dy * dy < 16.0) {
                         col = .{ .r = 250, .g = 240, .b = 200, .a = 255 }; // accent dot
                     }

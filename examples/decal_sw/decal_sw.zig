@@ -187,7 +187,7 @@ fn makeDecalPixels(gpa: Allocator) ![]u8 {
                 const band: f32 = @mod(r * 5.0, 1.0);
                 col = if (band < 0.5) .{ 230, 60, 60 } else .{ 255, 220, 60 };
                 if (r > 0.55) {
-                    a = @intFromFloat(@round(255.0 * (0.72 - r) / 0.17));
+                    a = @round(255.0 * (0.72 - r) / 0.17);
                 }
             }
             const i: usize = (y * n + x) * 4;

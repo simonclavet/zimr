@@ -83,7 +83,7 @@ const corner_image: [corner_rows * corner_cols]Color = blk: {
                 },
                 .u = ubo,
             };
-            const out = shader.shaderMain(io);
+            const out: shader.Out = shader.shaderMain(io);
             img[py * corner_cols + px] = Color.fromFloats(out.out_color[0], out.out_color[1], out.out_color[2], 1.0);
         }
     }

@@ -1,0 +1,3 @@
+# EMPTY. Every violation the ratchet was grandfathering has been fixed.
+# Regenerate only if a deliberate backlog is ever accepted again:
+#   zimrlint --baseline tools/lint_baseline.tsv --write-baseline <files...>

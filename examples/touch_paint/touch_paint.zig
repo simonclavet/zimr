@@ -103,7 +103,7 @@ fn update(f: *z.Frame, state: *State) void {
         // wgpu touch API is slot-based (no stable getTouchPointId); use the
         // slot index as the trail id. Trails follow slots, not fingers across sessions.
         const id: i32 = i;
-        const pos = z.getTouchPosition(f.input, i);
+        const pos: Vec2 = z.getTouchPosition(f.input, i);
         if (trailFor(state, id)) |t| {
             pushPoint(t, .{ pos[0], pos[1] });
         }
@@ -145,7 +145,7 @@ fn update(f: *z.Frame, state: *State) void {
             const age: usize = (trail_len + t.head - 1 - k) % trail_len;
             const idx_in_buffer: usize = (trail_len + t.head - 1 - k) % trail_len;
             _ = age;
-            const p = t.points[idx_in_buffer];
+            const p: Vec2 = t.points[idx_in_buffer];
             const fade: f32 = 1.0 - float(k) / float(t.count);
             const radius: f32 = 8.0 * fade;
             f.gl.circle(p, radius, .{ .color = col, .segments = 16 });

@@ -18,6 +18,18 @@ const k = @import("kompute");
 const zm = @import("zm");
 const sinTurns = zm.sinTurns;
 const cosTurns = zm.cosTurns;
+const exp = zm.exp;
+const exp2 = zm.exp2;
+const nan = zm.nan;
+const abs = zm.abs;
+const floor = zm.floor;
+const ceil = zm.ceil;
+const trunc = zm.trunc;
+const round = zm.round;
+const sinRad = zm.sinRad;
+const cosRad = zm.cosRad;
+const clamp = zm.clamp;
+const float = zm.float;
 
 // A KERNEL MAY ONLY CALL A `zm` FUNCTION THAT COMPUTES THE SAME EXPRESSION ON BOTH BACKENDS
 //
@@ -46,6 +58,21 @@ comptime {
         // `nan(T)` is a comptime `@bitCast` of a constant per float width - no branch, no call,
         // nothing that could differ between backends. Read before adding, same as `exp2`.
          "nan",
+        // `clamp(v, lo, hi)` is `min(hi, max(lo, v))`, and BOTH of those were read in zimrmath:
+        // neither contains an `is_gpu` branch at all. Their vector path is a pair of `@select`s
+        // for NaN handling - branch-free by construction - and their scalar path is the bare
+        // `@min`/`@max` builtin. Read before adding, same as the two above.
+        //
+        // Two things this scan does that are worth knowing: it catches the ALIAS line
+        // (`const clamp = ...;`) as well as call sites, and it is TEXTUAL - so naming the
+        // qualified form of a function in a comment trips it too, which is why the sentence
+        // above says 'in zimrmath' instead.
+          "clamp",
+        // `float(x)` is a comptime type-check that the argument is an integer, then a bare
+        // `@floatFromInt(x)`. No branch, no call, nothing backend-dependent. It exists so the
+        // conversion has a known result type, which `@floatFromInt` alone does not get through
+        // a `*` or `/` peer - the compiler rejects that outright.
+        "float",
     };
     // Known to branch on `is_gpu`, and deliberately allowed: their two routes are measured on the
     // device and agree inside their rows' bars - `sin` 1.8e-7, `cos` 1.9e-7, `tanh` and `sigmoid`
@@ -69,7 +96,9 @@ comptime {
             const c: u8 = source[stop];
             const wordy: bool = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
                 (c >= '0' and c <= '9') or c == '_';
-            if (!wordy) break;
+            if (!wordy) {
+                break;
+            }
         }
         const name: []const u8 = source[i + 3 .. stop];
         if (name.len == 0) {
@@ -80,18 +109,26 @@ comptime {
             if (ok.len == name.len) {
                 var same: bool = true;
                 for (ok, name) |a, b| {
-                    if (a != b) same = false;
+                    if (a != b) {
+                        same = false;
+                    }
                 }
-                if (same) allowed = true;
+                if (same) {
+                    allowed = true;
+                }
             }
         }
         for (measured_branching) |ok| {
             if (ok.len == name.len) {
                 var same: bool = true;
                 for (ok, name) |a, b| {
-                    if (a != b) same = false;
+                    if (a != b) {
+                        same = false;
+                    }
                 }
-                if (same) allowed = true;
+                if (same) {
+                    allowed = true;
+                }
             }
         }
         if (!allowed) {
@@ -190,7 +227,7 @@ pub fn expf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.exp(bx[id]);
+    bout[id] = exp(bx[id]);
 }
 
 /// `2^x`, which is not the same code path as `exp(x * ln 2)`.
@@ -201,7 +238,7 @@ pub fn exp2f(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.exp2(bx[id]);
+    bout[id] = exp2(bx[id]);
 }
 
 /// `a * gain + offset`, the one affine that replaced znum's four scalar variants.
@@ -324,14 +361,28 @@ pub fn diff_forward(id: u32) void {
     // bar of zero. It was the one red row in an otherwise green 105.
     //
     // The field is f32, so NaN is the value that matches.
-    bout[id] = if (id == 0) zm.nan(f32) else bx[id] - bx[id - 1];
+    // Element 0 has no predecessor, so the first difference is undefined rather than zero -
+    // NaN says that, where 0 would silently read as 'no change'.
+    // ---- THE HOLE IS PER ROW, NOT ONE PER BUFFER ----
+    //
+    // `zn.diff` steps over the LAST AXIS, so on a rank-2 tensor every row's column 0 has no
+    // predecessor and every row gets a NaN. This kernel used to test `id == 0` - one hole in the
+    // whole buffer - which on the sweep's 64x64 field meant 63 rows disagreed with the CPU in
+    // two ways at once: a finite value where NaN belonged, AND a difference taken across the row
+    // boundary against the previous row's last element.
+    //
+    // It survived because the kernel could not compile for a device until today, so the row had
+    // never actually run. The first device run reported `inf` - a finiteness mismatch - and the
+    // driver was blamed before the arithmetic was.
+    const col: u32 = if (params.cols == 0) id else id % params.cols;
+    bout[id] = if (col == 0) nan(f32) else bx[id] - bx[id - 1];
 }
 
 pub fn absf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.abs(bx[id]);
+    bout[id] = abs(bx[id]);
 }
 
 pub fn neg(id: u32) void {
@@ -546,7 +597,7 @@ pub fn sum_all_tiled(id: u32) void {
         const in_range: u32 = @intFromBool(idx < params.count);
         // Clamped rather than guarded: an out-of-range lane reads element 0 and multiplies it
         // by zero. Strided so consecutive lanes touch consecutive addresses — a coalesced walk.
-        acc += bx[idx * in_range] * @as(f32, @floatFromInt(in_range));
+        acc += bx[idx * in_range] * float(in_range);
     }
     partial[lid] = acc;
     k.workgroupBarrier();
@@ -581,7 +632,7 @@ pub fn mean_all(id: u32) void {
     while (i < params.count) : (i += 1) {
         total += bx[i];
     }
-    bout[0] = total / @as(f32, @floatFromInt(params.count));
+    bout[0] = total / float(params.count);
 }
 
 /// `out[0] = largest element`. Matches `zn.maxAll`.
@@ -623,14 +674,14 @@ pub fn floorf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.floor(bx[id]);
+    bout[id] = floor(bx[id]);
 }
 
 pub fn ceilf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.ceil(bx[id]);
+    bout[id] = ceil(bx[id]);
 }
 
 /// Zero maps to zero. Written as two comparisons rather than `sign(x)` so the convention is
@@ -668,35 +719,38 @@ pub fn truncf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.trunc(bx[id]);
+    bout[id] = trunc(bx[id]);
 }
 
 pub fn roundf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.round(bx[id]);
+    bout[id] = round(bx[id]);
 }
 
 pub fn sinf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.sinRad(bx[id]);
+    bout[id] = sinRad(bx[id]);
 }
 
 pub fn cosf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = zm.cosRad(bx[id]);
+    bout[id] = cosRad(bx[id]);
 }
 
 pub fn clampf(id: u32) void {
     if (id >= params.count) {
         return;
     }
-    bout[id] = @min(@max(bx[id], params.lo), params.hi);
+    // `@min(@max(v, lo), hi)` IS `clamp`'s definition exactly - lower bound first, then
+    // upper - so unlike the scroll and impulse clamps elsewhere this substitution needs no
+    // argument about lo <= hi.
+    bout[id] = clamp(bx[id], params.lo, params.hi);
 }
 
 /// Guarded above 20 at the SAME threshold as `zn.softplus`: `@exp(30)` is finite in f32 but
@@ -782,7 +836,7 @@ pub fn mean_axis0(id: u32) void {
     while (r < rows) : (r += 1) {
         total += bx[r * params.cols + id];
     }
-    bout[id] = total / @as(f32, @floatFromInt(rows));
+    bout[id] = total / float(rows);
 }
 
 /// `out[c] = row index of the largest x[r][c]`, written as a float. Ties to the first, NaN
@@ -879,7 +933,7 @@ pub fn avg_pool2d(id: u32) void {
             total += bx[(oy * params.pool + i) * params.cols + ox * params.pool + j];
         }
     }
-    bout[id] = total / @as(f32, @floatFromInt(params.pool * params.pool));
+    bout[id] = total / float(params.pool * params.pool);
 }
 
 /// `log(x) / log(2)`: the SPIR-V backend has no `log2` or `log10` intrinsic, so both are the
@@ -1010,7 +1064,38 @@ pub fn cos_turns(id: u32) void {
 // a line, and that realignment silently broke an append anchor three times during the
 // port. A vertical list is stable under formatting, so adding a kernel is a one-line
 // diff that no tooling will reflow.
+/// A NaN written straight to the output, with no branch and no arithmetic after it.
+///
+/// ---- WHY THIS KERNEL EXISTS: TO SPLIT ONE QUESTION INTO TWO ----
+///
+/// The `diff` row returns a FINITE value on device where the CPU returns NaN. The transpiled
+/// WGSL was read end to end and is correct at every step: the branch selects the NaN path, and
+/// the helper routes the bit pattern through a runtime `var` so the constant evaluator cannot
+/// fold it. So the value is lost somewhere at or below the driver - but "somewhere" spans a
+/// function call chain, a phi, a branch and a buffer store.
+///
+/// This kernel removes all of them. If it ALSO returns finite, the bitcast itself does not
+/// survive on this hardware and the answer is a driver assumption about NaN. If it returns NaN,
+/// then the bitcast is fine and something between it and `diff`'s store destroys the value -
+/// and the next bisection step is the function chain.
+///
+/// One bit of information, and it is the bit that decides which half to look in.
+pub fn nan_direct(id: u32) void {
+    if (id >= params.count) {
+        return;
+    }
+    // NO BRANCH. The first attempt wrote `if (x == x) nan else nan` to keep the input live,
+    // and the transpiler faithfully emitted the branch and the phi - which are two of the three
+    // things this kernel exists to eliminate. One call, one store, nothing else.
+    //
+    // The value being a constant is not a problem here: `nan(f32)` still reaches the device
+    // through `nonfinite_<bits>()`, which holds the pattern in a runtime `var` precisely so it
+    // cannot be folded. If the driver folds it anyway, that IS the finding.
+    bout[id] = nan(f32);
+}
+
 pub const kernels = [_][:0]const u8{
+    "nan_direct",
     "relu",
     "sigmoid",
     "tanhf",

@@ -4,85 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>zimr — webgpu ports tutorial</title>
-<style>
-:root{
-  --main-font:"Courier New",Courier,monospace;
-  --header-font:"Georgia","Times New Roman",serif;
-  --bg-page:#1f140e; --bg-paper:#332218; --bg-block:#261912;
-  --text-color:#f0e6d2; --text-muted:#a89684; --accent-color:#d35f33;
-  --border-color:#090604; --shadow-color:#000000;
-}
-*{box-sizing:border-box;}
-body{
-  background-color:var(--bg-page);
-  background-image:radial-gradient(var(--border-color) 2px,transparent 2px);
-  background-size:16px 16px;
-  color:var(--text-color); font-family:var(--main-font); line-height:1.6;
-  margin:0; padding:40px 20px; display:flex; justify-content:center;
-}
-.blog-container{
-  background-color:var(--bg-paper); max-width:860px; width:100%; padding:40px;
-  border:4px solid var(--border-color); box-shadow:12px 12px 0px var(--shadow-color);
-}
-h1.title{
-  font-family:var(--header-font); font-size:2.8rem; line-height:1.1;
-  text-transform:lowercase; border-bottom:6px double var(--border-color);
-  padding-bottom:10px; margin:0 0 10px 0; letter-spacing:-1px;
-}
-h2.subtitle{
-  font-family:var(--main-font); font-size:1.05rem; font-style:italic;
-  font-weight:normal; margin:0 0 20px 0; color:var(--accent-color); line-height:1.4;
-}
-nav.toc{
-  margin:0 0 30px 0; padding:14px 18px; border:2px solid var(--border-color);
-  background-color:var(--bg-block); box-shadow:4px 4px 0 var(--shadow-color);
-}
-nav.toc strong{
-  font-family:var(--header-font); color:var(--accent-color);
-  text-transform:uppercase; letter-spacing:1px; display:block; margin-bottom:8px;
-}
-nav.toc ol{margin:0; padding-left:22px;}
-nav.toc li{margin:3px 0;}
-h3{
-  font-family:var(--header-font); font-size:1.45rem; background-color:var(--border-color);
-  color:var(--text-color); display:inline-block; padding:4px 12px; margin:46px 0 15px 0;
-  border:2px solid var(--text-color); scroll-margin-top:20px;
-}
-h4{
-  font-family:var(--header-font); font-size:1.12rem; text-decoration:underline;
-  text-decoration-color:var(--accent-color); text-underline-offset:4px;
-  text-transform:lowercase; margin:25px 0 10px 0;
-}
-p{font-size:1rem; margin-bottom:18px;}
-a{color:var(--accent-color); text-decoration:underline; font-weight:bold;}
-a:hover{background-color:var(--accent-color); color:var(--bg-paper); text-decoration:none;}
-code{
-  background-color:var(--bg-block); border:1px solid var(--border-color);
-  padding:1px 5px; font-size:0.92em; color:var(--text-color);
-}
-pre{
-  background-color:var(--bg-block); border:2px solid var(--border-color);
-  border-left:6px solid var(--accent-color); padding:15px 18px; margin:18px 0;
-  overflow-x:auto; box-shadow:4px 4px 0px var(--shadow-color);
-  font-size:0.86rem; line-height:1.5;
-}
-pre code{background:none; border:none; padding:0; font-size:inherit; white-space:pre;}
-blockquote{
-  border-left:6px solid var(--accent-color); margin:24px 0; padding:14px 20px;
-  background-color:var(--bg-block); box-shadow:4px 4px 0px var(--shadow-color);
-}
-.bug{border-color:#e0a060; border-left-color:#e0a060;}
-.bug strong{color:#e0a060; font-family:var(--header-font); text-transform:uppercase; letter-spacing:1px;}
-ul{border:2px dashed var(--accent-color); padding:16px 20px 16px 40px;}
-li{margin:5px 0;}
-/* zig syntax highlight tokens */
-code.zig .c{color:var(--text-muted); font-style:italic;}
-code.zig .s{color:#9cb380;}
-code.zig .k{color:var(--accent-color); font-weight:bold;}
-code.zig .b{color:#e0a060;}
-code.zig .t{color:#8fb0c0;}
-code.zig .n{color:#cf8f6f;}
-</style>
+<!--docfmt:style-->
 </head>
 <body>
 <div class="blog-container">
@@ -128,7 +50,7 @@ pub fn main() !void {
 <h3 id="compute-smoke">1 · wgpu_compute_smoke</h3>
 <p>The simplest <code>z.Compute</code> demo: one kernel, written once, that runs on either the CPU or the GPU. The kernel is authored in the <strong>kompute</strong> DSL — plain Zig that doubles as a WGSL compute shader. <code>z.Compute(M)</code> wraps it: <code>initGpu</code> builds the storage buffer + pipeline; <code>upload</code> / <code>run</code> / <code>readLatest</code> drive it; the same kernel also runs as a CPU loop. This demo doubles <code>[1,2,3,4,5]</code> on the GPU and verifies the result.</p>
 <h4>double_it.zig — the kernel (kompute DSL)</h4>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const k</code><span class="faint"> · 36 lines</span></summary><pre><code class="zig">
 //! double_it.zig — the simplest compute kernel: out[i] = in[i] * 2, written in
 //! the kompute DSL form. The author writes only config + Buffers + Params + the
 //! kernel fn; `kompute` generates the g-namespace (extern storage/uniform on GPU,
@@ -163,9 +85,9 @@ pub fn double(c: k.Ctx(@This())) void {
 comptime {
     k.installKernel(@This(), "double");
 }
-</code></pre>
+</code></pre></details>
 <h4>wgpu_compute_smoke.zig — the host</h4>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 120 lines</span></summary><pre><code class="zig">
 //! wgpu_compute_smoke — the GPU compute round-trip, now driven by `z.Compute(M)`
 //! instead of hand-wired wgpu calls. Uploads [0,1,2,...,N-1], runs the `double_it`
 //! kernel (out[i] = in[i]*2) on the GPU, reads it back, draws it as bars (a correct
@@ -284,11 +206,11 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="compute-particles">2 · wgpu_compute_particles</h3>
 <p>A particle sim that flips its <em>compute</em> backend live — GPU dispatch vs. CPU loop — every few seconds, carrying the full sim state across the flip. The GPU path is <strong>zero-copy</strong>: <code>z.DrawPoints</code> reads each particle's position straight from the storage buffer the kernel wrote (a vertex shader indexing <code>positions[instance_index]</code>), so nothing reads back to the CPU. The CPU path computes in host memory, then uploads its result into that same buffer and draws it the same way. (Currently capped at 8192 particles — a larger count tripped the wasm stack via a 1&nbsp;MB inline readback mirror inside <code>Compute</code>; the fix is to heap-allocate that mirror.)</p>
 <h4>particle_step.zig — the kernel (gravity + unit-box bounce)</h4>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const k</code><span class="faint"> · 63 lines</span></summary><pre><code class="zig">
 //! particle_step.zig — one compute kernel: advance a particle under gravity and
 //! bounce it off the unit-box walls. Pure GATHER (each id writes only its own
 //! pos/vel), so it's identical on CPU and GPU and trivially parallel. Positions
@@ -350,9 +272,9 @@ pub fn step(c: k.Ctx(@This())) void {
 comptime {
     k.installKernel(@This(), "step");
 }
-</code></pre>
+</code></pre></details>
 <h4>wgpu_compute_particles.zig — the host (CPU/GPU toggle)</h4>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 163 lines</span></summary><pre><code class="zig">
 //! wgpu_compute_particles — 65536 particles driven by `z.Compute`, demonstrating the
 //! CPU/GPU compute toggle on the zero-copy render path. The SAME kernel auto-flips
 //! between a GPU dispatch and a CPU loop every few seconds, with the live state carried
@@ -514,10 +436,10 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="double-pendulum">3 · wgpu_double_pendulum</h3>
 <p>The classic chaotic double pendulum. Two pendulums start 1e-3&nbsp;rad apart in θ₂ and diverge into completely different paths — sensitive dependence on initial conditions. The physics is the standard Lagrangian solution (both rods as point masses) integrated with velocity-Verlet substeps. Each leaves a fading trail held in a <strong>CPU ring buffer</strong> of recent tip positions (the GL original used a render texture, which the wgpu backend doesn't expose yet). Note the layout is derived from the live viewport every frame, and the render scale is decoupled from the physics units.</p>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 199 lines</span></summary><pre><code class="zig">
 //! wgpu_double_pendulum — the classic chaotic double pendulum, ported to WebGPU.
 //! Two pendulums start 1e-3 rad apart in θ₂; identical at first, they diverge into
 //! completely different trajectories — the canonical demo of sensitive dependence on
@@ -715,10 +637,10 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawText(f.gl, s.font, "identical, then chaos", 12, 34, 14, c.init(138, 147, 168, 255));
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="starfield">4 · wgpu_starfield</h3>
 <p>A fly-through-space starfield. Each star is a point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a short streak (<code>drawLineEx</code>) from where it was a moment ago to where it is now — the warp-speed look. Closer stars are brighter and thicker; stars that pass the camera respawn at the back.</p>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 113 lines</span></summary><pre><code class="zig">
 //! wgpu_starfield — a fly-through-space starfield ported to WebGPU. Stars stream
 //! outward from the screen centre as motion streaks (the "warp speed" look): each is a
 //! point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a
@@ -830,10 +752,10 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="kaleidoscope">5 · wgpu_kaleidoscope</h3>
 <p>Symmetric trail art. An auto-driven brush follows a Lissajous path; each new segment is mirrored across N rotational axes (plus an X reflection) about the screen centre, wrapping the stroke into a kaleidoscope. The centring uses <code>beginMode2D</code> — the 2D camera — so this doubles as a camera-on-wgpu check. A short ring buffer of brush points gives the flowing, fading rainbow trail.</p>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 102 lines</span></summary><pre><code class="zig">
 //! wgpu_kaleidoscope — symmetric trail art ported to WebGPU. A brush follows an
 //! auto-driven Lissajous path; every frame the new segment is mirrored across N
 //! rotational axes (plus an X-axis reflection) about the screen centre, so the stroke
@@ -934,10 +856,10 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawText(f.gl, s.font, "kaleidoscope: auto-driven symmetric trail", 12, 12, 16, c.init(210, 214, 224, 220));
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="particles">6 · wgpu_simple_particles</h3>
 <p>A three-type particle emitter over a ring buffer: water (blue, falls under gravity), smoke (grey, rises + grows + fades), and fire (yellow→red, rises with a flicker wobble + shrinks). The active type cycles every few seconds. The ring buffer's head/tail indices are the emit/retire cursors.</p>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 176 lines</span></summary><pre><code class="zig">
 //! wgpu_simple_particles — a three-type particle emitter ported to WebGPU. A ring
 //! buffer of particles is emitted from a centre emitter; the active type cycles every
 //! few seconds: water (blue, falls under gravity), smoke (grey, rises, grows, fades),
@@ -1112,10 +1034,10 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawText(f.gl, s.font, label, 12, 12, 16, c.init(210, 214, 224, 220));
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="sine-cosine">7 · wgpu_math_sine_cosine</h3>
 <p>A unit-circle visualisation of sine &amp; cosine — and the showcase for the three new line primitives. A point sweeps the circle; the right triangle's legs are cos (blue) and sin (red). The swept angle is a <code>drawCircleSectorLines</code> arc, the axes are <code>drawLineDashed</code>, and the two wave traces below are <code>drawSplineLinear</code> polylines with moving markers. All three primitives are just <code>drawLineEx</code> loops under the hood.</p>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 104 lines</span></summary><pre><code class="zig">
 //! wgpu_math_sine_cosine — unit-circle visualisation of sine &amp; cosine, ported to WebGPU.
 //! A point sweeps the unit circle (auto-advancing angle); the right triangle's legs ARE
 //! cos (horizontal, blue) and sin (vertical, red). A sector arc marks the swept angle,
@@ -1218,10 +1140,10 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawText(f.gl, s.font, lbl, 12, 12, 16, c.init(210, 214, 224, 230));
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="bezier">8 · wgpu_lines_bezier</h3>
 <p>An animated cubic Bézier. Four control points drift along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn with <code>drawSplineLinear</code>, the control polygon is a dashed line, and the control points are dots.</p>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 105 lines</span></summary><pre><code class="zig">
 //! wgpu_lines_bezier — a cubic Bézier curve ported to WebGPU. Four control points drift
 //! along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn
 //! via `drawSplineLinear`, with the control polygon as a dashed line and the control
@@ -1325,10 +1247,10 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawText(f.gl, s.font, "cubic bezier (animated control points)", 12, 12, 16, c.init(210, 214, 224, 220));
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="camera2d">9 · wgpu_camera2d</h3>
 <p>The full Camera2D transform. A fixed world scene (grid + landmark shapes + origin marker) is viewed through a camera whose target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising offset / target / zoom / rotation via <code>beginMode2D</code>. The world is drawn in world coordinates; the camera does the rest.</p>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 84 lines</span></summary><pre><code class="zig">
 //! wgpu_camera2d — the Camera2D pan / zoom / rotate transform, ported to WebGPU. A world
 //! scene (grid + landmark shapes + origin marker) is viewed through a Camera2D whose
 //! target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising
@@ -1411,7 +1333,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawText(f.gl, s.font, lbl, 12, 12, 16, c.init(210, 214, 224, 230));
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3 id="boids">10 · wgpu_ecs_boids</h3>
 <p>Reynolds flocking on the zimr ECS — the example that proves the whole ECS subsystem (<code>Registry</code>, archetypes, <code>iterator</code>, <code>forEach</code>) runs on the wgpu backend. ~160 boids live in an archetype of Pos + Vel components. Each frame: a snapshot via <code>iterator</code> feeds a steering <code>forEach</code> (separation / alignment / cohesion), then an integrate-and-wrap <code>forEach</code>, then a render <code>iterator</code>.</p>
 <blockquote class="bug">
@@ -1419,7 +1341,7 @@ fn update(f: *z.Frame, s: *State) void {
 <p>The boids clump into an arc in the <em>top-left corner</em> instead of spreading out and flocking. Confirmed working: the viewport is valid (the HUD reads e.g. <code>343x261</code>, not <code>0x0</code>), GPU validation is clean, 60–120&nbsp;fps. Already tried: the original's tuned params (<code>separation_factor = 1.4</code>); a one-time <code>redistribute</code> of positions across the viewport on the first valid frame; viewport-relative toroidal wrap.</p>
 <p>Leading suspects: <strong>(a)</strong> the <code>redistribute</code> writes through an <code>iterator</code> view (<code>view.p.* = ...</code>) — if an iterator view isn't a writable pointer into chunk storage the way a <code>forEach</code> component pointer is, the redistribute is a silent no-op and the boids stay where they spawned. <strong>(b)</strong> <code>initState</code> spawns with <code>@max(64, f.window.widthf())</code>; since <code>f.window</code> is 0 at init, that's a 64×64 top-left box — exactly where they're stuck. <strong>(c)</strong> Pos and Vel are both <code>z.Vec2</code>, so the matcher distinguishes them by archetype field order — worth checking p/v aren't swapped in some query. The full code is below.</p>
 </blockquote>
-<pre><code class="zig">
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 247 lines</span></summary><pre><code class="zig">
 //! wgpu_ecs_boids — Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live
 //! in an archetype with Pos + Vel components; each frame three passes run the classic
 //! rules — a snapshot (via `iterator`) feeds a steering `forEach`
@@ -1665,29 +1587,9 @@ fn update(f: *z.Frame, s: *State) void {
     z.drawText(f.gl, s.font, lbl, 12, 12, 16, c.init(210, 214, 224, 220));
     z.endDrawing(f.gl);
 }
-</code></pre>
+</code></pre></details>
 <h3>highlighter</h3>
 <p>This page colours Zig client-side with a tiny single-pass tokeniser (comments, strings, keywords, <code>@builtins</code>, primitive types, numbers) — no external dependency, so it renders the same offline.</p>
-<script>
-function highlightZig(s){
-  return s.replace(/(\/\/[^\n]*)|("(?:\\.|[^"\\])*")|('(?:\\.|[^'\\])*')|\b(pub|const|var|fn|return|if|else|while|for|switch|struct|enum|union|try|catch|defer|errdefer|comptime|inline|and|or|orelse|break|continue|unreachable|undefined|null|true|false|error|test|extern|export|align|callconv|usingnamespace)\b|(@[A-Za-z_][A-Za-z0-9_]*)|\b(f16|f32|f64|i8|i16|i32|i64|u8|u16|u32|u64|usize|isize|bool|void|anytype|type|anyopaque|comptime_int|comptime_float)\b|\b(0x[0-9a-fA-F_]+|[0-9][0-9_]*\.?[0-9_]*(?:[eE][+-]?[0-9]+)?)\b/g,
-  function(m,c,st,ch,k,b,t,n){
-    if(c)return '<span class="c">'+c+'</span>';
-    if(st)return '<span class="s">'+st+'</span>';
-    if(ch)return '<span class="s">'+ch+'</span>';
-    if(k)return '<span class="k">'+k+'</span>';
-    if(b)return '<span class="b">'+b+'</span>';
-    if(t)return '<span class="t">'+t+'</span>';
-    if(n)return '<span class="n">'+n+'</span>';
-    return m;
-  });
-}
-document.addEventListener('DOMContentLoaded',function(){
-  document.querySelectorAll('pre code.zig').forEach(function(el){
-    el.innerHTML = highlightZig(el.innerHTML);
-  });
-});
-</script>
 </div>
 </body>
 </html>

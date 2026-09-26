@@ -13,6 +13,12 @@
 //! `zig build wgpu-zimrphysics-demo-standalone`.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
@@ -1120,7 +1126,11 @@ fn sceneGear(world: *zp.World, gpa: Allocator, state: *State) !void {
     var i: u32 = 0;
     while (i < radii.len) : (i += 1) {
         const r: f32 = radii[i];
-        if (i > 0) cx += prev_r + r; // place so the disks mesh (centres = sum of radii)
+        // Place so the disks mesh: adjacent centres are exactly the sum of the two radii, so
+        // they touch without overlapping. The first disk has no predecessor to offset from.
+        if (i > 0) {
+            cx += prev_r + r;
+        }
         const disk: zp.ShapeId = try world.shapes.add(gpa, .{
             .cylinder = .{ .half_height = 0.18, .radius = r, .convex_radius = 0.03 },
         });

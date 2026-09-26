@@ -9,6 +9,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const pi = zm.pi;
 const float = zm.float;
 const Color = zm.Color;
 const c = Color;
@@ -65,7 +66,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 18);
     s.* = .{
         .tex = try loadStackSheet(gpa, f.gl, booth_png),
-        .cam = .{ .target = vec(0, 0, 0), .distance = 9.0, .pitch = 1.0, .yaw = -0.6 + std.math.pi },
+        .cam = .{ .target = vec(0, 0, 0), .distance = 9.0, .pitch = 1.0, .yaw = -0.6 + pi },
         .font = font,
         .ui_host = z.UiHost.init(gpa, font),
     };

@@ -82,7 +82,9 @@ test "stack scene: boxes rest without interpenetrating" {
                 const y: f32 = world.bodies.data[ids[k].index()].com_pos[1];
                 const y_above: f32 = world.bodies.data[ids[k + 1].index()].com_pos[1];
                 const pen: f32 = (2.0 * half_y) - (y_above - y); // >0 = interpenetrating
-                if (pen > max_pen) max_pen = pen;
+                if (pen > max_pen) {
+                    max_pen = pen;
+                }
                 try expect(y_above > y); // never sink past each other
             }
         }

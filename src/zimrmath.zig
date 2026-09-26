@@ -303,8 +303,43 @@ pub const euler = 2.71828182845904523536028747135266249775724709369995;
 /// Archimedes' constant (pi)
 pub const pi = 3.14159265358979323846264338327950288419716939937510;
 
-/// Phi or Golden ratio constant (Phi) = (1 + sqrt(5))/2
-pub const phi = 1.6180339887498948482045868343656381177203091798057628621;
+/// The golden ratio, (1 + sqrt(5))/2.
+///
+/// ---- WHY NOT `phi` ----
+///
+/// It was `phi` until this rename, and the short name cost more than it saved. In THIS codebase
+/// `phi` already means two other things, both of them used far more than the constant ever was:
+///
+///   - an SSA phi node, dozens of times through `src/spv2wgsl.zig` (`UOp.phi`, `Op.Phi`,
+///     `phi_id`, and a local literally called `phi`);
+///   - the azimuthal angle of spherical coordinates - the standard theta/phi/radius convention -
+///     in `examples/point_rendering` and `examples/zimrphysics_demo`.
+///
+/// The golden ratio had ZERO arithmetic call sites in the whole tree. So the one meaning nobody
+/// used was holding the name, and holding it hard: `phi` sat in zimrlint's `reserved-math-names`
+/// list, which made every angle named `phi` a lint violation. Three were grandfathered in the
+/// baseline - two in `zimrphysics_demo`, one in `point_rendering` - and all three were angles.
+/// Dropping `phi` from that list cleared every one of them.
+///
+/// The failure mode was the bad kind, too. `zimrphysics_demo` computes
+/// `quatFromAxisAngle(vec(0, 1, 0), -(phi + pi / 2.0))`, which is correct only because a local
+/// shadows the constant. Delete that local and it still COMPILES - as 1.618 + pi/2, a
+/// plausible-looking angle that is silently wrong. A name should fail loudly when it collides.
+pub const golden_ratio = 1.6180339887498948482045868343656381177203091798057628621;
+
+/// The old spelling. NOT a `pub const ... = @compileError(...)`.
+///
+/// That was the first attempt and it took the whole test gate down: `src/tests.zig` runs
+/// `std.testing.refAllDecls(zm)`, which references every PUB declaration, so a pub
+/// `@compileError` fires the moment the tests are compiled rather than when someone writes
+/// `zm.phi`. This file already learned that once - see the note on `saturate` below - and the
+/// fix is the same: a PRIVATE stub is invisible to `refAllDecls` (which only sees pub decls via
+/// `@typeInfo`) while staying visible to a human reading the file, and `zm.phi` now fails with
+/// "not marked pub" and lands the reader right here.
+///
+/// USE `zm.golden_ratio`. `phi` is free again for SSA phi nodes and for the azimuthal angle of
+/// spherical coordinates, which is what it means everywhere else in this tree.
+fn phi() void {} // lint:off unused-global: reference-pinned discoverability stub
 
 /// Circle constant (tau)
 pub const tau = 2 * pi;
@@ -549,9 +584,9 @@ test "zm.degFromRad" {
 }
 /// Positive infinity of float type `T`.
 pub fn inf(comptime T: type) T {
-    return switch (T) {
-        f32 => @bitCast(@as(u32, 0x7F80_0000)),
-        f64 => @bitCast(@as(u64, 0x7FF0_0000_0000_0000)),
+    return switch (FloatScalar(T)) {
+        f32 => splatTo(T, @bitCast(@as(u32, 0x7F80_0000))),
+        f64 => splatTo(T, @bitCast(@as(u64, 0x7FF0_0000_0000_0000))),
         else => @compileError("zm.inf: unsupported float type"),
     };
 }
@@ -795,19 +830,41 @@ pub fn ceilPowerOfTwo(comptime T: type, value: T) error{Overflow}!T {
     }
     return @as(T, @intCast(x));
 }
-/// Quiet NaN of float type `T`.
+/// The scalar behind a float type, whether it is already scalar or a vector of them.
+///
+/// The five constant-returning helpers below (`nan`, `inf`, `floatMax`, `floatMin`, `floatEps`)
+/// take a TYPE rather than a value, so `perLane` - which maps over a value - cannot help them.
+/// Before this existed they answered `@compileError` for every vector type, which meant the one
+/// place they are most needed said no: a shader's working type is `@Vector(4, f32)`, and
+/// `zm.floatEps(@Vector(4, f32))` is exactly what a per-lane tolerance wants.
+fn FloatScalar(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .vector => |v| v.child,
+        else => T,
+    };
+}
+
+/// Broadcast a scalar constant to `T`, which may be a vector type.
+fn splatTo(comptime T: type, comptime value: FloatScalar(T)) T {
+    return switch (@typeInfo(T)) {
+        .vector => @splat(value),
+        else => value,
+    };
+}
+
+/// Quiet NaN of float type `T`. `T` may be a vector type, giving a vector of NaNs.
 pub fn nan(comptime T: type) T {
-    return switch (T) {
-        f32 => @bitCast(@as(u32, 0x7FC0_0000)),
-        f64 => @bitCast(@as(u64, 0x7FF8_0000_0000_0000)),
+    return switch (FloatScalar(T)) {
+        f32 => splatTo(T, @bitCast(@as(u32, 0x7FC0_0000))),
+        f64 => splatTo(T, @bitCast(@as(u64, 0x7FF8_0000_0000_0000))),
         else => @compileError("zm.nan: unsupported float type"),
     };
 }
 /// Machine epsilon of float type `T`.
 pub fn floatEps(comptime T: type) T {
-    return switch (T) {
-        f32 => 1.1920928955078125e-7,
-        f64 => 2.220446049250313e-16,
+    return switch (FloatScalar(T)) {
+        f32 => splatTo(T, 1.1920928955078125e-7),
+        f64 => splatTo(T, 2.220446049250313e-16),
         else => @compileError("zm.floatEps: unsupported float type"),
     };
 }
@@ -961,17 +1018,17 @@ pub fn highest(comptime T: type) T {
 
 /// Largest finite value of float type `T`.
 pub fn floatMax(comptime T: type) T {
-    return switch (T) {
-        f32 => 3.4028234663852886e38,
-        f64 => 1.7976931348623157e308,
+    return switch (FloatScalar(T)) {
+        f32 => splatTo(T, 3.4028234663852886e38),
+        f64 => splatTo(T, 1.7976931348623157e308),
         else => @compileError("zm.floatMax: unsupported float type"),
     };
 }
 /// Smallest positive normal value of float type `T`.
 pub fn floatMin(comptime T: type) T {
-    return switch (T) {
-        f32 => 1.1754943508222875e-38,
-        f64 => 2.2250738585072014e-308,
+    return switch (FloatScalar(T)) {
+        f32 => splatTo(T, 1.1754943508222875e-38),
+        f64 => splatTo(T, 2.2250738585072014e-308),
         else => @compileError("zm.floatMin: unsupported float type"),
     };
 }
@@ -1837,6 +1894,28 @@ pub fn sigmoid(x: anytype) @TypeOf(x) {
 /// `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))`
 /// `sqrt(2/pi)` is precomputed. Expressed entirely through `tanh` above, so CPU and GPU agree by
 /// construction rather than by tolerance. Generic over the float type of `x`.
+/// `softplus(x) = log(1 + exp(x))`, a smooth `relu`, written so it never overflows.
+///
+/// ---- WHY IT LIVES HERE AND NOT IN zimrnum ----
+///
+/// `relu`, `sigmoid`, `tanh` and `gelu` are already here, because this file is SHADER-SAFE and a
+/// kernel that wants an activation should not have to reach across a module edge to get one.
+/// `softplus` was the exception: zimrnum had it as a tensor op with the scalar spelled inline,
+/// and a third copy appeared by hand inside SAC's squash correction. Three spellings of one
+/// numerically delicate expression, none of them reachable from a shader.
+///
+/// ---- THE FORM MATTERS ----
+///
+/// The naive `log(1 + exp(x))` overflows for `x` around 89 in f32 - `exp` reaches infinity while
+/// the answer is a perfectly ordinary 89. Shifting by `max(x, 0)` keeps the exponent negative,
+/// and `log1p` then takes the small argument directly rather than forming `1 + tiny` and losing
+/// it to rounding. Finite and accurate across the whole range, both tails included.
+pub fn softplus(x: anytype) @TypeOf(x) {
+    const T = @TypeOf(x);
+    const shifted: T = @exp(-@abs(x));
+    return @max(x, 0) + log1p(shifted);
+}
+
 pub fn gelu(x: anytype) @TypeOf(x) {
     if (comptime @typeInfo(@TypeOf(x)) == .vector) {
         return perLane(gelu, x);
@@ -1901,11 +1980,13 @@ test "zm: every elementwise function stays within a few ULP, INCLUDING near zero
                     continue;
                 }
                 if (!isFinite(got)) {
+                    // lint:off debug-print: prints only on the failing path, immediately before
                     std.debug.print("zm.{s}: non-finite at x={e}\n", .{ name, x });
                     return error.NonFinite;
                 }
                 const relative: f64 = @abs((@as(f64, got) - want) / want);
                 if (relative > 1.0e-5) {
+                    // lint:off debug-print: prints only on the failing path, immediately before
                     std.debug.print("zm.{s}: {e} relative at x={e}\n", .{ name, relative, x });
                     return error.TooInaccurate;
                 }
@@ -2007,6 +2088,7 @@ test "zm: every elementwise function stays within a few ULP, INCLUDING near zero
             }
             const relative: f64 = @abs((@as(f64, acosh(x)) - want) / want);
             if (relative > 1.0e-5) {
+                // lint:off debug-print: prints only on the failing path, immediately before
                 std.debug.print("zm.acosh: {e} relative at x={d:.9}\n", .{ relative, x });
                 return error.TooInaccurate;
             }
@@ -2057,7 +2139,10 @@ test "zm turns: the quarter turns are exact, and the reduction never rounds" {
         const s: f64 = sinTurns(t_turns);
         const c: f64 = cosTurns(t_turns);
         try expect(@abs(s * s + c * c - 1.0) < 1.0e-15);
-        const both = sincosTurns(t_turns);
+        // The paired form must return EXACTLY what the separate calls do - not merely something
+        // close. `sincosTurns` exists to save recomputing the quarter-turn reduction twice, so
+        // if it ever drifts from `sinTurns`/`cosTurns` the saving has been paid for in accuracy.
+        const both: SinCos(f64) = sincosTurns(t_turns);
         try expectEqual(s, both.sin);
         try expectEqual(c, both.cos);
     }
@@ -3167,15 +3252,19 @@ test "zm.round" {
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const vr = round(splat(f));
-        const fr = @round(splat(f));
-        const vr8 = round(@as(F32x8, @splat(f)));
-        const fr8 = @round(@as(F32x8, @splat(f)));
-        const vr16 = round(@as(F32x16, @splat(f)));
-        const fr16 = @round(@as(F32x16, @splat(f)));
-        try expectVecEqual(vr, fr);
-        try expectVecEqual(vr8, fr8);
-        try expectVecEqual(vr16, fr16);
+        // zimrmath's `round` against Zig's `@round`, at all three vector widths. The point is
+        // that zm's version is not merely close to the builtin but IDENTICAL - `expectVecEqual`
+        // is exact, not a tolerance - because a shader and the host must agree bit for bit or a
+        // CPU-verified value stops matching what the GPU computed.
+        const ours_x4: Vec = round(splat(f));
+        const builtin_x4: Vec = @round(splat(f));
+        const ours_x8: F32x8 = round(@as(F32x8, @splat(f)));
+        const builtin_x8: F32x8 = @round(@as(F32x8, @splat(f)));
+        const ours_x16: F32x16 = round(@as(F32x16, @splat(f)));
+        const builtin_x16: F32x16 = @round(@as(F32x16, @splat(f)));
+        try expectVecEqual(ours_x4, builtin_x4);
+        try expectVecEqual(ours_x8, builtin_x8);
+        try expectVecEqual(ours_x16, builtin_x16);
         f += 0.12345 * float(i);
     }
 }
@@ -3323,15 +3412,19 @@ test "zm.trunc" {
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const vr = trunc(splat(f));
-        const fr = @trunc(splat(f));
-        const vr8 = trunc(@as(F32x8, @splat(f)));
-        const fr8 = @trunc(@as(F32x8, @splat(f)));
-        const vr16 = trunc(@as(F32x16, @splat(f)));
-        const fr16 = @trunc(@as(F32x16, @splat(f)));
-        try expectVecEqual(vr, fr);
-        try expectVecEqual(vr8, fr8);
-        try expectVecEqual(vr16, fr16);
+        // zimrmath's `trunc` against Zig's `@trunc`, at all three vector widths. The point is
+        // that zm's version is not merely close to the builtin but IDENTICAL - `expectVecEqual`
+        // is exact, not a tolerance - because a shader and the host must agree bit for bit or a
+        // CPU-verified value stops matching what the GPU computed.
+        const ours_x4: Vec = trunc(splat(f));
+        const builtin_x4: Vec = @trunc(splat(f));
+        const ours_x8: F32x8 = trunc(@as(F32x8, @splat(f)));
+        const builtin_x8: F32x8 = @trunc(@as(F32x8, @splat(f)));
+        const ours_x16: F32x16 = trunc(@as(F32x16, @splat(f)));
+        const builtin_x16: F32x16 = @trunc(@as(F32x16, @splat(f)));
+        try expectVecEqual(ours_x4, builtin_x4);
+        try expectVecEqual(ours_x8, builtin_x8);
+        try expectVecEqual(ours_x16, builtin_x16);
         f += 0.12345 * float(i);
     }
 }
@@ -3449,15 +3542,19 @@ test "zm.floor" {
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const vr = floor(splat(f));
-        const fr = @floor(splat(f));
-        const vr8 = floor(@as(F32x8, @splat(f)));
-        const fr8 = @floor(@as(F32x8, @splat(f)));
-        const vr16 = floor(@as(F32x16, @splat(f)));
-        const fr16 = @floor(@as(F32x16, @splat(f)));
-        try expectVecEqual(vr, fr);
-        try expectVecEqual(vr8, fr8);
-        try expectVecEqual(vr16, fr16);
+        // zimrmath's `floor` against Zig's `@floor`, at all three vector widths. The point is
+        // that zm's version is not merely close to the builtin but IDENTICAL - `expectVecEqual`
+        // is exact, not a tolerance - because a shader and the host must agree bit for bit or a
+        // CPU-verified value stops matching what the GPU computed.
+        const ours_x4: Vec = floor(splat(f));
+        const builtin_x4: Vec = @floor(splat(f));
+        const ours_x8: F32x8 = floor(@as(F32x8, @splat(f)));
+        const builtin_x8: F32x8 = @floor(@as(F32x8, @splat(f)));
+        const ours_x16: F32x16 = floor(@as(F32x16, @splat(f)));
+        const builtin_x16: F32x16 = @floor(@as(F32x16, @splat(f)));
+        try expectVecEqual(ours_x4, builtin_x4);
+        try expectVecEqual(ours_x8, builtin_x8);
+        try expectVecEqual(ours_x16, builtin_x16);
         f += 0.12345 * float(i);
     }
 }
@@ -3575,15 +3672,19 @@ test "zm.ceil" {
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const vr = ceil(splat(f));
-        const fr = @ceil(splat(f));
-        const vr8 = ceil(@as(F32x8, @splat(f)));
-        const fr8 = @ceil(@as(F32x8, @splat(f)));
-        const vr16 = ceil(@as(F32x16, @splat(f)));
-        const fr16 = @ceil(@as(F32x16, @splat(f)));
-        try expectVecEqual(vr, fr);
-        try expectVecEqual(vr8, fr8);
-        try expectVecEqual(vr16, fr16);
+        // zimrmath's `ceil` against Zig's `@ceil`, at all three vector widths. The point is
+        // that zm's version is not merely close to the builtin but IDENTICAL - `expectVecEqual`
+        // is exact, not a tolerance - because a shader and the host must agree bit for bit or a
+        // CPU-verified value stops matching what the GPU computed.
+        const ours_x4: Vec = ceil(splat(f));
+        const builtin_x4: Vec = @ceil(splat(f));
+        const ours_x8: F32x8 = ceil(@as(F32x8, @splat(f)));
+        const builtin_x8: F32x8 = @ceil(@as(F32x8, @splat(f)));
+        const ours_x16: F32x16 = ceil(@as(F32x16, @splat(f)));
+        const builtin_x16: F32x16 = @ceil(@as(F32x16, @splat(f)));
+        try expectVecEqual(ours_x4, builtin_x4);
+        try expectVecEqual(ours_x8, builtin_x8);
+        try expectVecEqual(ours_x16, builtin_x16);
         f += 0.12345 * float(i);
     }
 }
@@ -3663,6 +3764,52 @@ test "zm.clampFast" {
 /// it. `@typeInfo` only exposes pub decls, so a private one is invisible to
 /// refAllDecls while staying visible to a human reading the file.
 fn saturate() void {} // lint:off unused-global: reference-pinned discoverability stub
+test "zm constants: a vector type gets a vector, and it is the same number in every lane" {
+    // THE CASE THAT DID NOT COMPILE. `nan`, `inf`, `floatMax`, `floatMin` and `floatEps` take a
+    // TYPE, not a value, so `perLane` - which maps over a value - could not reach them. Every one
+    // answered `@compileError` for a vector type, which is precisely the type a shader computes
+    // in: `zm.floatEps(@Vector(4, f32))` is a per-lane tolerance, the obvious thing to want, and
+    // it was the one thing that could not be asked for.
+    //
+    // `src/shaders/zm_gpu_probe.zig` covers the same ground on the GPU side, where these have no
+    // CPU fallback at all. This half is here because a splat that is right on SPIR-V and wrong on
+    // the host would pass that probe and still be a bug.
+    const V4 = @Vector(4, f32);
+    const V2 = @Vector(2, f64);
+
+    const eps4: V4 = floatEps(V4);
+    inline for (0..4) |i| {
+        try expectEqual(floatEps(f32), eps4[i]);
+    }
+    const eps2: V2 = floatEps(V2);
+    inline for (0..2) |i| {
+        try expectEqual(floatEps(f64), eps2[i]);
+    }
+
+    // THE SCALAR PATH IS UNCHANGED, which is the other half of the claim: adding the vector case
+    // must not have altered what the existing callers already get.
+    try expectEqual(@as(f32, 1.1920928955078125e-7), floatEps(f32));
+    try expectEqual(@as(f64, 2.220446049250313e-16), floatEps(f64));
+
+    const big: V4 = floatMax(V4);
+    const small: V4 = floatMin(V4);
+    inline for (0..4) |i| {
+        try expect(big[i] > 1.0e38);
+        try expect(small[i] > 0 and small[i] < 1.0e-37);
+    }
+
+    // NaN and infinity have to be BUILT correctly per lane, not merely be non-finite: a splat of
+    // the wrong bit pattern is still non-finite and still wrong.
+    const nans: V4 = nan(V4);
+    const infs: V4 = inf(V4);
+    inline for (0..4) |i| {
+        try expect(isNan(nans[i]));
+        try expect(!isNan(infs[i]));
+        try expect(!isFinite(infs[i]));
+        try expect(infs[i] > floatMax(f32));
+    }
+}
+
 test "zm.clamp01 (vector + scalar; HLSL calls it saturate)" {
     {
         const v0: Vec = f32x4(-1.0, 0.2, 1.1, -0.3);
@@ -4237,21 +4384,36 @@ test "zm.sincos32xN" {
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const sc = sincosRad(splat(f));
-        const sc8 = sincosRad(@as(F32x8, @splat(f)));
-        const sc16 = sincosRad(@as(F32x16, @splat(f)));
-        const s4 = @sin(splat(f));
-        const s8 = @sin(@as(F32x8, @splat(f)));
-        const s16 = @sin(@as(F32x16, @splat(f)));
-        const c4 = @cos(splat(f));
-        const c8 = @cos(@as(F32x8, @splat(f)));
-        const c16 = @cos(@as(F32x16, @splat(f)));
-        try expectVecApproxEqAbs(sc[0], s4, epsilon);
-        try expectVecApproxEqAbs(sc8[0], s8, epsilon);
-        try expectVecApproxEqAbs(sc16[0], s16, epsilon);
-        try expectVecApproxEqAbs(sc[1], c4, epsilon);
-        try expectVecApproxEqAbs(sc8[1], c8, epsilon);
-        try expectVecApproxEqAbs(sc16[1], c16, epsilon);
+        // `sincosRad` returns `[2]T` - index 0 is the SINE, index 1 the cosine. Pulling them
+        // out by name here is the difference between a test that documents the convention and
+        // one that silently depends on it: `sc[1]` compared against `@cos` is only obviously
+        // right if you already know the order.
+        const sin_cos_x4: [2]Vec = sincosRad(splat(f));
+        const sin_cos_x8: [2]F32x8 = sincosRad(@as(F32x8, @splat(f)));
+        const sin_cos_x16: [2]F32x16 = sincosRad(@as(F32x16, @splat(f)));
+        const ours_sin_x4: Vec = sin_cos_x4[0];
+        const ours_cos_x4: Vec = sin_cos_x4[1];
+        const ours_sin_x8: F32x8 = sin_cos_x8[0];
+        const ours_cos_x8: F32x8 = sin_cos_x8[1];
+        const ours_sin_x16: F32x16 = sin_cos_x16[0];
+        const ours_cos_x16: F32x16 = sin_cos_x16[1];
+
+        // Against the builtins. APPROXIMATE here, unlike the round/trunc/floor/ceil tests above
+        // which demand exact equality: `sincosRad` is a polynomial approximation chosen to be
+        // cheap and SPIR-V-portable, not a transcription of the hardware's sine.
+        const builtin_sin_x4: Vec = @sin(splat(f));
+        const builtin_sin_x8: F32x8 = @sin(@as(F32x8, @splat(f)));
+        const builtin_sin_x16: F32x16 = @sin(@as(F32x16, @splat(f)));
+        const builtin_cos_x4: Vec = @cos(splat(f));
+        const builtin_cos_x8: F32x8 = @cos(@as(F32x8, @splat(f)));
+        const builtin_cos_x16: F32x16 = @cos(@as(F32x16, @splat(f)));
+
+        try expectVecApproxEqAbs(ours_sin_x4, builtin_sin_x4, epsilon);
+        try expectVecApproxEqAbs(ours_sin_x8, builtin_sin_x8, epsilon);
+        try expectVecApproxEqAbs(ours_sin_x16, builtin_sin_x16, epsilon);
+        try expectVecApproxEqAbs(ours_cos_x4, builtin_cos_x4, epsilon);
+        try expectVecApproxEqAbs(ours_cos_x8, builtin_cos_x8, epsilon);
+        try expectVecApproxEqAbs(ours_cos_x16, builtin_cos_x16, epsilon);
         f += 0.12345 * float(i);
     }
 }
@@ -4823,12 +4985,20 @@ pub fn mulMat(a: Mat, b: Mat) Mat {
     var result: Mat = undefined;
     comptime var col: u32 = 0;
     inline while (col < 4) : (col += 1) {
-        const bc = b[col];
-        const vx = swizzle(bc, .x, .x, .x, .x);
-        const vy = swizzle(bc, .y, .y, .y, .y);
-        const vz = swizzle(bc, .z, .z, .z, .z);
-        const vw = swizzle(bc, .w, .w, .w, .w);
-        result[col] = mulAdd(vx, a[0], vz * a[2]) + mulAdd(vy, a[1], vw * a[3]);
+        // Column `col` of the result is a linear combination of ALL FOUR columns of `a`,
+        // weighted by the four components of column `col` of `b`. Each weight has to reach every
+        // lane, which is what the four splat-swizzles do: `weight_x` is b[col].x in all four
+        // lanes, so `weight_x * a[0]` scales the whole column at once.
+        const b_col: Vec = b[col];
+        const weight_x: Vec = swizzle(b_col, .x, .x, .x, .x);
+        const weight_y: Vec = swizzle(b_col, .y, .y, .y, .y);
+        const weight_z: Vec = swizzle(b_col, .z, .z, .z, .z);
+        const weight_w: Vec = swizzle(b_col, .w, .w, .w, .w);
+        // Grouped as two `mulAdd`s rather than four multiplies and three adds so each pair
+        // becomes one fused multiply-add: same arithmetic, one rounding step fewer per pair.
+        const xz: Vec = mulAdd(weight_x, a[0], weight_z * a[2]);
+        const yw: Vec = mulAdd(weight_y, a[1], weight_w * a[3]);
+        result[col] = xz + yw;
     }
     return result;
 }
@@ -5886,6 +6056,14 @@ pub fn quatToMat(q: Quat) Mat {
     return matFromQuat(q);
 }
 
+/// ** THE `axis` THIS RETURNS IS NOT A UNIT VECTOR - it is the quaternion's raw `xyz`, whose
+/// length is `sin(angle/2)`. Multiplying it by `angle` gives `sin(angle/2) * angle`, which is
+/// quadratically wrong near zero. **For anything that needs a rotation VECTOR - a servo error,
+/// an integration step, an angular difference - use `quat2Vel` or `subQuat` instead**, which
+/// normalize and use `atan2` for small-angle precision.
+///
+/// A controller built on this ran a humanoid at 0.5 s of survival regardless of gain, because
+/// the gain was being multiplied by the error a second time.
 pub fn quatToAxisAngle(
     q: Quat,
     axis: *Vec,
@@ -5894,6 +6072,58 @@ pub fn quatToAxisAngle(
     axis.* = q;
     angle.* = 2.0 * acosRad(q[3]);
 }
+/// A rotation as a **rotation vector**: direction is the axis, length is the angle in radians.
+///
+/// ---- WHY THIS EXISTS ALONGSIDE `quatToAxisAngle` ----
+///
+/// `quatToAxisAngle` returns the quaternion's raw `xyz` as its axis. That vector has magnitude
+/// `sin(theta/2)`, **not one** - so multiplying it by the angle gives `sin(theta/2) * theta`
+/// rather than `theta`. Near the target that is quadratically too small, which makes any
+/// controller built on it mysteriously weak exactly where it should be precise.
+///
+/// *** THIS IS MuJoCo's `mju_quat2Vel`, AND THE THREE DIFFERENCES ARE ALL DELIBERATE:
+///
+///  1. **The axis is normalized**, so length carries the angle and nothing else.
+///  2. **`2*atan2(|xyz|, w)` rather than `2*acos(w)`.** `acos` loses precision near `w = 1` -
+///     the small-angle case a servo spends its whole life in - while `atan2` is stable there.
+///  3. **Angles past pi wrap to the short way round by SIGNING THE SPEED**, not by negating the
+///     axis. Same rotation, one branch instead of two.
+///
+/// A unit quaternion is assumed. `subQuat` normalizes before calling this for that reason.
+pub fn quat2Vel(q: Quat) Vec {
+    var axis: Vec = vec(q[0], q[1], q[2]);
+    const sin_half: f32 = length3(axis);
+    if (sin_half < 1.0e-12) {
+        // At identity the axis is undefined and the angle is zero, so the rotation vector is
+        // zero whichever axis you pick. Returning early avoids dividing by it.
+        return vec_zero;
+    }
+    axis = axis / splat(sin_half);
+    var angle: f32 = 2.0 * atan2Rad(sin_half, q[3]);
+    if (angle > pi) {
+        angle -= 2.0 * pi;
+    }
+    return axis * splat(angle);
+}
+
+/// The rotation carrying `b` to `a`, as a rotation vector in **b's frame**.
+///
+/// MuJoCo's `mju_subQuat`, and its contract is worth stating exactly: `b * quat(res) = a`.
+///
+/// ** THE FRAME IS THE PART THAT IS EASY TO GET WRONG. This computes `conj(b) * a` - the error
+/// expressed in b's own frame. The other order, `a * conj(b)`, is the same rotation expressed in
+/// the WORLD frame, and a joint servo that uses it applies torque in a frame its velocity
+/// coordinates are not in. The two agree only when b is identity.
+///
+/// Both inputs are normalized first: an integrated quaternion drifts off the unit sphere, and
+/// once it does, `conj` is no longer the inverse.
+pub fn subQuat(a: Quat, b: Quat) Vec {
+    const na: Quat = normalize4(a);
+    const nb: Quat = normalize4(b);
+    const inv_b: Quat = quat(-nb[0], -nb[1], -nb[2], nb[3]);
+    return quat2Vel(qmul(inv_b, na));
+}
+
 pub fn quatFromNormAxisAngle(axis: Vec, angle_rad: f32) Quat {
     const n: Vec = pointFromArr3(axis);
     const sc: [2]f32 = sincosRad(0.5 * angle_rad);
@@ -6829,15 +7059,20 @@ test "zm.sincos32" {
     var f: f32 = -100.0;
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
-        const sc = sincos32(f);
-        const s0 = sin32(f);
-        const c0 = cos32(f);
-        const s = @sin(f);
-        const c = @cos(f);
-        try expect(math.approxEqAbs(f32, sc[0], s, epsilon));
-        try expect(math.approxEqAbs(f32, sc[1], c, epsilon));
-        try expect(math.approxEqAbs(f32, s0, s, epsilon));
-        try expect(math.approxEqAbs(f32, c0, c, epsilon));
+        // Three things checked against one reference: the PAIRED form (index 0 sine, index 1
+        // cosine) and the two SEPARATE forms all have to track the builtin. Testing the pair and
+        // the singles together is what catches one of the three drifting on its own.
+        const ours_pair: [2]f32 = sincos32(f);
+        const ours_sin_paired: f32 = ours_pair[0];
+        const ours_cos_paired: f32 = ours_pair[1];
+        const ours_sin: f32 = sin32(f);
+        const ours_cos: f32 = cos32(f);
+        const builtin_sin: f32 = @sin(f);
+        const builtin_cos: f32 = @cos(f);
+        try expect(math.approxEqAbs(f32, ours_sin_paired, builtin_sin, epsilon));
+        try expect(math.approxEqAbs(f32, ours_cos_paired, builtin_cos, epsilon));
+        try expect(math.approxEqAbs(f32, ours_sin, builtin_sin, epsilon));
+        try expect(math.approxEqAbs(f32, ours_cos, builtin_cos, epsilon));
         f += 0.12345 * float(i);
     }
 }
@@ -7082,12 +7317,14 @@ fn fftUnswizzle(input: []const Vec, output: []Vec) void {
         const rev32: Log2Int(usize) = @intCast(@as(u32, 32) - log2_length);
         var index: usize = 0;
         while (index < len_n) : (index += 1) {
-            const n = index * 4;
+            // The reversed index is assembled from a 256-entry byte-reversal table, so this
+            // is the index scaled to its byte position in that table.
+            const table_base: usize = index * 4;
             const addr =
-                (@as(usize, @intCast(static.swizzle_table[n & 0xff])) << 24) |
-                (@as(usize, @intCast(static.swizzle_table[(n >> 8) & 0xff])) << 16) |
-                (@as(usize, @intCast(static.swizzle_table[(n >> 16) & 0xff])) << 8) |
-                @as(usize, @intCast(static.swizzle_table[(n >> 24) & 0xff]));
+                (@as(usize, @intCast(static.swizzle_table[table_base & 0xff])) << 24) |
+                (@as(usize, @intCast(static.swizzle_table[(table_base >> 8) & 0xff])) << 16) |
+                (@as(usize, @intCast(static.swizzle_table[(table_base >> 16) & 0xff])) << 8) |
+                @as(usize, @intCast(static.swizzle_table[(table_base >> 24) & 0xff]));
             f32_output[addr >> rev32] = input[index][0];
             f32_output[(0x40000000 | addr) >> rev32] = input[index][1];
             f32_output[(0x80000000 | addr) >> rev32] = input[index][2];
@@ -7106,12 +7343,13 @@ fn fftUnswizzle(input: []const Vec, output: []Vec) void {
         const rev32: Log2Int(usize) = @intCast(@as(u32, 32) - (@as(u32, log2_length) - 3));
         var index: usize = 0;
         while (index < len_n) : (index += 1) {
-            const n = index / 2;
+            // Half the rate of the 4-wide variant: two output slots per table lookup.
+            const table_base: usize = index / 2;
             var addr =
-                (((@as(usize, @intCast(static.swizzle_table[n & 0xff])) << 24) |
-                    (@as(usize, @intCast(static.swizzle_table[(n >> 8) & 0xff])) << 16) |
-                    (@as(usize, @intCast(static.swizzle_table[(n >> 16) & 0xff])) << 8) |
-                    (@as(usize, @intCast(static.swizzle_table[(n >> 24) & 0xff])))) >> rev32) |
+                (((@as(usize, @intCast(static.swizzle_table[table_base & 0xff])) << 24) |
+                    (@as(usize, @intCast(static.swizzle_table[(table_base >> 8) & 0xff])) << 16) |
+                    (@as(usize, @intCast(static.swizzle_table[(table_base >> 16) & 0xff])) << 8) |
+                    (@as(usize, @intCast(static.swizzle_table[(table_base >> 24) & 0xff])))) >> rev32) |
                 ((index & 1) * rev7 * 4);
             f32_output[addr] = input[index][0];
             addr += rev7;
@@ -7150,8 +7388,11 @@ fn fft8(
 
     var index: u32 = 0;
     while (index < count) : (index += 1) {
-        var pre = re[index * 2 ..];
-        var pim = im[index * 2 ..];
+        // Two complex vectors per iteration, hence the doubled index. `pre`/`pim` are the REAL
+        // and IMAGINARY halves of a split (structure-of-arrays) complex layout - this file keeps
+        // them in separate buffers so each side is one contiguous vector load.
+        var pre: []Vec = re[index * 2 ..];
+        var pim: []Vec = im[index * 2 ..];
 
         var odds_re = @shuffle(f32, pre[0], pre[1], [4]i32{ 1, 3, ~@as(i32, 1), ~@as(i32, 3) });
         var evens_re = @shuffle(f32, pre[0], pre[1], [4]i32{ 0, 2, ~@as(i32, 0), ~@as(i32, 2) });
@@ -7161,24 +7402,33 @@ fn fft8(
         fftButterflyDit4_1(&evens_re, &evens_im);
 
         {
-            const re_im = cmulSoa(
+            // The odd half multiplied by the four 8th-root-of-unity twiddles for this butterfly:
+            // 1, e^-i(pi/4), e^-i(pi/2), e^-i(3pi/4). The literals ARE those roots -
+            // 0.70710677 is 1/sqrt(2) - written out rather than computed so the constant folding
+            // is visible and identical on every target.
+            //
+            // `cmulSoa` returns `[2]T`: index 0 the REAL part, index 1 the imaginary.
+            const twiddled: [2]Vec = cmulSoa(
                 odds_re,
                 odds_im,
                 f32x4(1.0, 0.70710677, 0.0, -0.70710677),
                 f32x4(0.0, -0.70710677, -1.0, -0.70710677),
             );
-            pre[0] = evens_re + re_im[0];
-            pim[0] = evens_im + re_im[1];
+            pre[0] = evens_re + twiddled[0];
+            pim[0] = evens_im + twiddled[1];
         }
         {
-            const re_im = cmulSoa(
+            // The same four twiddles NEGATED - the second output of a radix-2 butterfly is the
+            // first with the odd half subtracted, and folding the sign into the twiddle keeps
+            // this an add rather than a separate negate-then-add.
+            const twiddled: [2]Vec = cmulSoa(
                 odds_re,
                 odds_im,
                 f32x4(-1.0, -0.70710677, 0.0, 0.70710677),
                 f32x4(0.0, 0.70710677, 1.0, 0.70710677),
             );
-            pre[1] = evens_re + re_im[0];
-            pim[1] = evens_im + re_im[1];
+            pre[1] = evens_re + twiddled[0];
+            pim[1] = evens_im + twiddled[1];
         }
     }
 }
@@ -7293,7 +7543,9 @@ fn fftN(
 
     var index: u32 = 0;
     while (index < total_vectors / 4) : (index += 1) {
-        const n = (index & stride_inv_mask) * 4 + (index & stride_mask);
+        // Non-contiguous butterfly stride: the low bits pick the position within a group,
+        // the high bits pick the group, so the counter is split and reassembled scaled by 4.
+        const n: u32 = (index & stride_inv_mask) * 4 + (index & stride_mask);
         fftButterflyDit4_4(
             &re[n],
             &re[n + stride],
@@ -7339,20 +7591,23 @@ pub fn fftInitUnityTable(out_unity_table: []Vec) void {
             unity_table[j] = splat(1.0);
             unity_table[j + len_n * 4] = splat(0.0);
 
-            var vls = vjp * vlstep;
-            var sin_cos = sincosRad(vls);
+            // The twiddle angle for this slot, then both trig values at once. Index 0 of
+            // `sincosRad` is the SINE and index 1 the cosine - see `zm.sincos32xN`.
+            var angle: Vec = vjp * vlstep;
+            var sin_cos: [2]Vec = sincosRad(angle);
             unity_table[j + len_n] = sin_cos[1];
             unity_table[j + len_n * 5] = sin_cos[0] * splat(-1.0);
 
-            var vijp = vjp + vjp;
-            vls = vijp * vlstep;
-            sin_cos = sincosRad(vls);
+            // Double the angle for the next table stride - the classic twiddle recurrence.
+            var vijp: Vec = vjp + vjp;
+            angle = vijp * vlstep;
+            sin_cos = sincosRad(angle);
             unity_table[j + len_n * 2] = sin_cos[1];
             unity_table[j + len_n * 6] = sin_cos[0] * splat(-1.0);
 
             vijp = vijp + vjp;
-            vls = vijp * vlstep;
-            sin_cos = sincosRad(vls);
+            angle = vijp * vlstep;
+            sin_cos = sincosRad(angle);
             unity_table[j + len_n * 3] = sin_cos[1];
             unity_table[j + len_n * 7] = sin_cos[0] * splat(-1.0);
 

@@ -6,6 +6,8 @@
 //! to be materialised before it can be bound. The host does that explicitly and shows it.
 const k = @import("kompute");
 const zm = @import("zm");
+const float = zm.float;
+const atan2Rad = zm.atan2Rad;
 const zn = @import("zn");
 
 pub const config = k.Config{ .max = 1 << 14, .workgroup = 64 };
@@ -326,7 +328,7 @@ pub fn atan2f(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
         return;
     }
-    bout[c.id] = zm.atan2Rad(ba[c.id], bb[c.id]);
+    bout[c.id] = atan2Rad(ba[c.id], bb[c.id]);
 }
 
 pub fn hypotf(c: k.Ctx(@This())) void {
@@ -387,7 +389,7 @@ pub fn mse_loss(c: k.Ctx(@This())) void {
         const d: f32 = ba[i] - bb[i];
         total += d * d;
     }
-    bout[0] = total / @as(f32, @floatFromInt(c.params.count));
+    bout[0] = total / float(c.params.count);
 }
 
 /// `out[0] = mean |a - b|`. One thread, plainly accumulated, like `mse_loss`.
@@ -400,7 +402,7 @@ pub fn mae_loss(c: k.Ctx(@This())) void {
     while (i < c.params.count) : (i += 1) {
         total += @abs(ba[i] - bb[i]);
     }
-    bout[0] = total / @as(f32, @floatFromInt(c.params.count));
+    bout[0] = total / float(c.params.count);
 }
 
 /// Huber: squared below `delta`, linear above — the same branch as `zn.huberLoss`, so the two
@@ -416,7 +418,7 @@ pub fn huber_loss(c: k.Ctx(@This())) void {
         const d: f32 = @abs(ba[i] - bb[i]);
         total += if (d <= delta) 0.5 * d * d else delta * (d - 0.5 * delta);
     }
-    bout[0] = total / @as(f32, @floatFromInt(c.params.count));
+    bout[0] = total / float(c.params.count);
 }
 
 /// Binary cross-entropy from logits `a` against targets `b`, in the overflow-free form
@@ -433,7 +435,7 @@ pub fn bce_loss(c: k.Ctx(@This())) void {
         const x: f32 = ba[i];
         total += @max(x, 0) - x * bb[i] + @log(1 + @exp(-@abs(x)));
     }
-    bout[0] = total / @as(f32, @floatFromInt(c.params.count));
+    bout[0] = total / float(c.params.count);
 }
 
 /// 2-D cross-correlation of `a` (a `cols × cols` image) with the 3×3 kernel held in `b[0..9]`,
@@ -540,7 +542,185 @@ pub fn adam_step(k_ctx: k.Ctx(@This())) void {
 // a line, and that realignment silently broke an append anchor three times during the
 // port. A vertical list is stable under formatting, so adding a kernel is a one-line
 // diff that no tooling will reflow.
+/// PPO's clipped surrogate, per sample, on the device.
+///
+/// ---- WHY THIS ROW EXISTS ----
+///
+/// `ppoClipSample` was written scalar-first - no allocation, no error union, no slice - SO THAT
+/// a kernel and the CPU loop could call the same function rather than two transcriptions of one
+/// formula. Two transcriptions is how a CPU/GPU comparison becomes circular: it compares a
+/// formula against itself and passes while both are wrong.
+///
+/// Until this row, that was an intention. The SPIR-V probe proved the shape COMPILES; only the
+/// sweep proves the device produces the same numbers.
+///
+/// The clip is fixed at 0.2 - the standard value, and a constant here so the row tests the
+/// arithmetic rather than a parameter the harness would have to carry.
+pub fn ppo_clip(k_ctx: k.Ctx(@This())) void {
+    if (k_ctx.id >= k_ctx.params.count) {
+        return;
+    }
+    const id: u32 = k_ctx.id;
+    // `a` is the LOG-RATIO and `b` the advantage, so `logp_old` is zero and `logp_new` is the
+    // ratio's log directly. Two inputs, not three - the harness fills `a` and `b` for every row
+    // and `c` only for the kernels that populate it themselves.
+    //
+    // This encoding is not a compromise: with the advantage varying in sign across the input
+    // field, BOTH clip branches are exercised. A row that fixed the advantage positive would
+    // only ever test the upper one, and the `@min` that makes this a trust region would be
+    // half-verified.
+    bout[id] = zn.ppoClipSample(f32, ba[id], 0.0, bb[id], 0.2);
+}
+
+/// One cartpole step's pole angle, under a continuous force.
+///
+/// Collection is where on-policy RL spends its wall clock and it is embarrassingly parallel
+/// across environments, so the dynamics belong on a device. This row is the narrow version of
+/// that claim: the same equations, the same answer, both sides.
+///
+/// The pole angle and the applied force are the row's two inputs.
+pub fn cartpole_pole(k_ctx: k.Ctx(@This())) void {
+    if (k_ctx.id >= k_ctx.params.count) {
+        return;
+    }
+    const id: u32 = k_ctx.id;
+    // `a` is the pole angle, `b` the applied force. The cart and the pole's rate start at zero
+    // so the row has one degree of freedom to disagree on rather than four - a mismatch here
+    // names the term that caused it.
+    const start: zn.CartpoleState(f32) = .{
+        .cart = 0,
+        .cart_rate = 0,
+        .pole_rad = ba[id],
+        .pole_rate_rad = 0,
+    };
+    bout[id] = zn.cartpoleContinuousStep(f32, start, bb[id]).state.pole_rad;
+}
+
+/// The adversarial style reward, on the device.
+///
+/// `a` is the discriminator's logit, `b` the reward scale. The floor is fixed at 1e-4 - the
+/// value AMP uses - so the row tests the arithmetic rather than a parameter the harness would
+/// have to carry.
+///
+/// The input field spans both regimes: a losing policy where the log is gentle, and a winning
+/// one where `1 - sigmoid` underflows and the floor is the only thing keeping the reward finite.
+pub fn disc_reward(k_ctx: k.Ctx(@This())) void {
+    if (k_ctx.id >= k_ctx.params.count) {
+        return;
+    }
+    const id: u32 = k_ctx.id;
+    bout[id] = zn.discriminatorReward(f32, ba[id] * 20.0, bb[id], 1.0e-4);
+}
+
+/// Adam at a LATER step, with moments that already carry history.
+///
+/// ---- THE GAP THIS CLOSES, AND WHY IT IS THE SHAPE OF A REAL BUG ----
+///
+/// `adam_step` above hardcodes the first step: it computes the first moment as
+/// `(1 - beta1) * gradient`, which is only true when the incoming moment is ZERO, and divides by
+/// `1 - beta1`, which is only the bias correction at `t = 1`. The conformance row for it fills
+/// both moments with zero, so CPU and GPU agree - about a step that happens once per training
+/// run.
+///
+/// **Every update after the first takes a different path, and nothing checked it.** That matters
+/// beyond tidiness: a predecessor project's GPU-resident SAC learned correctly for one update and
+/// then diverged, with eleven hypotheses formed and none confirmed. "Nearly right for one step
+/// and systematically wrong thereafter" is exactly what a first-step-only optimiser produces.
+///
+/// The incoming moments are DERIVED from the inputs rather than uploaded, so both sides can build
+/// them identically without the harness carrying two more buffers. The point is to exercise the
+/// warm arithmetic, not to reproduce any particular training state.
+pub fn adam_step_warm(k_ctx: k.Ctx(@This())) void {
+    if (k_ctx.id >= k_ctx.params.count) {
+        return;
+    }
+    const id: u32 = k_ctx.id;
+    const beta1: f32 = 0.9;
+    const beta2: f32 = 0.999;
+    const rate: f32 = 0.01;
+    const eps: f32 = 1e-8;
+
+    const weight: f32 = ba[id];
+    const gradient: f32 = bb[id];
+    // History the previous updates would have left behind.
+    const first_in: f32 = 0.3 * gradient;
+    const second_in: f32 = 0.2 * gradient * gradient;
+
+    const first: f32 = beta1 * first_in + (1 - beta1) * gradient;
+    const second: f32 = beta2 * second_in + (1 - beta2) * gradient * gradient;
+    // Bias correction at step 5, as constants rather than a device `pow` or a repurposed
+    // uniform field - `lo` and `hi` are the clamp bounds and are shared by every kernel here.
+    //
+    //   1 - 0.9^5   = 0.40951
+    //   1 - 0.999^5 = 0.004990009995000983
+    //
+    // Fixing the step is what makes them constants, and fixing the step is fine: the point is to
+    // exercise the arithmetic that runs when the moments are NOT empty, not to sweep `t`.
+    const correction_first: f32 = 0.40951;
+    const correction_second: f32 = 0.004990009995000983;
+    const corrected_first: f32 = first / correction_first;
+    const corrected_second: f32 = second / correction_second;
+    bout[id] = weight - rate * corrected_first / (@sqrt(corrected_second) + eps);
+}
+
+/// A target network following its online network by a fraction.
+///
+/// ---- ALSO A SECOND-UPDATE OPERATION, ALSO UNCHECKED UNTIL NOW ----
+///
+/// At the first update a target network has just been copied from the online one, so the follow
+/// moves it from a value to the same value and any error in the arithmetic is invisible. From the
+/// second update onward it is the only thing keeping the bootstrap target from chasing the
+/// critic that produced it.
+///
+/// So this shares the shape of the warm Adam row above: correct-looking for one step, and the
+/// governing operation thereafter. `follow` is fixed at 0.005 - the SMALL number, which is the
+/// convention `polyakUpdate` takes and the one that is easy to pass the complement of.
+pub fn polyak_follow(k_ctx: k.Ctx(@This())) void {
+    if (k_ctx.id >= k_ctx.params.count) {
+        return;
+    }
+    const id: u32 = k_ctx.id;
+    const follow: f32 = 0.005;
+    bout[id] = ba[id] + follow * (bb[id] - ba[id]);
+}
+
+/// SAC's tanh-squash log-density correction, at saturation.
+///
+/// ---- THE INPUT FIELD IS SCALED UP ON PURPOSE ----
+///
+/// `a` is multiplied by 12 so the field reaches pre-squash values where `tanh` rounds to exactly
+/// 1 in f32. That is where the textbook form `-log(1 - tanh(u)^2)` becomes `log(0)`, and it is
+/// **where a converged SAC policy spends most of its time** - the correction is needed most
+/// precisely where the naive spelling fails.
+///
+/// A row fed ordinary small values would agree perfectly and check nothing that matters.
+pub fn squash_correction(k_ctx: k.Ctx(@This())) void {
+    if (k_ctx.id >= k_ctx.params.count) {
+        return;
+    }
+    const id: u32 = k_ctx.id;
+    bout[id] = zn.squashCorrection(f32, ba[id] * 12.0);
+}
+
+// ---- `sacTarget` IS NOT KERNEL-CALLABLE, AND THAT IS WORTH RECORDING ----
+//
+// A row for it was written and removed. `sacTarget` takes `next_estimates: []const T` - a slice,
+// because it aggregates over however many critics there are - and SPIR-V rejects constructing a
+// slice from a local array: "cannot construct slices without the variable_pointers capability".
+//
+// So despite reading like a scalar-first function, it cannot run on a device as written. For a
+// GPU-resident trainer the aggregation would have to be unrolled at the call site, or the
+// function would need a fixed-arity twin for the common twin-critic case.
+//
+// Recorded here rather than in a plan file because this is where someone will next try it.
+
 pub const kernels = [_][:0]const u8{
+    "squash_correction",
+    "polyak_follow",
+    "adam_step_warm",
+    "disc_reward",
+    "ppo_clip",
+    "cartpole_pole",
     "add",
     "mul",
     "sub",

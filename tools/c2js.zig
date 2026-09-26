@@ -1,3 +1,7 @@
+//! lint:off std-math: c2js is a standalone host-only transpiler - Zig-emitted C in,
+//! JavaScript out. It never reaches a shader, so the GPU-portability reason for the
+//! std.math ban does not apply, and it should stay extractable from zimr without
+//! dragging zimrmath along for a single NaN constant.
 //! c_to_js.zig — a single-file C -> JavaScript transpiler, written in Zig.
 //!
 //! ===========================================================================
@@ -9724,12 +9728,24 @@ pub fn main(init: std.process.Init) !void {
             \\// zimr: self-reporting page — any uncaught error (including a top-level
             \\// throw during the runtime preamble) paints full-screen instead of a
             \\// silent white page. Installed BEFORE the generated script on purpose.
+            \\// ONE panel, APPENDED to - not a new element per call.
+            \\//
+            \\// Each call used to create its own `position:fixed;inset:0` <pre>, so the LAST
+            \\// error painted over every earlier one. That hid the message that mattered: a
+            \\// WGSL compile diagnostic arrives in a promise microtask and can land BEFORE the
+            \\// pipeline-creation cascade it explains, whereupon the cascade covered it and the
+            \\// page showed only "invalid due to a previous error".
             \\window.__wzFail = function (msg) {{
-            \\  var d = document.createElement("pre");
-            \\  d.style.cssText = "position:fixed;inset:0;margin:0;padding:16px;background:#300;" +
-            \\    "color:#fdd;font:14px/1.5 monospace;white-space:pre-wrap;z-index:99999;overflow:auto";
-            \\  d.textContent = "BRIDGE PAGE ERROR\n\n" + msg;
-            \\  (document.body || document.documentElement).appendChild(d);
+            \\  var d = document.getElementById("__wzfail");
+            \\  if (!d) {{
+            \\    d = document.createElement("pre");
+            \\    d.id = "__wzfail";
+            \\    d.style.cssText = "position:fixed;inset:0;margin:0;padding:16px;background:#2a0000;" +
+            \\      "color:#fdd;font:14px/1.5 monospace;white-space:pre-wrap;z-index:99999;overflow:auto";
+            \\    d.textContent = "BRIDGE PAGE ERROR";
+            \\    (document.body || document.documentElement).appendChild(d);
+            \\  }}
+            \\  d.textContent += "\n\n" + msg;
             \\}};
             \\window.addEventListener("error", function (e) {{
             \\  window.__wzFail((e.message || "error") + "\n" + (e.filename || "") + ":" + (e.lineno || 0) +

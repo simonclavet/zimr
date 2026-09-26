@@ -112,7 +112,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var i: usize = 0;
     while (i < cursor_zones.len) : (i += 1) {
-        const zone = cursor_zones[i];
+        const zone: CursorZone = cursor_zones[i];
         const x: f32 = float(24 + @as(i32, @intCast(i)) * (zone_w + 8));
         const w: f32 = float(zone_w);
         const rect: z.Rectangle = .{ .x = x, .y = zone_y, .width = w, .height = zone_h };
@@ -121,7 +121,9 @@ fn update(f: *z.Frame, s: *State) void {
         const fill: Color = if (hovered) brightenColor(zone.color, 30) else zone.color;
         f.gl.rect(rect, .{ .color = fill });
 
-        if (hovered) cursor_for_this_frame = zone.cursor;
+        if (hovered) {
+            cursor_for_this_frame = zone.cursor;
+        }
 
         // Centred label.  Atkinson at 12 px ≈ 7 px advance per char;
         // crude but adequate for this demo.

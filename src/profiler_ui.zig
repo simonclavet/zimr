@@ -309,7 +309,7 @@ fn zoneHistogram(u: Ui, src: u32) void {
     while (i < n) : (i += 1) {
         const frac: f64 = (series[i] - lo) / (hi - lo);
         const scaled: f64 = frac * float64(bins);
-        var bi: usize = @intFromFloat(scaled);
+        var bi: usize = @trunc(scaled);
         if (bi >= bins) {
             bi = bins - 1;
         }

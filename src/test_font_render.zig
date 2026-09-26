@@ -95,8 +95,8 @@ pub fn main() !void {
     var text_pixels: usize = 0;
     var i: usize = 0;
     while (i < n) : (i += 1) {
-        const r = px[i * 4 + 0];
-        const g = px[i * 4 + 1];
+        const r: u8 = px[i * 4 + 0];
+        const g: u8 = px[i * 4 + 1];
         // gold or white text is much brighter than the blue checker
         if (r > 150 and g > 150) {
             text_pixels += 1;

@@ -435,6 +435,32 @@ pub const robot_scene = @import("robot_scene.zig");
 pub const mjcf = @import("mjcf.zig");
 /// Turn a parsed MJCF robot into a simulable `robot.Model`.
 pub const robot_mjcf = @import("robot_mjcf.zig");
+/// The same robot model rebuilt in maximal coordinates (zimrphysics bodies + joints) - for
+/// comparing the two engines on one model. See `src/notes/ragdoll_compare_plan.md`.
+pub const robot_maximal = @import("robot_maximal.zig");
+pub const robot_gym = @import("robot_gym.zig");
+// The motion-tracking stack, in dependency order: clips and retargeting, the tracking task and
+// its fleet, the residual policy's observation and controller, and the PPO trainer on the kit.
+pub const robot_dance = @import("robot_dance.zig");
+pub const robot_track = @import("robot_track.zig");
+pub const robot_policy = @import("robot_policy.zig");
+pub const robot_ppo_track = @import("robot_ppo_track.zig");
+/// The latent world model and its normaliser - a page needs the normaliser to build a learner.
+pub const robot_latent = @import("robot_latent.zig");
+/// Geno's collision shapes, as `tools/geno_fit.py` fits them (generated; the robot model and the
+/// `geno_fit` page both read this one table).
+pub const robot_geno_shapes = @import("robot_geno_shapes.zig");
+/// A robot built from the character its captures were recorded on (rl_track_plan.md, Phase R).
+pub const robot_geno = @import("robot_geno.zig");
+/// Geno's robot model as `robot_geno.writeModel` makes it - a fixture its tests hold byte-equal to a fresh
+/// build, so pages load the body without re-measuring it.
+pub const robot_geno_model: []const u8 = @embedFile("tests/fixtures/robot/geno.xml");
+/// The networks and the resident data on the GPU: blocks, the feature ring, the reference tables.
+pub const robot_latent_kit = @import("robot_latent_kit.zig");
+/// SuperTrack's loop with the data and both networks resident on the GPU - what the training page runs.
+pub const robot_track_resident = @import("robot_track_resident.zig");
+/// SuperTrack (a supervised world model + a policy through it) and its kit driver.
+pub const robot_supertrack = @import("robot_supertrack.zig");
 /// Pose holding and inverse kinematics — the control layer every demo needs.
 pub const robot_control = @import("robot_control.zig");
 pub const robot_mpc = @import("robot_mpc.zig");

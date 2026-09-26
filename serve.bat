@@ -1,4 +1,4 @@
-@echo --------------------- off
+@echo off
 REM zimr — launch a local web server for the prebuilt examples.
 REM
 REM Requires Python 3 (built into Windows 10+ via the Microsoft Store
@@ -8,11 +8,11 @@ REM and gallery page are already in `prebuilt/`.
 setlocal
 
 REM Need a prebuilt\ directory to serve.  Generate it via release.bat
-REM (or `zig build -Drelease=true dist`) if it's missing.
+REM (or `zig build -Dmode=release dist`) if it's missing.
 if not exist "%~dp0prebuilt" (
     echo.
     echo prebuilt\ not found.  Run release.bat first to generate it,
-    echo or `zig build -Drelease=true dist` if you don't want to push.
+    echo or `zig build -Dmode=release dist` if you don't want to push.
     echo.
     pause
     exit /b 1
@@ -41,7 +41,7 @@ set PORT=8000
 
 echo.
 echo zimr examples gallery
-echo
+echo ---------------------
 echo  Serving prebuilt\ on http://localhost:%PORT%/
 echo  Press Ctrl+C to stop.
 echo.

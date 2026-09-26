@@ -4,85 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>zimr — render to texture</title>
-<style>
-:root{
-  --main-font:"Courier New",Courier,monospace;
-  --header-font:"Georgia","Times New Roman",serif;
-  --bg-page:#1f140e; --bg-paper:#332218; --bg-block:#261912;
-  --text-color:#f0e6d2; --text-muted:#a89684; --accent-color:#d35f33;
-  --border-color:#090604; --shadow-color:#000000;
-}
-*{box-sizing:border-box;}
-body{
-  background-color:var(--bg-page);
-  background-image:radial-gradient(var(--border-color) 2px,transparent 2px);
-  background-size:16px 16px;
-  color:var(--text-color); font-family:var(--main-font); line-height:1.6;
-  margin:0; padding:40px 20px; display:flex; justify-content:center;
-}
-.blog-container{
-  background-color:var(--bg-paper); max-width:860px; width:100%; padding:40px;
-  border:4px solid var(--border-color); box-shadow:12px 12px 0px var(--shadow-color);
-}
-h1.title{
-  font-family:var(--header-font); font-size:2.8rem; line-height:1.1;
-  text-transform:lowercase; border-bottom:6px double var(--border-color);
-  padding-bottom:10px; margin:0 0 10px 0; letter-spacing:-1px;
-}
-h2.subtitle{
-  font-family:var(--main-font); font-size:1.05rem; font-style:italic;
-  font-weight:normal; margin:0 0 20px 0; color:var(--accent-color); line-height:1.4;
-}
-nav.toc{
-  margin:0 0 30px 0; padding:14px 18px; border:2px solid var(--border-color);
-  background-color:var(--bg-block); box-shadow:4px 4px 0 var(--shadow-color);
-}
-nav.toc strong{
-  font-family:var(--header-font); color:var(--accent-color);
-  text-transform:uppercase; letter-spacing:1px; display:block; margin-bottom:8px;
-}
-nav.toc ol{margin:0; padding-left:22px;}
-nav.toc li{margin:3px 0;}
-h3{
-  font-family:var(--header-font); font-size:1.45rem; background-color:var(--border-color);
-  color:var(--text-color); display:inline-block; padding:4px 12px; margin:46px 0 15px 0;
-  border:2px solid var(--text-color); scroll-margin-top:20px;
-}
-h4{
-  font-family:var(--header-font); font-size:1.12rem; text-decoration:underline;
-  text-decoration-color:var(--accent-color); text-underline-offset:4px;
-  text-transform:lowercase; margin:25px 0 10px 0;
-}
-p{font-size:1rem; margin-bottom:18px;}
-a{color:var(--accent-color); text-decoration:underline; font-weight:bold;}
-a:hover{background-color:var(--accent-color); color:var(--bg-paper); text-decoration:none;}
-code{
-  background-color:var(--bg-block); border:1px solid var(--border-color);
-  padding:1px 5px; font-size:0.92em; color:var(--text-color);
-}
-pre{
-  background-color:var(--bg-block); border:2px solid var(--border-color);
-  border-left:6px solid var(--accent-color); padding:15px 18px; margin:18px 0;
-  overflow-x:auto; box-shadow:4px 4px 0px var(--shadow-color);
-  font-size:0.86rem; line-height:1.5;
-}
-pre code{background:none; border:none; padding:0; font-size:inherit; white-space:pre;}
-blockquote{
-  border-left:6px solid var(--accent-color); margin:24px 0; padding:14px 20px;
-  background-color:var(--bg-block); box-shadow:4px 4px 0px var(--shadow-color);
-}
-.bug{border-color:#e0a060; border-left-color:#e0a060;}
-.bug strong{color:#e0a060; font-family:var(--header-font); text-transform:uppercase; letter-spacing:1px;}
-ul{border:2px dashed var(--accent-color); padding:16px 20px 16px 40px;}
-li{margin:5px 0;}
-/* zig syntax highlight tokens */
-code.zig .c{color:var(--text-muted); font-style:italic;}
-code.zig .s{color:#9cb380;}
-code.zig .k{color:var(--accent-color); font-weight:bold;}
-code.zig .b{color:#e0a060;}
-code.zig .t{color:#8fb0c0;}
-code.zig .n{color:#cf8f6f;}
-</style>
+<!--docfmt:style-->
 <body>
 <div class="blog-container">
 <h1 class="title">zimr — render to texture</h1>
@@ -374,26 +296,6 @@ fn update(f: *z.Frame, s: *State) void {
     z.endDrawing(f.gl);
 }
 </code></pre>
-<script>
-function highlightZig(s){
-  return s.replace(/(\/\/[^\n]*)|("(?:\\.|[^"\\])*")|('(?:\\.|[^'\\])*')|\b(pub|const|var|fn|return|if|else|while|for|switch|struct|enum|union|try|catch|defer|errdefer|comptime|inline|and|or|orelse|break|continue|unreachable|undefined|null|true|false|error|test|extern|export|align|callconv|usingnamespace)\b|(@[A-Za-z_][A-Za-z0-9_]*)|\b(f16|f32|f64|i8|i16|i32|i64|u8|u16|u32|u64|usize|isize|bool|void|anytype|type|anyopaque|comptime_int|comptime_float)\b|\b(0x[0-9a-fA-F_]+|[0-9][0-9_]*\.?[0-9_]*(?:[eE][+-]?[0-9]+)?)\b/g,
-  function(m,c,st,ch,k,b,t,n){
-    if(c)return '<span class="c">'+c+'</span>';
-    if(st)return '<span class="s">'+st+'</span>';
-    if(ch)return '<span class="s">'+ch+'</span>';
-    if(k)return '<span class="k">'+k+'</span>';
-    if(b)return '<span class="b">'+b+'</span>';
-    if(t)return '<span class="t">'+t+'</span>';
-    if(n)return '<span class="n">'+n+'</span>';
-    return m;
-  });
-}
-document.addEventListener('DOMContentLoaded',function(){
-  document.querySelectorAll('pre code.zig').forEach(function(el){
-    el.innerHTML = highlightZig(el.innerHTML);
-  });
-});
-</script>
 </div>
 </body>
 </html>

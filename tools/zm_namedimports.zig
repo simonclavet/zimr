@@ -121,10 +121,15 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
             const node: Ast.Node.Index = @fromBackingInt(@intCast(i));
             const vd: Ast.full.VarDecl = ast.fullVarDecl(node) orelse continue;
             const init_n: Ast.Node.Index = vd.ast.init_node.unwrap() orelse continue;
-            if (!isZmDotField(&ast, init_n)) continue;
+            if (!isZmDotField(&ast, init_n)) {
+                continue;
+            }
             const name: []const u8 = ast.tokenSlice(vd.ast.mut_token + 1);
             const field: []const u8 = ast.tokenSlice(ast.nodeData(init_n).node_and_token[1]);
-            if (!eql(u8, name, field)) continue; // not canonical (name == member)
+            // not canonical (name == member)
+            if (!eql(u8, name, field)) {
+                continue;
+            }
             is_binding_init[@backingInt(init_n)] = true;
             try already_bound.append(gpa, name);
         }
@@ -149,7 +154,7 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
             if (fp.name_token) |nt| {
                 try declared.append(gpa, ast.tokenSlice(nt));
             }
-            var it = fp.iterate(&ast);
+            var it: Ast.full.FnProto.Iterator = fp.iterate(&ast);
             while (it.next()) |param| {
                 const pnt: u32 = param.name_token orelse continue;
                 try declared.append(gpa, ast.tokenSlice(pnt));
@@ -167,8 +172,12 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
         var i: usize = 0;
         while (i < ast.nodes.len) : (i += 1) {
             const node: Ast.Node.Index = @fromBackingInt(@intCast(i));
-            if (is_binding_init[i]) continue;
-            if (!isZmDotField(&ast, node)) continue;
+            if (is_binding_init[i]) {
+                continue;
+            }
+            if (!isZmDotField(&ast, node)) {
+                continue;
+            }
             const obj_node, const field_tok = ast.nodeData(node).node_and_token;
             const zm_tok: u32 = ast.nodeMainToken(obj_node);
             const del_start: usize = starts[zm_tok];

@@ -102,7 +102,7 @@ fn captureSig(
     var prev_space: bool = false;
     var i: usize = start;
     while (i < text.len) : (i += 1) {
-        const c = text[i];
+        const c: u8 = text[i];
         if (c == '(') {
             paren += 1;
             seen_open = true;

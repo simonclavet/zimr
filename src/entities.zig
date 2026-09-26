@@ -6316,6 +6316,9 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         pub fn init(self: *@This(), es: *Registry, tr: *Tree) void {
             assert(self.uninitialized(es, tr), @src());
             const entity: Entity = es.getEntity(self);
+            // The node is already a valid, default-initialised component: init only LINKS it into the tree, and a
+            // whole write would reset state set before it (an entity created inactive would wake up).
+            // lint:off whole-init-first: linking an initialised component, not filling raw memory
             self.next_sib = tr.first_child;
             if (tr.getFirstChild(es)) |fc| {
                 fc.prev_sib = entity.toOptional();

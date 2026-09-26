@@ -384,7 +384,7 @@ fn makeDecalImage(gpa: Allocator) !z.Image {
                     col = .{ 255, 220, 60 };
                 }
                 if (r > 0.55) {
-                    a = @intFromFloat(@round(255.0 * (0.72 - r) / 0.17));
+                    a = @round(255.0 * (0.72 - r) / 0.17);
                 }
             }
             const i: usize = (y * n + x) * 4;

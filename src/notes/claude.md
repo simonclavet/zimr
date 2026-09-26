@@ -425,7 +425,39 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
 
 **ACTIVE**
 
-- `zimrnum_plan.md` - **plan v2**: where things stand, the standing rules (znum first, tutorial, GPU sweep, verification, zimrmath, angles), and what remains in dependency order. The full study, the staged port and the 93-row divergence register are in `src/notes/archive/zimrnum_plan_v1.md`.
+- `rl_track_plan.md` - **THE CURRENT PLAN (v3, Sep 26); `C` resumes it.** One Geno policy for every
+  clip, trained overnight on a desktop GPU: the first night learns the whole dance and the whole get-up, then
+  ~100 LaFAN clips with get-ups hidden in some. Sections: standing rules (turn discipline, build/test traps),
+  the goal stated so it can fail, the principles (one task for every clip; the task defines failure; gravity
+  everywhere; root motion followed and SEEN; Simon's filter; judged in reality), where we stand (robot, task,
+  observation, action, learners, teacher, pages, known answers), the lessons, then THE WORK in order - Phase T
+  (the task finished), P (PPO hygiene), S (SuperTrack as published, safe from its model), ON (the night: page,
+  CPU mini-night, rehearsal, morning protocol), A (ADD, the 100-clip library, D5 revisited), X (the phone), M
+  (motion matching) - decisions, risks, the file map, and the SuperTrack / MimicKit comparison tables.
+  Archived: v2 (Sep 23-26, every measurement of Phases R, S, D1-D5, ST, ON, MK2) is
+  `src/notes/archive/rl_track_plan_v2.md`; v1 (T1-T9b) is `src/notes/archive/rl_track_plan_v1.md`;
+  `rl_track_journal.md` is the dated history.
+
+- `ragdoll_compare_plan.md` - **PAUSED (it was the current plan at 2163).** A `ragdoll_compare`
+  example: the MJCF humanoid dropped twice, once in reduced coordinates (`robot.zig` +
+  `robot_physics.Bridge`) and once in maximal coordinates (`zimrphysics`, 13 bodies, 12 joints),
+  to measure perf and flexibility side by side. Simon's decisions are in its §8; Stage 0
+  (`src/robot_maximal.zig`, headless, no GPU) is under way and its journal says what is next.
+
+- `servo_ladder.md` - **ACTIVE, second — its §8 (2163) re-derives the ladder: BALANCE is the gating risk
+  (a held standing pose falls in 1.4 s on both engines), rungs B0-B2 / S0-S2 / R0-R1 / L0.** Getting a ragdoll into a pose, which is upstream of
+  every DReCon/SuperTrack decision: a policy that outputs offsets on top of a controller that
+  cannot hold a pose is a correction to noise. Written after many turns of an exploding ragdoll
+  whose cause was never found. **The diagnosis is that `dance_track` has a dozen interacting
+  features and several were changed per turn**, so a failure could not be attributed - while
+  every single-feature test passed. The method is a LADDER in a new minimal example,
+  `servo_lab`: one addition per rung, one number per rung, a pass threshold, headless first, and
+  no rung skipped for being obvious. Rungs 0-2 pass (one hinge static, one hinge on a sine, all
+  24 joints holding their own rest pose); rung 2 had never been run and both cleared the
+  controller and caught a gain I had just lowered for a plausible reason. `drecon2.md` keeps the
+  method decision and the component measurements; this file owns getting unstuck.
+
+- `zimrnum_plan.md` - **plan v3**: where things stand as a measurement (§1), what "best possible" means as five testable properties (§2), and twenty items in dependency order across four tiers (§3). v2 is in `src/notes/archive/zimrnum_plan_v2.md`; the full study, the staged port and the 93-row divergence register are in `src/notes/archive/zimrnum_plan_v1.md`.
   library with autograd, nn, optim, stats and RL that **trains on the GPU**, every kernel authored
   in Zig through `kompute` + `spv2wgsl`. Design donor `znum` (63k lines + a 19k-line WebGPU
   training runtime + 51 Zig kernel files); nothing is cut, `df`/`sparse`/`io` are staged late.
@@ -438,6 +470,14 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
   znum measures the stock path at ~2x the WGSL). ★ **`spv2wgsl` is NOT lifted from znum** — its
   ledger records the transpiler as verbatim, and zimr's copy is the newer one (11 603 vs 11 561
   lines) and carries the 1980 storage-block fix that znum's kernels will need.
+
+**ACTIVE (second, alongside zimrnum — `C` resumes zimrnum unless you name this one)**
+
+- `docs_style_plan.md` — uniformize every published page to white on black, one shared `<style>`
+  injected at build time by `tools/docfmt.zig`, Zig's own tokenizer doing all highlighting,
+  `<details>` folds, zero runtime JS and zero network. Simon's five decisions are made and
+  recorded in §6. Stages 0-4 and 6 are landed; stage 5 (folds in `robots.html`) is what remains.
+  `zig build doc-gate` — also wired into `check` — is what keeps it from drifting back.
 
 **PAUSED (was the last pair worked before zimrnum)**
 
@@ -810,20 +850,36 @@ minutes. Total under 4 minutes when nothing is wrong:
 zspv, gen_externs, c2js, per-shader transpiles, the engine wasm) for a fraction of the launcher's
 link. If it is green the launcher almost certainly is too. Do NOT pre-warm anything else.
 
-**`scripts/measure.sh <label> <timeout> <cmd...>`** wraps a build and logs wall / peak RSS /
-cache delta / free disk to `/tmp/measure.log`. It exists because `--summary all` only prints on
+**`measure <label> <cmd...>`** (built once by `zig build measure`; `.zenv.sh` puts it on PATH)
+wraps a build and logs wall / peak RSS / cache delta / free disk to `/tmp/measure.log`. It takes
+no timeout argument — wrap it in `timeout`. It exists because `--summary all` only prints on
 COMPLETION — a round that times out leaves no record at all, and cache delta per round is the
 only progress signal that survives. Peak RSS is polled from `/proc` (there is no `/usr/bin/time`
 in this sandbox) and summed across the whole `zig` tree, since what matters is what the box holds
 at once.
 
 Ground rules for every call:
-- FOREGROUND only, wrapped in `timeout`. Backgrounded/nohup builds are
-  reaped silently between tool calls (empty logs, no zig processes).
+- FOREGROUND, wrapped in `timeout`, for anything that fits one call. A plain `&`/`nohup` build is
+  reaped between tool calls (empty logs, no zig processes) - but a DETACHED one survives:
+  `setsid nohup sh -c '...; echo exit $? >> log' < /dev/null > /dev/null 2>&1 &`, then poll the log
+  in later calls (Sep 24: a 457 s D3 run finished this way).
 - **`timeout 250`, not 170.** The 170s convention was calibrated on the 1282-era chain that cost
   850s in S2 alone. On 1902 the longest single round measured is 104s, so a 170s window mostly
   risks orphaning a step that was about to finish. Raise it and the retry loop disappears.
-- `-j1` always (1 core, ~3.9GB RAM). `-Dautofix=false` always.
+- `-j1` always (1 core, ~3.9GB RAM).
+- **LINT AND FMT (Sep 25, Simon): building is NOT gated.** Tests, smoke tests and release pages neither
+  check nor rewrite style - no more `-Dgate=false` / `-Dautofix=false`, and no build ever reformats a file
+  under an edit. Style is required where it matters, always as a non-mutating CHECK: every
+  `*-standalone` page, `dist`, `check`, and anything in `-Dmode=ship` fail unless `lint-check` (fmt --check +
+  lint) passes. `zig build fix` is the ONE step that rewrites (lint --fix, then zig fmt). **End every turn
+  with `zig build fix` (if anything needs it) then `zig build check`.**
+- **NEVER the full `zig build test` inside a turn (Sep 25):** it outlasts a turn - one died mid-run, its finished work
+  unreported. Run the modules touched (`zn-<stem>`), or the main module's tests with `-Dfocus=<example>
+  -Dtest-filter=<name>` (113 s for the timer tests), DETACHED if long. The full suite is Simon's, or a detached run.
+- **`whole-init-first` (lint):** after `x = ...create(T)` or in `init*(self: *T)`, the FIRST write through the pointer is
+  `x.* = .{ ... }` - `create`d memory and `= undefined` ignore field defaults. Name a field `= undefined` in the literal
+  if it is filled later. A function that resets or links an already-valid struct is a false positive: say so in a
+  `lint:off whole-init-first:` line directly above its first field write.
 - **A `timeout`-killed build ORPHANS its children.** `timeout` kills the `zig
   build` PARENT; the `zig build-exe` it spawned keeps compiling — on ONE core,
   forever, starving every command you run afterwards. Symptom: builds that took
@@ -890,34 +946,548 @@ decorations, exec-mode-on-callconv, and the inline-asm `"t"` type constraint tha
 
 zimrmath compiles for BOTH the CPU and SPIR-V. A change that is fine natively can
 fail on the shader path — and the only way to find out used to be building an
-example, which after a zimrmath edit recompiles EVERY shader. Instead:
+example, which after a zimrmath edit recompiles EVERY shader.
+
+**`zig build zm-gpu` is that check, and it takes 3 seconds.** It compiles
+`src/shaders/zm_gpu_probe.zig` — a real SPIR-V fragment entry point that calls the
+riskiest helpers on `zm.Vec` and folds the results into its output, so
+`-O ReleaseFast` cannot delete them and call it verified. It is wired into
+`zig build check`, so it is no longer something to remember to run.
+
+★ This section previously documented `scripts/spv_math_probe.zig` and a hand-run
+command line. **That file did not exist** — the recipe had been carried in this
+document long after whatever created it. If a probe fn needs adding, add it to
+`src/shaders/zm_gpu_probe.zig`, where the build already compiles it.
+
+The flags, if you ever need them by hand (they are what `src/shader_codegen.zig`
+uses; `-fno-llvm -fno-lld` is MANDATORY — LLVM segfaults on the spirv target):
 
     ZIG=tools/zig-x86_64-linux-*/zig
     $ZIG build-obj -target spirv32-vulkan -mcpu vulkan_v1_2 \
       -fno-llvm -fno-lld -O ReleaseFast -ofmt=spirv \
       -femit-bin=/tmp/probe.spv \
-      --dep zm -Mroot=scripts/spv_math_probe.zig -Mzm=src/zimrmath.zig
-    .zig-cache/o/*/spv2wgsl --check /tmp/probe.spv
+      --dep zm -Mroot=src/shaders/zm_gpu_probe.zig -Mzm=src/zimrmath.zig
 
-Those are the EXACT flags `src/shader_codegen.zig` uses (`-fno-llvm -fno-lld` is
-MANDATORY — LLVM segfaults on the spirv target). `zm` has NO module deps, so
-`--dep zm` is the only one needed; the generated `*_externs` module is NOT
-required because the probe has no shader entry point.
+`zm` has NO module deps, so `--dep zm` is the only one needed.
 
-**`spv2wgsl --check` is the real assertion**: it parses the WHOLE module, so it
-proves zimr's own SPIR-V→WGSL transpiler understands every instruction the new
-code emits. The WGSL OUTPUT will be ~30 bytes — spv2wgsl only emits from an
-OpEntryPoint and a probe has none. That is expected, not a failure.
+★★ **The type-parameterized helpers are the ones that break, and they break
+silently.** `nan`, `inf`, `floatMax`, `floatMin` and `floatEps` take a TYPE, not a
+value, so `perLane` cannot reach them — every one answered `@compileError` for a
+vector type, which is exactly what a shader computes in. They splat now
+(`FloatScalar` + `splatTo`), and the probe is what keeps them splatting.
 
-Used this to clear the riskiest edit of the vocabulary work: `clamp01` went from
-`pub fn clamp01(v: f32) f32` to `pub inline fn clamp01(v: anytype)` with a
-`switch (@typeInfo(T))`, and shaders call it 24x directly plus more via
+Used the same approach to clear the riskiest edit of the vocabulary work:
+`clamp01` went from `pub fn clamp01(v: f32) f32` to `pub inline fn clamp01(v: anytype)`
+with a `switch (@typeInfo(T))`, and shaders call it 24x directly plus more via
 `smoothstep`. Probe compiled in 1s; the @typeInfo switch folds away at comptime
 and what reaches the backend is plain OpSelect/OpPhi/OpBranchConditional — the
-same ops `min`/`max` already emit. Add a probe fn to scripts/spv_math_probe.zig
-whenever a math function starts being used by shaders.
+same ops `min`/`max` already emit.
+
+★★ **THE `std-math` BAN NOW HAS A FILE-LEVEL OPT-OUT, AND ONLY A FILE-LEVEL ONE.**
+
+    //! lint:off std-math: <why this file never reaches a shader>
+
+Per-line `// lint:off std-math` is still refused. The distinction is the point: "this
+file never reaches a GPU" is a property of the whole file, declared at the top where a
+reviewer sees it. A per-line escape would silence one call inside a file that IS
+shader-reachable — the exact hazard the ban was written for — and it would be invisible
+4000 lines down.
+
+The ban exists for one reason: std.math is host-only and does not reliably lower to
+SPIR-V. A host-only transpiler has no portability exposure, so applying the rule there
+follows it past its reason and costs a real dependency for nothing. `tools/c2js.zig`
+had gained a whole `zm` import for a single `zm.nan(f64)` — a module dependency for one
+constant. Reverted; it carries the directive instead.
+
+★ **THE STANDALONE TOOLS, AND WHAT THEY ACTUALLY DEPEND ON TODAY** (measured, not hoped):
+
+    src/spv2wgsl.zig      std + builtin ONLY — fully extractable as-is
+    tools/spv2wgsl.zig    std + the `spv2wgsl` module (it is a thin CLI over the above)
+    tools/zspv.zig        std + zspv_rewrite.zig (relative, same tool)
+    tools/c2js.zig        std + `jobs_abi` (73 lines, std-free) — effectively two files
+
+Keeping these extractable is worth something concrete: `spv2wgsl` is useful to anyone
+doing WebGPU in Zig, and it costs nothing to leave it that way. `tools/mesh_bake.zig`
+is the opposite case and keeps its `zm` import — it already pulls zimrmath transitively
+through `codecs`, so the dependency is free and the consistency is worth having.
+
+★ **This is a policy, not a check, which means it will drift.** Nothing fails if someone
+adds an import to `src/spv2wgsl.zig` tomorrow. The obvious fix is a `//! lint:standalone`
+directive whose rule rejects any `@import` outside std/builtin and same-tool relatives —
+small, and it turns the paragraph above into a property. Not built yet.
+
+★ **The c2js CASE CORPUS is already skipped from linting** (`build.zig`, the
+`firstSegmentIs(entry.path, "c2js_cases")` branch): 102 files of deliberately-varied Zig
+that exist to exercise the transpiler, not to follow house style. Note that
+`webtests/transpiler_corpus.zig` is a DIFFERENT thing despite the name — it is zimr's own
+harness that runs that corpus, so its lint findings are real and it stays linted.
 
 ### zimrmath canonical names — the @compileError TEACHING ALIAS (the mechanism)
+
+★★★ **THE LINTER'S AST WALK WAS INCOMPLETE, AND EVERY RULE INHERITED THE GAPS.**
+`childNodes` enumerates node tags and ends `else => return buf[0..0]` — no children
+for anything unlisted — and `walkNode` visits only *some* children of the tags it
+does handle. Each gap is a place a rule silently does not apply. Found one at a
+time, by grepping for violations the linter reported zero of:
+
+- `.assign` and the 18 compound forms — an entire right-hand side, unvisited.
+  `src/zimrphysics.zig` called `std.math.sign` three times that way.
+- `.while_cont` — the `while (i < n) : (i += 1)` form is a DIFFERENT tag from
+  `.while_simple`, in neither the switch nor `childNodes`. `src/image.zig:515` had
+  `std.math.clamp` inside one and lint reported clean for as long as it existed.
+- `if` / `while` **conditions**, and the continue expression. The walk takes
+  `then_expr` and `else_expr` and never the condition — so
+  `if (std.math.isNan(v))` was invisible.
+- positional `.{ a, b, c }` initialisers.
+
+**`std-math` no longer rides the walk.** It sweeps every node index in the file
+(`runChecks`), which is complete by construction and cannot grow a new blind spot
+when an unfamiliar syntax shape shows up. The other rules still walk, because they
+need `pos`/`fn_depth`; widening them is a separate job, one rule at a time, because
+each newly-reached node is a violation to fix or baseline.
+
+★★★ **THE BASELINE IS NOW EMPTY — THE TREE LINTS CLEAN WITH NOTHING GRANDFATHERED.**
+All 594 violations the ratchet was holding are fixed. `tools/lint_baseline.tsv` is a
+comment explaining how to regenerate it, and should stay that way: a non-empty
+baseline now means someone accepted a backlog on purpose.
+
+★★★ **LINT-CLEAN AND FMT-CLEAN PROVE NOTHING ABOUT CORRECTNESS.** The last pass fixed
+207 findings with no compile in between, exactly as asked. `zig fmt` passed, lint
+passed, and **six functions in `ui.zig` were silently broken** — `setScrollX(-50)`
+returned -50 instead of 0. Only `zig build test` knew.
+
+The cause is worth memorising: **`@min(A, B)` is SYMMETRIC**, so a regex converting
+`@max(0, @min(A, B))` into `clamp(...)` cannot tell the bound from the value. It
+guessed, and got six of eight backwards. Every other clamp conversion that session was
+written out per-site by hand and was correct. **Do not pattern-match a commutative
+operator into a positional one.**
+
+★★ **A `pub const x = @compileError(...)` TEACHING ALIAS TAKES THE TEST GATE DOWN.**
+`src/tests.zig` runs `std.testing.refAllDecls(zm)`, which references every PUB decl, so
+the error fires when the tests compile rather than when someone writes the old name.
+zimrmath already documented this on `saturate` and it still caught me. The working form
+is a PRIVATE stub - `fn phi() void {}` - invisible to `refAllDecls` (it only sees pub
+decls via `@typeInfo`) while still visible to a reader, and the old name then fails with
+"not marked 'pub'" which lands them on the note.
+
+★★ **NON-ZIG CODE: WHAT WENT, WHAT STAYED, AND WHY.**
+
+Deleted - eleven one-shot migration scripts under `scripts/` (brace/alias/cast rewriters, six
+docs restylers). They had already been applied; keeping an applied migration invites someone to
+run it twice.
+
+Converted to Zig:
+
+| was | now |
+|---|---|
+| `scripts/zn.sh` | `zig build zn-<stem>` - one step per fast-test root, twelve of them |
+| `scripts/measure.sh` | `tools/measure.zig`, installed by `zig build measure` |
+
+`measure` is INSTALLED to `tools/zig-out/bin` rather than run through a step, because this
+Zig's `Build` has no `b.args` - a step cannot forward trailing `--` arguments, and the tool is
+useless without them. `.zenv.sh` already puts that directory on PATH.
+
+Two things the Zig version does BETTER than the shell it replaced: peak RSS comes from
+`request_resource_usage_statistics` / `getMaxRss()` instead of polling `/proc` every 250 ms
+(exact, and it counts the build runner's children), and `statfs` is declared directly rather
+than shelling out to `df`. It has NO internal timeout: this std's `Child` exposes `wait` and
+`kill` but no `tryWait`, so bounding a run would need a watchdog thread when the caller already
+has a better one.
+
+★★★ **ONE HAND-DECLARED KERNEL ABI IN THIS REPO: `tools/fs_space.zig`.**
+
+Nothing in this Zig's std exposes filesystem statistics - no `statfs` wrapper, no
+`GetDiskFreeSpaceEx` binding - so free space has to be declared by hand, per platform. That
+makes it exactly the thing not to have two of, and there were two: `build.zig`'s disk guard
+(Linux + Windows, returning `?DiskSpace`) and a SECOND one I wrote in `tools/measure.zig` that
+was Linux-only and returned **0** on failure. A zero there reads as "disk full" - the opposite
+of "did not measure". Both now call `fs_space.query()`.
+
+★ **`null` IS THE ANSWER FOR A PLATFORM THIS HAS NOT BEEN TESTED ON**, and callers must render
+it as `n/a`, never as a number. What that means concretely:
+
+    linux x86_64   syscall + hand-declared struct — CHECKED against `df -m /`, agrees to the MB
+    linux 32-bit   null — the layout differs and needs `statfs64`; not guessed at
+    windows        `GetDiskFreeSpaceExA` — documented contract, NOT run, no machine here
+    macos, bsd     null — its `statfs` needs libc and a different struct, and a wrong struct
+                   does not fail loudly, it returns plausible garbage
+
+★★ **PORTABILITY IS NOT A PROPERTY OF THE ENGINE ALONE - IT IS A PROPERTY OF THE TOOLS TOO.**
+A dev harness that only runs on Linux quietly makes the repo Linux-only for anyone who tries to
+contribute from a Mac.
+
+★ **MUST STAY NON-ZIG, and not for want of trying:**
+
+- `scripts/robot_oracle.py`, `scripts/robot_bench_mujoco.py` - they generate fixtures from REAL
+  MuJoCo. The whole point is that an INDEPENDENT implementation produces the reference values.
+  Rewriting them in Zig would make zimr its own oracle, which is not a test.
+- `.zenv.sh` - it is what puts `zig` on PATH. A build step cannot bootstrap the thing that runs
+  build steps.
+
+★★★ **THE DUPLICATE THAT SURFACED BY ACCIDENT.** Adding a step per fast-test root made
+`zig build` REFUSE TO CONFIGURE - "a top-level step with name zn-zimrmath already exists" -
+because `zimrmath.zig` and `zimrnum.zig` were each listed TWICE in `fast_test_roots`.
+`test-fast` had been building and running both of them twice over, for who knows how long. A
+duplicate in a list of strings is invisible; a duplicate in a list of NAMES is a hard error.
+
+★★★ **THE TRANSPILER NOW READS ITS OWN OUTPUT BACK: `checkNonFiniteConstants`.**
+
+`src/spv2wgsl.zig` refuses to return WGSL containing a spelling a device has rejected. Two
+entries today, both of which cost a debugging cycle:
+
+    return nan;                       a bare non-finite token - WGSL has no such literal
+    bitcast<f32>(2143289344u)         a const-expression that folds to an unrepresentable value
+
+It is NOT a WGSL validator and does not try to be one. It is a list of things THIS transpiler has
+emitted and a device has actually refused. The point is that the second occurrence costs a build
+failure rather than a round trip through a phone. Plant-verified: reverting `nonFiniteName` to
+the const-foldable form now fails `zig build` with `spv2wgsl: WgslNonFiniteConstExpr`.
+
+★ **IT IS A HARD ERROR, DELIBERATELY, UNLIKE `checkOutputClosure`.** That neighbouring check runs
+only in `.debug` and only WARNS, returning the bad WGSL anyway because "the browser's WGSL
+frontend rejects it at pipeline creation if it actually matters". It does matter, and the
+rejection names no cause - that reasoning IS the three round trips. There is no use for WGSL that
+cannot compile, so this one fails in every mode.
+
+★★ **A LINT RULE WOULD HAVE BEEN THE WRONG ANSWER, and it was considered.** `nan(f32)` inside a
+kernel is CORRECT - `diff` of n values genuinely has one slot with no answer, and the host writes
+NaN there on purpose. The bug was never in the kernel; it was in how the transpiler spelled the
+constant. A rule flagging kernels that use `zm.nan` would fire on legitimate code forever and
+teach people to silence it. **Check the layer that was wrong, not the layer that was nearby.**
+
+★★★ **`createShaderModule` NEVER THROWS - ASK `getCompilationInfo()` OR YOU GET THE CASCADE.**
+
+A WGSL module that failed to compile is returned as a live object. The first thing anyone hears
+is one call later:
+
+    [Invalid ShaderModule "diff_forward"] is invalid due to a previous error.
+
+**"a previous error" is literally the whole message.** The actual diagnostic - with a line and a
+column into the rejected WGSL - sits in `module.getCompilationInfo()`, and nothing was asking.
+`src/bridge.zig`'s `jsDeviceCreateShaderModuleWgsl` now attaches a reporter that routes errors to
+`window.__wzFail`, the page's existing full-screen surface. It is a Promise and the bridge call
+is synchronous, so it fires a moment later - order on screen is not the point, having the
+message at all is.
+
+★ **This cost two device round-trips.** A NaN-literal bug was found by reading transpiler output
+by eye, fixed correctly, and the SAME cascade came back - because a second problem in the same
+module was never being printed. Reading generated code by eye is what you do when the tool that
+knows the answer has not been asked.
+
+★★ **AND VERIFY THE ARTIFACT, NOT THE BUILD COMMAND.** A standalone page is base64 wasm; grepping
+the HTML for `bitcast<f32>` finds nothing whether or not the fix is in it. Decode the blobs:
+
+    python3 -c "import base64,re; s=open(P).read(); print(sum(base64.b64decode(b).count(T)
+      for b in re.findall(r'\"([A-Za-z0-9+/=]{2000,})\"', s)))"
+
+I shipped a page as fixed without doing that, and an `&&` chain had silently skipped the copy on
+a failed lint, so the file handed over was the previous build.
+
+★★★ **WGSL HAS NO NaN OR INFINITY LITERAL, AND spv2wgsl WAS EMITTING ONE.**
+
+`renderConstant` printed a float with `{d}`, which renders a NaN as the text `nan`, and then
+checked the spelling for any of `".eEnN"` to decide it was "already formatted" - so `nan` and
+`inf` were returned VERBATIM. The emitted WGSL was `return nan;`. That is not an identifier, a
+keyword or a literal in WGSL; the spec has no way to spell either value.
+
+★ **Nothing in this repo parses the WGSL it produces**, so the failure was invisible to every
+gate: `zig build check`, the corpus, the smoke test and the SPIR-V probe all passed. It surfaced
+only on a real device, as
+
+    [Invalid ShaderModule "diff_forward"] is invalid due to a previous error
+    - While validating compute stage ... entryPoint: "diff_forward"
+
+Every kernel touching `zm.nan` was affected. The sweep's `diff` row is the one that reached a
+browser, because `diff` of n values has one slot with no answer and the host writes NaN there.
+
+★ **AND `bitcast<f32>(2143289344u)` IS NOT THE FIX EITHER.** Tint rejects it too:
+
+    :156:10 error: value nan cannot be represented as 'f32'
+      return bitcast<f32>(2143289344u);
+
+**A bitcast of a LITERAL is a const-expression**, so it gets folded at compile time, and a WGSL
+const-expression must be representable - which is precisely what a NaN is not. Nor does a
+module-scope `var<private> x: f32 = bitcast<f32>(...)` help: a module-scope initializer must
+ALSO be a const-expression, same fold, same rejection.
+
+The escape is a FUNCTION-SCOPE `var`, which is runtime storage:
+
+    fn nonfinite_2143289344() -> f32 {
+      var b: u32 = 2143289344u;
+      return bitcast<f32>(b);
+    }
+
+The constant evaluator never sees it. The DEVICE has no trouble with NaN at all - only the
+compiler's const-eval does. `spv2wgsl` emits one helper per distinct bit pattern, so a module
+using NaN five times declares it once and `+inf` never collides with `-inf`.
+
+★ **`std.math` IS ALLOWED IN `src/spv2wgsl.zig`** (file-level `lint:off`, like `tools/c2js.zig`):
+it is a host-only transpiler that never reaches a device, so the GPU-portability reason does not
+apply. And unlike a `zm` dependency it costs NOTHING - `std` is already imported, so the file
+stays as extractable as it was. I reached for `zm.isFinite` first and had to back it out; the
+distinction is module edge versus namespace, not std versus not-std.
+
+★★★ **THE ADVANTAGE OVER znum IS NOT PARITY, IT IS THE DYNAMICS.**
+
+znum's continuous-control gate trains a **point mass in R^3** - position in, clamped velocity
+out. That is all it has: znum contains NO articulated-body dynamics. `src/robot.zig` is 128
+public declarations of `forwardDynamics`/`inverseDynamics`/`step` with MJCF and URDF loading and
+MuJoCo-generated fixtures.
+
+**A policy trained against verified articulated dynamics, in one binary, with the physics under
+test by the same suite, is a category znum cannot reach** - and both halves are already here.
+When zimrnum's RL work is ranked, rank it by what gets to that gate.
+
+★ **AND zimrnum CAN BE BORN WITH znum's BUGS FIXED.** `RL_REVIEW.md` is an adversarial
+self-review; its findings are free design constraints. The one that matters most: znum's
+`ReplayBuffer` carries ONE `done` flag and therefore cannot distinguish "the episode ended" from
+"we cut it at the horizon" - zeroing the bootstrap on a horizon cut teaches the critic the world
+ends there. znum calls this structural. **zimrnum's `ReplayBuffer` is a raw ring with no flag
+yet**, so carrying `terminal` and `truncated` separately is free TODAY and expensive once
+callers exist.
+
+★★★ **A STRUCT-FIELD DEFAULT IS NOT AN INITIALISER WHEN THE CALLER HANDS YOU ZEROED MEMORY.**
+
+`dance_track` declared `kp: f32 = 400.0` and shipped with `kp 0` - `.memory = .managed` gives
+`init` a zeroed State and the declaration never runs. No torque at all, a limp ragdoll, and a
+source file that read as if the gains were set.
+
+★ **A number on screen that disagrees with the source beats any amount of reading the source.**
+The panel was added for a different reason and found this in one glance; it had been wrong since
+the example first compiled.
+
+★★★ **KEEP SOURCE DATA IN SOURCE UNITS; CONVERT AT THE POINT OF USE.**
+
+A BVH skeleton drew as a sprawling mess because each bone OFFSET was converted to metres and
+Z-up, then rotated by a rotation still in the file's own Y-up frame. **Rotating a Z-up vector by
+a Y-up rotation is not a small error - it is a different animation.**
+
+★ The engine's own `bvhForwardKinematicsFromRotations` has the identical recurrence and no such
+bug, because its offsets and rotations were loaded into the SAME space. It never converts
+mid-walk because it never has two spaces to be between.
+
+★★ The same applies to any value with two consumers wanting different units: converting early
+forces one of them to convert back, and **a value that is converted, unconverted and reconverted
+is one whose frame nobody can state.**
+
+★★★ **INSTALL A PANIC HANDLER BEFORE DEBUGGING ANY WASM BUILD.**
+
+A Zig safety trap in wasm is a bare `RuntimeError: unreachable` - no message, no line, no stack.
+Six turns went to bisecting a panic that named itself in ONE build once
+`pub const panic = std.debug.FullPanic(common.reportPanic)` existed. An example is the root
+module of its own binary, so the handler goes in the example; the function lives in
+`example_common`.
+
+★★ **AND `usize` IS 32 BITS ON WASM, 64 NATIVELY.** That was the bug underneath: a contact id
+passed through a `usize` parameter, masked to 48 bits, silently fine on one target and trapping
+on the other. **An id is not a size** - `usize` means "big enough to index memory" and nothing
+else. Any id, key, hash, handle or packed field typed `usize` is the same bug waiting.
+
+★ The general rule: **when a build target differs from the one you test on, the differences are
+a checklist, not a surprise.** For wasm: `usize` width, `@intCast` traps, no stack traces.
+
+★★★ **BUILD THE KNOWN-GOOD DEMO BEFORE DEBUGGING YOUR OWN.**
+
+`dance_track`'s panel was invisible across three device runs and two theories. Building
+`quadruped-standalone` and diffing its update against mine found both causes in one build:
+a missing `ui_host.render`, and an `endDrawing` the runtime already does.
+
+★ **Two bugs whose symptoms cancelled.** Without `render` the panel was silently absent; the
+moment `render` was added the stray `endDrawing` turned silence into a crash. Either alone would
+have been obvious - together they read as "the panel does not work".
+
+★ The general move: **when something in your code does not work and an engine demo does the same
+thing, diff the two before forming a theory.** It is one build and it compares against something
+known to be right, which no amount of reading your own code does.
+
+★★★ **BISECT THE FRAME FUNCTION; DO NOT THEORISE ABOUT `unreachable`.**
+
+A wasm panic surfaces as a bare `RuntimeError: unreachable` with no stack, and three rounds of
+reasoning about which index might be out of bounds produced nothing. Cutting the frame function
+in half twice - setup only, then setup plus the controller, then everything - located it in
+minutes.
+
+★ **And the linter had been pointing at the cause the whole time.** `@intFromFloat` is
+`unreachable` on a NaN or out-of-range value; the `int-from-float` rule flags it as redundant
+where the destination type is pinned. **A rule that reads like style was describing a crash** -
+worth reading lint output for what it implies, not only for what it asks.
+
+★★★ **READ THE INTERFACE BEFORE WRITING AGAINST IT - GUESSING COSTS A REWRITE EVERY TIME.**
+
+Two drafts parked in one session, both from the same cause. A retarget tool written against
+guessed API names used an identity rest alignment where a real T-pose offset was required - it
+would have produced a character moving plausibly and WRONGLY. A second draft assumed
+`robot_mjcf` was a module; it is a file inside `robot`, and every import route from `tools/` is
+closed.
+
+★ The tell is that the MEASUREMENTS in the same session were all reliable, because a measurement
+cannot be guessed - it either runs or it does not. **Code written against an inferred interface
+compiles, looks finished, and is wrong in a way no test written by the same guess will catch.**
+
+★★ **And check whether the problem exists before solving it.** The tool was precomputing a
+retarget that costs 1.8 ms - about 126 physics steps, against 2,400 for one pass over the clip.
+Two attempts at a file format, a build step and a checked-in asset, for a cost nobody had
+measured.
+
+★★★ **A STRUCT LITERAL EVALUATES ITS FIELDS IN ORDER, SO COPYING A BUILDER BEFORE CALLING IT
+AGAIN LOSES THE LATER WORK.**
+
+    return .{ .graph = g, .loss = try g.mseLoss(pred, y) };   // WRONG
+
+`.graph = g` copies the graph, THEN `mseLoss` appends nodes to the original. The returned copy
+does not contain its own loss, and `backward` indexes past the end of `values` - an
+out-of-bounds panic hundreds of lines away with no stack pointing at the cause.
+
+★ The rule: **build everything first, then write the literal.** Any field whose expression
+mutates another field's value is a field evaluated too late.
+
+★★ **A NUMERICALLY DELICATE FORMULA WRITTEN TWICE WILL BE IMPROVED IN ONLY ONE PLACE.**
+
+softplus existed three times: a tensor op in zimrnum with the scalar inline, a private helper in
+`SquashedGaussian`, and a hand copy inside `squashCorrection` written when a kernel needed one.
+All three used the stable shifted-`log1p` form - this time. The next improvement would have
+landed in whichever copy the author happened to be looking at.
+
+★ The move is not "extract every repeat" but: **when a formula was CHOSEN over an obvious
+alternative for numerical reasons, it gets exactly one home** - and if a shader might need it,
+that home is the shader-safe module.
+
+★★★ **A TEST THAT ONLY EXERCISES AN OPERATION'S FIRST CALL VERIFIES THE ONE CALL THAT BARELY
+MATTERS.**
+
+Our `adam step` conformance row filled both moments with zero - the state that holds for exactly
+one update per training run. The kernel was written to match, and so was structurally incapable
+of a second step. `polyakUpdate` had no row at all, and at update 1 it moves a value to itself.
+
+★ The pattern to look for: **an operation whose behaviour DEPENDS ON ACCUMULATED STATE is a
+different function on its first call than on its thousandth.** Optimiser moments, target-network
+follows, running normalisers, schedulers. Test the warm path explicitly, because the cold one is
+both easier to write and nearly worthless.
+
+★ A predecessor project lost eleven hypotheses to a GPU trainer that learned correctly for one
+update and then diverged. That is the symptom this class of gap produces.
+
+★★ **A NAME THAT PICKS ONE OF TWO CASES CONTRADICTS ANY DOC SAYING THEY ARE ONE.**
+
+`ddimStep` implemented DDPM too - `eta = 0` is DDIM, `eta = 1` is DDPM - and the doc comment said
+so, two lines under a name that had already chosen. Renamed `diffusionReverseStep`.
+
+★ The check is mechanical: **if the doc has to explain that the name is only half the story, the
+name is wrong.** Same for abbreviations - `cartpoleContStep` made every reader guess at `Cont`
+to save eight characters in a file where nothing else is short.
+
+★★★ **A DOC COMMENT THAT DESCRIBES BEHAVIOUR IS A CLAIM, AND AN UNTESTED CLAIM ROTS SILENTLY.**
+
+`discriminatorReward`'s comment said a zero floor "is refused". It was not - the function is
+scalar-first and has no error union to refuse with. Every other property of that function had an
+assertion; this one had a sentence, and the sentence was wrong from the moment it was written.
+
+★ The tell is grammatical: **"is refused", "must be", "cannot happen" are assertions in prose.**
+Either the code enforces them - in which case a test can check it - or the comment is describing
+a precondition and should say so. The whole argument for writing reasoning into this codebase is
+that it can be checked; a sentence nobody can run is the one kind of comment that gets away.
+
+★★★ **WHEN AN RL POLICY WILL NOT LEARN, CHECK THE EXPLORATION SCALE BEFORE THE LEARNING RATE.**
+
+AWR on cartpole reached a recognisable controller SHAPE - right signs, sensible relative
+magnitudes - and the return did not move. Two attempts went into the learning rate. The actual
+cause was that `sigma = 0.5` let the policy sample only forces near zero, on a task whose useful
+range is +/-10 N: **it never observed what a real push does, so it had no gradient toward one.**
+Raising sigma to 2.0 doubled the return immediately.
+
+★ The general form: a policy cannot learn from an action it never takes. When the weights look
+right and the returns do not move, the question is whether the action distribution covers the
+part of the space where the reward changes - not whether the step size is large enough.
+
+★★★ **WHEN A DEVICE DISAGREES, CHECK THE ARITHMETIC BEFORE THE TOOLCHAIN.**
+
+The sweep's `diff` row reported a finiteness mismatch. The search went: the SPIR-V transpiler
+(recently fixed, phi handling is genuinely hard), then the driver (fast-math assumptions eat
+NaNs), then - last - what the two sides actually compute. **The kernel tested `id == 0` for a
+hole that `zn.diff` puts at column 0 of EVERY ROW.** Sixty-three rows disagreed, in two ways at
+once, and the arithmetic was the cheapest thing to check and the last thing checked.
+
+★ Suspicion follows MEMORY rather than probability. A hard bug in area X makes X the available
+explanation for the next symptom, however unrelated. The counter is mechanical: **before blaming
+a layer, write down what each side computes and compare those.**
+
+★ A one-row diagnostic that removes everything except the question - here `nan direct`, a bare
+`nan(f32)` store with no branch and no call chain - is worth more than an hour of hypotheses. It
+cost one kernel and eliminated the driver entirely.
+
+★★★ **A SCANNER THAT MATCHES AN EXACT TAG STOPS SEEING THE DOCUMENT WHEN THE TAG GAINS AN
+ATTRIBUTE - AND REPORTS SUCCESS WHILE DOING IT.**
+
+`tools/zimrnum_ref.zig` looked for the literal `"<pre><code>"`. The docs restyling gave every
+block a `class="zig"`, and **148 of the tutorial's 241 examples silently stopped being checked**
+- arity included. The tool found the 93 bare ones, checked those, and printed a success line.
+Source folds went 46 -> 290 when it was fixed to match `"<pre><code"` and skip to the `>`.
+
+★ `doc-sync` had the SAME bug for the SAME reason and was fixed three weeks earlier. Two
+scanners, one restyling, one lesson not carried across. **When a document's markup changes,
+grep for every tool that parses it**, not just the one that broke.
+
+★★★ **`test` AND `test-fast` ARE COMPLEMENTARY, NOT NESTED. NEITHER IS "THE FULL SUITE".**
+
+Measured, not assumed - `zig build … --summary all` shows the shape:
+
+    zig build test        ONE test binary, rooted at src/tests.zig
+    zig build test-fast   SIX test binaries: zimrnum, zimrmath, robot, codecs, physics, …
+
+`src/tests.zig` contains **zero `test` blocks** - it is 56 `refAllDecls` calls - and it
+**never mentions zimrnum**. So `zig build test` compiles and exercises the render/engine
+half and is BLIND to the numerics/physics half. Touch `src/zimrnum.zig` and it finishes in
+2 s having rebuilt nothing.
+
+★ That blindness cost a turn: a `numericalGrad` conversion that wrote through a
+`@constCast` const array passed `zig build test` TWICE and was caught only by the gate,
+which runs `test-fast`. An earlier note here claimed `test` was "the only complete compile
+check"; it is complete for what `tests.zig` imports and for nothing else.
+
+**The rule: after editing a file, run the step that actually builds it.** For the shader
+half that is `zig build test`; for zimrnum/zimrmath/robot/codecs/physics it is
+`zig build test-fast`; for an example it is that example's smoke.
+
+★★ **FOR ZIMRNUM WORK, SKIP THE BUILD GRAPH ENTIRELY.** `zimrnum.zig` imports `std` and
+`zm` and nothing else, so it can be its own test root:
+
+    zig build zn-<stem> -Dgate=false [-Dtest-filter=…]
+
+There is one per fast-test root - `zn-zimrnum`, `zn-zimrmath`, `zn-robot`, and nine more.
+Measured after a real edit to zimrnum: **21 s filtered, 71 s for all of its tests, ~1 s when
+nothing changed**, against `test-fast`'s 71-212 s for all six modules. `-Dgate=false` skips
+the lint/fmt pass that otherwise precedes every compile.
+
+★ Finding these required adding them: `zig build` REFUSED TO CONFIGURE with a duplicate step
+name, which is how it came out that `zimrmath.zig` and `zimrnum.zig` were each listed TWICE
+in `fast_test_roots` - `test-fast` had been building and running both of them twice over.
+
+Run `zig build test-fast` before calling something done; it is the step the gate runs.
+
+★ **`@TypeOf(map).GetOrPutResult` over the spelled-out map type.** An annotation that
+repeats a declaration can drift from it, and did: a `u64` annotation sat over a `u32`
+map in zimrnum. `@TypeOf` cannot. Note it is `@TypeOf(map)`, not `@TypeOf(map.*)`, when
+the map is a local rather than a pointer parameter.
+
+★★ **`tools/lint_baseline.tsv` IS A RATCHET, NOT A SUPPRESSION LIST.** Fixing the
+walk exposed 594 pre-existing violations — the tree was never clean, the walker was
+blind, and the hard gate's "after all rules cleared" was true only of what it could
+see. The baseline records a count per (file, rule); anything ABOVE it fails, so new
+code is held to every rule from today. Keyed by file and rule rather than line, so
+an unrelated edit that moves a line does not spuriously fail. Regenerate
+deliberately, never casually:
+
+    zimrlint --baseline tools/lint_baseline.tsv --write-baseline <files...>
+
+★★ **std.math IS NOW ZERO TREE-WIDE**, which had never been true. 43 call sites
+moved to `zm` across `src/`, `examples/` and `tools/` — floats (`clamp`, `isNan`,
+`isInf`, `isFinite`, `floatMax`, `nan`, `pi`) because they are why the rule exists,
+and the comptime helpers (`maxInt`, `Log2Int`) because the destination is ONE math
+module. zimrmath already had all of them. `tools/mesh_bake.zig` and `tools/c2js.zig`
+gained a `zm` import in build.zig to get there: a host-only tool is no exception,
+since the point is that one module is the answer to "where does this live", not that
+portability happens not to bite in that file.
+
 The tension: **discoverability** wants the alias to EXIST (`zm.mix` should resolve, or people
 hand-roll duplicates — which is exactly what happened with `step`/`stepEdge`); **consistency**
 wants ONE spelling in the codebase. Both, via a dead decl that teaches:
@@ -1895,6 +2465,9 @@ false economy:
   running the sweep** — a green build says nothing about it.
 
 ★ **THE FMT GATE DOES NOT COVER `tools/`, AND 18 FILES HAVE BEEN ROTTING THERE SINCE 1676.**
+**Status on 2163: the debt is paid** — `zig fmt --check tools --exclude tools/zig-x86_64-linux-*`
+is clean. The BOUNDARY is not: the gate still names `tools/zimrlint.zig` alone, so the next
+automatic migration will stop at it again. What follows is the original finding.
 `zig fmt --check` over the whole tree flags `tools/rename_local.zig`, `rename_pub_fn.zig`,
 `zm_namedimports.zig`, `decl_deps.zig` and 14 `tools/c2js_cases/cases/*.zig` — all wanting the
 *1676* migration (`@intFromEnum`→`@backingInt`, `@enumFromInt`→`@fromBackingInt(@intCast(x))`).
@@ -2008,6 +2581,148 @@ Measured cold on 1980, 1 core, `-Dmode=release -Dautofix=false -j1`: build runne
 --check` over the gated surface clean; `hello-world-standalone` **118s / 1.74 MB**;
 `launcher-standalone` **80s / peak 1132 MB / 13.78 MB**; `check` **79s** green (corpus clean, no
 regressions, wgpu_smoke PASS); `smoke-test -Dfocus=fluid_gpu` PASS (init 4372 calls, ~151/frame).
+
+### 2125 — A NO-OP BUMP, AND WHAT "NO-OP" COST TO PROVE THIS TIME
+
+`0.17.0-dev.2125+0d600e488`, from 1980, with `.zig-cache`, `zig-out` and the old toolchain
+deleted first. **Zero source changes.** All three tiers clean on the first pass, no retry loop.
+
+★ **Tier 2 cost nothing.** `zig fmt --check` over the gated surface is clean — 2125 ships no
+automatic builtin migration, unlike 1676.
+
+★★ **Tier 3 static, and it is now a FOUR-SECOND exclusion: `lib/zig.h`'s name surface is
+BYTE-IDENTICAL to 1980** — 841 `zig_*` names on each, `comm -13` empty in both directions. Keep
+the previous toolchain's name table (`/tmp/zigh_names.txt`) before deleting it and diff the two;
+when nothing was removed, c2js's table cannot have gone stale and the entire rename class that
+broke 1857 is ruled out before a single build runs.
+
+★ Whole-C-surface sweep **102/102 emitted, zero `unhandled-*`, zero stderr**. `c2js-canary` PASS.
+The `/\*?` unresolved-cast marker is **0** on both standalones; longest line 109 708, unchanged.
+
+★★★ **THE 1980 STORAGE-BLOCK SHAPE SURVIVED — CHECKED BY HAND, BECAUSE NO GATE CAN.** The Adreno
+break at 1980 was found by Simon's phone while `check` and smoke were both green, so after any
+bump read the emitted WGSL directly. `fluid_gpu`'s `compute.wgsl`: every binding is a one-field
+block whose member is a RUNTIME-SIZED array (`array<vec2<f32>>`, not `array<vec2<f32>, N>`), the
+tainted one is `array<atomic<u32>>`, and the body map dedups `kbuf_pos_block` across five
+bindings while atomic and plain never collide. That is exactly what `storageArrayType` exists to
+emit, and one `grep -A3 '^struct .*_block'` confirms all three properties at once.
+
+★★★ **A FRESH SANDBOX MAKES THE CORPUS VACUOUS, AND A BUMP GUARANTEES IT.** `check` prints
+`✓ ENTIRE CORPUS TRANSPILES CLEANLY` and `✓ NO REGRESSIONS` while also printing
+`⚠ 190 fixture entries have no matching live input` — ALL 190. Fixtures are keyed by INPUT hash
+and a new compiler changes every `.spv` byte, so the regression half of `check` compares nothing
+on the first run after any bump. **Do not run `corpus-refresh` to clear that warning**: re-pinning
+to the new output is precisely how a real output change would get recorded as the baseline. The
+transpile-clean half is still live and still worth reading; the regression half is not evidence
+here, and the device is.
+
+★ `fluid_gpu` smoke: **init 4372 calls, ~151.0/frame — identical to 1980 to the call**, and
+`wgpu_bringup` 202 init / ~28.0 per frame. A matching call profile across a compiler change is
+the cheapest evidence that the host path did not move.
+
+Measured cold on 2125, 1 core, `-Dmode=release -Dautofix=false -j1`: `c2js-canary` **139s /
+755 MB**; `hello-world-standalone` **136s / 656 MB / 1.73 MB**; `launcher-standalone` **91s /
+peak 1142 MB / 13.55 MB**; `check` **61s** green; `smoke-test -Dfocus=fluid_gpu` **34s** PASS.
+Cold to launcher is **~6 minutes and 321 MB of cache** — the same envelope as 1902 and 1980.
+
+★★ **`measure` WRITES THE BUILD'S OUTPUT TO A FIXED `/tmp/b.log`**, not to any
+redirect placed on the `measure` call. Redirecting the wrapper captures only its own summary
+line, so `grep -c 'error:'` on that file reports 0 whatever happened — which reads exactly like a
+clean build. The wrapper's `rc=` is the honest verdict; **the log to read is `/tmp/b.log`**, and
+it is overwritten by the next measured command.
+
+### 2163 — NO SOURCE CHANGE FOR THE BUMP, AND THE LEAK CHECKER IT SWITCHED ON
+
+`0.17.0-dev.2163+89ff10d56`, from 2125. The tree needed nothing to build; everything below was
+found by the bump, not caused by it.
+
+Measured cold, 1 core, `-Dmode=release -Dautofix=false -j1`: build runner **88 s**;
+`c2js-canary` **28 s** PASS; whole-C-surface sweep **102/102**, zero `unhandled-*`, zero stderr;
+`zig fmt --check` clean on the gated surface AND on all of `tools/`; `hello-world-standalone`
+**116 s / 1 731 170 bytes**; `launcher-standalone` **102 s / 13 558 146 bytes**, zero `/*?`,
+longest line 110 796; `check` **74 s** green (56/56 transpile clean, doc-gate 12 pages);
+`smoke-test -Dfocus=fluid_gpu` **30 s** PASS at init 4372 / ~151.0 per frame — identical to 1980
+and 2125 to the call. The storage-block WGSL read by hand still has the 1980 shape: one-field
+blocks over runtime-sized arrays, `array<atomic<u32>>` on the tainted binding, one deduplicated
+block shared by six bindings.
+
+★★ **zig.h MOVED THIS TIME: 847 `zig_*` names against 2125's 841**, and the 2125 toolchain was
+already gone, so the four-second name diff above was impossible. The dynamic sweep is what
+cleared the rename class. **Keep the outgoing toolchain's name list before deleting it** —
+`grep -oE '\bzig_[A-Za-z0-9_]*(##w)?' <old>/lib/zig.h | sort -u > /tmp/zigh_<ver>.txt` — or
+the cheap check is unavailable exactly when it is needed.
+
+★★★ **`std.heap.DebugAllocator` IS NOW `std.heap.SafeAllocator`** (the old name is a deprecated
+alias), and `std.process.Init` hands `main` one in Debug/ReleaseSafe that reports leaks at exit
+WITHOUT changing the exit code. The first cold build printed two `leaked 11 bytes` with no step
+name and `(empty stack trace)`. How it was found, in order: rerun each tool by hand with the
+build's exact arguments until one reproduces (zimrlint's full-tree pass); rebuild THAT tool
+`-O Debug` for a stack trace (3 s); the trace named `checkFloatFromInt`. The 11 bytes were
+`float(a_ok)` and `float(b_ok)`: a rule built its fix text before `emitFix` checked `lint:off`,
+and the early return dropped it. Fixed by making `Issue` own a copy made after the check.
+
+★★ **`std.process.exit(1)` SKIPS THE LEAK CHECK.** It ends the process without unwinding, so the
+allocator's `deinit` never runs — a tool that exits non-zero can leak without a word, and the
+leak above surfaced only because the tree lints clean. zimrlint's `main` now returns `!u8`.
+Proven with a planted 7-byte leak: reported on a failing run, where it used to be silent.
+
+★ **A detached build survives between tool calls but NOT across turns.** `setsid nohup` kept
+`test-fast` alive through two polls in one turn; by the next turn it was gone with no `EXIT`
+line. Its finished objects stay in the cache, so the work is not lost — but a result has to be
+read in the same turn it was started, or re-run.
+
+★★★ **`import-cycle` — FILES MUST NOT IMPORT EACH OTHER, EVEN THOUGH ZIG ALLOWS IT.** A zimrlint
+rule over every `@import("*.zig")` in the run, each path resolved against its importing file, so
+`../robot.zig` and `robot.zig` are one node. It is the one cross-file rule: it reads every input
+itself because the per-file loop skips stamped-clean files, and a cycle is two clean files.
+`zig build dag-check` was never going to catch most of these: it scans top-level `src/*.zig`
+only, by basename, so `tools/`, the fixtures and a file importing itself (it drops self-edges)
+are invisible to it — and it lives in `tier-a-check`, which nothing runs, so even the
+`robot_mjcf` <-> `robot_physics` pair it COULD see went unreported. What the rule found:
+
+    robot_mjcf <-> robot_physics   the Go1 standing gate lived in robot_mjcf and needed
+                                   robot_physics; moved UP into robot_physics. robot_mjcf's
+                                   test artifact: 411 -> 364 tests, 17.2 -> 14.0 MB
+    zspv <-> zspv_rewrite          the CLI shared a file with the SPIR-V reader the rewriter
+                                   needs; CLI moved to tools/zspv_main.zig. Old and new zspv
+                                   give byte-identical output on all 56 cached shaders
+    wgpu.zig -> wgpu.zig           a nested namespace imported its own file to qualify names;
+                                   the file-scope names are already in scope
+
+★ **NO BACK EDGES REMAIN.** The last was `robot.zig` -> `tests/fixtures/robot/kuka_iiwa.zig`:
+the fixture is GENERATED as a comptime `rbt.ModelSpec` literal plus `rbt.Spec(spec)`, so it
+cannot exist without robot.zig, and three robot.zig tests imported it back. They moved into
+`robot_urdf.zig`, which already depends on both — 165 lines, changed only by `rbt.` qualifiers.
+`zn-robot` no longer runs them; `zn-robot_urdf` and `test-fast` do. The tree carries zero
+`lint:off import-cycle`.
+
+★★★ **`test-fast` IS FIVE ARTIFACTS NOW, NOT THIRTEEN.** `src/robot_tests.zig` imports every
+robot-family root, so the union compiles once and each test runs once; build.zig reads that
+file's import list (`robotTestsMembers`) and leaves its members out of `test-fast` while they
+keep their `zn-` steps. Measured on 2163, one core: **252 s for all 875 tests** (866 pass, 9
+skip) — zimrmath 171, zimrnum 223, ragdoll 6, zn_conformance 4, robot family 471. Per-module
+counts in the aggregate prove nothing was dropped: robot 124, robot_mpc 36, robot_mjcf 34,
+robot_control 21, mjcf 17, robot_physics 16, urdf 10, robot_scene 6, robot_urdf 5.
+
+★★ **`-Dslow-tests`** runs the retarget diagnostics that used to need a source edit, including
+`WHOLE BODY`, the only test of the shipped `solvePointCloud`:
+`zig build zn-robot_mjcf -Dslow-tests -Dtest-filter="WHOLE BODY"`. Host options only; the file
+reads it with `@hasDecl` because it also compiles into wasm.
+
+★★ **THE RETARGET'S SILENT CLAMPS ARE CHECKS NOW.** `buildPointSamples` folded its capacity
+guards into its skip conditions, so a short `out` dropped whole bodies' samples without a word;
+it still refuses to write out of bounds, and asserts at the end that it never had to. `ikStep`
+asserts `scratch.len >= ikScratchSize(nv)`. The `@min(nbody, 64)` and `@min(library_n, 192)`
+clamps in `geno_dance` and the robot_mjcf harness are assertions.
+
+★ **zimrlint's `--fix` defers `unused-global` deletions to a pass with nothing else to fix.**
+Applying a deletion of `const float = zm.float;` in the same pass as `float-from-int` writing
+`float(x)` broke the file; the parse guard discarded the pass and neither fix ever landed.
+
+★ Proven both ways: planted cycles fire (two files, a self-import, and a `sub/../` pair), a
+suppressed pair does not, a file whose partner is outside the run does not; and an independent
+scan of all 788 `.zig` files under src/examples/tools/webtests agrees — zero cycles, exactly
+those three suppressed edges.
 
 ## ★★★ A SELF-REFERENTIAL `State` MUST BE BUILT IN THE GLOBAL, NEVER COPIED INTO IT
 
@@ -2619,8 +3334,11 @@ update the `//!` doc in the same turn, like a test.
   `xs.toOwnedSlice(alloc)`, `map.getOrPut(alloc, k)`. `pop()` returns `?T`. Type the
   getOrPut result for the explicit-types rule:
   `const gop: @TypeOf(map).GetOrPutResult = ...`.
-- **No `GeneralPurposeAllocator`** — it's `std.heap.DebugAllocator(.{}){}`:
-  `var s = std.heap.DebugAllocator(.{}){}; const gpa = s.allocator();`.
+- **No `GeneralPurposeAllocator`, and on 2163 no `DebugAllocator` either** — it is
+  `std.heap.SafeAllocator` (the old name survives as a deprecated alias):
+  `var s: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{}); const gpa = s.allocator();`.
+  A tool with `main(init: std.process.Init)` already gets one as `init.gpa` in Debug/ReleaseSafe,
+  and it reports leaks at exit — but only if `main` RETURNS; `std.process.exit` skips the check.
 - **File I/O goes through `std.Io`**: get an io
   (`var t = std.Io.Threaded.init(alloc, .{}); const io = t.io();`), then
   `std.Io.Dir.cwd().openDir(io, p, .{.iterate=true})` /
@@ -3228,7 +3946,9 @@ EMPTY log each time — that emptiness is the tell, because a build making progr
       >/tmp/bg.log 2>&1 < /dev/null &
     # then poll across turns: pgrep -x zig, and watch /tmp/bg.log
 
-It runs to completion with no wall clock limit; poll `pgrep -x zig` until it is gone. Once
+It runs to completion with no wall clock limit; poll `pgrep -x zig` until it is gone. **Within
+the same turn only** — on 2163 a detached `test-fast` was alive at two polls and gone, with no
+`EXIT` line, by the next turn. Whatever it finished is cached; whatever it did not must be re-run. Once
 it lands, the cache is warm and the ordinary `zig build test` returns in about a second.
 
 ★ AND THE DIAGNOSTIC RULE: **two identical timeouts mean stop and measure, not retry.** Check
@@ -3375,11 +4095,13 @@ correct there ⇒ DPR-related, wrong ⇒ mode-related; then log
   namespaces (`gpu.zig`, `raster.zig`) stay namespaces — don't force them.
 - **Graph tooling** (all Zig, no Python — the analysis/codegen purge is complete):
   `tools/import_graph.zig` is the shared library (collectImports, Graph, sccs, levels,
-  transitiveReduction); `zig build dag-check` is the acyclic gate + level report;
+  transitiveReduction); `zig build dag-check` is the level report for top-level `src/*.zig` (by
+  basename; the one place `@import("zm")` counts as an edge) — the tree-wide cycle GATE is
+  zimrlint's `import-cycle`, which runs before every compile;
   `zig build files-md` regenerates the per-file atlas (curated text in
   `tools/file_descriptions.zig`); `zig build dag-png` renders `src/notes/dag.png` (layered) and
   `dag_force.png` (force-directed), tunables at the top of `tools/dag_png.zig`. Current shape:
-  49 modules, 63 covering edges after reduction, 0 cycles. **When porting a generator, prove it:**
+  83 modules and 385 import edges on 2163 (dag-check), 0 cycles. **When porting a generator, prove it:**
   snapshot the old output and diff byte-for-byte before deleting the original.
   The PNGs are NOT in the ship zip (the recipe excludes `*.png`) — attach them separately.
 - **COMPILE-CHECK RECIPES for cross-cutting refactors**: native/Canvas path → `zig build dag-png`
@@ -3387,3 +4109,8 @@ correct there ⇒ DPR-related, wrong ⇒ mode-related; then log
   (compiles the full wgpu wasm module). Both run lint over the roster first.
 - **`grep | head` HIDES consumers.** Always grep WITHOUT `head` before declaring a rename complete
   (a `head` once hid a `z.descriptor_encoder` user and shipped a broken build).
+
+- **Never count on the NEXT turn to collect a detached run.** One died between turns (its log empty); another, from a stalled turn, finished on its own. Poll every run to completion within the turn that starts it.
+- **A turn must never wait on a long test.** Anything over ~60 s runs detached (setsid nohup, log to /tmp) and is polled with sleeps under ~120 s per call. A turn that died waiting (Sep 25, D5 step 3, 162 s) lost its whole reply though the test passed.
+- **A test filter that matches nothing compiles NO test bodies** (`--test-filter` skips analysing non-matching tests), so `-Dtest-filter=NO_SUCH` checks only non-test code. To compile-check a test, filter on ITS name (Sep 26: a missing field passed such a "check").
+- **Long turns stall** (twice on Sep 26, the reply lost though the work went on). Keep a turn to a few runs; record and end before it grows.

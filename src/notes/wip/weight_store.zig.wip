@@ -1,0 +1,210 @@
+//! examples/weight_store - can a trained network survive a page reload on a phone?
+//!
+//! THE QUESTION THIS ANSWERS, AND WHY IT IS WORTH ITS OWN EXAMPLE
+//!
+//! `drecon2.md` plans to train a motion-tracking policy in a browser and keep it. That rests on
+//! one assumption nobody has tested on real hardware: that a blob the size of a small network
+//! survives `localStorage` on a phone, comes back byte-identical, and does not hit a quota.
+//!
+//! Desktop browsers are generous and mobile ones are not. iOS Safari in particular has evicted
+//! `localStorage` under memory pressure, and quota errors arrive as an exception rather than a
+//! short write. **Finding that out here costs one screen; finding it out after building a
+//! trainer costs the trainer.**
+//!
+//! WHAT IT DOES
+//!
+//! Builds a byte pattern the size of a real policy - the shapes `drecon2.md` proposes, at half
+//! DReCon's width - writes it, reads it back, and compares every byte. Then the same at four
+//! times the size, to find where the limit actually is rather than trusting a number from a
+//! blog post.
+//!
+//! THE COMPARISON IS BYTE-FOR-BYTE AND THAT IS THE POINT
+//!
+//! `localStorage` stores STRINGS. Anything that round-trips through UTF-16 and back can mangle
+//! bytes that are not valid text - which is why `serialize.zig` base64s first. A test that only
+//! checked the LENGTH would pass on a store that silently replaced every invalid byte with a
+//! replacement character, and the weights would load as finite, plausible, wrong numbers.
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const z = @import("zimr");
+const zm = @import("zm");
+const Color = zm.Color;
+const common = @import("example_common");
+const palette = common.palette;
+
+/// Two literal colours rather than names from a palette, because the only name
+/// `example_common` exports is `ink` and inventing the others would be guessing at an API.
+const pass_green: Color = .{ .r = 120, .g = 210, .b = 140, .a = 255 };
+const warn_orange: Color = .{ .r = 235, .g = 170, .b = 90, .a = 255 };
+const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
+
+/// The shape `drecon2.md` proposes: half DReCon's width, so 2 layers of 64.
+///
+/// DReCon uses 2x128 over a 110-dim observation. Half that is 2x64, and with our observation
+/// the parameter count lands near 12k - about 48 KB at f32, 64 KB base64'd. That is the blob
+/// this example writes first, because it is the one the plan actually depends on.
+const policy_parameters: usize = 110 * 64 + 64 * 64 + 64 * 25 + 64 + 64 + 25;
+const policy_bytes: usize = policy_parameters * @sizeOf(f32);
+
+/// A world model is bigger, and the plan's section 5 says a SuperTrack-sized one would not fit.
+/// This is the size we would want if the small one works - four times over.
+///
+/// ---- THE BUFFER IS ALLOCATED ONCE AT THIS SIZE, AND THAT IS ALREADY A FINDING ----
+///
+/// The first version allocated it eagerly at init and the wasm build died with an out-of-bounds
+/// memory access before drawing a frame. The page's linear memory is not a desktop heap, and a
+/// few hundred kilobytes of scratch is not free there. Allocating LAZILY - only when the larger
+/// case is actually run - keeps the default path small, and means a device that cannot afford
+/// the big buffer still reports on the small one rather than showing nothing at all.
+const large_bytes: usize = policy_bytes * 4;
+
+const Outcome = struct {
+    label: []const u8,
+    bytes: usize,
+    save_code: i32 = -99,
+    size_back: i32 = -99,
+    read_code: i32 = -99,
+    identical: bool = false,
+    ran: bool = false,
+};
+
+const State = struct {
+    /// Held because `update` is a frame callback and takes neither an allocator nor an error
+    /// union - the right shape for a per-frame function, and the reason anything that can fail
+    /// belongs at init or behind an explicit code.
+    gpa: Allocator = undefined,
+    font: z.Font,
+    small: Outcome = .{ .label = "policy  (2x64)", .bytes = policy_bytes },
+    large: Outcome = .{ .label = "4x larger     ", .bytes = large_bytes },
+    exported: bool = false,
+    export_len: usize = 0,
+    scratch: []u8 = &.{},
+};
+
+/// A pattern that is NOT text, on purpose.
+///
+/// Every byte value 0-255 appears, including the ones that are invalid UTF-8 on their own. A
+/// store that mangles non-text bytes passes a test written with ASCII and fails this one.
+fn fillPattern(buffer: []u8) void {
+    for (buffer, 0..) |*slot, i| {
+        slot.* = @intCast((i * 31 + (i >> 8) * 7) % 256);
+    }
+}
+
+/// Both buffers are allocated once at init, sized for the LARGER case, because `update` has
+/// neither an allocator nor an error union - which is the right shape for a frame callback and
+/// the reason the sizing decision is made where it can fail loudly.
+fn runRoundTrip(gpa: Allocator, key: []const u8, out: *Outcome, scratch: *[]u8) void {
+    if (scratch.len < out.bytes) {
+        const grown: []u8 = gpa.realloc(scratch.*, out.bytes) catch {
+            // Could not even allocate the buffer - which is itself the answer for this size.
+            out.save_code = -4;
+            out.read_code = -4;
+            out.identical = false;
+            out.ran = true;
+            return;
+        };
+        scratch.* = grown;
+    }
+    const payload: []u8 = scratch.*[0..out.bytes];
+    fillPattern(payload);
+
+    out.save_code = z.web.dom.persistence_save_bytes(gpa, key, payload) catch -3;
+    const back: ?[]u8 = z.web.dom.persistence_load_bytes(gpa, key) catch null;
+    if (back) |bytes| {
+        defer gpa.free(bytes);
+        out.read_code = @intCast(bytes.len);
+        // BYTE FOR BYTE. A length check alone would pass on a store that replaced every
+        // invalid byte with a replacement character - which is exactly what a UTF-16 round
+        // trip does to bytes that are not text, and why `serialize.zig` base64s first.
+        out.identical = bytes.len == out.bytes and std.mem.eql(u8, payload, bytes);
+    } else {
+        out.read_code = -1;
+        out.identical = false;
+    }
+    out.size_back = out.read_code;
+    out.ran = true;
+}
+
+fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.font = try z.loadFont(f, gpa, roboto_mono_ttf, 22);
+    // Only the policy-sized buffer up front; the larger one is grown on demand.
+    s.scratch = try gpa.alloc(u8, policy_bytes);
+}
+
+fn deinit(gpa: Allocator, s: *State) void {
+    gpa.free(s.scratch);
+    z.unloadFont(gpa, s.font);
+}
+
+fn statusLine(buf: []u8, out: Outcome) []const u8 {
+    if (!out.ran) {
+        return std.fmt.bufPrint(buf, "{s}  {d:>7} bytes   not run yet", .{ out.label, out.bytes }) catch buf[0..0];
+    }
+    const verdict: []const u8 = if (out.identical) "IDENTICAL" else "MISMATCH";
+    return std.fmt.bufPrint(
+        buf,
+        "{s}  {d:>7} bytes   save {d}  size {d}  read {d}  {s}",
+        .{ out.label, out.bytes, out.save_code, out.size_back, out.read_code, verdict },
+    ) catch buf[0..0];
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    var line: [200]u8 = undefined;
+
+    if (z.isKeyPressed(f.input, .space) or z.isMouseButtonPressed(f.input, .left)) {
+        runRoundTrip(s.gpa, "wstore_policy", &s.small, &s.scratch);
+        runRoundTrip(s.gpa, "wstore_large", &s.large, &s.scratch);
+    }
+
+    z.beginDrawing(f.gl);
+    var y: f32 = 40;
+    const step: f32 = 34;
+
+    f.gl.text(.{ 24, y }, "weight_store - can a network survive a reload?", .{ .size = 20, .color = palette.ink, .font = &s.font });
+    y += step * 1.5;
+
+    const small_colour = if (s.small.identical) pass_green else palette.ink;
+    f.gl.text(.{ 24, y }, statusLine(&line, s.small), .{ .size = 18, .color = small_colour, .font = &s.font });
+    y += step;
+    const large_colour = if (s.large.identical) pass_green else palette.ink;
+    f.gl.text(.{ 24, y }, statusLine(&line, s.large), .{ .size = 18, .color = large_colour, .font = &s.font });
+    y += step * 1.5;
+
+    f.gl.text(.{ 24, y }, "TAP or SPACE to write, read back, and compare every byte.", .{ .size = 16, .color = palette.ink, .font = &s.font });
+    y += step * 0.9;
+    f.gl.text(.{ 24, y }, "Then RELOAD the page and tap again - the values must survive.", .{ .size = 16, .color = palette.ink, .font = &s.font });
+    y += step * 1.4;
+
+    const both_ok: bool = s.small.identical and s.large.identical;
+    const headline: []const u8 = if (!s.small.ran)
+        "waiting"
+    else if (both_ok)
+        "BOTH SIZES SURVIVE - the plan's persistence assumption holds"
+    else if (s.small.identical)
+        "policy size survives, the larger one does NOT - keep networks small"
+    else
+        "the policy-sized blob did NOT round-trip - persistence needs another route";
+    const headline_colour = if (both_ok) pass_green else warn_orange;
+    f.gl.text(.{ 24, y }, headline, .{ .size = 18, .color = headline_colour, .font = &s.font });
+
+    common.caption(f.gl, s.font, "weight_store - localStorage round-trip at real network sizes");
+    z.endDrawing(f.gl);
+}
+
+pub const app: z.AppSpec(State) = .{
+    .config = .{
+        .window = .{
+            .title = "zimr - weight_store",
+            .width = 800,
+            .height = 450,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};

@@ -21,6 +21,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const tau = zm.tau;
 const Vec2 = zm.Vec2;
 
 // Fixed-function shader pair used by the CPU side's `ff_triangle` bridge
@@ -163,8 +164,8 @@ fn fillCircle(
     gl.begin(.triangles);
     var i: u32 = 0;
     while (i < segs) : (i += 1) {
-        const a0: f32 = float(i) * (std.math.tau / float(segs));
-        const a1: f32 = float(i + 1) * (std.math.tau / float(segs));
+        const a0: f32 = float(i) * (tau / float(segs));
+        const a1: f32 = float(i + 1) * (tau / float(segs));
         gl.vertex2f(cx, cy);
         gl.vertex2f(cx + r * @cos(a0), cy + r * @sin(a0));
         gl.vertex2f(cx + r * @cos(a1), cy + r * @sin(a1));
@@ -192,7 +193,7 @@ fn drawScene(gl: anytype, t: f32) void {
     var i: u32 = 0;
     while (i < n_orbit) : (i += 1) {
         const fi: f32 = float(i);
-        const ang: f32 = t * 0.5 + fi * (std.math.tau / float(n_orbit));
+        const ang: f32 = t * 0.5 + fi * (tau / float(n_orbit));
         const orbit_r: f32 = 180.0 + 40.0 * @sin(t + fi);
         const px: f32 = cx + orbit_r * @cos(ang);
         const py: f32 = cy + orbit_r * @sin(ang);
@@ -209,8 +210,8 @@ fn drawScene(gl: anytype, t: f32) void {
     gl.begin(.triangles);
     var k: u32 = 0;
     while (k < sides) : (k += 1) {
-        const a0: f32 = t * 0.8 + float(k) * (std.math.tau / float(sides));
-        const a1: f32 = t * 0.8 + float(k + 1) * (std.math.tau / float(sides));
+        const a0: f32 = t * 0.8 + float(k) * (tau / float(sides));
+        const a1: f32 = t * 0.8 + float(k + 1) * (tau / float(sides));
         gl.vertex2f(cx, cy);
         gl.vertex2f(cx + poly_r * @cos(a0), cy + poly_r * @sin(a0));
         gl.vertex2f(cx + poly_r * @cos(a1), cy + poly_r * @sin(a1));

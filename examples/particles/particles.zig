@@ -127,8 +127,8 @@ fn update(f: *z.Frame, s: *State) void {
     // Draw particles (fade alpha with life).
     var j: usize = 0;
     while (j < s.count) : (j += 1) {
-        const p = s.particles[j];
-        const col = p.color.fade(p.life);
+        const p: Particle = s.particles[j];
+        const col: Color = p.color.fade(p.life);
         f.gl.circle(p.pos, p.radius, .{ .color = col, .segments = 16 });
     }
     // Emitter marker.

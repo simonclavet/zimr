@@ -1190,15 +1190,21 @@ pub fn pascal(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     out.appendAssumeCapacity(if (c0 >= 'a' and c0 <= 'z') c0 - 32 else c0);
     var i: usize = 1;
     while (i < s.len) : (i += 1) {
-        const c = s[i];
+        const c: u8 = s[i];
         if (c == '_') {
             i += 1;
-            if (i >= s.len) break;
-            const n = s[i];
-            if (n >= 'a' and n <= 'z')
-                out.appendAssumeCapacity(n - 32)
-            else if (n >= '0' and n <= '9')
-                out.appendAssumeCapacity(n);
+            if (i >= s.len) {
+                break;
+            }
+            const after_underscore: u8 = s[i];
+            // `_x` means 'uppercase x': 32 is the ASCII gap between 'a' and 'A'. A digit after the
+            // underscore is passed through as-is, and anything else is DROPPED - the escape consumed
+            // it and no branch appends it.
+            if (after_underscore >= 'a' and after_underscore <= 'z') {
+                out.appendAssumeCapacity(after_underscore - 32);
+            } else if (after_underscore >= '0' and after_underscore <= '9') {
+                out.appendAssumeCapacity(after_underscore);
+            }
         } else {
             out.appendAssumeCapacity(c);
         }
@@ -1234,12 +1240,16 @@ pub fn camel(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     out.appendAssumeCapacity(if (c0 >= 'A' and c0 <= 'Z') c0 + 32 else c0);
     var i: usize = 1;
     while (i < s.len) : (i += 1) {
-        const c = s[i];
+        const c: u8 = s[i];
         if (c == '_') {
             i += 1;
-            if (i >= s.len) break;
-            const n = s[i];
-            if (n >= 'a' and n <= 'z') out.appendAssumeCapacity(n - 32);
+            if (i >= s.len) {
+                break;
+            }
+            const after_underscore: u8 = s[i];
+            if (after_underscore >= 'a' and after_underscore <= 'z') {
+                out.appendAssumeCapacity(after_underscore - 32);
+            }
         } else {
             out.appendAssumeCapacity(c);
         }

@@ -226,10 +226,15 @@ pub const png = struct {
         var prev_row: []const u8 = &[_]u8{};
         var y: usize = 0;
         while (y < height) : (y += 1) {
-            const row_start = y * (stride + 1);
-            const filter_type = filtered[row_start];
-            const cur_in = filtered[row_start + 1 .. row_start + 1 + stride];
-            const cur_out = out[y * stride .. (y + 1) * stride];
+            // PNG prefixes every row with ONE filter-type byte, hence `stride + 1` per row and the
+            // `+ 1` offsets below - the filtered buffer is taller-per-row than the output.
+            const row_start: usize = y * (stride + 1);
+            const filter_type: u8 = filtered[row_start];
+            const cur_in: []const u8 = filtered[row_start + 1 .. row_start + 1 + stride];
+            // The output row is written IN PLACE as the filter runs, and the Sub/Paeth filters read
+            // `cur_out` for bytes they have already unfiltered - so this slice is both destination
+            // and left-neighbour source. That is why it cannot be a copy.
+            const cur_out: []u8 = out[y * stride .. (y + 1) * stride];
 
             // PNG row filters: each byte's raw value is corrected based on
             // its neighbours.  See PNG spec section 9.  Inlined here rather
@@ -245,9 +250,13 @@ pub const png = struct {
                 },
                 // Up: byte = raw + byte at same pos in previous scanline.
                 2 => if (prev_row.len == 0) {
+                    // First scanline: no row above, so Up degenerates to a straight copy.
                     @memcpy(cur_out, cur_in);
-                } else for (cur_in, 0..) |b, i| {
-                    cur_out[i] = b +% prev_row[i];
+                } else {
+                    // Every later row adds the byte directly above it.
+                    for (cur_in, 0..) |b, i| {
+                        cur_out[i] = b +% prev_row[i];
+                    }
                 },
                 // Average: byte = raw + floor((left + above) / 2).
                 3 => for (cur_in, 0..) |b, i| {
@@ -305,7 +314,8 @@ pub const png = struct {
         switch (color_type) {
             0 => { // Grayscale → RGBA
                 while (i < n) : (i += 1) {
-                    const g = raw[i];
+                    // One grey byte fills R, G and B; alpha is opaque.
+                    const g: u8 = raw[i];
                     rgba[i * 4 + 0] = g;
                     rgba[i * 4 + 1] = g;
                     rgba[i * 4 + 2] = g;
@@ -332,7 +342,8 @@ pub const png = struct {
             },
             4 => { // Grayscale + Alpha → RGBA
                 while (i < n) : (i += 1) {
-                    const g = raw[i * 2 + 0];
+                    // Grey + alpha: two bytes in, four out. The grey level fills R, G and B.
+                    const g: u8 = raw[i * 2 + 0];
                     rgba[i * 4 + 0] = g;
                     rgba[i * 4 + 1] = g;
                     rgba[i * 4 + 2] = g;
@@ -3843,7 +3854,7 @@ pub const truetype = struct {
                 y = @intCast(vertices.items[off + i].y);
 
                 if (next_move == i) {
-                    if (i != 0)
+                    if (i != 0) {
                         num_vertices = closeShape(
                             vertices.items,
                             num_vertices,
@@ -3856,6 +3867,7 @@ pub const truetype = struct {
                             cx,
                             cy,
                         );
+                    }
 
                     // now start the new one
                     start_off = (flags & 1) == 0;
@@ -3894,10 +3906,11 @@ pub const truetype = struct {
                         cy = y;
                         was_off = true;
                     } else {
-                        if (was_off)
-                            vertices.items[num_vertices].set(.vcurve, x, y, cx, cy)
-                        else
+                        if (was_off) {
+                            vertices.items[num_vertices].set(.vcurve, x, y, cx, cy);
+                        } else {
                             vertices.items[num_vertices].set(.vline, x, y, 0, 0);
+                        }
                         num_vertices += 1;
                         was_off = false;
                     }
@@ -4146,8 +4159,9 @@ pub const truetype = struct {
                 var a = k;
                 var b = j;
                 // skip the edge if horizontal
-                if (p[j].y == p[k].y)
+                if (p[j].y == p[k].y) {
                     continue;
+                }
                 // add edge from j to k to the list
                 e[n].invert = false;
                 if (if (invert) p[j].y > p[k].y else p[j].y < p[k].y) {
@@ -4666,8 +4680,9 @@ pub const truetype = struct {
 
                         // if x2 is right at the right edge of x1, y_crossing can blow up, github #1057
                         // @TODO: maybe test against sy1 rather than y_bottom?
-                        if (y_crossing > y_bottom)
+                        if (y_crossing > y_bottom) {
                             y_crossing = y_bottom;
+                        }
 
                         const sign: f32 = e.direction;
 
@@ -5635,10 +5650,11 @@ pub const truetype = struct {
                         i += 1;
                     }
                     while (i + 3 < sp) : (i += 4) {
-                        if (b0 == Instruction.hhcurveto.asInt()) //  0x1B
-                            try ctx.rccurveTo(s[i], f, s[i + 1], s[i + 2], s[i + 3], 0.0)
-                        else
+                        if (b0 == Instruction.hhcurveto.asInt()) { //  0x1B
+                            try ctx.rccurveTo(s[i], f, s[i + 1], s[i + 2], s[i + 3], 0.0);
+                        } else {
                             try ctx.rccurveTo(f, s[i], s[i + 1], s[i + 2], 0.0, s[i + 3]);
+                        }
                         f = 0.0;
                     }
                 },
@@ -6449,7 +6465,9 @@ pub const code_point = struct {
             var i_prev: @TypeOf(iter.i.?) = iter.i.?;
 
             while (i_prev > 0) : (i_prev -= 1) {
-                if (!followbyte(iter.bytes[i_prev])) break;
+                if (!followbyte(iter.bytes[i_prev])) {
+                    break;
+                }
             }
 
             if (i_prev > 0) {
@@ -6516,9 +6534,15 @@ pub const code_point = struct {
 
         while (iter.next()) |cp| : (i += 1) {
             // The `code` field is the actual code point scalar as a `u21`.
-            if (i == 0) try expect(cp.code == 'H');
-            if (i == 1) try expect(cp.code == 'i');
-            if (i == 2) try expect(cp.code == ' ');
+            if (i == 0) {
+                try expect(cp.code == 'H');
+            }
+            if (i == 1) {
+                try expect(cp.code == 'i');
+            }
+            if (i == 2) {
+                try expect(cp.code == ' ');
+            }
 
             if (i == 3) {
                 try expect(cp.code == '😊');
@@ -6548,7 +6572,9 @@ pub const code_point = struct {
             try bvh_expectEqual('😊', r_iter.peek().?.code);
             try bvh_expectEqual('😊', r_iter.prev().?.code);
             // Both kinds of iterators can be reversed:
-            var fwd_iter = r_iter.forwardIterator(); // or iter.reverseIterator();
+            // Either iterator can be turned around mid-walk; the reversed one resumes from where
+            // the first stopped rather than restarting.
+            var fwd_iter: Iterator = r_iter.forwardIterator();
             // This will always return the last codepoint from
             // the prior iterator, _if_ it yielded one:
             try bvh_expectEqual('😊', fwd_iter.next().?.code);
@@ -8328,13 +8354,27 @@ pub const gltf = struct {
                             if (t == .string) {
                                 acc.type_kind = blk: {
                                     const s: []const u8 = t.string;
-                                    if (std_mod.mem.eql(u8, s, "SCALAR")) break :blk .scalar;
-                                    if (std_mod.mem.eql(u8, s, "VEC2")) break :blk .vec2;
-                                    if (std_mod.mem.eql(u8, s, "VEC3")) break :blk .vec3;
-                                    if (std_mod.mem.eql(u8, s, "VEC4")) break :blk .vec4;
-                                    if (std_mod.mem.eql(u8, s, "MAT2")) break :blk .mat2;
-                                    if (std_mod.mem.eql(u8, s, "MAT3")) break :blk .mat3;
-                                    if (std_mod.mem.eql(u8, s, "MAT4")) break :blk .mat4;
+                                    if (std_mod.mem.eql(u8, s, "SCALAR")) {
+                                        break :blk .scalar;
+                                    }
+                                    if (std_mod.mem.eql(u8, s, "VEC2")) {
+                                        break :blk .vec2;
+                                    }
+                                    if (std_mod.mem.eql(u8, s, "VEC3")) {
+                                        break :blk .vec3;
+                                    }
+                                    if (std_mod.mem.eql(u8, s, "VEC4")) {
+                                        break :blk .vec4;
+                                    }
+                                    if (std_mod.mem.eql(u8, s, "MAT2")) {
+                                        break :blk .mat2;
+                                    }
+                                    if (std_mod.mem.eql(u8, s, "MAT3")) {
+                                        break :blk .mat3;
+                                    }
+                                    if (std_mod.mem.eql(u8, s, "MAT4")) {
+                                        break :blk .mat4;
+                                    }
                                     return Error.MalformedJson;
                                 };
                             }
@@ -8723,8 +8763,12 @@ pub const gltf = struct {
                                             if (interp == .string) {
                                                 samp.interpolation = blk: {
                                                     const s: []const u8 = interp.string;
-                                                    if (std_mod.mem.eql(u8, s, "STEP")) break :blk .step;
-                                                    if (std_mod.mem.eql(u8, s, "CUBICSPLINE")) break :blk .cubic_spline;
+                                                    if (std_mod.mem.eql(u8, s, "STEP")) {
+                                                        break :blk .step;
+                                                    }
+                                                    if (std_mod.mem.eql(u8, s, "CUBICSPLINE")) {
+                                                        break :blk .cubic_spline;
+                                                    }
                                                     break :blk .linear;
                                                 };
                                             }
@@ -8766,10 +8810,17 @@ pub const gltf = struct {
                                                     if (path == .string) {
                                                         ch.target_path = blk: {
                                                             const s: []const u8 = path.string;
-                                                            if (std_mod.mem.eql(u8, s, "rotation"))
+                                                            if (std_mod.mem.eql(u8, s, "rotation")) {
                                                                 break :blk .rotation;
-                                                            if (std_mod.mem.eql(u8, s, "scale")) break :blk .scale;
-                                                            if (std_mod.mem.eql(u8, s, "weights")) break :blk .weights;
+                                                            }
+                                                            if (std_mod.mem.eql(u8, s, "scale")) {
+                                                                {
+                                                                    break :blk .scale;
+                                                                }
+                                                            }
+                                                            if (std_mod.mem.eql(u8, s, "weights")) {
+                                                                break :blk .weights;
+                                                            }
                                                             break :blk .translation;
                                                         };
                                                     }
@@ -8876,9 +8927,12 @@ pub const gltf = struct {
             const stride: usize = bv.byte_stride.?;
             var elem_i: usize = 0;
             while (elem_i < accessor.count) : (elem_i += 1) {
-                const src_off = start + elem_i * stride;
+                // glTF accessors may be INTERLEAVED, so the source advances by the buffer view's stride
+                // rather than by the element size; the two are equal only for a tightly packed view.
+                const src_off: usize = start + elem_i * stride;
                 const src_ptr: [*]const u8 = buf_data.ptr + src_off;
-                const dst_off_bytes = elem_i * elem_byte_size;
+                // The destination is TIGHTLY packed - no stride - because `out` is zimr's own array.
+                const dst_off_bytes: usize = elem_i * elem_byte_size;
                 const dst_bytes: []u8 = std_mod.mem.sliceAsBytes(out)[dst_off_bytes .. dst_off_bytes + elem_byte_size];
                 @memcpy(dst_bytes, src_ptr[0..elem_byte_size]);
             }
@@ -10206,10 +10260,14 @@ pub const obj = struct {
                             const c: Corner = self.corners[corner_idx];
                             const key: VertexKey = .{
                                 .p = c.position,
-                                .t = c.tex_coord orelse std.math.maxInt(u32),
-                                .n = c.normal orelse std.math.maxInt(u32),
+                                .t = c.tex_coord orelse maxInt(u32),
+                                .n = c.normal orelse maxInt(u32),
                             };
-                            const gop = try seen.getOrPut(gpa, key);
+                            // Dedup vertices by (position, uv, normal): glTF indexes each attribute
+                            // separately, but a GPU vertex buffer needs ONE index per fully-specified
+                            // vertex - a position reused with a different normal becomes two vertices.
+                            const gop: @TypeOf(seen).GetOrPutResult =
+                                try seen.getOrPut(gpa, key);
                             if (!gop.found_existing) {
                                 gop.value_ptr.* = @intCast(positions.items.len / 3);
                                 const pos_i: usize = c.position * 3;
@@ -11621,7 +11679,7 @@ pub const fbx = struct {
     /// ufbx and are not worth deriving by hand — getting one sign wrong yields a rotation that is
     /// correct at zero and wrong everywhere else.
     pub fn eulerToQuat(v: [3]f64, order: RotationOrder) [4]f64 {
-        // zm.pi rather than std.math.pi: std.math is banned outside zimrmath.
+        // zm.pi rather than pi: std.math is banned outside zimrmath.
         const half: f64 = @as(f64, pi) / 180.0 * 0.5;
         const vx: f64 = v[0] * half;
         const vy: f64 = v[1] * half;

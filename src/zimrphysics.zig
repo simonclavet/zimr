@@ -1225,9 +1225,17 @@ fn shapeMass(shape: *const Shape, density: f32) MassProperties {
             const mass: f32 = cylinder_mass + caps_mass;
             // Axis Y runs along the capsule; X and Z are the two perpendicular axes.
             const inertia_along_axis: f32 = 0.5 * cylinder_mass * radius_sq + 0.4 * caps_mass * radius_sq;
+            // ★★ THE CAPS SIT AT THE ENDS, NOT AT THE CENTRE. Each hemisphere's COM is h/2 + 3r/8
+            // from the middle, and about the middle a hemisphere of mass m has
+            // m·(2r²/5 + h²/4 + 3hr/8) — the flat-face term plus the parallel-axis shift, minus the
+            // shift back to its own COM, which cancels the 9r²/64 exactly. This used to be
+            // 0.4·caps_mass·r² alone, as if the caps were one sphere at the centre: a limb's
+            // tumbling inertia came out 20-58% low (the humanoid's shin: 0.0188 against 0.0326,
+            // which MuJoCo's own formula gives). Found by `robot_maximal`'s mass-property test.
             const inertia_perpendicular: f32 =
                 cylinder_mass * (3.0 * radius_sq + cylinder_height * cylinder_height) / 12.0 +
-                0.4 * caps_mass * radius_sq;
+                caps_mass * (0.4 * radius_sq + 0.25 * cylinder_height * cylinder_height +
+                    0.375 * cylinder_height * radius);
             const inv_inertia_perpendicular: f32 = 1.0 / inertia_perpendicular;
             const inv_inertia_along_axis: f32 = 1.0 / inertia_along_axis;
             const inv_inertia: Vec = vec(
@@ -4309,8 +4317,12 @@ pub const Constraint = struct {
 
     // --- .swing_twist (ragdoll cone + twist joint) ---
     swing_type: SwingType = .cone,
-    normal_half_cone: f32 = 0.0, // swing limit about the normal (Z) axis, radians
-    plane_half_cone: f32 = 0.0, // swing limit about the plane (Y) axis, radians
+    // ★ Jolt's meaning, which is NOT "about" the named axis: each half-cone bounds the swing of
+    // the twist axis WITHIN the plane it names. So normal_half_cone limits rotation about the
+    // PLANE (Y) axis, and plane_half_cone rotation about the NORMAL (Z) axis. Measured by
+    // robot_maximal's one-hinge probe after the reading these comments used to give got it wrong.
+    normal_half_cone: f32 = 0.0, // swing within the twist/normal plane: rotation about Y, radians
+    plane_half_cone: f32 = 0.0, // swing within the twist/plane plane: rotation about Z, radians
     twist_min: f32 = 0.0, // twist limit about the twist (X) axis, radians
     twist_max: f32 = 0.0,
     constraint_to_body_a: Quat = quat_identity, // rotation: constraint space -> body A local
@@ -9225,7 +9237,13 @@ pub fn createRevoluteJoint(
         .local_anchor_b = rotate(conjugate(body_b.rot), spec.anchor - body_b.com_pos),
         .local_axis_a = rotate(conjugate(body_a.rot), axis_world),
         .local_axis_b = rotate(conjugate(body_b.rot), axis_world),
-        .inv_initial_rotation = qmul(body_a.rot, conjugate(body_b.rot)),
+        // ★★★ JOLT'S CONVENTION, WORLD FRAME: B0^-1 A0 here, and the current angle is taken from
+        // diff = B inv_initial A^-1 about the WORLD hinge axis. This used to store A0 B0^-1 and
+        // measure conj(A) inv_initial B - a relative rotation in the PARENT's local frame - about
+        // the world axis. The two agree only while the parent is unrotated, so every hinge limit
+        // and motor read a wrong angle once its body turned: robot_maximal's zero-gravity drive to
+        // a pose worked upright (4.6 deg at 2 s) and went to 97-137 deg with the body turned 80 deg.
+        .inv_initial_rotation = qmul(conjugate(body_b.rot), body_a.rot),
         .has_limits = spec.has_limits,
         .limit_min = spec.limit_min,
         .limit_max = spec.limit_max,
@@ -9280,8 +9298,11 @@ pub const SwingTwistSpec = struct {
     twist_axis: Vec, // world-space twist axis (a bone's long axis); need not be unit
     plane_axis: Vec, // world-space reference axis perpendicular to twist; re-orthonormalized
     swing_type: SwingType = .cone,
-    normal_half_cone: f32 = 0.0, // half swing limit about the normal axis, radians
-    plane_half_cone: f32 = 0.0, // half swing limit about the plane axis, radians
+    // ★ Each half-cone bounds the swing WITHIN the plane it names (Jolt's meaning):
+    // normal_half_cone limits rotation ABOUT `plane_axis`, plane_half_cone rotation ABOUT the
+    // normal (twist x plane). Reading them as "about the named axis" swaps the two.
+    normal_half_cone: f32 = 0.0, // half swing within the twist/normal plane (about plane_axis), radians
+    plane_half_cone: f32 = 0.0, // half swing within the twist/plane plane (about the normal), radians
     twist_min: f32 = 0.0, // twist limit, radians (should be in [-pi, pi])
     twist_max: f32 = 0.0,
     swing_motor: AngularMotorSettings = .{}, // motor that drives the swing (parts Y, Z)
@@ -10304,14 +10325,16 @@ fn collideSphereBox(
         const dy: f32 = he[1] - @abs(local_center[1]);
         const dz: f32 = he[2] - @abs(local_center[2]);
         if (dx <= dy and dx <= dz) {
-            local_normal = vec(std.math.sign(local_center[0]), 0, 0);
-            surface[0] = std.math.sign(local_center[0]) * he[0];
+            // lint:off no-qualified-zm: `sign` is taken three times over in this file (a fn
+            // parameter and two locals), so a file-scope alias will not compile.
+            local_normal = vec(zm.sign(local_center[0]), 0, 0);
+            surface[0] = zm.sign(local_center[0]) * he[0];
         } else if (dy <= dz) {
-            local_normal = vec(0, std.math.sign(local_center[1]), 0);
-            surface[1] = std.math.sign(local_center[1]) * he[1];
+            local_normal = vec(0, zm.sign(local_center[1]), 0);
+            surface[1] = zm.sign(local_center[1]) * he[1];
         } else {
-            local_normal = vec(0, 0, std.math.sign(local_center[2]));
-            surface[2] = std.math.sign(local_center[2]) * he[2];
+            local_normal = vec(0, 0, zm.sign(local_center[2]));
+            surface[2] = zm.sign(local_center[2]) * he[2];
         }
     }
 
@@ -11262,7 +11285,7 @@ fn segmentBoxClosest(
             if (away > 0) {
                 return away;
             }
-            var deepest: f32 = std.math.floatMax(f32);
+            var deepest: f32 = floatMax(f32);
             inline for (0..3) |axis| {
                 deepest = @min(deepest, extent[axis] - @abs(point[axis]));
             }
@@ -13582,10 +13605,12 @@ fn cvDetermineConstraints(
         });
 
         if (cvSlopeTooSteep(char, c.surface_normal)) {
-            const dot: f32 = dot3(c.contact_normal, char.up);
-            if (dot > 1.0e-3) {
+            // How closely the contact faces the character's up axis - shadows zimrmath's `dot`
+            // otherwise, and `up_alignment` says what the number means.
+            const up_alignment: f32 = dot3(c.contact_normal, char.up);
+            if (up_alignment > 1.0e-3) {
                 out.items[primary_index].is_steep_slope = true;
-                const normal: Vec = cvNorm(c.contact_normal - char.up * splat(dot), char.up);
+                const normal: Vec = cvNorm(c.contact_normal - char.up * splat(up_alignment), char.up);
                 const proj: f32 = dot3(c.linear_velocity, normal);
                 try out.append(scratch, .{
                     .contact = ci,
@@ -13822,8 +13847,10 @@ fn cvSolveConstraints(
             const rel_other: Vec = constraints[oc_idx].linear_velocity - new_velocity;
             const penetration: f32 = dot3(rel_other, other_normal);
             if (penetration > highest_penetration) {
-                const dot: f32 = dot3(other_normal, plane_normal);
-                if (dot < 0.984 and dot > -0.984) {
+                // How parallel the two contact planes are. The 0.984 gate is about ten degrees:
+                // near-parallel planes are the same surface seen twice and must not both be kept.
+                const plane_alignment: f32 = dot3(other_normal, plane_normal);
+                if (plane_alignment < 0.984 and plane_alignment > -0.984) {
                     highest_penetration = penetration;
                     other = oc_idx;
                 }
@@ -14851,7 +14878,7 @@ fn sliderCurrentPosition(world: *const World, s: *const Constraint) f32 {
 fn hingeCurrentAngle(world: *const World, h: *const Constraint) f32 {
     const ba: *const Body = &world.bodies.data[h.body_a];
     const bb: *const Body = &world.bodies.data[h.body_b];
-    const diff: Quat = qmul(conjugate(ba.rot), qmul(h.inv_initial_rotation, bb.rot));
+    const diff: Quat = qmul(bb.rot, qmul(h.inv_initial_rotation, conjugate(ba.rot)));
     return quatAngleAbout(diff, h.world_axis);
 }
 
@@ -15893,7 +15920,7 @@ fn prepareConstraint(
             c.hinge_rotation.prepare(inv_i_a, hinge_axis_a, inv_i_b, hinge_axis_b);
             c.world_axis = hinge_axis_a; // a1
             // Current hinge angle theta about a1 (zero at the creation pose).
-            const diff: Quat = qmul(conjugate(body_a.rot), qmul(c.inv_initial_rotation, body_b.rot));
+            const diff: Quat = qmul(body_b.rot, qmul(c.inv_initial_rotation, conjugate(body_a.rot)));
             const theta: f32 = quatAngleAbout(diff, c.world_axis);
 
             // (3) Angle limit (rigid one-sided stop), engaged only at/over a bound.
@@ -16309,7 +16336,7 @@ fn solveConstraintPosition(world: *World, c: *Constraint, baumgarte: f32) void {
             }
             // Angle limit (rigid): recompute the current angle and the nearer-limit error.
             if (c.limit_rt.active) {
-                const diff: Quat = qmul(conjugate(body_a.rot), qmul(c.inv_initial_rotation, body_b.rot));
+                const diff: Quat = qmul(body_b.rot, qmul(c.inv_initial_rotation, conjugate(body_a.rot)));
                 const theta: f32 = quatAngleAbout(diff, hinge_axis_a);
                 var c_err: f32 = 0.0;
                 var engaged: bool = false;
@@ -16931,22 +16958,27 @@ pub fn createSoftBodyFromMesh(
                 }
                 switch (opts.bend_type) {
                     .none => {},
-                    .distance => if (!is_shear) try addEdge(
-                        gpa,
-                        vertices,
-                        &out_edges,
-                        vopp0,
-                        vopp1,
-                        opts.bend_compliance,
-                    ),
-                    .dihedral => if (vertices[vopp0].inv_mass > 0.0 or vertices[vopp1].inv_mass > 0.0)
+                    .distance => if (!is_shear) {
+                        try addEdge(
+                            gpa,
+                            vertices,
+                            &out_edges,
+                            vopp0,
+                            vopp1,
+                            opts.bend_compliance,
+                        );
+                    },
+                    // A dihedral bend needs at least one of the two opposite vertices to be movable;
+                    // with both pinned the constraint can never do anything and only costs solver time.
+                    .dihedral => if (vertices[vopp0].inv_mass > 0.0 or vertices[vopp1].inv_mass > 0.0) {
                         try out_bends.append(
                             gpa,
                             .{
                                 .vertex = .{ e0.v[0], e0.v[1], vopp0, vopp1 },
                                 .compliance = opts.bend_compliance,
                             },
-                        ),
+                        );
+                    },
                 }
             } else {
                 i = j - 1;
@@ -17749,7 +17781,9 @@ pub fn softBodyUpdate(
                 continue;
             }
             const sign: f32 = if (dot3(cross(n2, n1), edge_vec) < 0.0) -1.0 else 1.0;
-            const dval: f32 = @max(-1.0, @min(1.0, dot3(n1, n2) / @sqrt(prod)));
+            // Clamped into acos's domain. Both bounds are literals, so `lo <= hi` holds trivially
+            // and the two forms cannot disagree about which bound is applied first.
+            const dval: f32 = clamp(dot3(n1, n2) / @sqrt(prod), -1.0, 1.0);
             // Fold onto half a turn either side. One subtraction of the nearest whole turn,
             // exact and branchless - and unlike the two-branch radian form it is correct however
             // far out `initial_angle` puts the difference, rather than for one turn only.
@@ -17779,12 +17813,14 @@ pub fn softBodyUpdate(
             const x0: Vec = v0.position;
             const x1e: Vec = v1.position;
             const delta: Vec = x1e - x0;
-            const length: f32 = length3(delta);
-            const denom: f32 = length * (v0.inv_mass + v1.inv_mass + e.compliance * inv_dt_sq);
+            // `current_length`, not `length`: the bare name shadows the zimrmath helper, and this
+            // is the CURRENT separation being driven toward the constraint's rest length.
+            const current_length: f32 = length3(delta);
+            const denom: f32 = current_length * (v0.inv_mass + v1.inv_mass + e.compliance * inv_dt_sq);
             if (denom < 1.0e-12) {
                 continue;
             }
-            const correction: Vec = delta * splat((length - e.rest_length) / denom);
+            const correction: Vec = delta * splat((current_length - e.rest_length) / denom);
             v0.position = x0 + correction * splat(v0.inv_mass);
             v1.position = x1e - correction * splat(v1.inv_mass);
         }
@@ -18261,7 +18297,9 @@ pub fn step(world: *World, dt: f32) !void {
 
             // Vehicles: suspension push (and, later, tire friction) + pitch/roll, in the
             // same velocity sweep so the coupling with contacts converges.
-            for (world.vehicles.items) |v| v.solveVelocity(world, dt);
+            for (world.vehicles.items) |v| {
+                v.solveVelocity(world, dt);
+            }
         }
     }
 
@@ -18423,7 +18461,9 @@ pub fn step(world: *World, dt: f32) !void {
             }
 
             // Vehicles: suspension hard-limit + pitch/roll position correction.
-            for (world.vehicles.items) |v| v.solvePosition(world, s.baumgarte);
+            for (world.vehicles.items) |v| {
+                v.solvePosition(world, s.baumgarte);
+            }
         }
     }
 

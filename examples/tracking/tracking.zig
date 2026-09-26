@@ -39,10 +39,17 @@
 //! form instead of a policy; **nothing below the interface would change.**
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
+const pi = zm.pi;
 const rbt = z.robot;
 const ctl = z.robot_control;
 const mpc = z.robot_mpc;
@@ -290,7 +297,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 /// guarantee on a redundant arm. Two passes, so the last entry meets the first.
 fn buildPoseTable(s: *State) void {
     const m: *rbt.Model = &s.model;
-    s.loop_period = 2.0 * zm.pi / @max(0.01, s.speed);
+    s.loop_period = 2.0 * pi / @max(0.01, s.speed);
     @memcpy(s.planner.data.pos, s.rest);
     s.planner.data.stage = .stale;
     rbt.forward(m, &s.planner.data);
@@ -485,7 +492,7 @@ fn drawArm(s: *State, gl: *z.WgpuGl, a: *const Arm, depth: f32) void {
     var previous: Vec = toRender(targetAt(0, s.speed), depth);
     var step: u32 = 1;
     while (step <= 96) : (step += 1) {
-        const t: f32 = 2.0 * zm.pi * float(step) / 96.0 / @max(0.01, s.speed);
+        const t: f32 = 2.0 * pi * float(step) / 96.0 / @max(0.01, s.speed);
         const here: Vec = toRender(targetAt(t, s.speed), depth);
         z.drawLine3D(gl, previous, here, path_colour);
         previous = here;

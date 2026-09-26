@@ -8,10 +8,10 @@ zig-out/
 # build cache; this dir is just for ad-hoc inspection.
 shadertemp/
 
-# Pre-built distribution (`prebuilt/`, ~1.1 GB of demo wasm) is NOT tracked:
-# it exceeds Codeberg's repo-size budget and is regenerable via `release.bat`
-# (or `zig build -Drelease=true dist`). Codeberg Pages is updated by a separate
-# deploy script, so the repo carries source only.
+# Pre-built distribution (`prebuilt/`, ~350 MB of demo wasm + docs) is NOT
+# tracked on main: it is regenerable via `zig build -Dmode=release dist`, and
+# `release.bat` / `release.sh` publish it to the orphan `pages` branch that
+# GitHub Pages serves, so main carries source only.
 prebuilt/
 
 
@@ -40,3 +40,4 @@ reference/
 # c2js writes "<basename>.js.map" next to its output; bridge.js.map had been
 # sitting in the repo root (1.4 MB) and shipping inside every snapshot zip.
 *.js.map
+/train/

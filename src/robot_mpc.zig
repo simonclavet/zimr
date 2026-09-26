@@ -2657,15 +2657,17 @@ pub fn solveCrane(
         @memcpy(plan.states[0..n], x0[0..n]);
         cost = 0;
         for (0..plan.horizon) |k| {
-            const xk = plan.states[k * n ..][0..n];
-            const uk = plan.ctrl[k * nu ..][0..nu];
+            const xk: []const f32 = plan.states[k * n ..][0..n];
+            const uk: []const f32 = plan.ctrl[k * nu ..][0..nu];
             for (0..n) |i| {
                 const e: f32 = xk[i] - plan.reference[k * n + i];
                 plan.knot_error[k * n + i] = e;
                 cost += 0.5 * weights.state[i] * e * e;
             }
-            for (0..nu) |j| cost += 0.5 * weights.control[j] * uk[j] * uk[j];
-            const next = craneStep(model, xk, uk, step, true);
+            for (0..nu) |j| {
+                cost += 0.5 * weights.control[j] * uk[j] * uk[j];
+            }
+            const next: [crane_state_dim]f32 = craneStep(model, xk, uk, step, true);
             @memcpy(plan.states[(k + 1) * n ..][0..n], &next);
         }
         for (0..n) |i| {
@@ -2698,7 +2700,9 @@ pub fn solveCrane(
                 break;
             }
         }
-        if (!solved) return cost;
+        if (!solved) {
+            return cost;
+        }
 
         var rolled: [crane_state_dim]f32 = undefined;
         @memcpy(&rolled, x0[0..n]);
@@ -4311,7 +4315,7 @@ fn accumulateTask(
             // The point's world velocity is `J·q̇`, which is what the residual is against.
             var moving: Vec = vec(0, 0, 0);
             for (0..m.nv) |v| {
-                moving += s.task_jacobian[v] * zm.splat(d.vel[v]);
+                moving += s.task_jacobian[v] * splat(d.vel[v]);
             }
             const want_vel: Vec = vec(
                 velocity[knot * 3 + 0],
@@ -4630,7 +4634,7 @@ fn taskCost(
                 rbt.jacPoint(m, d, task.body, at, jac_buf[0..m.nv], null);
                 var moving: Vec = vec(0, 0, 0);
                 for (0..m.nv) |v| {
-                    moving += jac_buf[v] * zm.splat(d.vel[v]);
+                    moving += jac_buf[v] * splat(d.vel[v]);
                 }
                 const want_vel: Vec = vec(
                     velocity[knot * 3 + 0],

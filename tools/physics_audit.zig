@@ -15,6 +15,7 @@
 const std = @import("std");
 const zp = @import("zp");
 const zm = @import("zm");
+const pi = zm.pi;
 const float = zm.float;
 
 const bufPrint = std.fmt.bufPrint;
@@ -701,10 +702,18 @@ fn pathScenario(rep: *Report, gpa: std.mem.Allocator) !void {
         defer scratch.deinit();
         try zp.step(&world, scratch.allocator(), dt);
         const p: Vec = world.bodies.data[b].com_pos;
-        if (@abs(p[2]) > max_z) max_z = @abs(p[2]);
-        if (p[1] < min_y) min_y = p[1];
-        if (p[1] < 3.3) reached_bottom = true;
-        if (reached_bottom and p[0] > 1.0 and p[1] > max_y_after_bottom) max_y_after_bottom = p[1];
+        if (@abs(p[2]) > max_z) {
+            max_z = @abs(p[2]);
+        }
+        if (p[1] < min_y) {
+            min_y = p[1];
+        }
+        if (p[1] < 3.3) {
+            reached_bottom = true;
+        }
+        if (reached_bottom and p[0] > 1.0 and p[1] > max_y_after_bottom) {
+            max_y_after_bottom = p[1];
+        }
     }
     const p: Vec = world.bodies.data[b].com_pos;
     const finite: bool = finite3(p) and finite3(world.motion[b].lin_vel);
@@ -780,12 +789,17 @@ fn newtonsCradleScenario(rep: *Report, gpa: std.mem.Allocator) !void {
         try zp.step(&world, scratch.allocator(), dt);
         const v0: f32 = world.motion[b0].lin_vel[0];
         const v1: f32 = world.motion[b1].lin_vel[0];
-        if (v1 < 0.5 and v0 > impact_speed) impact_speed = v0; // swing-in speed
+        // swing-in speed
+        if (v1 < 0.5 and v0 > impact_speed) {
+            impact_speed = v0;
+        }
         if (v1 > peak_v1) {
             peak_v1 = v1;
             v0_at_peak = v0;
         }
-        if (v1 > 2.0) transferred = true;
+        if (v1 > 2.0) {
+            transferred = true;
+        }
     }
     const finite: bool = finite3(world.motion[b0].lin_vel) and finite3(world.motion[b1].lin_vel);
     // ball1 took (near) all the speed; ball0 (near) stopped; no energy gained.
@@ -1451,7 +1465,7 @@ fn tumblerScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var children: [6]zp.CompoundChild = undefined;
     var k: usize = 0;
     while (k < 6) : (k += 1) {
-        const th: f32 = float(k) * zm.pi / 3.0;
+        const th: f32 = float(k) * pi / 3.0;
         children[k] = .{
             .shape = wall,
             .local_pos = vec(radius * @cos(th), radius * @sin(th), 0),
@@ -1781,11 +1795,12 @@ fn stirrerScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     } });
     var seg: usize = 0;
     while (seg < seg_count) : (seg += 1) {
-        const phi: f32 = float(seg) * (2.0 * zm.pi / float(seg_count));
+        // The AZIMUTH of this ring segment. `phi` would shadow zimrmath's golden ratio.
+        const azimuth: f32 = float(seg) * (2.0 * pi / float(seg_count));
         _ = try world.addBody(gpa, .{
             .shape = seg_shape,
-            .position = vec(r_wall * zm.cosRad(phi), 1.5, r_wall * zm.sinRad(phi)),
-            .rotation = quatFromAxisAngle(vec(0, 1, 0), -(phi + zm.pi / 2.0)),
+            .position = vec(r_wall * zm.cosRad(azimuth), 1.5, r_wall * zm.sinRad(azimuth)),
+            .rotation = quatFromAxisAngle(vec(0, 1, 0), -(azimuth + zm.pi / 2.0)),
             .motion_type = .static,
         });
     }
@@ -1864,7 +1879,7 @@ fn stirrerScenario(rep: *Report, gpa: std.mem.Allocator) !void {
         if (finite3(p) and rad < r_wall + 0.4 and p[1] > -1.0 and p[1] < 6.0) {
             inside += 1;
         }
-        spd += zm.length3(world.getLinearVelocity(b));
+        spd += length3(world.getLinearVelocity(b));
     }
     const w: f32 = world.getAngularVelocity(rotor)[1];
     const avg_speed: f32 = spd / float(n);

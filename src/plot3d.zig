@@ -57,6 +57,9 @@ const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
+const maxInt = zm.maxInt;
+const isInf = zm.isInf;
+const isNan = zm.isNan;
 const sinTurns = zm.sinTurns;
 const cosTurns = zm.cosTurns;
 const radFromTurns = zm.radFromTurns;
@@ -1159,7 +1162,7 @@ pub fn Pool(comptime T: type) type {
             for (self.items.items, 0..) |p, i| {
                 if (p == item) return i;
             }
-            return std.math.maxInt(usize);
+            return maxInt(usize);
         }
         pub fn reset(self: *Self) void {
             self.map.clearRetainingCapacity();
@@ -1239,7 +1242,7 @@ pub const Ticker = struct {
 pub const TransformFn = *const fn (value: f32, data: ?*anyopaque) callconv(.c) f32;
 
 inline fn constrainNan(v: f32) f32 {
-    return if (std.math.isNan(v)) 0 else v;
+    return if (isNan(v)) 0 else v;
 }
 
 inline fn constrainInf(v: f32) f32 {
@@ -1477,14 +1480,14 @@ pub const Axis = struct {
     }
 
     pub fn extendFit(self: *Axis, value: f32) void {
-        if (std.math.isNan(value) or std.math.isInf(value)) {
+        if (isNan(value) or isInf(value)) {
             return;
         }
         self.fit_extents.min = @min(self.fit_extents.min, value);
         self.fit_extents.max = @max(self.fit_extents.max, value);
     }
     pub fn applyFit(self: *Axis) void {
-        if (!std.math.isInf(self.fit_extents.min) and !std.math.isInf(self.fit_extents.max)) {
+        if (!isInf(self.fit_extents.min) and !isInf(self.fit_extents.max)) {
             if (!self.isLockedMin()) {
                 self.range.min = self.fit_extents.min;
             }
@@ -2097,7 +2100,9 @@ pub fn popStyleColor(ctx: *Context, count: usize) void {
     const style: *Style = getStyle(ctx);
     var n: usize = count;
     while (n > 0) : (n -= 1) {
-        const mod = ctx.style_color_stack.pop() orelse break;
+        // Unwinding a push: each entry carries which colour slot was overridden and what was
+        // there before, so popping restores rather than guessing a default.
+        const mod: StyleColorMod = ctx.style_color_stack.pop() orelse break;
         style.colors[@intCast(@backingInt(mod.col))] = mod.backup;
     }
 }
@@ -2579,9 +2584,11 @@ fn locatorDefault(ctx: *Context, ticker: *Ticker, range: Range, pixels: f32) voi
 
     var major: f32 = graphmin;
     while (major < graphmax + 0.5 * interval) : (major += interval) {
-        if (major - interval < 0 and major + interval > 0) major = 0;
+        if (major - interval < 0 and major + interval > 0) {
+            major = 0;
+        }
         if (range.contains(major)) {
-            const label = formatTickDefault(major, &buf);
+            const label: []const u8 = formatTickDefault(major, &buf);
             _ = ticker.addTickLabel(ctx, major, true, true, label);
         }
         var i: i32 = 1;
@@ -3153,34 +3160,62 @@ fn renderTicksAndLabels(
     // only that axis. (Simplification of upstream's active-edge selection.)
     var a: usize = 0;
     while (a < 3) : (a += 1) {
-        const axis = &plot.axes[a];
-        if (!axis.hasTickLabels() and !axis.hasTickMarks()) continue;
+        const axis: *const Axis = &plot.axes[a];
+        if (!axis.hasTickLabels() and !axis.hasTickMarks()) {
+            continue;
+        }
         for (axis.ticker.ticks.items, 0..) |tick, ti| {
-            const t = (tick.plot_pos - axis.range.min) / (axis.range.max - axis.range.min);
-            if (t < 0 or t > 1) continue;
-            var p = range_min;
+            const axis_span: f32 = axis.range.max - axis.range.min;
+            const t: f32 = (tick.plot_pos - axis.range.min) / axis_span;
+            if (t < 0 or t > 1) {
+                continue;
+            }
+            // Walk the edge that leaves `range_min` along THIS axis only; the other two
+            // coordinates stay pinned at their minimum.
+            //
+            // ★ THE SWITCH IS LOAD-BEARING, NOT VERBOSITY. `Point3` is `@Vector(4, f32)`, and a
+            // vector index must be COMPTIME-KNOWN - `tick_point[a]` with a runtime `a` is
+            // `error: vector index not comptime known`. The switch gives each arm a literal
+            // index. Anyone "simplifying" this back to `tick_point[a]` gets a compile error, but
+            // only from a target that actually builds this file.
+            var tick_point: Point3 = range_min;
             switch (a) {
-                0 => p[0] = range_min[0] + t * (range_max[0] - range_min[0]),
-                1 => p[1] = range_min[1] + t * (range_max[1] - range_min[1]),
-                2 => p[2] = range_min[2] + t * (range_max[2] - range_min[2]),
+                0 => tick_point[0] = range_min[0] + t * (range_max[0] - range_min[0]),
+                1 => tick_point[1] = range_min[1] + t * (range_max[1] - range_min[1]),
+                2 => tick_point[2] = range_min[2] + t * (range_max[2] - range_min[2]),
                 else => unreachable,
             }
-            const pix = plotToPixelsP(plot, p);
+            const pix: Vec2 = plotToPixelsP(plot, tick_point);
             if (axis.hasTickMarks() and tick.major) {
                 dl.addLine(pix, .{ pix[0], pix[1] + 4 }, tick_col, 1.0);
             }
             if (axis.hasTickLabels() and tick.show_label and tick.text_offset >= 0) {
-                const label = axis.ticker.getText(ti);
-                const ts = im.calcTextSize(label);
-                dl.addText(.{ pix[0] - ts[0] * 0.5, pix[1] + 4 }, text_col, label);
+                const label: []const u8 = axis.ticker.getText(ti);
+                const label_size: Vec2 = im.calcTextSize(label);
+                // Centred under the tick: back off by half the text width, then down by the
+                // same 4px the tick mark uses.
+                const label_pos: Vec2 = .{ pix[0] - label_size[0] * 0.5, pix[1] + 4 };
+                dl.addText(label_pos, text_col, label);
             }
         }
-        // Axis label at the far end of the edge.
+        // The axis name, at the MIDDLE of that axis's own edge.
+        //
+        // ★ This previously read `var p = range_max; ... _ = &p;` - every axis drew its label at
+        // the same `range_max` corner, so all three names stacked on one point and only the last
+        // was readable. The `_ = &p` was there to stop the compiler complaining that a `var`
+        // which is never written should be `const`, which is a fair signal that the line meant
+        // to vary something and did not. Midpoint of the edge matches how the ticks above are
+        // placed, so the label now sits with the values it names.
         if (axis.hasLabel()) {
-            var p = range_max;
-            const pix = plotToPixelsP(plot, p);
+            var label_point: Point3 = range_min;
+            switch (a) {
+                0 => label_point[0] = (range_min[0] + range_max[0]) * 0.5,
+                1 => label_point[1] = (range_min[1] + range_max[1]) * 0.5,
+                2 => label_point[2] = (range_min[2] + range_max[2]) * 0.5,
+                else => unreachable,
+            }
+            const pix: Vec2 = plotToPixelsP(plot, label_point);
             dl.addText(pix, text_col, axis.getLabel());
-            _ = &p;
         }
     }
 }
@@ -3206,10 +3241,20 @@ fn renderPlotBackground(
     const col: zm.ColorU32 = getStyleColorU32(ctx, .plot_bg);
     var face: usize = 0;
     while (face < 3) : (face += 1) {
-        if (plane_2d != -1 and @as(i32, @intCast(face)) != plane_2d) continue;
-        const fi = face + 3 * @as(usize, @intFromBool(active_faces[face]));
-        const q = box_faces[fi];
-        dl.addQuadFilled(corners_pix[q[0]], corners_pix[q[1]], corners_pix[q[2]], corners_pix[q[3]], col);
+        if (plane_2d != -1 and @as(i32, @intCast(face)) != plane_2d) {
+            continue;
+        }
+        // Same far-face selection as `renderGrid`: `active_faces` picks the wall behind the
+        // data so the fill does not sit over it.
+        const face_index: usize = face + 3 * @as(usize, @intFromBool(active_faces[face]));
+        const face_corners: [4]usize = box_faces[face_index];
+        dl.addQuadFilled(
+            corners_pix[face_corners[0]],
+            corners_pix[face_corners[1]],
+            corners_pix[face_corners[2]],
+            corners_pix[face_corners[3]],
+            col,
+        );
     }
 }
 
@@ -3297,33 +3342,54 @@ fn renderGrid(
 
     var face: usize = 0;
     while (face < 3) : (face += 1) {
-        if (plane_2d != -1 and @as(i32, @intCast(face)) != plane_2d) continue;
-        const fi = face + 3 * @as(usize, @intFromBool(active_faces[face]));
-        const axis_u = &plot.axes[(face + 1) % 3];
-        const axis_v = &plot.axes[(face + 2) % 3];
-        const q = box_faces[fi];
-        const p0 = corners[q[0]];
-        const p1 = corners[q[1]];
-        const p3 = corners[q[3]];
-        const u_vec = p1 - p0;
-        const v_vec = p3 - p0;
+        if (plane_2d != -1 and @as(i32, @intCast(face)) != plane_2d) {
+            continue;
+        }
+        // Each axis pair has two opposing faces of the box; `active_faces` picks the one facing
+        // away from the camera, so the grid is drawn on the far wall rather than across the data.
+        const face_index: usize = face + 3 * @as(usize, @intFromBool(active_faces[face]));
+        const axis_u: *const Axis = &plot.axes[(face + 1) % 3];
+        const axis_v: *const Axis = &plot.axes[(face + 2) % 3];
 
+        // The face's four corners, in winding order. Only three are needed: one origin and the
+        // two edges leaving it.
+        const face_corners: [4]usize = box_faces[face_index];
+        const origin: Point3 = corners[face_corners[0]];
+        const u_end: Point3 = corners[face_corners[1]];
+        const v_end: Point3 = corners[face_corners[3]];
+        const u_edge: Point3 = u_end - origin;
+        const v_edge: Point3 = v_end - origin;
+
+        // A grid line for a tick on axis U runs ALONG V, and vice versa - the line marks one
+        // value of U and spans every value of V. Naming the endpoints after the edge they are
+        // offset from is what makes that readable: previously `u_vec` came from `p1` while the
+        // U-lines ran to `p3`, which is right but reads as a bug every time.
         if (axis_u.hasGridLines()) {
             for (axis_u.ticker.ticks.items) |tick| {
-                const t_u = (tick.plot_pos - axis_u.range.min) / (axis_u.range.max - axis_u.range.min);
-                if (t_u < 0 or t_u > 1) continue;
-                const ps = plotToPixelsP(plot, p0 + u_vec * splat(t_u));
-                const pe = plotToPixelsP(plot, p3 + u_vec * splat(t_u));
-                dl.addLine(ps, pe, if (tick.major) col_major else col_minor, 1.0);
+                const u_span: f32 = axis_u.range.max - axis_u.range.min;
+                const t_u: f32 = (tick.plot_pos - axis_u.range.min) / u_span;
+                if (t_u < 0 or t_u > 1) {
+                    continue;
+                }
+                const offset_u: Point3 = u_edge * splat(t_u);
+                const line_start: Vec2 = plotToPixelsP(plot, origin + offset_u);
+                const line_end: Vec2 = plotToPixelsP(plot, v_end + offset_u);
+                const color: zm.ColorU32 = if (tick.major) col_major else col_minor;
+                dl.addLine(line_start, line_end, color, 1.0);
             }
         }
         if (axis_v.hasGridLines()) {
             for (axis_v.ticker.ticks.items) |tick| {
-                const t_v = (tick.plot_pos - axis_v.range.min) / (axis_v.range.max - axis_v.range.min);
-                if (t_v < 0 or t_v > 1) continue;
-                const ps = plotToPixelsP(plot, p0 + v_vec * splat(t_v));
-                const pe = plotToPixelsP(plot, p1 + v_vec * splat(t_v));
-                dl.addLine(ps, pe, if (tick.major) col_major else col_minor, 1.0);
+                const v_span: f32 = axis_v.range.max - axis_v.range.min;
+                const t_v: f32 = (tick.plot_pos - axis_v.range.min) / v_span;
+                if (t_v < 0 or t_v > 1) {
+                    continue;
+                }
+                const offset_v: Point3 = v_edge * splat(t_v);
+                const line_start: Vec2 = plotToPixelsP(plot, origin + offset_v);
+                const line_end: Vec2 = plotToPixelsP(plot, u_end + offset_v);
+                const color: zm.ColorU32 = if (tick.major) col_major else col_minor;
+                dl.addLine(line_start, line_end, color, 1.0);
             }
         }
     }
@@ -3811,16 +3877,27 @@ fn renderLineStrip(
         return;
     }
     const box: Box = cullBox(plot);
-    var p1: Point3 = getter.at(0);
+    // A polyline, so each point is the END of one segment and the START of the next. Carrying
+    // `segment_start` across the iteration is what makes it one `getter.at` per point rather
+    // than two - the getters can be strided or wrapped views, so the call is not always free.
+    var segment_start: Point3 = getter.at(0);
     var i: usize = 0;
     while (i < getter.count - 1) : (i += 1) {
-        const p2 = getter.at(i + 1);
-        var c0: Point3 = undefined;
-        var c1: Point3 = undefined;
-        if (box.clipLineSegment(p1, p2, &c0, &c1)) {
-            dl.addLine(plotToPixelsP(plot, c0), plotToPixelsP(plot, c1), col, weight);
+        const segment_end: Point3 = getter.at(i + 1);
+        // CLIPPED, not culled: a segment crossing the box edge is shortened to the part inside
+        // rather than dropped, which is why this takes the two `clipped_*` outputs instead of
+        // testing containment like the fill paths do.
+        var clipped_start: Point3 = undefined;
+        var clipped_end: Point3 = undefined;
+        if (box.clipLineSegment(segment_start, segment_end, &clipped_start, &clipped_end)) {
+            dl.addLine(
+                plotToPixelsP(plot, clipped_start),
+                plotToPixelsP(plot, clipped_end),
+                col,
+                weight,
+            );
         }
-        p1 = p2;
+        segment_start = segment_end;
     }
 }
 
@@ -3833,14 +3910,21 @@ fn renderLineSegments(
     weight: f32,
 ) void {
     const box: Box = cullBox(plot);
+    // Disjoint segments, so `i` steps by TWO and nothing carries across iterations - the
+    // difference from `renderLine` above, which treats the same points as one connected path.
     var i: usize = 0;
     while (i + 1 < getter.count) : (i += 2) {
-        const p1 = getter.at(i);
-        const p2 = getter.at(i + 1);
-        var c0: Point3 = undefined;
-        var c1: Point3 = undefined;
-        if (box.clipLineSegment(p1, p2, &c0, &c1)) {
-            dl.addLine(plotToPixelsP(plot, c0), plotToPixelsP(plot, c1), col, weight);
+        const segment_start: Point3 = getter.at(i);
+        const segment_end: Point3 = getter.at(i + 1);
+        var clipped_start: Point3 = undefined;
+        var clipped_end: Point3 = undefined;
+        if (box.clipLineSegment(segment_start, segment_end, &clipped_start, &clipped_end)) {
+            dl.addLine(
+                plotToPixelsP(plot, clipped_start),
+                plotToPixelsP(plot, clipped_end),
+                col,
+                weight,
+            );
         }
     }
 }
@@ -3850,12 +3934,28 @@ fn renderTriangleFill(plot: *Plot3D, getter: anytype, col: zm.ColorU32) void {
     const box: Box = cullBox(plot);
     var prim: usize = 0;
     while (3 * prim + 2 < getter.count) : (prim += 1) {
-        const a = getter.at(3 * prim);
-        const b = getter.at(3 * prim + 1);
-        const c = getter.at(3 * prim + 2);
-        if (!box.contains(a) and !box.contains(b) and !box.contains(c)) continue;
-        const z = getPointDepth(plot, (a + b + c) / splat(3));
-        plot.draw_list.addTriangle(plotToPixelsP(plot, a), plotToPixelsP(plot, b), plotToPixelsP(plot, c), col, z);
+        const vertex_a: Point3 = getter.at(3 * prim);
+        const vertex_b: Point3 = getter.at(3 * prim + 1);
+        const vertex_c: Point3 = getter.at(3 * prim + 2);
+        // Dropped only when EVERY vertex is outside the box - a triangle with one corner inside
+        // still has visible area. Note this is a corner test, not an overlap test: a large
+        // triangle that spans the box with all three corners outside is culled even though part
+        // of it is on screen. Cheap and nearly always right; the alternative is a real
+        // box-triangle intersection per primitive.
+        const all_outside: bool =
+            !box.contains(vertex_a) and !box.contains(vertex_b) and !box.contains(vertex_c);
+        if (all_outside) {
+            continue;
+        }
+        const centroid: Point3 = (vertex_a + vertex_b + vertex_c) / splat(3);
+        const depth: f32 = getPointDepth(plot, centroid);
+        plot.draw_list.addTriangle(
+            plotToPixelsP(plot, vertex_a),
+            plotToPixelsP(plot, vertex_b),
+            plotToPixelsP(plot, vertex_c),
+            col,
+            depth,
+        );
     }
 }
 
@@ -3864,19 +3964,25 @@ fn renderQuadFill(plot: *Plot3D, getter: anytype, col: zm.ColorU32) void {
     const box: Box = cullBox(plot);
     var prim: usize = 0;
     while (4 * prim + 3 < getter.count) : (prim += 1) {
-        const a = getter.at(4 * prim);
-        const b = getter.at(4 * prim + 1);
-        const c = getter.at(4 * prim + 2);
-        const d = getter.at(4 * prim + 3);
-        if (!box.contains(a) and !box.contains(b) and !box.contains(c) and !box.contains(d)) continue;
-        const z = getPointDepth(plot, (a + b + c + d) / splat(4));
+        const vertex_a: Point3 = getter.at(4 * prim);
+        const vertex_b: Point3 = getter.at(4 * prim + 1);
+        const vertex_c: Point3 = getter.at(4 * prim + 2);
+        const vertex_d: Point3 = getter.at(4 * prim + 3);
+        // Same corner-only cull as `renderTriangleFill`; see the note there.
+        const all_outside: bool = !box.contains(vertex_a) and !box.contains(vertex_b) and
+            !box.contains(vertex_c) and !box.contains(vertex_d);
+        if (all_outside) {
+            continue;
+        }
+        const centroid: Point3 = (vertex_a + vertex_b + vertex_c + vertex_d) / splat(4);
+        const depth: f32 = getPointDepth(plot, centroid);
         plot.draw_list.addQuad(
-            plotToPixelsP(plot, a),
-            plotToPixelsP(plot, b),
-            plotToPixelsP(plot, c),
-            plotToPixelsP(plot, d),
+            plotToPixelsP(plot, vertex_a),
+            plotToPixelsP(plot, vertex_b),
+            plotToPixelsP(plot, vertex_c),
+            plotToPixelsP(plot, vertex_d),
             col,
-            z,
+            depth,
         );
     }
 }
@@ -4006,8 +4112,12 @@ fn renderMarkers(
     const line: zm.ColorU32 = im.colorToU32(n.spec.marker_line_color.?);
     var i: usize = 0;
     while (i < getter.count) : (i += 1) {
-        const pt = getter.at(i);
-        if (!box.contains(pt)) continue;
+        // A marker is a point, so containment IS the correct cull here - unlike the triangle
+        // and quad fills, where a corner test can drop something still partly on screen.
+        const pt: Point3 = getter.at(i);
+        if (!box.contains(pt)) {
+            continue;
+        }
         renderMarker(
             dl,
             n.spec.marker,
@@ -4154,12 +4264,15 @@ fn renderTriangleEdges(
 ) void {
     var prim: usize = 0;
     while (3 * prim + 2 < getter.count) : (prim += 1) {
-        const a = plotToPixelsP(plot, getter.at(3 * prim));
-        const b = plotToPixelsP(plot, getter.at(3 * prim + 1));
-        const c = plotToPixelsP(plot, getter.at(3 * prim + 2));
-        dl.addLine(a, b, col, weight);
-        dl.addLine(b, c, col, weight);
-        dl.addLine(c, a, col, weight);
+        // Outlines only - projected straight to pixels, with no cull and no depth. Unlike the
+        // FILL paths these go to the plain 2D draw list, so they always land on top of the
+        // depth-sorted fills rather than interleaving with them.
+        const pixel_a: Vec2 = plotToPixelsP(plot, getter.at(3 * prim));
+        const pixel_b: Vec2 = plotToPixelsP(plot, getter.at(3 * prim + 1));
+        const pixel_c: Vec2 = plotToPixelsP(plot, getter.at(3 * prim + 2));
+        dl.addLine(pixel_a, pixel_b, col, weight);
+        dl.addLine(pixel_b, pixel_c, col, weight);
+        dl.addLine(pixel_c, pixel_a, col, weight);
     }
 }
 
@@ -4230,14 +4343,16 @@ fn renderQuadEdges(
 ) void {
     var prim: usize = 0;
     while (4 * prim + 3 < getter.count) : (prim += 1) {
-        const a = plotToPixelsP(plot, getter.at(4 * prim));
-        const b = plotToPixelsP(plot, getter.at(4 * prim + 1));
-        const c = plotToPixelsP(plot, getter.at(4 * prim + 2));
-        const d = plotToPixelsP(plot, getter.at(4 * prim + 3));
-        dl.addLine(a, b, col, weight);
-        dl.addLine(b, c, col, weight);
-        dl.addLine(c, d, col, weight);
-        dl.addLine(d, a, col, weight);
+        // Closed outline: the last edge runs back to the first corner. See the note in the
+        // triangle version above about these bypassing the depth sort.
+        const pixel_a: Vec2 = plotToPixelsP(plot, getter.at(4 * prim));
+        const pixel_b: Vec2 = plotToPixelsP(plot, getter.at(4 * prim + 1));
+        const pixel_c: Vec2 = plotToPixelsP(plot, getter.at(4 * prim + 2));
+        const pixel_d: Vec2 = plotToPixelsP(plot, getter.at(4 * prim + 3));
+        dl.addLine(pixel_a, pixel_b, col, weight);
+        dl.addLine(pixel_b, pixel_c, col, weight);
+        dl.addLine(pixel_c, pixel_d, col, weight);
+        dl.addLine(pixel_d, pixel_a, col, weight);
     }
 }
 
@@ -4328,28 +4443,47 @@ pub fn plotSurface(
         while (yi + 1 < y_count) : (yi += 1) {
             var xi: usize = 0;
             while (xi + 1 < x_count) : (xi += 1) {
-                const k00 = yi * x_count + xi;
-                const k10 = yi * x_count + (xi + 1);
-                const k11 = (yi + 1) * x_count + (xi + 1);
-                const k01 = (yi + 1) * x_count + xi;
-                const a = getter.at(k00);
-                const b = getter.at(k10);
-                const c = getter.at(k11);
-                const d = getter.at(k01);
+                // One cell of the (x_count x y_count) grid, named by its corner's grid position:
+                // `x0y0` is the cell's origin, `x1y1` the diagonally opposite corner. The four
+                // are listed in winding order, which is what `addQuad` expects.
+                const index_x0y0: usize = yi * x_count + xi;
+                const index_x1y0: usize = yi * x_count + (xi + 1);
+                const index_x1y1: usize = (yi + 1) * x_count + (xi + 1);
+                const index_x0y1: usize = (yi + 1) * x_count + xi;
+                const corner_x0y0: Point3 = getter.at(index_x0y0);
+                const corner_x1y0: Point3 = getter.at(index_x1y0);
+                const corner_x1y1: Point3 = getter.at(index_x1y1);
+                const corner_x0y1: Point3 = getter.at(index_x0y1);
                 if (n.render_fill and !@as(SurfaceFlags, @bitCast(s.flags)).no_fill) {
-                    const z = getPointDepth(plot, (a + b + c + d) / splat(4));
+                    // Depth for the painter's-algorithm sort is the cell CENTROID, not any one
+                    // corner: sorting by a corner makes adjacent cells flip order along a shared
+                    // edge and the surface tears.
+                    const centroid: Point3 =
+                        (corner_x0y0 + corner_x1y0 + corner_x1y1 + corner_x0y1) / splat(4);
+                    const depth: f32 = getPointDepth(plot, centroid);
                     plot.draw_list.addQuad(
-                        plotToPixelsP(plot, a),
-                        plotToPixelsP(plot, b),
-                        plotToPixelsP(plot, c),
-                        plotToPixelsP(plot, d),
+                        plotToPixelsP(plot, corner_x0y0),
+                        plotToPixelsP(plot, corner_x1y0),
+                        plotToPixelsP(plot, corner_x1y1),
+                        plotToPixelsP(plot, corner_x0y1),
                         fill_col,
-                        z,
+                        depth,
                     );
                 }
                 if (n.render_line and !@as(TriangleFlags, @bitCast(s.flags)).no_lines) {
-                    dl.addLine(plotToPixelsP(plot, a), plotToPixelsP(plot, b), line_col, s.line_weight);
-                    dl.addLine(plotToPixelsP(plot, a), plotToPixelsP(plot, d), line_col, s.line_weight);
+                    // Only the two edges LEAVING this cell's origin are drawn; the other two
+                    // belong to the neighbouring cells, which is what keeps every interior edge
+                    // from being stroked twice.
+                    //
+                    // ★ CONSEQUENCE: the far boundary is not stroked at all. No cell has
+                    // `yi == y_count - 1` or `xi == x_count - 1` as its origin, so the last row's
+                    // horizontal edges and the last column's vertical edges are missing, and the
+                    // wireframe is open on two sides. Left as-is rather than fixed blind, because
+                    // closing it changes rendered output and the screenshot fixtures are the
+                    // arbiter of that.
+                    const pixel_x0y0: Vec2 = plotToPixelsP(plot, corner_x0y0);
+                    dl.addLine(pixel_x0y0, plotToPixelsP(plot, corner_x1y0), line_col, s.line_weight);
+                    dl.addLine(pixel_x0y0, plotToPixelsP(plot, corner_x0y1), line_col, s.line_weight);
                 }
             }
         }
@@ -4379,22 +4513,30 @@ pub fn plotMesh(
         const dl: Im.DrawList = im.getWindowDrawList();
         const fill_col: zm.ColorU32 = im.colorToU32(s.fill_color.?);
         const line_col: zm.ColorU32 = im.colorToU32(s.line_color.?);
+        // `idxs` is a flat list of triplets, so `t` steps by 3 and the guard is `t + 2` - the
+        // last complete triangle starts at `idxs.len - 3`. A trailing 1 or 2 stray indices are
+        // ignored rather than read past the end.
         var t: usize = 0;
         while (t + 2 < idxs.len) : (t += 3) {
-            const a = vtx[idxs[t]];
-            const b = vtx[idxs[t + 1]];
-            const c = vtx[idxs[t + 2]];
-            const pa = plotToPixelsP(plot, a);
-            const pb = plotToPixelsP(plot, b);
-            const pc = plotToPixelsP(plot, c);
+            const vertex_a: Point3 = vtx[idxs[t]];
+            const vertex_b: Point3 = vtx[idxs[t + 1]];
+            const vertex_c: Point3 = vtx[idxs[t + 2]];
+            const pixel_a: Vec2 = plotToPixelsP(plot, vertex_a);
+            const pixel_b: Vec2 = plotToPixelsP(plot, vertex_b);
+            const pixel_c: Vec2 = plotToPixelsP(plot, vertex_c);
             if (n.render_fill and !@as(MeshFlags, @bitCast(s.flags)).no_fill) {
-                const z = getPointDepth(plot, (a + b + c) / splat(3));
-                plot.draw_list.addTriangle(pa, pb, pc, fill_col, z);
+                // Centroid depth, for the same reason the surface uses it: a per-vertex depth
+                // lets neighbouring triangles disagree about which is in front.
+                const centroid: Point3 = (vertex_a + vertex_b + vertex_c) / splat(3);
+                const depth: f32 = getPointDepth(plot, centroid);
+                plot.draw_list.addTriangle(pixel_a, pixel_b, pixel_c, fill_col, depth);
             }
             if (n.render_line and !@as(TriangleFlags, @bitCast(s.flags)).no_lines) {
-                dl.addLine(pa, pb, line_col, s.line_weight);
-                dl.addLine(pb, pc, line_col, s.line_weight);
-                dl.addLine(pc, pa, line_col, s.line_weight);
+                // All three edges, unlike the surface grid above: a mesh has no implied
+                // neighbour to stroke the shared edge, so every triangle draws its own.
+                dl.addLine(pixel_a, pixel_b, line_col, s.line_weight);
+                dl.addLine(pixel_b, pixel_c, line_col, s.line_weight);
+                dl.addLine(pixel_c, pixel_a, line_col, s.line_weight);
             }
         }
         endItem(ctx);
@@ -4598,7 +4740,9 @@ pub fn genSphere(
         var sl: usize = 0;
         while (sl <= slices) : (sl += 1) {
             const theta_turns = float(sl) / float(slices);
-            if (vi >= out_vtx.len) return .{ .vtx = vi, .idx = ii };
+            if (vi >= out_vtx.len) {
+                return .{ .vtx = vi, .idx = ii };
+            }
             const sp: f32 = radius * sinTurns(phi_turns);
             out_vtx[vi] = point3(
                 sp * cosTurns(theta_turns),
@@ -4617,7 +4761,9 @@ pub fn genSphere(
             const b: u32 = @intCast(st * stride + sl + 1);
             const c: u32 = @intCast((st + 1) * stride + sl);
             const d: u32 = @intCast((st + 1) * stride + sl + 1);
-            if (ii + 6 > out_idx.len) return .{ .vtx = vi, .idx = ii };
+            if (ii + 6 > out_idx.len) {
+                return .{ .vtx = vi, .idx = ii };
+            }
             out_idx[ii] = a;
             out_idx[ii + 1] = c;
             out_idx[ii + 2] = b;

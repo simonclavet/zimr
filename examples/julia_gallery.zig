@@ -63,7 +63,9 @@ fn juliaPixel(zx0: f32, zy0: f32, cx: f32, cy: f32, hue_offset: f32) [4]u8 {
     while (iter < max_iter) : (iter += 1) {
         zx2 = zx * zx;
         zy2 = zy * zy;
-        if (zx2 + zy2 > BAIL_R2) break;
+        if (zx2 + zy2 > BAIL_R2) {
+            break;
+        }
         const zxy_new: f32 = 2 * zx * zy + cy;
         const zx_new: f32 = zx2 - zy2 + cx;
         zx = zx_new;

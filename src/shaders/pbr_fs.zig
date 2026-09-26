@@ -18,6 +18,7 @@
 
 const zm = @import("zm");
 const Vec = zm.Vec;
+const clamp = zm.clamp;
 const Vec3 = zm.Vec3;
 const clamp01 = zm.clamp01;
 const dot = zm.dot;
@@ -250,10 +251,10 @@ pub fn shaderMain(io_in: Io) Out {
     var i: i32 = 0;
     while (i < io_in.u.directional_light_count and i < @as(i32, max_directional_lights)) : (i += 1) {
         const idx: usize = @intCast(i);
-        const L_neg: @Vector(4, f32) = io_in.u.directional_light_dir[idx];
+        const L_neg: Vec = io_in.u.directional_light_dir[idx];
         const L: Vec3 = normalize(Vec3{ -L_neg[0], -L_neg[1], -L_neg[2] });
         const shadow: f32 = if (i == 0) computeShadow(io_in, N, L, shadow_proj, shadow_closest) else 1.0;
-        const lc: @Vector(4, f32) = io_in.u.directional_light_color[idx];
+        const lc: Vec = io_in.u.directional_light_color[idx];
         const radiance: Vec3 = Vec3{ lc[0], lc[1], lc[2] } * @as(Vec3, @splat(shadow));
         Lo = Lo + brdf(N, V, L, radiance, albedo, metallic, roughness, F0);
     }
@@ -262,7 +263,7 @@ pub fn shaderMain(io_in: Io) Out {
     var j: i32 = 0;
     while (j < io_in.u.point_light_count and j < @as(i32, max_point_lights)) : (j += 1) {
         const idx: usize = @intCast(j);
-        const pp: @Vector(4, f32) = io_in.u.point_light_pos[idx];
+        const pp: Vec = io_in.u.point_light_pos[idx];
         const to_light: Vec3 = Vec3{ pp[0], pp[1], pp[2] } - io_in.frag_world_pos;
         const dist: f32 = length(to_light);
         const range: f32 = io_in.u.point_light_range[idx][0];
@@ -270,8 +271,8 @@ pub fn shaderMain(io_in: Io) Out {
             continue;
         }
         const L: Vec3 = to_light * @as(Vec3, @splat(1.0 / @max(dist, 1e-7)));
-        const falloff: f32 = @min(@max(1.0 - dist / range, 0.0), 1.0);
-        const pc: @Vector(4, f32) = io_in.u.point_light_color[idx];
+        const falloff: f32 = clamp(1.0 - dist / range, 0.0, 1.0);
+        const pc: Vec = io_in.u.point_light_color[idx];
         const radiance: Vec3 =
             Vec3{ pc[0], pc[1], pc[2] } * @as(Vec3, @splat(falloff * falloff));
         Lo = Lo + brdf(N, V, L, radiance, albedo, metallic, roughness, F0);

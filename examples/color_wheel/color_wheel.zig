@@ -7,6 +7,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
+const length = zm.length;
 const common = @import("example_common");
 
 const sinRad = zm.sinRad;
@@ -93,7 +94,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
     if (down and s.mode == mode_wheel) {
         const off: Vec2 = .{ m[0] - lay.center[0], m[1] - lay.center[1] };
-        s.sat = clamp(zm.length(off) / lay.radius, 0.0, 1.0);
+        s.sat = clamp(length(off) / lay.radius, 0.0, 1.0);
         var a: f32 = atan2Rad(off[0], -off[1]); // 0 at top, clockwise
         if (a < 0) {
             a += tau;

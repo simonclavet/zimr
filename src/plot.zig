@@ -1862,7 +1862,14 @@ pub const Plot = struct {
         var bx: f32 = px - bw * 0.5;
         var by: f32 = py - bh;
         if (spec.clamp) {
+            // NOT `clamp`: this applies the UPPER bound first and `clamp` applies the lower first,
+            // which differ when hi < lo. Here `area.right() - bw` drops below `area.x` whenever the
+            // legend box is wider than the plot area - a narrow plot with a long series name. The
+            // current form pins the box to the left edge and lets it overflow; `clamp` would push it
+            // off the left instead.
+            // lint:off clamp-pattern: bounds can invert - see above
             bx = @max(self.area.x, @min(bx, self.area.right() - bw));
+            // lint:off clamp-pattern: bounds can invert - see the note at the first of these
             by = @max(self.area.y, @min(by, self.area.bottom() - bh));
         }
         sink.fillRect(.{ .x = bx, .y = by, .w = bw, .h = bh }, spec.bg);
@@ -1883,6 +1890,7 @@ pub const Plot = struct {
         const bw: f32 = textWidth(s, spec.size) + padx * 2;
         const bh: f32 = spec.size + pady * 2;
         var bx: f32 = px - bw * 0.5;
+        // lint:off clamp-pattern: bounds can invert - see the note at the first of these
         bx = @max(self.area.x, @min(bx, self.area.right() - bw));
         const by: f32 = self.area.bottom() + 2;
         sink.fillRect(.{ .x = bx, .y = by, .w = bw, .h = bh }, spec.bg);
@@ -1903,6 +1911,7 @@ pub const Plot = struct {
         const bw: f32 = textWidth(s, spec.size) + padx * 2;
         const bh: f32 = spec.size + pady * 2;
         var by: f32 = py - bh * 0.5;
+        // lint:off clamp-pattern: bounds can invert - see the note at the first of these
         by = @max(self.area.y, @min(by, self.area.bottom() - bh));
         const bx: f32 = self.area.x - bw - 3;
         sink.fillRect(.{ .x = bx, .y = by, .w = bw, .h = bh }, spec.bg);

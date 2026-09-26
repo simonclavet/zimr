@@ -40,10 +40,18 @@
 //! the actual feet. The robot was held up by contacts that were not under it.
 
 const std = @import("std");
+const common = @import("example_common");
+
+/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
+/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one
+/// build once a handler existed.
+pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 
 const z = @import("zimr");
 const zm = @import("zm");
+const clamp = zm.clamp;
+const splat = zm.splat;
 const rbt = z.robot;
 const ctl = z.robot_control;
 const mjcf = z.mjcf;
@@ -375,13 +383,13 @@ fn rebuildCommand(s: *State) void {
         const want_x: f32 = march + goal[0] - s.com_home_offset[0];
         const want_y: f32 = goal[1] - s.com_home_offset[1];
         const cap: f32 = walk_sway_speed * sim_timestep;
-        s.torso_offset[0] += zm.clamp((want_x - s.torso_offset[0]) * 0.02, -cap, cap);
-        s.torso_offset[1] += zm.clamp((want_y - s.torso_offset[1]) * 0.02, -cap, cap);
+        s.torso_offset[0] += clamp((want_x - s.torso_offset[0]) * 0.02, -cap, cap);
+        s.torso_offset[1] += clamp((want_y - s.torso_offset[1]) * 0.02, -cap, cap);
     } else if (s.auto_shift and s.shift_progress > 0) {
         s.torso_offset[0] += com_rate * (goal[0] - live_com[0]);
         s.torso_offset[1] += com_rate * (goal[1] - live_com[1]);
-        s.torso_offset[0] = zm.clamp(s.torso_offset[0], -0.25, 0.25);
-        s.torso_offset[1] = zm.clamp(s.torso_offset[1], -0.25, 0.25);
+        s.torso_offset[0] = clamp(s.torso_offset[0], -0.25, 0.25);
+        s.torso_offset[1] = clamp(s.torso_offset[1], -0.25, 0.25);
     }
 
     @memcpy(s.scratch_pose, s.data.pos);
@@ -394,7 +402,7 @@ fn rebuildCommand(s: *State) void {
     for (0..leg_count) |leg| {
         var target: Vec = s.pinned[leg];
         if (@as(i32, @intCast(leg)) == s.lift_index) {
-            target += s.reach * zm.splat(s.lift_progress);
+            target += s.reach * splat(s.lift_progress);
         }
         _ = (ctl.Ik{ .max_iterations = 12, .max_step = 0.15 }).solve(
             model,
