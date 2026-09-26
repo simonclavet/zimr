@@ -1,7 +1,7 @@
 // Indexing a scalar-pointer cast: `((ELEM*)base)[i]` (reads AND the address-of / store
 // forms `&((ELEM*)base)[i]` / `((ELEM*)base)[i] = v`). The Zig C backend emits these
 // (paren-wrapped) when it folds a slice or `[*:0]T`/`[*]T` pointer to a known GLOBAL
-// base — e.g. a sentinel slice's `s.ptr[i]` -> `((u32*)&g)[i]`, and `p[i] = v` ->
+// base - e.g. a sentinel slice's `s.ptr[i]` -> `((u32*)&g)[i]`, and `p[i] = v` ->
 // `*&((u32*)((arr_Ns_T*)&g))[i]`. Pre-fix:
 //   * the value read lowered `[i]` as a literal JS subscript on a heap offset -> 0;
 //   * the address form fell through to the value read (a load), so `p[i]=v` stored to
@@ -28,7 +28,7 @@ export fn run_test() i32 {
 
     // STORE through a [*:0]u32 pointer into a GLOBAL (the scalar-outer-cast shape):
     // p[i] = v -> *&((u32*)((arr_4s_u32*)&wbuf))[i]. Pre-fix this either stored to
-    // offset 0 (writes lost) or strided by the wrapper size (20) — both wrong.
+    // offset 0 (writes lost) or strided by the wrapper size (20) - both wrong.
     const p: [*:0]u32 = &wbuf;
     i = 0;
     while (i < 4) : (i += 1) p[i] = @intCast((i + 1) * 100);

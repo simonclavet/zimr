@@ -1,15 +1,15 @@
-//! bridge.zig — THE zimr host monolith (ZIG_BRIDGE_PLAN, t1178+).
+//! bridge.zig - THE zimr host monolith (ZIG_BRIDGE_PLAN, t1178+).
 //!
 //! This file is the entire browser side of zimr, written in Zig and
-//! transpiled to JavaScript (zig build-obj -ofmt=c → tools/c2js → page).
+//! transpiled to JavaScript (zig build-obj -ofmt=c -> tools/c2js -> page).
 //! ONE file by charter: it absorbs the webzig interop kernel (wz.zig,
-//! taken from intake/webzig-all at Phase 1), and will grow — in banner
-//! sections, draw3d-style — the Site/boot runtime with zimr's WebGPU
+//! taken from intake/webzig-all at Phase 1), and will grow - in banner
+//! sections, draw3d-style - the Site/boot runtime with zimr's WebGPU
 //! async preamble, the ~60 wgpu import implementations, the dom glue,
 //! the overlay-input port, and the WebAudio section. Its `export fn
 //! start()` IS the page entry point for every example.
 //!
-//! Style: foreign (webzig) until the scheduled cleanup pass — in the
+//! Style: foreign (webzig) until the scheduled cleanup pass - in the
 //! lint skip ledger; the no-closures / no-indirect-calls transpiler
 //! constraints are LAW here (callbacks are named fns via `func`).
 //!
@@ -429,13 +429,13 @@ pub fn str(comptime s: []const u8) Value {
     return .{ .h = js_str(s.ptr, @intCast(s.len)) };
 }
 
-/// Wrap a Zig function as a JS callback value (for event listeners, rAF, …).
+/// Wrap a Zig function as a JS callback value (for event listeners, rAF, ...).
 /// Pass it the address of a function: `func(&onClick)`.
 pub fn func(f: *const anyopaque) Value {
     return .{ .h = js_func(f) };
 }
 
-/// CanvasRenderingContext2D — the common 2D drawing API, typed.
+/// CanvasRenderingContext2D - the common 2D drawing API, typed.
 pub const Ctx2D = extern struct {
     j: Value,
 
@@ -674,7 +674,7 @@ pub const Element = extern struct {
     ) void {
         _ = self.j.call("setAttribute", .{ str(name), str(val) });
     }
-    /// el.setAttribute("style", css) — inline styles.
+    /// el.setAttribute("style", css) - inline styles.
     pub fn setStyle(self: Element, comptime css_text: []const u8) void {
         _ = self.j.call("setAttribute", .{ str("style"), str(css_text) });
     }
@@ -684,7 +684,7 @@ pub const Element = extern struct {
     pub fn height(self: Element) f32 {
         return self.j.get("height").to(f32);
     }
-    /// el.addEventListener(type, handler) — pass a Zig fn address: `.on("click", &f)`
+    /// el.addEventListener(type, handler) - pass a Zig fn address: `.on("click", &f)`
     pub fn on(
         self: Element,
         comptime event: []const u8,
@@ -701,7 +701,7 @@ pub const Element = extern struct {
         return .{ .j = self.j.call("getContext", .{str("2d")}) };
     }
 
-    /// el.textContent = fmt(spec, args) — the format-aware text setter, the line
+    /// el.textContent = fmt(spec, args) - the format-aware text setter, the line
     /// you write most: `out.setFmt("You clicked {} times", .{count})`.
     pub fn setFmt(
         self: Element,
@@ -711,7 +711,7 @@ pub const Element = extern struct {
         self.j.set("textContent", fmt(spec, args));
     }
 
-    // classList — toggle UI state without touching className strings by hand.
+    // classList - toggle UI state without touching className strings by hand.
     pub fn addClass(self: Element, comptime cls: []const u8) void {
         _ = self.j.get("classList").call("add", .{str(cls)});
     }
@@ -743,12 +743,12 @@ pub const Element = extern struct {
     pub fn blur(self: Element) void {
         _ = self.j.call("blur", .{});
     }
-    /// el.remove() — detach from the DOM.
+    /// el.remove() - detach from the DOM.
     pub fn remove(self: Element) void {
         _ = self.j.call("remove", .{});
     }
 
-    /// el.querySelector(sel) — find a descendant.
+    /// el.querySelector(sel) - find a descendant.
     pub fn query(self: Element, comptime sel: []const u8) Element {
         return .{ .j = self.j.call("querySelector", .{str(sel)}) };
     }
@@ -807,7 +807,7 @@ pub const Document = extern struct {
     pub fn create(self: Document, comptime tag: []const u8) Element {
         return .{ .j = self.j.call("createElement", .{str(tag)}) };
     }
-    /// document.createTextNode(text) — appendable as a child for mixed content.
+    /// document.createTextNode(text) - appendable as a child for mixed content.
     pub fn createText(self: Document, comptime text: []const u8) Element {
         return .{ .j = self.j.call("createTextNode", .{str(text)}) };
     }
@@ -830,14 +830,14 @@ pub fn requestAnimationFrame(cb: Value) void {
 
 /// Wrap a Zig fn as a JS callback with the RAW NUMERIC ABI: arguments arrive
 /// as plain numbers (BigInt i64s coerced via Number), no per-arg handle is
-/// minted or freed. The wgpu/wasi import namespaces use this — they are the
+/// minted or freed. The wgpu/wasi import namespaces use this - they are the
 /// per-frame hot path and traffic exclusively in numbers and (ptr,len) pairs.
 pub fn funcNum(f: *const anyopaque) Value {
     return .{ .h = js_fn_num(f) };
 }
 
 const ZimrWgpu = struct {
-    // Must match the TS bridge's TEXTURE_FORMATS indices exactly — the wasm
+    // Must match the TS bridge's TEXTURE_FORMATS indices exactly - the wasm
     // side encodes formats as these positions.
     const texture_formats = [_][]const u8{
         "undefined",       "rgba8unorm",   "rgba8unorm-srgb", "bgra8unorm",
@@ -905,7 +905,7 @@ const ZimrWgpu = struct {
             canvas.set("height", Value{ .h = js_num(@floatFromInt(@max(h, 1))) });
             const ctx: Value = canvas.call("getContext", .{str("webgpu")});
             // rgba8unorm (not getPreferredCanvasFormat's bgra8unorm) to match the
-            // engine's RGBA8 render textures — see domCanvasConfigure for why.
+            // engine's RGBA8 render textures - see domCanvasConfigure for why.
             const preferred: Value = str("rgba8unorm");
             const cfg: Value = global().get("Object").new(.{});
             cfg.set("device", g.boot.gpu_device);
@@ -1119,7 +1119,7 @@ const ZimrWgpu = struct {
     //   q  = a queue of received messages (each a Uint8Array of the frame bytes)
     //   st = 0 connecting / 1 open / 2 closed-or-errored
     // The onopen/onmessage/onclose/onerror handlers are PURE JS closures (built
-    // with `new Function`) that only push to the queue and flip the state — they
+    // with `new Function`) that only push to the queue and flip the state - they
     // never call back into wasm, so nothing re-enters a running frame. wasm drains
     // the queue by polling once per frame, exactly like the fetch bridge.
     fn jsWsOpen(url_ptr: f64, url_len: f64) f64 {
@@ -1162,7 +1162,7 @@ const ZimrWgpu = struct {
         if (ws.getNum("readyState") != 1) {
             return;
         }
-        // Send as a text frame (a JS string) — the L0 server speaks text frames.
+        // Send as a text frame (a JS string) - the L0 server speaks text frames.
         _ = ws.call("send", .{modString(ptr, len)});
     }
 
@@ -1219,8 +1219,8 @@ const ZimrWgpu = struct {
     // handle whose holder carries the pc, a two-slot channel array, a buffer of
     // ICE candidates that arrived before the remote description was set, and an
     // event queue that pure-JS closures push into (they NEVER call back into
-    // wasm — the game drains the queue itself via jsRtcPoll). Channel 0 is
-    // "cursor" (unreliable, unordered — lossy is fine); channel 1 is "clicks"
+    // wasm - the game drains the queue itself via jsRtcPoll). Channel 0 is
+    // "cursor" (unreliable, unordered - lossy is fine); channel 1 is "clicks"
     // (reliable, ordered). Poll event encoding (written into the game buffer):
     //   byte 0 = kind, byte 1 = channel, bytes 2.. = payload
     //   kind 1 local offer SDP | 2 local answer SDP | 3 local ICE (JSON) |
@@ -1302,10 +1302,10 @@ const ZimrWgpu = struct {
         desc.set("type", if (is_offer != 0) str("offer") else str("answer"));
         desc.set("sdp", modString(sdp_ptr, sdp_len));
         // setRemoteDescription is async. After it resolves we flush any ICE that
-        // arrived early, and — if this was an offer (we're the answerer) — create
+        // arrived early, and - if this was an offer (we're the answerer) - create
         // the answer right here so it can't race ahead of the remote description.
-        // (`d` and `isOffer` come in as the 3rd/4th call args — arguments[2] and
-        // arguments[3] — to keep new Function at its 3-arg limit.)
+        // (`d` and `isOffer` come in as the 3rd/4th call args - arguments[2] and
+        // arguments[3] - to keep new Function at its 3-arg limit.)
         const chain: Value = global().get("Function").new(.{
             str("pc"),
             str("h"),
@@ -1329,7 +1329,7 @@ const ZimrWgpu = struct {
         const pc: Value = holder.get("pc");
         // Buffer candidates that arrive before the remote description is set;
         // jsRtcSetRemote flushes them once it resolves. (`s` comes in as the 3rd
-        // call arg — arguments[2] — to keep new Function at its 3-arg limit.)
+        // call arg - arguments[2] - to keep new Function at its 3-arg limit.)
         const add: Value = global().get("Function").new(.{
             str("pc"),
             str("h"),
@@ -1420,11 +1420,11 @@ const ZimrWgpu = struct {
         const perf: Value = .{ .h = perf_obj_handle };
         return js_to_num(perf.call("now", .{}).h);
     }
-    /// `Date.now()` — wall-clock milliseconds since the Unix epoch (UTC).
+    /// `Date.now()` - wall-clock milliseconds since the Unix epoch (UTC).
     fn jsEpochMs() f64 {
         return js_to_num(global().get("Date").call("now", .{}).h);
     }
-    /// `new Date().getTimezoneOffset()` — minutes to add to local to reach UTC.
+    /// `new Date().getTimezoneOffset()` - minutes to add to local to reach UTC.
     fn jsTzOffsetMin() f64 {
         return js_to_num(global().get("Date").new(.{}).call("getTimezoneOffset", .{}).h);
     }
@@ -1440,7 +1440,7 @@ const ZimrWgpu = struct {
     fn decodeBufferUsage(bits: u32) u32 {
         // zimr bit i -> GPUBufferUsage flag (MAP_READ..QUERY_RESOLVE); the
         // numeric flag values happen to coincide with the zimr bit order, so
-        // the decode is a masked identity — kept as a loop for clarity if the
+        // the decode is a masked identity - kept as a loop for clarity if the
         // orders ever diverge.
         var out: u32 = 0;
         inline for (buffer_usage_bits, 0..) |flag, i| {
@@ -1616,7 +1616,7 @@ const ZimrWgpu = struct {
         tblRelease(cmd_buffer);
         // GPU timing: the timestamps copied into ts_read_buf by this submit become
         // readable once the GPU finishes; mapAsync resolves then. One in flight at
-        // a time — the tick poll completes + unmaps before the next is started.
+        // a time - the tick poll completes + unmaps before the next is started.
         if (g.wgpu.ts_resolve_pairs > 0 and !g.wgpu.ts_pending) {
             const bytes: f64 = @floatFromInt(g.wgpu.ts_resolve_pairs * 2 * 8);
             const mode_read: Value = numValue(1);
@@ -2276,14 +2276,14 @@ const ZimrWgpu = struct {
         return out;
     }
     fn blendStateFor(mode: u32, target: Value) void {
-        // 0 none; 1 alpha; 2 additive; 3 multiply; 4 premultiplied — the
+        // 0 none; 1 alpha; 2 additive; 3 multiply; 4 premultiplied - the
         // engine's whole blending vocabulary, matching the TS bridge.
         const blend: Value = global().get("Object").new(.{});
         switch (mode) {
             1 => {
                 blend.set("color", blendComponent("src-alpha", "one-minus-src-alpha"));
                 // Alpha channel: "over" (one, one-minus-src-alpha), NOT (one,
-                // zero). Replace-alpha punched holes in render-textures — a
+                // zero). Replace-alpha punched holes in render-textures - a
                 // transparent glyph/shape pixel (src a=0) wrote a=0 over the
                 // cleared a=1, so sampling the RT later (e.g. drawCubeTexture)
                 // showed through. Over keeps a cleared RT opaque: a stays 1.
@@ -2356,7 +2356,7 @@ const ZimrWgpu = struct {
         // wgpu.DepthMode (exhaustive depthCompare()/writesDepth()); consume them
         // verbatim instead of re-deriving from `depth`. A position-indexed
         // compare table and a `depth != 7` write rule both silently mis-handle
-        // any added/reordered DepthMode — the class behind zimr345's
+        // any added/reordered DepthMode - the class behind zimr345's
         // writing-`.always` black-screen. (`depth` is still read above, used
         // only for the none/no-attachment check below.)
         const depth_compare: Value = c.strAt(descriptor_ptr);
@@ -2391,7 +2391,7 @@ const ZimrWgpu = struct {
         const targets: Value = global().get("Array").new(.{});
         _ = targets.call("push", .{target});
         // MRT tail: extra color targets for locations 1..N.  Blend-free by
-        // design — the only multi-target consumer today is the G-buffer, and
+        // design - the only multi-target consumer today is the G-buffer, and
         // blending positions/normals would be nonsense.  Encoded LAST in the
         // blob (see gpu.zig encodeRenderPipelineDescriptor).
         const extra_target_count: u32 = c.u32At();
@@ -2728,7 +2728,7 @@ const ZimrInput = struct {
         // Per-pointer -> the touch ring (tracks by id).
         callIfPresent("zimr_input_push_touch_move", .{ numArg(pointerId(e)), numArg(p[0]), numArg(p[1]) });
         // Mouse channel on EVERY move, exactly as the proven TS bridge did
-        // (no isPrimary gate — the viewer may report isPrimary falsey for a
+        // (no isPrimary gate - the viewer may report isPrimary falsey for a
         // touch pointer, which would silently drop the drag).
         callIfPresent("input_push_mouse_move", .{ numArg(p[0]), numArg(p[1]) });
     }
@@ -2776,10 +2776,10 @@ const ZimrInput = struct {
     }
     fn onDeviceMotion(ev: Handle) void {
         const e: Value = .{ .h = ev };
-        // accelerationIncludingGravity is the device's PROPER acceleration — the
+        // accelerationIncludingGravity is the device's PROPER acceleration - the
         // one vector that already fuses gravity + motion (equivalence principle).
         // It's null until the first real sample, and stays null on non-https
-        // origins (which fire the event but withhold data) → skip those, the app
+        // origins (which fire the event but withhold data) -> skip those, the app
         // keeps its plain-down fallback.
         const acc: Value = e.get("accelerationIncludingGravity");
         if (!acc.truthy()) {
@@ -2805,10 +2805,10 @@ const ZimrInput = struct {
 
     /// Attach the full listener set; the canvas must exist (the classic
     /// engine creates it via js_get_surface during _initialize).
-    /// {passive: false} — REQUIRED for touch/wheel. Browsers default these
+    /// {passive: false} - REQUIRED for touch/wheel. Browsers default these
     /// listeners to passive, which makes preventDefault() a silent no-op and
     /// lets a wrapping scroll container (e.g. an embedding iframe/in-app
-    /// viewer) STEAL the gesture after touchstart — the canvas never sees
+    /// viewer) STEAL the gesture after touchstart - the canvas never sees
     /// touchmove. Top-level Chrome has no such container so it "worked"
     /// there; the in-app viewer did not. Non-passive + preventDefault keeps
     /// the whole gesture ours.
@@ -2818,17 +2818,17 @@ const ZimrInput = struct {
         return opts;
     }
     fn install() void {
-        // Pointer Events ONLY — they unify mouse + touch + pen, so we never
+        // Pointer Events ONLY - they unify mouse + touch + pen, so we never
         // double-bind (binding touch* alongside pointer* double-delivered
         // each finger and, worse, touchstart's preventDefault suppressed the
-        // primary finger's pointer events — the "first finger dead" bug).
+        // primary finger's pointer events - the "first finger dead" bug).
         // All listeners on the CANVAS; setPointerCapture in onPointerDown
         // keeps a straying drag attached without window-level listeners
         // (which were the iframe-fragile part in the in-app viewer).
         // Pointer Events ONLY (they unify mouse/touch/pen). DOWN + WHEEL on
         // the canvas; MOVE/UP/CANCEL on WINDOW so a drag that leaves the
         // canvas still tracks WITHOUT setPointerCapture (capture broke move
-        // delivery for touch pointers inside the in-app viewer's iframe —
+        // delivery for touch pointers inside the in-app viewer's iframe -
         // press landed, drag died). This is assert_demo.html's proven shape.
         const canvas: Value = g.wgpu.canvas;
         const opts: Value = passiveFalse();
@@ -2839,9 +2839,9 @@ const ZimrInput = struct {
         _ = canvas.call("addEventListener", .{ str("wheel"), func(&onWheel), opts });
         _ = global().call("addEventListener", .{ str("keydown"), func(&onKeyDown) });
         _ = global().call("addEventListener", .{ str("keyup"), func(&onKeyUp) });
-        // Accelerometer (tilt). Harmless if unused — the handler just routes
+        // Accelerometer (tilt). Harmless if unused - the handler just routes
         // samples into input state. On Android it fires immediately; iOS would
-        // need a tap-gated requestPermission() (deferred — Android-first).
+        // need a tap-gated requestPermission() (deferred - Android-first).
         // Data only arrives on https/localhost origins (see onDeviceMotion).
         _ = global().call("addEventListener", .{ str("devicemotion"), func(&onDeviceMotion) });
         _ = canvas.call("addEventListener", .{ str("contextmenu"), func(&onContextMenu) });
@@ -2852,14 +2852,14 @@ const ZimrBoot = struct {
     const EvRec = extern struct { code: u32, a: f32, b: f32 };
 
     fn note(comptime msg: []const u8) void {
-        // Route to console.log — the page's bottom log overlay mirrors it and
+        // Route to console.log - the page's bottom log overlay mirrors it and
         // devtools shows it. (The old bare <pre> rendered black-on-black on the
         // dark page, which is why these diagnostics were invisible.)
         _ = global().get("console").call("log", .{str(msg)});
     }
 
     /// Surface uncaptured WebGPU validation errors (device 'uncapturederror').
-    /// These are otherwise SILENT — a bad pipeline/pass (e.g. a render pipeline
+    /// These are otherwise SILENT - a bad pipeline/pass (e.g. a render pipeline
     /// whose depth-stencil doesn't match the pass's depth attachment) just paints
     /// black with no clue. Logging the GPU's own message turns "why is it black?"
     /// into a one-line diagnosis, on-device (the page log mirrors console.error).
@@ -2868,7 +2868,7 @@ const ZimrBoot = struct {
     /// enough on a phone: the bottom log overlay is `bottom:0` and
     /// `pointer-events:none`, so inside an embedded viewer (the Claude app's
     /// HTML preview, an iframe, any chrome that overlaps the bottom strip) it can
-    /// be cropped out of sight — and a webview has no devtools to fall back on.
+    /// be cropped out of sight - and a webview has no devtools to fall back on.
     /// A command-buffer rejection paints black anyway, so there is nothing to
     /// occlude: taking the screen is strictly better than being invisible. The
     /// panel is selectable, so the GPU's exact wording can be copied off-device.
@@ -2984,8 +2984,8 @@ const ZimrBoot = struct {
             return 0;
         }
         // Force rgba8unorm rather than getPreferredCanvasFormat() (bgra8unorm on
-        // desktop). The engine is RGBA8 everywhere — render textures are
-        // rgba8unorm — so a BGRA8 canvas makes the cached 2D "shapes" pipeline
+        // desktop). The engine is RGBA8 everywhere - render textures are
+        // rgba8unorm - so a BGRA8 canvas makes the cached 2D "shapes" pipeline
         // (built for the backbuffer format) incompatible with render-texture
         // passes. One format across the whole engine keeps that pipeline valid
         // in both the swapchain and RTT passes.
@@ -3014,9 +3014,9 @@ const ZimrBoot = struct {
     // ---- user-file port (drag-and-drop + the mobile file picker) ---------
     //
     // Both entry points feed ONE queue, because a caller should not care whether the bytes
-    // arrived by drag or by picker — see `web.zig`'s `userfile` for the full rationale.
+    // arrived by drag or by picker - see `web.zig`'s `userfile` for the full rationale.
     //
-    // ★ `preventDefault` is needed on BOTH `dragover` AND `drop`. Without the first the drop
+    // * `preventDefault` is needed on BOTH `dragover` AND `drop`. Without the first the drop
     // event never fires; without the second the browser NAVIGATES AWAY to the dropped file,
     // discarding the whole app. It is the classic first bug in every web drop implementation
     // and it looks exactly like "the page crashed".
@@ -3031,7 +3031,7 @@ const ZimrBoot = struct {
     ///
     /// The name is carried on the promise itself (`p.__zimr_name`) rather than in a Zig-side
     /// map, because several reads can be in flight at once and the transpiler forbids closures
-    /// — so the only place to hang per-operation state is the JS object already in hand.
+    /// - so the only place to hang per-operation state is the JS object already in hand.
     fn ufOnBuffer(buf_h: Handle) void {
         ufEnsureQueue();
         const buf: Value = .{ .h = buf_h };
@@ -3258,10 +3258,10 @@ const ZimrBoot = struct {
     // overlay). A real <input> is positioned over the wasm-drawn widget, focused
     // right after display:block (the trick that pops the mobile keyboard), and
     // polled each frame for its value. TS closures become named handlers here
-    // (the transpiler forbids closures / indirect calls — callbacks are `func`).
+    // (the transpiler forbids closures / indirect calls - callbacks are `func`).
     // Coords are identity: exact under .responsive (CSS px == wasm px); .fit-mode
     // letterbox scaling and the char-filter `input` listener are follow-ups.
-    // overlay state lives in g.overlay (the page singleton) — see BridgeGlobals.
+    // overlay state lives in g.overlay (the page singleton) - see BridgeGlobals.
 
     fn ovKeyIs(k: Value, comptime lit: []const u8) bool {
         return js_to_num(k.call("localeCompare", .{str(lit)}).h) == 0;
@@ -3365,7 +3365,7 @@ const ZimrBoot = struct {
         ovSetPx(s, "height", @max(1.0, js_to_num(h)));
         s.set("display", str("block"));
         g.overlay.visible = true;
-        // Focus must come AFTER display:block — focusing a display:none element
+        // Focus must come AFTER display:block - focusing a display:none element
         // is a no-op on mobile, and this focus is what raises the soft keyboard.
         _ = g.overlay.el.call("focus", .{});
         const n: u32 = g.overlay.el.get("value").getU32("length");
@@ -3446,7 +3446,7 @@ const ZimrBoot = struct {
     // Same VISIBLE-overlay doctrine, but its OWN page singleton (g.overlay_ta):
     // only one widget is focused at a time, yet an <input> and a <textarea> are
     // different DOM nodes, so caching one handle for both would dangle on a type
-    // switch. Everything mirrors the <input> port except Enter handling — see
+    // switch. Everything mirrors the <input> port except Enter handling - see
     // domSetOverlayTextareaCtrlEnterForNewline.
 
     fn overlayTaOnBlur(_: Handle) void {
@@ -3463,7 +3463,7 @@ const ZimrBoot = struct {
         const e: Value = .{ .h = ev };
         const key: Value = e.get("key");
         if (ovKeyIs(key, "Enter")) {
-            // Default (ctrl_enter off): fall through — let the browser insert the
+            // Default (ctrl_enter off): fall through - let the browser insert the
             // newline as it normally would. When on: plain Enter commits (blur),
             // and Ctrl/Cmd+Enter inserts the '\n' manually.
             if (g.overlay_ta.ctrl_enter_for_newline) {
@@ -3552,7 +3552,7 @@ const ZimrBoot = struct {
         ovSetPx(s, "height", @max(1.0, js_to_num(h)));
         s.set("display", str("block"));
         g.overlay_ta.visible = true;
-        // Focus AFTER display:block — focusing a display:none node is a no-op on
+        // Focus AFTER display:block - focusing a display:none node is a no-op on
         // mobile, and this focus is what raises the soft keyboard.
         _ = g.overlay_ta.el.call("focus", .{});
         const n: u32 = g.overlay_ta.el.get("value").getU32("length");
@@ -3616,7 +3616,7 @@ const ZimrBoot = struct {
     }
 
     // Fill a wasm buffer with cryptographically-strong random bytes from the
-    // host's crypto.getRandomValues — the backing for `Config.rng_seed == null`
+    // host's crypto.getRandomValues - the backing for `Config.rng_seed == null`
     // (a fresh per-launch seed for `Frame.random`). Same idiom as the WASI
     // random_get shim; a byte view over [ptr, ptr+len) is filled in place.
     fn domCryptoRandomFill(ptr: Handle, len: Handle) void {
@@ -3772,7 +3772,7 @@ const ZimrBoot = struct {
                 // GPU timing (profiler): the 'timestamp-query' feature lets us
                 // measure GPU-side pass durations. It's optional and absent on
                 // many mobile drivers, so we feature-check the adapter and only
-                // request it when present — requesting an unsupported feature
+                // request it when present - requesting an unsupported feature
                 // would REJECT requestDevice and black-screen the boot.
                 const adapter_features: Value = adapter.get("features");
                 const has_timestamp_query: bool = adapter_features.call("has", .{str("timestamp-query")}).truthy();
@@ -3893,7 +3893,7 @@ const ZimrBoot = struct {
                     dom.set("js_userfile_offer", funcNum(&ZimrBoot.ufOffer));
                     dom.set("js_userfile_set_save_rect", funcNum(&ZimrBoot.ufSetSaveRect));
                     dom.set("js_userfile_hide_save", funcNum(&ZimrBoot.ufHideSave));
-                    // WebSocket client (P2P signaling — see src/net.zig).
+                    // WebSocket client (P2P signaling - see src/net.zig).
                     dom.set("js_ws_open", funcNum(&ZimrWgpu.jsWsOpen));
                     dom.set("js_ws_state", funcNum(&ZimrWgpu.jsWsState));
                     dom.set("js_ws_send", funcNum(&ZimrWgpu.jsWsSend));
@@ -3959,7 +3959,7 @@ const ZimrBoot = struct {
                 }
                 {
                     // jobs: the Web Worker pool behind `zimr.jobs`. The workers are NOT
-                    // spawned here — `available()` brings them up lazily on first use, so
+                    // spawned here - `available()` brings them up lazily on first use, so
                     // an app that never submits a job never creates a thread.
                     const jobs_ns: Value = global().get("Object").new(.{});
                     ZimrJobs.install(jobs_ns);
@@ -4029,7 +4029,7 @@ const ZimrBoot = struct {
 
 /// The bridge entry point, called once from the page's inline boot script. It
 /// sets up the reused JS singletons, decides whether there's a wasm module to
-/// run at all, and — if so — kicks off the adapter->device->instantiate->run
+/// run at all, and - if so - kicks off the adapter->device->instantiate->run
 /// pipeline by entering stage 1 and starting the rAF loop.
 export fn start() void {
     // One-time JS singletons the bridge reuses on every frame: a UTF-8 decoder
@@ -4041,7 +4041,7 @@ export fn start() void {
     g.boot.canvas_contexts = global().get("Map").new(.{});
 
     // The job pool's containers are minted HERE, at boot, and not lazily inside
-    // `ZimrJobs.spawn` — because spawn() is first reached from inside a frame, and
+    // `ZimrJobs.spawn` - because spawn() is first reached from inside a frame, and
     // every handle minted during a frame is reclaimed by that frame's js_reset. A
     // long-lived handle born inside the bracket is a DANGLING handle one frame later.
     // (The workers themselves are still created lazily; they are held by these JS
@@ -4082,10 +4082,10 @@ export fn start() void {
 }
 
 pub const css = struct {
-    // css.zig — type-safe, runtime-mutable styling, authored in Zig.
+    // css.zig - type-safe, runtime-mutable styling, authored in Zig.
     //
     // The whole model in one sentence: a `Style` is a struct with one field per CSS
-    // property — fill in the ones you want, the compiler checks them.
+    // property - fill in the ones you want, the compiler checks them.
     //
     //   css.rule(".card", .{
     //       .background_color = css.cssVar("panel"),     // a Color
@@ -4096,12 +4096,12 @@ pub const css = struct {
     //   });
     //
     // Why this shape:
-    //   * Typos are compile errors — `.bordr_radius` is not a field of `Style`.
-    //   * Values can't be mixed up — `color` is `?Color`, so `.color = px(8)` won't
+    //   * Typos are compile errors - `.bordr_radius` is not a field of `Style`.
+    //   * Values can't be mixed up - `color` is `?Color`, so `.color = px(8)` won't
     //     compile. `Length`, `Color`, `Number` are distinct types.
-    //   * Keyword properties are enums — `.display = .flex` autocompletes and can't
+    //   * Keyword properties are enums - `.display = .flex` autocompletes and can't
     //     be mistyped; exotic keywords use `.raw`.
-    //   * Composite shorthands (padding, border, font, transition…) are plain
+    //   * Composite shorthands (padding, border, font, transition...) are plain
     //     strings, because their value genuinely is free-form.
     //   * Anything not modelled goes in `.raw` as name/value pairs. Nothing is
     //     locked out.
@@ -4116,8 +4116,8 @@ pub const css = struct {
     //     whole rule-sets.
 
     // ===========================================================================
-    // comptime string helpers (no std — std.fmt would drag in the Io.Writer vtable,
-    // which bloats and breaks the C→JS transpile). Returning `comptime blk: { …
+    // comptime string helpers (no std - std.fmt would drag in the Io.Writer vtable,
+    // which bloats and breaks the C->JS transpile). Returning `comptime blk: { ...
     // break :blk &final; }` puts the bytes in static memory, usable at runtime.
     // ===========================================================================
 
@@ -4230,7 +4230,7 @@ pub const css = struct {
     }
 
     // ===========================================================================
-    // typed values — distinct types so a Color can't be used where a Length is
+    // typed values - distinct types so a Color can't be used where a Length is
     // expected, and vice-versa. Build them with the helpers below, never by hand.
     // ===========================================================================
     pub const Length = struct { repr: []const u8 };
@@ -4319,7 +4319,7 @@ pub const css = struct {
     }
 
     // ===========================================================================
-    // keyword enums — closed value sets, so they autocomplete and can't be mistyped.
+    // keyword enums - closed value sets, so they autocomplete and can't be mistyped.
     // ===========================================================================
     pub const Display = enum {
         flex,
@@ -4376,7 +4376,7 @@ pub const css = struct {
     }
 
     // ===========================================================================
-    // the Style struct — one field per CSS property. Unset fields (null) are
+    // the Style struct - one field per CSS property. Unset fields (null) are
     // omitted. `raw` is the escape hatch for anything not modelled here.
     // ===========================================================================
     pub const Decl = struct { []const u8, []const u8 };
@@ -4515,13 +4515,13 @@ pub const css = struct {
         };
     }
 
-    /// Render a Style to a `prop:val;…` string (e.g. for an inline `style="…"`).
+    /// Render a Style to a `prop:val;...` string (e.g. for an inline `style="..."`).
     pub fn styleString(comptime style: Style) []const u8 {
         return comptime declBody(style);
     }
 
     // ===========================================================================
-    // runtime — the live CSSOM. Authoring is comptime; everything below is mutable.
+    // runtime - the live CSSOM. Authoring is comptime; everything below is mutable.
     // ===========================================================================
     fn applyStyle(decl_style: Value, comptime style: Style) void {
         inline for (comptime structFields(Style)) |f| {
@@ -4562,7 +4562,7 @@ pub const css = struct {
     };
 
     // Lazily-created default sheet. A `?Sheet` global initializes to null and is
-    // created on first use — the transpiler honours optional/bool static init.
+    // created on first use - the transpiler honours optional/bool static init.
     fn defaultSheet() Sheet {
         if (g.default_sheet == null) {
             g.default_sheet = Sheet.create();
@@ -4570,8 +4570,8 @@ pub const css = struct {
         return g.default_sheet.?;
     }
 
-    /// Add a static rule to the default sheet — the common case (define and forget,
-    /// no `_ =` needed). `:hover`, descendant selectors and `@media` all work — the
+    /// Add a static rule to the default sheet - the common case (define and forget,
+    /// no `_ =` needed). `:hover`, descendant selectors and `@media` all work - the
     /// selector is a real selector. To mutate a rule at runtime, use `ruleLive`.
     pub fn rule(comptime selector: []const u8, comptime style: Style) void {
         _ = defaultSheet().rule(selector, style);
@@ -4581,12 +4581,12 @@ pub const css = struct {
     pub fn ruleLive(comptime selector: []const u8, comptime style: Style) Rule {
         return defaultSheet().rule(selector, style);
     }
-    /// Raw rule text on the default sheet — for `@keyframes` and other at-rules.
+    /// Raw rule text on the default sheet - for `@keyframes` and other at-rules.
     pub fn ruleRaw(comptime css_text: []const u8) void {
         defaultSheet().ruleRaw(css_text);
     }
 
-    /// A live CSS rule. `set` merges declarations, `unset` removes one — both at runtime.
+    /// A live CSS rule. `set` merges declarations, `unset` removes one - both at runtime.
     pub const Rule = struct {
         j: Value,
         pub fn set(self: Rule, comptime style: Style) void {
@@ -4617,8 +4617,8 @@ pub const css = struct {
         }
     }
 
-    /// Change a token at runtime. The value may be a typed value (Color/Length/…)
-    /// built however you like — including from runtime data — or a plain string.
+    /// Change a token at runtime. The value may be a typed value (Color/Length/...)
+    /// built however you like - including from runtime data - or a plain string.
     pub fn setVar(comptime name: []const u8, value: anytype) void {
         const st: Value = document().j.get("documentElement").get("style");
         const prop: []const u8 = comptime "--" ++ kebab(name);
@@ -4636,17 +4636,17 @@ pub const css = struct {
 };
 
 // ===========================================================================
-// ZimrAudio — the "audio" wasm import namespace (WebAudio).
+// ZimrAudio - the "audio" wasm import namespace (WebAudio).
 //
 // The Zig engine has declared `extern "audio" fn js_audio_*` (src/web.zig) since
-// the SFX subsystem landed, and the smoke harness stubs them — but NOTHING ever
+// the SFX subsystem landed, and the smoke harness stubs them - but NOTHING ever
 // provided them to a browser. `imports` carried only dom / wgpu / wasi / env, so
 // every audio example died at `WebAssembly.instantiate` with
 // "Import 'audio': module is not an object or function". It was invisible
 // in-sandbox precisely because smoke supplies the import that the browser lacks.
 //
 // This is that host, ported from the pre-wgpu TypeScript bridge (`src/web/zimr.ts`
-// in the old tree) — same object graph, same id discipline, same semantics — but
+// in the old tree) - same object graph, same id discipline, same semantics - but
 // written in Zig and transpiled to JS by c2js, so the page has ONE host language.
 //
 // The object graph per voice mirrors the TS exactly:
@@ -4654,12 +4654,12 @@ pub const css = struct {
 //
 // Records (context / source / decode) are plain JS objects kept in one Map, so
 // `pause` can rebuild a source later: a stopped AudioBufferSourceNode is NOT
-// restartable — Web Audio makes them one-shot — so `resume` constructs a fresh
+// restartable - Web Audio makes them one-shot - so `resume` constructs a fresh
 // node and starts it at the saved offset. That single fact is why a source record
 // exists at all.
 // ===========================================================================
 const ZimrAudio = struct {
-    /// Local clamp — bridge.zig deliberately has no zimrmath dependency (it is the
+    /// Local clamp - bridge.zig deliberately has no zimrmath dependency (it is the
     /// HOST, compiled to JS, not engine code).
     fn clampF(v: f64, lo: f64, hi: f64) f64 {
         if (v < lo) {
@@ -4789,7 +4789,7 @@ const ZimrAudio = struct {
             return 0;
         }
         if (data_len != frame_count * channels) {
-            return 0; // the caller's own arithmetic disagrees — refuse rather than read garbage
+            return 0; // the caller's own arithmetic disagrees - refuse rather than read garbage
         }
         const ctx: Value = rec.get("ctx");
 
@@ -4880,7 +4880,7 @@ const ZimrAudio = struct {
 
         // No closures in Zig->JS: bind the source id into the handler instead.
         // `onended` also fires on an explicit stop(), so the handler re-checks the
-        // record — a paused voice already cleared `playing` and must SURVIVE, or
+        // record - a paused voice already cleared `playing` and must SURVIVE, or
         // resume would have nothing to rebuild from.
         node.set("onended", func(&onSourceEnded).call("bind", .{ num(0), num(id) }));
         _ = node.call("start", .{ num(when), num(off) });
@@ -4894,7 +4894,7 @@ const ZimrAudio = struct {
             return;
         }
         if (rec.getNum("playing") == 0) {
-            return; // paused deliberately — keep the record for resume
+            return; // paused deliberately - keep the record for resume
         }
         rec.set("playing", 0);
         drop(id); // played to its end: the voice is spent
@@ -4947,7 +4947,7 @@ const ZimrAudio = struct {
         drop(source_id);
     }
 
-    /// Web Audio source nodes are ONE-SHOT — a stopped node can never restart. So
+    /// Web Audio source nodes are ONE-SHOT - a stopped node can never restart. So
     /// pause banks the play position and throws the node away; `resume` builds a
     /// new one at that offset. Elapsed time is scaled by pitch, because
     /// playbackRate stretches wall-clock against buffer-time.
@@ -5010,14 +5010,14 @@ const ZimrAudio = struct {
 
     /// `decodeAudioData` is asynchronous and the wasm cannot block, hence the
     /// poll triad: kick off a decode, ask `is_decode_ready`, then `take` the
-    /// buffer. The decode record is a JS object BOUND into the callbacks — that's
+    /// buffer. The decode record is a JS object BOUND into the callbacks - that's
     /// how a closure-free Zig->JS host remembers which decode finished.
     fn decodeOggBytes(ctx_id: f64, data_ptr: f64, data_len: f64) f64 {
         const rec: Value = lookup(ctx_id);
         if (rec.isNull()) {
             return 0;
         }
-        // decodeAudioData DETACHES the ArrayBuffer it is given — hand it a private
+        // decodeAudioData DETACHES the ArrayBuffer it is given - hand it a private
         // copy, never a view onto the wasm heap.
         const src: Value = ZimrWgpu.modBytes(data_ptr, data_len);
         const copy: Value = global().get("Uint8Array").new(.{num(data_len)});
@@ -5041,7 +5041,7 @@ const ZimrAudio = struct {
         pending.set("ready", 1);
     }
 
-    /// A FAILED decode still reports "ready" — otherwise the engine would poll
+    /// A FAILED decode still reports "ready" - otherwise the engine would poll
     /// forever. `take` then finds no result and returns 0, which is exactly the
     /// invalid-buffer answer the Zig side already handles.
     fn onDecodeFail(pending_h: Handle) void {
@@ -5063,7 +5063,7 @@ const ZimrAudio = struct {
             return 0;
         }
         if (rec.getNum("ready") == 0) {
-            return 0; // still decoding — keep the record and let the caller poll again
+            return 0; // still decoding - keep the record and let the caller poll again
         }
         const result: Value = rec.get("result");
         drop(decode_id);
@@ -5100,7 +5100,7 @@ const ZimrAudio = struct {
     }
 
     /// Write the current magnitude spectrum into wasm memory, one byte per bin.
-    /// `getByteFrequencyData` fills the typed array IN PLACE — and the array we
+    /// `getByteFrequencyData` fills the typed array IN PLACE - and the array we
     /// hand it is a view straight onto the wasm heap, so the samples land in the
     /// caller's slice with no intermediate copy.
     fn getFrequencyData(_: f64, analyser_id: f64, out_ptr: f64, out_len: f64) f64 {
@@ -5154,14 +5154,14 @@ const ZimrAudio = struct {
 };
 
 // ===========================================================================
-// ZimrJobs — the Web Worker pool behind `zimr.jobs`.
+// ZimrJobs - the Web Worker pool behind `zimr.jobs`.
 // ===========================================================================
 //
 // WHAT A WEB WORKER IS, for anyone who has not met one.
 //
 // A Web Worker is a second JavaScript thread. It shares NOTHING with the page: not a
 // variable, not the DOM, not the canvas, not WebGPU. The only way to speak to it is
-// `postMessage(value)`, and the value is COPIED across the boundary — except for an
+// `postMessage(value)`, and the value is COPIED across the boundary - except for an
 // ArrayBuffer listed as "transferable", which is handed over wholesale and DETACHED
 // from the sender. A transfer is O(1) no matter how big the buffer is.
 //
@@ -5169,10 +5169,10 @@ const ZimrAudio = struct {
 //
 //   1. A worker cannot run the app's wasm. It has no WebGPU and no DOM, so 96 of the
 //      app's imports would be missing. Instead each worker instantiates its own copy
-//      of a SEPARATE, freestanding kernel wasm (~19 KB) with ZERO imports — nothing to
+//      of a SEPARATE, freestanding kernel wasm (~19 KB) with ZERO imports - nothing to
 //      stub, and only ~1 MB of linear memory per worker.
 //   2. There is no shared memory. `SharedArrayBuffer` requires cross-origin isolation
-//      headers (COOP/COEP) that a downloaded standalone page does not have — this was
+//      headers (COOP/COEP) that a downloaded standalone page does not have - this was
 //      MEASURED on-device (crossOriginIsolated: false), not assumed. So every job's
 //      bytes are copied in, and the result is transferred back.
 //
@@ -5180,15 +5180,15 @@ const ZimrAudio = struct {
 // The worker's reply lands in `results` whenever it lands. `poll` just looks in that
 // map. The app never waits on anything: it asks once a frame and gets on with drawing.
 //
-// IF WORKERS ARE UNAVAILABLE — `new Worker()` THROWS inside a sandboxed iframe (the
-// Claude artifact preview is one) — then `available()` reports 0 and `src/jobs.zig`
+// IF WORKERS ARE UNAVAILABLE - `new Worker()` THROWS inside a sandboxed iframe (the
+// Claude artifact preview is one) - then `available()` reports 0 and `src/jobs.zig`
 // runs the kernel inline on the main thread instead. The app is none the wiser; it
 // just hitches, exactly as it would have if it had never used jobs.
 const ZimrJobs = struct {
     /// The worker's own program is no longer HERE, and that is the point.
     ///
-    /// It is `src/jobs_worker.zig` — a Zig program, compiled to JavaScript by the same
-    /// `build-obj -ofmt=c` → c2js path that produces this file — and the page carries it as
+    /// It is `src/jobs_worker.zig` - a Zig program, compiled to JavaScript by the same
+    /// `build-obj -ofmt=c` -> c2js path that produces this file - and the page carries it as
     /// `window.ZIMR_WORKER_JS`, exactly as it carries `ZIMR_KERNEL_WASM`.
     ///
     /// What used to be here was ~40 lines of hand-written JavaScript in a Zig string. It was
@@ -5205,7 +5205,7 @@ const ZimrJobs = struct {
 
     /// `new Worker(url)`, but survivable. In a sandboxed iframe (the Claude artifact
     /// preview is one) the blob: URL has an opaque origin and the constructor throws a
-    /// SecurityError. That is not an error condition for us — it just means no workers,
+    /// SecurityError. That is not an error condition for us - it just means no workers,
     /// so `jobs.zig` runs kernels inline instead. Returns a null Value on refusal.
     fn tryNewWorker(url: Value) Value {
         return .{ .h = js_try_new1(global().get("Worker").h, url.h) };
@@ -5229,10 +5229,10 @@ const ZimrJobs = struct {
         // How many? `hardwareConcurrency` is the core count. We take half, and never more
         // than 4: this pool exists to move work OFF the main thread, not to chase
         // throughput (measured: 8 workers give only ~3.4x aggregate on a phone, and a hot
-        // CPU throttles the GPU — which for a renderer is a bad trade).
+        // CPU throttles the GPU - which for a renderer is a bad trade).
         //
         // The clamp is written POSITIVELY. `hardwareConcurrency` is absent on some
-        // browsers, `getNum` reads that back as NaN, and `NaN < 2` is FALSE — so
+        // browsers, `getNum` reads that back as NaN, and `NaN < 2` is FALSE - so
         // `if (cores < 2) cores = 2;` would leave NaN in place and `@trunc(NaN / 2)` into
         // a u32 is illegal behaviour. Asking `>= 2` instead makes the missing case fall
         // into the default, which is what a default is for.
@@ -5246,7 +5246,7 @@ const ZimrJobs = struct {
             want = 4;
         }
 
-        // (workers / busy_with / queue / results were minted at boot — see start().)
+        // (workers / busy_with / queue / results were minted at boot - see start().)
 
         // A Worker normally loads its program from a URL. We have no separate .js file
         // (the whole app is ONE html file), so we wrap the source in a Blob and hand
@@ -5254,7 +5254,7 @@ const ZimrJobs = struct {
         // iframe, because a blob: URL there has an opaque origin.
         // The program is `src/jobs_worker.zig`, compiled to JS by c2js and injected into the
         // page as `window.ZIMR_WORKER_JS`. Its last line calls its own `start()`, which
-        // registers the message handler — everything after that happens because the browser
+        // registers the message handler - everything after that happens because the browser
         // delivers a message.
         const parts: Value = global().get("Array").new(.{});
         _ = parts.call("push", .{workerProgram()});
@@ -5268,7 +5268,7 @@ const ZimrJobs = struct {
         while (i < want) : (i += 1) {
             const w: Value = tryNewWorker(url);
             if (w.isNull()) {
-                // Refused — a sandboxed iframe forbids blob: workers. Any workers we
+                // Refused - a sandboxed iframe forbids blob: workers. Any workers we
                 // already started are real OS threads: kill them before giving up, or
                 // they idle forever holding a wasm instance each.
                 var k: u32 = 0;
@@ -5298,7 +5298,7 @@ const ZimrJobs = struct {
     /// Is a boolean-ish JS field SET?
     ///
     /// This exists because `getNum` on an ABSENT field yields NaN, and NaN fails every
-    /// comparison — so `if (v.getNum("failed") != 0)` is TRUE when the field is missing.
+    /// comparison - so `if (v.getNum("failed") != 0)` is TRUE when the field is missing.
     /// That is not a hypothetical: it shipped. A successful job sends no `failed` field,
     /// so every success took the failure branch. The test must be POSITIVE, and asking it
     /// through a named helper means nobody has to remember why.
@@ -5310,7 +5310,7 @@ const ZimrJobs = struct {
     /// queued job.
     ///
     /// This runs from a postMessage event, which fires OUTSIDE the frame's
-    /// js_mark/js_reset bracket — so it must open its own handle scope or it leaks one
+    /// js_mark/js_reset bracket - so it must open its own handle scope or it leaks one
     /// handle per job, forever. (`onKeyDown` has the same problem and the same fix.) The
     /// result survives the reset because the JS Map holds the OBJECT; only the
     /// handle-table slot is reclaimed.
@@ -5321,7 +5321,7 @@ const ZimrJobs = struct {
         const data: Value = (Value{ .h = event_h }).get("data");
 
         // The 'ready' handshake carries no handle, so `handle` reads back as NaN. NaN
-        // fails EVERY comparison — including `== 0` — so test for a real handle
+        // fails EVERY comparison - including `== 0` - so test for a real handle
         // positively. Same trap as `flagSet` above; same answer.
         const handle: f64 = data.getNum("handle");
         if (!(handle >= 1)) {
@@ -5342,12 +5342,12 @@ const ZimrJobs = struct {
             _ = g.jobs.abandoned.call("delete", .{num(handle)});
         } else if (flagSet(data, "failed")) {
             // -2 = "the kernel failed", distinct from -1 = "still running". An error
-            // cannot cross the wasm boundary as a value, so log its NAME here — on the
+            // cannot cross the wasm boundary as a value, so log its NAME here - on the
             // page overlay, which is the only console a phone has.
             //
             // Two ARGUMENTS, not a concatenation: `String.concat` is not a function.
             // `concat` lives on String.PROTOTYPE, so it exists on a string INSTANCE and
-            // not on the String constructor — and `console.error` takes varargs anyway,
+            // not on the String constructor - and `console.error` takes varargs anyway,
             // which is both simpler and impossible to get wrong.
             _ = global().get("console").call("error", .{
                 str("zimr.jobs: kernel failed:"),
@@ -5376,7 +5376,7 @@ const ZimrJobs = struct {
                 return;
             }
             // NOT READY = NOT ELIGIBLE. Written positively (`>= 1`), because `getNum` on an
-            // absent element yields NaN and NaN fails every comparison — so `!= 1` would be
+            // absent element yields NaN and NaN fails every comparison - so `!= 1` would be
             // TRUE for a missing entry and we would be right back where we started.
             if (!(js_to_num(g.jobs.ready.at(i).h) >= 1)) {
                 continue;
@@ -5426,7 +5426,7 @@ const ZimrJobs = struct {
     ///
     /// The header and payload used to arrive already joined, because `jobs.zig` allocated a
     /// `staged` buffer and memcpy'd both into it. That allocation was a MULTI-MEGABYTE
-    /// `gpa.alloc` on every single dispatch, in the frame path — precisely the mistake that
+    /// `gpa.alloc` on every single dispatch, in the frame path - precisely the mistake that
     /// cost `Job.poll` 154 ms on the landing frame, still live on the input side.
     ///
     /// It bought nothing. This function has to allocate a JS-owned buffer anyway (the one it
@@ -5444,12 +5444,12 @@ const ZimrJobs = struct {
             return 0;
         }
 
-        // VIEWS on the app's wasm heap — free, and valid only until the next allocation.
+        // VIEWS on the app's wasm heap - free, and valid only until the next allocation.
         const header_view: Value = ZimrWgpu.modBytes(header_ptr, header_len);
         const payload_view: Value = ZimrWgpu.modBytes(payload_ptr, payload_len);
 
         // The one buffer that crosses. It is JS-owned because it gets TRANSFERRED to the
-        // worker, which detaches it — we must not hand over a view of our own heap.
+        // worker, which detaches it - we must not hand over a view of our own heap.
         const total_len: f64 = header_len + payload_len;
         const joined: Value = global().get("Uint8Array").new(.{num(total_len)});
         _ = joined.call("set", .{header_view}); // header at offset 0
@@ -5472,7 +5472,7 @@ const ZimrJobs = struct {
     ///
     /// NEVER COERCE `r` TO A NUMBER HERE. The map holds either the result (a Uint8Array) or
     /// the number -2 (the kernel failed). Asking `Number(r)` to tell those apart looks free
-    /// and is not: on the success path `r` is the RESULT — 2.7 MB for a 1024x1024 PNG — and
+    /// and is not: on the success path `r` is the RESULT - 2.7 MB for a 1024x1024 PNG - and
     /// JS coerces a TypedArray to a number via `toString()`, which builds a string of 2.7
     /// MILLION comma-separated integers (~10 MB of text), parses it to NaN, and throws it
     /// away.
@@ -5496,7 +5496,7 @@ const ZimrJobs = struct {
         // (a Uint8Array) without ever asking the array what it looks like as a string.
         const is_num: bool = global().get("Number").call("isFinite", .{r}).truthy();
         if (is_num) {
-            return -2; // the failure marker — the only number we ever store
+            return -2; // the failure marker - the only number we ever store
         }
         return r.getNum("length"); // a Uint8Array: O(1), no coercion, no 10 MB string
     }
@@ -5517,7 +5517,7 @@ const ZimrJobs = struct {
         return n;
     }
 
-    /// The owner is done with this job and will never collect it — because it failed,
+    /// The owner is done with this job and will never collect it - because it failed,
     /// or because the app dropped the handle (`Job.deinit` on an in-flight job).
     ///
     /// Drop any result we are already holding, and remember the handle so that a reply
@@ -5529,14 +5529,14 @@ const ZimrJobs = struct {
     ///
     ///   STILL QUEUED, never dispatched.
     ///       Take it OUT of the queue. This used to be skipped, and it was not merely wasted
-    ///       work — it was wasted work that DELAYED THE LIVE WORK BEHIND IT. `rt_workers`
+    ///       work - it was wasted work that DELAYED THE LIVE WORK BEHIND IT. `rt_workers`
     ///       re-renders on every frame the camera moves, cancelling sixteen tiles and
     ///       submitting sixteen more; the dead ones stayed queued AHEAD of the new ones, so a
     ///       one-second drag left the pool grinding through hundreds of tiles for camera
     ///       positions the user had already left. Splicing it out is the whole fix.
     ///
     ///   RUNNING on a worker.
-    ///       We cannot stop it — a worker runs one job to completion and there is no way to
+    ///       We cannot stop it - a worker runs one job to completion and there is no way to
     ///       interrupt wasm mid-call. Mark the handle abandoned so the eventual reply is
     ///       thrown away instead of parking a multi-megabyte result in the map that nobody
     ///       will ever collect.
@@ -5546,7 +5546,7 @@ const ZimrJobs = struct {
     ///
     /// Note what this buys beyond speed: `abandoned` is now BOUNDED by the number of jobs
     /// actually in flight. Before, a handle cancelled while queued was added to the set, then
-    /// dispatched anyway, and only removed when its reply arrived — so the set tracked every
+    /// dispatched anyway, and only removed when its reply arrived - so the set tracked every
     /// cancellation the page had ever made. Now a queued job leaves no trace at all, because
     /// no reply will ever come for it.
     fn cancel(handle: f64) void {
@@ -5558,7 +5558,7 @@ const ZimrJobs = struct {
         _ = g.jobs.results.call("delete", .{num(handle)});
         _ = g.jobs.kernel_errors.call("delete", .{num(handle)});
 
-        // Still queued? Remove it, and we are done — no worker will ever touch it, so no
+        // Still queued? Remove it, and we are done - no worker will ever touch it, so no
         // reply will ever arrive, so there is nothing to abandon.
         const queued_count: u32 = g.jobs.queue.getU32("length");
         var queue_index: u32 = 0;
@@ -5585,7 +5585,7 @@ const ZimrJobs = struct {
         }
 
         // TextEncoder.encodeInto writes UTF-8 straight into our wasm memory and reports how
-        // much fitted — no intermediate array, and no way to overrun `cap`.
+        // much fitted - no intermediate array, and no way to overrun `cap`.
         const encoder: Value = global().get("TextEncoder").new(.{});
         const view: Value = ZimrWgpu.modBytes(dst, cap);
         const stats: Value = encoder.call("encodeInto", .{ name, view });
@@ -5653,7 +5653,7 @@ const BridgeGlobals = struct {
         objects: Value = undefined, // a JS Map: id -> GPU object
         next_id: u32 = 2,
         // The transitional primary canvas for the classic (single-surface)
-        // zimr contract — lazily created by js_get_surface. Apps written
+        // zimr contract - lazily created by js_get_surface. Apps written
         // against the D9 doctrine create their own canvases via dom verbs.
         canvas: Value = undefined,
         context: Value = undefined,
@@ -5687,7 +5687,7 @@ const BridgeGlobals = struct {
     /// WebAudio host state. Same doctrine as `Wgpu`: ONE Map and ONE counter, so
     /// ids are unique ACROSS types (context / buffer / source / decode) and
     /// handing a buffer id where a source id belongs can never alias silently.
-    /// Id 0 is reserved for "invalid" — what every `js_audio_*` returns on
+    /// Id 0 is reserved for "invalid" - what every `js_audio_*` returns on
     /// failure, matching the Zig declarations in `src/web.zig`.
     const Audio = struct {
         objects: Value = undefined, // JS Map: id -> AudioContext rec / AudioBuffer / source rec / decode rec
@@ -5699,7 +5699,7 @@ const BridgeGlobals = struct {
     /// A Web Worker is a SECOND JavaScript thread. It shares NOTHING with the page:
     /// no variables, no DOM, no canvas, no WebGPU. The only way to talk to it is to
     /// `postMessage` a value, which is COPIED across (or, for an ArrayBuffer, handed
-    /// over wholesale and detached from the sender — a "transfer", which costs nothing
+    /// over wholesale and detached from the sender - a "transfer", which costs nothing
     /// however large it is).
     ///
     /// That isolation is exactly why a kernel must be a pure function, and why each
@@ -5719,12 +5719,12 @@ const BridgeGlobals = struct {
         /// `ex` still undefined, throws inside the worker, and is never heard from again.
         ///
         /// The worker has always posted `{t:'ready'}` when it finished instantiating. The
-        /// host has always THROWN IT AWAY — the handshake carries no handle, so it fell
+        /// host has always THROWN IT AWAY - the handshake carries no handle, so it fell
         /// through the `handle >= 1` guard and vanished. So `pump()` would dispatch to a
         /// worker that could not yet run anything.
         ///
         /// `worker_png` never hit it: one job, submitted many frames after the pool came up.
-        /// `rt_workers` submits SIXTEEN on the first frame — the same frame `spawn()` runs —
+        /// `rt_workers` submits SIXTEEN on the first frame - the same frame `spawn()` runs -
         /// and every one of them raced the instantiation. Sixteen tiles, none ever landed,
         /// and not one error anywhere.
         ready: Value = undefined,
@@ -5768,7 +5768,7 @@ const UserFile = struct {
     /// file every few seconds does not leak the old ones.
     save: Value = .{ .h = 0 },
     save_url: Value = .{ .h = 0 },
-    /// Drop listeners are attached once, lazily — attaching them at boot would mean every
+    /// Drop listeners are attached once, lazily - attaching them at boot would mean every
     /// page paid for a feature almost none of them use.
     listening: bool = false,
     /// The name of the file whose `arrayBuffer()` is currently in flight.
@@ -5796,7 +5796,7 @@ pub const Event = extern struct {
     pub fn key(self: Event) Value {
         return self.j.get("key");
     }
-    /// KeyboardEvent.code — the physical key ("ArrowLeft", "KeyW"), layout-independent.
+    /// KeyboardEvent.code - the physical key ("ArrowLeft", "KeyW"), layout-independent.
     pub fn code(self: Event) Value {
         return self.j.get("code");
     }
@@ -5813,19 +5813,19 @@ pub const Event = extern struct {
 };
 
 /// A JS Promise, handled with CALLBACKS (no Asyncify, no blocking). `.then(&onOk)`
-/// registers a Zig fn that JS calls with the resolved value (a Handle — `wz.wrap` it);
+/// registers a Zig fn that JS calls with the resolved value (a Handle - `wz.wrap` it);
 /// `.catch_(&onErr)` handles rejection. Both return the next Promise, so you can chain
-/// `wz.fetch(u).then(&ok).catch_(&err)`. Callbacks are `fn(wz.Handle) void` — do the next
+/// `wz.fetch(u).then(&ok).catch_(&err)`. Callbacks are `fn(wz.Handle) void` - do the next
 /// async step (e.g. `res.json().then(&onData)`) inside the callback.
 pub const Promise = extern struct {
     j: Value,
-    /// .then(onResolve) — onResolve is a `&fn(wz.Value) void`.
+    /// .then(onResolve) - onResolve is a `&fn(wz.Value) void`.
     pub fn then(self: Promise, on_resolve: *const anyopaque) Promise {
         return .{ .j = self.j.call("then", .{func(on_resolve)}) };
     }
     /// .then with a typed context: `p.thenCtx(rec, onMapped)` where rec is a pointer
     /// and `onMapped: fn(@TypeOf(rec), wz.Value) void`. The context is threaded to the
-    /// callback so per-operation state needn't live in a global — closures-with-state
+    /// callback so per-operation state needn't live in a global - closures-with-state
     /// without Asyncify. (The resolved Value is valid only inside the callback.)
     pub fn thenCtx(
         self: Promise,
@@ -5856,11 +5856,11 @@ pub const Promise = extern struct {
         const h = js_func_ctx(&Tramp.entry, @intCast(@intFromPtr(ctx)));
         return .{ .j = self.j.call("catch", .{Value{ .h = h }}) };
     }
-    /// .catch(onReject) — named `catch_` because `catch` is a Zig keyword.
+    /// .catch(onReject) - named `catch_` because `catch` is a Zig keyword.
     pub fn catch_(self: Promise, on_reject: *const anyopaque) Promise {
         return .{ .j = self.j.call("catch", .{func(on_reject)}) };
     }
-    /// .finally(onDone) — runs on settle (resolve OR reject); onDone takes no args.
+    /// .finally(onDone) - runs on settle (resolve OR reject); onDone takes no args.
     pub fn finally(self: Promise, on_done: *const anyopaque) Promise {
         return .{ .j = self.j.call("finally", .{func(on_done)}) };
     }
@@ -5879,11 +5879,11 @@ pub const Response = extern struct {
     pub fn text(self: Response) Promise {
         return .{ .j = self.j.call("text", .{}) };
     }
-    /// response.ok — true for a 2xx status.
+    /// response.ok - true for a 2xx status.
     pub fn ok(self: Response) bool {
         return self.j.get("ok").truthy();
     }
-    /// response.status — the HTTP status code.
+    /// response.status - the HTTP status code.
     pub fn status(self: Response) f64 {
         return self.j.get("status").to(f64);
     }
@@ -5896,8 +5896,8 @@ pub const Value = extern struct {
     pub fn get(self: Value, comptime name: []const u8) Value {
         return .{ .h = js_get(self.h, name.ptr, @intCast(name.len)) };
     }
-    /// obj.prop as a number, read directly with no intermediate handle — for the hot
-    /// numeric reads (event.offsetX every move, canvas.width, element.scrollTop, …).
+    /// obj.prop as a number, read directly with no intermediate handle - for the hot
+    /// numeric reads (event.offsetX every move, canvas.width, element.scrollTop, ...).
     /// `getNum` returns f64; `getU32`/`getF32` are typed conveniences.
     pub fn getNum(self: Value, comptime name: []const u8) f64 {
         return js_get_num(self.h, name.ptr, @intCast(name.len));
@@ -5941,7 +5941,7 @@ pub const Value = extern struct {
         js_set_index(self.h, i, toH(value));
     }
 
-    /// obj.method(...args) — args is a tuple of mixed types, each marshalled.
+    /// obj.method(...args) - args is a tuple of mixed types, each marshalled.
     /// Dispatches by comptime arity to the fixed-arity kernel calls (no buffer)
     /// for up to 6 args; falls back to a heap arg-buffer for more.
     pub fn call(
@@ -6031,7 +6031,7 @@ pub const Value = extern struct {
     }
 
     /// obj.method(...args) for a VOID method: no result handle is minted (the hot
-    /// render-loop calls — setPipeline/setBindGroup/draw/end — are all void, and the
+    /// render-loop calls - setPipeline/setBindGroup/draw/end - are all void, and the
     /// discarded return-handle is pure overhead + handle-table churn otherwise).
     pub fn callVoid(
         self: Value,
@@ -6175,7 +6175,7 @@ pub fn Wire(comptime T: type) type {
 // Wasm.readSlice). Bounds descriptor reads; one copy replaces N per-field crossings.
 
 /// A handle table for bridges: maps 1-based ids (0 = none/invalid) to live values,
-/// reusing released ids via a free list. One per resource kind — the table every
+/// reusing released ids via a free list. One per resource kind - the table every
 /// bridge needs to hand the module small integer handles for GPU/DOM objects while
 /// keeping the real JS values (wz.Value) host-side. Fixed capacity, no allocator;
 /// overflowing it traps rather than silently overwriting, since a too-small cap or a
@@ -6196,7 +6196,7 @@ pub fn Table(comptime T: type, comptime capacity: usize) type {
                 break :blk self.free[self.free_n];
             } else blk: {
                 const i = self.next;
-                if (i >= capacity) unreachable; // table full — raise the capacity
+                if (i >= capacity) unreachable; // table full - raise the capacity
                 self.next += 1;
                 break :blk i;
             };
@@ -6226,17 +6226,17 @@ pub fn Table(comptime T: type, comptime capacity: usize) type {
 
 // numeric-arg fast path: a call whose args are all ints/floats skips minting a
 // handle per argument (js_num + a handle-table slot each) and passes raw f64s to
-// the js_callnN kernels. Hot graphics/WebGPU calls — fillRect, draw, setViewport,
-// dispatchWorkgroups — are all-numeric, and this brings them to parity with a
-// hand-written `obj.method(x, y, …)`. Detected at comptime, so non-numeric calls
+// the js_callnN kernels. Hot graphics/WebGPU calls - fillRect, draw, setViewport,
+// dispatchWorkgroups - are all-numeric, and this brings them to parity with a
+// hand-written `obj.method(x, y, ...)`. Detected at comptime, so non-numeric calls
 // compile to the handle path with no runtime branch.
 
 // ===========================================================================
-// Value — a handle to any JS value.
+// Value - a handle to any JS value.
 // ===========================================================================
 
 // ===========================================================================
-// Free helpers — the JS globals.
+// Free helpers - the JS globals.
 // ===========================================================================
 pub fn window() Value {
     return global();
@@ -6272,7 +6272,7 @@ pub fn setInterval(handler: *const anyopaque, ms: u32) Value {
 pub fn setTimeout(handler: *const anyopaque, ms: u32) Value {
     return global().call("setTimeout", .{ func(handler), ms });
 }
-/// clearInterval(id) — id is the Value returned by setInterval.
+/// clearInterval(id) - id is the Value returned by setInterval.
 pub fn clearInterval(id: Value) void {
     _ = global().call("clearInterval", .{id});
 }
@@ -6283,16 +6283,16 @@ pub fn clearTimeout(id: Value) void {
 
 // ---- ubiquitous built-ins ------------------------------------------------
 
-/// Math.random() — a float in [0, 1). (For seeded/repeatable randomness use Zig's
+/// Math.random() - a float in [0, 1). (For seeded/repeatable randomness use Zig's
 /// std.Random instead; this is the quick JS one.)
 pub fn random() f64 {
     return math().call("random", .{}).to(f64);
 }
-/// Date.now() — milliseconds since the epoch.
+/// Date.now() - milliseconds since the epoch.
 pub fn now() f64 {
     return global().get("Date").call("now", .{}).to(f64);
 }
-/// A JS Date — `wz.date()` gives you `new Date()` (now). Methods return the same
+/// A JS Date - `wz.date()` gives you `new Date()` (now). Methods return the same
 /// strings JS does; reach `.j` for anything not wrapped.
 pub const Date = extern struct {
     j: Value,
@@ -6314,7 +6314,7 @@ pub const Date = extern struct {
     }
 };
 
-/// new Date() — the current moment, as a typed Date facade.
+/// new Date() - the current moment, as a typed Date facade.
 pub fn date() Date {
     return .{ .j = global().get("Date").new(.{}) };
 }
@@ -6331,7 +6331,7 @@ pub fn log(comptime spec: []const u8, args: anytype) void {
 pub fn warn(comptime spec: []const u8, args: anytype) void {
     _ = console().call("warn", .{fmt(spec, args)});
 }
-/// console.error(fmt(spec, args))  (named `err` — `error` is a Zig keyword)
+/// console.error(fmt(spec, args))  (named `err` - `error` is a Zig keyword)
 pub fn err(comptime spec: []const u8, args: anytype) void {
     _ = console().call("error", .{fmt(spec, args)});
 }
@@ -6347,7 +6347,7 @@ pub const json = struct {
     }
 };
 
-/// localStorage — string key/value persistence. `get` returns a Value that is
+/// localStorage - string key/value persistence. `get` returns a Value that is
 /// `null` when the key is absent (check with `.isNull()`); `set` stores any value
 /// (numbers/strings coerce). Keys are comptime (they are part of your app, not data).
 pub const storage = struct {
@@ -6368,7 +6368,7 @@ pub const storage = struct {
     }
 };
 
-// ---- fetch (async, callback-based — no Asyncify, no blocking) ------------
+// ---- fetch (async, callback-based - no Asyncify, no blocking) ------------
 // `fetch` resolves to a Response; `fetchJson`/`fetchText` skip straight to the
 // parsed body. Handle the result with `.then(&onData)` (and `.catch_(&onErr)`):
 // your callback is `fn(wz.Handle) void`, called with the resolved value.
@@ -6394,12 +6394,12 @@ pub fn fetchText(url: anytype) Promise {
 }
 
 // ===========================================================================
-// Typed facades — thin wrappers so common code reads exactly like JS.
+// Typed facades - thin wrappers so common code reads exactly like JS.
 // Each is just a Value plus typed methods; reach `.j` for anything not wrapped.
 // ===========================================================================
 
 // ===========================================================================
-// String building — the way JS uses template literals, with std.fmt-style `{}`.
+// String building - the way JS uses template literals, with std.fmt-style `{}`.
 //   fmt("{} + {} = {}", .{a, b, a + b})   ~=   `${a} + ${b} = ${a + b}`
 // Placeholders accept integers, floats (truncated to integer), and string
 // literals. Returns a JS string Value ready to assign.
@@ -6432,18 +6432,18 @@ pub fn output(parent: Element, comptime id: []const u8) Element {
     return o;
 }
 
-/// Build a JS string from a runtime byte buffer — the dynamic-length escape
+/// Build a JS string from a runtime byte buffer - the dynamic-length escape
 /// hatch that `str` (comptime) and `fmt` (numbers only) don't cover.
 pub fn strBuf(ptr: [*]const u8, len: u32) Value {
     return .{ .h = js_str(ptr, len) };
 }
 
 // ===========================================================================
-// WASM hosting — load a sibling .wasm module and drive it from Zig.
+// WASM hosting - load a sibling .wasm module and drive it from Zig.
 //
 // The module lives in ITS OWN linear memory (exported as `memory`); this bridge
 // runs in the transpiler's separate heap. We never touch the module's memory
-// directly — we read it on the JS side (a Uint8Array over its buffer) and copy
+// directly - we read it on the JS side (a Uint8Array over its buffer) and copy
 // regions into a canvas. Instantiation is async (a Promise); the animation loop
 // is requestAnimationFrame. Both are hidden behind `Site(...)` below so the
 // bridge reads like synchronous setup + a per-frame function.
@@ -6495,7 +6495,7 @@ pub const Wasm = extern struct {
 
     /// A fresh DataView over the module's whole linear memory (re-made each call,
     /// since a growing memory detaches its old buffer). The typed accessors below
-    /// use it to read/write struct fields at known byte offsets — the manual,
+    /// use it to read/write struct fields at known byte offsets - the manual,
     /// little-endian layout that BOTH sides must agree on by hand.
     pub fn dataView(self: Wasm) Value {
         return global().get("DataView").new(.{self.mem.get("buffer")});
@@ -6564,10 +6564,10 @@ pub const Wasm = extern struct {
         return global().get("TextDecoder").new(.{}).call("decode", .{region});
     }
     /// Read `len` values of `T` out of the module's memory at byte `ptr` in ONE bulk
-    /// copy, then reinterpret natively — no per-field DataView crossing. `T` must pass
+    /// copy, then reinterpret natively - no per-field DataView crossing. `T` must pass
     /// `Wire` (a shared `extern struct`), so the wire format IS the struct both sides
     /// share: reorder a field and both move together. Returns a view into a reused
-    /// scratch buffer — valid until the next readSlice/readStruct call.
+    /// scratch buffer - valid until the next readSlice/readStruct call.
     pub fn readSlice(
         self: Wasm,
         comptime T: type,
@@ -6593,14 +6593,14 @@ pub const Wasm = extern struct {
 };
 
 // ===========================================================================
-// Host-side module runtime — the JS half of wz_mod.zig's imports. The module
+// Host-side module runtime - the JS half of wz_mod.zig's imports. The module
 // passes (ptr, len) pairs into ITS OWN memory; the host reads them here. `g.module.mem`
 // is the module's memory, captured by Site once the module is live (before any
 // import can fire), so these helpers and the input/log sinks can decode module
 // strings without each needing a handle to the Wasm wrapper.
 // ===========================================================================
 
-/// Decode a (ptr, len) pair — passed by the module as numbers — as a UTF-8 string
+/// Decode a (ptr, len) pair - passed by the module as numbers - as a UTF-8 string
 /// living in the module's linear memory.
 fn moduleStr(ptr_h: Handle, len_h: Handle) Value {
     const ptr: u32 = @trunc(js_to_num(ptr_h));
@@ -6609,11 +6609,11 @@ fn moduleStr(ptr_h: Handle, len_h: Handle) Value {
     return global().get("TextDecoder").new(.{}).call("decode", .{view});
 }
 
-/// input — poll the keyboard and mouse from the module (see wz_mod.zig's
+/// input - poll the keyboard and mouse from the module (see wz_mod.zig's
 /// `wzm.input`). Call `wz.input.attach(canvas)` once from your bridge (e.g. in
 /// onReady), passing the canvas you blit to; that registers DOM listeners and
 /// tracks held keys + mouse position/buttons. The module then queries this state
-/// synchronously each frame through the imports Site wires below — no event
+/// synchronously each frame through the imports Site wires below - no event
 /// plumbing crosses into WASM.
 pub const input = struct {
 
@@ -6670,7 +6670,7 @@ pub const input = struct {
     }
 };
 
-/// assets — bytes the module can pull synchronously (see wz_mod.zig's `wzm.asset`).
+/// assets - bytes the module can pull synchronously (see wz_mod.zig's `wzm.asset`).
 /// Register each asset once (e.g. in onReady), typically straight from `@embedFile`:
 ///
 ///     wz.assets.register("level.dat", @embedFile("level.dat"));
@@ -6731,9 +6731,9 @@ pub const assets = struct {
 };
 
 /// The WASM-site runtime. Parameterized by two comptime callbacks so every
-/// Zig→Zig call is a DIRECT call (the transpiler has no indirect-call support):
-///   * `onReady(Wasm)` runs once the module is live — size the canvas, etc.
-///   * `onFrame(Wasm)` runs every animation frame — call into WASM, blit.
+/// Zig->Zig call is a DIRECT call (the transpiler has no indirect-call support):
+///   * `onReady(Wasm)` runs once the module is live - size the canvas, etc.
+///   * `onFrame(Wasm)` runs every animation frame - call into WASM, blit.
 /// Usage:
 ///   const App = js.Site(onReady, onFrame);
 ///   App.boot();
@@ -6748,12 +6748,12 @@ pub fn Site(
         var poll_cb: Value = undefined;
         var frame_cb: Value = undefined;
 
-        /// fetch(url) → WebAssembly.instantiateStreaming → (poll until ready) →
-        /// onReady → start the per-frame loop.
+        /// fetch(url) -> WebAssembly.instantiateStreaming -> (poll until ready) ->
+        /// onReady -> start the per-frame loop.
         /// Begin loading the module. The page wrapper decides HOW: a standalone
         /// page sets `window.WASM_BYTES` (a Uint8Array decoded from inlined
-        /// base64) → instantiate from bytes; otherwise `window.WASM_URL` is a
-        /// sibling file → fetch + instantiateStreaming. The module exports its own
+        /// base64) -> instantiate from bytes; otherwise `window.WASM_URL` is a
+        /// sibling file -> fetch + instantiateStreaming. The module exports its own
         /// memory; the import object holds the `Imports` host fns plus the built-in
         /// `__wz_log` console sink (used only if the module opts into wz_mod).
         pub fn boot() void {
@@ -6794,7 +6794,7 @@ pub fn Site(
         }
         fn poll(_: Handle) void {
             if (js_promise_status(pid) == 0) {
-                requestAnimationFrame(poll_cb); // still pending — check next frame
+                requestAnimationFrame(poll_cb); // still pending - check next frame
                 return;
             }
             const result: Value = wrap(js_promise_take(pid));
@@ -6820,7 +6820,7 @@ pub fn Site(
         // The console sink for the module's panic/std.log (see wz_mod.zig). Wired
         // into the import object below as `env.__wz_log`, so a module that opts in
         // (`pub const panic = wzm.panic; std_options.logFn = wzm.log`) gets its
-        // panics and logs in the browser console for free — and a module that opts
+        // panics and logs in the browser console for free - and a module that opts
         // out simply never imports it. The module passes (level, ptr, len) as
         // numbers; we read that slice of ITS memory as UTF-8 and print by level.
         fn hostLog(
@@ -6841,17 +6841,17 @@ pub fn Site(
 }
 
 // ===========================================================================
-// css — type-safe, runtime-mutable styling authored in Zig. Folded in here so
+// css - type-safe, runtime-mutable styling authored in Zig. Folded in here so
 // the bridge reaches it as `js.css.rule(...)` with no extra module to wire.
 // (Full design notes are inside the struct.)
 // ===========================================================================
 
 // ===========================================================================
-// ZIMR BOOT + DOM VERBS (ZIG_BRIDGE_PLAN Phase 2; doctrine D9–D11)
+// ZIMR BOOT + DOM VERBS (ZIG_BRIDGE_PLAN Phase 2; doctrine D9-D11)
 //
-// Mechanism only — the PAGE IS DEFINED BY THE APP. start() does exactly:
-// feature-check → requestAdapter → requestDevice → instantiate WASM_BYTES
-// → call the app's exported `zimr_page_main()` → rAF-drive `zimr_frame(t)`.
+// Mechanism only - the PAGE IS DEFINED BY THE APP. start() does exactly:
+// feature-check -> requestAdapter -> requestDevice -> instantiate WASM_BYTES
+// -> call the app's exported `zimr_page_main()` -> rAF-drive `zimr_frame(t)`.
 // The app builds the document (headings, links, iframes, css, and the
 // canvases themselves) through the generic "dom" import verbs below; the
 // shared GPUDevice serves every canvas the app creates (D11).
@@ -6871,7 +6871,7 @@ pub fn Site(
 // ===========================================================================
 
 // ===========================================================================
-// PHASE 3a — the classic zimr wgpu contract (ZIG_BRIDGE_PLAN Phase 3)
+// PHASE 3a - the classic zimr wgpu contract (ZIG_BRIDGE_PLAN Phase 3)
 //
 // Mirrors src/bridge.zig verb-for-verb: u32 handles in one table,
 // singleton ids (device == queue == surface == 1), packed (w<<16)|h sizes,
@@ -6881,14 +6881,14 @@ pub fn Site(
 // ===========================================================================
 
 // ===========================================================================
-// WASI shim — wasm32-wasi REACTOR support for classic zimr apps. Every stub
+// WASI shim - wasm32-wasi REACTOR support for classic zimr apps. Every stub
 // mirrors the per-example pages' minimal shim: 0 for success-ish ops, EBADF
 // (8) for filesystem ops; random_get is real (crypto over a fresh
 // module-memory view); proc_exit paints the self-reporting overlay.
 // ===========================================================================
 
 // ===========================================================================
-// CLASSIC INPUT WIRING — zimr apps receive input by EXPORTING push
+// CLASSIC INPUT WIRING - zimr apps receive input by EXPORTING push
 // functions (input_push_mouse_move, zimr_input_push_touch_down, ...) that
 // the host calls from DOM events. Conventions mirror the shipped pages:
 // coordinates are CSS px relative to the canvas, wheel sends (dx, -dy),

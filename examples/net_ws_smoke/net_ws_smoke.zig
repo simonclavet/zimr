@@ -1,4 +1,4 @@
-//! net_ws_smoke — the WebSocket half of zimr's P2P signaling, running in a
+//! net_ws_smoke - the WebSocket half of zimr's P2P signaling, running in a
 //! browser. It connects to the L0 signaling server (tools/signal_server.zig or
 //! its Render-deployable twin tools/render_server.zig), joins a room, and shows
 //! the live protocol: WELCOME / JOINED / LEFT / FROM messages as they arrive.

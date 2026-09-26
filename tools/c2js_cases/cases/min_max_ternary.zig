@@ -1,8 +1,8 @@
-// `@min`/`@max` — and anything the C backend lowers to an INLINE ternary
-// `cond ? a : b` — must evaluate the SELECT, not just the condition. The
+// `@min`/`@max` - and anything the C backend lowers to an INLINE ternary
+// `cond ? a : b` - must evaluate the SELECT, not just the condition. The
 // transpiler had no ternary parser (it assumed the backend lowered every branch
 // to gotos), so `@min`/`@max` silently kept the comparison and dropped both arms
-// (an orphaned `a;`). Covers signed operands and unsigned operands ≥ 2^31 (where
+// (an orphaned `a;`). Covers signed operands and unsigned operands >= 2^31 (where
 // a sign-confused compare would also be wrong), a running reduction, and nested
 // `@min`/`@max` (chained ternaries). Self-checks (returns 0 on success).
 export fn run_test() i32 {

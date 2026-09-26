@@ -1,7 +1,7 @@
 //! @mulWithOverflow on integers wide enough that the TRUE product exceeds 2^53.
 //! The wrapped (stored) result was computed with a plain JS `*`, which loses low
 //! bits once the product passes 2^53, so the truncated value was silently wrong
-//! for large 32-bit operands — even though the regular `*%` multiply (Math.imul)
+//! for large 32-bit operands - even though the regular `*%` multiply (Math.imul)
 //! was correct. The overflow BIT was fine (a float multiply preserves the
 //! product's magnitude). The fix computes the stored value with Math.imul for a
 //! <=32-bit multiply, keeping the magnitude compare for the overflow bit.

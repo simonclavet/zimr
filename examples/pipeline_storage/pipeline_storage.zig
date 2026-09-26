@@ -1,10 +1,10 @@
-//! pipeline_storage — Phase 2 (`src/notes/webgpu_control.md`): a COMPUTE
+//! pipeline_storage - Phase 2 (`src/notes/webgpu_control.md`): a COMPUTE
 //! shader writes an image into a STORAGE TEXTURE, which a render pass then
 //! samples. This is the compute<->render bridge: GPU-generated texture content,
 //! no CPU upload.
 //!
 //! Flow (one-shot at init, on its own command encoder so it runs outside the
-//! frame's render pass — compute and render passes can't be open at once):
+//! frame's render pass - compute and render passes can't be open at once):
 //!   - create an rgba8unorm texture with usage { storage_binding, texture_binding }
 //!   - compute BGL: @binding(0) texture_storage_2d<rgba8unorm, write>, vis=compute
 //!   - dispatch an 8x8 workgroup grid; the kernel `textureStore`s a plasma
@@ -98,7 +98,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    // Create the storage texture and paint it once via compute — the fill's
+    // Create the storage texture and paint it once via compute - the fill's
     // scaffolding is built and released inside the helper (leak-safe).
     const st: z.material.StorageTexture = try z.material.storageTextureFilled(
         gpa,
@@ -168,7 +168,7 @@ pub const app: z.AppSpec(State) = .{
     .init = initState,
     // .memory left default (arena): init creates a compute pipeline + storage
     // texture (+ their bind groups/layouts) that aren't kept in State, so a full
-    // managed teardown needs new State fields to hold those handles — deferred.
+    // managed teardown needs new State fields to hold those handles - deferred.
     // The stored render_pipe/tex_view/sampler/render_bg would free cleanly.
     .deinit = deinit,
     .update = update,

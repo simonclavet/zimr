@@ -1,6 +1,6 @@
-//! examples/shaders_vertex_displacement_vs.zig — the vertex shader that turns a
+//! examples/shaders_vertex_displacement_vs.zig - the vertex shader that turns a
 //! flat grid into a living surface by sampling a Perlin heightfield IN THE
-//! VERTEX STAGE. `heightLevel` is the explicit-LOD accessor (→
+//! VERTEX STAGE. `heightLevel` is the explicit-LOD accessor (->
 //! textureSampleLevel), which needs no derivatives and is legal in the vertex
 //! stage. Three heights per vertex (the vertex plus two neighbours) give the
 //! world-space surface normal, so the surface is lit, not merely displaced.
@@ -21,7 +21,7 @@ pub const Io = shader_externs.IoT(shader_io.Ubo);
 pub const Out = shader_externs.Out;
 
 /// Height at `uv`: two octaves of the heightfield, scrolled in different
-/// directions by time `t` — scrolling a static texture is what animates the
+/// directions by time `t` - scrolling a static texture is what animates the
 /// swells. The `repeat` sampler tiles the noise, so `uv * freq` may exceed 1.
 fn heightAt(io_in: Io, uv: Vec2, t: f32, freq: f32) f32 {
     const uv1: Vec2 = .{ uv[0] * freq + t * 0.030, uv[1] * freq + t * 0.021 };

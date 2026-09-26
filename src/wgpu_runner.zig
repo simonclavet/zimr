@@ -1,7 +1,7 @@
-//! wgpu_runner.zig — the generic standalone runner for a DESCRIPTOR-ONLY wgpu
+//! wgpu_runner.zig - the generic standalone runner for a DESCRIPTOR-ONLY wgpu
 //! example. It is the exe root of an `addWgpuApp` build: it imports the example
 //! as the `user_app` module (which exposes `pub const app = z.AppSpec(State){...}`
-//! and nothing else — no `main`, no globals), owns the wasm entry and the single
+//! and nothing else - no `main`, no globals), owns the wasm entry and the single
 //! beginDrawing/clearBackground/endDrawing, and ticks the app full-screen.
 //!
 //! Because the example never opens/closes the frame and draws in `f.window`-local
@@ -26,7 +26,7 @@ pub var zimr_app: z.App = .{};
 /// (beginDrawing wipes to the config clear), let the app draw into the
 /// full-screen frame, then present. A MIGRATED app (`manages_own_frame = true`)
 /// owns its own `beginDrawing`/`endDrawing` so it can render offscreen (RTT)
-/// before opening the screen — the runner just calls `update`. Once every
+/// before opening the screen - the runner just calls `update`. Once every
 /// example is migrated, this branch and the flag are deleted.
 fn runnerUpdate(f: *z.Frame, s: *State) void {
     if (spec.manages_own_frame) {
@@ -47,7 +47,7 @@ pub fn main() !void {
     try zimr_app.run(spec.config, State, runnerInit, runnerUpdate);
 }
 
-/// Tear down the current example State by running its `deinit` — the entry point
+/// Tear down the current example State by running its `deinit` - the entry point
 /// the smoke/leak harness calls after ticking frames, so the GPU-handle balance
 /// can be re-measured post-teardown (a non-zero delta from a clean baseline is a
 /// leak). No-op if the example never initialized. A standalone never calls this
@@ -59,7 +59,7 @@ pub export fn runnerDeinit() void {
         zimr_app.gpa.destroy(sp);
         zimr_app.state = null;
     }
-    // The engine must not RETAIN this example's texture registrations — release
+    // The engine must not RETAIN this example's texture registrations - release
     // them so the registry doesn't grow across example lifecycles (the launcher
     // switch / long-running-app leak). The fixed engine resources (pipelines,
     // ortho ring, white texture) persist; only per-example registrations clear.
@@ -71,7 +71,7 @@ pub export fn runnerDeinit() void {
     }
 }
 
-/// FULL engine teardown — the memory-accounting proof. After the leak harness has
+/// FULL engine teardown - the memory-accounting proof. After the leak harness has
 /// run every example lifecycle (init/deinit/reinit/deinit), it calls this once to
 /// tear down the ENGINE itself: the fixed baseline that deliberately PERSISTS
 /// across example lifecycles. That baseline is the 3D subsystem (`Cube3D`), the 2D
@@ -79,7 +79,7 @@ pub export fn runnerDeinit() void {
 /// the pipeline / bind-group caches. Each subsystem's `deinit` now destroys every
 /// GPU handle it created, so once this returns the create/destroy census is all
 /// zero. That clean-zero state is the proof that every handle zimr allocates is
-/// accounted for — not that freeing is mandatory, but that nothing is untracked.
+/// accounted for - not that freeing is mandatory, but that nothing is untracked.
 /// A standalone never calls this (it runs forever); only the harness does.
 pub export fn runnerShutdown() void {
     // Defensive: an example State should already be gone (the harness runs
@@ -114,7 +114,7 @@ pub export fn runnerShutdown() void {
 
     // The engine fullscreen quad VBO (created lazily by fullscreenVbo() the first
     // time an app blits a render texture / runs a fullscreen pass). Engine-owned,
-    // one for the program's life — free it here so RTT examples leave the device
+    // one for the program's life - free it here so RTT examples leave the device
     // clean under the leak gate.
     if (zimr_app.fullscreen_vbo != .invalid) {
         z.wgpu.destroyBuffer(zimr_app.fullscreen_vbo);
@@ -122,10 +122,10 @@ pub export fn runnerShutdown() void {
     }
 }
 
-/// Re-run the example's `init` on the SAME instance after a `runnerDeinit` — the
+/// Re-run the example's `init` on the SAME instance after a `runnerDeinit` - the
 /// leak harness's TWICE-LIFECYCLE probe. The engine (Renderer2D) persists across
 /// this (its lazy init is guarded), so lifecycle-2's handle census grows over
-/// lifecycle-1's ONLY by what the example failed to free — isolating a per-run
+/// lifecycle-1's ONLY by what the example failed to free - isolating a per-run
 /// leak from the fixed engine baseline. No-op unless currently torn down.
 pub export fn runnerReinit() void {
     if (zimr_app.state != null) {
@@ -140,13 +140,13 @@ pub export fn runnerReinit() void {
     zimr_app.state = state_ptr;
 }
 
-/// The example's declared memory mode (0 = arena, 1 = managed) — the leak
+/// The example's declared memory mode (0 = arena, 1 = managed) - the leak
 /// harness only ENFORCES a flat twice-lifecycle census for `.managed` examples.
 pub export fn runnerMemoryMode() i32 {
     return @backingInt(spec.memory);
 }
 
-/// Net live bytes currently handed out through the example's allocator — the
+/// Net live bytes currently handed out through the example's allocator - the
 /// precise, fragmentation-free CPU twin of the GPU handle census. Growth across
 /// the twice-lifecycle probe is exactly a per-lifecycle CPU leak.
 pub export fn runnerLiveBytes() i32 {

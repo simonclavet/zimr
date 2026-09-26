@@ -1,13 +1,13 @@
-//! basic — the smallest end-to-end zimr WebGPU demo, the flagship the GL
-//! `basic` is for the GL backend. On init it builds a 16×16 checker with
+//! basic - the smallest end-to-end zimr WebGPU demo, the flagship the GL
+//! `basic` is for the GL backend. On init it builds a 16x16 checker with
 //! `genImageChecked` and uploads it (`loadTextureFromImage`). Each frame it
 //! clears to a slowly-pulsing slate and pushes ONE textured triangle through
 //! the rl-immediate path (`rlSetTexture` + `rlBegin(.triangles)` +
 //! `rlColor4ub`/`rlTexCoord2f`/`rlVertex2f`): the default fragment shader does
 //! `texel * vertexColor`, so the per-vertex tints colour the checker rather
 //! than replace it. If you see the pulsing background AND a tinted-checker
-//! triangle, the whole WebGPU path — texture upload + bind, the 2D pipeline,
-//! the vertex accumulator, and the batch flush — is working.
+//! triangle, the whole WebGPU path - texture upload + bind, the 2D pipeline,
+//! the vertex accumulator, and the batch flush - is working.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -34,7 +34,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, roboto_mono_ttf, 24);
-    // 16×16 checker, 4×4-pixel cells, sky-on-slate — same as GL `basic`.
+    // 16x16 checker, 4x4-pixel cells, sky-on-slate - same as GL `basic`.
     const img: z.Image = try z.genImageChecked(gpa, 16, 16, 4, 4, c.sky_400, c.slate_800);
     const checker: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);
     z.unloadImage(gpa, img);

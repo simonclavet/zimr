@@ -1,4 +1,4 @@
-//! src/shaders/probes/sampler_test_fs.zig — S1.4.5b end-to-end probe.
+//! src/shaders/probes/sampler_test_fs.zig - S1.4.5b end-to-end probe.
 //!
 //! Validates the full sampler-shader pipeline:
 //!   Zig source ->
@@ -15,7 +15,7 @@
 //! `rewriteSamplers` should keep this shader producing output
 //! shaped like `examples/shared/shaders/_sampler_derisk.fs.glsl`.
 //!
-//! NOT registered for general use — purely a build-pipeline probe.
+//! NOT registered for general use - purely a build-pipeline probe.
 //! `examples/sampler_derisk_test.zig` loads the post-processed GLSL
 //! via `loadShaderFromMemory` to confirm WebGL2 acceptance.
 

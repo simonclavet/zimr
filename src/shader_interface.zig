@@ -1,4 +1,4 @@
-//! SHADER-SAFE — this file may be @imported by shader sources
+//! SHADER-SAFE - this file may be @imported by shader sources
 //! (compiled through the SPIR-V pipeline) and by comptime executors.
 //! Lint enforces the tier: no allocators, no runtime std, no externs,
 //! no bridge imports outside `test` blocks. `zm` is allowed: it is
@@ -7,7 +7,7 @@
 //! wires it alongside shader_interface, so importing it here gives the
 //! Vec/Vec2/Vec3 aliases without breaking the shader-safe tier.
 //!
-//! src/shader_interface.zig — schema wrapper types for typed shaders.
+//! src/shader_interface.zig - schema wrapper types for typed shaders.
 //!
 //! This module declares the small set of generic wrapper types that
 //! shader interface files (`*_io.zig`) use to describe a shader's
@@ -15,18 +15,18 @@
 //! bind, which vertex attributes it consumes and at which locations,
 //! and how to compose common uniform sets across shaders.
 //!
-//! Wrapper types here are PURE METADATA carriers — they're parameterized
+//! Wrapper types here are PURE METADATA carriers - they're parameterized
 //! over comptime values (slot numbers, element kinds, location indices)
 //! and store those values as `pub const` declarations on the returned
 //! type.  Engine code introspects these constants via `@field(T, "slot")`
 //! etc. to drive auto-binding without runtime cost.
 //!
 //! Three responsibilities:
-//!   1. `Sampler2D(MaterialMapIndex)` / `Sampler2D.atSlot(N)` — tag a
+//!   1. `Sampler2D(MaterialMapIndex)` / `Sampler2D.atSlot(N)` - tag a
 //!      sampler with the texture-unit slot it should bind to.
-//!   2. `Attr(ElemKind, location)` — declare vertex-attribute element
+//!   2. `Attr(ElemKind, location)` - declare vertex-attribute element
 //!      type + GLSL `layout(location = N)` annotation.
-//!   3. `merge(.{ A, B, C })` — comptime struct-merge for composing
+//!   3. `merge(.{ A, B, C })` - comptime struct-merge for composing
 //!      common uniform sets (Lighting, Fog, Shadow, ...) into a single
 //!      `Uniforms` struct per shader.
 //!
@@ -47,18 +47,18 @@ const expectEqual = std.testing.expectEqual;
 /// numbers used by the typed shader pipeline's `Sampler2D(.X)` markers
 /// AND by `Material.maps[N]` on the engine side.  Same enum used in
 /// both worlds keeps shader-side declarations and host-side material
-/// assignment in sync — a `Sampler2D(.albedo)` in a shader iface and
+/// assignment in sync - a `Sampler2D(.albedo)` in a shader iface and
 /// a `material.maps[.albedo].texture = ...` on the host both refer to
 /// slot 0.
 ///
 /// Defined here (in the typed-shader interface module) because it's
-/// fundamentally a shader-binding concept — the slot enum is part of
+/// fundamentally a shader-binding concept - the slot enum is part of
 /// how a shader declares what textures it needs.  `src/types.zig`
 /// re-exports it from here for engine-side users (`Material`, etc.)
 /// so existing call sites can keep using `MaterialMapIndex`.
 ///
 /// Defining it here instead of in `types.zig` lets the shader-interface
-/// module be self-contained — its module tree is just this single file,
+/// module be self-contained - its module tree is just this single file,
 /// so it can be wired as a named module dep on per-shader codegen
 /// bootstrap exes without dragging `types.zig` into a second module
 /// tree (which would error: "file in two modules").
@@ -80,12 +80,12 @@ pub const MaterialMapIndex = enum(i32) {
 };
 
 // ===========================================================================
-// BINDING-GROUP RULE — single source of truth (shared by codegen + solver)
+// BINDING-GROUP RULE - single source of truth (shared by codegen + solver)
 // ===========================================================================
 //
 // The @group a shader's resources bind to is decided in TWO places that MUST
 // agree, or the GPU rejects the pipeline at creation ("Invalid RenderPipeline
-// due to a previous error" — the zimr324 bug):
+// due to a previous error" - the zimr324 bug):
 //   - `tools/gen_shader_externs.zig` sets the WGSL `@group(N)` decorations.
 //   - `shader_introspect.solveLayout` builds the matching host bind groups.
 // Both call the functions below so they can NEVER drift. The stage is detected
@@ -93,18 +93,18 @@ pub const MaterialMapIndex = enum(i32) {
 // with `Inputs`, or a lone uniform schema) is treated as fragment-stage.
 
 /// The `@group` a uniform block (`Ubo` / `Uniforms`) binds to, by stage:
-///   - VS schema (declares `Attributes`)           → group 0
-///   - FS schema (declares `Inputs`, no Attributes) → group 2
+///   - VS schema (declares `Attributes`)           -> group 0
+///   - FS schema (declares `Inputs`, no Attributes) -> group 2
 ///   - neither (a MERGED material schema whose UBO is VS-stage, e.g. the 2D
-///     shapes `EngineSchema`)                        → group 0
+///     shapes `EngineSchema`)                        -> group 0
 /// Group 1 is reserved for material samplers (`sampler_group`), so a two-stage
 /// pipeline's VS and FS uniforms never collide. The codegen only ever processes
 /// pure VS/FS io files (so it never hits the final case); only `solveLayout`
-/// sees merged schemas — both stay correct from this one rule.
+/// sees merged schemas - both stay correct from this one rule.
 pub fn uniformGroupForSchema(comptime SchemaT: type) u32 {
     // Explicit override: a schema may pin its uniform block to a specific group
     // by declaring `pub const ubo_group: u32 = N`. Used by shaders whose UBO
-    // doesn't follow the stage-default scheme — e.g. the decal FS, whose
+    // doesn't follow the stage-default scheme - e.g. the decal FS, whose
     // projector UBO sits at group 1 (with the decal texture pinned to group 2).
     // Because BOTH the codegen and `solveLayout` read the group through this one
     // function, an override keeps the emitted @group and the host layout in
@@ -124,11 +124,11 @@ pub fn uniformGroupForSchema(comptime SchemaT: type) u32 {
     if (@hasDecl(SchemaT, "Inputs")) {
         return 2; // fragment stage
     }
-    return 0; // merged/ambiguous schema → treat the UBO as vertex-stage
+    return 0; // merged/ambiguous schema -> treat the UBO as vertex-stage
 }
 
 /// The default `@group` for material samplers/textures. Reserved engine-wide
-/// (the 2D shapes batch binds its atlas here too — see
+/// (the 2D shapes batch binds its atlas here too - see
 /// `gpu_iface.batch_reserved_group`). Overridable per-field via a `Sampler2D`
 /// `.pinned`/`.shared` config.
 pub const sampler_group: u32 = 1;
@@ -151,7 +151,7 @@ pub const BindingLocation = struct {
 /// layout.  Passed as the second argument to `Sampler2D(tag, config)`.
 ///
 /// All fields optional; `.{}` accepts every default and lets the
-/// layout solver decide (UBO → group 0, sampler → group 1, dense
+/// layout solver decide (UBO -> group 0, sampler -> group 1, dense
 /// in declaration order within each group).  See
 /// `src/notes/finishing_new_gpu_foundations.md` turn 1 for the
 /// rules.
@@ -229,7 +229,7 @@ pub fn shared(loc: BindingLocation) SharedLocation {
 /// SPIR-V side (via `zm_binding`).
 ///
 /// `config` is `SamplerConfig`; `.{}` accepts every default.  The
-/// empty struct literal IS the marker — it tells readers "there's
+/// empty struct literal IS the marker - it tells readers "there's
 /// configuration here, it's just defaulted" rather than letting them
 /// forget the marker exists.  Matches `std.ArrayList(T).initCapacity`
 /// style where the config arg is required-but-defaulted.
@@ -272,7 +272,7 @@ pub fn Sampler2D_atSlot(comptime n: u32, comptime config: SamplerConfig) type {
 /// Future: `SamplerCube`, `Sampler3D`, `Sampler2DArray`.  Same pattern.
 
 // ===========================================================================
-// RESOURCE BINDING PLACEMENT — THE single source of truth
+// RESOURCE BINDING PLACEMENT - THE single source of truth
 // ===========================================================================
 //
 // `uniformGroupForSchema` (above), `solveSamplerSlots`, and `solveStorageSlots`
@@ -285,7 +285,7 @@ pub fn Sampler2D_atSlot(comptime n: u32, comptime config: SamplerConfig) type {
 // and the host layout are identical by construction and cannot drift.
 //
 // This replaced three hand-kept copies of the sampler solver that had to stay
-// byte-identical and didn't — the drift produced two on-device Dawn failures (a
+// byte-identical and didn't - the drift produced two on-device Dawn failures (a
 // binding collision and a texture/sampler type mismatch) that nothing but a
 // phone could catch. shader_interface is the right home: it carries no host
 // (wgpu) dependency, so the codegen tier can import it (importing
@@ -308,7 +308,7 @@ pub const SamplerSlot = struct {
     stages: Stages = .{ .fragment = true },
 };
 
-/// Field count of a `Samplers` struct — the length of `solveSamplerSlots`'s
+/// Field count of a `Samplers` struct - the length of `solveSamplerSlots`'s
 /// return array.
 pub fn samplerFieldCount(comptime SamplersT: type) usize {
     return @typeInfo(SamplersT).@"struct".field_types.len;
@@ -323,11 +323,11 @@ pub fn samplerFieldCount(comptime SamplersT: type) usize {
 /// algorithm drifted, producing two on-device Dawn failures: a binding
 /// collision and a texture/sampler type mismatch.)
 ///
-/// Each `Sampler2D` takes TWO bindings — texture at N, paired sampler at N+1
+/// Each `Sampler2D` takes TWO bindings - texture at N, paired sampler at N+1
 /// (zspv_rewrite synthesizes the sampler half there; the host mirrors it). A
 /// free (unpinned/unshared) sampler takes the lowest N in `sampler_group`
 /// where BOTH N and N+1 are unclaimed, then advances by 2. Without reserving
-/// N+1, the next texture would land on the previous sampler's slot — the
+/// N+1, the next texture would land on the previous sampler's slot - the
 /// multi-texture PBR collision. Pinned/shared fields keep their explicit cell.
 pub fn solveSamplerSlots(comptime SamplersT: type) [samplerFieldCount(SamplersT)]SamplerSlot {
     return comptime blk: {
@@ -337,7 +337,7 @@ pub fn solveSamplerSlots(comptime SamplersT: type) [samplerFieldCount(SamplersT)
         // Pass 1: claim pinned/shared cells (per-group 64-bit bitmask; WebGPU
         // guarantees 4 groups, and the solver tracks bindings 0-63). A pinned
         // sampler occupies BOTH its texture cell (binding) AND its paired
-        // sampler cell (binding+1), so claim both — otherwise a free sampler
+        // sampler cell (binding+1), so claim both - otherwise a free sampler
         // could land on a pinned sampler's +1 slot.
         var claimed: [4]u64 = .{ 0, 0, 0, 0 };
         for (sinfo.field_names, sinfo.field_types) |field_name, field_type| {
@@ -388,7 +388,7 @@ pub fn solveSamplerSlots(comptime SamplersT: type) [samplerFieldCount(SamplersT)
 /// The resolved location of one `Storage` field.
 pub const StorageSlot = struct { group: u32, binding: u32 };
 
-/// Field count of a schema's `Storage` struct (0 if it declares none) — the
+/// Field count of a schema's `Storage` struct (0 if it declares none) - the
 /// length of `solveStorageSlots`'s return array.
 pub fn storageFieldCount(comptime SchemaT: type) usize {
     if (!@hasDecl(SchemaT, "Storage")) {
@@ -423,12 +423,12 @@ pub fn solveStorageSlots(comptime SchemaT: type) [storageFieldCount(SchemaT)]Sto
 }
 
 // ===========================================================================
-// STORAGE BUFFERS — read-only / read-write SSBO schema markers
+// STORAGE BUFFERS - read-only / read-write SSBO schema markers
 // ===========================================================================
 
 /// Access mode for a storage-buffer binding.  `.read` emits
 /// `var<storage, read>` (the common case: a vertex/fragment stage reading
-/// data a compute pass produced — e.g. instanced particle positions);
+/// data a compute pass produced - e.g. instanced particle positions);
 /// `.read_write` emits `var<storage, read_write>` (compute stages that
 /// mutate the buffer).
 pub const StorageAccess = enum { read, read_write };
@@ -449,7 +449,7 @@ pub const StorageAccess = enum { read, read_write };
 /// `io.positions(i)` instead of hand-writing
 /// `ssboLoad(Vec2, positions, i)`.  Storage buffers bind in the SAME
 /// group as the stage's uniform block, at bindings AFTER the UBO
-/// (group 0 binding 1, 2, … for a VS with a UBO at binding 0) — so the
+/// (group 0 binding 1, 2, ... for a VS with a UBO at binding 0) - so the
 /// generated layout matches the conventional hand-wired one.  `Resources`
 /// reads this struct to auto-generate the matching bind-group layout
 /// entries (`autoStorageBindGroupLayout`).
@@ -461,12 +461,12 @@ pub fn StorageBuf(comptime Elem: type, comptime access_mode: StorageAccess) type
 }
 
 // ===========================================================================
-// BUILTINS — SPIR-V builtin inputs as first-class schema members
+// BUILTINS - SPIR-V builtin inputs as first-class schema members
 // ===========================================================================
 
 /// The set of SPIR-V builtin inputs a shader can request by name in a
 /// `Builtins` schema section.  These carry NO descriptor binding (they're
-/// pipeline builtins, not resources) — declaring them just lets the body
+/// pipeline builtins, not resources) - declaring them just lets the body
 /// read `io.vertex_index` / `io.instance_index` as typed fields instead of
 /// reaching for `shader_externs.vertex_index` as a side-channel.
 pub const BuiltinKind = enum { vertex_index, instance_index };
@@ -496,11 +496,11 @@ pub fn Builtin(comptime kind: BuiltinKind) type {
 /// Float vectors are by far the most common; integer attributes are
 /// included for skinning (bone IDs as `uvec4`) and similar.
 pub const ElemKind = enum {
-    vec2, // 2 × f32
-    vec3, // 3 × f32
-    vec4, // 4 × f32
-    ivec4, // 4 × i32
-    uvec4, // 4 × u32
+    vec2, // 2 x f32
+    vec3, // 3 x f32
+    vec4, // 4 x f32
+    ivec4, // 4 x i32
+    uvec4, // 4 x u32
 };
 
 /// Returns a marker type describing a vertex attribute: its GLSL
@@ -517,7 +517,7 @@ pub const ElemKind = enum {
 ///
 /// Schemas describe BINDINGS, not engine policy.  Whether the engine
 /// auto-generates missing tangents is a separate concern handled in
-/// `mesh_prep.zig` by field-name convention — see plan.md §"Engine
+/// `mesh_prep.zig` by field-name convention - see plan.md section "Engine
 /// policy: schema-driven auto-fulfillment of missing mesh attributes".
 pub fn Attr(comptime elem: ElemKind, comptime loc: u32) type {
     return struct {
@@ -527,7 +527,7 @@ pub fn Attr(comptime elem: ElemKind, comptime loc: u32) type {
 }
 
 // ===========================================================================
-// STRUCT MERGE (Q7) — comptime composition for common uniform sets
+// STRUCT MERGE (Q7) - comptime composition for common uniform sets
 // ===========================================================================
 
 /// Comptime helper that takes a tuple of struct types and produces a
@@ -604,11 +604,11 @@ pub fn merge(comptime structs: anytype) type {
 // RESERVED UNIFORM NAMES (Q4, Q5)
 // ===========================================================================
 
-/// Reserved uniform names — engine-managed.  The engine populates
+/// Reserved uniform names - engine-managed.  The engine populates
 /// these uniforms automatically before every draw call.  Caller code
 /// writing to a reserved name via `bind(Iface, sh).set(.X, ...)`
 /// triggers a debug-build warning; the engine value overwrites it
-/// regardless.  See plan.md §"Reserved uniform names" for the full
+/// regardless.  See plan.md section "Reserved uniform names" for the full
 /// rationale and per-name semantics.
 ///
 /// To opt out of engine management for a particular slot, give your
@@ -636,7 +636,7 @@ pub fn isReservedName(comptime name: []const u8) bool {
 }
 
 // ===========================================================================
-// SECTION — UBO wire layout (the GPU byte layout for plain-struct schemas)
+// SECTION - UBO wire layout (the GPU byte layout for plain-struct schemas)
 // ===========================================================================
 //
 // Zig 0.17.0-dev.1245 disallows `@Vector` fields in `extern struct`s on CPU
@@ -650,20 +650,20 @@ pub fn isReservedName(comptime name: []const u8) bool {
 // The layout these functions compute is the C/extern layout that the SPIR-V
 // backend assigns to the generated `extern struct` mirror (the mirror is
 // emitted by tools/gen_shader_externs.zig on the SPIR-V target, where vector
-// fields remain legal) — the same offsets spv2wgsl carries into the WGSL
+// fields remain legal) - the same offsets spv2wgsl carries into the WGSL
 // struct. For the field types allowed here that layout is also WGSL-uniform
 // legal, so host bytes, SPIR-V offsets, and WGSL agree by construction.
 //
-// Allowed field types (compile error otherwise — extend deliberately, and
+// Allowed field types (compile error otherwise - extend deliberately, and
 // only after confirming the SPIR-V-side layout of the new shape):
-//   f32 / i32 / u32           → size 4,  align 4
-//   @Vector(2, f32)           → size 8,  align 8
-//   @Vector(4, f32)           → size 16, align 16
-//   [N]scalar                 → stride 4 (C rule)
-//   [N]@Vector(2|4, f32)      → stride 8|16 (mat4 as [4]Vec, vec runs)
+//   f32 / i32 / u32           -> size 4,  align 4
+//   @Vector(2, f32)           -> size 8,  align 8
+//   @Vector(4, f32)           -> size 16, align 16
+//   [N]scalar                 -> stride 4 (C rule)
+//   [N]@Vector(2|4, f32)      -> stride 8|16 (mat4 as [4]Vec, vec runs)
 //
 // `@Vector(3, f32)` is deliberately rejected: C gives it size 16 while
-// std140 gives 12, so a vec3 field is a layout trap — schemas pad to Vec.
+// std140 gives 12, so a vec3 field is a layout trap - schemas pad to Vec.
 
 /// C-layout alignment of a UBO field type. `@compileError`s on any type
 /// outside the allowed set above.
@@ -720,7 +720,7 @@ pub fn wireOffsetOf(comptime T: type, comptime field_name: []const u8) comptime_
     @compileError("wireOffsetOf: no field '" ++ field_name ++ "' in " ++ @typeName(T));
 }
 
-/// Total wire (GPU) size of struct `T`: C rule — the end offset rounded up
+/// Total wire (GPU) size of struct `T`: C rule - the end offset rounded up
 /// to the struct's alignment (its largest field alignment).
 pub fn wireSizeOf(comptime T: type) comptime_int {
     const info = @typeInfo(T).@"struct";
@@ -744,11 +744,11 @@ pub fn wireSizeOf(comptime T: type) comptime_int {
 // WGSL uniform-block (std140) layout validation. A port of the rule naga
 // (valid/type.rs) and Tint/Dawn enforce: in the `uniform` address space, array
 // element stride must be a multiple of 16, so a `[N]f32`/`[N]@Vector(2,f32)`
-// field (stride 4/8) is REJECTED — "array stride N not a multiple of 16".
+// field (stride 4/8) is REJECTED - "array stride N not a multiple of 16".
 // Before this, such a UBO shipped WGSL the browser refused; now it's a compile
 // error at the schema (see `assertValidUniform`, called from gen_shader_externs).
 //
-// It REUSES `wireAlignOf`/`wireFieldSize` above — the wire (CPU) layout and the
+// It REUSES `wireAlignOf`/`wireFieldSize` above - the wire (CPU) layout and the
 // base WGSL layout agree byte-for-byte on the allowed field set, so there is a
 // single layout source of truth. (vec3 is already rejected by `wireAlignOf`.)
 // ---------------------------------------------------------------------------
@@ -792,7 +792,7 @@ pub fn assertValidUniform(comptime T: type) void {
 }
 
 test "assertValidUniform: [N]f32/[N]vec2 rejected, vec fields accepted" {
-    // The pre-fix points_vs layout — array<f32,N> in a uniform block is illegal.
+    // The pre-fix points_vs layout - array<f32,N> in a uniform block is illegal.
     try expect(uniformFieldError([2]f32) != null);
     try expect(uniformFieldError([4]f32) != null);
     try expect(std.mem.indexOf(u8, uniformFieldError([2]f32).?, "16") != null);
@@ -852,7 +852,7 @@ pub fn writeWire(comptime T: type, value: *const T, out: []u8) void {
     }
 }
 
-/// Serialize a UBO value and return the wire bytes by value — the one-liner
+/// Serialize a UBO value and return the wire bytes by value - the one-liner
 /// shape every `queueWriteBuffer` call site wants:
 ///
 ///     const bytes: [shader.wireSizeOf(Ubo)]u8 = shader.wireOf(Ubo, &value);
@@ -904,7 +904,7 @@ test "Sampler2D carries slot at type level" {
     try expectEqual(@as(u32, 0), T.slot);
     try expectEqual(SamplerKind.material_map, T.kind);
     try expectEqual(MaterialMapIndex.albedo, T.map_index);
-    // Default config: no pin, no shared — solver assigns location.
+    // Default config: no pin, no shared - solver assigns location.
     try expect(T.sampler_config.pinned == null);
     try expect(T.sampler_config.shared == null);
 
@@ -998,17 +998,17 @@ test "isReservedName detects reserved engine uniforms" {
 }
 
 test "uniformGroupForSchema: VS->0, FS->2, merged-material->0" {
-    // A VS schema (declares Attributes) — vertex-stage UBO at group 0.
+    // A VS schema (declares Attributes) - vertex-stage UBO at group 0.
     const VsLike = struct {
         pub const Attributes = struct {};
         pub const Ubo = struct {};
     };
-    // An FS schema (declares Inputs, no Attributes) — fragment-stage UBO at 2.
+    // An FS schema (declares Inputs, no Attributes) - fragment-stage UBO at 2.
     const FsLike = struct {
         pub const Inputs = struct {};
         pub const Ubo = struct {};
     };
-    // A MERGED material schema (no Attributes/Inputs) — its UBO is vertex-stage
+    // A MERGED material schema (no Attributes/Inputs) - its UBO is vertex-stage
     // and MUST land at group 0. This is the 2D shapes `EngineSchema` shape;
     // if this returns 2, renderer_2d's bg_layouts[0] is invalid and the whole
     // "shapes" pipeline dies (the zimr328 regression).
@@ -1025,7 +1025,7 @@ test "uniformGroupForSchema: VS->0, FS->2, merged-material->0" {
 test "wire layout: offsets + size match the compiler's own extern layout" {
     // The plain-struct schema shape (depth_vs_io's Ubo): a mat4, a vec4,
     // then a scalar row. The reference is a REAL extern struct with legal
-    // (array) fields carrying the same alignments — the compiler's own
+    // (array) fields carrying the same alignments - the compiler's own
     // extern layout is the ground truth the wire functions must replicate.
     const Schema = struct {
         mvp: [4]Vec,
@@ -1125,7 +1125,7 @@ test "solveSamplerSlots: sampler stage visibility (default fragment, opt-in vert
         shared_map: Sampler2D(.metalness, .{ .stages = .{ .vertex = true } }),
     };
     const slots = comptime solveSamplerSlots(S);
-    // default → fragment-only
+    // default -> fragment-only
     try expectEqual(false, slots[0].stages.vertex);
     try expectEqual(true, slots[0].stages.fragment);
     // vertex-only
@@ -1147,9 +1147,9 @@ test "solveSamplerSlots: pinned cells are kept and free pairs fill around them" 
     // pinned keeps (1,2)
     try expectEqual(@as(u32, 2), slots[0].binding);
     try expectEqual(SamplerSlotOrigin.pinned, slots[0].origin);
-    // free_a: lowest N with N and N+1 free → (1,0)
+    // free_a: lowest N with N and N+1 free -> (1,0)
     try expectEqual(@as(u32, 0), slots[1].binding);
     // free_b: pinned claims 2 AND its sampler half 3, so the next free pair
-    // starts at 4 → (1,4).
+    // starts at 4 -> (1,4).
     try expectEqual(@as(u32, 4), slots[2].binding);
 }

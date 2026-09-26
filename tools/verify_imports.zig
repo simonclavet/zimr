@@ -1,4 +1,4 @@
-//! verify_imports — pure-Zig replacement for webtests/verify_imports.js.
+//! verify_imports - pure-Zig replacement for webtests/verify_imports.js.
 //!
 //! The browser rejects a standalone at `WebAssembly.instantiate` when the wasm
 //! imports a host function the bridge never built (a LinkError). Neither the Zig
@@ -51,7 +51,7 @@ const WasmImports = struct {
             pos += 1;
             const size: u32 = readU32Leb(bytes, &pos);
             const body_end: usize = pos + size;
-            if (id != 2) { // not the import section — skip its body
+            if (id != 2) { // not the import section - skip its body
                 pos = body_end;
                 continue;
             }
@@ -95,7 +95,7 @@ const WasmImports = struct {
     }
 };
 
-/// True when bridge source registers `field` via a `.set("field", …)` call.
+/// True when bridge source registers `field` via a `.set("field", ...)` call.
 /// Scans for the quoted literal, tolerating the multi-line `.set(\n  "js_x",`
 /// form (host names are globally unique, so namespace need not be matched).
 fn bridgeProvides(bridge: []const u8, field: []const u8) bool {

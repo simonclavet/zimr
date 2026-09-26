@@ -1,14 +1,14 @@
-//! physics_sidebyside — two physics worlds, side by side, drawn the way each kind of
+//! physics_sidebyside - two physics worlds, side by side, drawn the way each kind of
 //! game would actually draw it.
 //!
-//!   LEFT  : the 2D engine (`zimrphysics2d`, a Box2D v3 port), rendered like a 2D game —
+//!   LEFT  : the 2D engine (`zimrphysics2d`, a Box2D v3 port), rendered like a 2D game -
 //!           an orthographic, screen-space pass of flat filled squares into a DrawList.
 //!   RIGHT : the 3D engine (`zimrphysics`, a Jolt port), rendered in perspective as cubes,
 //!           scoped to the right half of the canvas with `pushViewport`.
 //!
 //! Each world drops 10 boxes that fall and pile on a static ground. The point of the demo is
 //! that the setup and per-step code below read almost line-for-line identically across the two
-//! engines — that is what the API harmonization bought. A "Reset" button rebuilds both worlds.
+//! engines - that is what the API harmonization bought. A "Reset" button rebuilds both worlds.
 //!
 //! Standard wgpu example contract: a `pub const app: z.AppSpec(State)`.
 
@@ -93,7 +93,7 @@ fn dropX(i: usize) f32 {
 // ---------------------------------------------------------------------------------------
 // SETUP. The two functions below are written to be as parallel as the engines allow. The
 // `createBody(world, .{ .motion_type, .position })` calls are identical; the only real
-// difference is the shape model — 2D attaches a shape to the body (Box2D), 3D references a
+// difference is the shape model - 2D attaches a shape to the body (Box2D), 3D references a
 // shared shape held in a store (Jolt). Both are exactly how each upstream library works.
 // ---------------------------------------------------------------------------------------
 
@@ -192,7 +192,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    // STEP — identical across the two engines.
+    // STEP - identical across the two engines.
     p2.step(&s.world2d, fixed_dt) catch assertUnreachable(@src(), "OOM", .{});
     p3.step(&s.world3d, fixed_dt) catch assertUnreachable(@src(), "OOM", .{});
 
@@ -202,7 +202,7 @@ fn update(f: *z.Frame, s: *State) void {
     defer s.ui_host.render(f);
 
     // ---- RIGHT HALF: the 3D world, in perspective. There is no GPU sub-rect viewport (only a
-    // scissor), so beginMode3D would centre world-origin on the *full* screen — i.e. on the divider.
+    // scissor), so beginMode3D would centre world-origin on the *full* screen - i.e. on the divider.
     // Instead we build the view-projection ourselves and shift clip space into the right half:
     //   x' = 0.5*x + 0.5*w   maps NDC x in [-1, 1] -> [0, 1] (the right half),
     // so world-origin lands at the centre of the right half, undistorted at the half-width aspect.
@@ -254,7 +254,7 @@ fn update(f: *z.Frame, s: *State) void {
         .height = g_br[1] - g_tl[1],
     }, ground_color);
 
-    // boxes — each a filled, rotated quad (mirrors the 3D loop: get pos, get rot, draw)
+    // boxes - each a filled, rotated quad (mirrors the 3D loop: get pos, get rot, draw)
     for (s.boxes2d, 0..) |h, i| {
         const pos: Vec2 = p2.getPosition(&s.world2d, h);
         const rot: Rot2 = p2.getRotation(&s.world2d, h);

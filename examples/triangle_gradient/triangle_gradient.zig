@@ -1,4 +1,4 @@
-//! triangle_gradient — three gradient-filled triangles whose corners pulse on
+//! triangle_gradient - three gradient-filled triangles whose corners pulse on
 //! out-of-phase sine waves. Each vertex carries its own colour and the GPU interpolates
 //! across the face, so the blend direction breathes. Exercises the new drawTriangleGradient
 //! primitive. Ported from raylib's gradient-triangle demo, themed with the shared scaffold.

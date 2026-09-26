@@ -1,5 +1,5 @@
 // Saturating arithmetic must clamp to the type range: `+|` `-|` `*|`, and the
-// saturating shift `<<|` — which was an unhandled runtime helper (marker -> 0).
+// saturating shift `<<|` - which was an unhandled runtime helper (marker -> 0).
 // Self-checks (returns 0 on success).
 export fn run_test() i32 {
     var u: u8 = 200;

@@ -1,4 +1,4 @@
-//! src/shaders/depth_common_io.zig — Interp varyings shared by
+//! src/shaders/depth_common_io.zig - Interp varyings shared by
 //! `depth_vs` and `depth_fs`.
 //!
 //! The "depth-in-red" primitive: the VS computes each vertex's depth
@@ -6,9 +6,9 @@
 //! FS just emits it (cube3d-style pass-through, so the whole shader is
 //! one group-0 uniform and no scalar varyings). Two consumers select
 //! behaviour via `Ubo.mode`:
-//!   * mode 1 — `shaders_depth_rendering`: linearized, normalized
+//!   * mode 1 - `shaders_depth_rendering`: linearized, normalized
 //!     grayscale depth visualisation (near dark, far light).
-//!   * mode 0 — the shadow-map light PASS: raw `ndc_z*0.5+0.5`, the
+//!   * mode 0 - the shadow-map light PASS: raw `ndc_z*0.5+0.5`, the
 //!     exact value `pbr_fs.computeShadow` compares as `closest_depth`
 //!     (a directional light uses an orthographic projection, so this
 //!     raw depth is already linear and the comparison is exact).

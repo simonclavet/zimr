@@ -1,5 +1,5 @@
-//! models3d — port of the GL `models3d`: every immediate-3D primitive in
-//! one slowly-orbiting scene — sphere, cube, tapered cylinder, capsule, cone —
+//! models3d - port of the GL `models3d`: every immediate-3D primitive in
+//! one slowly-orbiting scene - sphere, cube, tapered cylinder, capsule, cone -
 //! above a ground grid, each wrapped in its wireframe AABB so the
 //! `getXxxBoundingBox` helpers are visually verified. The GL version drew these
 //! through the rlgl matrix stack; the wgpu immediate API batches them (one draw
@@ -34,7 +34,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    s.angle += f.time.delta_time * 20.0; // 20°/sec orbit
+    s.angle += f.time.delta_time * 20.0; // 20 deg/sec orbit
 
     z.clearViewport(f, common.palette.bg);
 

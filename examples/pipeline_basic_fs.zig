@@ -1,4 +1,4 @@
-//! examples/pipeline_basic_fs.zig — pipeline_basic fragment shader body, in Zig.
+//! examples/pipeline_basic_fs.zig - pipeline_basic fragment shader body, in Zig.
 //!
 //! Emits the interpolated per-vertex colour. Schema: `pipeline_basic_fs_io.zig`.
 

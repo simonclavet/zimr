@@ -1,4 +1,4 @@
-//! tile_gather.zig — workgroup shared-memory NEIGHBOUR-TILING de-risk (Stage 2a).
+//! tile_gather.zig - workgroup shared-memory NEIGHBOUR-TILING de-risk (Stage 2a).
 //!
 //! Proves the mechanism the fluid's density/force passes will use: ONE WORKGROUP
 //! PER CELL cooperatively loads its 3x3 cell neighbourhood into a workgroup-
@@ -6,7 +6,7 @@
 //! particle reading neighbours from the fast tile instead of from global memory.
 //!
 //! The verifiable quantity is an INTEGER neighbour count (particles within h,
-//! excluding self) per particle — exact pass/fail, no float epsilon. Because the
+//! excluding self) per particle - exact pass/fail, no float epsilon. Because the
 //! cell size equals h, every neighbour within h lies in the 3x3 block, so the
 //! grid count equals a brute-force O(N^2) count (the host's ground truth).
 //!
@@ -15,7 +15,7 @@
 //! workgroups (no out-of-range workgroup), the load loop guards per-lane WORK
 //! (`while (s < cnt)`) not the barrier, so every lane reaches it (spv2wgsl's
 //! checkBarrierUniformity enforces this at build time). CPU path: the identical
-//! gather straight from global memory — the oracle (no tile, no barrier).
+//! gather straight from global memory - the oracle (no tile, no barrier).
 const k = @import("kompute");
 const zm = @import("zm");
 const float = zm.float;
@@ -35,7 +35,7 @@ pub const n_rows: u32 = n_cols;
 pub const grid_cells: u32 = n_cols * n_rows;
 
 // `.max` = the LARGEST dispatch across all kernels (gatherTiled runs
-// grid_cells*wg_size threads), NOT num_particles — the run() cap assert uses it
+// grid_cells*wg_size threads), NOT num_particles - the run() cap assert uses it
 // as a single bound for every kernel, so it must cover the biggest one.
 pub const config = k.Config{ .max = grid_cells * 64, .workgroup = 64 };
 pub const wg_size: u32 = config.workgroup;
@@ -49,7 +49,7 @@ pub const Buffers = extern struct {
     out_count: [num_particles]u32,
     /// Diagnostic: dbg[wgid*wg_size + lid] = wgid, written UNCONDITIONALLY by
     /// every thread (before any guard). The host checks dbg[t] == t/wg_size to
-    /// verify workgroupId() is delivered correctly — the one primitive Stage 1
+    /// verify workgroupId() is delivered correctly - the one primitive Stage 1
     /// never tested.
     dbg: [grid_cells * wg_size]u32,
 };
@@ -112,7 +112,7 @@ pub fn tileBuildGrid(c: k.Ctx(@This())) void {
 /// Count this cell's neighbour pairs via the shared tile (GPU) or straight from
 /// global memory (CPU oracle). Dispatch is PER-CELL: count = grid_cells*wg_size.
 /// Cooperatively load the 3x3 neighbourhood of `cell` into the shared tile and
-/// return tile_len. `noinline` so spv2wgsl keeps it a SEPARATE WGSL function —
+/// return tile_len. `noinline` so spv2wgsl keeps it a SEPARATE WGSL function -
 /// its `if (in_bounds)` branches then stay inside this function and do NOT
 /// enclose the barrier that `gatherTiled` issues after the call (a barrier must
 /// not sit inside cell-dependent control flow, which Tint treats as non-uniform
@@ -152,7 +152,7 @@ pub fn gatherTiled(c: k.Ctx(@This())) void {
         const cell: u32 = gid / wg_size;
         const lid: u32 = gid % wg_size;
         b_dbg[gid] = gid + 1;
-        // Load (in a separate fn) → barrier at TOP LEVEL → process.
+        // Load (in a separate fn) -> barrier at TOP LEVEL -> process.
         const tile_len: u32 = loadNeighbourTile(cell, lid, c.params.cols, c.params.rows);
         k.workgroupBarrier();
         const center_raw: u32 = k.atomicLoad(b_grid_counts, cell);

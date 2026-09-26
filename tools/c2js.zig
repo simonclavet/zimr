@@ -2,7 +2,7 @@
 //! JavaScript out. It never reaches a shader, so the GPU-portability reason for the
 //! std.math ban does not apply, and it should stay extractable from zimr without
 //! dragging zimrmath along for a single NaN constant.
-//! c_to_js.zig — a single-file C -> JavaScript transpiler, written in Zig.
+//! c_to_js.zig - a single-file C -> JavaScript transpiler, written in Zig.
 //!
 //! ===========================================================================
 //! BIG PICTURE
@@ -25,7 +25,7 @@
 //!
 //! The generated JavaScript is intentionally unreadable: temporaries keep their
 //! C names (t0, t1, ...), control flow is a state machine, and memory is a typed
-//! array. Readability of the output is a non-goal — it is meant to be run, and
+//! array. Readability of the output is a non-goal - it is meant to be run, and
 //! debugged via a JS->C source map (emitted on request; see "SOURCE MAPS").
 //!
 //! I/O contract:
@@ -112,7 +112,7 @@
 //!        mechanism expresses arbitrary gotos, loops, and switches uniformly.
 //!
 //! ===========================================================================
-//! INPUT DIALECT — the exact C shapes this tool recognizes
+//! INPUT DIALECT - the exact C shapes this tool recognizes
 //! ===========================================================================
 //! Everything below is what Zig's C backend actually emits; the parser keys off
 //! these shapes. If a shape changes upstream, the corresponding handler must.
@@ -127,7 +127,7 @@
 //!         mask/ext -> zig_wrap_u32(x, bits) / zig_wrap_i32(x, bits)
 //!     Plain `/` and `%` are emitted directly (and mapped directly).
 //!   * Float arithmetic also via helpers: zig_add_f32/f64, zig_sub_*, zig_mul_*,
-//!     zig_div_* — mapped to JS +,-,*,/ . f64 ops are plain; f32 ops (plus the
+//!     zig_div_* - mapped to JS +,-,*,/ . f64 ops are plain; f32 ops (plus the
 //!     f32 math intrinsics and f64->f32 narrowing) are wrapped in Math.fround so
 //!     single-precision results are bit-exact with native.
 //!   * Float literals: `zig_make_f64(<hexfloat>, <u64 bits>)` /
@@ -152,12 +152,12 @@
 //!     global keeps its initial value; `bool` is a one-byte (byte-addressed) type.
 //!   * extern functions with no library name (`extern fn js_get(...)`) become
 //!     bare `js_get(...)` call sites; a non-`zig_*` callee is emitted verbatim,
-//!     so it only needs to EXIST at runtime — which the kernel and the program's
+//!     so it only needs to EXIST at runtime - which the kernel and the program's
 //!     own definitions provide. (Unrecognized `zig_*` helpers are handled or
 //!     marked by `tryBuiltinCall`, never emitted as a bare undefined call.)
 //!
 //! ===========================================================================
-//! THE MEMORY MODEL — one flat heap, typed-array views
+//! THE MEMORY MODEL - one flat heap, typed-array views
 //! ===========================================================================
 //! Anything with an address lives in a single 16 MB ArrayBuffer `__MEM`, viewed
 //! through `__HEAP8/U8/16/U16/32/U32/F32/F64`. There is no malloc: all storage
@@ -191,7 +191,7 @@
 //!     pointer cast records the wrapper tag so `->array[i]` (and `&...->array[i]`,
 //!     which must yield an ADDRESS, not a load) resolve against it.
 //!   * SCALAR @bitCast: `@bitCast` between same-size scalars (i32<->u32,
-//!     f32<->u32, ...) is lowered by the backend to `memcpy(&dst, &src, N)` — a
+//!     f32<->u32, ...) is lowered by the backend to `memcpy(&dst, &src, N)` - a
 //!     byte reinterpretation through the addresses of two LOCALS. Local scalars
 //!     are JS variables, not heap-backed, so a literal heap memcpy is meaningless;
 //!     `tryBuiltinCall` intercepts this exact shape and stages the bits through a
@@ -221,7 +221,7 @@
 //!     handle-typed; internal compute may use structs freely.
 //!
 //! ===========================================================================
-//! INTEGER SEMANTICS — masking on store ("wrap")
+//! INTEGER SEMANTICS - masking on store ("wrap")
 //! ===========================================================================
 //! C assignment truncates to the destination width; JS numbers don't. `wrap`
 //! coerces an expression to a type's store semantics:
@@ -238,7 +238,7 @@
 //! become BigInt literals. A lightweight per-expression width tracker (last_w) lets
 //! a cast convert at a BigInt<->Number boundary (widen `BigInt(x)`, narrow
 //! `Number(asIntN/asUintN(...))`). Crucially, wasm32 pointers/sizes/indices are
-//! 32-bit (size_t/uintptr_t), so they stay fast Numbers — BigInt appears ONLY for
+//! 32-bit (size_t/uintptr_t), so they stay fast Numbers - BigInt appears ONLY for
 //! values that are genuinely 64/128-bit, and the hot path is unchanged.
 //! Float/bool/ptr/other are unwrapped.
 //!
@@ -251,7 +251,7 @@
 //! (`parseAssign`) handle simple `name op= rhs`, pointer stores `(*P) = rhs`,
 //! cast-pointer stores, and the struct field/copy stores described above; `=`
 //! applies `wrap` to the rhs for the lvalue's type. `parseUnary` handles casts
-//! (stripped to identity — pointers/offsets are just integers), address-of (the
+//! (stripped to identity - pointers/offsets are just integers), address-of (the
 //! many `&...` shapes that resolve to heap offsets), and the C-backend's
 //! `*(&x)` round-trips (collapsed to identity). `tryBuiltinCall` intercepts the
 //! whole `zig_*` helper family: arithmetic, shifts, wraps, conversions, float
@@ -261,7 +261,7 @@
 //! than a bare (undefined) call. Any non-`zig_*` callee is emitted verbatim.
 //!
 //! ===========================================================================
-//! THE JS INTEROP KERNEL — the only hand-written JavaScript
+//! THE JS INTEROP KERNEL - the only hand-written JavaScript
 //! ===========================================================================
 //! A small block of JS is baked into the output preamble. It is the sole irreducible
 //! piece of hand-written JS; everything else is generated. It provides the bridge
@@ -270,7 +270,7 @@
 //!     nodes, functions, strings, promises) are kept in an array; a "handle" is
 //!     an index. `__href(o)` interns and returns an index; index 1 is globalThis.
 //!     A free-list reclaims freed indices (`js_free`), and `js_mark`/`js_reset`
-//!     bracket a scope so all handles interned within it are released at once —
+//!     bracket a scope so all handles interned within it are released at once -
 //!     wz.Site uses this per frame, so the table stays bounded in a render loop.
 //!   * PRIMITIVES: js_global, js_get/get_num/get_index/set/set_num/set_index,
 //!     js_call0..6 plus js_call0v..5v (void variants that return no result handle)
@@ -288,7 +288,7 @@
 //!     arrayBuffer) is orchestrated in Zig across frames as register/poll/take.
 //!   * GENERALITY LAYER (so a Zig program can do anything JS can):
 //!         js_array/js_push/js_len           build/inspect arrays
-//!         js_apply/js_call_n/js_construct    calls/new for more than six arguments —
+//!         js_apply/js_call_n/js_construct    calls/new for more than six arguments -
 //!                                            args are a heap u32-array of handles
 //!         js_typeof/js_instanceof/js_truthy/js_strict_eq   reflection/control
 //!         js_try_call                        call that may throw; writes a
@@ -298,8 +298,8 @@
 //!   * `__copy` (heap byte copy, for struct-by-value) also lives in the preamble.
 //!   To use any of these from Zig you declare them `extern fn`. Most call sites emit
 //!   verbatim as calls to these definitions. The exception is a property or method
-//!   access whose name is a comptime literal — js_get/get_num, js_set/set_num, and
-//!   the js_call* family — which is emitted as a direct `__H[recv].name(...)` access;
+//!   access whose name is a comptime literal - js_get/get_num, js_set/set_num, and
+//!   the js_call* family - which is emitted as a direct `__H[recv].name(...)` access;
 //!   the kernel form is the general fallback when the name is not a literal.
 //!
 //! ===========================================================================
@@ -320,7 +320,7 @@
 //!   are the SSA temps t0..tN).
 //!
 //! ===========================================================================
-//! TESTING & SOUNDNESS — how output is checked against real Zig
+//! TESTING & SOUNDNESS - how output is checked against real Zig
 //! ===========================================================================
 //! The failure mode that matters most for a transpiler is SILENT wrong output:
 //! JS that runs without error but computes the wrong thing. Three layers guard
@@ -332,8 +332,8 @@
 //!     markers. Plus a DOM scenario over demo/webdemo2.zig.
 //!   * NATIVE-ORACLE DIFFERENTIAL (`tests/differential.sh` + `oracle_main.zig`):
 //!     for a program exporting `run_test() i32`, the result is computed two ways
-//!     — compiled to a NATIVE binary and run (ground truth: real Zig on real
-//!     hardware), and Zig -> C -> JS run in node — and the two are diffed. The
+//!     - compiled to a NATIVE binary and run (ground truth: real Zig on real
+//!     hardware), and Zig -> C -> JS run in node - and the two are diffed. The
 //!     expected value is never hand-written; the compiler is the oracle. This is
 //!     the layer that catches author blind spots, because the cases a human
 //!     writes are the population least likely to contain the human's blind spots.
@@ -350,7 +350,7 @@
 //! faithfully, it emits a marker comment (`/*TODO ...*/` or `/*?...*/`) inline
 //! rather than guessing. Markers make an unsupported/uncertain lowering VISIBLE:
 //! the harness fails on any nonzero count, and the differential prints it. The
-//! design rule throughout is loud-over-silent — a marker (or a hard mismatch) is
+//! design rule throughout is loud-over-silent - a marker (or a hard mismatch) is
 //! always preferable to JS that quietly returns the wrong number.
 //!
 //! ===========================================================================
@@ -365,18 +365,18 @@
 //!     are dropped (the kernel + the program's own code supply all runtime).
 //!
 //! Numeric:
-//!   * 64-bit integers (u64/i64) ARE BigInts — exact past 2^53. Wrapping ARITHMETIC
+//!   * 64-bit integers (u64/i64) ARE BigInts - exact past 2^53. Wrapping ARITHMETIC
 //!     goes through zig_*_u64 helpers lowered by bigIntWide; BITWISE & | ^ ~ and
 //!     COMPARISON are native BigInt ops; literals arrive as UINT64_C/INT64_C (and
 //!     the 64-bit limit macros) -> BigInt literals; casts convert at a BigInt<->
 //!     Number boundary using the last_w width tracker. wasm32 pointers/sizes/indices
 //!     are 32-bit (size_t/uintptr_t) and stay fast Numbers, so the hot path keeps
-//!     the numbers-only shape — BigInt appears only for genuinely 64-bit values.
+//!     the numbers-only shape - BigInt appears only for genuinely 64-bit values.
 //!     DEFERRED: a 64-bit @bitCast lowered as `memcpy(&a,&b,8)` between scalar
 //!     locals still round-trips through a 32-bit scratch slot (keeps only the low
-//!     32 bits — a pre-existing limitation, now LOUD via a BigInt-store throw rather
+//!     32 bits - a pre-existing limitation, now LOUD via a BigInt-store throw rather
 //!     than silent); and the bridge<->wasm i64 ABI (no example uses it).
-//!   * 128-bit integers (u128/i128) ARE lowered to BigInt — the C backend routes
+//!   * 128-bit integers (u128/i128) ARE lowered to BigInt - the C backend routes
 //!     every 128-bit op through opaque zig_*_{u,i}128 helpers, so the value only
 //!     flows between those calls (now shared with the 64-bit BigInt path; see
 //!     bigIntWide). Construction, +,-,*, the wrapping shifts, and & | ^ ~ are exact;
@@ -414,18 +414,18 @@
 //!     whole on field assignment. 64-bit (i64/u64) struct fields, array elements,
 //!     and through-pointer accesses round-trip within 2^53 (8-byte element stride
 //!     + __ld/st64). Taking the address of a local SCALAR (`&w` for a plain
-//!     `var w` — the out-parameter idiom `f(&w)`) is also handled: the local is
+//!     `var w` - the out-parameter idiom `f(&w)`) is also handled: the local is
 //!     heap-backed like an aggregate, so `&w` is a real address and reads load /
 //!     writes store through its slot (so 64-bit out-params work too). The one
 //!     deliberate exception is `&x` inside the bitcast/copy idioms
-//!     (`memcpy(&a,&b,n)` etc.), which the transpiler lowers specially — those
+//!     (`memcpy(&a,&b,n)` etc.), which the transpiler lowers specially - those
 //!     temps stay SSA values and get no slot. An address-taken scalar follows the
 //!     same static-slot / shadow-stack-frame split as aggregates above.
 //!     Storing through the ADDRESS of a struct field whose type is a function
 //!     pointer (`o.f = &g`, which the C backend lowers as `t = &o.f; *t = &g`) is
 //!     handled via the function-dispatch table: `&g` lowers to a 1-based __FTABLE
 //!     index, the field stores that index, and an indirect call dispatches
-//!     `__FTABLE[idx](args)` — see cases/fnptr_field_reassign. Reading a struct's
+//!     `__FTABLE[idx](args)` - see cases/fnptr_field_reassign. Reading a struct's
 //!     array field by a RUNTIME index (`g.vals[i]`), calling a fn-ptr field on a
 //!     const struct, and the by-value struct returns exercised in cases/ all work.
 //!
@@ -455,7 +455,7 @@
 //! non-recursive by-value calls ARE exercised by the fuzzer against the native
 //! oracle. Recursion with address-taken locals is now handled by the shadow stack
 //! (see above); 64-bit BITWISE via bare operators (& | ^ ~) remains a known numeric
-//! item above — left for the reasons given, not a mere gap. f32 rounding, 64-bit
+//! item above - left for the reasons given, not a mere gap. f32 rounding, 64-bit
 //! arithmetic, and <=32-bit packed structs are also handled (a packed struct wider
 //! than 32 bits is flagged with a loud marker: a field above bit 32 would need a
 //! true 64-bit heap load/store).
@@ -467,18 +467,18 @@
 //!
 //!  1. The `/*?...*/` MARKER GATE, at the bottom of main(). Catches C that c2js
 //!     KNOWS it cannot model. Every such construct lowers to a constant, so a
-//!     miss is a silently wrong VALUE, not a crash — any marker is fatal.
+//!     miss is a silently wrong VALUE, not a crash - any marker is fatal.
 //!     This gate exists because 0.17.0-dev.1676 renamed zig.h's integer casts to
 //!     `zig_<dst>_<op>_<src>`; c2js knew only the older `zig_wrap_uN` spelling,
 //!     and 99 call sites per bundle became the literal `0`. It shipped green
 //!     through build, lint, fmt and verify_imports, and the only symptom was one
-//!     device-only `GPUTextureFormat: undefined` — the other 98 corrupted data
+//!     device-only `GPUTextureFormat: undefined` - the other 98 corrupted data
 //!     quietly. The marker had been emitted for YEARS with a comment saying its
 //!     purpose was to "make the gap loud, not silent". Nothing ever read it.
 //!     A marker nothing reads is not a gate.
 //!
 //!  2. `zig build c2js-canary` (webtests/c2js_canary.zig). Catches C that c2js
-//!     models WRONGLY — the half a marker can never flag. A battery of integer
+//!     models WRONGLY - the half a marker can never flag. A battery of integer
 //!     casts, wrapping arithmetic and 64/128-bit ops is transpiled normally and
 //!     compared against the SAME computation folded by Zig's comptime evaluator,
 //!     which never passes through c2js. The seed is a runtime PARAMETER so the
@@ -515,7 +515,7 @@ const allocPrint = std.fmt.allocPrint;
 const parseInt = std.fmt.parseInt;
 const File = std.Io.File;
 const Dir = std.Io.Dir;
-/// NaN is the only value unequal to itself — no std.math needed, and the
+/// NaN is the only value unequal to itself - no std.math needed, and the
 /// transpiler stays dependency-free on the engine's math vocabulary.
 fn isNan(x: anytype) bool {
     return x != x;
@@ -631,7 +631,7 @@ fn decodeCString(gpa: Allocator, s: []const u8) ![]u8 {
 /// cannot be instantiated inside a Web Worker (which has no DOM and no WebGPU), so we
 /// fail the build instead of shipping a page whose workers die on startup.
 ///
-/// A minimal section walk — we only need section 2 (imports) and only its first entry.
+/// A minimal section walk - we only need section 2 (imports) and only its first entry.
 fn firstWasmImport(gpa: Allocator, bytes: []const u8) !?[]const u8 {
     if (bytes.len < 8 or !std.mem.eql(u8, bytes[0..4], "\x00asm")) {
         return null; // not a wasm we understand; leave it alone
@@ -663,7 +663,7 @@ fn firstWasmImport(gpa: Allocator, bytes: []const u8) !?[]const u8 {
 }
 
 /// Does this wasm export `want`? Used to catch a kernel wasm that compiled fine but
-/// contains no kernels — a root that forgot `exportWorkerEntry()`. Such a wasm imports
+/// contains no kernels - a root that forgot `exportWorkerEntry()`. Such a wasm imports
 /// nothing (there is nothing in it TO import), so the purity check alone would wave it
 /// through and the failure would surface as a runtime NoSuchKernel inside a worker.
 fn wasmExports(bytes: []const u8, want: []const u8) bool {
@@ -757,8 +757,8 @@ fn base64Encode(gpa: Allocator, bytes: []const u8) ![]u8 {
 //   * strips leading indentation, blank lines, and collapses space runs.
 // It is string-aware (the base64 data blob and any other string literal is
 // copied verbatim) and conservative with newlines (kept, so no ASI surprises).
-// Exported entry points (`start`, `onAdd`, …) and kernel names (`js_get`,
-// `__HEAPU32`, `__copy`, …) are NOT generated names, so they are preserved.
+// Exported entry points (`start`, `onAdd`, ...) and kernel names (`js_get`,
+// `__HEAPU32`, `__copy`, ...) are NOT generated names, so they are preserved.
 // ----------------------------------------------------------------------------
 fn minIdStart(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c == '$';
@@ -970,7 +970,7 @@ fn isDigit(c: u8) bool {
 // The hand-written tokenizer. Walks the preprocessed C byte-by-byte and hands
 // out one Token at a time; `main` drives it in a loop to build the flat token
 // slice the parser then walks. No buffering, no lookahead beyond the current
-// char — the parser does its own peeking over the finished slice.
+// char - the parser does its own peeking over the finished slice.
 const Lexer = struct {
     src: []const u8,
     i: usize = 0,
@@ -1002,7 +1002,7 @@ const Lexer = struct {
         }
     }
 
-    // Produce the next token — this is essentially the entire lexer. In order it
+    // Produce the next token - this is essentially the entire lexer. In order it
     // tries: identifier/keyword, string-or-char literal (quotes stripped, escapes
     // left raw for decodeCString later), number (digits/hex/suffixes and a signed
     // exponent kept attached), then a longest-match punctuator. An unknown byte is
@@ -1212,8 +1212,8 @@ fn elemFromName(name: []const u8) ?Elem {
     if (eql(u8, name, "f64")) {
         return .{ .bits = 64, .signed = false, .float = true };
     }
-    // Arbitrary-width integers: u40, i48, u33, i7, … (the C backend stores a 33-63
-    // bit element in 64-bit cells, an 8-31 bit one in its next-power-of-2 cell —
+    // Arbitrary-width integers: u40, i48, u33, i7, ... (the C backend stores a 33-63
+    // bit element in 64-bit cells, an 8-31 bit one in its next-power-of-2 cell -
     // the heap view picks the cell from .bits). Without this, an odd-width element
     // type returned null, so e.g. arr_6_u40 was misread as an array-of-struct and
     // its element store silently lowered to a load (dropping the write).
@@ -1229,7 +1229,7 @@ fn elemFromName(name: []const u8) ?Elem {
 
 /// True if `e` is a single fully-parenthesized expression whose outermost
 /// operation produces exactly `suffix` (e.g. " | 0", " >>> 0", " & 255"). Lets
-/// `wrap` be idempotent — re-wrapping an already-canonical value is skipped,
+/// `wrap` be idempotent - re-wrapping an already-canonical value is skipped,
 /// which removes the pervasive double coercions (`((x | 0) | 0)` -> `(x | 0)`).
 fn outerWrapIs(e: []const u8, suffix: []const u8) bool {
     if (e.len < suffix.len + 2) {
@@ -1244,7 +1244,7 @@ fn outerWrapIs(e: []const u8, suffix: []const u8) bool {
             depth += 1;
         } else if (c == ')') {
             depth -= 1;
-            // the leading '(' must close only at the very end — i.e. the parens
+            // the leading '(' must close only at the very end - i.e. the parens
             // span the whole expression, so `suffix` really is the outermost op.
             if (depth == 0 and idx != e.len - 1) {
                 return false;
@@ -1316,11 +1316,11 @@ fn outerCallIs(e: []const u8, fn_name: []const u8) bool {
 /// `arr_<count>_<elem>_<id>` (e.g. `arr_4096_u8_2372`, `arr_8_u32_2568`).
 /// Returns the element count and element type, or null if `tag` isn't one.
 /// True if `tag` is one of the C backend's synthetic fixed-array wrapper structs
-/// — `arr_<count>_<elem>...` (and the sentinel form `arr_<count>s<sentinel>_<elem>`),
+/// - `arr_<count>_<elem>...` (and the sentinel form `arr_<count>s<sentinel>_<elem>`),
 /// i.e. `arr_` immediately followed by a DIGIT (the element count). A USER struct
 /// or module whose mangled name merely begins with `arr_<letter>` (e.g.
 /// `arr_of_arr_struct_P`) is NOT a wrapper and must not be diverted by the
-/// wrapper-detection sites — doing so drops it from struct-pointer/value tracking
+/// wrapper-detection sites - doing so drops it from struct-pointer/value tracking
 /// and silently lowers `p->field` to a bogus JS property access.
 fn looksLikeArrayWrapper(tag: []const u8) bool {
     return startsWith(u8, tag, "arr_") and tag.len > "arr_".len and isDigit(tag["arr_".len]);
@@ -1376,7 +1376,7 @@ fn isStructElemArrayTag(tag: []const u8) bool {
     // A sentinel array encodes its count as `<N>s<sentinelTypeId>` (e.g.
     // `arr_3s181_<enumTag>`); take the digits before `s`. A sentinel array whose
     // element is a NON-primitive (an enum-tag/struct typedef) is still an
-    // array-of-aggregates and must be treated as a struct value — not diverted to
+    // array-of-aggregates and must be treated as a struct value - not diverted to
     // the scalar/string path (which read its first bytes as one number). A sentinel
     // u8/u32 array keeps a primitive element here, so it still returns false.
     var count_s: []const u8 = count_s_raw;
@@ -1437,15 +1437,15 @@ fn structPtrTagOf(self: *Transpiler, specs: []const Token) ?[]const u8 {
         }
         if (t.kind == .ident and tag == null) {
             // A struct typedef alias (e.g. the C backend's `aligned__N_X`) implies a
-            // struct even without the `struct` keyword — resolve it to the real tag.
+            // struct even without the `struct` keyword - resolve it to the real tag.
             if (self.struct_aliases.get(t.text)) |real| {
                 tag = real;
                 continue;
             }
             if (saw_struct) {
-                // Track pointers to clean primitive-array wrappers (`arr_4_i32 *` —
+                // Track pointers to clean primitive-array wrappers (`arr_4_i32 *` -
                 // the inner row of a `[N][M]`), to STRUCT-element array wrappers
-                // (`arr_2_aos_P *` — the inner row of a `[N][M]struct`, detected via
+                // (`arr_2_aos_P *` - the inner row of a `[N][M]struct`, detected via
                 // isStructElemArrayTag), and to non-array structs (named structs,
                 // `vec_*`). Leave sentinel string wrappers (`arr_26s115_u8`,
                 // parseArrTag-fail AND not a struct-elem array) to their string path.
@@ -1531,7 +1531,7 @@ fn structTypeNameOf(specs: []const Token) ?[]const u8 {
     return null;
 }
 
-// elem* — the bridge from a C element/field type (Elem) to how it's physically
+// elem* - the bridge from a C element/field type (Elem) to how it's physically
 // touched in the emitted JS. elemShift = log2 of the byte stride, elemSize =
 // that stride in bytes, elemView = the typed-array view to index through
 // (__HEAPU8 / __HEAP16 / __HEAPF64 / ...), and fieldElem just lifts a struct
@@ -1545,13 +1545,13 @@ fn elemShift(e: Elem) u3 {
         // shift 2 because the scalar @bitCast/scratch idiom views them through the
         // 32-bit (low-word) array; their array/pointer STRIDE is 8 (see elemSize)
         // and real loads/stores go through __ld/st64, so values round-trip within
-        // 2^53. (Only >2^53 magnitudes remain lossy — a JS Number limit.)
+        // 2^53. (Only >2^53 magnitudes remain lossy - a JS Number limit.)
         64 => if (e.float) 3 else 2,
         else => 2, // 32-bit ints and f32
     };
 }
 fn elemSize(e: Elem) usize {
-    // 64-bit ints/floats occupy 8 bytes — the array/pointer STRIDE — even though
+    // 64-bit ints/floats occupy 8 bytes - the array/pointer STRIDE - even though
     // 64-bit ints are viewed through the 32-bit (low-word) typed array. Keeping
     // stride and view-shift separate is what makes `&arr[i]` for i64/u64 land on
     // the right 8-byte element (the load/store itself reads two words via __ld64).
@@ -1592,7 +1592,7 @@ fn elemView(e: Elem) []const u8 {
         16 => if (e.signed) "__HEAP16" else "__HEAPU16",
         // 64-bit int loads/stores go through heapLoad/heapStore -> __ldi64/__ldu64/
         // __st64 (two 32-bit words), so this branch is reached only by the scalar
-        // @bitCast/scratch idiom, which reads the low word — hence the 32-bit U32 view.
+        // @bitCast/scratch idiom, which reads the low word - hence the 32-bit U32 view.
         64 => if (e.signed) "__HEAP32" else "__HEAPU32",
         else => if (e.signed) "__HEAP32" else "__HEAPU32",
     };
@@ -1685,7 +1685,7 @@ fn baseType(name: []const u8) ?CType {
     return null;
 }
 
-// Is this identifier a C type keyword/qualifier — something a declaration could
+// Is this identifier a C type keyword/qualifier - something a declaration could
 // start with? Covers the standard set plus the backend's `zig_*` specifiers,
 // but NOT `zig_e_*` (how the backend escapes a real name that collides with a C
 // keyword). Feeds looksLikeDecl and cast detection.
@@ -1704,11 +1704,11 @@ fn isTypeQualifierOrSpecifier(name: []const u8) bool {
     // (zig_f32, ...) are specifiers; but `zig_e_<name>` is how the backend
     // escapes an identifier that collides with a C keyword (a field/var named
     // `int`, `float`, ...), so those are real names, not specifiers. The noreturn
-    // trap primitives (zig_unreachable/zig_trap) are FUNCTIONS, not types — exclude
-    // them so a bare `zig_unreachable();` statement is parsed as a call (→ __panic)
+    // trap primitives (zig_unreachable/zig_trap) are FUNCTIONS, not types - exclude
+    // them so a bare `zig_unreachable();` statement is parsed as a call (-> __panic)
     // instead of being mistaken for a declaration and dropped. The atomic helpers
     // (zig_atomic_store/_load, zig_atomicrmw_*, zig_cmpxchg_*, zig_fence) are FUNCTIONS
-    // too and must be excluded for the same reason — but `zig_atomic` (no trailing
+    // too and must be excluded for the same reason - but `zig_atomic` (no trailing
     // `_`) is the type macro used in casts `(zig_atomic(T) *)`, so it stays a specifier.
     if (startsWith(u8, name, "zig_") and !startsWith(u8, name, "zig_e_") and
         !eql(u8, name, "zig_unreachable") and !eql(u8, name, "zig_trap") and
@@ -1821,8 +1821,8 @@ fn tyFromSpecifiers(toks: []const Token) CType {
 
 // Recursive statement AST: `Stmt` (below) is a union over these kinds, and each
 // kind embeds `[]const Stmt` for its nested body. The reference cycle between
-// `Stmt` and its kinds is irreducible — neither side can be fully declared before
-// the other — so the forward reference to `Stmt` here is opted in deliberately.
+// `Stmt` and its kinds is irreducible - neither side can be fully declared before
+// the other - so the forward reference to `Stmt` here is opted in deliberately.
 // lint:off decl-order: Stmt<->statement-kind structs form a recursive AST cycle
 const IfStmt = struct { cond: []const u8, then: []const Stmt, els: ?[]const Stmt };
 const WhileStmt = struct { cond: []const u8, body: []const Stmt };
@@ -1864,7 +1864,7 @@ const VarInfo = struct { ty: CType };
 
 // The parser AND code generator in one object. One Transpiler is built per
 // program (init); `run` drives the whole show. It walks the token slice `toks`
-// with a cursor `p` and appends finished JavaScript to `out` as it goes — there
+// with a cursor `p` and appends finished JavaScript to `out` as it goes - there
 // is no whole-program AST, so parsing an expression and emitting its JS are the
 // same step. The pile of StringHashMaps below are the symbol tables: the
 // prescans fill some (globals/structs/typedefs/enums/recursion), the rest
@@ -1894,7 +1894,7 @@ const Transpiler = struct {
     // Pointer-to-pointer struct pointers (`struct X **`). A SINGLE-star struct
     // pointer holds a struct's heap offset, so `*p` is identity (the offset
     // itself). A DOUBLE-star one is the address of a slot that holds a struct
-    // pointer, so `*pp` must LOAD the stored pointer (a 4-byte offset) — EXCEPT
+    // pointer, so `*pp` must LOAD the stored pointer (a 4-byte offset) - EXCEPT
     // the Zig C-backend's address-of-local round-trip (`pp = &localStructPtr;
     // *pp`), where `&` collapsed a bare (non-heap-backed) local and `*` must
     // hand it straight back. `pp_load` records the temps whose `*` LOADS;
@@ -1916,7 +1916,7 @@ const Transpiler = struct {
     bitpack_sizes: StringHashMap(u32), // packed-struct typedef name (`bitpack__...`) -> byte size
     recursive_fns: StringHashMap(void), // function names in a call-graph cycle (direct or mutual)
     // SHADOW STACK (recursive functions only). Address-taken locals normally get a
-    // fixed static scratch slot (fast, reused — but NOT reentrant). In a recursive
+    // fixed static scratch slot (fast, reused - but NOT reentrant). In a recursive
     // function that would clobber a live frame across calls, so there each such local
     // instead gets a frame-relative offset here and the function bumps __SP on entry /
     // restores it on exit (the standard wasm/LLVM shadow stack). Non-recursive
@@ -1925,7 +1925,7 @@ const Transpiler = struct {
     frame_size: u32 = 0, // per-fn: total bytes the current recursive function's frame needs
     fn_index: StringHashMap(u32), // every defined function name -> 1-based __FTABLE index (0 = null fn-ptr)
     fn_table: ArrayList([]const u8), // function names in index order (for emitting __FTABLE)
-    // per-fn: locals declared `RET (*name)(...)` — calling one dispatches via __FTABLE
+    // per-fn: locals declared `RET (*name)(...)` - calling one dispatches via __FTABLE
     fn_ptr_vars: StringHashMap(void),
     uses_fn_ptr: bool, // some `&<function>` appears as a value -> emit the dispatch table
     // SAFE_HEAP debug mode: route every heap access through __idx()
@@ -1951,7 +1951,7 @@ const Transpiler = struct {
     // has been laid out (forward references), so the `&global` write is recorded
     // here and patched into the data image at the end of prescanScalarGlobals.
     // (A const global's pointer derefs are value-propagated by the C backend, so
-    // they never read the data image; a `var` one does — hence this is needed.)
+    // they never read the data image; a `var` one does - hence this is needed.)
     pending_relocs: ArrayList(Reloc) = .empty,
     heap_top: u32 = 1024, // next free heap offset; set past `data` after prescan,
     // then bumped for local/global scratch WITHOUT growing the emitted image.
@@ -2012,8 +2012,8 @@ const Transpiler = struct {
     // --- token helpers ---
     // The recursive-descent primitives, used everywhere below: peek/peekAt look
     // without consuming, is/eat test (and eat consumes) the current token's text,
-    // and expect consumes the expected text or — to keep limping forward on input
-    // we didn't model — just skips one token.
+    // and expect consumes the expected text or - to keep limping forward on input
+    // we didn't model - just skips one token.
     // --- parser cursor primitives (operate on `toks` at position `p`) ---
     // current()      : the token under the cursor (eof past the end)
     // lookahead(n)   : the token n positions ahead, without moving
@@ -2046,7 +2046,7 @@ const Transpiler = struct {
 
     // --- emit helpers ---
     // emit appends raw text and, on the first character of each new output line,
-    // logs a (generated-line -> current-C-line) pair — that running log IS the
+    // logs a (generated-line -> current-C-line) pair - that running log IS the
     // source map (see buildSourceMap). print is the printf-style cousin but writes
     // straight to `out` WITHOUT touching the line counters, so only use it for
     // fragments within a line.
@@ -2113,7 +2113,7 @@ const Transpiler = struct {
         // prescanData) size their fields via tyFromSpecifiers, which resolves typedef
         // element types (e.g. a packed-struct `bitpack__...` -> u64, or an enum tag
         // `enum__...` -> u8) through type_aliases/bitpack_sizes. If those run after the
-        // layouts, a typedef'd element silently defaults to a 32-bit int — so an array
+        // layouts, a typedef'd element silently defaults to a 32-bit int - so an array
         // of an 8-byte packed struct strided by 4 and the elements overlapped.
         try self.prescanEnums();
         try self.prescanTypedefs();
@@ -2143,7 +2143,7 @@ const Transpiler = struct {
             \\// length-tracking, so they keep working after a resize. grow returns the
             \\// OLD page count (or -1 if it can't extend), matching wasm semantics.
             \\function __wmsize() { return (__MEM.byteLength / 65536) | 0; }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __wmgrow(delta) { const old = (__MEM.byteLength / 65536) | 0; delta = delta | 0; if (delta < 0) return -1; try { __MEM.resize((old + delta) * 65536); } catch (e) { return -1; } return old; }
             \\// Shadow stack for address-taken locals of recursive functions. Grows DOWN
             \\// from the top of the INITIAL 16 MB (grown pages extend above it, as in the
@@ -2162,23 +2162,23 @@ const Transpiler = struct {
             // keep the same shape and cost.
             try self.emit(
                 \\// --- SAFE_HEAP (debug): bounds / alignment / null checks on every access ---
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __fault(a, sz, why) { throw new RangeError("wz SAFE_HEAP: " + why + " " + sz + "-byte access at address " + a); }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __idx(a, sz) { if ((a | 0) !== a) __fault(a, sz, "non-integer"); if (a <= 0) __fault(a, sz, "null/negative"); if (a + sz > __MEM.byteLength) __fault(a, sz, "out-of-bounds"); if (a & (sz - 1)) __fault(a, sz, "misaligned"); return a; }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __idx64(a) { if ((a | 0) !== a) __fault(a, 8, "non-integer"); if (a <= 0) __fault(a, 8, "null/negative"); if (a + 8 > __MEM.byteLength) __fault(a, 8, "out-of-bounds"); return a; }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __ckrange(a, n, what) { if ((a | 0) !== a || a < 0 || a + n > __MEM.byteLength) __fault(a, n, what); }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __copy(dst, src, n) { __ckrange(dst, n, "copy-dst"); __ckrange(src, n, "copy-src"); __HEAPU8.copyWithin(dst, src, src + n); return dst; }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function memcpy(d, s, n) { __ckrange(d, n, "memcpy-dst"); __ckrange(s, n, "memcpy-src"); __HEAPU8.copyWithin(d, s, s + n); return d; }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function memmove(d, s, n) { __ckrange(d, n, "memmove-dst"); __ckrange(s, n, "memmove-src"); __HEAPU8.copyWithin(d, s, s + n); return d; }
                 \\function memset(d, v, n) { __ckrange(d, n, "memset"); __HEAPU8.fill(v & 255, d, d + n); return d; }
                 \\// program-supplied pointers reaching kernel helpers (arg arrays, out-params)
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __ckargs(argp, n) { if (n === 0) return; if ((argp & 3) !== 0) __fault(argp, 4, "call-args misaligned"); __ckrange(argp, n * 4, "call-args"); }
                 \\function __cku32(p) { __idx(p, 4); }
                 \\
@@ -2202,54 +2202,54 @@ const Transpiler = struct {
             \\// silently falling through (which would wrap and return a wrong value).
             \\function __panic(m) { throw new Error("panic: " + (m || "reached unreachable code")); }
             \\// bit builtins (width-aware): @clz/@ctz/@popCount/@byteSwap/@bitReverse.
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __clz(x, n) { if (n <= 32) return Math.clz32(x >>> 0) - (32 - n); var h = Number((x >> 32n) & 0xFFFFFFFFn), l = Number(x & 0xFFFFFFFFn); var c = h !== 0 ? Math.clz32(h) : 32 + Math.clz32(l); return c - (64 - n); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __ctz(x, n) { if (n <= 32) { if (x === 0) return n; var l = x >>> 0; return 31 - Math.clz32(l & -l); } if (x === 0n) return n; var lo = Number(x & 0xFFFFFFFFn); if (lo !== 0) return 31 - Math.clz32(lo & -lo); var hi = Number((x >> 32n) & 0xFFFFFFFFn); return 32 + (31 - Math.clz32(hi & -hi)); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __popcnt32(x) { x = x >>> 0; x = x - ((x >>> 1) & 0x55555555); x = (x & 0x33333333) + ((x >>> 2) & 0x33333333); return (((x + (x >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24; }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __popcount(x, n) { return n <= 32 ? __popcnt32(x) : __popcnt32(Number(x & 0xFFFFFFFFn)) + __popcnt32(Number((x >> 32n) & 0xFFFFFFFFn)); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __byteswap(x, n) { if (n > 32) { var rb = 0n, j = 0; for (; j < n / 8; j++) { rb = (rb << 8n) | (x & 0xFFn); x >>= 8n; } return rb; } var b = n / 8, r = 0, k = 0; for (; k < b; k++) r = r * 256 + (Math.floor(x / Math.pow(256, k)) & 255); return r; }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __bitreverse(x, n) { if (n > 32) { var rb = 0n, j = 0; for (; j < n; j++) { rb = (rb << 1n) | (x & 1n); x >>= 1n; } return rb; } var r = 0, k = 0; for (; k < n; k++) r = r * 2 + (Math.floor(x / Math.pow(2, k)) % 2); return r; }
             \\// 64-bit bitwise via hi/lo 32-bit halves (helper-form ops only; correct within 2^53).
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __band64(a, b) { var hi = (Math.floor(a / 4294967296) & Math.floor(b / 4294967296)) >>> 0; var lo = ((a >>> 0) & (b >>> 0)) >>> 0; return hi * 4294967296 + lo; }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __bor64(a, b) { var hi = (Math.floor(a / 4294967296) | Math.floor(b / 4294967296)) >>> 0; var lo = ((a >>> 0) | (b >>> 0)) >>> 0; return hi * 4294967296 + lo; }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __bxor64(a, b) { var hi = (Math.floor(a / 4294967296) ^ Math.floor(b / 4294967296)) >>> 0; var lo = ((a >>> 0) ^ (b >>> 0)) >>> 0; return hi * 4294967296 + lo; }
             \\// 64-bit integer heap load/store: two 32-bit words, little-endian, exact within 2^53.
             \\
         );
         if (self.safe) {
             try self.emit(
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __ldu64(a) { __idx64(a); return (a & 7) === 0 ? __HEAPU64[a >> 3] : (BigInt(__HEAPU32[a >> 2] >>> 0) | (BigInt(__HEAPU32[(a >> 2) + 1] >>> 0) << 32n)); }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __ldi64(a) { __idx64(a); return (a & 7) === 0 ? __HEAP64[a >> 3] : BigInt.asIntN(64, BigInt(__HEAPU32[a >> 2] >>> 0) | (BigInt(__HEAPU32[(a >> 2) + 1] >>> 0) << 32n)); }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __st64(a, v) { __idx64(a); if ((a & 7) === 0) { __HEAPU64[a >> 3] = v; } else { var i = a >> 2; __HEAPU32[i] = Number(v & 0xFFFFFFFFn); __HEAPU32[i + 1] = Number((v >> 32n) & 0xFFFFFFFFn); } return v; }
                 \\
             );
         } else {
             try self.emit(
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __ldu64(a) { return (a & 7) === 0 ? __HEAPU64[a >> 3] : (BigInt(__HEAPU32[a >> 2] >>> 0) | (BigInt(__HEAPU32[(a >> 2) + 1] >>> 0) << 32n)); }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __ldi64(a) { return (a & 7) === 0 ? __HEAP64[a >> 3] : BigInt.asIntN(64, BigInt(__HEAPU32[a >> 2] >>> 0) | (BigInt(__HEAPU32[(a >> 2) + 1] >>> 0) << 32n)); }
-                // lint:off line-length: emitted-JS template — one source line is one output line
+                // lint:off line-length: emitted-JS template - one source line is one output line
                 \\function __st64(a, v) { if ((a & 7) === 0) { __HEAPU64[a >> 3] = v; } else { var i = a >> 2; __HEAPU32[i] = Number(v & 0xFFFFFFFFn); __HEAPU32[i + 1] = Number((v >> 32n) & 0xFFFFFFFFn); } return v; }
                 \\
             );
         }
         try self.emit(
             \\// saturating-arithmetic clamps (unsigned / signed) to an N-bit range.
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __clampu(v, n) { if (typeof v === 'bigint') { var hb = (1n << BigInt(n)) - 1n; return v < 0n ? 0n : (v > hb ? hb : v); } var hi = n >= 53 ? 9007199254740991 : Math.pow(2, n) - 1; return v < 0 ? 0 : (v > hi ? hi : v); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __clampi(v, n) { if (typeof v === 'bigint') { var hb = (1n << BigInt(n - 1)) - 1n, lb = -(1n << BigInt(n - 1)); return v < lb ? lb : (v > hb ? hb : v); } var hi = Math.pow(2, n - 1) - 1, lo = -Math.pow(2, n - 1); return v < lo ? lo : (v > hi ? hi : v); }
             \\function __fmin(a, b) { return a !== a ? b : (b !== b ? a : Math.min(a, b)); }
             \\function __fmax(a, b) { return a !== a ? b : (b !== b ? a : Math.max(a, b)); }
@@ -2271,9 +2271,9 @@ const Transpiler = struct {
             \\let __Hf = [];
             \\function __href(o) { const i = __Hf.length ? __Hf.pop() : __H.length; __H[i] = o; return i; }
             \\const __SCR = new Uint8Array(65536);
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __cp(p, l) { if (l > 65536) return __HEAPU8.slice(p, p + l); __SCR.set(__HEAPU8.subarray(p, p + l)); return __SCR.subarray(0, l); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __jstr(p, l) { let s = __nc.get(p); if (s === undefined) { s = __dec.decode(l < 256 ? __HEAPU8.slice(p, p + l) : __cp(p, l)); __nc.set(p, s); } return s; }
             \\function js_global() { return 1; }
             \\function js_get(o, p, l) { return __href(__H[o][__jstr(p, l)]); }
@@ -2289,7 +2289,7 @@ const Transpiler = struct {
             \\function js_call3v(o,p,l,a,b,c){__H[o][__jstr(p,l)].call(__H[o],__H[a],__H[b],__H[c]);}
             \\function js_call4v(o,p,l,a,b,c,d){__H[o][__jstr(p,l)].call(__H[o],__H[a],__H[b],__H[c],__H[d]);}
             \\function js_call5v(o,p,l,a,b,c,d,e){__H[o][__jstr(p,l)].call(__H[o],__H[a],__H[b],__H[c],__H[d],__H[e]);}
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_read_into(dst,srcMem,srcOff,len){new Uint8Array(__MEM,dst,len).set(new Uint8Array(__H[srcMem].buffer,srcOff,len));}
             \\function js_calln1(o,p,l,a){return __href(__H[o][__jstr(p,l)].call(__H[o],a));}
             \\function js_calln2(o,p,l,a,b){return __href(__H[o][__jstr(p,l)].call(__H[o],a,b));}
@@ -2303,7 +2303,7 @@ const Transpiler = struct {
             \\function js_calln4v(o,p,l,a,b,c,d){__H[o][__jstr(p,l)].call(__H[o],a,b,c,d);}
             \\function js_calln5v(o,p,l,a,b,c,d,e){__H[o][__jstr(p,l)].call(__H[o],a,b,c,d,e);}
             \\function js_calln6v(o,p,l,a,b,c,d,e,g){__H[o][__jstr(p,l)].call(__H[o],a,b,c,d,e,g);}
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call2(o, p, l, a, b) { const f = __H[o][__jstr(p, l)]; return __href(f.call(__H[o], __H[a], __H[b])); }
             \\function js_new0(c) { return __href(new (__H[c])()); }
             \\function js_str(p, l) { return __href(__dec.decode(l < 256 ? __HEAPU8.slice(p, p + l) : __cp(p, l))); }
@@ -2312,23 +2312,23 @@ const Transpiler = struct {
             \\function js_is_null(v) { return (__H[v] == null) ? 1 : 0; }
             \\function js_free(v) { if (v > 1 && __H[v] !== undefined) { __H[v] = undefined; __Hf.push(v); } }
             \\function js_mark() { return __H.length; }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_reset(m) { while (__H.length > m) __H.pop(); if (__Hf.length) __Hf = __Hf.filter(function (i) { return i < m; }); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_func(f) { return __href(function(...args) { const hs = args.map(__href); const r = __FTABLE[f](...hs); for (let i = 0; i < hs.length; i++) js_free(hs[i]); return r; }); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_func_ctx(f,ctx) { return __href(function(...args) { const hs = args.map(__href); const r = __FTABLE[f](ctx, ...hs); for (let i = 0; i < hs.length; i++) js_free(hs[i]); return r; }); }
             \\function js_obj() { return __href({}); }
             \\function js_fn_raw(f) { return __href(function(...args) { return __FTABLE[f](...args); }); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_fn_num(f) { return __href(function(...a) { return __FTABLE[f](...a.map(x => typeof x === "bigint" ? Number(x) : x)); }); }
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call3(o,p,l,a,b,c){const f=__H[o][__jstr(p,l)];return __href(f.call(__H[o],__H[a],__H[b],__H[c]));}
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call4(o,p,l,a,b,c,d){const f=__H[o][__jstr(p,l)];return __href(f.call(__H[o],__H[a],__H[b],__H[c],__H[d]));}
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call5(o,p,l,a,b,c,d,e){const f=__H[o][__jstr(p,l)];return __href(f.call(__H[o],__H[a],__H[b],__H[c],__H[d],__H[e]));}
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call6(o,p,l,a,b,c,d,e,g){const f=__H[o][__jstr(p,l)];return __href(f.call(__H[o],__H[a],__H[b],__H[c],__H[d],__H[e],__H[g]));}
             \\function js_new1(c,a){return __href(new (__H[c])(__H[a]));}
             \\// Like js_new1, but a constructor that THROWS yields the null handle (0)
@@ -2339,11 +2339,11 @@ const Transpiler = struct {
             \\function js_new2(c,a,b){return __href(new (__H[c])(__H[a],__H[b]));}
             \\function js_new3(c,a,b,d){return __href(new (__H[c])(__H[a],__H[b],__H[d]));}
             \\function js_set_index(o,i,v){__H[o][i]=__H[v];}
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_string_into(h,p,max){const m=Math.min(max,65536);const r=__enc.encodeInto(String(__H[h]),__SCR.subarray(0,m));__HEAPU8.set(__SCR.subarray(0,r.written),p);return r.written;}
             \\function js_bytes(p,l){return __href(new Uint8Array(__MEM.slice(p,p+l)));}
             \\const __P = [null];
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_promise_register(ph){const id=__P.length;__P.push({s:0,v:0});Promise.resolve(__H[ph]).then(v=>{if(__P[id])__P[id]={s:1,v:__href(v)};},e=>{if(__P[id])__P[id]={s:2,v:__href(e)};});return id;}
             \\function js_promise_status(id){return __P[id]?__P[id].s:2;}
             \\function js_promise_take(id){const r=__P[id]?__P[id].v:0;__P[id]=null;return r;}
@@ -2359,10 +2359,10 @@ const Transpiler = struct {
             \\// arbitrary-arity call/construct: args are a heap array of handles,
             \\// read `n` of them starting at byte `argp` (u32 each). Removes the
             \\// js_callN 6-argument ceiling.
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __args(argp,n){__ckargs(argp,n);const a=new Array(n);for(let i=0;i<n;i++)a[i]=__H[__HEAPU32[(argp>>2)+i]];return a;}
             \\function js_apply(fn,thisv,argp,n){return __href(__H[fn].apply(__H[thisv],__args(argp,n)));}
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call_n(o,p,l,argp,n){const f=__H[o][__jstr(p,l)];return __href(f.apply(__H[o],__args(argp,n)));}
             \\function js_construct(c,argp,n){return __href(new (__H[c])(...__args(argp,n)));}
             \\// reflection / control: typeof, instanceof, truthiness, equality
@@ -2372,7 +2372,7 @@ const Transpiler = struct {
             \\function js_strict_eq(a,b){return __H[a]===__H[b] ? 1 : 0;}
             \\// call that may throw: writes 1 to *okp (heap u32) on success else 0,
             \\// and returns the result handle (or the caught exception handle).
-            // lint:off line-length: emitted-JS template — one source line is one output line
+            // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_try_call(o,p,l,argp,n,okp){try{const f=__H[o][__jstr(p,l)];const r=f.apply(__H[o],__args(argp,n));__cku32(okp);__HEAPU32[okp>>2]=1;return __href(r);}catch(e){__cku32(okp);__HEAPU32[okp>>2]=0;return __href(e);}}
             \\
             \\const __f64dv = new DataView(new ArrayBuffer(8));
@@ -2421,7 +2421,7 @@ const Transpiler = struct {
     /// aggregate typedefs (which contain `(`/`{`).
     /// Build the call graph and record which functions are in a cycle (directly
     /// self-recursive or mutually recursive). Local structs/arrays are given a
-    /// STATIC scratch slot — a fixed heap address — which is not reentrant, so a
+    /// STATIC scratch slot - a fixed heap address - which is not reentrant, so a
     /// recursive function with such a local would have its inner call clobber the
     /// outer frame's data (a silent wrong result). Knowing the recursive set lets
     /// the decl path flag that case loudly (a marker) instead of miscompiling it.
@@ -2452,7 +2452,7 @@ const Transpiler = struct {
         // Function-pointer dispatch table: a function whose ADDRESS is taken (`&fn`
         // used as a value) gets a 1-based __FTABLE index (0 reserved for a null
         // fn-ptr). `&fn` lowers to that index; an indirect call dispatches through
-        // `__FTABLE[idx](args)`. Only address-taken functions are listed — the
+        // `__FTABLE[idx](args)`. Only address-taken functions are listed - the
         // entry point (whose address is never taken, and whose export `#define`
         // rename would otherwise dangle the table) stays out, and fn-ptr-free
         // programs collect nothing and emit no table at all.
@@ -2508,7 +2508,7 @@ const Transpiler = struct {
                 }
             }
         }
-        // Transitive closure (Floyd–Warshall): f is recursive iff f reaches f.
+        // Transitive closure (Floyd-Warshall): f is recursive iff f reaches f.
         var kk: usize = 0;
         while (kk < n) : (kk += 1) {
             var a: usize = 0;
@@ -2567,7 +2567,7 @@ const Transpiler = struct {
                                 try self.bitpack_sizes.put(self.toks[k].text, z);
                             }
                         }
-                        // A simple `typedef <prim> NAME;` — the enum tag typedefs
+                        // A simple `typedef <prim> NAME;` - the enum tag typedefs
                         // `typedef uint8_t enum__...;` are the important case; record
                         // NAME -> the underlying scalar CType so a cast `(enum__... *)`,
                         // a deref through such a pointer, and that-typed struct
@@ -2653,7 +2653,7 @@ const Transpiler = struct {
 
     // Prepass (the first thing prescanData does): walk every token and, at each
     // `struct|union NAME { ... }`, hand off to parseStructDef to record the layout
-    // — total size plus each field's byte offset and type — into `structs`. Borrows
+    // - total size plus each field's byte offset and type - into `structs`. Borrows
     // the parse cursor `p` and puts it back, so the real parse later starts clean.
     fn prescanStructLayouts(self: *Transpiler) error{OutOfMemory}!void {
         const saved: usize = self.p;
@@ -2778,7 +2778,7 @@ const Transpiler = struct {
             if (arrayStructInfo(specs)) |info| {
                 // Prefer the wrapper's own parsed layout size: a sentinel-terminated
                 // array (`[N:0]T` -> `arr_Ns<id>_T { T array[N+1]; }`) has N+1 slots,
-                // but parseArrTag's count is the logical N — so count*elem_size would
+                // but parseArrTag's count is the logical N - so count*elem_size would
                 // under-allocate by the sentinel slot, letting the NEXT global overlap
                 // arr[N] (read back as that global's value). The struct layout has the
                 // true byte size (incl. the sentinel); fall back to N*elem_size only
@@ -2811,7 +2811,7 @@ const Transpiler = struct {
                 try self.globals.put(name, off);
                 // Const array with a literal initializer (`= {{e0, e1, ...}}`):
                 // the wrapper is `struct arr_N_T { T array[N]; }`, so its layout
-                // (parsed in prescanStructLayouts) has a single array field —
+                // (parsed in prescanStructLayouts) has a single array field -
                 // writeConstStruct walks the `{{...}}` and writes each element
                 // into the image. Without this the data reads back as zeros.
                 if (ei + 1 < n and eql(u8, self.toks[ei + 1].text, "{")) {
@@ -2892,7 +2892,7 @@ const Transpiler = struct {
             }
             // little-endian store of the initial value into the slot. `val` is a
             // u64, so a wider global (u80/u96/u128) gets only its low 8 bytes from
-            // val; the rest are zero — writing them via `val >> (b*8)` would
+            // val; the rest are zero - writing them via `val >> (b*8)` would
             // overflow the shift-amount cast (b*8 >= 64) and panic.
             var b: u32 = 0;
             while (b < width) : (b += 1) {
@@ -2922,7 +2922,7 @@ const Transpiler = struct {
     /// read (single-threaded, non-reentrant through these static slots).
     fn allocScratch(self: *Transpiler, bytes: u32) u32 {
         // 8-align the slot so any 64-bit member (an f64/i64/u64, read or written
-        // via __HEAPF64 / __ld*64 / __st64 — all of which shift the byte address
+        // via __HEAPF64 / __ld*64 / __st64 - all of which shift the byte address
         // by 3 and therefore require 8-byte alignment) lands aligned. A slot that
         // is only 4-aligned silently reads/writes the wrong 8 bytes. Scratch is
         // bump-allocated working memory, so over-aligning costs at most 7 bytes
@@ -3047,8 +3047,8 @@ const Transpiler = struct {
     }
 
     /// If the initializer element starting at token `start` is an address-of-
-    /// global — `&name`, possibly wrapped in pointer casts like
-    /// `((uint32_t *)&name)` — return that global's name; else null. The `&`
+    /// global - `&name`, possibly wrapped in pointer casts like
+    /// `((uint32_t *)&name)` - return that global's name; else null. The `&`
     /// must sit in a unary position (preceded by `(`/`)`/`,`/`{`/`=`) so a
     /// binary `a & MASK` is not mistaken for an address-of. The caller records a
     /// relocation; the apply step gates on `globals.get`, so a stray match that
@@ -3172,7 +3172,7 @@ const Transpiler = struct {
             return 0;
         }
         // The C backend emits type-limit constants as bare macros (UINT64_MAX,
-        // INT64_MIN, …), which parseInt can't read — without this they would
+        // INT64_MIN, ...), which parseInt can't read - without this they would
         // silently become 0.
         if (limitMacroValue(tok)) |v| {
             return if (neg) 0 -% v else v;
@@ -3246,7 +3246,7 @@ const Transpiler = struct {
     /// fields (the `{e0, e1, ...}` inner brace that SIMD vectors lower to), and
     /// nested struct fields (recursively). Constant leaves are evaluated by
     /// parseScalarInit (so `zig_make_f32(hexfloat, bits)` stores the exact IEEE
-    /// bytes). Struct-element arrays aren't unrolled (left zeroed) — rare and not
+    /// bytes). Struct-element arrays aren't unrolled (left zeroed) - rare and not
     /// reached by the vector/matrix-of-scalars constants this targets.
     fn writeConstStruct(
         self: *Transpiler,
@@ -3433,7 +3433,7 @@ const Transpiler = struct {
     /// Name of the call whose argument list directly encloses token `i`, or null
     /// if `i` isn't inside a `name(...)` arg list. Scans left balancing parens.
     /// Used by the address-of pre-scan to skip `&x` inside the bitcast/copy idioms
-    /// (`memcpy(&a,&b,n)` etc.) — those temps are SSA values, not real out-params.
+    /// (`memcpy(&a,&b,n)` etc.) - those temps are SSA values, not real out-params.
     fn enclosingCallName(self: *Transpiler, i: usize) ?[]const u8 {
         var depth: i32 = 0;
         var j: usize = i;
@@ -3573,7 +3573,7 @@ const Transpiler = struct {
             // Array of structs (`[N]T` with T a struct, e.g. the rows of a
             // `[N][M]` or a `[4]Vec`): the element stride is the element
             // struct's whole size, and the result is that element's address
-            // (a struct pointer — the temp it lands in is tagged at its decl).
+            // (a struct pointer - the temp it lands in is tagged at its decl).
             if (f.struct_tag) |etag| {
                 if (self.structs.get(etag)) |el| {
                     return allocPrint(self.gpa, "(({s}) + ({s}) * {d})", .{ base, idx, el.size });
@@ -3581,7 +3581,7 @@ const Transpiler = struct {
             }
             // Pointer field (`slice.ptr`): `base` is the address WHERE the
             // pointer is stored, so the element address is the LOADED pointer
-            // value plus the index scaled by the pointee size — not base + i*sz.
+            // value plus the index scaled by the pointee size - not base + i*sz.
             // BUT an inline ARRAY of pointers (`T *field[N]`, f.size > 4) is laid
             // out in place: element i lives at base + i*4 and the stored pointer
             // is read by the caller's later deref. Only a genuine single pointer
@@ -3702,7 +3702,7 @@ const Transpiler = struct {
                 };
                 if (is_array and self.current().kind == .str) {
                     // array-typed field initialized from a C string literal
-                    // (`(struct { u8 array[N]; }){"\005\006..."}`) — the form Zig's
+                    // (`(struct { u8 array[N]; }){"\005\006..."}`) - the form Zig's
                     // C backend uses for a runtime [N]u8 value. Decode the bytes and
                     // store each at field_offset + j (element size is 1 for u8).
                     const bytes: []u8 = try decodeCString(self.gpa, self.current().text);
@@ -3833,7 +3833,7 @@ const Transpiler = struct {
         var fields: ArrayList(Field) = .empty;
         var off: u32 = 0;
         var max_sz: u32 = 0; // for a top-level union: largest member size (all at offset 0)
-        var struct_align: u32 = 1; // max field alignment → the struct's own alignment
+        var struct_align: u32 = 1; // max field alignment -> the struct's own alignment
         while (i < close) {
             // Nested anonymous aggregate field: `union { ... } name;` (tagged
             // unions lower to `struct { union { ... } payload; <tag> tag; }`) or
@@ -3851,7 +3851,7 @@ const Transpiler = struct {
                 var subs: ArrayList(Field) = .empty;
                 var sub_off: u32 = 0;
                 var sub_max: u32 = 0;
-                var agg_align: u32 = 1; // max member alignment → the aggregate's alignment
+                var agg_align: u32 = 1; // max member alignment -> the aggregate's alignment
                 var m: usize = abrace + 1;
                 while (m < aclose) {
                     const ms: usize = m;
@@ -3974,8 +3974,8 @@ const Transpiler = struct {
             var fty: CType = tyFromSpecifiers(seg[0..nk]);
             // Resolve a packed-struct `bitpack__...` element to its real byte width.
             // A packed struct is modelled as one uN word and accessed via __ld*64/
-            // __st64 (an 8-byte op for the u64 case), so the field — and the stride
-            // of any array of it — MUST match that width. tyFromSpecifiers is a free
+            // __st64 (an 8-byte op for the u64 case), so the field - and the stride
+            // of any array of it - MUST match that width. tyFromSpecifiers is a free
             // fn and can't see the alias tables, so it would default it to a 32-bit
             // int and an array of an 8-byte packed struct would stride by 4, its
             // elements overlapping. (Enum-tag aliases are intentionally NOT resolved
@@ -3993,10 +3993,10 @@ const Transpiler = struct {
             // MUST be sized at its REAL width. The element store strides by that
             // width (the global's array_elems resolves the alias), so sizing it at
             // the default 4 here makes the whole-array struct copy + read use a
-            // 4-byte stride that disagrees with the 1-byte store — an `enum(u8)`
+            // 4-byte stride that disagrees with the 1-byte store - an `enum(u8)`
             // array reads back garbage and a `switch` on it hits `unreachable`.
             // (A USER struct's scalar enum field keeps the 4-byte slot, which its
-            // cast-pointer field access relies on — see the note above; hence this
+            // cast-pointer field access relies on - see the note above; hence this
             // is gated on the synthetic array-wrapper tag only.)
             if (looksLikeArrayWrapper(tag)) {
                 for (seg[0..nk]) |st| {
@@ -4053,7 +4053,7 @@ const Transpiler = struct {
                     break :blk t;
                 }
                 // A USER struct's `[N]scalar` member is, in the C backend, also a
-                // nested array-wrapper struct accessed as `s.field.array[i]` — so
+                // nested array-wrapper struct accessed as `s.field.array[i]` - so
                 // it must be sized and tagged as a nested struct (otherwise it is
                 // mis-sized, the following field's offset is wrong, and a
                 // runtime-indexed `s.field[i]` crashes). Gate on the type really
@@ -4082,7 +4082,7 @@ const Transpiler = struct {
                     else => 4,
                 };
             };
-            // Field alignment: a scalar aligns to its size (1/2/4/8 → so an f64 /
+            // Field alignment: a scalar aligns to its size (1/2/4/8 -> so an f64 /
             // i64 field forces 8); a nested struct aligns to its OWN computed
             // alignment (an inner struct containing an f64 needs 8, not 4). An
             // array field aligns to its element (fsize is the single-element size
@@ -4122,7 +4122,7 @@ const Transpiler = struct {
             }
         }
         // A struct's size is a multiple of its alignment (Zig/C _Alignof), so an
-        // array of it strides by the padded size — not the unpadded field span.
+        // array of it strides by the padded size - not the unpadded field span.
         const total: u32 = alignForward(u32, if (is_top_union) max_sz else off, struct_align);
         try self.structs.put(
             tag,
@@ -4133,7 +4133,7 @@ const Transpiler = struct {
     // STAGE 3 dispatcher, one call per top-level construct (run loops on it). A
     // `struct|union NAME {` definition is recorded then skipped; a real function
     // definition (signature followed by `{`) goes to emitFunction; everything else
-    // — prototypes, typedefs, dead builtin_* data — is skipped tolerantly via
+    // - prototypes, typedefs, dead builtin_* data - is skipped tolerantly via
     // skipDecl. The C backend never nests definitions, so this stays flat.
     fn parseTopLevel(self: *Transpiler) error{OutOfMemory}!void {
         while (self.consume(";")) {}
@@ -4164,7 +4164,7 @@ const Transpiler = struct {
         self.skipDecl();
     }
 
-    // Turn ONE C function into ONE JS function — the per-function heart of stages
+    // Turn ONE C function into ONE JS function - the per-function heart of stages
     // 3+4. Steps: clear last function's scratch; register params (a struct-VALUE
     // param arrives as a heap offset, so it's tracked as a struct var); parse the
     // body into a Stmt tree; lower that to a flat FlowOp list (flatten); then render it
@@ -4283,7 +4283,7 @@ const Transpiler = struct {
         // parse body into AST (populates self.locals + self.vars), then lower
         self.p = sig.rparen + 1; // points at `{`
         // Pre-scan the body for bare `&IDENT` (address-of a local) so the decl
-        // handler can heap-back address-taken SCALAR locals — the same backing
+        // handler can heap-back address-taken SCALAR locals - the same backing
         // aggregates already get. Conservative to avoid false positives: only a
         // UNARY `&` (preceded by `(` `,` `=` `return`, never an operand, so binary
         // `a & b` is excluded) and only when IDENT is NOT followed by `.`/`[`/`->`
@@ -4300,7 +4300,7 @@ const Transpiler = struct {
                 const prev: []const u8 = self.toks[i - 1].text;
                 const unary: bool = eql(u8, prev, "(") or eql(u8, prev, ",") or
                     eql(u8, prev, "=") or eql(u8, prev, "return") or
-                    // a pointer-cast close: `(T *)&x` — the C backend's form for
+                    // a pointer-cast close: `(T *)&x` - the C backend's form for
                     // address-of with a cast (`@ptrCast(&x)`, `&union.field`, a
                     // `[*]`/`*anyopaque` pointer). `*)` before `&` is unambiguous:
                     // a binary `(expr) & y` never has `*` immediately before `)`.
@@ -4315,8 +4315,8 @@ const Transpiler = struct {
                 if (eql(u8, after, ".") or eql(u8, after, "[") or eql(u8, after, "->")) {
                     continue;
                 }
-                // Skip `&x` inside the bitcast/copy idioms — `memcpy(&a,&b,n)`,
-                // `memmove`, `memset(&a,...)` — which the transpiler already lowers
+                // Skip `&x` inside the bitcast/copy idioms - `memcpy(&a,&b,n)`,
+                // `memmove`, `memset(&a,...)` - which the transpiler already lowers
                 // specially; those temps are plain SSA values, not out-parameters.
                 if (self.enclosingCallName(i)) |cn| {
                     if (eql(u8, cn, "memcpy") or eql(u8, cn, "memmove") or eql(u8, cn, "memset")) {
@@ -4368,7 +4368,7 @@ const Transpiler = struct {
         // Shadow-stack prologue/epilogue: only for a recursive function that has
         // address-taken locals (frame_size > 0). Bump __SP down by the frame, expose
         // the frame base as __fp (locals resolve to __fp + offset), and restore __SP
-        // on every exit via `finally` — so recursion gets a fresh frame per call while
+        // on every exit via `finally` - so recursion gets a fresh frame per call while
         // non-recursive functions keep the zero-overhead static slots untouched.
         const has_frame: bool = self.frame_size > 0 and self.recursive_fns.contains(self.cur_fn);
         if (has_frame) {
@@ -4395,7 +4395,7 @@ const Transpiler = struct {
     }
 
     // Parse either a `{...}` block or a single statement, always handing back a Stmt
-    // slice — lets if/while/for bodies be treated uniformly whether braced or not.
+    // slice - lets if/while/for bodies be treated uniformly whether braced or not.
     fn parseStmtAsBlock(self: *Transpiler) error{OutOfMemory}![]const Stmt {
         if (self.atText("{")) {
             return self.parseBlock();
@@ -4416,7 +4416,7 @@ const Transpiler = struct {
         return isTypeQualifierOrSpecifier(t.text) or self.typedefs.contains(t.text);
     }
 
-    // Parse ONE C statement into a Stmt node — the recursive-descent core of stage
+    // Parse ONE C statement into a Stmt node - the recursive-descent core of stage
     // 3. Handles blocks, declarations, labels, if/while/for/switch/do, break/
     // continue/goto/return, and otherwise falls back to an expression statement.
     // The Stmt tree it grows is what flatten lowers next; every node stashes its C
@@ -4579,7 +4579,7 @@ const Transpiler = struct {
                 }
                 continue;
             }
-            // a typedef name in type position (e.g. an enum tag type) — consume it
+            // a typedef name in type position (e.g. an enum tag type) - consume it
             // as the type, leaving the following identifier as the variable name.
             // Accept a following `*` too: `TYPEDEF *name;` is a pointer declaration
             // (C reads `alias * name;` as declaring `name`, not a multiply), and
@@ -4597,7 +4597,7 @@ const Transpiler = struct {
         // Resolve an enum-tag alias pointee to its real width: a deref (`*p`) or
         // index (`p[i]`) of an enum POINTER local must load/stride at the enum's
         // true size (1/2 bytes), not tyFromSpecifiers' default 4-byte int (which
-        // would read 4 bytes of a 1-byte enum — e.g. an `*enum(u8)` from a slice).
+        // would read 4 bytes of a 1-byte enum - e.g. an `*enum(u8)` from a slice).
         // The address math already strides correctly; this fixes the load width.
         if (ty.kind == .ptr) {
             for (specs) |st| {
@@ -4617,7 +4617,7 @@ const Transpiler = struct {
 
         // Function-pointer declarator: `RET (*name)(args);` or `RET (**name)(args);`.
         // The C backend emits these for fn-ptr locals (e.g. a struct fn-ptr field
-        // loaded into a temp). Declare `name` as a plain numeric local — a single-
+        // loaded into a temp). Declare `name` as a plain numeric local - a single-
         // star fn-ptr holds a __FTABLE index (calling it dispatches through the
         // table; tracked in fn_ptr_vars), a double-star holds the heap ADDRESS of
         // such a slot (deref'd with the ordinary 4-byte pointer load/store). Without
@@ -4671,13 +4671,13 @@ const Transpiler = struct {
         // Local packed-struct value: the C backend lowers a packed struct to a
         // single integer typedef (`typedef uint8_t bitpack__...;`), then takes its
         // address and read-modify-writes through the pointer (`&t0`, `(*p) = ...`).
-        // So the local needs real backing memory — give it a heap scratch slot and
+        // So the local needs real backing memory - give it a heap scratch slot and
         // map name -> offset. `&t0` then resolves to the slot (the `&ident` ->
         // globals fallthrough) and the existing pointer-deref + bit-op helpers
         // (zig_shr_u8 / zig_and_u8 / bare `<<`,`|`) do the field packing. The
-        // packing was never the issue — only the address-taken scalar local was.
+        // packing was never the issue - only the address-taken scalar local was.
         // A POINTER to a packed struct (`bitpack__... const *p`) is NOT a packed-struct
-        // value — it's a 32-bit address — so it must fall through to the pointer/struct-
+        // value - it's a 32-bit address - so it must fall through to the pointer/struct-
         // pointer handling, not be heap-backed as the backing integer.
         for (specs) |sp| {
             if (sp.kind == .ident and countStars(specs) == 0) {
@@ -4690,7 +4690,7 @@ const Transpiler = struct {
                         // BigInt path: __ldu64/__st64 (two 32-bit words) and BigInt bit-ops
                         // (parseBinary lifts the un-cast shift amount). Treat it like an
                         // address-taken scalar local: one slot that `&p`/the RMW and a
-                        // whole-value read or store all reach. A single home is required —
+                        // whole-value read or store all reach. A single home is required -
                         // if the read and the store resolved to different locations, a
                         // store could write a JS variable the read never sees, miscompiling
                         // @bitCast of/to a packed struct.
@@ -4733,7 +4733,7 @@ const Transpiler = struct {
             try self.local_array_names.append(self.gpa, name); // purge per-fn
             try self.vars.put(name, .{ .ty = .{ .kind = .ptr, .struct_tag = tag } });
             try self.locals.append(self.gpa, .{ .name = name, .dflt = "0" });
-            // Address-taken single-star struct pointer (`&t4` ESCAPES — e.g. passed
+            // Address-taken single-star struct pointer (`&t4` ESCAPES - e.g. passed
             // to a helper as `Node **`, or stored where it is loaded back): the
             // pointer VARIABLE itself needs real backing memory so `&t4` is a true
             // slot address and the callee's `*a0` loads the stored pointer. Give it a
@@ -4789,7 +4789,7 @@ const Transpiler = struct {
             try self.local_array_names.append(self.gpa, name);
             // Also record the wrapper struct tag (the `arr_N_T` struct is in
             // `self.structs`). This lets a struct-value assignment to the whole
-            // array — `t0 = (arr_4_i32){{...}}` — go through the byte-copy path
+            // array - `t0 = (arr_4_i32){{...}}` - go through the byte-copy path
             // in parseAssign and land in this slot, so `&t0` (and a slice built
             // from it) point at the data. Element access `t0.array[i]` still
             // resolves via array_elems, which parsePostfix checks first.
@@ -4850,7 +4850,7 @@ const Transpiler = struct {
 
         // Address-taken scalar local: `&w` was seen for this name and it's a plain
         // int/float scalar (aggregates handled above). Like an aggregate it needs
-        // real backing memory, so `&w` is a true address — reads load and writes
+        // real backing memory, so `&w` is a true address - reads load and writes
         // store through the heap (heapLoad/heapStore, so 64-bit works too). Only
         // triggers when the pre-scan flagged the name, so functions without any
         // address-taken scalar are completely unaffected.
@@ -4894,12 +4894,12 @@ const Transpiler = struct {
     // ------------------------------------------------------------------------
     // Lowering: AST -> flat ops (all control flow -> conditional gotos)
     // ------------------------------------------------------------------------
-    // STAGE 4a — control-flow lowering. Walk the Stmt tree and append a flat list
+    // STAGE 4a - control-flow lowering. Walk the Stmt tree and append a flat list
     // of Ops (line | ret | label | goto | cgoto). Every if/while/for/switch and
     // every break/continue is rewritten into conditional gotos against fresh labels
     // (break/continue resolve through brk_stack/cont_stack). This collapses our
     // structured statements into the SAME goto currency the C backend already emits
-    // — so emitBody downstream has just one shape to render.
+    // - so emitBody downstream has just one shape to render.
     fn flatten(
         self: *Transpiler,
         stmts: []const Stmt,
@@ -5081,14 +5081,14 @@ const Transpiler = struct {
         }
         const num: usize = blocks.items.len;
 
-        // Jump threading. A "trampoline" block — one whose only effect is a single
-        // unconditional jump (no statements, no return, no conditional branch) —
+        // Jump threading. A "trampoline" block - one whose only effect is a single
+        // unconditional jump (no statements, no return, no conditional branch) -
         // arises constantly from the C backend's nested `zig_block_N:` labels that
         // just chain gotos. `thread[i]` is the FINAL real block reached by following
         // such pure jumps from i, so every goto / fallthrough / the initial state
         // can target it directly. This removes the redundant switch re-dispatches a
         // trampoline forces (a loop back-edge went body -> trampoline -> header, two
-        // dispatches per iteration; threaded it is one — ~2x on tight loops).
+        // dispatches per iteration; threaded it is one - ~2x on tight loops).
         const thread: []usize = try self.gpa.alloc(usize, num + 1);
         for (0..num + 1) |i| {
             thread[i] = i;
@@ -5127,8 +5127,8 @@ const Transpiler = struct {
         try self.print("  let __s = {d};\n  __loop: while (true) {{\n    switch (__s) {{\n", .{thread[0]});
         for (blocks.items, 0..) |blk, i| {
             try self.print("      case {d}: {{\n", .{i});
-            // A block whose final op is an unconditional jump back to ITSELF — the
-            // back-edge of a counting/`while` loop after threading — is emitted as a
+            // A block whose final op is an unconditional jump back to ITSELF - the
+            // back-edge of a counting/`while` loop after threading - is emitted as a
             // real `while (true)` so V8 optimizes the hot loop instead of paying a
             // switch re-dispatch every iteration (~3x on tight loops). Mid-block
             // cgotos break the inner while; the case's trailing `break` re-dispatches
@@ -5199,7 +5199,7 @@ const Transpiler = struct {
         e_in: []const u8,
         ty: CType,
     ) ![]const u8 {
-        // A lo/hi wide extract lowers to `Number(BigInt.asUintN(64, X))` — a Number
+        // A lo/hi wide extract lowers to `Number(BigInt.asUintN(64, X))` - a Number
         // by design (for index / Number contexts). But when it feeds a >32-bit
         // destination (a BigInt u64/wide local, e.g. a __st64 store), re-wrapping a
         // Number in asUintN throws "cannot convert to a BigInt". Recover the inner
@@ -5240,7 +5240,7 @@ const Transpiler = struct {
                 if (ty.bits > 32 and ty.bits <= 64) {
                     // 33-64 bit integers live in int64_t/uint64_t C storage and are
                     // BigInts in this model (exact past 2^53). Mask/sign-extend to the
-                    // REAL width with asUintN/asIntN(bits, …) — a plain `& mask` here
+                    // REAL width with asUintN/asIntN(bits, ...) - a plain `& mask` here
                     // used a Number mask literal and threw "cannot mix BigInt and other
                     // types" against the BigInt value (e.g. a `@bitCast` to u40 that
                     // spilled through __ldu64). asUintN/asIntN are no-ops on an
@@ -5317,7 +5317,7 @@ const Transpiler = struct {
     // fall straight through to parseBinary.
     /// After assigning an RHS to `name`, if `name` is a double-star struct
     /// pointer (`pp_struct_ptrs`), record whether `*name` must LOAD (it holds a
-    /// heap address — a `&ptr->field` / `&var.field` / param slot) or stay
+    /// heap address - a `&ptr->field` / `&var.field` / param slot) or stay
     /// identity (it aliases a bare local via the `&local` round-trip). The
     /// distinction is the `addr_local_collapse` flag, set by the `&` handler's
     /// bare-local passthrough; any heap address leaves it false. Only call this
@@ -5374,7 +5374,7 @@ const Transpiler = struct {
                             };
                             // A struct element (`f.struct_tag`) strides by the
                             // WHOLE struct size and the store is a byte COPY of the
-                            // source struct (rhs is its heap offset) — NOT a scalar
+                            // source struct (rhs is its heap offset) - NOT a scalar
                             // store of the offset at stride 4, which silently
                             // miscompiled storing a struct into an array-wrapper
                             // element (e.g. @memset of a struct array, whose fill
@@ -5401,10 +5401,10 @@ const Transpiler = struct {
                 // The Zig C backend emits this DIRECT two-level form for a UNION
                 // payload field (e.g. `t1.payload.big = t0`); a nested STRUCT field
                 // is instead written through a pointer (handled elsewhere). This branch
-                // is what carries the u64/f64 payload store to memory — without it the
+                // is what carries the u64/f64 payload store to memory - without it the
                 // store would lower as a LOAD and the value would never be written. f1
                 // carries the inner struct/union tag (struct_tag), within which f2
-                // resolves — same as the read path.
+                // resolves - same as the read path.
                 if (eql(u8, self.lookahead(1).text, ".") and self.lookahead(2).kind == .ident and
                     eql(u8, self.lookahead(3).text, ".") and self.lookahead(4).kind == .ident and
                     eql(u8, self.lookahead(5).text, "=") and self.globals.get(head_tok.text) != null)
@@ -5435,7 +5435,7 @@ const Transpiler = struct {
                             self.p += 4; // name . field =
                             const rhs: []const u8 = try self.parseAssign();
                             // Frame-aware base (recursive locals live at __fp+N, not the
-                            // static slot) — see the whole-struct-copy note below.
+                            // static slot) - see the whole-struct-copy note below.
                             const base: []const u8 = try self.scratchBase(head_tok.text, off);
                             const addr: []u8 = try allocPrint(self.gpa, "(({s}) + {d})", .{ base, f.offset });
                             return try self.fieldStore(addr, f, rhs);
@@ -5453,7 +5453,7 @@ const Transpiler = struct {
                         // shadow-stack frame (__fp + N), not its static slot. scratchBase
                         // resolves to whichever applies, so the stored value and a later
                         // `&t0` agree (using the raw static `off` here wrote the value to
-                        // the static slot while `&t0` read the frame — silently losing it).
+                        // the static slot while `&t0` read the frame - silently losing it).
                         const dst: []const u8 = try self.scratchBase(head_tok.text, off);
                         return try allocPrint(
                             self.gpa,
@@ -5464,7 +5464,7 @@ const Transpiler = struct {
                 }
             }
             // ptr->field[idx] = rhs : element store through a struct/wrapper
-            // pointer. The Zig C backend emits this for a `[N][M]T` row fill —
+            // pointer. The Zig C backend emits this for a `[N][M]T` row fill -
             // `t4->array[i] = v` where `t4 : arr_M_T*` (the inner row pointer, e.g.
             // from `@memset(row, v)` over `for (&grid) |*row|`). The single-field
             // `ptr->field =` handler below doesn't cover the `[idx]` element form,
@@ -5542,7 +5542,7 @@ const Transpiler = struct {
         {
             const nm: []const u8 = self.lookahead(2).text;
             // (*pp) = ptrValue : a DOUBLE-star struct pointer (`struct X **`). The
-            // store target is a pointer SLOT, so this writes a 4-byte offset — NOT
+            // store target is a pointer SLOT, so this writes a 4-byte offset - NOT
             // a struct byte-copy. Must be checked before the single-star struct-copy
             // branch below (which would otherwise __copy layout.size bytes and, for
             // a 4-byte struct, silently dereference the rhs offset). Mirrors the
@@ -5589,7 +5589,7 @@ const Transpiler = struct {
         }
         // store through a bare pointer subscript:  ptr[idx] = rhs. The Zig C
         // backend emits this for a vector-literal store into a `[N]@Vector`
-        // element — `t = (elemT *)&arr.array[i]; t[k] = zig_make_fNN(...)` — where
+        // element - `t = (elemT *)&arr.array[i]; t[k] = zig_make_fNN(...)` - where
         // `t` is a plain pointer local with a known element type. None of the
         // handlers above match (`t` is neither a struct_var/ptr nor a deref), so it
         // fell through to the rvalue path: the subscript lowered to a LOAD and the
@@ -5633,7 +5633,7 @@ const Transpiler = struct {
             return stored;
         }
         // General lvalue store:  LVALUE = rhs, resolving casts / `->` / `.` / `[i]`
-        // to a heap address. Catches shapes the specific handlers above miss —
+        // to a heap address. Catches shapes the specific handlers above miss -
         // notably the array-wrapper element store `((arr_N_T*)&g)->array[i] = v`
         // that the Zig C backend emits for the fill/copy loop of `@memset` /
         // `@memcpy` on a 64-bit-element array. Previously this fell through and the
@@ -5641,7 +5641,7 @@ const Transpiler = struct {
         // RHS to a bare value). Only commit when a plain `=` follows; otherwise
         // restore and let the rvalue path handle it.
         // Direct element store into a primitive-element array wrapper:
-        // `((arr_N_T*)&g)->array[i] = rhs` — the shape the Zig C backend emits for
+        // `((arr_N_T*)&g)->array[i] = rhs` - the shape the Zig C backend emits for
         // the @memset/@memcpy fill/copy loop of a 64-bit-element array (and any
         // direct global-array element store that isn't first hoisted to a `&...`
         // temp). structTagOf diverts these wrappers, so the generic field-store
@@ -5707,7 +5707,7 @@ const Transpiler = struct {
             }
         }
         // C ternary `cond ? a : b`. The backend lowers most branches to gotos,
-        // but emits an INLINE ternary for a few builtins — `@min`/`@max` become
+        // but emits an INLINE ternary for a few builtins - `@min`/`@max` become
         // `(x < y) ? x : y`. Without this, the `?`/`:` were unparsed: the condition
         // leaked through as the value and the arms were dropped (an orphaned `a;`),
         // silently miscompiling every `@min`/`@max`. Right-associative: the else
@@ -5780,7 +5780,7 @@ const Transpiler = struct {
             // BigInt<->Number mixing throws on arithmetic/bitwise/shift (NOT on
             // comparisons, which JS coerces). The C backend casts mixed-WIDTH operands
             // to a common width, but NOT shift amounts (`u64 << UINT8_C(n)`) or the odd
-            // un-cast literal — so when exactly one side is a 64/128-bit BigInt, lift the
+            // un-cast literal - so when exactly one side is a 64/128-bit BigInt, lift the
             // Number side with BigInt(...). asUintN/asIntN at the enclosing assignment
             // re-narrows, so an over-wide intermediate is fine.
             var l: []const u8 = left;
@@ -5806,7 +5806,7 @@ const Transpiler = struct {
         return left;
     }
 
-    // Prefix level: -, +, !, ~, and the interesting one — `*ptr` loads, which read
+    // Prefix level: -, +, !, ~, and the interesting one - `*ptr` loads, which read
     // through the correct heap view for the pointee (`*structPtr` is identity,
     // since a struct value just IS its heap offset). Non-prefix tokens fall through
     // to parsePostfix.
@@ -5853,7 +5853,7 @@ const Transpiler = struct {
                 // tag-tracking address walker FIRST so a nested `&field->member`
                 // chain (`*(&(&S->inner)->a)`) and a global cast-pointer + member
                 // fold the trailing `->field` into a heap *load*. Only if that
-                // can't model the shape do we fall back to the postfix parse —
+                // can't model the shape do we fall back to the postfix parse -
                 // which, for a nested member, leaks the intermediate address as a
                 // JS property access (`(addr).a` -> undefined -> 0), the silent
                 // read miscompile this ordering fixes. (A bare `*(&ident)` is
@@ -5905,7 +5905,7 @@ const Transpiler = struct {
                         }
                     }
                 }
-                // general: *( (T *) <addr> )  — infer the view from the cast type.
+                // general: *( (T *) <addr> )  - infer the view from the cast type.
                 if (eql(u8, nx.text, "(")) {
                     if (try self.tryDerefCast()) |loaded| {
                         return loaded;
@@ -5941,7 +5941,7 @@ const Transpiler = struct {
                 // indirect call later does __FTABLE[idx](args). A direct call
                 // `fn(args)` never reaches here (it parses as a plain call), and the
                 // working const-fn-ptr case is fully resolved by the C backend to
-                // direct calls, so it never emits `&fn` — only mutable fn-ptr
+                // direct calls, so it never emits `&fn` - only mutable fn-ptr
                 // stores do, which is exactly what this enables.
                 if (self.current().kind == .ident) {
                     if (self.fn_index.get(self.current().text)) |idx| {
@@ -5963,7 +5963,7 @@ const Transpiler = struct {
                     const idx: []const u8 = try self.parseExpr();
                     self.expect("]");
                     // pointee size: a struct pointer (`[*]S` / `*S`) strides by
-                    // the WHOLE struct size — which is recorded as ty.struct_tag,
+                    // the WHOLE struct size - which is recorded as ty.struct_tag,
                     // NOT ty.elem (struct-pointer locals are registered with a tag
                     // but no elem), so consulting only ty.elem here struck a stride
                     // of 1 and silently miscompiled `&p[i]` (and thus `p[i].field`
@@ -5990,8 +5990,8 @@ const Transpiler = struct {
                     // &structVar.field[.field...][i] -> base address + summed
                     // field offsets (+ [i]*elem). Walks nested aggregates so a
                     // tagged union's `&v.payload.member` resolves. The base is a
-                    // local/global's slot offset, or — for a struct value-param,
-                    // which holds its heap offset at runtime — the param value.
+                    // local/global's slot offset, or - for a struct value-param,
+                    // which holds its heap offset at runtime - the param value.
                     if (self.struct_vars.get(op.text)) |tag0| {
                         const base0: ?[]const u8 = if (self.globals.get(op.text)) |off0|
                             try self.scratchBase(op.text, off0)
@@ -6035,7 +6035,7 @@ const Transpiler = struct {
                     // accessed through a pointer (`&ptr->payload.rect`) needs the
                     // nested walk, otherwise only `->payload` was consumed and the
                     // trailing `.rect` leaked onto the (cast) result as a JS property
-                    // access — `(addr).rect` -> undefined -> a read at address ~0,
+                    // access - `(addr).rect` -> undefined -> a read at address ~0,
                     // silently zeroing the captured payload.
                     if (self.struct_ptrs.get(op.text)) |tag| {
                         if (eql(u8, self.lookahead(1).text, "->") and
@@ -6108,7 +6108,7 @@ const Transpiler = struct {
                     self.pending_struct_tag = null;
                     self.pending_ptr_elem = null;
                     // &((ELEM*)X)[i] : the ADDRESS of the i-th element of a cast
-                    // pointer (X + i*size) — NOT a heap load. The Zig C backend emits
+                    // pointer (X + i*size) - NOT a heap load. The Zig C backend emits
                     // this for `p[i] = v` and `p[i].field` through a `[*]T`/`[*:0]T`
                     // pointer that it folds to a known base. Without it the primary's
                     // value path turns `((ELEM*)X)[i]` into a heap *load* and the
@@ -6143,7 +6143,7 @@ const Transpiler = struct {
                     // LAST RESORT before the value path can leak a property
                     // access: the general tag-tracking lvalue walker. The C
                     // backend nests member addresses as
-                    // `&(&(&((T*)&g))->a)->b)->array[i]` — e.g. a fixed array
+                    // `&(&(&((T*)&g))->a)->b)->array[i]` - e.g. a fixed array
                     // inside a struct inside a GLOBAL struct, exactly the shape a
                     // single consolidated `var g` produces. The specialized
                     // handlers above own their proven shapes (incl. relocated
@@ -6344,7 +6344,7 @@ const Transpiler = struct {
                             self.expect("]");
                             // array of STRUCTS: stride by the element struct's whole
                             // size and yield the element's ADDRESS (a struct pointer),
-                            // recording its tag — NOT a scalar load with the int stride.
+                            // recording its tag - NOT a scalar load with the int stride.
                             if (f.struct_tag) |etag| {
                                 if (self.structs.get(etag)) |el| {
                                     self.pending_struct_tag = etag;
@@ -6374,7 +6374,7 @@ const Transpiler = struct {
                         }
                     }
                     // <ptr>->array[idx] where the pointer's pointee is itself an
-                    // array wrapper — e.g. a 2D array `[N][M]T`: the C backend reads
+                    // array wrapper - e.g. a 2D array `[N][M]T`: the C backend reads
                     // an inner row via `(&outer.array[i])->array[j]`. chain_tag/
                     // chain_addr already resolve a struct pointer (struct_ptrs) to
                     // its base address; stride into its `array` field instead of
@@ -6411,7 +6411,7 @@ const Transpiler = struct {
                 }
                 // Field access via the tracked struct chain (handles struct
                 // value-params accessed with `.`, struct pointers with `->`, and
-                // nested `a.b.c` — including a tagged union's `s.payload.member`).
+                // nested `a.b.c` - including a tagged union's `s.payload.member`).
                 if (chain_tag) |tg| {
                     if (self.fieldOf(tg, field)) |f| {
                         const addr: []u8 = try allocPrint(
@@ -6448,7 +6448,7 @@ const Transpiler = struct {
                             self.expect("]");
                             if (elem.struct_tag) |etag| {
                                 // pointee is a struct (`[]const Pt`): the element is
-                                // a struct VALUE — yield its address and advance the
+                                // a struct VALUE - yield its address and advance the
                                 // chain so a following `.field` (or a struct copy)
                                 // resolves against it.
                                 if (self.structs.get(etag)) |el| {
@@ -6560,7 +6560,7 @@ const Transpiler = struct {
         // '*' would make tyFromSpecifiers report a pointer and lose float-ness.
         const specs: []const Token = self.toks[spec_start .. star_idx orelse self.p];
         self.p += 1; // )
-        // A struct-typed cast (`(struct Tag *)…`) — record the tag so the
+        // A struct-typed cast (`(struct Tag *)...`) - record the tag so the
         // deref load/store copies the whole struct instead of a scalar.
         if (structTagOf(self, specs)) |tag| {
             if (self.structs.contains(tag)) {
@@ -6605,7 +6605,7 @@ const Transpiler = struct {
         var addr: []const u8 = try self.parseUnary(); // &global / address expression
         // optional pointer arithmetic: (T*)<base> + <index>  -> base + index*sizeof(T).
         // For a struct pointee the stride is the whole struct size, not the
-        // scalar elemSize of the (default 32-bit) element record — otherwise a
+        // scalar elemSize of the (default 32-bit) element record - otherwise a
         // `*((Pt*)&arr + i)` whole-struct copy strides by 4 and reads mid-struct.
         if (self.atText("+")) {
             self.p += 1;
@@ -6624,13 +6624,13 @@ const Transpiler = struct {
             self.expect(")");
         }
         // A whole-struct load (*(struct Tag*)addr) evaluates to the struct's
-        // address — struct values ARE heap offsets in this model.
+        // address - struct values ARE heap offsets in this model.
         if (e.struct_tag != null) {
             return try allocPrint(self.gpa, "({s})", .{addr});
         }
         // PRIMITIVE-element array wrappers (`arr_N_u64`, ...) are diverted by
         // structTagOf (parseCastElem yields a scalar), so without this branch a
-        // whole-array value load `*(arr_N_T*)&g` would lower to a 32-bit heapLoad —
+        // whole-array value load `*(arr_N_T*)&g` would lower to a 32-bit heapLoad -
         // reading arr[0]'s low word and using it as a (garbage) copy SOURCE address.
         // Like a struct, a whole-array value IS its heap offset: recover the wrapper
         // from the cast tokens and return the address.
@@ -6758,7 +6758,7 @@ const Transpiler = struct {
             return try self.parseLValueAddr();
         }
         if (self.atText("(")) {
-            // (T *) ADDR : a pointer cast — base address from ADDR, type from T.
+            // (T *) ADDR : a pointer cast - base address from ADDR, type from T.
             if (self.isCastAhead()) {
                 const e: Elem = self.parseCastElem() orelse return null; // consumes "( T * )"
                 const addr: []const u8 = try self.parseUnary(); // &global / pointer expression
@@ -6870,7 +6870,7 @@ const Transpiler = struct {
         return cur;
     }
 
-    /// Read `*(&LVALUE)` — identity with LVALUE, loaded through the right heap
+    /// Read `*(&LVALUE)` - identity with LVALUE, loaded through the right heap
     /// view. self.p at the leading '*'. Returns null (restoring) on mismatch.
     fn tryDerefAddrOf(self: *Transpiler) error{OutOfMemory}!?[]const u8 {
         const save: usize = self.p;
@@ -7046,7 +7046,7 @@ const Transpiler = struct {
     /// `((arr_N_T*)&global)->array[idx] = rhs`  ->  heapStore at off + idx*size.
     /// Mirrors tryArrayWrapperAddr but consumes the `= rhs` and emits the store
     /// (routing a 64-bit element through __st64). Returns null (without consuming)
-    /// if the shape — including the trailing `=` — doesn't match.
+    /// if the shape - including the trailing `=` - doesn't match.
     fn tryArrayWrapperStore(self: *Transpiler) error{OutOfMemory}!?[]const u8 {
         const save: usize = self.p;
         if (!self.atText("(")) {
@@ -7125,7 +7125,7 @@ const Transpiler = struct {
         const idx: []const u8 = try self.parseExpr();
         self.expect("]");
         if (!self.atText("=") or eql(u8, self.lookahead(1).text, "=")) {
-            self.p = save; // not a plain assignment — let the rvalue path handle it
+            self.p = save; // not a plain assignment - let the rvalue path handle it
             return null;
         }
         self.p += 1; // =
@@ -7144,7 +7144,7 @@ const Transpiler = struct {
 
     /// Render `arg` (already-emitted JS for a u64 word) as a BigInt-valued expression.
     /// A bare integer literal is turned into a BigInt LITERAL (`123n`) so values above
-    /// 2^53 keep full precision — `BigInt(18446744072709551609)` would first round the
+    /// 2^53 keep full precision - `BigInt(18446744072709551609)` would first round the
     /// Number literal and lose the low bits. Non-literal expressions use `BigInt(...)`.
     fn bigLit(self: *Transpiler, arg: []const u8) error{OutOfMemory}![]const u8 {
         var s: []const u8 = arg;
@@ -7184,9 +7184,9 @@ const Transpiler = struct {
     /// Lower a 128-bit C-backend helper call `zig_<op>_<u|i>128(args...)` to a BigInt
     /// expression. Returns null for ops we don't model yet (caller emits a loud marker).
     /// A u128/i128 value is represented as a BigInt; `lo`/`hi` convert a 64-bit word to a
-    /// Number at the boundary (lossy beyond 2^53 — the same limit as the 64-bit ABI).
+    /// Number at the boundary (lossy beyond 2^53 - the same limit as the 64-bit ABI).
     /// True if `name` is a wide-integer arithmetic helper `zig_<op>_<u|i><64|128>` for
-    /// an op bigIntWide lowers — so it can be intercepted BEFORE its args are consumed,
+    /// an op bigIntWide lowers - so it can be intercepted BEFORE its args are consumed,
     /// while clz/ctz/popcount/overflow helpers (same _u64 tail) fall through.
     fn isWideArith(self: *Transpiler, name: []const u8) bool {
         _ = self;
@@ -7236,7 +7236,7 @@ const Transpiler = struct {
 
     /// Parse zig.h's trailing `bits` argument (arrives as `UINT8_C(N)`, already
     /// unwrapped to `N` by the literal handler). On failure keep going with
-    /// `dflt` so the transpile still reports everything at once, but RECORD it —
+    /// `dflt` so the transpile still reports everything at once, but RECORD it -
     /// a wrong width means a dropped mask on every sub-width integer downstream.
     fn bitsArg(self: *Transpiler, e: []const u8, dflt: u16) u16 {
         const text: []const u8 = trim(u8, e, "() ");
@@ -7386,7 +7386,7 @@ const Transpiler = struct {
             // `not` carries its width as the SECOND arg, not the third: the
             // generic `bits` above is for the three-arg wrapping ops (a, b, bits),
             // and `zig_not_uN(x, bits)` has only two. A u48 arrives as
-            // `zig_not_u64(x, 48)` and must mask at 48 — masking at the uint64_t
+            // `zig_not_u64(x, 48)` and must mask at 48 - masking at the uint64_t
             // STORAGE width leaves all 16 bits above the declared width set, so
             // `~x` compared against `x ^ maxInt(48)` disagreed. (Signed is
             // indifferent: `~x` of a sign-extended iN is already in range at
@@ -7421,14 +7421,14 @@ const Transpiler = struct {
             self.last_w = 0;
             return try allocPrint(self.gpa, "(({s})<({s})?-1:({s})>({s})?1:0)", .{ a, b, a, b });
         }
-        return null; // anything still unmodeled — caller emits a loud marker
+        return null; // anything still unmodeled - caller emits a loud marker
     }
 
     /// Monomorphic call emission. A facade call (`Value.call`/`callVoid`) carries a
     /// comptime-literal method name, which Zig lowers to a (ptr,len) into a static
     /// data constant. Resolving that constant back to the name at emit time lets us
     /// emit a direct `__H[recv].name(args)` rather than the generic
-    /// `__H[o][__jstr(p,l)].call(__H[o], …)`. A direct, inline-cacheable method call
+    /// `__H[o][__jstr(p,l)].call(__H[o], ...)`. A direct, inline-cacheable method call
     /// avoids decoding the name and the dynamic `obj[key]` lookup on every call.
     /// Conservative: a name that does not resolve to a plain identifier at a known
     /// data offset falls back to the exact generic kernel call, so output stays correct.
@@ -7467,7 +7467,7 @@ const Transpiler = struct {
             }
         }
         self.expect(")");
-        // every js_call*(o, p, l, …arity args). Anything off-shape -> exact rebuild.
+        // every js_call*(o, p, l, ...arity args). Anything off-shape -> exact rebuild.
         if (args.items.len != 3 + arity) {
             return try self.rebuildCall(name, args.items);
         }
@@ -7526,9 +7526,9 @@ const Transpiler = struct {
         return b.items;
     }
 
-    /// Monomorphic property access — the get/set analogue of tryMonoCall. A facade
+    /// Monomorphic property access - the get/set analogue of tryMonoCall. A facade
     /// `.get`/`.set`/`.getNum`/`.set`(numeric) also carries a comptime-literal property
-    /// name; resolve it and emit `__H[o].name` / `__H[o].name = …` directly instead of
+    /// name; resolve it and emit `__H[o].name` / `__H[o].name = ...` directly instead of
     /// the dynamic `__H[o][__jstr(p,l)]`. Same conservative fallback to the exact kernel.
     fn tryMonoProp(self: *Transpiler, name: []const u8) error{OutOfMemory}!?[]const u8 {
         const is_get = eql(u8, name, "js_get");
@@ -7592,10 +7592,10 @@ const Transpiler = struct {
             return m;
         }
         // Noreturn trap primitives: a reached `unreachable`, an explicit @trap(), or the
-        // tail of a panic chain (a safety check that failed). These MUST halt — emit a
+        // tail of a panic chain (a safety check that failed). These MUST halt - emit a
         // throw so integer-overflow / bounds / reached-unreachable panics in Debug &
         // ReleaseSafe builds are loud, instead of being dropped (zig.h lowers them as
-        // function-like macros, which the preprocessor otherwise ignores → the panic
+        // function-like macros, which the preprocessor otherwise ignores -> the panic
         // would silently fall through and the wrapped value would be returned).
         if (eql(u8, name, "zig_unreachable") or eql(u8, name, "zig_trap")) {
             if (self.atText("(")) {
@@ -7607,7 +7607,7 @@ const Transpiler = struct {
         // Atomics. Single-threaded wasm: lower to a plain load / store / read-modify-
         // write (memory ordering is a no-op). The C backend emits these as function-
         // like macros the preprocessor ignores, so without this they were SILENTLY
-        // DROPPED — an atomic store / RMW vanished and an atomic load left a stale
+        // DROPPED - an atomic store / RMW vanished and an atomic load left a stale
         // temp. Shapes (the result of a load/RMW is written to the FIRST arg, a local):
         //   zig_atomic_store(ptr, val, order, T, CT)        -> *ptr = val
         //   zig_atomic_load(res, ptr, order, T, CT)         -> res = *ptr
@@ -7626,7 +7626,7 @@ const Transpiler = struct {
                     }
                 }
                 self.expect(")");
-                // Element type = the Zig width token (u8/i32/u64/u40/…) among the args.
+                // Element type = the Zig width token (u8/i32/u64/u40/...) among the args.
                 var elem: Elem = .{ .bits = 32, .signed = false, .float = false };
                 for (args.items) |a| {
                     if (elemFromName(a)) |e2| {
@@ -7740,7 +7740,7 @@ const Transpiler = struct {
             return try self.gpa.dupe(u8, "0");
         }
 
-        // scalars as `memcpy(&dst, &src, N)` — a byte reinterpretation through the
+        // scalars as `memcpy(&dst, &src, N)` - a byte reinterpretation through the
         // addresses of two locals. Local scalars aren't heap-backed (they're JS
         // variables), so a literal heap memcpy is meaningless here. Reinterpret
         // the bits correctly by staging through a typed-view scratch slot: store
@@ -7765,7 +7765,7 @@ const Transpiler = struct {
                 // (heap-backed at a known offset); it is resolved here because the
                 // normal path would treat the local's *value* as an address.
                 // A packed-struct (or other address-taken) local is heap-backed at
-                // a scratch slot with NO plain JS variable — its canonical location
+                // a scratch slot with NO plain JS variable - its canonical location
                 // is the slot, exactly like a global. Fold it into the global path so
                 // the byte-reinterpret reads/writes the slot instead of a bare name
                 // (which was never declared: `t7 is not defined`).
@@ -7809,7 +7809,7 @@ const Transpiler = struct {
                     } else if (b_glob) |b_off| {
                         // dst local, src global (`local = @bitCast(CONST)`):
                         // reinterpret the global's bytes as dst's type, in place.
-                        // A 64-bit INT dst is a BigInt — read it with __ld[u/i]64
+                        // A 64-bit INT dst is a BigInt - read it with __ld[u/i]64
                         // (two words), not a 32-bit typed-view load.
                         const ea: Elem = elemOfTy(a_local.?.ty);
                         const rd: []const u8 = if (ea.bits == 64 and !ea.float)
@@ -7825,7 +7825,7 @@ const Transpiler = struct {
                         const a_off: u32 = a_glob.?;
                         const eb: Elem = elemOfTy(b_local.?.ty);
                         const n: u32 = (@as(u32, eb.bits) + 7) / 8;
-                        // A 64-bit src is a BigInt — it must be staged with __st64
+                        // A 64-bit src is a BigInt - it must be staged with __st64
                         // (two 32-bit words); a typed-view store (`__HEAPU32[..] =
                         // bigint`) throws "Cannot convert a BigInt value to a number".
                         const stage: []const u8 = if (eb.bits == 64 and !eb.float)
@@ -7958,13 +7958,13 @@ const Transpiler = struct {
         }
         // @bitCast(float) -> integer repr: `zig_u32_bitCast_f32(x)`,
         // `zig_u64_bitCast_f64(x)` and their signed forms. ONE argument and no
-        // width, so castHelper() below does NOT match these — its pattern wants
+        // width, so castHelper() below does NOT match these - its pattern wants
         // an integer SOURCE (`zig_<u|i>N_<op>_<u|i>M`), and here the source is a
         // float. They reached the marker and lowered to 0, which is the silent
         // kind of wrong: a float printer reading bits it never got.
         //
         // The inverse direction (int bits -> float) is __f32bits/__f64bits above.
-        // f16 and f80 are deliberately NOT modelled — DataView has no portable
+        // f16 and f80 are deliberately NOT modelled - DataView has no portable
         // f16/f80 accessor, and a wrong answer there is worse than a loud marker.
         if (indexOf(u8, name, "_bitCast_f") != null and
             (endsWith(u8, name, "_f32") or endsWith(u8, name, "_f64")))
@@ -7996,7 +7996,7 @@ const Transpiler = struct {
         // dest) at the DESTINATION width, so they lower through the very same
         // wrap() as `zig_wrap_uN` below. Note these are NOT identity even when
         // src and dst widths match: `bits` can be narrower (a packed u9 in a u32).
-        // Falling through to the unhandled-helper marker emitted a literal 0 —
+        // Falling through to the unhandled-helper marker emitted a literal 0 -
         // silently wrong data rather than a crash.
         if (self.castHelper(name)) |ch| {
             self.expect("(");
@@ -8036,7 +8036,7 @@ const Transpiler = struct {
             // The width is the SECOND arg, emitted as `UINTxx_C(N)`; parse the
             // transpiled expression (the `_C` wrapper handler unwraps it to `N`)
             // rather than the raw leading token (`UINTxx_C`), which would fail to
-            // parse and silently default to 32 — dropping the mask / the
+            // parse and silently default to 32 - dropping the mask / the
             // sign-extension for any sub-32-bit field (e.g. a packed `i7`).
             const bits_e: []const u8 = try self.parseExpr();
             self.expect(")");
@@ -8162,7 +8162,7 @@ const Transpiler = struct {
                 // (lt:`<0`, le:`<=0`, gt:`>0`, ge:`>=0`, eq:`==0`, ne:`!=0`). A single
                 // spaceship returns 0 for an unordered (NaN) compare, which is correct
                 // only for lt/gt but WRONG for le/ge/eq/ne (`0<=0`, `0>=0`, `0==0` are
-                // true; `0!=0` is false) — so `NaN <= x` / `NaN == NaN` came out true
+                // true; `0!=0` is false) - so `NaN <= x` / `NaN == NaN` came out true
                 // and `NaN != NaN` false. Emit a per-operator value that, under that
                 // wrap, equals the IEEE result (NaN unordered: all false except !=).
                 if (startsWith(u8, name, "zig_lt_f")) {
@@ -8556,7 +8556,7 @@ const Transpiler = struct {
         // these (rather than bare operators) for e.g. packed-struct field reads.
         // For <=32-bit, JS &|^ are exact. For 64-bit, JS bitwise truncates to 32
         // bits, so split into hi/lo halves (correct within 2^53). (Bare-operator
-        // 64-bit bitwise stays a type-light gap — see EXPRESSIONS — but these
+        // 64-bit bitwise stays a type-light gap - see EXPRESSIONS - but these
         // width-carrying helper forms we can do right.)
         {
             const BitwiseOp = enum { band, bor, bxor };
@@ -8632,12 +8632,12 @@ const Transpiler = struct {
         // ~x: zig_not_uN(x, bits) / zig_not_iN(x, bits), for N of 8/16/32. The
         // 1857 compiler routes every integer `~` through these instead of
         // emitting the C operator, so before this handler a narrow bitwise NOT
-        // reached the unhandled-helper marker and lowered to 0 — which took MD5
+        // reached the unhandled-helper marker and lowered to 0 - which took MD5
         // and math.rotl with it. (The _u64/_i64/_u128/_i128 spellings never get
         // here: isWideArith intercepts them for the BigInt path above.)
         //
         // zig.h spells these `arg ^ maxInt_u(N, bits)` (unsigned) and `~arg`
-        // (signed, bits unused) — both are `~x` narrowed to the DECLARED width,
+        // (signed, bits unused) - both are `~x` narrowed to the DECLARED width,
         // which is exactly what wrap() does: `>>> 0` at u32, `& mask` below it,
         // and a shift pair to sign-extend the signed forms.
         //
@@ -8664,8 +8664,8 @@ const Transpiler = struct {
         // single-arg bit builtins -> width-aware kernel helpers.
         //
         // BOTH SPELLINGS ARE LIVE. Compiler 1857 renamed three of these five in
-        // zig.h to camelCase — popcount -> popCount, byte_swap -> byteSwap,
-        // bit_reverse -> bitReverse — while clz and ctz kept their snake form.
+        // zig.h to camelCase - popcount -> popCount, byte_swap -> byteSwap,
+        // bit_reverse -> bitReverse - while clz and ctz kept their snake form.
         // c2js consumes C, not a compiler, so a C file emitted by either
         // toolchain must transpile; the old prefixes stay. A missing spelling is
         // NOT a compile error here, it is a silent lowering to 0, so this table
@@ -8686,7 +8686,7 @@ const Transpiler = struct {
                 self.expect("(");
                 const a: []const u8 = try self.parseExpr();
                 // The ACTUAL type width is the SECOND C arg (e.g. zig_clz_u64(x, 48)
-                // for a u48 — the `u64` suffix is just the storage type). @clz, @ctz's
+                // for a u48 - the `u64` suffix is just the storage type). @clz, @ctz's
                 // zero case, @byteSwap and @bitReverse all depend on the real width, so
                 // a u40/u48 computed leading zeros / swapped bytes over 64 bits.
                 // Prefer the second arg; fall back to the name suffix when absent.
@@ -8736,7 +8736,7 @@ const Transpiler = struct {
 
         // saturating left shift: zig_shls_TN(a, b, bits) -> clamp(a << b). Since
         // `a << b` == `a * 2^b` mathematically, this is clamp(a * 2^b) to the
-        // N-bit range — the same clamp the saturating add/sub/mul use. The float
+        // N-bit range - the same clamp the saturating add/sub/mul use. The float
         // product is exact below 2^53 (the no-overflow case for <=32-bit types)
         // and far above the range otherwise, so the saturation decision is
         // reliable. Without this, `<<|` hit the unhandled-helper marker and
@@ -8872,7 +8872,7 @@ const Transpiler = struct {
                         // exceeds 2^53, so use Math.imul (exact mod 2^32; the
                         // typed-view store then truncates to the field width).
                         // Math.imul truncates to 32 bits, so it is NOT used for a
-                        // 64-bit multiply — that stays a Number multiply, bounded
+                        // 64-bit multiply - that stays a Number multiply, bounded
                         // by the 2^53 int64 ABI like the rest of 64-bit math.
                         const wrapped: []const u8 = if (kind == .mul and wn <= 32)
                             try allocPrint(self.gpa, "Math.imul({s}, {s})", .{ a, b })
@@ -8911,7 +8911,7 @@ const Transpiler = struct {
         // Safety net: any OTHER zig.h runtime helper we don't model. Emitting it
         // verbatim would call an undefined function and throw at runtime with no
         // warning; instead consume the call and leave a visible marker (same
-        // philosophy as the recursion marker — make the gap loud, not silent).
+        // philosophy as the recursion marker - make the gap loud, not silent).
         if (startsWith(u8, name, "zig_") and self.atText("(")) {
             const close: usize = self.matching(self.p, "(", ")");
             self.p = close + 1;
@@ -8939,8 +8939,8 @@ const Transpiler = struct {
                 // compound literal: ( struct Tag ) { f0, f1, ... }
                 if (close + 1 < self.toks.len and eql(u8, self.toks[close + 1].text, "{")) {
                     // structTypeNameOf (not structTagOf) so a primitive-array
-                    // wrapper like `(arr_4_i32){{1,2,3,4}}` — a local array's
-                    // initializer — is materialized in scratch rather than
+                    // wrapper like `(arr_4_i32){{1,2,3,4}}` - a local array's
+                    // initializer - is materialized in scratch rather than
                     // discarded; parseCompoundLiteral lays out its element bytes.
                     const tag: ?[]const u8 = structTypeNameOf(self.toks[self.p + 1 .. close]);
                     self.p = close + 1; // move to '{'
@@ -8957,7 +8957,7 @@ const Transpiler = struct {
                     return self.gpa.dupe(u8, "0");
                 }
                 // Pointer cast in value context: `(T*)<base> + <n>` is C pointer
-                // arithmetic — the offset scales by the pointee size. (A plain
+                // arithmetic - the offset scales by the pointee size. (A plain
                 // identity cast with no trailing +/- falls through unchanged.)
                 var cast_ty: CType = tyFromSpecifiers(self.toks[self.p + 1 .. close]);
                 // A type-alias base (enum tag typedef): when the specs are a
@@ -9014,12 +9014,12 @@ const Transpiler = struct {
                         self.pending_ptr_elem = null;
                     } else {
                         // `(ELEM*)base [idx]` for a SCALAR pointee is `*(p + idx)`, a
-                        // heap load — not a JS subscript (the generic postfix `[idx]`
+                        // heap load - not a JS subscript (the generic postfix `[idx]`
                         // handler would emit `(base)[idx]` on a heap offset ->
                         // `undefined` -> 0). The Zig C backend emits this when it folds
                         // a slice/`[*:0]` pointer to a known base (e.g. a sentinel
                         // slice's `s.ptr[i]` -> `((u32*)&arr)[i]`), usually wrapped in
-                        // parens, so the `[idx]` lands at postfix level — record the
+                        // parens, so the `[idx]` lands at postfix level - record the
                         // pointee element and let parsePostfix turn the subscript into
                         // a heap load (and the `&`-handler into an element address).
                         self.pending_ptr_elem = pe;
@@ -9101,7 +9101,7 @@ const Transpiler = struct {
                 // u64 because its other caller is the data-image writer, which
                 // truncates to the slot width. An EXPRESSION has no slot to
                 // truncate against, so printing that u64 verbatim made INT8_MIN
-                // read as 18446744073709551488 — and `x != INT8_MIN` is then
+                // read as 18446744073709551488 - and `x != INT8_MIN` is then
                 // ALWAYS true. Silent: no marker, no error, just a comparison
                 // that can never hold. Emit the signed value here.
                 if (endsWith(u8, t.text, "_MIN")) {
@@ -9121,7 +9121,7 @@ const Transpiler = struct {
                 0;
             return self.gpa.dupe(u8, self.applyDefine(t.text));
         }
-        // unknown — consume and emit a marker so we can see it in output
+        // unknown - consume and emit a marker so we can see it in output
         self.p += 1;
         return allocPrint(self.gpa, "/*?{s}*/ 0", .{t.text});
     }
@@ -9149,12 +9149,12 @@ fn readAllStdin(gpa: Allocator, io: std.Io) ![]u8 {
     return list.toOwnedSlice(gpa);
 }
 
-// Write all bytes to stdout (cross-platform via std.Io) — the plain-filter output.
+// Write all bytes to stdout (cross-platform via std.Io) - the plain-filter output.
 fn writeAllStdout(io: std.Io, bytes: []const u8) !void {
     try File.stdout().writeStreamingAll(io, bytes);
 }
 
-// Write all bytes to stderr (usage / errors — keeps stdout a clean JS stream).
+// Write all bytes to stderr (usage / errors - keeps stdout a clean JS stream).
 fn writeAllStderr(io: std.Io, bytes: []const u8) !void {
     try File.stderr().writeStreamingAll(io, bytes);
 }
@@ -9291,7 +9291,7 @@ fn buildSourceMap(
     return json.toOwnedSlice(gpa);
 }
 
-// Program entry — wires the whole pipeline together. Arena-allocate everything,
+// Program entry - wires the whole pipeline together. Arena-allocate everything,
 // read C from stdin, preprocess, tokenize (tagging each token with its C line
 // for the source map), then build a Transpiler and run it. Afterwards write the
 // JS to stdout, and if a basename arg was passed, also write "<name>.js.map" and
@@ -9399,7 +9399,7 @@ pub fn main(init: std.process.Init) !void {
 
     // tokenize, tagging each token with its 1-based line in the C source so the
     // source map can point JS positions back at the (mangled but identifier-
-    // preserving) C — the closest debuggable source, since Zig's C backend emits
+    // preserving) C - the closest debuggable source, since Zig's C backend emits
     // no #line info to reach the original .zig.
     var lex = Lexer{ .src = pp.src };
     var toks: ArrayList(Token) = .empty;
@@ -9424,12 +9424,12 @@ pub fn main(init: std.process.Init) !void {
     try t.run();
 
     // GATE: c2js emits a `/*?...*/ 0` marker wherever it meets C it cannot
-    // model — an unmodeled zig.h helper, an atomic, a >64-bit packed field, or
+    // model - an unmodeled zig.h helper, an atomic, a >64-bit packed field, or
     // just an unknown token. The marker was always written to be "visible", but
     // nothing ever LOOKED at it, so a compiler bump that renamed zig.h's cast
     // helpers turned 99 call sites into a literal 0 and shipped green through
     // lint, fmt and verify_imports. EVERY marker is a silently wrong VALUE
-    // rather than a crash — the worst failure mode there is — so ANY marker, of
+    // rather than a crash - the worst failure mode there is - so ANY marker, of
     // ANY kind, is fatal here, not just the one that happened to bite us.
     // Guessed cast widths (bitsArg) are the same class with no trace in the
     // emitted JS, so they ride along in the same report.
@@ -9498,21 +9498,21 @@ pub fn main(init: std.process.Init) !void {
             const enc: std.base64.Base64Encoder = std.base64.standard.Encoder;
             const b64: []u8 = try gpa.alloc(u8, enc.calcSize(wbytes.len));
             _ = enc.encode(b64, wbytes);
-            // ── ★★★ THE BASE64 IS WRAPPED, AND THAT IS NOT COSMETIC ──
+            // -- *** THE BASE64 IS WRAPPED, AND THAT IS NOT COSMETIC --
             //
             // Emitted as one string, the wasm becomes a SINGLE LINE as long as the encoding:
-            // measured at **1 048 385 characters** for `zimrnum_field` — just under 2^20 — where
+            // measured at **1 048 385 characters** for `zimrnum_field` - just under 2^20 - where
             // `hello_world` sat at 747 949 and had always opened fine. That page was the first
             // to cross a megabyte on one line, and the first that Claude's Android viewer refused
             // to open while Chrome opened it happily. A per-line buffer limit is the obvious
             // suspect and this is the cheap way to stop provoking it.
             //
-            // ★★ SPLIT INTO JS STRING CONCATENATION, not by putting newlines inside the literal.
+            // ** SPLIT INTO JS STRING CONCATENATION, not by putting newlines inside the literal.
             // `atob` tolerating whitespace is implementation behaviour, not something the spec
             // promises, and a page that decodes on one engine and not another is worse than a
             // long line. `"a" + "b"` is unambiguous everywhere.
             //
-            // ★ 64 KB per chunk: comfortably under any plausible line limit, and few enough
+            // * 64 KB per chunk: comfortably under any plausible line limit, and few enough
             // concatenations that no parser is troubled by the expression depth.
             const chunk: usize = 64 * 1024;
             var js: std.ArrayList(u8) = .empty;
@@ -9545,7 +9545,7 @@ pub fn main(init: std.process.Init) !void {
         // of linear memory) and needs 96 imports a worker cannot provide (WebGPU, DOM).
         //
         // THE PURITY GATE LIVES HERE. A kernel must be a pure function of its bytes, so
-        // its wasm must import NOTHING — that is exactly what lets a worker instantiate
+        // its wasm must import NOTHING - that is exactly what lets a worker instantiate
         // it with `{}`. If a kernel reaches for the DOM or WebGPU, the linker records an
         // import, and we refuse to build rather than ship a page whose workers die on
         // instantiation. The failure is a build error naming the offending import, not a
@@ -9561,7 +9561,7 @@ pub fn main(init: std.process.Init) !void {
 
             // The worker MUST NOT contain `await`. An async onmessage yields, and a job
             // arriving during instantiation re-enters the handler with the kernel exports
-            // still unset — it throws inside the worker and is never heard from again. There
+            // still unset - it throws inside the worker and is never heard from again. There
             // is no `await` in Zig to reach for, so this can only fire if someone reintroduces
             // hand-written JS. Catch it HERE, where the message can say what went wrong.
             if (std.mem.indexOf(u8, wbytes, "await") != null) {
@@ -9591,7 +9591,7 @@ pub fn main(init: std.process.Init) !void {
         const kernel_setup: []const u8 = if (kernel_wasm_opt) |kpath| blk: {
             const kbytes: []u8 = try readFileAlloc(init.io, gpa, kpath);
 
-            // A kernel wasm with no `zimr_job_alloc` export has no kernels in it — the
+            // A kernel wasm with no `zimr_job_alloc` export has no kernels in it - the
             // root forgot to call `registry.exportWorkerEntry()`. That would sail through
             // the purity check below (nothing imported, because nothing is there) and
             // then fail at RUNTIME as a NoSuchKernel, in a worker, on a phone. Catch the

@@ -4,7 +4,7 @@
 // storage.  The unit tests in `src/ui.zig` cover the
 // implementation paths (round trip, type isolation, persist
 // recording).  This file tests the SHAPE that an extension
-// author actually writes — get-or-put, mutate in place,
+// author actually writes - get-or-put, mutate in place,
 // repeat next frame.
 //
 // Plus: the lint-zimr lint-rule audit catches the public-API
@@ -14,7 +14,7 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
-// GL-retirement P5a: retargeted at the LIVE umbrella — the namespace
+// GL-retirement P5a: retargeted at the LIVE umbrella - the namespace
 // shape these tests guard is now zimr's.
 const z = @import("../zimr.zig");
 
@@ -29,7 +29,7 @@ test "Q2 extension pattern: get-or-put + mutate + read next frame" {
         drag_origin: ?@Vector(2, f32) = null,
     };
 
-    // Frame 1: first call to the hypothetical knob() — no prior
+    // Frame 1: first call to the hypothetical knob() - no prior
     // state, so init a fresh one.
     const id: z.ui.Id = 0xCAFE;
     const r1 = u.getOrPutState(KnobState, id, .{});
@@ -52,7 +52,7 @@ test "extension pattern: StateOpts reachable through z.ui namespace" {
 
     const TestState = struct { val: i32 = 0 };
     // The `.{ .persist = true }` should resolve through z.ui.StateOpts
-    // — proves the type is reachable via the public namespace and
+    // - proves the type is reachable via the public namespace and
     // not just internal to ui.zig.
     const opts: z.ui.StateOpts = .{ .persist = true };
     _ = u.getOrPutState(TestState, 0, opts);

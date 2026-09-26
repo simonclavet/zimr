@@ -1,14 +1,14 @@
-//! three_leg — a Go1 standing on three legs, reaching with the fourth.
+//! three_leg - a Go1 standing on three legs, reaching with the fourth.
 //!
-//! ── ★ WHAT TO TRY ──
+//! -- * WHAT TO TRY --
 //!
 //! Pick a foot, press **lift**, and drive it with the three sliders. All four work. Turn off
-//! **shift the torso first** and the robot rolls over instantly, whichever foot you choose —
+//! **shift the torso first** and the robot rolls over instantly, whichever foot you choose -
 //! that is the whole point of the sway.
 //!
-//! ── ★★ WHY A FRONT FOOT AND NOT A REAR ONE ──
+//! -- ** WHY A FRONT FOOT AND NOT A REAR ONE --
 //!
-//! The Go1's centre of mass sits at **(−0.051, 0.001)** — 51 mm behind the middle of its feet,
+//! The Go1's centre of mass sits at **(-0.051, 0.001)** - 51 mm behind the middle of its feet,
 //! because the trunk's mass is not centred between the hips. So the four-foot stance is not
 //! symmetric about the mass, and the two diagonals are not equivalent:
 //!
@@ -18,19 +18,19 @@
 //! A 36 mm asymmetry, and it decides which leg a static walk can lift first. The panel shows
 //! the margin live so you can watch it change as the torso shifts.
 //!
-//! ── ★★★ AND WHY THE TORSO SHIFTS BEFORE THE FOOT LEAVES ──
+//! -- *** AND WHY THE TORSO SHIFTS BEFORE THE FOOT LEAVES --
 //!
 //! Lifting without shifting drops the mass onto the edge of a triangle it is already on, and
-//! the robot rolls over — measured, 180 degrees, every time, for all four feet. Real quadrupeds
+//! the robot rolls over - measured, 180 degrees, every time, for all four feet. Real quadrupeds
 //! sway before they step for exactly this reason, and it is why a static walk needs three feet
 //! down most of the time (`examples/quadruped` found duty 0.85 stands and 0.70 falls by
 //! experiment; this is the geometry underneath that number).
 //!
-//! ── ★ THE TWO BUGS THIS COST, BOTH INVISIBLE ──
+//! -- * THE TWO BUGS THIS COST, BOTH INVISIBLE --
 //!
 //! **`applyKeyframe` is not a memcpy.** `keyframes[0].qpos` is in the FILE's layout and the
-//! model's differs in the free joint's quaternion. Copying it raw put the robot UPSIDE DOWN —
-//! feet at z = 0.535, above a trunk at 0.27 — and every foot position and CM number computed
+//! model's differs in the free joint's quaternion. Copying it raw put the robot UPSIDE DOWN -
+//! feet at z = 0.535, above a trunk at 0.27 - and every foot position and CM number computed
 //! from it described an inverted machine. Nothing complained, because an inverted pose is a
 //! valid pose.
 //!
@@ -102,7 +102,7 @@ const State = struct {
     imported: rmj.Imported,
     data: rbt.Data,
 
-    /// The commanded reference pose, in the MODEL's layout — see the header on `applyKeyframe`.
+    /// The commanded reference pose, in the MODEL's layout - see the header on `applyKeyframe`.
     home: []f32,
     /// What `PoseHold` is actually given each tick: `home` with the torso shifted and the
     /// lifted foot moved, resolved to joint angles by per-leg IK.
@@ -116,7 +116,7 @@ const State = struct {
     /// The original stance, so a reset puts the feet back.
     pinned_home: [leg_count]Vec,
     /// Where the centre of mass sits relative to the root at the home stance. Constant enough
-    /// that the root position putting the CM on a goal is simply `goal − this`.
+    /// that the root position putting the CM on a goal is simply `goal - this`.
     com_home_offset: [2]f32,
     leg_act: [leg_count]ctl.Actuation,
     all_act: ctl.Actuation,
@@ -144,7 +144,7 @@ const State = struct {
     margin: f32,
     /// Which feet are carrying load this tick, one bit per leg.
     ///
-    /// ★ THE READOUT THAT WOULD HAVE SAVED A ROUND TRIP. "The wrong foot lifted" and "the robot
+    /// * THE READOUT THAT WOULD HAVE SAVED A ROUND TRIP. "The wrong foot lifted" and "the robot
     /// tipped and dropped a foot" look identical in a picture and are completely different
     /// faults. One bit per leg tells them apart instantly.
     contact_mask: u4,
@@ -172,7 +172,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const model: *const rbt.Model = &s.imported.model;
     s.data = try rbt.Data.init(gpa, model);
 
-    // ★ THROUGH `applyKeyframe`, NOT A COPY. See the file header.
+    // * THROUGH `applyKeyframe`, NOT A COPY. See the file header.
     _ = rmj.applyKeyframe(model, &s.data, s.robot.keyframes[0]);
     rbt.forward(model, &s.data);
     s.home = try gpa.dupe(f32, s.data.pos);
@@ -288,7 +288,7 @@ fn plantFeet(s: *State) void {
 
 /// Signed distance from `point` to the nearest edge of the support triangle. Positive inside.
 ///
-/// ★ A DIAGNOSTIC, NOT A PREDICATE. Measured, the robot stands happily at a margin of −0.11:
+/// * A DIAGNOSTIC, NOT A PREDICATE. Measured, the robot stands happily at a margin of -0.11:
 /// the lifted leg's own mass and the contact compliance carry it well outside the strict
 /// polygon. A stability test built on this number would reject configurations that work.
 fn supportMargin(tri: [3]Vec, point: Vec) f32 {
@@ -313,9 +313,9 @@ fn supportMargin(tri: [3]Vec, point: Vec) f32 {
 
 /// Rebuild `commanded`: shift the torso, place the lifted foot, pin the rest.
 ///
-/// ── ★★★ EVERYTHING HERE HAPPENS IN COMMAND SPACE ──
+/// -- *** EVERYTHING HERE HAPPENS IN COMMAND SPACE --
 ///
-/// The reference is `home` and the feet are pinned where they are AT `home` — never where the
+/// The reference is `home` and the feet are pinned where they are AT `home` - never where the
 /// robot has actually got to. A PD holds a load by sitting off its target, so the achieved pose
 /// is `home + steady-state error`; capture that and command it back and the error is zero, the
 /// torque is zero, and the robot collapses. Solving from the commanded pose keeps the error,
@@ -339,7 +339,7 @@ fn rebuildCommand(s: *State) void {
     goal[0] /= 3.0;
     goal[1] /= 3.0;
 
-    // ── ★★★ THE SHIFT IS A CLOSED LOOP ON THE MEASURED CM, NOT AN OPEN-LOOP RATIO ──
+    // -- *** THE SHIFT IS A CLOSED LOOP ON THE MEASURED CM, NOT AN OPEN-LOOP RATIO --
     //
     // Moving the torso by `d` does NOT move the centre of mass by `d`: the legs carry about
     // half the robot and largely stay where they are, so the CM follows roughly half as far.
@@ -356,22 +356,22 @@ fn rebuildCommand(s: *State) void {
     // which foot is coming up, so there is no constant to find.
     //
     // Integrating the measured error removes the constant. It converges on whatever
-    // displacement the geometry actually needs, and all four feet then work with ONE setting —
+    // displacement the geometry actually needs, and all four feet then work with ONE setting -
     // measured margin +0.071 for every one of them, which is the loop arriving at the same
     // place regardless of the leg. Too fast and it overshoots into a fall: 0.005 holds, 0.010
     // tips every foot.
     const live_com: Vec = s.data.subtree_com[rbt.world_body];
     if (s.walking) {
-        // ── ★★★ MARCH PLUS SWAY, AT A SPEED THE LEGS CAN FOLLOW ──
+        // -- *** MARCH PLUS SWAY, AT A SPEED THE LEGS CAN FOLLOW --
         //
         // The support centroid is a SWAY target, not a drive: lifting a front foot removes it
         // from the centroid so the target moves BACKWARD, and with no march the body walks
-        // itself backwards — measured, trunk at -0.200 while two feet had advanced. The march
+        // itself backwards - measured, trunk at -0.200 while two feet had advanced. The march
         // is what the feet have actually done, and the sway rides on top of it.
         //
-        // ★ AND THE SPEED IS SET BY LEG COMPLIANCE, NOT BY THE PLAN. Moving a 12 kg trunk means
+        // * AND THE SPEED IS SET BY LEG COMPLIANCE, NOT BY THE PLAN. Moving a 12 kg trunk means
         // bending springy legs against planted feet; at 0.25 m/s the body lagged its command by
-        // 0.21 m then overshot — a ±0.2 m oscillation that stretched a rear leg to its limit.
+        // 0.21 m then overshot - a +/-0.2 m oscillation that stretched a rear leg to its limit.
         // At 0.05 m/s it tracks and a full four-leg cycle completes.
         var mean_foot: f32 = 0;
         var mean_home: f32 = 0;
@@ -418,7 +418,7 @@ fn rebuildCommand(s: *State) void {
     }
     @memcpy(s.commanded, s.data.pos);
 
-    // ★ BACK TO THE LIVE STATE, AND RECOMPUTE. `plantFeet` reads `body_xpos`; leaving it on the
+    // * BACK TO THE LIVE STATE, AND RECOMPUTE. `plantFeet` reads `body_xpos`; leaving it on the
     // IK configuration places contacts centimetres from the real feet, and the robot is held up
     // by contacts that are not under it. This one missing call cost a day.
     @memcpy(s.data.pos, s.scratch_pose);
@@ -431,8 +431,8 @@ fn rebuildCommand(s: *State) void {
 fn controlTick(s: *State) void {
     const model: *const rbt.Model = &s.imported.model;
     if (s.walking) {
-        // ★ THE FOOT WAITS FOR THE MASS. The swing only begins once the measured margin says
-        // the centre of mass is actually over the triangle the other three feet make — a fixed
+        // * THE FOOT WAITS FOR THE MASS. The swing only begins once the measured margin says
+        // the centre of mass is actually over the triangle the other three feet make - a fixed
         // delay works right up until the shift is slower than the delay, and then the robot
         // steps off a support it has not reached.
         const leg: usize = crawl_order[s.steps_done % 4];
@@ -448,8 +448,8 @@ fn controlTick(s: *State) void {
                 s.pinned[leg] = s.swing_to;
                 s.swing = -1;
                 s.steps_done += 1;
-                // ★★★ AND THE MARGIN IS NOW STALE. `steps_done` has changed, so the next tick
-                // asks about a DIFFERENT support triangle — but `s.margin` still describes the
+                // *** AND THE MARGIN IS NOW STALE. `steps_done` has changed, so the next tick
+                // asks about a DIFFERENT support triangle - but `s.margin` still describes the
                 // one just finished, where the weight was deliberately shifted and the margin is
                 // comfortably positive. The gate would pass instantly and the next foot would
                 // leave the ground with no weight shift at all.
@@ -466,11 +466,11 @@ fn controlTick(s: *State) void {
         rbt.step(model, &s.data);
         return;
     }
-    // Shift first, then lift — a robot on three legs before its mass has moved is the one thing
+    // Shift first, then lift - a robot on three legs before its mass has moved is the one thing
     // a real quadruped never does.
     if (s.lifting) {
         s.shift_progress = @min(1.0, s.shift_progress + sim_timestep * 1.0);
-        // ★ THE FOOT WAITS FOR THE MASS, not for a timer: the lift only starts once the CM is
+        // * THE FOOT WAITS FOR THE MASS, not for a timer: the lift only starts once the CM is
         // actually inside the triangle. A fixed delay works until the shift is slower than the
         // delay, and then the robot steps off a support it has not reached yet.
         if (s.shift_progress >= 1.0 and (s.margin > 0.01 or !s.auto_shift)) {
@@ -480,7 +480,7 @@ fn controlTick(s: *State) void {
         s.lift_progress = @max(0.0, s.lift_progress - sim_timestep * 2.0);
         if (s.lift_progress <= 0.0) {
             s.shift_progress = @max(0.0, s.shift_progress - sim_timestep * 1.0);
-            // ★ UNWIND THE LEAN TOO. Without this the robot puts its foot down and stays
+            // * UNWIND THE LEAN TOO. Without this the robot puts its foot down and stays
             // leaning, so the next lift starts from a stance that is already committed.
             s.torso_offset[0] -= s.torso_offset[0] * sim_timestep * 2.0;
             s.torso_offset[1] -= s.torso_offset[1] * sim_timestep * 2.0;
@@ -516,8 +516,8 @@ fn update(f: *z.Frame, s: *State) void {
     defer s.ui_host.render(f);
     const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
 
-    // ★ PROFILING OFF ACROSS THE CONTROL LOOP. Physics runs at 500 Hz and each tick also does
-    // four IK solves, so a frame executes thousands of instrumented calls — each zone costing
+    // * PROFILING OFF ACROSS THE CONTROL LOOP. Physics runs at 500 Hz and each tick also does
+    // four IK solves, so a frame executes thousands of instrumented calls - each zone costing
     // two timestamps, which on wasm are two JS boundary crossings. Measured here: 5602 host
     // calls per frame before this, 200 after. The instrument is priced for a frame that does a
     // few things; everything outside this call is still profiled normally.
@@ -593,7 +593,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
         }
     }
 
-    // ★ THE SUPPORT TRIANGLE AND THE CENTRE OF MASS, which is what makes the demo worth
+    // * THE SUPPORT TRIANGLE AND THE CENTRE OF MASS, which is what makes the demo worth
     // watching: the whole question is whether the yellow dot is over the green triangle.
     var tri: [3]Vec = undefined;
     var k: usize = 0;
@@ -654,9 +654,9 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
 
         var index: i32 = s.lift_index;
         if (u.combo("which foot", &index, &leg_names, .{})) {
-            // ★★★ AND THE ACCUMULATED SHIFT GOES WITH IT. `torso_offset` is an integrator
+            // *** AND THE ACCUMULATED SHIFT GOES WITH IT. `torso_offset` is an integrator
             // aimed at ONE foot's support triangle. Leaving it in place when the selection
-            // changes means the torso is still leaning for the PREVIOUS choice — pick the
+            // changes means the torso is still leaning for the PREVIOUS choice - pick the
             // front right after the rear left and the mass is already thrown forward, so the
             // robot tips the instant a foot leaves. The symptom is "I chose one foot and a
             // different one came up", because the tipping lifts a foot nobody asked for.
@@ -668,11 +668,11 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.text("  goal until the mass is over the triangle", .{});
         u.separator();
 
-        // ★ WALK MODE: the same machinery, sequenced. Each leg shifts the weight, swings
-        // forward one stride, and plants — then the next. A full four-leg cycle completes.
+        // * WALK MODE: the same machinery, sequenced. Each leg shifts the weight, swings
+        // forward one stride, and plants - then the next. A full four-leg cycle completes.
         if (u.checkbox("WALK (crawl gait)", &s.walking)) {
-            // ★★★ A CLEAN START, AND THE MARGIN MUST BE STALE-PROOF. `s.margin` is computed for
-            // whichever leg was last EXCLUDED from the support triangle — the one the lift-mode
+            // *** A CLEAN START, AND THE MARGIN MUST BE STALE-PROOF. `s.margin` is computed for
+            // whichever leg was last EXCLUDED from the support triangle - the one the lift-mode
             // combo selected. The crawl starts on a different leg, so on the first tick the gate
             // would read a margin belonging to another triangle: if the robot had just been
             // holding a foot up, that margin is comfortably positive and the very first swing
@@ -690,7 +690,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
                 s.steps_done,
                 leg_names[crawl_order[s.steps_done % 4]],
             });
-            // ★ WHAT THE GAIT IS WAITING FOR, SPELLED OUT. "It flips on the first step" and
+            // * WHAT THE GAIT IS WAITING FOR, SPELLED OUT. "It flips on the first step" and
             // "it never steps" and "it steps too early" look identical from outside; the phase
             // and the margin against the gate tell them apart without another round trip.
             if (s.swing < 0) {

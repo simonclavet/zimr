@@ -1,4 +1,4 @@
-//! dag_check.zig — verify the `src/*.zig` file-level import graph is a DAG.
+//! dag_check.zig - verify the `src/*.zig` file-level import graph is a DAG.
 //!
 //! The import-graph analysis (tokenizer @import scan, Tarjan SCC, levels)
 //! lives in the shared `import_graph.zig`, used by both this gate and
@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
     var ow: std.Io.File.Writer = std.Io.File.stdout().writer(io, &out_buf);
     const out: *std.Io.Writer = &ow.interface;
 
-    // Cycle detection — the gate.  No whitelist.
+    // Cycle detection - the gate.  No whitelist.
     const comps: ArrayList(ArrayList(u32)) = try ig.sccs(gpa, g);
     var n_nontrivial: usize = 0;
     for (comps.items) |c| {

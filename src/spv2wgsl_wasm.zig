@@ -1,4 +1,4 @@
-// src/spv2wgsl_wasm.zig - wasm wrapper exposing the SPIR-V → WGSL
+// src/spv2wgsl_wasm.zig - wasm wrapper exposing the SPIR-V -> WGSL
 // transpiler to JavaScript.  Loaded by `webtests/transpiler_corpus.ts`
 // to run the transpiler across every SPIR-V file in `.zig-cache/` and
 // report per-shader statistics.
@@ -14,7 +14,7 @@
 const std = @import("std");
 const spv2wgsl = @import("spv2wgsl.zig");
 
-// Static buffer for the SPIR-V input (1 MB max — comfortable margin
+// Static buffer for the SPIR-V input (1 MB max - comfortable margin
 // over the 52KB ceiling we've seen in the corpus).
 // lint:off module-var: wasm-export input buffer, persists across JS calls
 var spv_buf: [1024 * 1024]u8 align(@alignOf(u32)) = undefined;
@@ -64,7 +64,7 @@ export fn transpile(len: u32) u64 {
         return 0;
     }
 
-    // Reset the arena — each call gets a fresh slate.  Previous call's
+    // Reset the arena - each call gets a fresh slate.  Previous call's
     // WGSL is freed here.
     _ = arena_storage.reset(.retain_capacity);
 

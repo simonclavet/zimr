@@ -1,4 +1,4 @@
-//! math_angle_rotation — four fixed reference lines (0/30/60/90 degrees) from the
+//! math_angle_rotation - four fixed reference lines (0/30/60/90 degrees) from the
 //! centre with radial labels, plus one line that sweeps a full turn every six seconds with
 //! its colour cycling by angle. Demonstrates the parametric (cos, sin) circle-point pattern.
 //! Ported from raylib shapes_math_angle_rotation, themed with the shared scaffold.

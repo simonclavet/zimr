@@ -1,5 +1,5 @@
 // 2- and 3-level nested struct field reads must return VALUES, not addresses
-// (the old Q1 "returns the field address" gap — now fixed; locked in here).
+// (the old Q1 "returns the field address" gap - now fixed; locked in here).
 const Inner = struct { b: i32, c: i32 };
 const Mid = struct { inner: Inner, d: i32 };
 const Outer = struct { mid: Mid, e: i32 };

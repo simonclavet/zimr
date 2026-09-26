@@ -1,11 +1,11 @@
-// examples/easings_rectangles.zig - 16×9 grid of rectangles that
+// examples/easings_rectangles.zig - 16x9 grid of rectangles that
 // simultaneously shrink to zero and rotate one full turn.
 // Port of raylib's `examples/shapes/shapes_easings_rectangles.c`
-// (★3, ~124 LOC).  Both the shrink and the spin share the same
+// (*3, ~124 LOC).  Both the shrink and the spin share the same
 // `framesCounter` time anchor - `circOut` drives the size, `linear`
 // drives the rotation.  240 frames = ~4s total.
 // What this exercises:
-//   - 144 rectangles × 240 frames = ~35k draw-rect-pro calls per
+//   - 144 rectangles x 240 frames = ~35k draw-rect-pro calls per
 //     animation.  Light stress test for `drawRectangleRotated`'s
 //     batching.
 //   - `circOut`'s shape: starts fast, finishes flat.  Half of the
@@ -44,7 +44,7 @@ const play_duration: f32 = 240; // 4s at 60fps
 const c = Color;
 
 const State = struct {
-    /// Owned shapes-texture state. id=1 → rlgl's internal 1x1 white pixel.
+    /// Owned shapes-texture state. id=1 -> rlgl's internal 1x1 white pixel.
     /// Owned default-font cache. Populated by `loadFontFromTtfBytes` below.
     font: z.Font,
     frame_count: usize = 0,

@@ -1,11 +1,11 @@
-//! ui_dock_simple — the simplest docking demo.
+//! ui_dock_simple - the simplest docking demo.
 //!
 //! A full-window dockspace with three windows arranged by the builder API:
 //! "Outline" and "Files" share a tabbed column on the left, "Editor" fills the
 //! central area on the right. At runtime you can drag a tab out and re-dock it on
 //! any edge (split) or center (tab), and drag the splitter between panels to
 //! resize. Exercises `u.dockSpace` + the `dockBuilder*` API + drag-to-dock + the
-//! splitter — all from `src/ui.zig`'s docking system.
+//! splitter - all from `src/ui.zig`'s docking system.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -19,7 +19,7 @@ const bg: Color = .{ .r = 18, .g = 22, .b = 32, .a = 255 };
 const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
-    /// The builder runs ONCE (dockBuilderSplitNode is not idempotent — it would
+    /// The builder runs ONCE (dockBuilderSplitNode is not idempotent - it would
     /// split again every frame). After that the layout is live and user-editable.
     built: bool = false,
 };
@@ -69,7 +69,7 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    // The docked windows — submitted as ordinary windows. Because the builder
+    // The docked windows - submitted as ordinary windows. Because the builder
     // gave each a dock_node_id, the dock system routes them into their leaves
     // (their own title bars are suppressed; the leaf's tab bar drives selection).
     if (u.window("Outline", .{})) |w| {

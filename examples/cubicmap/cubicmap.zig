@@ -1,7 +1,7 @@
-//! cubicmap — raylib's `models_cubicmap_rendering`, the zimr way.
+//! cubicmap - raylib's `models_cubicmap_rendering`, the zimr way.
 //!
 //! A pixel map (white = wall, black = corridor) is turned into a
-//! cube-walled maze mesh by `genMeshCubicmap` (ported this port — each
+//! cube-walled maze mesh by `genMeshCubicmap` (ported this port - each
 //! white cell becomes a cube, and only walls facing empty cells are
 //! emitted, so the interior is hollow and cheap). It's drawn with the
 //! face-shaded `maze_fs` on the shared `gbuffer_vs`: floor, ceiling,
@@ -386,7 +386,7 @@ fn update(f: *z.Frame, s: *State) void {
     // last-frame UI state = 1-frame lag, imperceptible).
 
     // Run a requested regen HERE, before the RTT (mesh) and composite (preview)
-    // reference them — never destroy a texture already recorded into the submit.
+    // reference them - never destroy a texture already recorded into the submit.
     if (s.regen_requested) {
         s.regen_requested = false;
         s.mesh.vcount = regen(s.gpa, f, &s.rng, s.mesh.vbo, s.scratch, &s.preview, s.offset) catch s.mesh.vcount;
@@ -397,7 +397,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     // ---- camera, centered on the maze middle ----
-    // genMeshCubicmap lays cubes at w*(i-0.5), so a grid_w×grid_h maze spans
+    // genMeshCubicmap lays cubes at w*(i-0.5), so a grid_wxgrid_h maze spans
     // ~-0.5..(grid-1.5); its center is here, NOT the origin.
     const cx: f32 = cube_size[0] * (float(grid_w) - 2.0) * 0.5;
     const cz: f32 = cube_size[2] * (float(grid_h) - 2.0) * 0.5;
@@ -424,8 +424,8 @@ fn update(f: *z.Frame, s: *State) void {
         .light_dir = .{ sun_dir[0], sun_dir[1], sun_dir[2], 0 },
         .col_top = .{ 0.85, 0.86, 0.90, 1 }, // floor / cube tops (bright)
         .col_bottom = .{ 0.20, 0.22, 0.28, 1 }, // ceilings / undersides (dark)
-        .col_wall_x = .{ 0.40, 0.55, 0.80, 1 }, // walls facing ±X (blue)
-        .col_wall_z = .{ 0.80, 0.50, 0.38, 1 }, // walls facing ±Z (terracotta)
+        .col_wall_x = .{ 0.40, 0.55, 0.80, 1 }, // walls facing +/-X (blue)
+        .col_wall_z = .{ 0.80, 0.50, 0.38, 1 }, // walls facing +/-Z (terracotta)
     };
     z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
 

@@ -12,7 +12,7 @@
 // pass needs (pbr_fs.computeShadow samples exactly this value as
 // `closest_depth`). Proving it renders here de-risks the shadow pass.
 //
-// Custom single-group pipeline (simpler than lambert_demo — no
+// Custom single-group pipeline (simpler than lambert_demo - no
 // samplers, no FS uniforms; the only binding is the VS's mvp UBO at
 // group 0). The WebGPU binding model is documented in src/zimr.zig.
 //
@@ -48,7 +48,7 @@ const DepthVertex = extern struct {
 const hs: f32 = 0.6;
 
 // 24 corners (4 per face) of a unit cube centred at the origin, CCW from
-// outside. Only position is needed — the depth shader reads location 0.
+// outside. Only position is needed - the depth shader reads location 0.
 const cube_corners = [_][3]f32{
     // +Z
     .{ -hs, -hs, hs },  .{ hs, -hs, hs },   .{ hs, hs, hs },   .{ -hs, hs, hs },
@@ -83,7 +83,7 @@ const cube_offsets = [_][3]f32{
 const vertex_count: usize = cube_corners.len * cube_offsets.len;
 const index_count: usize = face_indices.len * cube_offsets.len;
 
-// Host mirror of `depth_vs_io.Ubo` — must match byte-for-byte (96 bytes).
+// Host mirror of `depth_vs_io.Ubo` - must match byte-for-byte (96 bytes).
 const DepthUbo = struct {
     mvp: [4]Vec,
     params: Vec,

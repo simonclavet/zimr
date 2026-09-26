@@ -1,4 +1,4 @@
-//! lightmap_vs.zig — transform the plane by MVP and pass BOTH uv sets through
+//! lightmap_vs.zig - transform the plane by MVP and pass BOTH uv sets through
 //! to the fragment stage (base uv + lightmap uv2).
 const zm = @import("zm");
 const Vec3 = zm.Vec3;

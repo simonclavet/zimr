@@ -40,7 +40,7 @@ test "LoadError contains the GPU + alloc errors" {
 //
 // We can't import zimr.zig from a test file (it pulls in webgl externs),
 // so we replicate the function logic directly here.  The contract is
-// "decode PNG → wrap in Image", which is one png.decode call wide.
+// "decode PNG -> wrap in Image", which is one png.decode call wide.
 
 const Image = @import("../types.zig").Image;
 
@@ -55,7 +55,7 @@ fn loadImageFromMemory(gpa: Allocator, bytes: []const u8) errors.LoadError!Image
     };
 }
 
-// 4×4 RGBA PNG, copied from png_test.zig.
+// 4x4 RGBA PNG, copied from png_test.zig.
 const png_4x4_rgba = [_]u8{
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x08, 0x06, 0x00, 0x00, 0x00, 0xa9, 0xf1, 0x9e,

@@ -1,11 +1,11 @@
-//! robot_scene.zig — a robot and the loose objects it interacts with, in ONE tree.
+//! robot_scene.zig - a robot and the loose objects it interacts with, in ONE tree.
 //!
-//! ── ★★ WHY THIS EXISTS: THE SEAM, REMOVED ──
+//! -- ** WHY THIS EXISTS: THE SEAM, REMOVED --
 //!
 //! Four attempts at coupling two solvers across a contact each found a real bug and none
-//! fixed the symptom (§4h-ter). The review that followed (§4k) reached a different answer:
+//! fixed the symptom (section 4h-ter). The review that followed (section 4k) reached a different answer:
 //! **a contact is one constraint between two inertias, and resolving it in two places is not
-//! an approximation of resolving it once — it is a different and worse problem.**
+//! an approximation of resolving it once - it is a different and worse problem.**
 //!
 //! MuJoCo has no coupling problem because it has no second engine. A free-floating box is a
 //! body with a free joint, in the same tree as every robot link. The Jacobian spans both
@@ -13,23 +13,23 @@
 //! conserved by construction rather than by handoff.
 //!
 //! zimr can do the same, and needed almost nothing new to do it: `JointKind.free` landed in
-//! phase 2, and `addContactRows` has always built the RELATIVE Jacobian `jac_b − jac_a`
-//! between two tree bodies. Measured on the smallest case that can fail — a 2 kg pusher and
-//! a 0.5 kg free crate, one contact, no gravity — **momentum is conserved to 0.002% over 600
+//! phase 2, and `addContactRows` has always built the RELATIVE Jacobian `jac_b - jac_a`
+//! between two tree bodies. Measured on the smallest case that can fail - a 2 kg pusher and
+//! a 0.5 kg free crate, one contact, no gravity - **momentum is conserved to 0.002% over 600
 //! steps**, against a coupling that could not conserve it at all.
 //!
-//! ── WHAT GOES IN THE TREE, AND WHAT DOES NOT ──
+//! -- WHAT GOES IN THE TREE, AND WHAT DOES NOT --
 //!
 //! This is a scene-authoring decision and it should be an obvious one:
 //!
 //!   * **In the tree**: anything the robot must interact with CORRECTLY. A crate it pushes,
-//!     a ball it catches, the plank it walks along. These cost articulated-solver prices —
-//!     six DOFs each in the mass matrix — and buy exact contact.
+//!     a ball it catches, the plank it walks along. These cost articulated-solver prices -
+//!     six DOFs each in the mass matrix - and buy exact contact.
 //!   * **In zimrphysics**: everything else. Scenery, debris, a thousand particles, the
 //!     ragdoll across the room. These cost nothing to the robot and cannot affect it.
 //!
 //! A body cannot currently move between the two at runtime. Deferred until something needs
-//! it, per §1.1's rule against pre-building escape hatches.
+//! it, per section 1.1's rule against pre-building escape hatches.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -57,7 +57,7 @@ pub const FreeBody = struct {
     inertial: ?rbt.InertialSpec = null,
     /// Damping applied to all six DOFs.
     ///
-    /// Not a physical property of the object — real crates have no built-in drag — but the
+    /// Not a physical property of the object - real crates have no built-in drag - but the
     /// cheapest way to keep a scene from accumulating jitter into perpetual motion, and what
     /// MuJoCo models do in practice. Zero is honest and slightly livelier.
     damping: f32 = 0.0,
@@ -65,17 +65,17 @@ pub const FreeBody = struct {
 
 /// Robots and the loose objects around them, as one simulated system.
 ///
-/// ── ★ MANY ROBOTS, ONE TREE ──
+/// -- * MANY ROBOTS, ONE TREE --
 ///
 /// Two robots that must be able to touch each other have to be in the SAME model, for
 /// exactly the reason a robot and a crate do: a contact between them is one constraint
-/// between two inertias. MuJoCo works this way — a scene with four arms is one `mjModel`
-/// whose `worldbody` holds four subtrees — and it is why a Menagerie scene file can drop
+/// between two inertias. MuJoCo works this way - a scene with four arms is one `mjModel`
+/// whose `worldbody` holds four subtrees - and it is why a Menagerie scene file can drop
 /// several robots into a room and have them collide correctly.
 ///
 /// Robots keep their declaration order and their body indices, so `robots[0]`'s bodies are
 /// numbered exactly as they would be alone. That matters because a generated model names its
-/// joints through an enum whose values ARE those indices — `Kuka.Joint.lbr_iiwa_joint_4`
+/// joints through an enum whose values ARE those indices - `Kuka.Joint.lbr_iiwa_joint_4`
 /// must still mean the same joint when a second arm joins the scene. `bodyOffset` gives the
 /// shift for every robot after the first.
 pub const Scene = struct {
@@ -91,7 +91,7 @@ pub const Scene = struct {
     ///
     /// The free bodies become ordinary tree bodies whose parent is the world and whose only
     /// joint is a `.free`. Nothing downstream needs to know they are different: the contact
-    /// solver sees a body index, the mass matrix sees six more DOFs, and `Â` picks up their
+    /// solver sees a body index, the mass matrix sees six more DOFs, and `A_hat` picks up their
     /// inertia because it always did for tree bodies.
     pub fn build(self: Scene, gpa: Allocator) !rbt.Model {
         var scratch: std.heap.ArenaAllocator = .init(gpa);
@@ -103,9 +103,9 @@ pub const Scene = struct {
         var tendons: std.ArrayListUnmanaged(rbt.TendonSpec) = .empty;
         var sensors: std.ArrayListUnmanaged(rbt.SensorSpec) = .empty;
 
-        // ★ NAMES MUST STAY UNIQUE ACROSS ROBOTS, and two copies of the same arm is the
+        // * NAMES MUST STAY UNIQUE ACROSS ROBOTS, and two copies of the same arm is the
         // obvious case that breaks it. A second KUKA brings a second `lbr_iiwa_joint_4`, and
-        // `jointIndexByName` returns the FIRST match — so an actuator on robot 2 would
+        // `jointIndexByName` returns the FIRST match - so an actuator on robot 2 would
         // silently drive robot 1. Prefixing from the second robot onward keeps single-robot
         // scenes byte-identical to what they were while making collisions impossible.
         for (self.robots, 0..) |robot, index| {
@@ -116,11 +116,11 @@ pub const Scene = struct {
                 try sensors.appendSlice(a, robot.sensors);
                 continue;
             }
-            // ★ TENDONS AND SENSORS ON A SECOND ROBOT ARE REFUSED, NOT DROPPED.
+            // * TENDONS AND SENSORS ON A SECOND ROBOT ARE REFUSED, NOT DROPPED.
             //
             // Both name the joints and sites they act on, and both would need the same
             // prefixing the bodies get. Doing that is not hard; doing it UNTESTED is how a
-            // tendon silently ends up driving the first robot's joint instead of its own —
+            // tendon silently ends up driving the first robot's joint instead of its own -
             // and a scene where robot 2's cable moves robot 1 is a bug nobody would think to
             // look for.
             //
@@ -164,11 +164,11 @@ pub const Scene = struct {
                 .name = try allocPrint(a, "{s}_free", .{body.name}),
                 .kind = .free,
                 .damping = body.damping,
-                // ★ NO ARMATURE on a free body, and the distinction is worth stating.
+                // * NO ARMATURE on a free body, and the distinction is worth stating.
                 // Armature is a GEARBOX's rotor inertia, reflected through a transmission
                 // that a loose crate does not have. Adding it would make the crate resist
                 // acceleration by an amount that corresponds to nothing, and would quietly
-                // break any momentum accounting — `m·v` would not be the whole story.
+                // break any momentum accounting - `m*v` would not be the whole story.
                 .armature = 0.0,
             };
             try bodies.append(a, .{
@@ -206,7 +206,7 @@ pub const Scene = struct {
     /// Index of a free body in the built model's tree.
     ///
     /// Free bodies follow every robot's bodies, in declaration order. Exposed because a
-    /// caller that put a crate in the scene needs to find it again — to draw it, or to name
+    /// caller that put a crate in the scene needs to find it again - to draw it, or to name
     /// it in a contact.
     pub fn freeBodyIndex(self: Scene, which: usize) u32 {
         return self.bodyOffset(self.robots.len) + @as(u32, @intCast(which));
@@ -274,7 +274,7 @@ test "scene: free bodies add six DOFs each and keep the robot's indices" {
     // World, the robot's link, and two crates.
     try expectEqual(@as(u32, 4), m.nbody);
 
-    // ★ The robot keeps index 1 — a scene must not renumber the robot, because a generated
+    // * The robot keeps index 1 - a scene must not renumber the robot, because a generated
     // model names its joints through an enum whose values ARE these indices.
     try expectEqual(@as(u32, 0), m.body_parent[1]);
     try expectEqual(@as(u32, 2), scene.freeBodyIndex(0));
@@ -286,7 +286,7 @@ test "scene: free bodies add six DOFs each and keep the robot's indices" {
 }
 
 test "scene: a robot pushing a scene crate conserves momentum" {
-    // The §4k proof, now through the API a scene actually uses rather than a hand-written
+    // The section 4k proof, now through the API a scene actually uses rather than a hand-written
     // spec. Same physics, same guarantee: one tree, one solver, one ledger.
     const gpa: Allocator = std.testing.allocator;
     const scene: Scene = .{
@@ -329,8 +329,8 @@ test "scene: a robot pushing a scene crate conserves momentum" {
     try expectApproxEqAbs(initial_momentum, final_momentum, 0.002);
 }
 
-test "scene: a heavier crate resists more — the property the old seam could not have" {
-    // ★ THE MEASUREMENT THAT FAILED UNDER THE OLD ARCHITECTURE. Across a 666x mass range the
+test "scene: a heavier crate resists more - the property the old seam could not have" {
+    // * THE MEASUREMENT THAT FAILED UNDER THE OLD ARCHITECTURE. Across a 666x mass range the
     // arm's behaviour did not change by 1%, because the robot treated every external body as
     // immovable and zimrphysics treated every proxy as a wall.
     //
@@ -374,7 +374,7 @@ test "scene: a heavier crate resists more — the property the old seam could no
         speeds[trial] = d.vel[0];
     }
 
-    // Pushing a 50 kg crate barely slows a 2 kg pusher — it bounces back off it. Pushing a
+    // Pushing a 50 kg crate barely slows a 2 kg pusher - it bounces back off it. Pushing a
     // 0.5 kg one carries it along and the pusher keeps most of its speed forward. The two
     // must differ, and by a lot; under the old seam they differed by under 1%.
     try expect(@abs(speeds[0] - speeds[1]) > 0.3);
@@ -384,13 +384,13 @@ test "scene: a heavier crate resists more — the property the old seam could no
 }
 
 test "scene: two robots and a crate share one tree, with names kept apart" {
-    // ★★ WHAT "MANY ROBOTS INTERACTING" REQUIRES. Two robots that can touch each other must
+    // ** WHAT "MANY ROBOTS INTERACTING" REQUIRES. Two robots that can touch each other must
     // be in the SAME model, for the same reason a robot and a crate must: a contact between
     // them is one constraint between two inertias, and there is nowhere else to put it.
-    // MuJoCo works this way too — a scene with four arms is one `mjModel` with four subtrees.
+    // MuJoCo works this way too - a scene with four arms is one `mjModel` with four subtrees.
     //
     // The trap is NAMES. A second copy of an arm brings a second joint called `slide`, and
-    // `jointIndexByName` returns the first match — so an actuator meant for robot 2 would
+    // `jointIndexByName` returns the first match - so an actuator meant for robot 2 would
     // silently drive robot 1, which is a wrong robot moving with no error anywhere.
     const gpa: Allocator = std.testing.allocator;
     const scene: Scene = .{
@@ -405,13 +405,13 @@ test "scene: two robots and a crate share one tree, with names kept apart" {
     try expectEqual(@as(u32, 8), m.nv);
     try expectEqual(@as(u32, 4), m.nbody); // world + 2 links + 1 crate
 
-    // ★ Robot 0 is unshifted, so a generated model's joint enum stays valid when a second
+    // * Robot 0 is unshifted, so a generated model's joint enum stays valid when a second
     // robot joins the scene.
     try expectEqual(@as(u32, 1), scene.bodyOffset(0));
     try expectEqual(@as(u32, 2), scene.bodyOffset(1));
     try expectEqual(@as(u32, 3), scene.freeBodyIndex(0));
 
-    // Every body hangs off the world here, and each is its own root — two robots do not
+    // Every body hangs off the world here, and each is its own root - two robots do not
     // become one mechanism just by sharing a model.
     try expectEqual(@as(u32, 0), m.body_parent[1]);
     try expectEqual(@as(u32, 0), m.body_parent[2]);
@@ -420,7 +420,7 @@ test "scene: two robots and a crate share one tree, with names kept apart" {
 
 test "scene: two robots can push the same crate, and the books still balance" {
     // The property that makes a shared tree worth the cost: two robots and an object are one
-    // system, so momentum is conserved across ALL of them — not per robot, not approximately.
+    // system, so momentum is conserved across ALL of them - not per robot, not approximately.
     const gpa: Allocator = std.testing.allocator;
     const scene: Scene = .{
         .robots = &.{ test_arm, test_arm },
@@ -440,7 +440,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
     for (0..900) |_| {
         rbt.forward(&m, &d);
         d.clearContacts();
-        // Arm 0 against the crate, then the crate against arm 1 — a chain of two contacts
+        // Arm 0 against the crate, then the crate against arm 1 - a chain of two contacts
         // through a free body, which is the shape "robot hands an object to robot" takes.
         inline for ([_]u32{ 1, 2 }) |link| {
             const gap: f32 = @abs(d.body_xpos[box][0] - d.body_xpos[link][0]) - 0.10;
@@ -466,7 +466,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
     const final_momentum: f32 = 2.0 * d.vel[0] + 2.0 * d.vel[1] + 0.5 * d.vel[2];
     try expectApproxEqAbs(initial_momentum, final_momentum, 0.01);
     // And the push actually propagated. Both robots start at the same place here, so the
-    // crate reaches robot 1 only if robot 0 drives it there — a chain of two contacts
+    // crate reaches robot 1 only if robot 0 drives it there - a chain of two contacts
     // through a free body, which is the shape "robot hands an object to robot" takes.
     //
     // Loose, deliberately: this once asserted a specific velocity, tuned when free bodies
@@ -477,7 +477,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
 }
 
 test "scene: the degenerate shapes all build" {
-    // ★ AUDIT TEST. Every existing scene test has both a robot and free bodies, so three
+    // * AUDIT TEST. Every existing scene test has both a robot and free bodies, so three
     // shapes a caller will actually reach for were never exercised: a scene of loose objects
     // with NO robot (a physics sandbox), a robot with nothing around it (the plain case), and
     // an empty scene (whatever a UI shows before anything is loaded).
@@ -499,7 +499,7 @@ test "scene: the degenerate shapes all build" {
         defer m.deinit();
         try expectEqual(@as(u32, 6), m.nv);
         try expectEqual(@as(u32, 2), m.nbody);
-        // ★ And the free body is at tree index 1, immediately after the world — which is what
+        // * And the free body is at tree index 1, immediately after the world - which is what
         // `bodyOffset` must give when there is nothing to offset past.
         try expectEqual(@as(u32, 1), scene.freeBodyIndex(0));
     }

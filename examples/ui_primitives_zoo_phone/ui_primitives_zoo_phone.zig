@@ -4,12 +4,12 @@
 // One card per primitive, each rendered with a label saying what
 // it SHOULD look like.  If anything renders blank, wrong colour,
 // wrong position, or wrong shape, it's immediately obvious by
-// eyeball — no snapshot baselines required.
+// eyeball - no snapshot baselines required.
 //
 // Why: through turns 410-437 zimr accumulated a set of canvas
 // primitives (addLine / addArc / addPolyline / etc) whose only
-// test coverage was at the COMMAND QUEUE level — "did the
-// polyline cmd land with N points?" — not at the RENDERED PIXEL
+// test coverage was at the COMMAND QUEUE level - "did the
+// polyline cmd land with N points?" - not at the RENDERED PIXEL
 // level.  Turn 437 found that `drawTriangleStrip` (the path
 // every line/arc primitive routes through) had been shipping
 // broken in WebGL2 with no texture binding + no UVs for many
@@ -21,7 +21,7 @@
 //   [drawn primitive inside 350x140 canvas]
 //
 // Tap a primitive name (left side) to highlight which one
-// you're looking at — useful when something renders wrong
+// you're looking at - useful when something renders wrong
 // and you need to know exactly which API is at fault.
 
 const std = @import("std");
@@ -115,7 +115,7 @@ fn drawRectFilledCard(
         .height = 60,
     };
     dl.addRectFilled(r, accent);
-    // EXPECT: amber 80×60 rect to the right, with hairline outline.
+    // EXPECT: amber 80x60 rect to the right, with hairline outline.
     const r2: z.Rectangle = .{
         .x = area.x + 200,
         .y = area.y + 20,
@@ -170,7 +170,7 @@ fn drawArcCard(
     phase_turns: f32,
 ) void {
     // EXPECT: a quarter-arc, a semicircle, and a sweeping arc that
-    // grows with phase_turns.  Top→bottom three rows.
+    // grows with phase_turns.  Top->bottom three rows.
     const cy: f32 = area.y + area.height * 0.5;
     const r: f32 = 45;
 
@@ -192,7 +192,7 @@ fn drawArcCard(
         accent2,
         4,
     );
-    // Animated full sweep — grows from 0 to 2π as phase_turns cycles.
+    // Animated full sweep - grows from 0 to 2 pi as phase_turns cycles.
     const a1: f32 = -pi * 0.5 + tau * phase_turns;
     dl.addArc(
         .{ area.x + 300, cy },
@@ -229,7 +229,7 @@ fn drawArcFilledCard(
         tau,
         accent2,
     );
-    // Full disk via 2π sweep (animated start angle for visual cue).
+    // Full disk via 2 pi sweep (animated start angle for visual cue).
     dl.addArcFilled(
         .{ area.x + 300, cy },
         r,
@@ -379,7 +379,7 @@ fn drawNgonCard(
     phase_turns: f32,
 ) void {
     // EXPECT: a stroked octagon, a filled pentagon, and a filled
-    // 12-gon — three regular n-gons across the card.  Rotates
+    // 12-gon - three regular n-gons across the card.  Rotates
     // continuously to make sure rotation works.
     const cy: f32 = area.y + area.height * 0.5;
     const rot: f32 = phase_turns * tau;

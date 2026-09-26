@@ -1,4 +1,4 @@
-//! starfield — a fly-through-space starfield ported to WebGPU. Stars stream
+//! starfield - a fly-through-space starfield ported to WebGPU. Stars stream
 //! outward from the screen centre as motion streaks (the "warp speed" look): each is a
 //! point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a
 //! short line from where it was a moment ago to where it is now. Closer stars are

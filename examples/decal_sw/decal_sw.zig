@@ -1,10 +1,10 @@
-//! decal_sw — ONE Zig decal shader, TWO renderers, side by side.
+//! decal_sw - ONE Zig decal shader, TWO renderers, side by side.
 //!
 //! `src/shaders/decal_vs.zig` + `decal_fs.zig` are the SAME files the build
-//! compiles to SPIR-V → WGSL for the GPU decal pipeline. Here they are also
+//! compiles to SPIR-V -> WGSL for the GPU decal pipeline. Here they are also
 //! imported as plain Zig (`z.decal_shaders`) and run by the software rasterizer
-//! per vertex / per fragment, so the projector math — world → decal-box space,
-//! the inside-box mask, the facing mask — runs bit-identically on hardware and
+//! per vertex / per fragment, so the projector math - world -> decal-box space,
+//! the inside-box mask, the facing mask - runs bit-identically on hardware and
 //! in software:
 //!   - RIGHT (GPU): the receiver sphere is drawn flat, then the decals are
 //!     painted by `z.drawDecal`'s WebGPU pipeline, into an offscreen render
@@ -12,7 +12,7 @@
 //!   - LEFT (CPU): the same sphere is filled flat, then the SAME decal_vs /
 //!     decal_fs `shaderMain`s run over the receiver triangles through
 //!     `raster_shader.rasterizeTriangles`, depth-tested `.less_equal` with no
-//!     depth write and alpha-over blend — matching the GPU decal pipeline's
+//!     depth write and alpha-over blend - matching the GPU decal pipeline's
 //!     `.less_equal_no_write` overlay state.
 //! Same mesh, same projector matrices, same DecalUbo values, same decal
 //! texture, same camera. The base surface is a flat unlit colour on both sides
@@ -48,7 +48,7 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // The CPU half renders a constant pixel budget shaped to the live canvas
 // aspect, so rotating the phone never stretches and never changes the per-frame
-// CPU cost. ~30k px ≈ 220×136.
+// CPU cost. ~30k px ~ 220x136.
 const cpu_pixel_budget: f32 = 30_000;
 
 const decal_tex_edge: u32 = 64;
@@ -64,7 +64,7 @@ const z_far: f32 = 100.0;
 const base_color: Color = .{ .r = 120, .g = 130, .b = 150, .a = 255 };
 const bg_clear: Color = .{ .r = 10, .g = 12, .b = 20, .a = 255 };
 
-/// A recorded decal: the world→box projector, the projector facing dir (the
+/// A recorded decal: the world->box projector, the projector facing dir (the
 /// surface normal at the hit), and its tint. Both halves consume these.
 const Decal = struct {
     projector: Mat,
@@ -86,8 +86,8 @@ fn buildDecalUbo(d: Decal) decal.fs.Ubo {
     };
 }
 
-/// Build the world→box projector for a hit point + surface normal, spun a
-/// deterministic amount about its own axis — the SAME construction the decals
+/// Build the world->box projector for a hit point + surface normal, spun a
+/// deterministic amount about its own axis - the SAME construction the decals
 /// example uses (look from just outside the surface toward the hit, then spin
 /// in-plane). `compose(first, then)` reads in application order.
 fn buildProjector(hit_point: Vec, hit_normal: Vec, spin_deg: f32) Mat {
@@ -113,7 +113,7 @@ const CpuTex = struct {
 };
 
 /// A de-indexed triangle-soup copy of the receiver mesh (position + normal per
-/// vertex), matching how `uploadDecalReceiver` de-indexes for the GPU — so the
+/// vertex), matching how `uploadDecalReceiver` de-indexes for the GPU - so the
 /// CPU decal pass rasterizes the exact same triangles.
 const CpuReceiver = struct {
     positions: [][3]f32,
@@ -167,7 +167,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.sw.deinit(gpa);
 }
 
-/// The procedural decal texture as raw RGBA8 bytes — a concentric-ring target
+/// The procedural decal texture as raw RGBA8 bytes - a concentric-ring target
 /// that fades to transparent well inside the box edge, so the box clip only
 /// ever cuts already-transparent texels. Returns owned pixels; the GPU half
 /// wraps the same data in an `z.Image`.
@@ -336,7 +336,7 @@ fn maybePlaceDecal(s: *State, dt: f32) void {
 
 /// The CPU half: fill the sphere flat, then run decal_vs + decal_fs over the
 /// receiver triangles once per decal, depth-tested `.less_equal` (no write) and
-/// alpha-blended over — the software mirror of the GPU decal overlay.
+/// alpha-blended over - the software mirror of the GPU decal overlay.
 fn renderCpu(s: *State, view: Mat, proj: Mat) void {
     s.sw.clearColor(bg_clear);
     s.sw.clearDepth(1.0);
@@ -393,7 +393,7 @@ fn colorToLinear(c: Color) [4]f32 {
 
 /// Flat-fill the receiver triangles into the CPU colour+depth buffer (base
 /// surface), depth-writing with `.less` so the sphere is solid. Uses the shared
-/// rasterizer with a constant-colour path by writing directly — a tiny inline
+/// rasterizer with a constant-colour path by writing directly - a tiny inline
 /// FS-free fill keeps the base trivially identical to the GPU's flat draw.
 fn fillTrianglesFlat(s: *State, rgba: [4]f32) void {
     const connect: fn (decal.vs.Out, *FlatFs.Io) void = comptime z.shader.autoConnect(decal.vs.Out, FlatFs.Io);
@@ -487,7 +487,7 @@ fn update(f: *z.Frame, s: *State) void {
     const vh: f32 = @max(f.window.heightf(), 1);
     z.clearViewport(f, .{ .r = 8, .g = 9, .b = 14, .a = 255 });
 
-    // ---- Shared orbit camera — BOTH halves consume these matrices ----
+    // ---- Shared orbit camera - BOTH halves consume these matrices ----
     const cp: f32 = @cos(s.cam_pitch);
     const sp: f32 = @sin(s.cam_pitch);
     const sy: f32 = @sin(s.cam_yaw);

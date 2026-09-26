@@ -1,12 +1,12 @@
-//! examples/shader_uniforms_fs.zig — mouse-driven spiral fragment
+//! examples/shader_uniforms_fs.zig - mouse-driven spiral fragment
 //! shader with iface co-located in this file (Inputs / Outputs /
 //! Ubo at the top, body below).
 //!
 //! Companion to `examples/shader_uniforms.zig`.  Uses `frag_tex_coord
-//! * u.resolution` for the pixel-space position (unit-agnostic — the
+//! * u.resolution` for the pixel-space position (unit-agnostic - the
 //! shader's math cancels the unit out via the division by
 //! `u.resolution.y`, so the host can stay in logical px without any
-//! DPR conversion).  HSV→RGB block matches mandelbrot's; the
+//! DPR conversion).  HSV->RGB block matches mandelbrot's; the
 //! interesting bit is the angle/radius polar mapping driving the hue.
 //!
 //! Migrated 2026-05-27 from the legacy hand-written-externs pattern
@@ -34,8 +34,8 @@ const shader_externs = @import("shader_uniforms_fs_externs");
 pub const Io = shader_externs.IoT(shader_io.Ubo);
 pub const Out = shader_externs.Out;
 
-// HSV → RGB.  Standard Iñigo Quilez form.  Returns a Vec3 with each
-// component in [0, 1].  `pub fn` (not `pub inline fn`) — Zig's SPIR-V
+// HSV -> RGB.  Standard Inigo Quilez form.  Returns a Vec3 with each
+// component in [0, 1].  `pub fn` (not `pub inline fn`) - Zig's SPIR-V
 // backend's inline pass breaks structured-control-flow markers;
 // spirv-opt inlines properly post-codegen.
 fn hsv2rgb(c: Vec3) Vec3 {
@@ -65,7 +65,7 @@ pub fn shaderMain(io_in: Io) Out {
     // Pixel-space position derived from frag_tex_coord (already 0..1
     // across the rect) times resolution.  Both mouse and resolution
     // are in the same units, so the division by resolution.y in
-    // `to_mouse` cancels the unit out — this shader is DPR-agnostic.
+    // `to_mouse` cancels the unit out - this shader is DPR-agnostic.
     const frag: Vec2 = io_in.frag_tex_coord * io_in.u.resolution;
     const inv_h: Vec2 = vec2(1.0 / io_in.u.resolution[1], 1.0 / io_in.u.resolution[1]);
     const to_mouse: Vec2 = (frag - io_in.u.mouse) * inv_h;

@@ -1,11 +1,11 @@
-//! cheatsheet — pure-Zig generator for zimr's public API cheatsheet.
+//! cheatsheet - pure-Zig generator for zimr's public API cheatsheet.
 //!
 //! Walks every `src/*.zig`, extracts each `pub fn` (with its enclosing
 //! `pub const X = struct {` namespace path and leading `///` doc), and emits a
 //! single self-contained `cheatsheet.html` grouped by module. Replaces the old
 //! `scripts/build_cheatsheet.py`, whose hardcoded module list went stale after
 //! the module-collapse (it still named `rlgl.zig`/`gpu.zig`/`scene.zig` and
-//! missed `zimrphysics.zig`/`plot3d.zig`) and cross-referenced raylib/imgui —
+//! missed `zimrphysics.zig`/`plot3d.zig`) and cross-referenced raylib/imgui -
 //! a mapping zimr has long since drifted away from. Auto-discovery means new
 //! modules appear with zero edits here.
 //!

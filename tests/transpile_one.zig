@@ -1,4 +1,4 @@
-//! tests/transpile_one.zig — native-binary harness for debugging
+//! tests/transpile_one.zig - native-binary harness for debugging
 //! single-shader transpile failures.  Loads the .spv at argv[1],
 //! runs spv2wgsl.convertSpirvToWgsl on it, prints any panic stack
 //! trace.

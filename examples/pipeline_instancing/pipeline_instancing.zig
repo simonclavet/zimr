@@ -1,4 +1,4 @@
-//! pipeline_instancing — increment 4 of the custom-pipeline API
+//! pipeline_instancing - increment 4 of the custom-pipeline API
 //! (`src/notes/webgpu_control.md`). Ported from raygpu's `pipeline_instancing.cpp`:
 //! ONE draw call paints a whole grid of triangles, each fed its own offset and
 //! colour from INSTANCE-rate vertex buffers.
@@ -8,7 +8,7 @@
 //! INSTANCE (a position offset and a colour). `drawArrays(vertex_count,
 //! instance_count)` then replays the 3-vertex triangle `instance_count` times,
 //! and the GPU pulls a fresh offset+colour for each. The offset buffer is
-//! re-uploaded every frame so the grid ripples on a sine wave — dynamic
+//! re-uploaded every frame so the grid ripples on a sine wave - dynamic
 //! per-instance data, the raygpu demo's trick.
 //!
 //! Builds straight on vao_multibuffer: same multi-buffer layout, one slot just
@@ -135,7 +135,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 
     // The UBO (group 0) is owned by the shader's Resources; pushUbo rewrites it
-    // each frame. No hand-wired bind group / layout — loadShaderVF builds them.
+    // each frame. No hand-wired bind group / layout - loadShaderVF builds them.
     const shader: z.shader.LoadedShader(vs_io) = try z.shader.loadShaderVF(vs_io, fs_io, .{
         .f = f.gpu,
         .gpa = gpa,

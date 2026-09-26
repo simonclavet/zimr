@@ -1,14 +1,14 @@
-//! src/shaders/fog_fs.zig — distance-fog fragment shader.
+//! src/shaders/fog_fs.zig - distance-fog fragment shader.
 //!
 //! Forward Blinn-ish lighting (Lambert diffuse + a modest specular),
 //! then the whole result is folded toward `fog_color` by raylib's
-//! exponential-squared falloff: `visibility = 1/e^((d·density)²)`.
-//! The squared exponent is the trick — near geometry stays almost
+//! exponential-squared falloff: `visibility = 1/e^((d*density)^2)`.
+//! The squared exponent is the trick - near geometry stays almost
 //! untouched (the curve is flat at 0), then visibility collapses fast
 //! past the knee, which reads as a wall of atmosphere instead of a
 //! linear grey wash.
 //!
-//! The VERTEX stage is `gbuffer_vs`, reused as-is — this FS consumes
+//! The VERTEX stage is `gbuffer_vs`, reused as-is - this FS consumes
 //! the same world-position + world-normal varyings the G-buffer pair
 //! shares (`gbuffer_common_io.Interp`).  Schema in `fog_fs_io.zig`.
 
@@ -42,7 +42,7 @@ pub fn shaderMain(io_in: Io) Out {
     };
     const view_dir: Vec3 = normalize(to_eye);
 
-    // Lambert + Blinn specular (pow 16 as four squarings — raylib's
+    // Lambert + Blinn specular (pow 16 as four squarings - raylib's
     // "Shine: 16.0", minus the transcendental).
     const n_dot_l: f32 = @max(dot(normal, light_dir), 0.0);
     const half_dir: Vec3 = normalize(light_dir + view_dir);
@@ -56,7 +56,7 @@ pub fn shaderMain(io_in: Io) Out {
         io_in.u.base_color[2],
     } * @as(Vec3, @splat(lighting)) + @as(Vec3, @splat(spec * n_dot_l));
 
-    // The fog: distance from the CAMERA (not depth — fog is radial, so
+    // The fog: distance from the CAMERA (not depth - fog is radial, so
     // spinning in place doesn't make the corners of the screen clear up).
     const dist: f32 = @sqrt(@max(dot(to_eye, to_eye), 1.0e-8));
     const dd: f32 = dist * io_in.u.params[0];

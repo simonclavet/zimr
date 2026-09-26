@@ -2,7 +2,7 @@
 //! and behind it PPO, SAC or SuperTrack LEARNING to hold the same cartpole - their cartpoles
 //! stepped on the CPU, their networks trained on the GPU.
 //!
-//! ── ★ WHAT THIS DEMONSTRATES ──
+//! -- * WHAT THIS DEMONSTRATES --
 //!
 //! The same robot.zig cartpole model throughout - identical dynamics, so comparisons are exact:
 //!
@@ -16,7 +16,7 @@
 //!     each on its own GPU pipe through `zn_mlp`'s kernels, each update ONE recorded submission
 //!     (`compute_host`'s recording), only the weights coming back.
 //!
-//! ── ★★ THE FRAME IS BUDGETED ON BOTH PROCESSORS ──
+//! -- ** THE FRAME IS BUDGETED ON BOTH PROCESSORS --
 //!
 //! The CPU's share (the learner's collection, MPC's planning) is steered on the measured frame
 //! time, AIMD, so the two converge to fair shares; a GPU batch goes out only once the last one is
@@ -68,7 +68,7 @@ const StKit = st_mod.SuperTrackKitOn(zn_mlp);
 /// all updating on the GPU through `zn_mlp`, each on its own pipe.
 const LearnerKind = enum { ppo, sac, supertrack };
 
-/// ── SuperTrack's side ──
+/// -- SuperTrack's side --
 /// It acts every 2 physics steps (the action held), so its step is 0.02 s - the proven
 /// configuration's - and its 32-step window 0.64 s. A push to the pole every 40 of its steps,
 /// as in `robot_supertrack`'s test; episodes capped at 250 of its steps (500 physics steps).
@@ -77,7 +77,7 @@ const st_push_every: u32 = 40;
 const st_push_size: f32 = 0.4;
 const st_cap: u32 = 250;
 
-/// ── SAC's side (the panel shows what an update costs on this device) ──
+/// -- SAC's side (the panel shows what an update costs on this device) --
 /// Random actions for the first transitions, as `SacAgent`.
 const sac_warmup: usize = 1000;
 const sac_capacity: usize = 50_000;
@@ -100,7 +100,7 @@ const minibatches: usize = samples / minibatch_rows;
 const fail_angle: f32 = 0.21;
 const fail_cart: f32 = 2.2;
 const episode_cap: u32 = 500;
-/// ── ★★★ THE FRAME IS BUDGETED ON BOTH PROCESSORS ──
+/// -- *** THE FRAME IS BUDGETED ON BOTH PROCESSORS --
 ///
 /// A learner that issues GPU work faster than the device completes it floods the queue - and on
 /// a phone the GPU is shared with the compositor, so a flooded queue stalls the whole device, not
@@ -143,26 +143,26 @@ fn pipelineEntries(comptime M: type) [M.kernels.len]z.Compute(M).KernelWgsl {
 const sim_timestep: f32 = 1.0 / 100.0;
 const rail_limit: f32 = 2.4;
 
-/// ── ★★★ 2.5 s OF LOOKAHEAD, AND IT HAS TO BE THIS LONG ──
+/// -- *** 2.5 s OF LOOKAHEAD, AND IT HAS TO BE THIS LONG --
 ///
-/// The first version used 60 knots — 0.6 s — chosen because a cold solve at that length is
+/// The first version used 60 knots - 0.6 s - chosen because a cold solve at that length is
 /// 2.9 ms and fits comfortably in a frame. It balances beautifully and **cannot swing up at
 /// all**: measured, the pole wandered from 3.0 rad to 58 rad over ten seconds while the cost
 /// climbed through 1e6. A pump takes more than a second, so a planner that can only see 0.6 s
-/// ahead never finds one — it is not a tuning problem, the solution is outside the horizon.
+/// ahead never finds one - it is not a tuning problem, the solution is outside the horizon.
 ///
-/// At 250 knots the same loop swings up and balances: theta 3.0 → 4.09 (pumping) → 1.73 →
+/// At 250 knots the same loop swings up and balances: theta 3.0 -> 4.09 (pumping) -> 1.73 ->
 /// 0.003 upright by frame 180, then the cart drifts back to centre and the cost falls to 0.07.
 ///
-/// ★ AND THE COLD SOLVE NO LONGER HAS TO FIT IN A FRAME, which is the point of the budget
+/// * AND THE COLD SOLVE NO LONGER HAS TO FIT IN A FRAME, which is the point of the budget
 /// loop below. It is spread across however many frames it takes, with the robot held still and
 /// the ghost trajectory sharpening while you watch.
 const horizon: u32 = 250;
 
 /// How much planning to do before letting the robot move.
 ///
-/// ★ A cold swing-up needs ~142 iterations to converge fully, but the plan is coherent — pumping
-/// in the right direction, respecting the rail — well before that. Sixty is enough to act on, and
+/// * A cold swing-up needs ~142 iterations to converge fully, but the plan is coherent - pumping
+/// in the right direction, respecting the rail - well before that. Sixty is enough to act on, and
 /// the receding horizon polishes the rest while it runs: at 4 iterations a frame, a quarter of a
 /// second, instead of an open-ended wait for convergence.
 const warmup_iterations: u32 = 60;
@@ -174,9 +174,9 @@ const pole_col: Color = .{ .r = 237, .g = 184, .b = 89, .a = 255 };
 const ghost_col: Color = .{ .r = 89, .g = 204, .b = 153, .a = 255 };
 const limit_col: Color = .{ .r = 204, .g = 89, .b = 89, .a = 255 };
 
-/// ★ THE MOTOR CANNOT LIFT THE POLE, and that is the point of the demo. Force 6 N on ~1.1 kg
-/// gives the cart a ≈ 5.45 m/s², so the largest torque it can put on the pole is m·a·l = 0.164
-/// N·m. Gravity at horizontal asks for m·g·l = 0.294 N·m. There is no way up except to swing.
+/// * THE MOTOR CANNOT LIFT THE POLE, and that is the point of the demo. Force 6 N on ~1.1 kg
+/// gives the cart a ~ 5.45 m/s^2, so the largest torque it can put on the pole is m*a*l = 0.164
+/// N*m. Gravity at horizontal asks for m*g*l = 0.294 N*m. There is no way up except to swing.
 const Cartpole = rbt.Spec(.{
     .bodies = &.{
         .{
@@ -235,14 +235,14 @@ const State = struct {
     last_iterations: u32,
     last_cost: f32,
     /// Iterations spent on the CURRENT plan since the last reset, and the cost the plan
-    /// started at — the two numbers that make "still planning" mean something.
+    /// started at - the two numbers that make "still planning" mean something.
     plan_iterations: u32,
     first_cost: f32,
     /// A short history of the cost, for the progress plot.
     cost_history: [96]f32,
     cost_history_len: usize,
     accumulator: f32,
-    /// Rolling frame time in milliseconds — what the budget controller is protecting.
+    /// Rolling frame time in milliseconds - what the budget controller is protecting.
     frame_ms: f32,
 
     cam: z.OrbitCamera,
@@ -251,7 +251,7 @@ const State = struct {
     cube: z.Mesh,
     cylinder: z.Mesh,
     transform: [1]zm.Mat,
-    // ── PPO ──
+    // -- PPO --
     pipe: z.Compute(zn_mlp),
     learner: Learner,
     envs: [n_envs]rbt.Data,
@@ -287,7 +287,7 @@ const State = struct {
     /// Frames in the last second the GPU was still busy (a batch not yet back).
     gpu_busy_frames: u32,
     busy_window: u32,
-    // ── SAC, and the switch ──
+    // -- SAC, and the switch --
     kind: LearnerKind,
     sac_pipe: z.Compute(zn_mlp),
     sac: SacLearner,
@@ -307,10 +307,10 @@ const State = struct {
     sac_submit_ms: f32,
     /// A batch's dispatch to its weights coming back (EMA, ms): an upper bound on GPU time.
     sac_round_trip_ms: f32,
-    // ── MPC's share of the frame, steered like the learners' (see planWithinFrame) ──
+    // -- MPC's share of the frame, steered like the learners' (see planWithinFrame) --
     mpc_budget_ms: f32,
     ms_per_iteration: f32,
-    // ── SuperTrack ──
+    // -- SuperTrack --
     st_host: *st_mod.SuperTrack,
     st_pipe: z.Compute(zn_mlp),
     st_kit: StKit,
@@ -445,8 +445,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn deinit(gpa: Allocator, s: *State) void {
-    // ★ THE MESHES TOO. The smoke runner's `managed` check compares live bytes across a full
-    // init/deinit cycle and caught these missing — a leak that never shows up in a browser,
+    // * THE MESHES TOO. The smoke runner's `managed` check compares live bytes across a full
+    // init/deinit cycle and caught these missing - a leak that never shows up in a browser,
     // because the tab is torn down before anyone notices, and shows up immediately in the
     // launcher where examples are created and destroyed as you switch between them.
     gpa.free(s.returns);
@@ -479,7 +479,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.model.deinit();
 }
 
-/// Put the pole at `angle` (0 upright, π hanging) and throw away the plan.
+/// Put the pole at `angle` (0 upright, pi hanging) and throw away the plan.
 fn reset(s: *State, angle: f32) void {
     s.data.reset(&s.model);
     s.data.pos[pole_hinge] = angle;
@@ -494,19 +494,19 @@ fn reset(s: *State, angle: f32) void {
     s.cost_history_len = 0;
 }
 
-/// ── ★★★ THE BUDGET LOOP: PLAN A LITTLE, ALWAYS RETURN ──
+/// -- *** THE BUDGET LOOP: PLAN A LITTLE, ALWAYS RETURN --
 ///
 /// `mpc.optimize` with `iterations = n` does at most n improvement passes and returns. That is
 /// the hook this whole demo hangs on: the planner is re-entrant across frames because its unit
 /// of work is one iteration, and a frame simply stops asking.
 ///
-/// ── ★★ THE BUDGET IS DRIVEN BY THE FRAME TIME, NOT BY A STOPWATCH ──
+/// -- ** THE BUDGET IS DRIVEN BY THE FRAME TIME, NOT BY A STOPWATCH --
 ///
 /// A page has no wall clock of its own to time the planner with (`bridge.zig` imports none), and
 /// needs none.
 ///
-/// ★ `f.time.delta_time` measures the thing actually worth protecting — whether frames are
-/// landing on time — rather than a proxy for it. Planning time is only one contributor; a device
+/// * `f.time.delta_time` measures the thing actually worth protecting - whether frames are
+/// landing on time - rather than a proxy for it. Planning time is only one contributor; a device
 /// struggling with the renderer needs the planner to back off just as much, and a stopwatch
 /// around `optimize` cannot see that.
 ///
@@ -516,21 +516,21 @@ fn reset(s: *State, angle: f32) void {
 fn planWithinFrame(s: *State, delta_time: f32) void {
     const target: f32 = 1.0 / 60.0;
 
-    // ── ★★★ PROFILING IS SUSPENDED ACROSS THE PLANNER, AND IT HAS TO BE ──
+    // -- *** PROFILING IS SUSPENDED ACROSS THE PLANNER, AND IT HAS TO BE --
     //
     // `robot.step` is instrumented, which is right for a frame that steps a robot a few times.
-    // One planning frame here steps it **tens of thousands** of times — 250 knots x 6
-    // finite-difference columns x up to 40 iterations — and every zone takes two timestamps,
+    // One planning frame here steps it **tens of thousands** of times - 250 knots x 6
+    // finite-difference columns x up to 40 iterations - and every zone takes two timestamps,
     // which on wasm are two JS boundary crossings.
     //
     // Measured: at horizon 60 the smoke runner already saw 12 225 clock calls per frame. At
-    // 250 it **exhausted Node's JS heap and the gate died** — and a browser would have been
+    // 250 it **exhausted Node's JS heap and the gate died** - and a browser would have been
     // paying the same crossings, tens of milliseconds a frame, for a profile nobody can read
     // (a flame graph of 60 000 identical `robot.step` zones is not a diagnostic).
     //
-    // ★ THIS IS NOT PROFILER-BASHING. The instrument is priced for the workload it was built
+    // * THIS IS NOT PROFILER-BASHING. The instrument is priced for the workload it was built
     // for. A planner is a different workload, and the right move is to tell the instrument so.
-    // Everything outside this call — rendering, UI, the physics the robot actually runs — is
+    // Everything outside this call - rendering, UI, the physics the robot actually runs - is
     // still profiled normally.
     const was_frozen: bool = profiler.isFrozen();
     profiler.freeze();
@@ -553,15 +553,15 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
         s.first_cost = result.initial_cost;
     }
 
-    // ── ★★★ "GOOD ENOUGH TO ACT ON" IS NOT "CONVERGED", AND WAITING FOR THE LATTER IS A BUG ──
+    // -- *** "GOOD ENOUGH TO ACT ON" IS NOT "CONVERGED", AND WAITING FOR THE LATTER IS A BUG --
     //
-    // This used to hold the robot still until `result.converged`, which on a phone — 4
-    // iterations a frame, a cold plan starting from a 2.5 s free-fall rollout — meant staring
+    // This used to hold the robot still until `result.converged`, which on a phone - 4
+    // iterations a frame, a cold plan starting from a 2.5 s free-fall rollout - meant staring
     // at a motionless cartpole under the word "planning" with no way to tell whether it was
     // making progress or wedged. That is a worse failure than a wrong answer, because the user
     // cannot distinguish it from a hang.
     //
-    // ★ AND CONVERGENCE IS THE WRONG BAR ANYWAY. MPC re-solves every single tick; the plan
+    // * AND CONVERGENCE IS THE WRONG BAR ANYWAY. MPC re-solves every single tick; the plan
     // does not need to be optimal before the first step, it needs to be SANE. A budget of
     // iterations buys that, and everything after it is bought while the robot is already
     // moving, which is what the receding horizon is for.
@@ -578,9 +578,9 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
         s.cost_history[s.cost_history.len - 1] = result.cost;
     }
 
-    // A slow average, so one hitch — a texture upload, a GC pause — does not swing the budget.
+    // A slow average, so one hitch - a texture upload, a GC pause - does not swing the budget.
     s.frame_ms += (delta_time * 1000.0 - s.frame_ms) * 0.1;
-    // ── ★ A FAIR SHARE OF THE FRAME ──
+    // -- * A FAIR SHARE OF THE FRAME --
     // This rule was "add iterations only below 0.7 of the frame target" - which, on a display
     // locked to vsync, never happens once a learner fills the headroom: on Simon's phone MPC sat
     // at 1 iteration a frame. Now MPC's budget is MILLISECONDS, steered by the learners' own
@@ -704,7 +704,7 @@ fn trainSlice(s: *State) void {
 
 /// PPO's share of the frame, budgeted on both processors (see `frame_target_ms`).
 fn runPpo(s: *State, delta_time: f32) void {
-    // ── Steer the budgets on the measured frame time: back off fast, creep up slowly. ──
+    // -- Steer the budgets on the measured frame time: back off fast, creep up slowly. --
     const frame_ms: f32 = delta_time * 1000.0;
     const on_time: bool = frame_ms < frame_target_ms * 1.1;
     if (frame_ms > frame_target_ms * 1.25) {
@@ -714,9 +714,9 @@ fn runPpo(s: *State, delta_time: f32) void {
         s.learner_budget_ms = @min(cpu_budget_max_ms, s.learner_budget_ms + 0.1);
     }
 
-    // ── GPU: new work only once the last batch is BACK (finished and mirrored). ──
+    // -- GPU: new work only once the last batch is BACK (finished and mirrored). --
     //
-    // ★★ POLL THE READBACK EVERY FRAME, FIRST. `readLatest` (inside `syncWeights`) both lands a
+    // ** POLL THE READBACK EVERY FRAME, FIRST. `readLatest` (inside `syncWeights`) both lands a
     // finished copy AND encodes the next one, and the mirrored generation only advances in it.
     // Calling it only once the GPU looked idle deadlocked: after the first batch nothing encoded
     // a copy, so `mirrored` never reached `gpu_wait` and training stopped for good. The stub GPU
@@ -746,9 +746,9 @@ fn runPpo(s: *State, delta_time: f32) void {
         s.busy_window += 1;
     }
 
-    // ── CPU: collect within the budget; wait when the next rollout is full and the last is
-    // still training. ──
-    // ★ AT LEAST ONE TICK A FRAME, then the budget: learning always progresses, even when the
+    // -- CPU: collect within the budget; wait when the next rollout is full and the last is
+    // still training. --
+    // * AT LEAST ONE TICK A FRAME, then the budget: learning always progresses, even when the
     // frame's budget is spent (a tick is ~0.1 ms). The smoke runner's clock advances 16 ms a
     // CALL, so a budget-first loop exited before collecting anything - neither learner ever
     // trained headlessly, and the training paths went unexercised there.
@@ -1015,7 +1015,7 @@ fn update(f: *z.Frame, s: *State) void {
     defer s.ui_host.render(f);
     const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
 
-    // 1. PLAN — bounded, every frame, whether or not the physics advances.
+    // 1. PLAN - bounded, every frame, whether or not the physics advances.
     planWithinFrame(s, f.time.delta_time);
     switch (s.kind) {
         .ppo => runPpo(s, f.time.delta_time),
@@ -1023,33 +1023,33 @@ fn update(f: *z.Frame, s: *State) void {
         .supertrack => runSuperTrack(s, f.time.delta_time),
     }
 
-    // 2. ACT — the simulation runs on its own clock, not the display's.
+    // 2. ACT - the simulation runs on its own clock, not the display's.
     //
-    // ★ WHILE `warming`, THE ROBOT DOES NOT MOVE. A cold plan is nonsense for its first few
+    // * WHILE `warming`, THE ROBOT DOES NOT MOVE. A cold plan is nonsense for its first few
     // iterations, and applying it would flail the cart around for a quarter of a second before
     // the optimiser found anything. Holding still until the first solve converges makes the
     // ghost trajectory readable and the start honest: you are watching it think, then act.
     if (s.running and !s.warming) {
         s.accumulator += @min(f.time.delta_time, 0.1);
         while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
-            // ★ `feedbackControl` RATHER THAN `plan.ctrl[0]`, and the difference is the whole
+            // * `feedbackControl` RATHER THAN `plan.ctrl[0]`, and the difference is the whole
             // reason MPC survives a slow solver. The plan in hand was linearised about a state
-            // the robot has since left — up to two sim steps ago, because physics runs at 100 Hz
-            // and planning at the display rate. `K₀·δx` is the backward pass's own answer to
+            // the robot has since left - up to two sim steps ago, because physics runs at 100 Hz
+            // and planning at the display rate. `K_0*dx` is the backward pass's own answer to
             // being somewhere else.
             mpc.feedbackControl(&s.model, &s.data, &s.plan, s.applied);
             @memcpy(s.data.ctrl, s.applied);
             rbt.step(&s.model, &s.data);
-            // ★★ SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
+            // ** SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
             // robot has advanced a tick, knot 1 is the new now. Shifting before the step
-            // applies knot 1's control to knot 0's state — off by one, every tick, compounding.
+            // applies knot 1's control to knot 0's state - off by one, every tick, compounding.
             mpc.shift(&s.plan);
         }
     }
 
     z.clearViewport(f, bg);
     const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
-    // ★ FRAME THE RAIL, NOT THE CART. The plan spans the full 4.8 m of track and the ghost
+    // * FRAME THE RAIL, NOT THE CART. The plan spans the full 4.8 m of track and the ghost
     // trajectory is the thing worth seeing; a distance tuned to the robot alone crops it.
     s.cam.distance = clamp(5.2 / @max(0.35, aspect), 4.0, 11.0);
     const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.2, .max_distance = 9.0 });
@@ -1068,7 +1068,7 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
         z.drawMeshInstanced(gl, &s.cube, &s.transform, limit_col);
     }
 
-    // ── ★ THE PLAN, DRAWN AS GHOSTS. This is the demo's actual subject: the optimiser's
+    // -- * THE PLAN, DRAWN AS GHOSTS. This is the demo's actual subject: the optimiser's
     // intention, one faint pole per planned knot, sharpening as it converges. Every fourth
     // knot, because sixty overlapping poles is a smear rather than a trajectory.
     const ns: u32 = s.plan.nstate;
@@ -1087,7 +1087,7 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     drawPole(s, gl, x, angle, 0.035, pole_col);
 }
 
-/// One pole, drawn from its pivot rather than centred on it — the cylinder mesh spans [0, h]
+/// One pole, drawn from its pivot rather than centred on it - the cylinder mesh spans [0, h]
 /// along Y, so rotating about the cart's origin puts the pivot where the hinge is.
 fn drawPole(
     s: *State,
@@ -1190,7 +1190,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.text("motor {d:>6.2}  (limit +-1)", .{s.applied[0]});
         u.separator();
 
-        // ★ THE BUDGET IS SHOWN, NOT SET. It is what the device turned out to afford — a
+        // * THE BUDGET IS SHOWN, NOT SET. It is what the device turned out to afford - a
         // number worth seeing precisely because a phone and a desktop differ by more than 10x,
         // and because it is the reason the frame rate holds.
         u.text("frame {d:.1} ms ({d:.0} fps), planning {d:.0} iters/frame", .{
@@ -1200,7 +1200,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         });
         u.text("MPC's share {d:.1} ms ({d:.2} ms an iteration)", .{ s.mpc_budget_ms, s.ms_per_iteration });
 
-        // ── ★ PROGRESS, NOT A SPINNER. "planning..." with nothing moving is
+        // -- * PROGRESS, NOT A SPINNER. "planning..." with nothing moving is
         // indistinguishable from a hang; a count against a target and a falling cost are not.
         if (s.warming) {
             u.text("warming up {d}/{d} iterations", .{ s.plan_iterations, warmup_iterations });
@@ -1212,7 +1212,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         }
         u.text("cost {d:.1}  (started {d:.1})", .{ s.last_cost, s.first_cost });
 
-        // ★ THE COST CURVE IS THE EVIDENCE. A number that is falling tells you to wait; a
+        // * THE COST CURVE IS THE EVIDENCE. A number that is falling tells you to wait; a
         // number that has flattened tells you it is done and the rest is the robot's problem.
         if (s.cost_history_len > 2) {
             var top: f32 = 0;
@@ -1229,8 +1229,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         }
         u.separator();
 
-        // ★ AND `run` IS AN OVERRIDE, NOT A SUGGESTION. Ticking it while still warming starts
-        // the robot on whatever plan exists — which is the honest thing to offer someone who
+        // * AND `run` IS AN OVERRIDE, NOT A SUGGESTION. Ticking it while still warming starts
+        // the robot on whatever plan exists - which is the honest thing to offer someone who
         // would rather watch it fail than watch it wait.
         if (u.checkbox("run (skips the warm-up)", &s.running)) {
             if (s.running) {

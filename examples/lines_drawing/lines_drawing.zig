@@ -1,4 +1,4 @@
-//! lines_drawing — a persistent paint canvas. Drag to paint with a hue that cycles by
+//! lines_drawing - a persistent paint canvas. Drag to paint with a hue that cycles by
 //! stroke speed; strokes accumulate into an offscreen render texture that is composited to
 //! the screen each frame. Exercises the RTT accumulate path (beginTextureMode with no clear
 //! = load) and pointer input. Desktop extras: right-drag erases, middle-click clears, wheel
@@ -75,7 +75,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.beginDrawing(f.gl);
     z.clearViewport(f, common.palette.bg);
 
-    // Composite the canvas to the screen (RTs render upright — no flip).
+    // Composite the canvas to the screen (RTs render upright - no flip).
     f.gl.texture(.{ .x = 0, .y = 0, .width = w, .height = h }, s.canvas.asTexture(), .{ .tint = white });
 
     if (!left_down) {

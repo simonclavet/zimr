@@ -1,4 +1,4 @@
-// src/tests/snapshot_regression_test.zig — host-side visual
+// src/tests/snapshot_regression_test.zig - host-side visual
 // regression tests built on the `ui.snapshot` helper.
 //
 // What's tested:
@@ -55,7 +55,7 @@ fn drawSceneB(u_handle: ui.Ui) void {
 fn buildContext(gpa: Allocator) ui.UiContext {
     return .{
         .gpa = gpa,
-        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
         // live-byte tripwire that catches a dropped per-frame reset). These four test
         // files were imported by nothing, so they never compiled against the change.
         .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),
@@ -65,7 +65,7 @@ fn buildContext(gpa: Allocator) ui.UiContext {
 }
 
 /// Best-effort directory create + file delete using the Io-threaded
-/// file APIs.  Both swallow errors — the tests are robust to host
+/// file APIs.  Both swallow errors - the tests are robust to host
 /// environments where `tests/snapshots/` isn't writable.
 fn prepareSnapshotPath(io: std.Io, ref_path: []const u8) void {
     std.Io.Dir.cwd().createDirPath(io, snapshot_dir) catch {}; // lint:off catch-suppression: ensure-dir, ok if exists
@@ -122,7 +122,7 @@ test "snapshot: identical scene re-run is byte-for-byte equal" {
         _ = ui.snapshotPng(gpa, io, &ctx, width, height, ref_path) catch return;
     }
 
-    // Pass 2: identical scene → must read the baseline + compare
+    // Pass 2: identical scene -> must read the baseline + compare
     // pixel-for-pixel.  Zero differing.
     var ctx: ui.UiContext = buildContext(gpa);
     defer ctx.deinit();

@@ -1,10 +1,10 @@
-//! ui_phone_gestures — port of the GL `ui_phone_gestures`: a touch
+//! ui_phone_gestures - port of the GL `ui_phone_gestures`: a touch
 //! playground exercising the three core phone gestures against the wgpu input
 //! state. TAP (four targets, rising-edge press tested against the landing
 //! point so a finger that drifts after touchstart still counts), DRAG (a handle
 //! that pins to the finger while held), and SWIPE (a scissor-clipped list that
 //! scrolls with the drag delta). Pure manual drawing + raw mouse/touch input
-//! (`f.input.mouse.press_position`/`current_button`, `getMousePosition`) — no
+//! (`f.input.mouse.press_position`/`current_button`, `getMousePosition`) - no
 //! UI widgets, so hover is computed directly rather than via a UiHost.
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
@@ -136,7 +136,7 @@ fn update(f: *z.Frame, s: *State) void {
     );
     const swipe_y: f32 = 392;
     // Fill down to just above the status line (the design height is fixed via
-    // .fit, so this is deterministic — the list uses all remaining space).
+    // .fit, so this is deterministic - the list uses all remaining space).
     const swipe_h: f32 = f.window.heightf() - swipe_y - 34;
     if (swipe_h >= 40) {
         const swipe_rect: z.Rectangle = .{ .x = 16, .y = swipe_y, .width = w - 32, .height = swipe_h };
@@ -197,8 +197,8 @@ pub const app: z.AppSpec(State) = .{
             .title = "zimr - WebGPU - phone gestures",
             // .fit: a FIXED design space (9:16 portrait) uniformly scaled +
             // centered into the canvas. The standalone canvas uses the SAME
-            // 9:16 aspect-ratio (CSS), so .fit fills it exactly — no letterbox,
-            // no centering-shrink — and it looks identical in every viewer
+            // 9:16 aspect-ratio (CSS), so .fit fills it exactly - no letterbox,
+            // no centering-shrink - and it looks identical in every viewer
             // regardless of how each sizes/zooms the page.
             .width = 450,
             .height = 800,

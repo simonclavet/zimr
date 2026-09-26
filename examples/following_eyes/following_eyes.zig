@@ -1,4 +1,4 @@
-//! following_eyes — two googly eyes whose irises track the pointer, each clamped to stay
+//! following_eyes - two googly eyes whose irises track the pointer, each clamped to stay
 //! inside its sclera (atan2 + a radius clamp, straight from the raylib original). On a phone there
 //! is no hover, so when nothing is touching the screen the eyes wander on their own along a slow
 //! Lissajous path; touch and they snap to your finger. From raylib shapes_following_eyes.

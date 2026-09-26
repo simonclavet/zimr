@@ -4,7 +4,7 @@
 //! ("sizeof is not defined"); now a <=32-bit packed struct is heap-backed (so
 //! `&t` has a real address) and the bit packing (shr/and/<<) works. run_test()
 //! returns 0 on success, else a nonzero code for the first failed check. (Packed
-//! structs wider than 32 bits are out of scope and emit a loud marker instead —
+//! structs wider than 32 bits are out of scope and emit a loud marker instead -
 //! they would need a true 64-bit heap load/store; see the file header.)
 
 const Flags = packed struct { a: u1, b: u3, c: u4 }; // 8-bit

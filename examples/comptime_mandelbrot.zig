@@ -1,4 +1,4 @@
-//! examples/comptime_mandelbrot.zig — the Mandelbrot set, computed
+//! examples/comptime_mandelbrot.zig - the Mandelbrot set, computed
 //! at COMPILE TIME, baked into the binary as a const, printed at
 //! runtime.
 //!
@@ -11,10 +11,10 @@
 //!   The SAME Mandelbrot kernel from `examples/sw_mandelbrot.zig`
 //!   runs in FOUR distinct execution environments:
 //!
-//!     1. WebGPU/WGSL — compiled via SPIR-V → WGSL, runs in browser GPU
-//!     2. WebGL2/GLSL — compiled via SPIR-V → spirv-cross → GLSL ES 3.0
-//!     3. Native CPU — Zig ReleaseFast, per-pixel `shaderMain` calls
-//!     4. **Compile-time Zig** — Mandelbrot evaluated by the Zig
+//!     1. WebGPU/WGSL - compiled via SPIR-V -> WGSL, runs in browser GPU
+//!     2. WebGL2/GLSL - compiled via SPIR-V -> spirv-cross -> GLSL ES 3.0
+//!     3. Native CPU - Zig ReleaseFast, per-pixel `shaderMain` calls
+//!     4. **Compile-time Zig** - Mandelbrot evaluated by the Zig
 //!        compiler itself, no runtime work, the image IS the binary
 //!
 //!   Mode #4 is the demo here.  The pixel data lives in the read-only
@@ -23,7 +23,7 @@
 //!   `@setEvalBranchQuota` lets the comptime branch see enough budget
 //!   to finish.
 //!
-//!   This is the OS-version of "constexpr fractals" — but Zig comptime
+//!   This is the OS-version of "constexpr fractals" - but Zig comptime
 //!   is way more general than C++ constexpr.  Anything Zig can do at
 //!   runtime, Zig can do at compile time (modulo I/O and allocation
 //!   constraints).  Including: floating-point iteration, conditional
@@ -34,10 +34,10 @@ const zm = @import("zm");
 const float = zm.float;
 
 // ============================================================================
-// SECTION 1 — the kernel
+// SECTION 1 - the kernel
 // ============================================================================
 
-/// The Mandelbrot iteration — pure function, no side effects.  Same
+/// The Mandelbrot iteration - pure function, no side effects.  Same
 /// shape as `examples/sw_mandelbrot.zig`'s `MandelbrotFs.shaderMain`
 /// but lifted out of the io/out wrapping so it can be called by
 /// either runtime or comptime code.
@@ -78,7 +78,7 @@ fn mandelbrotEscape(
 }
 
 // ============================================================================
-// SECTION 2 — comptime rendering
+// SECTION 2 - comptime rendering
 // ============================================================================
 
 /// ASCII palette indexed by smooth escape value.  Order matters:
@@ -125,7 +125,7 @@ fn renderAscii(
     while (y < height) : (y += 1) {
         var x: usize = 0;
         while (x < width) : (x += 1) {
-            // Pixel centers at +0.5; map to [-0.5, +0.5] × view size.
+            // Pixel centers at +0.5; map to [-0.5, +0.5] x view size.
             const u: f32 = (float(x) + 0.5) / float(width);
             const v: f32 = (float(y) + 0.5) / float(height);
             // Y flip: terminal Y grows down, imaginary axis grows up.
@@ -142,10 +142,10 @@ fn renderAscii(
 }
 
 // ============================================================================
-// SECTION 3 — the comptime call site
+// SECTION 3 - the comptime call site
 // ============================================================================
 
-/// The baked Mandelbrot.  This call site runs at COMPILE TIME — every
+/// The baked Mandelbrot.  This call site runs at COMPILE TIME - every
 /// pixel of the iteration, the escape test, the smooth-iteration
 /// formula, and the palette lookup is evaluated by the Zig compiler.
 /// At runtime, this is a `const` byte array in the read-only data
@@ -169,7 +169,7 @@ const image: [img_h * (img_w + 1)]u8 = renderAscii(
 );
 
 // ============================================================================
-// SECTION 4 — runtime entry point (zero per-pixel work)
+// SECTION 4 - runtime entry point (zero per-pixel work)
 // ============================================================================
 
 pub fn main() void {

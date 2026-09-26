@@ -1,5 +1,5 @@
 // Aggregate-in-aggregate by value: an array of structs each holding an array
-// (the old Q9 gap — now works; locked in).
+// (the old Q9 gap - now works; locked in).
 const Row = struct { cells: [3]i32 };
 const Grid = struct { rows: [2]Row };
 export fn run_test() i32 {

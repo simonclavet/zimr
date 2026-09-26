@@ -41,6 +41,7 @@
 //! The shapes, the floor and the actuators follow, one measured step at a time (the plan's Phase R).
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const codecs = @import("codecs.zig");
 /// The task's clip format - a copied clip is one, exactly as an IK-baked clip is.
@@ -209,7 +210,7 @@ pub fn readPose(gpa: Allocator, bytes: []const u8) !Posed {
     return .{ .bones = bones, .positions = positions, .rotations = rotations, .locals = locals, .names = names };
 }
 
-// ──────── R2: the rest pose ────────
+// -------- R2: the rest pose --------
 //
 // Every joint of a robot reads "no rotation" in ONE pose - its zero pose - and much of the model is
 // measured from there: a joint's range is an angle away from it, a hinge's axis is drawn in it, and the
@@ -318,7 +319,7 @@ pub fn restForward(
     }
 }
 
-// ──────── R3: Geno's mesh, and the sole it stands on ────────
+// -------- R3: Geno's mesh, and the sole it stands on --------
 
 /// Geno's skinned mesh, exactly as the viewer's export script writes it
 /// (`GenoView/resources/export_geno.py`, the `Geno.bin` it saves):
@@ -603,7 +604,7 @@ pub fn solePlane(mesh: Mesh, bind: Posed, side: Side) !Sole {
     };
 }
 
-// ──────── R5: mass and inertia, from the body's own volume ────────
+// -------- R5: mass and inertia, from the body's own volume --------
 //
 // A robot's masses are usually guesses - a density times each collision shape's volume, or numbers out
 // of a table. Ours can do better, because the body itself is right here: Geno's mesh is a skin around a
@@ -858,7 +859,7 @@ pub const BodyVolume = struct {
     }
 };
 
-// ──────── R5b: cutting the mass at the joints ────────
+// -------- R5b: cutting the mass at the joints --------
 //
 // The skin weights say which bone each bit of flesh MOVES with, and near a joint that answer is a blend:
 // a vertex that is half foot and half shin goes wherever its larger half does. The anthropometry tables -
@@ -1162,7 +1163,7 @@ pub fn measureVolume(
     return .{ .shares = shares, .columns_hit = columns_hit, .odd_columns = odd_columns };
 }
 
-// ──────── R6: joint ranges, from what the captures actually do ────────
+// -------- R6: joint ranges, from what the captures actually do --------
 //
 // A joint limit is a claim about the body: this far, and no further. Guessed, it is either too tight -
 // the robot cannot reach a pose its captures ask for, and the tracker spends itself fighting a wall - or
@@ -1418,7 +1419,7 @@ pub fn measureRanges(gpa: Allocator, rest: Posed, captures: []const []const u8) 
     return ranges;
 }
 
-// ──────── R6b: the model, assembled ────────
+// -------- R6b: the model, assembled --------
 
 /// The one turn between Geno's world and the engine's. Geno's files are y-up; the engine's robots are
 /// z-up (MuJoCo's convention - gravity along -z). A quarter turn about x takes one to the other:
@@ -1855,7 +1856,7 @@ pub fn writeModel(
     return text.toOwnedSlice(gpa);
 }
 
-// ──────── R7: retargeting, which is now a copy ────────
+// -------- R7: retargeting, which is now a copy --------
 
 /// One frame of a capture, read into every joint's local place (from its position channels) and local
 /// turn (from its rotation channels, in the file's own order).
@@ -2029,7 +2030,7 @@ pub const Copier = struct {
     }
 };
 
-// ──────── R8a: the training task's inputs, for Geno ────────
+// -------- R8a: the training task's inputs, for Geno --------
 
 /// Where Geno's model lives as a file, so the task and the pages load it instead of re-measuring the body
 /// (sampling its volume takes seconds). A test holds it equal to a fresh `writeModel`, and rewrites it when
@@ -3247,7 +3248,7 @@ pub fn heldClip(
     };
 }
 
-// ──────── Tests ────────
+// -------- Tests --------
 
 const expect = std.testing.expect;
 const bind_bvh: []const u8 = @embedFile("tests/fixtures/robot/geno_bind.bvh");
@@ -3300,15 +3301,13 @@ test "robot_geno: R1 - Geno's measurements, as our own code reads them" {
     const stance_descent: f32 =
         @abs(degFromRad(asinRad(clamp(stance_drop[1] / length3(stance_drop), -1.0, 1.0))));
 
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  Geno, in metres: hips {d:.3} m up, thigh {d:.3}, shin {d:.3}, ankle-to-toe {d:.3}\n", .{
+    report.print("\n  Geno, in metres: hips {d:.3} m up, thigh {d:.3}, shin {d:.3}, ankle-to-toe {d:.3}\n", .{
         hips[1],
         thigh,
         shin,
         foot,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  the ankle sits {d:.3} m up, its toe {d:.3} m up: the rest sole descends " ++
+    report.print("  the ankle sits {d:.3} m up, its toe {d:.3} m up: the rest sole descends " ++
         "{d:.1} deg (bind), {d:.1} deg (stance)\n", .{ ankle[1], toe[1], descent, stance_descent });
 
     // Geno is a human-sized character: hips a little under a metre, a thigh and a shin of about
@@ -3333,8 +3332,7 @@ test "robot_geno: R1 - Geno's measurements, as our own code reads them" {
             worst = @max(worst, length3(a.offset - b.offset));
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  bind and stance: {d} bones, identical hierarchy, offsets differ by at most {d:.4} m\n", .{
+    report.print("  bind and stance: {d} bones, identical hierarchy, offsets differ by at most {d:.4} m\n", .{
         bind.bones.len,
         worst,
     });
@@ -3404,8 +3402,7 @@ test "robot_geno: R2 - the robot's zero pose is Geno's bind pose, and a pose is 
     const descent: f32 = @abs(degFromRad(asinRad(clamp(drop[1] / length3(drop), -1.0, 1.0))));
 
     // The numbers first, so that a failure below always shows the evidence it failed on.
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R2: at the file's zero the upper arm points {d:.0} deg above level and the foot descends " ++
+    report.print("\n  R2: at the file's zero the upper arm points {d:.0} deg above level and the foot descends " ++
         "{d:.1} deg;\n  identity joints = bind to {e:.1} m / {e:.1} deg; " ++
         "the stance copied = the stance to {e:.1} m / " ++
         "{e:.1} deg;\n  rest sole descent {d:.2} deg (constant {d:.1})\n", .{
@@ -3452,8 +3449,7 @@ test "robot_geno: R3 - the sole plane, derived from Geno's own mesh" {
 
     for ([_]Side{ .left, .right }) |side| {
         const sole: Sole = try solePlane(mesh, bind, side);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  R3 {s}: sole at {d:.4} m, ankle {d:.4} m above it; {d} vertices touch, from {d:.3} m " ++
+        report.print("  R3 {s}: sole at {d:.4} m, ankle {d:.4} m above it; {d} vertices touch, from {d:.3} m " ++
             "(heel) to {d:.3} m (toes) along the foot, the ball at {d:.3}\n", .{
             side.prefix(),
             sole.height,
@@ -3472,8 +3468,7 @@ test "robot_geno: R3 - the sole plane, derived from Geno's own mesh" {
         // The foot's depth: the ankle rides 8-9.5 cm above the sole, as a human's does.
         try expect(sole.ankle_height > 0.08 and sole.ankle_height < 0.095);
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  mesh and skeleton share one frame: 75 joints, worst {e:.1} m apart\n", .{worst});
+    report.print("  mesh and skeleton share one frame: 75 joints, worst {e:.1} m apart\n", .{worst});
 }
 
 test "robot_geno: R5 - the volume sampler, on a box whose answer is known" {
@@ -3521,8 +3516,7 @@ test "robot_geno: R5 - the volume sampler, on a box whose answer is known" {
         m * (size[0] * size[0] + size[1] * size[1]) / 12.0,
     };
     const got: [3][3]f32 = share.inertia();
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R5 box: mass {d:.3} kg (exact {d:.3}), centre off by {e:.1} m, " ++
+    report.print("\n  R5 box: mass {d:.3} kg (exact {d:.3}), centre off by {e:.1} m, " ++
         "inertia {d:.4} {d:.4} {d:.4} " ++
         "(exact {d:.4} {d:.4} {d:.4}), odd columns {d}\n", .{
         share.mass(),
@@ -3646,8 +3640,7 @@ fn compareWithTables(mesh: Mesh, body: BodyVolume, total: f32) ![anthropometry.l
         const realisable: bool = inertia[0][0] + inertia[1][1] >= inertia[2][2] and
             inertia[1][1] + inertia[2][2] >= inertia[0][0] and inertia[2][2] + inertia[0][0] >= inertia[1][1] and
             inertia[0][0] > 0.0 and inertia[1][1] > 0.0 and inertia[2][2] > 0.0;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  {s:<14} {d:6.2} kg = {d:5.2} % (de Leva {d:5.2}, {d:4.0} %; " ++
+        report.print("  {s:<14} {d:6.2} kg = {d:5.2} % (de Leva {d:5.2}, {d:4.0} %; " ++
             "Dempster {d:5.2}, {d:4.0} %){s}\n", .{
             segment.name,
             share.mass(),
@@ -3680,8 +3673,7 @@ test "robot_geno: R5 - Geno's mass and inertia, from its own volume" {
     }
     const height: f32 = high - low;
     const total: f32 = whole.mass();
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R5 Geno: {d:.3} m tall, {d:.1} litres, {d:.1} kg at {d:.0} kg/m^3 (BMI {d:.1}); " ++
+    report.print("\n  R5 Geno: {d:.3} m tall, {d:.1} litres, {d:.1} kg at {d:.0} kg/m^3 (BMI {d:.1}); " ++
         "{d} columns, {d} odd\n", .{
         height,
         whole.volume * 1000.0,
@@ -3726,8 +3718,7 @@ test "robot_geno: R5b - cut the tables' way, and what it shows about Geno's buil
         }
     }
 
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R5b, cut at the joints ({d:.1} kg):\n", .{total});
+    report.print("\n  R5b, cut at the joints ({d:.1} kg):\n", .{total});
     const beyond: [anthropometry.len]bool = try compareWithTables(mesh, by_planes, total);
     // THE FINDING. Cut the tables' own way, six of the eight segments land within 20 % of a table - and
     // the two that do not are the SAME two as with the skin weights, at nearly the same weight. However
@@ -3745,8 +3736,7 @@ test "robot_geno: R5b - cut the tables' way, and what it shows about Geno's buil
         }
         const by_weights: f32 = segmentShare(mesh, by_skin, segment).mass();
         const by_cuts: f32 = segmentShare(mesh, by_planes, segment).mass();
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  {s}: {d:.2} kg by the skin weights, {d:.2} kg cut at the joints\n", .{
+        report.print("  {s}: {d:.2} kg by the skin weights, {d:.2} kg cut at the joints\n", .{
             segment.name,
             by_weights,
             by_cuts,
@@ -3793,13 +3783,11 @@ test "robot_geno: R6 - joint ranges, from the tracking set's four clips" {
     const ranges: []Range = try measureRanges(gpa, bind, &files);
     defer gpa.free(ranges);
 
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R6 over {d} frames: joint, total and swing (limit / max), twist band [limits] (extremes)\n", .{
+    report.print("\n  R6 over {d} frames: joint, total and swing (limit / max), twist band [limits] (extremes)\n", .{
         ranges[0].frames,
     });
     for (ranges) |range| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  {s:<13} total {d:5.1} / {d:5.1}  swing {d:5.1} / {d:5.1}  twist [{d:6.1}, {d:6.1}] " ++
+        report.print("  {s:<13} total {d:5.1} / {d:5.1}  swing {d:5.1} / {d:5.1}  twist [{d:6.1}, {d:6.1}] " ++
             "({d:6.1}, {d:6.1}){s}\n", .{
             range.name,
             range.total_limit,
@@ -3873,8 +3861,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         const file: std.Io.File = try std.Io.Dir.cwd().createFile(threaded.io(), model_fixture_path, .{});
         defer file.close(threaded.io());
         try file.writeStreamingAll(threaded.io(), xml);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  R8a: {s} was {s} - rewritten from writeModel; review the diff and run again\n", .{
+        report.print("\n  R8a: {s} was {s} - rewritten from writeModel; review the diff and run again\n", .{
             model_fixture_path,
             if (stored == null) "missing" else "stale",
         });
@@ -3911,8 +3898,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     for (imported.model.body_mass) |mass| {
         total += mass;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R6b: {d} bytes of MJCF, {d} bodies; at rest every body within {e:.1} m " ++
+    report.print("\n  R6b: {d} bytes of MJCF, {d} bodies; at rest every body within {e:.1} m " ++
         "of the bind pose; " ++
         "{d:.2} kg in the model (the body: {d:.2})\n", .{
         xml.len,
@@ -3924,8 +3910,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     try expect(worst < 1.0e-3);
     // Every pair of shapes that overlaps at rest is excluded - among them the three that meet across
     // shapeless bodies (the chest with each upper arm, and with Neck1), so at least those.
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  R6c: {d} pairs of shapes overlap at rest, and never collide\n", .{
+    report.print("  R6c: {d} pairs of shapes overlap at rest, and never collide\n", .{
         imported.model.exclude_pairs.len,
     });
     try expect(imported.model.exclude_pairs.len >= 3);
@@ -3961,15 +3946,14 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         }
         placed += 1;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  R6b: {d} shapes placed by the engine, every centre within {e:.1} m of the fit\n", .{
+    report.print("  R6b: {d} shapes placed by the engine, every centre within {e:.1} m of the fit\n", .{
         placed,
         shape_worst,
     });
     try expect(placed == shapes.geoms.len);
     try expect(shape_worst < 1.0e-3);
 
-    // ── THE STANDING GUARD (standing rule 7): in a world with a floor, Geno stays ON it. ──
+    // -- THE STANDING GUARD (standing rule 7): in a world with a floor, Geno stays ON it. --
     //
     // No actions - no servo, nothing - so the ragdoll crumples, and "still standing" is not the question.
     // The question is whether this world HAS a floor that holds, because a world without one passes many
@@ -4024,8 +4008,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         finite = finite and z == z;
     }
     const end_height: f32 = data.body_xpos[root][2];
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  R6b guard: {d} steps; contacts {s}; the hips went from {d:.3} to {d:.3} m; " ++
+    report.print("  R6b guard: {d} steps; contacts {s}; the hips went from {d:.3} to {d:.3} m; " ++
         "lowest body origin " ++
         "{d:.3} m\n", .{ 30 * steps_per_frame, if (touched) "yes" else "NONE", start_height, end_height, lowest });
     try expect(finite);
@@ -4038,7 +4021,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     // collided, they throw the robot metres up. `writeExclusions` names them.)
     try expect(end_height < start_height + 0.05);
 
-    // ── R7: RETARGETING IS A COPY, on all four clips, through the engine's own kinematics. ──
+    // -- R7: RETARGETING IS A COPY, on all four clips, through the engine's own kinematics. --
     //
     // Two claims, because the captures are not quite rigid: they stretch the thighs and the upper arms by up
     // to 3 mm from frame to frame (the knees' and elbows' own translations move), and no rigid robot can copy
@@ -4145,8 +4128,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         }
     }
 
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  R7: {d} frames of four clips copied; every body turned as captured to {e:.1} deg;\n" ++
+    report.print("  R7: {d} frames of four clips copied; every body turned as captured to {e:.1} deg;\n" ++
         "  positions: exact against rigid bones to {e:.1} m; against the recorded capture {d:.4} m (its stretch);\n" ++
         "  the walk's standing soles tilt {d:.1} deg\n", .{
         frames_copied,
@@ -4179,8 +4161,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
             worst_residual = @max(worst_residual, r);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  R8a: four clips copied into the task's format ({d} numbers a frame); " ++
+    report.print("  R8a: four clips copied into the task's format ({d} numbers a frame); " ++
         "worst residual {d:.4} m\n", .{
         imported.model.qpos0.len,
         worst_residual,
@@ -4286,8 +4267,7 @@ test "robot_geno: R8a part 3 - the task's servo drives all 23 of Geno's ball joi
         rbt.step(m, &data);
     }
     const end: JointError = jointError(m, &data, target, scratch);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R8a servo: {d} ball joints, {d} degrees of freedom; joint error {d:.3} rad -> {d:.5} rad " ++
+    report.print("\n  R8a servo: {d} ball joints, {d} degrees of freedom; joint error {d:.3} rad -> {d:.5} rad " ++
         "in 0.5 s (worst dof {d:.5} rad)\n", .{ body_names.len - 1, nv - root, start.total, end.total, end.worst });
     try expect(end.total == end.total);
     // THE KNOWN ANSWER: every joint within 1 % of its target in half a second, and no degree of freedom off
@@ -4369,8 +4349,7 @@ test "robot_geno: R9 and R10, measured early - Geno held and servoed on a floor,
                         }
                     }
                     if (law == .floating and (frame + 1) % 15 == 0) {
-                        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                        std.debug.print("    t {d:.2} s: hips {d:.3} m from the start\n", .{
+                        report.print("    t {d:.2} s: hips {d:.3} m from the start\n", .{
                             float(frame + 1) / 60.0,
                             length3(run.data.body_xpos[run.hips] - at_start),
                         });
@@ -4382,8 +4361,7 @@ test "robot_geno: R9 and R10, measured early - Geno held and servoed on a floor,
                     for (0..120) |frame| {
                         for (0..joints) |n| {
                             if (gave_way[n] == frame and reported < 5) {
-                                // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                                std.debug.print("    {s} passed 5 deg at {d:.2} s\n", .{
+                                report.print("    {s} passed 5 deg at {d:.2} s\n", .{
                                     body_names[n + 1],
                                     float(frame) / 60.0,
                                 });
@@ -4410,13 +4388,11 @@ test "robot_geno: R9 and R10, measured early - Geno held and servoed on a floor,
                             _ = try probe.stepToward(stance, 1.0 / 60.0);
                         }
                         const slid: Vec = (probe.data.body_xpos[foot] - foot_start) * vec(1, 1, 0);
-                        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                        std.debug.print("    floor friction {d:.1}: the left foot slides {d:.3} m along the floor " ++
+                        report.print("    floor friction {d:.1}: the left foot slides {d:.3} m along the floor " ++
                             "in 2 s\n", .{ friction, length3(slid) });
                     }
                 }
-                // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                std.debug.print("\n  R9 early ({t}): the bind pose held 2 s - the hips drift {d:.4} m\n", .{
+                report.print("\n  R9 early ({t}): the bind pose held 2 s - the hips drift {d:.4} m\n", .{
                     law,
                     drift,
                 });
@@ -4436,8 +4412,7 @@ test "robot_geno: R9 and R10, measured early - Geno held and servoed on a floor,
                 shortest = @min(shortest, seconds);
                 longest = @max(longest, seconds);
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("  R10 early ({t}), {s}: mean time to failure {d:.2} s " ++
+            report.print("  R10 early ({t}), {s}: mean time to failure {d:.2} s " ++
                 "(shortest {d:.2}, longest {d:.2})\n", .{
                 law,
                 name,
@@ -4519,8 +4494,7 @@ test "robot_geno: S1 tuning sweep - which settings keep the get-up up longest" {
             total += float(try run.survive(&clip, from)) * clip.frame_time;
             starts += 1;
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  sweep: floor friction {d:.1}, armature {d:.2} damping {d:.1} " ++
+        report.print("  sweep: floor friction {d:.1}, armature {d:.2} damping {d:.1} " ++
             "frequency {d:.0} Hz max accel {d:.0}: " ++
             "get-up MTTF {d:.2} s\n", .{
             setting.friction,
@@ -4583,8 +4557,7 @@ test "robot_geno: a restart is a clean start - the same start ends the same way,
             differ += 1;
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  determinism: 45 steps of the walk, twice from a restart - {d} of {d} numbers differ\n", .{
+    report.print("\n  determinism: 45 steps of the walk, twice from a restart - {d} of {d} numbers differ\n", .{
         differ,
         ends[0].len,
     });
@@ -4886,8 +4859,7 @@ test "robot_geno: S0 - SuperTrack learns to hold Geno's T-pose, headless" {
     defer gpa.free(model_text);
     for (hold_seeds) |seed| {
         const result: HoldResult = try holdTrial(gpa, model_text, hold_recipe, seed);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  S0 seed {d}: world loss {d:.3}, policy loss {d:.3}; " ++
+        report.print("\n  S0 seed {d}: world loss {d:.3}, policy loss {d:.3}; " ++
             "time to failure: servo {d:.2} s, " ++
             "policy {d:.3} s ({d:.0} and {d:.0} falls);\n" ++
             "  in the model: tracking loss {d:.4} doing nothing, {d:.4} with the policy, " ++
@@ -5090,8 +5062,7 @@ test "robot_geno: S2b - SAC holds Geno's T-pose, model-free" {
         }
         lengths[k] = if (ended > 0) float(frames) / float(ended) else 1200.0;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  SAC on Geno's T-pose, {d} s ({d} transitions): judged {d:.1} frames an episode | " ++
+    report.print("\n  SAC on Geno's T-pose, {d} s ({d} transitions): judged {d:.1} frames an episode | " ++
         "servo alone {d:.1}\n", .{ @divTrunc(sac_budget_ms, 1000), transitions, lengths[0], lengths[1] });
     try expect(lengths[0] == lengths[0]);
 }
@@ -5137,8 +5108,7 @@ test "robot_geno: S2c - the T-pose HOLDS: standing armature and the capture-poin
     for ([_]f32{ 0.0, 2.0, 3.0, 4.0, 8.0 }) |gain| {
         run.balance_gain = gain;
         const seconds: f32 = float(try run.survive(&held, 0)) * held.frame_time;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{s}  standing armature, reflex gain {d:.0}: the T-pose held {d:.2} s\n", .{
+        report.print("{s}  standing armature, reflex gain {d:.0}: the T-pose held {d:.2} s\n", .{
             if (gain == 0.0) "\n" else "",
             gain,
             seconds,
@@ -5195,8 +5165,7 @@ test "robot_geno: the dance's first 5 s - the servo alone, with light joints and
                 total += float(try run.survive(&clip, from)) * clip.frame_time;
                 starts += 1;
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("{s}  dance, first 5 s, armature {d:.2}, {s}: the servo alone keeps up " ++
+            report.print("{s}  dance, first 5 s, armature {d:.2}, {s}: the servo alone keeps up " ++
                 "{d:.2} s on average ({d} starts)\n", .{
                 if (armature == joint_armature and !feedforward) "\n" else "",
                 armature,
@@ -5231,8 +5200,7 @@ test "robot_geno: S0 dance - SuperTrack on the dance's first 5 s" {
         .seconds = 5.0,
         .armature = dance_armature,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  S0 dance (first 5 s, armature {?d:.2}): world loss {d:.3}, policy loss {d:.3};\n" ++
+    report.print("\n  S0 dance (first 5 s, armature {?d:.2}): world loss {d:.3}, policy loss {d:.3};\n" ++
         "  real simulator, {d} steps x 8: servo {d} falls, mean reward {d:.4} | " ++
         "policy {d} falls, mean reward {d:.4};\n" ++
         "  in the model {d:.4} doing nothing, {d:.4} with the policy\n", .{
@@ -5316,8 +5284,7 @@ test "robot_geno: D1 - save and restore: two rollouts from one moment are identi
     for (0..3) |axis| {
         drift = @max(drift, @abs(outcomes[axis] - outcomes[nq + axis]));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D1 restore: {d} of {d} numbers identical across two rollouts; the restored rollout's root " ++
+    report.print("\n  D1 restore: {d} of {d} numbers identical across two rollouts; the restored rollout's root " ++
         "drifts {d:.2} mm from the run that never stopped, after 20 steps\n", .{ identical, nq, drift * 1000.0 });
     try expect(identical == nq);
 }
@@ -5366,8 +5333,7 @@ test "robot_geno: a restart rests on the floor - no jump, no spin" {
             jump = @max(jump, run.data.vel[2]);
             spin = @max(spin, length3(vec(run.data.vel[3], run.data.vel[4], run.data.vel[5])));
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{s}  restart {s}: lowest point {d:.1} mm; first ten steps: up to {d:.2} m/s upward, " ++
+        report.print("{s}  restart {s}: lowest point {d:.1} mm; first ten steps: up to {d:.2} m/s upward, " ++
             "{d:.2} rad/s of spin\n", .{
             if (lifted) "" else "\n",
             if (lifted) "rested on the floor" else "as copied",
@@ -5476,8 +5442,7 @@ test "robot_geno: a launch at a random dance frame - every body onto the next fr
             }
             misses[k] = .{ .worst = worst, .mean = sum / float(m.nbody - 1), .body = worst_body };
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{s}  dance frame {d}, one real step's miss of the next frame (mean / worst, mm): " ++
+        report.print("{s}  dance frame {d}, one real step's miss of the next frame (mean / worst, mm): " ++
             "feedforward {d:.1} / {d:.1} ({s}) | zero-velocity servo {d:.1} / {d:.1} | launched at rest " ++
             "{d:.1} / {d:.1} | feedforward, no contacts {d:.1} / {d:.1} ({s})\n", .{
             if (worst_kinematic == 0.0) "\n" else "",
@@ -5494,8 +5459,7 @@ test "robot_geno: a launch at a random dance frame - every body onto the next fr
             imported.names[misses[3].body],
         });
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  the launch velocities, integrated one frame BACKWARD, land every body within {d:.4} mm " ++
+    report.print("  the launch velocities, integrated one frame BACKWARD, land every body within {d:.4} mm " ++
         "of the frame before\n", .{
         worst_kinematic * 1000.0,
     });
@@ -5553,8 +5517,7 @@ test "robot_geno: the whole 30 s dance - the servo alone, strong joints, with an
                 to_the_end += 1;
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{s}  the whole dance, {s}: keeps up {d:.2} s on average; {d} of {d} starts reach the end\n", .{
+        report.print("{s}  the whole dance, {s}: keeps up {d:.2} s on average; {d} of {d} starts reach the end\n", .{
             if (feedforward) "" else "\n",
             if (feedforward) "feedforward" else "zero-velocity damping",
             total / float(starts),
@@ -5636,8 +5599,7 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
             deepest[lo * nbody + hi] = @max(deepest[lo * nbody + hi], event.depth);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  the dance's self-contacts over {d} launched frames " ++
+    report.print("\n  the dance's self-contacts over {d} launched frames " ++
         "(pair: contact points, deepest mm):\n", .{frames});
     var any: bool = false;
     for (0..nbody) |lo| {
@@ -5645,8 +5607,7 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
             const n: u32 = counts[lo * nbody + hi];
             if (n > 0) {
                 any = true;
-                // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                std.debug.print("    {s} - {s}: {d}, {d:.1} mm\n", .{
+                report.print("    {s} - {s}: {d}, {d:.1} mm\n", .{
                     imported.names[lo],
                     imported.names[hi],
                     n,
@@ -5657,8 +5618,7 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
     }
     for (0..nbody) |b| {
         if (floor_touch[b] > 0) {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    floor - {s}: {d}\n", .{ imported.names[b], floor_touch[b] });
+            report.print("    floor - {s}: {d}\n", .{ imported.names[b], floor_touch[b] });
         }
     }
     // What excluding them buys: the servo alone over the whole dance, with the model's exclusions (pairs
@@ -5687,8 +5647,7 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
             total += float(try trial.survive(&clip, from)) * clip.frame_time;
             starts += 1;
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  the whole dance, servo alone, {d} excluded pairs: keeps up {d:.2} s on average\n", .{
+        report.print("  the whole dance, servo alone, {d} excluded pairs: keeps up {d:.2} s on average\n", .{
             imported.model.exclude_pairs.len,
             total / float(starts),
         });
@@ -5744,8 +5703,7 @@ test "robot_geno: the clip's per-frame lift - frames resting on the floor, not i
                 rbt.kinematics(m, &probe);
                 deepest = @min(deepest, rbt.lowestPoint(m, &probe));
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("  lifted {d} of {d} frames, by up to {d:.1} mm; now the lowest point of any frame " ++
+            report.print("  lifted {d} of {d} frames, by up to {d:.1} mm; now the lowest point of any frame " ++
                 "is {d:.2} mm above the floor\n", .{
                 raise.frames,
                 clip.frame_count,
@@ -5761,8 +5719,7 @@ test "robot_geno: the clip's per-frame lift - frames resting on the floor, not i
             total += float(try run.survive(&clip, from)) * clip.frame_time;
             starts += 1;
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{s}  the whole dance, servo alone, {s}: keeps up {d:.2} s on average\n", .{
+        report.print("{s}  the whole dance, servo alone, {s}: keeps up {d:.2} s on average\n", .{
             if (lifted) "" else "\n",
             if (lifted) "clip lifted onto the floor" else "clip as copied",
             total / float(starts),
@@ -5880,8 +5837,7 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
                     turn = 2.0 * pi - turn;
                 }
                 const heading: f32 = turn * 180.0 / pi;
-                // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                std.debug.print("    at its end (frame {d}): hips {d:.2} m off across the floor, {d:.2} m up/down, " ++
+                report.print("    at its end (frame {d}): hips {d:.2} m off across the floor, {d:.2} m up/down, " ++
                     "heading {d:.0} deg off; the pose in its own root's frame {d:.0} mm off on average\n", .{
                     g,
                     length3(vec(hips_off[0], hips_off[1], 0.0)),
@@ -5890,8 +5846,7 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
                     shape / float(m.nbody - 1) * 1000.0,
                 });
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("{s}  D1 from dance frame {d}: servo alone {d:.2} s, planned {d:.2} s (cap {d:.1} s)\n", .{
+            report.print("{s}  D1 from dance frame {d}: servo alone {d:.2} s, planned {d:.2} s (cap {d:.1} s)\n", .{
                 if (from == planner_starts[0]) "\n" else "",
                 from,
                 float(servo) * clip.frame_time,
@@ -5899,8 +5854,7 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
                 float(planner_cap) * clip.frame_time,
             });
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  D1 {s}, filter {d:.1}, raw sigma {d:.1}, memoryless {}, iterations {d}, gravity {d:.1} " ++
+        report.print("  D1 {s}, filter {d:.1}, raw sigma {d:.1}, memoryless {}, iterations {d}, gravity {d:.1} " ++
             "({d} samples x {d} steps, {d} knots, " ++
             "limited to {d:.2} rad): " ++
             "servo alone {d:.2} s on average, planned {d:.2} s\n", .{
@@ -5920,8 +5874,7 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
         // What the teacher's actions ask of a student: raw offsets per freedom at its decisions, and applied ones.
         {
             const n: f64 = @floatFromInt(@max(planner.offsets_counted, 1));
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    its actions, decimation {d}: raw |offset| {d:.3} rad on average " ++
+            report.print("    its actions, decimation {d}: raw |offset| {d:.3} rad on average " ++
                 "(largest {d:.2}), applied " ++
                 "{d:.3}; raw past 0.2 / 0.6 / 1.0 rad: {d:.1}% / {d:.1}% / {d:.1}%\n", .{
                 variant.decimation,
@@ -6072,8 +6025,7 @@ test "robot_geno: D3 data - the planner's steps, recorded in the task's own form
             worst = @max(worst, @abs(here - recorded));
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D3 data: {d} planned steps recorded from dance frame 360; the planner's largest offset " ++
+    report.print("\n  D3 data: {d} planned steps recorded from dance frame 360; the planner's largest offset " ++
         "{d:.2} rad; four recorded steps reproduced through the task's own action to {e:.1}\n", .{
         recording.frames,
         recording.largest_offset,
@@ -6205,8 +6157,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
     defer candidate_world.deinit(gpa);
 
     const trained: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D3 timing: servo data {d} ms, teacher data {d} ms, training {d} ms\n", .{
+    report.print("\n  D3 timing: servo data {d} ms, teacher data {d} ms, training {d} ms\n", .{
         @divTrunc(servo_done.nanoseconds - began.nanoseconds, 1_000_000),
         @divTrunc(teacher_done.nanoseconds - servo_done.nanoseconds, 1_000_000),
         @divTrunc(trained.nanoseconds - teacher_done.nanoseconds, 1_000_000),
@@ -6250,8 +6201,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
             _ = try teacher_world.trainStep(teacher_fleet);
             _ = try candidate_world.trainStep(candidate_fleet);
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  after {d} training steps:\n", .{checkpoint});
+        report.print("  after {d} training steps:\n", .{checkpoint});
         const worlds = [_]*latent.LatentWorld{ servo_world, teacher_world, candidate_world };
         const names = [_][]const u8{ "the servo's data", "the teacher's data", "the teacher's JITTERED candidates" };
         for (worlds, names) |world, name| {
@@ -6307,8 +6257,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
                     }
                 }
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("{s}  D3, world model on {s}: action response off by {d:.2} of its size, direction " ++
+            report.print("{s}  D3, world model on {s}: action response off by {d:.2} of its size, direction " ++
                 "cosine {d:.2}; one-step state error {d:.3} (normalised) - {d} probes\n", .{
                 if (world == servo_world) "" else "",
                 name,
@@ -6323,8 +6272,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
     for (candidate_fleet.replay.written) |n| {
         candidate_records += n;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  (the teacher recorded {d} steps and {d} candidate steps; each model trained {d} steps)\n", .{
+    report.print("  (the teacher recorded {d} steps and {d} candidate steps; each model trained {d} steps)\n", .{
         recorded,
         candidate_records,
         trained_steps,
@@ -6399,8 +6347,7 @@ test "robot_geno: geno_train's clip - the dance from 5 s to 15 s, lifted onto th
         const file: std.Io.File = try std.Io.Dir.cwd().createFile(threaded.io(), train_clip_path, .{});
         defer file.close(threaded.io());
         try file.writeStreamingAll(threaded.io(), baked);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
+        report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
             train_clip_path,
             if (stored == null) "missing" else "stale",
             baked.len,
@@ -6441,8 +6388,7 @@ test "robot_geno: the GPU page's SuperTrack, on its CPU twin - how jittery is th
             .armature = standing_armature,
             .action_scale = 0.6,
         });
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  the page's SuperTrack on its CPU twin, smoothness {d:.1}: " ++
+        report.print("\n  the page's SuperTrack on its CPU twin, smoothness {d:.1}: " ++
             "world loss {d:.3}, policy loss {d:.3};\n" ++
             "  real simulator, {d} steps x 8: servo {d} falls, reward {d:.3} | policy {d} falls, reward {d:.3};\n" ++
             "  the policy's actions: mean |a| {d:.3}, mean frame-to-frame jump {d:.3} " ++
@@ -6615,8 +6561,7 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
     }
     const servo: Quality = try judgeQuality(learner, judge_steps, true);
     const student: Quality = try judgeQuality(learner, judge_steps, false);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D4 clone: the teacher recorded {d} steps; cloning loss {d:.4} -> {d:.4} over {d} updates;\n" ++
+    report.print("\n  D4 clone: the teacher recorded {d} steps; cloning loss {d:.4} -> {d:.4} over {d} updates;\n" ++
         "  real simulator, {d} steps x {d}: servo {d} falls, reward {d:.3} | clone {d} falls, reward {d:.3};\n" ++
         "  the clone's actions: mean |a| {d:.3}, frame-to-frame jump {d:.3} (units of {d:.1} rad)\n", .{
         recorded,
@@ -6694,8 +6639,7 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
             last_loss = try learner.cloneStep(&steps);
         }
         const judged: Quality = try judgeQuality(learner, judge_steps, false);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  DAgger round {d}: +{d} labels ({d} steps in all), loss {d:.4}; " ++
+        report.print("  DAgger round {d}: +{d} labels ({d} steps in all), loss {d:.4}; " ++
             "clone {d} falls, reward {d:.3}, |a| {d:.3}, jump {d:.3}\n", .{
             round + 1,
             labelled,
@@ -7214,8 +7158,7 @@ test "robot_geno: D5 recorder - each observation's last action is what DReCon's 
         _ = controller.apply(demo.label(row));
         _ = controller.apply(demo.label(row));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D5 recorder: kept up {d} frames, {d} rows of {d} + {d}; last-action slot vs DReCon's " ++
+    report.print("\n  D5 recorder: kept up {d} frames, {d} rows of {d} + {d}; last-action slot vs DReCon's " ++
         "controller: at most {e:.2} apart; largest label {d:.2}\n", .{
         kept,
         demo.rows(),
@@ -7349,8 +7292,7 @@ test "robot_geno: D5 step 2 - the teacher's decisions replayed through DReCon's 
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D5 step 2: {d} decisions over 60 steps; teacher vs DReCon's controller targets " ++
+    report.print("\n  D5 step 2: {d} decisions over 60 steps; teacher vs DReCon's controller targets " ++
         "differ by at most {e:.2} (largest label {d:.2} units)\n", .{ decisions, worst, largest_label });
     try expect(decisions == 30);
     try expect(worst < 1.0e-5);
@@ -7452,8 +7394,7 @@ test "robot_geno: D5 (i) - the teacher's decisions replayed in the trainer's fle
             break;
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D5 (i): teacher (ServoRun) vs its labels replayed in the fleet, from frame {d}: {d} steps " ++
+    report.print("\n  D5 (i): teacher (ServoRun) vs its labels replayed in the fleet, from frame {d}: {d} steps " ++
         "compared (teacher fell: {}, fleet done early: {});\n  worst body apart (mm) at step", .{
         from,
         compared,
@@ -7462,12 +7403,10 @@ test "robot_geno: D5 (i) - the teacher's decisions replayed in the trainer's fle
     });
     for ([_]usize{ 1, 2, 5, 10, 20, 30, 45, 60 }) |at| {
         if (at <= compared) {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print(" {d}: {d:.6}", .{ at, apart[at - 1] * 1000.0 });
+            report.print(" {d}: {d:.6}", .{ at, apart[at - 1] * 1000.0 });
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
     // MEASURED (Sep 25): 89 nm after one step, under 0.6 um through step 45 - the same physics to rounding; by
     // step 60, 29 mm (a sub-micron difference flips a contact: the sensitivity of contact, not a mismatch).
     try expect(compared >= 30);
@@ -7586,8 +7525,7 @@ test "robot_geno: D5 (ii) - the teacher's label at a state: how much is signal, 
     noise /= cells * float64(seeds - 1);
     signal /= cells;
     square /= cells * float64(seeds);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D5 (ii): {d} decisions x {d} seeds - labels' mean square {d:.4}; sampling noise (within a " ++
+    report.print("\n  D5 (ii): {d} decisions x {d} seeds - labels' mean square {d:.4}; sampling noise (within a " ++
         "state) {d:.4}, signal (between states) {d:.4}; signal / noise {d:.2}\n", .{
         decided,
         seeds,
@@ -7698,8 +7636,7 @@ test "robot_geno: D5 (ii-b) - how much does the teacher's label depend on the pl
     memory /= cells;
     signal /= cells;
     cold_square /= cells;
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D5 (ii-b): {d} decisions - warm vs cold plan, same seed: apart {d:.4} per number; " ++
+    report.print("\n  D5 (ii-b): {d} decisions - warm vs cold plan, same seed: apart {d:.4} per number; " ++
         "signal between states {d:.4} (memory / signal {d:.2}); cold labels' mean square {d:.4}\n", .{
         decided,
         memory,
@@ -7757,8 +7694,7 @@ test "robot_geno: D5.5 - calibrating perturbed starts: how often the servo alone
                 lasted += 1;
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  D5.5 calibration: pose {d:.2} rad, kick {d:.2} m/s - the servo alone lasts 1 s from " ++
+        report.print("\n  D5.5 calibration: pose {d:.2} rad, kick {d:.2} m/s - the servo alone lasts 1 s from " ++
             "{d} of {d} perturbed starts (mean {d:.1} frames)", .{
             noise.pose,
             noise.velocity,
@@ -7767,8 +7703,7 @@ test "robot_geno: D5.5 - calibrating perturbed starts: how often the servo alone
             float(frames_kept) / float(starts),
         });
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
 }
 
 test "robot_geno: ON.2.1 - feasibility: can the servo alone, or the teacher, track the whole dance and get up?" {
@@ -7825,8 +7760,7 @@ test "robot_geno: ON.2.1 - feasibility: can the servo alone, or the teacher, tra
         defer run.deinit();
         var planner: Planner = try .init(gpa, &run, &task.imported, d5_teacher);
         defer planner.deinit();
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  ON.2.1 {s}: {d} frames ({d:.1} s); the reference's head lowest {d:.2} m at frame {d}, " ++
+        report.print("\n  ON.2.1 {s}: {d} frames ({d:.1} s); the reference's head lowest {d:.2} m at frame {d}, " ++
             "highest {d:.2} m\n", .{
             @tagName(motion),
             clip.frame_count,
@@ -7854,8 +7788,7 @@ test "robot_geno: ON.2.1 - feasibility: can the servo alone, or the teacher, tra
                 kept[who] = f - from - 1;
             }
             const reference_best: f32 = std.mem.max(f32, heights[from .. from + cap]);
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    from {d}: servo {d} frames (head up to {d:.2} m) | teacher {d} frames " ++
+            report.print("    from {d}: servo {d} frames (head up to {d:.2} m) | teacher {d} frames " ++
                 "(head up to {d:.2} m) | the reference's head up to {d:.2} m\n", .{
                 from,
                 kept[0],
@@ -7958,8 +7891,7 @@ test "robot_geno: ON.2.1b - the floor-to-crouch lift: a search problem or a phys
         teacher.samples = variant.samples;
         var planner: Planner = try .init(gpa, &run, &task.imported, teacher);
         defer planner.deinit();
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  ON.2.1b {s}:", .{variant.name});
+        report.print("\n  ON.2.1b {s}:", .{variant.name});
         for (starts) |from| {
             try run.start(clip, from);
             @memset(planner.applied, 0.0);
@@ -7979,8 +7911,7 @@ test "robot_geno: ON.2.1b - the floor-to-crouch lift: a search problem or a phys
                 }
             }
             const reference_best: f32 = std.mem.max(f32, heights[from .. from + cap]);
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("\n    from {d}: head up to {d:.2} m (reference {d:.2}), on average {d:.2} m below it; " ++
+            report.print("\n    from {d}: head up to {d:.2} m (reference {d:.2}), on average {d:.2} m below it; " ++
                 "the head rule ends it at frame {?d}", .{
                 from,
                 head_best,
@@ -7990,8 +7921,7 @@ test "robot_geno: ON.2.1b - the floor-to-crouch lift: a search problem or a phys
             });
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
 }
 
 /// One variant of the floor-lift trial (ON.2.1c, 2.1d): which joints the teacher plans, the ball joints'
@@ -8077,8 +8007,7 @@ fn floorLift(
         teacher.posture_gate = variant.posture;
         var planner: Planner = try .init(gpa, &run, &task.imported, teacher);
         defer planner.deinit();
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  {s} {s} ({d} joints):", .{ label, variant.name, planner.joint_adr.len });
+        report.print("\n  {s} {s} ({d} joints):", .{ label, variant.name, planner.joint_adr.len });
         for (starts) |from| {
             try run.start(clip, from);
             @memset(planner.applied, 0.0);
@@ -8093,8 +8022,7 @@ fn floorLift(
                 head_best = @max(head_best, height);
                 deficit += @max(0.0, heights[f] - height);
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("\n    from {d}: head up to {d:.2} m (reference {d:.2}), on average {d:.2} m below it", .{
+            report.print("\n    from {d}: head up to {d:.2} m (reference {d:.2}), on average {d:.2} m below it", .{
                 from,
                 head_best,
                 std.mem.max(f32, heights[from .. from + cap]),
@@ -8102,8 +8030,7 @@ fn floorLift(
             });
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
 }
 
 test "robot_geno: ON.2.1c - the floor lift with EVERY joint in the plan" {
@@ -8112,9 +8039,6 @@ test "robot_geno: ON.2.1c - the floor lift with EVERY joint in the plan" {
     // shoulders, upper spine or neck, exactly what pushes a body off the floor. So: every ball joint in the
     // plan (E), and with armature 0.5 as well (F), from three floor starts (single runs are noisy).
     // Every ball joint, by the name of the body it moves.
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
     // MEASURED (Sep 26): E - 0.46 / 0.58 / 0.55 m (references 0.99 / 1.24 / 1.43); F - 0.41 / 0.52 / 0.75 m.
     // Every joint barely helps: the search space was not the problem.
     const options = @import("build_options");
@@ -8340,16 +8264,13 @@ test "robot_geno: ON.0b - which limit of the one failure criterion ends the serv
             }
             frames += f - from - 1;
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  ON.0b {s}: the servo alone lost the reference in {d} of {d} runs (mean {d:.2} s); " ++
+        report.print("\n  ON.0b {s}: the servo alone lost the reference in {d} of {d} runs (mean {d:.2} s); " ++
             "at that moment -", .{ @tagName(motion), ended, starts, float(frames) / float(starts) / 60.0 });
         for (names, crossed, sums) |name, count, sum| {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print(" {s}: crossed {d}x (mean {d:.2});", .{ name, count, sum / float(@max(ended, 1)) });
+            report.print(" {s}: crossed {d}x (mean {d:.2});", .{ name, count, sum / float(@max(ended, 1)) });
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
 }
 
 test "robot_geno: ON.0b - which limit ends the TEACHER's dance runs?" {
@@ -8385,8 +8306,7 @@ test "robot_geno: ON.0b - which limit ends the TEACHER's dance runs?" {
             }
         }
         const e: robot_track.TrackingError = run.check.last;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  ON.0b teacher from {d}: lost after {d:.2} s - pose {d:.2} m / {d:.2} rad, " ++
+        report.print("\n  ON.0b teacher from {d}: lost after {d:.2} s - pose {d:.2} m / {d:.2} rad, " ++
             "root {d:.2} m / {d:.2} rad, height {d:.2} m; the old rule's hips distance {d:.2} m", .{
             from,
             float(f - from - 1) / 60.0,
@@ -8398,8 +8318,7 @@ test "robot_geno: ON.0b - which limit ends the TEACHER's dance runs?" {
             hips,
         });
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
 }
 
 test "robot_geno: FailureCheck's error IS the fleet's - every field, velocities included" {
@@ -8454,8 +8373,7 @@ test "robot_geno: FailureCheck's error IS the fleet's - every field, velocities 
     for (pairs) |pair| {
         worst = @max(worst, @abs(pair[0] - pair[1]));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  FailureCheck vs the fleet: every field of the error at most {e:.2} apart " ++
+    report.print("\n  FailureCheck vs the fleet: every field of the error at most {e:.2} apart " ++
         "(velocity {d:.4} vs {d:.4})\n", .{
         worst,
         fleets.velocity,

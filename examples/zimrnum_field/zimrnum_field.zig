@@ -1,18 +1,18 @@
-//! zimrnum_field — a scalar field built with zimrnum, computed twice, drawn three times.
+//! zimrnum_field - a scalar field built with zimrnum, computed twice, drawn three times.
 //!
-//! ── ★★★ WHAT THIS EXAMPLE IS FOR ──
+//! -- *** WHAT THIS EXAMPLE IS FOR --
 //!
-//! To use zimrnum the way an application would, not the way a test does. It builds a 64×64 field
-//! out of tensors — noise plus a broadcast row ramp — evaluates it through `zn.add` and `zn.mul`
+//! To use zimrnum the way an application would, not the way a test does. It builds a 64x64 field
+//! out of tensors - noise plus a broadcast row ramp - evaluates it through `zn.add` and `zn.mul`
 //! on the CPU and through the same operations on the GPU, and draws BOTH heatmaps plus their
 //! difference. A wrong GPU result is not a number in a log; it is a visibly different picture.
 //!
-//! ★★ THE DENSIFY STEP IS SHOWN, NOT HIDDEN. The GPU kernel takes flat buffers with a count —
+//! ** THE DENSIFY STEP IS SHOWN, NOT HIDDEN. The GPU kernel takes flat buffers with a count -
 //! no shape, no strides. `zn.broadcastTo` produces a stride-0 VIEW, which cannot be bound. So the
 //! host materialises the ramp into a dense tensor first, with `zn.add` against a zero field, and
 //! that line is the whole difference between what the two backends can accept.
 //!
-//! ★ Inputs come from `zn.Rng`, which is counter-based: both backends see identical values
+//! * Inputs come from `zn.Rng`, which is counter-based: both backends see identical values
 //! without either sending them to the other, and the field is reproducible from one seed.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -48,8 +48,8 @@ const float = zm.float;
 const Color = zm.Color;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-// One WGSL per ENTRY, not per kernel file — the build names each embed after its entry.
-/// ── ★★★ THE PIPELINE TABLE IS DERIVED, NOT WRITTEN ──
+// One WGSL per ENTRY, not per kernel file - the build names each embed after its entry.
+/// -- *** THE PIPELINE TABLE IS DERIVED, NOT WRITTEN --
 ///
 /// A kernel used to be named in four places: the file's install call, `build.zig`'s `.entries`,
 /// an `@embedFile` here, and a pipeline entry here. Four lists to keep in agreement by hand, and
@@ -58,9 +58,9 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 /// Now each kernel file carries `pub const kernels`, and this builds the host table from it. The
 /// entry name and its WGSL cannot disagree, because the same string produces both.
 ///
-/// ★★ IT IS ALSO THE DRIFT GATE, AND IT COSTS NOTHING. `@embedFile(name ++ "_wgsl")` only
+/// ** IT IS ALSO THE DRIFT GATE, AND IT COSTS NOTHING. `@embedFile(name ++ "_wgsl")` only
 /// resolves if `build.zig` generated that WGSL. Add an entry to a kernel file and forget the
-/// build, and the failure is a compile error naming the missing file — not a shader that is
+/// build, and the failure is a compile error naming the missing file - not a shader that is
 /// absent at runtime on a device you are not holding.
 fn pipelineEntries(comptime M: type) [M.kernels.len]z.Compute(M).KernelWgsl {
     var table: [M.kernels.len]z.Compute(M).KernelWgsl = undefined;
@@ -72,24 +72,24 @@ fn pipelineEntries(comptime M: type) [M.kernels.len]z.Compute(M).KernelWgsl {
 
 const rerun_size: struct { w: f32, h: f32 } = .{ .w = 124, .h = 26 };
 
-// ── ★★★ THE COVERAGE GATE ──
+// -- *** THE COVERAGE GATE --
 //
 // Every kernel entry must be exercised by exactly one row, and every row must name a kernel that
 // exists. Without this the sweep's green says something about the rows someone REMEMBERED to add,
-// not about the kernel set — and `sub` and `div` sat on the CPU for six turns with no kernel
+// not about the kernel set - and `sub` and `div` sat on the CPU for six turns with no kernel
 // precisely because nothing was watching.
 //
-// ★★ IT IS A COMPILE ERROR, NOT A TEST. A kernel added without a row cannot build, so the gap
+// ** IT IS A COMPILE ERROR, NOT A TEST. A kernel added without a row cannot build, so the gap
 // cannot survive to a device. `build.zig`'s drift gate already covers the other edge (a kernel
-// with no WGSL fails to embed), so the three lists — kernel file, build entries, sweep rows —
+// with no WGSL fails to embed), so the three lists - kernel file, build entries, sweep rows -
 // are now pinned to each other in both directions.
 //
-// ★ WHAT THIS DOES NOT COVER, stated so it is not mistaken for more than it is: it pins
-// KERNEL ↔ ROW. It cannot pin OP ↔ KERNEL — a `zimrnum` function with no GPU kernel at all is
+// * WHAT THIS DOES NOT COVER, stated so it is not mistaken for more than it is: it pins
+// KERNEL <-> ROW. It cannot pin OP <-> KERNEL - a `zimrnum` function with no GPU kernel at all is
 // still invisible here, because zimrnum has no device dispatch of its own yet. That gate belongs
-// with the dispatch seam, and §10.3 debt 11 stays open until then.
+// with the dispatch seam, and section 10.3 debt 11 stays open until then.
 comptime {
-    // ── ★★★ EVERY BUFFER A KERNEL READS MUST BE ONE THE HOST UPLOADS ──
+    // -- *** EVERY BUFFER A KERNEL READS MUST BE ONE THE HOST UPLOADS --
     //
     // `where_pick` read its selector from `c` and nothing uploaded it. The headless twin test
     // filled `c` by hand and passed; the sweep never did, and the device failed the row with the
@@ -97,10 +97,10 @@ comptime {
     // check that runs on the host**, because the host's own test fills it as part of being a
     // test.
     //
-    // ★ So: this file must contain an `upload` call for every field of every pipeline's `Buffers`
+    // * So: this file must contain an `upload` call for every field of every pipeline's `Buffers`
     // that is not the output. Checked by searching this file's own source, which is crude and is
-    // exactly as strong as it needs to be — the failure it prevents is a missing line.
-    // ★ The quota is generous because the search walks this whole file; a comptime string scan
+    // exactly as strong as it needs to be - the failure it prevents is a missing line.
+    // * The quota is generous because the search walks this whole file; a comptime string scan
     // over 60 KB is thousands of branches and the default stops well short.
     @setEvalBranchQuota(2_000_000);
     const source: []const u8 = @embedFile("zimrnum_field.zig");
@@ -187,7 +187,7 @@ const State = struct {
     field_b: []f32,
     /// `|field_a| + 0.5`: strictly positive, for the rows whose operation needs it.
     field_p: []f32,
-    /// `tanh(noise)`, so every value lies strictly inside (-1, 1) — the domain of `atanh`.
+    /// `tanh(noise)`, so every value lies strictly inside (-1, 1) - the domain of `atanh`.
     field_u: []f32,
     /// The `where` row's selector, `greater(a, b)`, which the kernel reads from buffer `c`.
     field_c: []f32,
@@ -195,20 +195,20 @@ const State = struct {
     /// `ulps * peak`: a field spanning decades takes its bar from its largest element and stops
     /// testing the small ones at all.
     field_t: []f32,
-    /// ── ★★★ ALL FOUR CPU REFERENCES, COMPUTED ONCE ──
+    /// -- *** ALL FOUR CPU REFERENCES, COMPUTED ONCE --
     ///
     /// The inputs never change, so each operation's answer is fixed. Computing them up front
     /// removes the bug that produced `FAIL add worst 23.9`: the sweep used to rebuild `cpu_out`
-    /// the instant it advanced, while `readLatest` still held the PREVIOUS dispatch's data — so
+    /// the instant it advanced, while `readLatest` still held the PREVIOUS dispatch's data - so
     /// operation N's GPU result was compared against operation N+1's reference. Nothing was wrong
     /// with either kernel.
     cpu_ref: [cases.len][]f32,
     cpu_out: []f32,
     gpu_out: []f32,
 
-    /// The operation being measured. It ADVANCES ON ITS OWN — no tapping. A round trip to a
+    /// The operation being measured. It ADVANCES ON ITS OWN - no tapping. A round trip to a
     /// phone costs minutes, so one screenshot has to answer every question.
-    /// Index into `cases`. It advances on its own — no tapping.
+    /// Index into `cases`. It advances on its own - no tapping.
     op: usize = 0,
     dispatched: bool = false,
     /// Frames to let the queue settle before a readback is believed. `readLatest` returns the
@@ -226,14 +226,14 @@ const State = struct {
     /// Where the re-run button was drawn last frame. The hit test reads this rather than a
     /// constant, so the two can never disagree.
     rerun: z.Rectangle = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
-    /// ── ★★★ THE PAGE HAS TO SCROLL, AND SORTING ALONE IS NOT ENOUGH ──
+    /// -- *** THE PAGE HAS TO SCROLL, AND SORTING ALONE IS NOT ENOUGH --
     ///
     /// Forty-eight rows plus three heatmaps already exceed a phone screen, and the port is headed
     /// past a hundred. Two changes, because they solve different halves:
     ///
-    /// ★★ **Failures sort to the top**, so the rows that matter are visible without touching
-    /// anything — which is what a screenshot needs.
-    /// ★ **Drag or wheel scrolls**, for reading the rest.
+    /// ** **Failures sort to the top**, so the rows that matter are visible without touching
+    /// anything - which is what a screenshot needs.
+    /// * **Drag or wheel scrolls**, for reading the rest.
     scroll: f32 = 0,
     /// True between a press that began outside the button and the release that ends it. A drag
     /// with no beginning cannot tell a finger arriving from a finger moving.
@@ -267,7 +267,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 /// Build the two operands with zimrnum, then every operation's reference answer.
 ///
-/// ★ Called ONCE. The inputs are fixed, so the four answers are fixed, and recomputing one of
+/// * Called ONCE. The inputs are fixed, so the four answers are fixed, and recomputing one of
 /// them mid-sweep is what let a stale readback be judged against the wrong reference.
 fn buildFields(s: *State) !void {
     const shape = [_]usize{ side, side };
@@ -279,7 +279,7 @@ fn buildFields(s: *State) !void {
     rng.split(0).fillNormal(f32, s.field_a);
 
     // Operand B: a single row ramp, stretched down the field. `broadcastTo` makes that a view
-    // with a stride of 0 on the row axis — no storage, no copy.
+    // with a stride of 0 on the row axis - no storage, no copy.
     var ramp_row: [side]f32 = undefined;
     for (0..side) |i| {
         ramp_row[i] = float(@as(u32, @intCast(i))) / float(side) * 2.0 - 1.0;
@@ -287,17 +287,17 @@ fn buildFields(s: *State) !void {
     const row: zn.Tensor(f32) = try zn.Tensor(f32).fromSlice(&ramp_row, &.{ 1, side });
     const stretched: zn.Tensor(f32) = try row.broadcastTo(&shape);
 
-    // ★★ MATERIALISE IT. The stretched view is fine for the CPU walk and cannot be bound to a
+    // ** MATERIALISE IT. The stretched view is fine for the CPU walk and cannot be bound to a
     // kernel, which takes a dense buffer. Adding it to a zeroed field is the densify step.
     b.fill(0.0);
     try zn.add(f32, b, b, stretched);
 
-    // ★ `|a| + 0.5`, so `log` is defined too — a plain `|a|` would still hit zero and give -inf.
+    // * `|a| + 0.5`, so `log` is defined too - a plain `|a|` would still hit zero and give -inf.
     for (s.field_p, s.field_a) |*slot, x| {
         slot.* = @abs(x) + 0.5;
     }
-    // ★ `tanh` maps the whole real line into (-1, 1) exactly, so this field is inside the domain
-    // of `atanh` by construction rather than by clamping — and it still spans most of the range.
+    // * `tanh` maps the whole real line into (-1, 1) exactly, so this field is inside the domain
+    // of `atanh` by construction rather than by clamping - and it still spans most of the range.
     for (s.field_u, s.field_a) |*slot, x| {
         slot.* = zm.tanh(x);
     }
@@ -337,7 +337,7 @@ fn buildFields(s: *State) !void {
         };
         const out: Tn = try Tn.fromSlice(slot, &shape);
         // Zeroed first: a reduction writes only `out_len` values, and the rest of the reference
-        // would otherwise be whatever the allocator handed over — visible in the heatmap even
+        // would otherwise be whatever the allocator handed over - visible in the heatmap even
         // though the verdict ignores it.
         out.fill(0);
         try c.cpu(out, src, b);
@@ -355,7 +355,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     );
     pipe.element_count = count;
     // Row-major strides for `bcast_add`: `a` is a full field, `b` is its first row stretched
-    // down — `b_row = 0` is the broadcast, exactly as `broadcastTo` does it on the CPU.
+    // down - `b_row = 0` is the broadcast, exactly as `broadcastTo` does it on the CPU.
     pipe.params = .{
         .count = count,
         .scalar = learning_rate,
@@ -424,14 +424,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     try buildFields(s);
     s.pipe.upload(.a, s.field_a);
     s.pipe.upload(.b, s.field_b);
-    // ── ★★★ THE MASK THE `where` KERNEL READS ──
+    // -- *** THE MASK THE `where` KERNEL READS --
     //
     // `where_pick` reads its selector from the `c` buffer, and **nothing was uploading it**. The
     // headless twin test filled `c` by hand and passed; the sweep never did, so on the device the
-    // kernel selected from an empty buffer and the row failed with a worst of 4.2 — the input
+    // kernel selected from an empty buffer and the row failed with a worst of 4.2 - the input
     // data itself, not a 0/1 mask.
     //
-    // ★ A buffer a kernel READS but the host never WRITES is invisible to every check that runs
+    // * A buffer a kernel READS but the host never WRITES is invisible to every check that runs
     // on the host, because the host's own twin test fills it as part of the test. The device is
     // the only thing that can see it, and it did.
     for (s.field_c, s.field_a, s.field_b) |*slot, x, y| {
@@ -451,8 +451,8 @@ fn barFor(c: Case, peak: f32) f32 {
 
 /// One cell of a heatmap: blue below zero, red above, brightness with magnitude.
 fn heat(v: f32) Color {
-    // ★★ ZERO MUST BE NEUTRAL. The first version returned dark red at v == 0, so a difference
-    // panel that was exactly zero everywhere rendered as a solid red block — the same picture a
+    // ** ZERO MUST BE NEUTRAL. The first version returned dark red at v == 0, so a difference
+    // panel that was exactly zero everywhere rendered as a solid red block - the same picture a
     // uniformly small POSITIVE error would give. The whole point of the third panel is to tell
     // those apart, so the saturation now falls to nothing as the magnitude does.
     const m: f32 = @min(@abs(v) / 3.0, 1.0);
@@ -462,11 +462,11 @@ fn heat(v: f32) Color {
 
 /// Draw `data` as a heatmap, one rect per BLOCK of `block`x`block` elements.
 ///
-/// ── ★★★ WHY IT DOWNSAMPLES, AND WHY BY MAGNITUDE ──
+/// -- *** WHY IT DOWNSAMPLES, AND WHY BY MAGNITUDE --
 ///
 /// Three 64x64 panels is 12 288 rects a frame, and with the UI's glyphs on top that overflowed
 /// the vertex ring: `flushBatch` asserts rather than corrupt, so the page panicked in the smoke
-/// runner. Sampling every other element would fix the count and lose the point — a single wrong
+/// runner. Sampling every other element would fix the count and lose the point - a single wrong
 /// element could fall in a skipped position, and the difference panel exists precisely to show
 /// one wrong element.
 ///
@@ -515,7 +515,7 @@ const Gen = struct { submitted: u64, mirrored: u64 };
 
 fn update(f: *z.Frame, s: *State) void {
     // Tapping anywhere switches the operation; both backends recompute from the same inputs.
-    // ── ★★★ A BUTTON, NOT THE WHOLE SCREEN ──
+    // -- *** A BUTTON, NOT THE WHOLE SCREEN --
     //
     // Tapping anywhere used to re-run the sweep, which meant every scroll, every stray touch and
     // every attempt to read a number restarted the measurement. A verifier that discards its
@@ -527,16 +527,16 @@ fn update(f: *z.Frame, s: *State) void {
     // past the end leaves a reader staring at nothing and wondering if the page broke.
     s.scroll -= z.getMouseWheelMove(f.input) * 40.0;
 
-    // ── ★★★ A DRAG ANCHORS ON THE PRESS FRAME, AND THAT FRAME'S DELTA IS DISCARDED ──
+    // -- *** A DRAG ANCHORS ON THE PRESS FRAME, AND THAT FRAME'S DELTA IS DISCARDED --
     //
     // This used to apply `getMouseDelta` on every frame the button was down, including the frame
-    // it went down on. With a mouse that is harmless — the pointer was already where you clicked,
+    // it went down on. With a mouse that is harmless - the pointer was already where you clicked,
     // so the delta is nearly zero. **With a finger it is the bug**: the pointer TELEPORTS from
     // wherever it last was to wherever you touched, and that entire jump arrives as one frame's
     // delta. Touching the bottom of the page to start scrolling flung it by the distance from the
     // last touch point, which reads as the page popping out from under you.
     //
-    // ★ So a drag has a beginning: the press frame sets `dragging` and contributes NOTHING, and
+    // * So a drag has a beginning: the press frame sets `dragging` and contributes NOTHING, and
     // only later frames move the page. The page now stays exactly where it was until the finger
     // actually moves, which is what every other scrolling surface does.
     if (z.isMouseButtonPressed(f.input, .left)) {
@@ -544,7 +544,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.drag_from = mouse[1];
         s.scroll_from = s.scroll;
     } else if (s.dragging and z.isMouseButtonDown(f.input, .left)) {
-        // ★★ ABSOLUTE, NOT ACCUMULATED. `scroll = scroll_at_press - (moved since press)` makes
+        // ** ABSOLUTE, NOT ACCUMULATED. `scroll = scroll_at_press - (moved since press)` makes
         // the content track the finger exactly: the pixel under it at the press stays under it,
         // and no per-frame delta is ever added, so a dropped or doubled frame cannot make the
         // page drift away from the finger over a long drag.
@@ -564,31 +564,31 @@ fn update(f: *z.Frame, s: *State) void {
     }
     if (false) {
         s.op += 1;
-        // Rebuilding cannot fail — the shapes are fixed and no allocation happens — but a
+        // Rebuilding cannot fail - the shapes are fixed and no allocation happens - but a
         // swallowed error would leave the panels showing a stale field with nothing to say so.
         s.dispatched = false;
     }
 
     if (!s.dispatched) {
         s.dispatched = true;
-        // ── ★★★ THREE FRAMES, BECAUSE THE DEVICE MEASURED THE QUEUE AT THREE ──
+        // -- *** THREE FRAMES, BECAUSE THE DEVICE MEASURED THE QUEUE AT THREE --
         //
         // The previous version waited ONE frame and detected staleness by comparing the readback
         // against the PREVIOUS row's output. **That was wrong, and the device proved it**: with a
-        // three-deep queue the readback is row N−3's data, which does not match row N−1's
-        // reference either — so it was accepted as fresh and compared against row N. Two rows
+        // three-deep queue the readback is row N-3's data, which does not match row N-1's
+        // reference either - so it was accepted as fresh and compared against row N. Two rows
         // failed with worst errors of 9.8 and 4.2, which for 0/1 masks can only be another row's
         // data.
         //
-        // ★★ A staleness test that compares against ONE previous row can only catch a lag of
-        // exactly one. Catching a lag of three needs either a comparison against the last three —
-        // which is three chances to collide with a legitimately identical output — or a label
+        // ** A staleness test that compares against ONE previous row can only catch a lag of
+        // exactly one. Catching a lag of three needs either a comparison against the last three -
+        // which is three chances to collide with a legitimately identical output - or a label
         // travelling with the data, which the sweep has no spare buffer element for.
         //
-        // ★ So: three frames, matched to the depth `zimrnum_train` measured. 86 rows × 3 is about
+        // * So: three frames, matched to the depth `zimrnum_train` measured. 86 rows x 3 is about
         // **2.2 s at 120 Hz**, a little over the two-second budget. Correctness first; the budget
         // is bought back by splitting the sweep when it next grows, not by reading early.
-        // ★★★ SIX, NOT THREE - AND THE DEVICE RAISED IT TWICE NOW.
+        // *** SIX, NOT THREE - AND THE DEVICE RAISED IT TWICE NOW.
         //
         // Three was matched to the queue depth `zimrnum_train` measured. It held for 86 rows and
         // then failed again at 91: `bcast add (bias)` came back **inf** and `tanh grad` **3.84**,
@@ -613,11 +613,11 @@ fn update(f: *z.Frame, s: *State) void {
         s.settle = 0;
         s.await_generation = null;
         // `run` takes the entry name at comptime, so the branch selects the CALL, not a string.
-        // ★ `run` takes the entry name at COMPTIME, so the selection is an `inline for` over
-        // the table rather than a runtime lookup — the loop is unrolled and each arm passes a
+        // * `run` takes the entry name at COMPTIME, so the selection is an `inline for` over
+        // the table rather than a runtime lookup - the loop is unrolled and each arm passes a
         // literal.
-        // ★★ THE DEVICE MUST SEE THE SAME INPUT THE REFERENCE DID. Uploading per dispatch is
-        // 16 KB of traffic on a row that already reads 4096 elements — nothing — and it removes
+        // ** THE DEVICE MUST SEE THE SAME INPUT THE REFERENCE DID. Uploading per dispatch is
+        // 16 KB of traffic on a row that already reads 4096 elements - nothing - and it removes
         // the possibility of the two sides being compared on different data, which is the bug
         // that produced `FAIL add worst 23.9` earlier in this port.
         switch (cases[s.op].input) {
@@ -723,12 +723,12 @@ fn update(f: *z.Frame, s: *State) void {
     }
     const all_done: bool = finished == s.results.len;
 
-    // ── ★★★ PLAIN TEXT ROWS, NOT A UI TABLE ──
+    // -- *** PLAIN TEXT ROWS, NOT A UI TABLE --
     //
     // The `ui.zig` version worked and Simon prefers this one. It is also the honest fit: this
     // page is read as a SCREENSHOT, so scrolling, column sizing and a frozen header buy nothing,
     // while the UI library cost ~400 KB of standalone and an extra frame-ordering contract to get
-    // wrong — which it duly was, twice. Text rows have no such contract.
+    // wrong - which it duly was, twice. Text rows have no such contract.
     var y: f32 = 10 - s.scroll;
     if (!all_done) {
         textRow(f, s, &y, z.colors.amber_400, 16, "zimrnum GPU sweep - {d}/{d} measured", .{
@@ -748,7 +748,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
     textRow(f, s, &y, z.colors.slate_500, 12, "     operation           worst |cpu-gpu|  bar", .{});
 
-    // ★★ Two passes: everything that FAILED, then everything else. A reader opening this page
+    // ** Two passes: everything that FAILED, then everything else. A reader opening this page
     // wants the exception, and at forty-eight rows the exception was below the fold.
     var pass_index: u8 = 0;
     while (pass_index < 2) : (pass_index += 1) {
@@ -765,8 +765,8 @@ fn update(f: *z.Frame, s: *State) void {
             const bar: f32 = barFor(c, r.peak);
             const ok: bool = !failed;
             const tint: Color = if (ok) z.colors.emerald_400 else z.colors.red_400;
-            // ★ The bar is printed WITH the deviation, because a verdict a reader cannot check is a
-            // verdict they learn to ignore — and for the rows that scale by ULP it is not a constant.
+            // * The bar is printed WITH the deviation, because a verdict a reader cannot check is a
+            // verdict they learn to ignore - and for the rows that scale by ULP it is not a constant.
             textRow(f, s, &y, tint, 12, " {s}  {s: <18} {d: <15} {d}", .{
                 if (ok) "OK" else "XX",
                 c.label,
@@ -798,7 +798,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Placed BELOW the heatmaps, from the layout rather than a guess, and recorded for next
     // frame's hit test. Away from the rows, because a control under a finger is a control
-    // pressed by accident — which is why tapping anywhere used to restart the measurement every
+    // pressed by accident - which is why tapping anywhere used to restart the measurement every
     // time someone tried to read it.
     s.rerun = .{ .x = 20, .y = cap + 6, .width = rerun_size.w, .height = rerun_size.h };
     // Recorded from the layout, so the scroll limit follows the content instead of a constant

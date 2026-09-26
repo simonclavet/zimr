@@ -1,8 +1,8 @@
-//! cube3d — port of the GL `cube3d`: a fixed-camera 3D scene with a
+//! cube3d - port of the GL `cube3d`: a fixed-camera 3D scene with a
 //! spinning green cube (solid + wireframe) above a ground grid, plus a static
 //! reference sphere. The GL version spun the cube through the rlgl matrix stack
 //! (rlPushMatrix / rlRotatef); the wgpu immediate API expresses the same thing
-//! as a `.rotation` matrix on the cube descriptor — no matrix stack. The HUD is
+//! as a `.rotation` matrix on the cube descriptor - no matrix stack. The HUD is
 //! drawn in 2D after endMode3D so it stays screen-anchored (single shared pass).
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -33,7 +33,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 fn update(f: *z.Frame, s: *State) void {
     const t: f32 = f.time.time;
-    const angle: f32 = t * 0.8; // ~45°/sec about Y
+    const angle: f32 = t * 0.8; // ~45 deg/sec about Y
 
     z.clearViewport(f, common.palette.bg);
 

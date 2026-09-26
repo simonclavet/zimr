@@ -2,7 +2,7 @@
 //
 // Loads the Stanford bunny (`bun_zipper`) through `codecs.obj` and draws it lit
 // + slowly turning. The bunny is the real stress test for the loader: 35,947
-// positions, 69,451 triangles, and — like most scan-derived OBJs — NO normals
+// positions, 69,451 triangles, and - like most scan-derived OBJs - NO normals
 // and NO tex-coords. So this whole frame leans on the loader's smooth-normal
 // synthesis (per-vertex accumulation of face normals) and on de-indexing
 // dropping the bunny's ~1,100 unreferenced "hole" vertices. ~34,834 vertices /

@@ -20,14 +20,14 @@
 //              textLinkOpenURL, invisibleButton, textWrapped.
 //              Adds the four turn-266 features.
 // Outcomes:
-//   - Both render → bug is in the 80-line loop (the content,
+//   - Both render -> bug is in the 80-line loop (the content,
 //     not the structure).  Probably a per-line glyph budget
 //     issue, or specific content in the random log strings
 //     hitting a UTF-8 / line-width edge case.
-//   - Window 1 renders, Window 2 blank → one of the four
+//   - Window 1 renders, Window 2 blank -> one of the four
 //     turn-266 helpers (textLinkOpenURL, invisibleButton,
 //     textWrapped) is the culprit.
-//   - Both blank → the structural combo (separatorText +
+//   - Both blank -> the structural combo (separatorText +
 //     beginChild + textColored) is the culprit.
 
 const std = @import("std");

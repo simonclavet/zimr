@@ -1,4 +1,4 @@
-//! examples/bloom_composite_fs.zig — bloom composite FS body.
+//! examples/bloom_composite_fs.zig - bloom composite FS body.
 //!
 //! Adds the blurred bloom highlights back onto the original scene, scaled by
 //! `intensity`. The final tone-mapping-free combine that produces the glow.

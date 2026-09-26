@@ -1,9 +1,9 @@
-//! textures_npatch_drawing — nine-slice (9-patch) panel drawing. A procedurally
+//! textures_npatch_drawing - nine-slice (9-patch) panel drawing. A procedurally
 //! generated UI panel is sliced into 9 regions (4 fixed 16 px corners, 4 edges,
 //! 1 center) sized by the mouse; corners stay fixed while edges + center stretch.
 //! Ports raylib's `textures_npatch_drawing` (procedural panel instead of the
 //! resources/ninepatch_button.png asset). The 9-patch goes through the unified
-//! `sink.image` path with `.npatch` set — one 2D drawing surface, no separate call.
+//! `sink.image` path with `.npatch` set - one 2D drawing surface, no separate call.
 //!
 //! Leak-clean (`.memory = .managed`): the Sprite's Image copy is freed in `deinit`;
 //! its GPU texture + the font atlas are engine-owned (freed by resetRegistry).
@@ -31,9 +31,9 @@ const State = struct {
     font: z.Font,
 };
 
-/// Build a 64×64 UI-panel nine-patch in RGBA: a gold frame with a dark outer
+/// Build a 64x64 UI-panel nine-patch in RGBA: a gold frame with a dark outer
 /// line and a bright accent dot in each corner, over a translucent blue fill.
-/// The distinct corner dots make the 9-slice obvious — they never distort while
+/// The distinct corner dots make the 9-slice obvious - they never distort while
 /// the edges + center stretch.
 fn makeNinePatch(gpa: Allocator) !z.Image {
     const w: usize = patch_px;

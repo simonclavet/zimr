@@ -1,4 +1,4 @@
-//! src/shader_connect.zig — comptime-monomorphized varying connector.
+//! src/shader_connect.zig - comptime-monomorphized varying connector.
 //!
 //! Bridges a vertex shader's `Out` to a fragment shader's `Io` by
 //! matching field names.  Used by:
@@ -23,7 +23,7 @@ const expectEqual = std.testing.expectEqual;
 /// Returns a comptime-monomorphized function that copies fields from
 /// a VS `Out` struct to a FS `Io` struct by matching field names.
 ///
-/// The `position` field is skipped — that's the clip-space output the
+/// The `position` field is skipped - that's the clip-space output the
 /// rasterizer uses for triangle setup, not a varying.  Any other field
 /// in `VsOut` that also appears in `FsIo` is copied; fields in `FsIo`
 /// that aren't in `VsOut` are left alone (preserving caller-set UBO

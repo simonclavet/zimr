@@ -1,4 +1,4 @@
-//! examples/instancing_vs_io.zig — typed interface for the instancing vertex
+//! examples/instancing_vs_io.zig - typed interface for the instancing vertex
 //! shader. Companion to `instancing_vs.zig`.
 //!
 //! Demonstrates INSTANCED drawing with a multi-buffer vertex layout: one buffer
@@ -6,7 +6,7 @@
 //! (offset @1, colour @2). The three `Attributes` declare only the @locations;
 //! the per-vertex-vs-per-instance step modes live in the hand-built
 //! `vertex_buffer_layouts` the host passes to `loadShaderVF` (the schema can't
-//! express step rate, so instanced layouts are built by hand — see the example).
+//! express step rate, so instanced layouts are built by hand - see the example).
 //!
 //! The `Ubo` (a 4x4 transform for aspect-correction) is declared here in the
 //! vertex schema, so the codegen binds it at @group(0) and `loadShaderVF` routes
@@ -33,7 +33,7 @@ pub const Ubo = struct {
     transform: [4]Vec,
 };
 
-/// Varying to the fragment stage — the interpolated colour. Matches
+/// Varying to the fragment stage - the interpolated colour. Matches
 /// `pipeline_uniforms_fs_io.Inputs` field-for-field (structural reuse).
 pub const Outputs = struct {
     frag_color: Vec,

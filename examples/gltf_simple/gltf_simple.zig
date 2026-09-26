@@ -4,7 +4,7 @@
 // (a freshly-generated 24-vert CCW cube_glb.zig) with the reusable `z.pbr3d` renderer and
 // draw it lit + auto-rotating. The cube glb carries POSITION + indices only
 // (no normals/UVs/material), so this exercises loadGltf's flat-normal synthesis
-// + the default material — a good minimal check of the glTF→GPU path.
+// + the default material - a good minimal check of the glTF->GPU path.
 //
 // Build:      zig build wgpu-gltf-simple
 // Standalone: zig build wgpu-gltf-simple-standalone

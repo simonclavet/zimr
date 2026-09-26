@@ -1,4 +1,4 @@
-//! serve — zimr's pure-Zig static dev server (ZIG_BRIDGE_PLAN D7 / Phase 5
+//! serve - zimr's pure-Zig static dev server (ZIG_BRIDGE_PLAN D7 / Phase 5
 //! step 1). Replaces the bun-run webtests/server.ts for the SERVING path:
 //! static files with correct MIME types (`.wasm` -> application/wasm in
 //! particular) and an HMR client `<script>` injected into every `.html`

@@ -1,5 +1,5 @@
 // examples/ellipse_collision.zig - two ellipses, point-and-ellipse predicates.
-// Two ellipses (A: 120×70, B: 90×140 by default).  A "Controls"
+// Two ellipses (A: 120x70, B: 90x140 by default).  A "Controls"
 // panel chooses which ellipse follows the cursor and lets you
 // resize both axes of each ellipse live; the other ellipse stays
 // where you last released it.  Ellipses turn red when their
@@ -7,12 +7,12 @@
 // cursor itself is inside the *non-controlled* ellipse.
 // Two original predicates ported from raylib's example:
 //   pointInEllipse(p, c, rx, ry)
-//       = (((p − c)[0] / rx)² + ((p − c)[1] / ry)²) ≤ 1
+//       = (((p - c)[0] / rx)^2 + ((p - c)[1] / ry)^2) <= 1
 //   ellipsesIntersect(c1, rx1, ry1, c2, rx2, ry2)
 //       Walk the line from c1 to c2, compute the radial distance
 //       from each ellipse's centre to its boundary in the
-//       direction θ of that line, and check whether the sum of
-//       the two radial distances is ≥ |c2 − c1|.  Exact for axis-
+//       direction theta of that line, and check whether the sum of
+//       the two radial distances is >= |c2 - c1|.  Exact for axis-
 //       aligned ellipses; conservative for rotated ones (which
 //       we don't have here).
 // Ported from raylib's `shapes_ellipse_collision.c`; A/B keys
@@ -78,7 +78,7 @@ fn pointInEllipse(
 /// Do two axis-aligned ellipses overlap?  Walk the line connecting
 /// the centres; in that direction, each ellipse has a known radial
 /// extent from its centre to its boundary.  They overlap iff the
-/// sum of those two extents is ≥ the distance between centres.
+/// sum of those two extents is >= the distance between centres.
 fn ellipsesIntersect(
     c1: Vec2,
     rx1: f32,
@@ -100,7 +100,7 @@ fn ellipsesIntersect(
     const cos_t: f32 = @cos(theta);
     const sin_t: f32 = @sin(theta);
 
-    // r(theta) = (rx * ry) / sqrt((ry·cos)² + (rx·sin)²)
+    // r(theta) = (rx * ry) / sqrt((ry*cos)^2 + (rx*sin)^2)
     // i.e. the distance from the ellipse's centre to its boundary
     // along the ray at angle theta.
     const r1_num: f32 = rx1 * ry1;

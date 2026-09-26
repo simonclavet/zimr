@@ -1,9 +1,9 @@
-//! starfield_effect — the "warp speed" starfield with a live control panel.
+//! starfield_effect - the "warp speed" starfield with a live control panel.
 //! DESCRIPTOR-ONLY (P2): the file exposes `pub const app = z.AppSpec(State){...}`
-//! and nothing else — no `main`, no `zimr_app`, no `std_options` (those live in
+//! and nothing else - no `main`, no `zimr_app`, no `std_options` (those live in
 //! the runner, which owns the wasm entry + the frame). `update` draws into the
 //! Frame's viewport in LOCAL coords (reads f.window for its size, paints its own
-//! background) and never opens/clears/closes the frame — so the SAME body runs
+//! background) and never opens/clears/closes the frame - so the SAME body runs
 //! full-screen via the standalone runner OR inside a launcher cell unchanged.
 //!
 //! 420 stars stream outward from the centre via a 1/z perspective divide; two
@@ -118,7 +118,7 @@ fn update(f: *z.Frame, s: *State) void {
     const hh: f32 = h * 0.5;
     const rand: std.Random = s.rng.random();
 
-    // Paint our own background (fills our viewport — works full-screen or in a
+    // Paint our own background (fills our viewport - works full-screen or in a
     // cell). The runner/launcher already opened the frame; we don't clear it.
     f.gl.rect(.{ .x = 0, .y = 0, .width = w, .height = h }, .{ .color = c.init(0, 25, 53, 255) });
 
@@ -160,7 +160,7 @@ fn update(f: *z.Frame, s: *State) void {
     drawUiPanel(f, s, rand, hw, hh);
 }
 
-/// The whole example, as data. No globals, no main — the runner/launcher drives it.
+/// The whole example, as data. No globals, no main - the runner/launcher drives it.
 pub const app: z.AppSpec(State) = .{
     .config = .{ .window = .{
         .title = "zimr - WebGPU - starfield effect",

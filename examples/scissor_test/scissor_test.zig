@@ -1,7 +1,7 @@
 // examples/scissor_test.zig - hardware scissor-rectangle clipping.
 // Port of raylib's `examples/core/core_scissor_test.c`. A box follows your
 // finger; while the test is ON, a full-screen red fill and a line of text are
-// clipped to that box by the GPU scissor — not by any per-primitive masking.
+// clipped to that box by the GPU scissor - not by any per-primitive masking.
 //
 // Toggling is a UI BUTTON (not the S key) so it's testable by tapping on a
 // phone; the S key still works if there's a hardware keyboard.
@@ -10,14 +10,14 @@
 //
 //   1. SUBMIT THE UI BEFORE ASKING IF IT OWNS THE POINTER. `wantCaptureMouse`
 //      hit-tests the windows submitted THIS frame, so calling it before the
-//      window is declared always returns false — and the box would then jump to
+//      window is declared always returns false - and the box would then jump to
 //      your finger while you were tapping a button, dragging the scene out from
 //      under the UI.
 //
 //   2. THE BOX FOLLOWS THE FINGER; THE SCISSOR RECT IS WHAT GETS CLAMPED. WebGPU
 //      requires the scissor rect to lie inside the render area (outside it, the
 //      containment assert in wgpu_app fires and the command buffer is rejected).
-//      The naive fix — clamp the BOX so it never leaves the window — confines the
+//      The naive fix - clamp the BOX so it never leaves the window - confines the
 //      box's CENTRE to [half_box, w - half_box], which on a narrow phone screen
 //      strands the box far to the right of where you actually touched. So the box
 //      tracks the finger exactly, and the rect handed to the GPU is the
@@ -72,7 +72,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     const u: z.ui_real.Ui = s.ui_host.begin(f);
 
-    // (1) SUBMIT the UI first — `wantCaptureMouse` hit-tests this frame's
+    // (1) SUBMIT the UI first - `wantCaptureMouse` hit-tests this frame's
     // windows, so querying it before they exist would always say "not mine".
     // Submitting early does NOT change draw order: ui_host.render(f) still
     // composites the UI last, on top of the scene.
@@ -89,7 +89,7 @@ fn update(f: *z.Frame, s: *State) void {
         u.text("box {d:.0},{d:.0}  window {d:.0}x{d:.0}", .{ s.box.x, s.box.y, sw, sh });
     }
 
-    // (2) The box is centred EXACTLY on the finger — no clamping here, or it
+    // (2) The box is centred EXACTLY on the finger - no clamping here, or it
     // would lag to one side near the screen edges. Frozen while the pointer is
     // over the UI, so tapping a button doesn't drag the box along with it.
     if (!u.wantCaptureMouse()) {
@@ -105,7 +105,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.box.height = box_size;
     }
 
-    // The GPU scissor rect = box ∩ window. This is the ONLY thing that needs
+    // The GPU scissor rect = box intersect window. This is the ONLY thing that needs
     // clamping, and clamping it here keeps WebGPU's containment rule satisfied.
     const x0: f32 = clamp(s.box.x, 0.0, sw);
     const y0: f32 = clamp(s.box.y, 0.0, sh);
@@ -116,7 +116,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // One screen-filling draw + a line of text: with the scissor active only the
     // slice inside the box is rasterised. If the box is entirely off-window the
-    // intersection is empty — then NOTHING is drawn, which is what "clipped to an
+    // intersection is empty - then NOTHING is drawn, which is what "clipped to an
     // empty region" actually means (drawing it unclipped would be a lie).
     if (!s.scissor_on) {
         drawClipped(f, s, sw, sh);
@@ -126,7 +126,7 @@ fn update(f: *z.Frame, s: *State) void {
         z.endScissorMode(f.gl);
     }
 
-    // Drawn OUTSIDE the scissor, so the outline is always fully visible — it
+    // Drawn OUTSIDE the scissor, so the outline is always fully visible - it
     // shows where the box IS, even where its contents are clipped away.
     f.gl.rect(s.box, .{ .color = c.black, .outline = 2 });
 

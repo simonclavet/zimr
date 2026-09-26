@@ -1,4 +1,4 @@
-//! rectangle_advanced — rounded rectangles with independent left/right corner roundness
+//! rectangle_advanced - rounded rectangles with independent left/right corner roundness
 //! and a horizontal colour gradient (solid corners, body interpolated). A faithful port of the
 //! raylib DrawRectangleRoundedGradientH helper. A stack of bars breathes: each bar oscillates
 //! its two corner radii on offset sine waves while the gradient hues drift around the wheel.

@@ -1,12 +1,12 @@
-//! launcher — the flagship multi-app switcher. Hosts many full example apps
+//! launcher - the flagship multi-app switcher. Hosts many full example apps
 //! (each self-contained: its own shaders/fonts/State, isolated leak-checking
 //! allocator) and shows ONE at a time full-screen via z.Launcher. A switch pill
-//! (◂ prev, a dot per app, ▸ next) cycles between apps on tap.
+//! (< prev, a dot per app, > next) cycles between apps on tap.
 //!
 //! Children are added with addDeferred (LAZY): only the shown app is initialized,
-//! on the frame it's first switched to — so booting many apps (incl. a 6MB
+//! on the frame it's first switched to - so booting many apps (incl. a 6MB
 //! helmet) stays light. The contract is uniform: a child draws its scene + its
-//! own UI and NEVER calls endDrawing — the runner owns frame begin/end, and the
+//! own UI and NEVER calls endDrawing - the runner owns frame begin/end, and the
 //! launcher composes this pill on top in the same frame. App.endDrawing asserts
 //! if a child violates that (see Launcher.tickFullscreen).
 //!
@@ -58,7 +58,7 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_fps_playground").app), // first-person physics: walk + jump on cubes
     z.eraseApp(@import("ex_starfield").app), // warp-speed starfield
     z.eraseApp(@import("ex_shader_effects").app), // switchable 2D post-fx
-    // ★ A Go1 with a procedurally spliced arm: the torso weaves through three incommensurate
+    // * A Go1 with a procedurally spliced arm: the torso weaves through three incommensurate
     // frequencies while the gripper holds a point that travels with the feet. Reports its own
     // attitude error, gripper drift, foot slip and friction-cone occupancy.
     z.eraseApp(@import("ex_quadruped").app), // articulated robot: gimbal + contact readouts
@@ -77,7 +77,7 @@ const State = struct {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     _ = f;
     // Build the Launcher straight into its final home and register children on
-    // it there — no local `var launcher` that gets copied into the slot. `.ids`
+    // it there - no local `var launcher` that gets copied into the slot. `.ids`
     // is filled by the loop below (still exhaustive: the field is written here).
     s.* = .{ .launcher = z.Launcher.init(gpa), .ids = undefined, .active = 0 };
     inline for (flagships, 0..) |vt, i| {
@@ -106,9 +106,9 @@ fn drawPill(
 
     const cy: f32 = y + h * 0.5;
 
-    // ◂ prev chevron (apex left), left zone.
+    // < prev chevron (apex left), left zone.
     gl.triangle(vec2(x + 18, cy - 7), vec2(x + 18, cy + 7), vec2(x + 8, cy), .{ .color = white });
-    // ▸ next chevron (apex right), right zone.
+    // > next chevron (apex right), right zone.
     gl.triangle(vec2(x + w - 18, cy - 7), vec2(x + w - 18, cy + 7), vec2(x + w - 8, cy), .{ .color = white });
 
     // One dot per app between the chevrons; the active one is bright.
@@ -129,7 +129,7 @@ fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
 
-    // Switch pill: ◂ [dot per app] ▸. Centered, raised above the bottom edge so
+    // Switch pill: < [dot per app] >. Centered, raised above the bottom edge so
     // it clears bottom-corner content (insets, logs).
     const spacing: f32 = 11;
     const n_f: f32 = float(n_apps);
@@ -161,7 +161,7 @@ fn update(f: *z.Frame, s: *State) void {
 
 pub const app: z.AppSpec(State) = .{
     // Multi-example host: it drives dozens of hosted example lifecycles, so a
-    // single leak-tight deinit isn't meaningful — opt out of the managed gate.
+    // single leak-tight deinit isn't meaningful - opt out of the managed gate.
     .memory = .managed,
     .config = .{
         .window = .{

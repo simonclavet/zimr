@@ -1,8 +1,8 @@
-// Storing into a GLOBAL array-of-structs element field — `G[i].field = v` — must
+// Storing into a GLOBAL array-of-structs element field - `G[i].field = v` - must
 // emit the assignment. The C backend inlines the element address as a cast-pointer
 // with `+` arithmetic (`*(&((P*)((arr*)&G) + i)->x) = v`); the lvalue address walker
 // had no `+` (pointer-arithmetic) case, so the LHS failed to resolve, the store path
-// bailed, and the whole assignment was silently dropped — the LHS lowered to an
+// bailed, and the whole assignment was silently dropped - the LHS lowered to an
 // orphaned heap read and the RHS to a bare value. Local arrays were unaffected
 // (the backend used a temp there). Self-checks (returns 0 on success).
 const P = struct { x: i32, y: i32 };

@@ -1,4 +1,4 @@
-//! examples/bloom_bright_fs_io.zig — typed interface for the bloom
+//! examples/bloom_bright_fs_io.zig - typed interface for the bloom
 //! bright-pass fragment shader. Reads the scene render texture and keeps only
 //! the luminance above `thresh`, remapped so the threshold maps to black. Body
 //! in `bloom_bright_fs.zig`.
@@ -25,7 +25,7 @@ pub const Inputs = struct {
 
 /// group(0) binding(0): the single per-pass scalar, padded to a vec4 (std140).
 pub const Ubo = struct {
-    /// {thresh, 0, 0, 0} — luminance below `thresh` is discarded.
+    /// {thresh, 0, 0, 0} - luminance below `thresh` is discarded.
     params: Vec,
 };
 
@@ -35,7 +35,7 @@ pub const Samplers = struct {
     src: shader.Sampler2D(.albedo, .{ .pinned = .{ .group = 0, .binding = 1 } }),
 };
 
-/// Stage output — the bright-pass colour.
+/// Stage output - the bright-pass colour.
 pub const Outputs = struct {
     final_color: Vec,
 };

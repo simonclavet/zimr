@@ -1,4 +1,4 @@
-//! examples/mandelbrot_fs_bundle.zig — single-module entry point for
+//! examples/mandelbrot_fs_bundle.zig - single-module entry point for
 //! native consumers of `mandelbrot_fs.zig`.  Bundles the shader source
 //! and its io schema together so they share one module (avoiding Zig
 //! 0.16's one-file-per-module rule when both are reached by an example).

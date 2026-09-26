@@ -3,14 +3,14 @@
 //! WHY THIS EXISTS
 //! ---------------
 //! The two real fixtures (`dance1_subject2`, `0005_2FeetJump001`) disagree about nearly
-//! everything — channel layout, rotation order, frame rate, units — and between them they
+//! everything - channel layout, rotation order, frame rate, units - and between them they
 //! still leave holes. Neither is Z-up, so the coordinate-rotation path has no real test.
 //! Neither has a joint name near the 32-byte `BoneInfo.name` limit, so the truncation path
 //! has no real test. Neither is malformed, so no error path has one either.
 //!
 //! Hand-writing a BVH per case is how a test file becomes 400 lines of string literals that
-//! nobody re-reads. Generating them keeps each case one line of intent, and — the actual
-//! payoff — lets a test assert on values it COMPUTED rather than values it transcribed. A
+//! nobody re-reads. Generating them keeps each case one line of intent, and - the actual
+//! payoff - lets a test assert on values it COMPUTED rather than values it transcribed. A
 //! synthetic clip whose joint angles are a known function of the frame index has a known
 //! forward-kinematics answer at every frame, not just at frame 0.
 //!
@@ -115,7 +115,7 @@ fn writeLine(out: *std.ArrayList(u8), gpa: Allocator, crlf: bool) !void {
 
 /// Build a BVH document. Caller owns the returned bytes.
 ///
-/// The skeleton is a straight chain — joint `i+1` is the child of joint `i` — because a
+/// The skeleton is a straight chain - joint `i+1` is the child of joint `i` - because a
 /// chain is the shape whose forward kinematics a test can state in closed form. Branching
 /// skeletons are what the real fixtures are for.
 pub fn generate(gpa: Allocator, opts: Options) ![]u8 {
@@ -150,8 +150,8 @@ pub fn generate(gpa: Allocator, opts: Options) ![]u8 {
         try writeLine(w, gpa, opts.crlf);
 
         // The root sits at the origin; every other joint is offset from its parent by the
-        // bone vector. A non-zero root offset is a WORLD PLACEMENT, not a bone — dance1 has
-        // one and it skews the up-axis heuristic — so it is deliberately left at zero here.
+        // bone vector. A non-zero root offset is a WORLD PLACEMENT, not a bone - dance1 has
+        // one and it skews the up-axis heuristic - so it is deliberately left at zero here.
         const off: [3]f32 = if (i == 0) .{ 0.0, 0.0, 0.0 } else bone;
         try writeIndent(w, gpa, i + 1);
         try w.print(gpa, "OFFSET {d:.6} {d:.6} {d:.6}", .{ off[0], off[1], off[2] });
@@ -241,7 +241,7 @@ test "synth: the generated document has the shape the options asked for" {
     });
     defer gpa.free(bytes);
 
-    // Root carries 6 channels, the child 3 — the 2FeetJump shape.
+    // Root carries 6 channels, the child 3 - the 2FeetJump shape.
     try expect(indexOf(u8, bytes, "CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation") != null);
     try expect(indexOf(u8, bytes, "CHANNELS 3 Xrotation Yrotation Zrotation") != null);
     try expect(indexOf(u8, bytes, "Frames: 3") != null);

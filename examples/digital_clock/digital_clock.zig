@@ -1,4 +1,4 @@
-//! digital_clock — a clock with two faces: a custom seven-segment digital readout and an
+//! digital_clock - a clock with two faces: a custom seven-segment digital readout and an
 //! analog dial with sweeping hands. Both are ported faithfully from the raylib original (the
 //! seven-segment glyphs are hand-built from hexagonal bar segments; the hands are rotated bars).
 //! There is no wall-clock-of-day in the raylib original's sense, but zimr exposes z.localTime()

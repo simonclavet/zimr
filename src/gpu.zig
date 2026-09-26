@@ -1,5 +1,5 @@
 //! lint:alias gpu
-//! gpu.zig — zimr's WebGPU resource layer over the raw `wgpu` bindings. One
+//! gpu.zig - zimr's WebGPU resource layer over the raw `wgpu` bindings. One
 //! flat module (merged from pipeline_cache + descriptor_encoder + gpu_frame):
 //!   - pipeline state caching: StateCombo / CacheKey / PipelineCache + hashers
 //!   - descriptor encoding: RenderPipelineDescriptor / BindGroupEntry / Vertex* + encode*
@@ -103,7 +103,7 @@ pub const PipelineCache = struct {
     }
 
     /// Insert a pre-built pipeline under `key`.  Caller owns the
-    /// build — see `pipeline_builder.zig` (TODO, blocked on transpiler)
+    /// build - see `pipeline_builder.zig` (TODO, blocked on transpiler)
     /// for the build flow.
     pub fn put(
         self: *PipelineCache,
@@ -135,7 +135,7 @@ pub const PipelineCache = struct {
 };
 
 // ============================================================================
-// SECTION — pre-bake list
+// SECTION - pre-bake list
 // ============================================================================
 
 /// The 8 hot combos pre-baked at app init for the default 2D shader.
@@ -172,7 +172,7 @@ pub fn hotCombos2D(color_format: wgpu.TextureFormat) [8]StateCombo {
 }
 
 /// Hash a shader source string.  We use the first 8 bytes of sha256
-/// truncated — collisions theoretically possible but practically
+/// truncated - collisions theoretically possible but practically
 /// impossible in zimr's workload size.
 pub fn hashSource(source: []const u8) u64 {
     return std.hash.Wyhash.hash(0xC0FFEE, source);
@@ -231,7 +231,7 @@ test "invalidateSource removes only matching entries" {
 // ============================= descriptor encoding ============================
 
 // ============================================================================
-// SECTION 1 — bind group layout entries
+// SECTION 1 - bind group layout entries
 // ============================================================================
 //
 // Format (per entry):
@@ -301,7 +301,7 @@ pub fn encodeBindGroupLayoutEntries(
 }
 
 // ============================================================================
-// SECTION 2 — bind group entries (resource bindings)
+// SECTION 2 - bind group entries (resource bindings)
 // ============================================================================
 //
 // Format (per entry):
@@ -324,12 +324,12 @@ pub const BindGroupEntry = struct {
     };
 };
 
-/// A bind-group layout holding ONE uniform buffer at binding 0 — the overwhelmingly common
+/// A bind-group layout holding ONE uniform buffer at binding 0 - the overwhelmingly common
 /// case for a custom pipeline's per-stage uniforms.
 ///
-/// ★ THIS EXACT HELPER WAS COPIED INTO TWELVE EXAMPLES before it lived here (`shadowmap`,
+/// * THIS EXACT HELPER WAS COPIED INTO TWELVE EXAMPLES before it lived here (`shadowmap`,
 /// `deferred_render`, `cel_shading`, `fog_rendering`, `mesh_picking`, `geno_dance`, ...). It is
-/// not example scaffolding — it is what every hand-built pipeline needs before it can bind
+/// not example scaffolding - it is what every hand-built pipeline needs before it can bind
 /// anything, and twelve copies is twelve chances for one of them to drift.
 pub fn uniformBindGroupLayout(
     gpa: Allocator,
@@ -415,7 +415,7 @@ pub fn encodeBindGroupEntries(
 }
 
 // ============================================================================
-// SECTION 3 — render pipeline descriptor
+// SECTION 3 - render pipeline descriptor
 // ============================================================================
 //
 // Format:
@@ -458,7 +458,7 @@ pub const RenderPipelineDescriptor = struct {
     /// WGSL pipeline-overridable constants set at creation (raygpu `override`).
     /// Applied to both the vertex and fragment stage.
     constants: []const PipelineConstant = &.{},
-    /// MRT: color-target formats for fragment output locations 1..N —
+    /// MRT: color-target formats for fragment output locations 1..N -
     /// location 0 stays `state.color_format` (with the StateCombo's blend);
     /// the extras are created blend-free, which is what a G-buffer wants
     /// (blending world positions would be nonsense).  Empty = the classic
@@ -523,7 +523,7 @@ pub fn encodeRenderPipelineDescriptor(
         try writeF64(gpa, &buf, k.value);
     }
 
-    // MRT tail: extra color-target formats for locations 1..N (0 = none —
+    // MRT tail: extra color-target formats for locations 1..N (0 = none -
     // the classic single-target pipeline).  Kept LAST so the blob stays a
     // strict prefix-extension of the old layout.
     try writeU32(gpa, &buf, @intCast(desc.extra_color_formats.len));
@@ -535,7 +535,7 @@ pub fn encodeRenderPipelineDescriptor(
 }
 
 // ============================================================================
-// SECTION 4 — primitive writers
+// SECTION 4 - primitive writers
 // ============================================================================
 
 // ============================================================================
@@ -577,7 +577,7 @@ test "encodeBindGroupEntries handles mixed resource types" {
     const bytes: []const u8 = try encodeBindGroupEntries(std.testing.allocator, entries);
     defer std.testing.allocator.free(bytes);
 
-    // 4 (count) + 3 × (4+4+4+8+8) = 4 + 84 = 88
+    // 4 (count) + 3 x (4+4+4+8+8) = 4 + 84 = 88
     try expectEqual(@as(usize, 88), bytes.len);
     try expectEqual(@as(u32, 3), std.mem.readInt(u32, bytes[0..4], .little));
     // First entry: binding=0, type=0 (buffer), handle=42, offset=0, size=256
@@ -662,13 +662,13 @@ test "encodeRenderPipelineDescriptor appends the MRT extra-target tail" {
 // ============================== per-frame GPU state ===========================
 
 /// Tag identifying which backend is active.  Used by
-/// `if (f.gpu.backend == .wgpu) { … }` gates in user code that opts
+/// `if (f.gpu.backend == .wgpu) { ... }` gates in user code that opts
 /// out of software-renderer compatibility.
 pub const Backend = enum(u8) { wgpu, sw };
 
 pub const GpuFrame = struct {
     // ------------------------------------------------------------------
-    // LONG-LIVED — lifetime = app
+    // LONG-LIVED - lifetime = app
     // ------------------------------------------------------------------
     backend: Backend = .wgpu,
     device: wgpu.DeviceHandle = .invalid,
@@ -693,7 +693,7 @@ pub const GpuFrame = struct {
     bind_group_cache: ?*BindGroupCache = null,
 
     // ------------------------------------------------------------------
-    // PER-FRAME TRANSIENT — lifetime = current frame
+    // PER-FRAME TRANSIENT - lifetime = current frame
     // ------------------------------------------------------------------
     //
     // These are written by `WgpuBackend.beginFrame` AND ALSO returned
@@ -704,7 +704,7 @@ pub const GpuFrame = struct {
     encoder: wgpu.CommandEncoderHandle = .invalid,
 
     // ------------------------------------------------------------------
-    // OPTIONAL — software renderer backend
+    // OPTIONAL - software renderer backend
     // ------------------------------------------------------------------
     /// When `backend == .sw`, this points at the software rasterizer
     /// context.  When `backend == .wgpu`, this is `null`.  The type

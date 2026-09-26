@@ -1,10 +1,10 @@
 // @divFloor on 64-bit operands. Pre-fix the transpiler lowered the
 // `zig_div_floor_i64`/`_u64` helper to Math.floor(BigInt/BigInt) (signed) and
-// Math.trunc(BigInt/BigInt) (unsigned) — both throw in the emitted JS, because
+// Math.trunc(BigInt/BigInt) (unsigned) - both throw in the emitted JS, because
 // Math.floor/Math.trunc reject BigInt (and BigInt `/` already truncates toward
 // zero, so the signed case was also semantically wrong). The reference here is
 // built from @divTrunc (plain BigInt `/`, which always worked) adjusted to
-// floor, so a wrong value — not just a crash — is caught too.
+// floor, so a wrong value - not just a crash - is caught too.
 fn refFloor(a: i64, b: i64) i64 {
     const q: i64 = @divTrunc(a, b);
     const r: i64 = @rem(a, b);

@@ -10,7 +10,7 @@
 //
 // This is the manual, in-app version of the engine's `.scale_mode = .fit` (which
 // does the same letterboxing at the window level). Doing it by hand is what
-// raylib's sample teaches — and it's what you need when only PART of the app is
+// raylib's sample teaches - and it's what you need when only PART of the app is
 // a fixed-resolution viewport.
 //
 // What this exercises:
@@ -118,7 +118,7 @@ fn drawGame(gl: *z.WgpuGl, font: *z.Font, mouse_virt: Vec2, t: f32) void {
         .{ .size = 22, .color = c.darkgray, .font = font },
     );
 
-    // Crosshair at the mapped mouse position — the proof that screen->virtual
+    // Crosshair at the mapped mouse position - the proof that screen->virtual
     // input mapping is correct. It should sit exactly under the real cursor.
     const mx: f32 = mouse_virt[0];
     const my: f32 = mouse_virt[1];
@@ -171,7 +171,7 @@ pub const app: z.AppSpec(State) = .{
             .height = 450,
             // RESPONSIVE on purpose: the window is the REAL device size, so the
             // letterbox math has something to solve. (`.fit` would do this same
-            // job at the engine level — this example does it by hand.)
+            // job at the engine level - this example does it by hand.)
             .scale_mode = .responsive,
             .clear = .{ .r = 0, .g = 0, .b = 0, .a = 1.0 },
         },

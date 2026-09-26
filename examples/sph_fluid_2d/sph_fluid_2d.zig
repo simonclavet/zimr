@@ -1,4 +1,4 @@
-//! examples/sph_fluid_2d.zig — Particle-based viscoelastic fluid (2D port).
+//! examples/sph_fluid_2d.zig - Particle-based viscoelastic fluid (2D port).
 //!
 //! Implementation of:
 //!   Clavet, Beaudoin, Poulin (2005).  Particle-based Viscoelastic
@@ -16,18 +16,18 @@
 //! algorithm block from the paper appears as a labelled section
 //! with comments mapping back to the original equations.  Helper
 //! functions exist only where they are genuinely reused (the
-//! cell-sort grid rebuild, which runs twice per step).  The 3×3-
+//! cell-sort grid rebuild, which runs twice per step).  The 3x3-
 //! cell neighbour loop is inlined into all three places it appears
 //! (viscosity, density, pressure) because each has a different
 //! body and zero-callback overhead matters for the hot path.
 //!
 //! Paper map:
-//!   §3   Simulation step (Algorithm 1)    — `step` outer flow
-//!   §4   Double density relax (Alg. 2)    — `step`, Pass A/B/C
-//!   §5.3 Viscosity (Algorithm 5)          — `step`, viscosity
-//!   §6   Object interaction               — NOT IMPLEMENTED
-//!   §5.1 Elasticity (springs)             — NOT IMPLEMENTED
-//!   §5.2 Plasticity                       — NOT IMPLEMENTED
+//!   section 3   Simulation step (Algorithm 1)    - `step` outer flow
+//!   section 4   Double density relax (Alg. 2)    - `step`, Pass A/B/C
+//!   section 5.3 Viscosity (Algorithm 5)          - `step`, viscosity
+//!   section 6   Object interaction               - NOT IMPLEMENTED
+//!   section 5.1 Elasticity (springs)             - NOT IMPLEMENTED
+//!   section 5.2 Plasticity                       - NOT IMPLEMENTED
 //!
 //! Controls:
 //!   Left-drag          : repel particles from the cursor
@@ -51,13 +51,13 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // --- Constants -----------------------------------------------------
 //
-// Tunables.  The values come from the paper's "typical" set (§7.3)
+// Tunables.  The values come from the paper's "typical" set (section 7.3)
 // adapted to a smaller canvas:
 //   h = 22 px        (interaction radius)
 //   rho_0 = 10       (rest density, dimensionless)
 //   k = 0.004        (far-pressure stiffness)
 //   k_near = 0.010   (near-pressure stiffness)
-//   sigma = 0        (linear viscosity — disabled)
+//   sigma = 0        (linear viscosity - disabled)
 //   beta = 0.10      (quadratic viscosity coefficient)
 // Time unit is 1 step = 1/60 second (one rendered frame).  We run
 // `substeps` iterations of the algorithm per rendered frame to
@@ -73,7 +73,7 @@ const rest_rho: f32 = 10.0;
 /// Maximum particle speed in pixels per substep.  A hard cap that
 /// prevents instability if `k` is set high enough to overshoot
 /// boundaries.  Sliding the speed back down preserves direction
-/// but silently breaks momentum conservation — band-aid, not a
+/// but silently breaks momentum conservation - band-aid, not a
 /// feature.
 const max_speed: f32 = 40.0;
 const mouse_radius: f32 = 90.0;
@@ -81,7 +81,7 @@ const mouse_force_mag: f32 = 0.8;
 
 // Spatial grid: cell size = interaction radius.  +2 border pads
 // the edges so a particle right on the boundary still has a valid
-// cell (the algorithm's 3×3 neighbour walk would otherwise OOB).
+// cell (the algorithm's 3x3 neighbour walk would otherwise OOB).
 const grid_cols: u32 = @trunc(@ceil(screen_w / interact_radius) + 2);
 const grid_rows: u32 = @trunc(@ceil(screen_h / interact_radius) + 2);
 const grid_cells: u32 = grid_cols * grid_rows;
@@ -92,14 +92,14 @@ const State = struct {
     // Particle data, struct-of-arrays.  Each array is
     // num_particles long, allocated once at init, never resized.
     // SoA chosen because every algorithm pass touches either
-    // positions+velocities OR densities+positions — the access
+    // positions+velocities OR densities+positions - the access
     // pattern is component-major.
     positions: []Vec2,
     prev_positions: []Vec2,
     velocities: []Vec2,
     /// `.x` = rho (linear-spike density), `.y` = rho_near (cubic-
     /// spike near-density).  Stored together because the pressure
-    /// pass reads both fields per neighbour — paired access wins
+    /// pass reads both fields per neighbour - paired access wins
     /// cache lines.
     densities: []Vec2,
     /// Pressure-pass output, applied as a separate sweep so all
@@ -113,7 +113,7 @@ const State = struct {
     /// damped v[i].  The dam-break spawn correlates index with
     /// position (low = upper-left, high = lower-right), so the
     /// order dependency manifested as a visible asymmetric damping
-    /// — rightward-sloshing particles damped less than leftward
+    /// - rightward-sloshing particles damped less than leftward
     /// ones, producing a persistent rightward bias.  Two-pass
     /// gather + apply fixes that.
     visc_deltas: []Vec2,
@@ -125,8 +125,8 @@ const State = struct {
     //   grid_indices[k]  = particle index, for k in
     //                      [starts[c], starts[c+1])
     //
-    // Constructed each substep by bucket-count → exclusive prefix
-    // sum → scatter.  No MAX_PER_CELL cap (cells can hold any
+    // Constructed each substep by bucket-count -> exclusive prefix
+    // sum -> scatter.  No MAX_PER_CELL cap (cells can hold any
     // number of particles).  Faster than the WebGPU version's
     // atomic-append for hot cells because no contention.
     grid_starts: []u32,
@@ -136,11 +136,11 @@ const State = struct {
     /// avoid per-frame alloc.
     grid_cursor: []u32,
     /// Cached cell index per particle.  Computed during
-    /// `rebuildGrid` and reused by all three neighbour passes —
-    /// saves recomputing `x/h, y/h` ~25× per particle per substep.
+    /// `rebuildGrid` and reused by all three neighbour passes -
+    /// saves recomputing `x/h, y/h` ~25x per particle per substep.
     grid_cell_of_particle: []u32,
 
-    // Simulation parameters — exposed via ImGui sliders.
+    // Simulation parameters - exposed via ImGui sliders.
     k_far: f32 = 0.004,
     k_near: f32 = 0.010,
     gravity_y: f32 = 0.05,
@@ -169,11 +169,11 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// the left ~52% of the canvas with deterministic sub-pixel jitter
 /// to break exact co-location.
 ///
-/// num_particles must factor as cols*rows exactly — using cols
+/// num_particles must factor as cols*rows exactly - using cols
 /// computed from a sqrt + ceil produces a partial bottom row, and
 /// the missing slots on one side give the dam a slight mass
 /// imbalance that biases the post-release flow.  We choose
-/// 50 × 40 = 2000 so the block is perfectly rectangular.
+/// 50 x 40 = 2000 so the block is perfectly rectangular.
 fn resetParticles(s: *State) void {
     const cols: u32 = 50;
     const rows: u32 = num_particles / cols; // = 40, exact
@@ -227,7 +227,7 @@ fn initState(
     // Zero everything that the simulation step doesn't initialize
     // before reading.  `resetParticles` handles positions /
     // prev_positions / velocities; the rest gets touched by
-    // `step()`'s first invocation in a write-then-read order — BUT
+    // `step()`'s first invocation in a write-then-read order - BUT
     // in ReleaseSafe (which smoke uses) Zig fills `gpa.alloc`
     // memory with the 0xAAAAAAAA undefined-sentinel, and any
     // read-before-write inside step() would trap on
@@ -258,7 +258,7 @@ fn initState(
 ///
 /// After this returns, the algorithm-side invariants are:
 ///   - `grid_cell_of_particle[i]` = cell index containing particle i
-///   - `grid_starts[c] ≤ grid_starts[c+1]`, and particles in cell c
+///   - `grid_starts[c] <= grid_starts[c+1]`, and particles in cell c
 ///     occupy slots `[grid_starts[c], grid_starts[c+1])` in
 ///     `grid_indices`
 fn rebuildGrid(s: *State) void {
@@ -267,7 +267,7 @@ fn rebuildGrid(s: *State) void {
     const rows_i32: i32 = @intCast(grid_rows);
 
     // 1. Count.  We zero `grid_starts[0 .. grid_cells+1]` then
-    //    write counts into `grid_starts[c + 1]` — leaves slot 0
+    //    write counts into `grid_starts[c + 1]` - leaves slot 0
     //    at zero, which is exactly what we want for the prefix
     //    sum below.
     @memset(s.grid_starts, 0);
@@ -316,7 +316,7 @@ fn rebuildGrid(s: *State) void {
 /// paper.  Reads top-to-bottom; each labelled block corresponds to
 /// a paper section.  No helper functions for the neighbour loop
 /// because each pass has a different body and inlining matters at
-/// 2000 particles × 2 substeps × 60 fps × ~9 neighbours = ~2M
+/// 2000 particles x 2 substeps x 60 fps x ~9 neighbours = ~2M
 /// inner-body iterations per second.
 fn step(s: *State) void {
     const dt: f32 = 1.0;
@@ -330,7 +330,7 @@ fn step(s: *State) void {
     const rows_i32: i32 = @intCast(grid_rows);
 
     // ================================================================
-    // Algorithm 1, lines 1-5 — apply gravity + mouse force.
+    // Algorithm 1, lines 1-5 - apply gravity + mouse force.
     //
     // Gravity adds a constant impulse to vy each step.  The mouse
     // adds a radial impulse with linear falloff: maximum strength
@@ -370,29 +370,29 @@ fn step(s: *State) void {
     }
 
     // ================================================================
-    // Grid rebuild #1 — on CURRENT positions.  Viscosity needs to
+    // Grid rebuild #1 - on CURRENT positions.  Viscosity needs to
     // find neighbours at the particles' actual positions (not yet
     // predicted).
     // ================================================================
     rebuildGrid(s);
 
     // ================================================================
-    // Algorithm 5 — viscosity damping.
+    // Algorithm 5 - viscosity damping.
     //
     // For each pair (i, j) closer than h with positive inward
     // radial velocity, apply an impulse along the connecting line
     // that damps the relative motion:
     //
-    //   u = (v_i - v_j) · r̂        (positive if approaching)
-    //   I = dt · (1 - q) · β · u²   (paper β term; σ omitted)
-    //   v_i -= I·r̂ / 2,   v_j += I·r̂ / 2
+    //   u = (v_i - v_j) * r_hat        (positive if approaching)
+    //   I = dt * (1 - q) * beta * u^2   (paper beta term; sigma omitted)
+    //   v_i -= I*r_hat / 2,   v_j += I*r_hat / 2
     //
     // Paper applies impulses in an ordered-pair scatter (each pair
     // touched once).  We use a symmetric gather: each particle
     // reads all its neighbours' velocities and accumulates its
     // half-impulse.
     //
-    // The gather MUST be over a velocity snapshot — if we mutated
+    // The gather MUST be over a velocity snapshot - if we mutated
     // s.velocities[i] in place during the loop, later particles
     // would read already-damped neighbour velocities and damp less.
     // Since dam-break index correlates with position, that
@@ -413,7 +413,7 @@ fn step(s: *State) void {
         const cx: i32 = @intCast(cell_i % grid_cols);
         const cy: i32 = @intCast(cell_i / grid_cols);
 
-        // 3×3-cell neighbourhood walk.  Same pattern in density
+        // 3x3-cell neighbourhood walk.  Same pattern in density
         // and pressure passes below.
         var dy: i32 = -1;
         while (dy <= 1) : (dy += 1) {
@@ -438,8 +438,8 @@ fn step(s: *State) void {
                     const r: Vec2 = s.positions[j] - p_i;
                     const r_sq: f32 = r[0] * r[0] + r[1] * r[1];
                     // Only skip exact co-location (numerical NaN
-                    // guard).  Threshold lowered from 0.01 → 0.0001
-                    // — anything past r ≈ 0.01 px gives a sane r̂.
+                    // guard).  Threshold lowered from 0.01 -> 0.0001
+                    // - anything past r ~ 0.01 px gives a sane r_hat.
                     if (r_sq >= h_sq or r_sq < 0.0001) {
                         continue;
                     }
@@ -451,31 +451,31 @@ fn step(s: *State) void {
                     const dv: Vec2 = v_i - s.velocities[j];
                     const u_radial: f32 = dv[0] * r_hat[0] + dv[1] * r_hat[1];
 
-                    // Linear drag, applied to ALL pairs — approaching
+                    // Linear drag, applied to ALL pairs - approaching
                     // AND separating, not just u > 0 as the paper does.
                     //
-                    // Why linear instead of paper's β·u²:
+                    // Why linear instead of paper's beta*u^2:
                     //   Quadratic scaling kills slow-motion damping.
-                    //   For bulk creep at u ≈ 1 with β = 0.10, the
-                    //   impulse is 0.05 — essentially zero.  That's
+                    //   For bulk creep at u ~ 1 with beta = 0.10, the
+                    //   impulse is 0.05 - essentially zero.  That's
                     //   why the rightward drift would never settle:
                     //   no part of our viscosity model opposed it.
-                    //   Linear (σ·u) gives uniform drag regardless of
+                    //   Linear (sigma*u) gives uniform drag regardless of
                     //   speed, which is what damps bulk flow.
                     //
                     // Why both directions (no u > 0 gate):
                     //   Real viscous drag opposes relative motion in
                     //   either direction.  Paper gates by u > 0
                     //   ("only when running into each other") to
-                    //   preserve explosion energy in collisions — but
+                    //   preserve explosion energy in collisions - but
                     //   our problem is the opposite, fluid that
                     //   refuses to settle.  Damping separation too
                     //   makes the simulation actually equilibriate.
                     //
                     // Momentum still conserves exactly: u is symmetric
-                    // in i↔j (dv flips sign, r̂ flips sign, sign-of-
+                    // in i<->j (dv flips sign, r_hat flips sign, sign-of-
                     // product is invariant), so mag is identical for
-                    // both processings, and the equal-and-opposite r̂
+                    // both processings, and the equal-and-opposite r_hat
                     // gives equal-and-opposite half-impulses.
                     const i_mag: f32 =
                         dt * (1.0 - q) * beta * u_radial * 0.5;
@@ -491,9 +491,9 @@ fn step(s: *State) void {
     }
 
     // ================================================================
-    // Algorithm 1, lines 6-10 — predict + boundary contact.
+    // Algorithm 1, lines 6-10 - predict + boundary contact.
     //
-    // Save current pos, then move particles forward by v·dt.  The
+    // Save current pos, then move particles forward by v*dt.  The
     // double-density relaxation below operates on PREDICTED
     // positions; velocity is recovered at the end of the substep
     // as (new_pos - prev_pos) / dt, so any positional edits in
@@ -506,14 +506,14 @@ fn step(s: *State) void {
     //   1. If we only clamped after relaxation, a particle whose
     //      predicted pos lies outside the domain would still
     //      contribute to pressure as if it were 5 px through the
-    //      wall — neighbour density on the wall side is wrong.
+    //      wall - neighbour density on the wall side is wrong.
     //      Catching it at predict keeps the predicted layout
     //      physically valid.
     //
     //   2. The wall must absorb momentum, not amplify it, AND it
     //      must not pile particles into a single-row-thick stack.
     //      An earlier version teleported penetrating particles
-    //      TO the wall margin — but that compressed every wall
+    //      TO the wall margin - but that compressed every wall
     //      contact into the same y-line (or x-line), spiking
     //      neighbour density there and launching adjacent
     //      particles as a fountain on the next pressure pass.
@@ -553,22 +553,22 @@ fn step(s: *State) void {
     }
 
     // ================================================================
-    // Grid rebuild #2 — on PREDICTED positions.  Density and
+    // Grid rebuild #2 - on PREDICTED positions.  Density and
     // pressure both use the same predicted layout, so one rebuild
     // covers both.
     // ================================================================
     rebuildGrid(s);
 
     // ================================================================
-    // Algorithm 2 — double density relaxation.
+    // Algorithm 2 - double density relaxation.
     //
     // PASS A: density.  For each particle i, sum two kernels over
     // neighbours:
-    //   rho_i      = Σⱼ (1 - r_ij/h)²    (linear-spike, eq. 1)
-    //   rho_near_i = Σⱼ (1 - r_ij/h)³    (sharp cubic, eq. 4)
+    //   rho_i      = sum_j (1 - r_ij/h)^2    (linear-spike, eq. 1)
+    //   rho_near_i = sum_j (1 - r_ij/h)^3    (sharp cubic, eq. 4)
     // The sharper near-density kernel reacts only to very-close
     // pairs, which gives the algorithm its anti-clustering
-    // property (paper §4.3).
+    // property (paper section 4.3).
     // ================================================================
     for (s.densities, s.positions, 0..) |*d, p_i, i_usize| {
         const i: u32 = @intCast(i_usize);
@@ -616,24 +616,24 @@ fn step(s: *State) void {
     }
 
     // ================================================================
-    // Algorithm 2 — PASS B: compute pressure displacements.
+    // Algorithm 2 - PASS B: compute pressure displacements.
     //
     //   P_i      = k * (rho_i - rho_0)     (signed, paper eq. 2)
     //   P_near_i = k_near * rho_near_i     (always positive, eq. 5)
-    //   Δr_ij    = dt² · (P · (1-q) + P_near · (1-q)²) · r̂
+    //   dr_ij    = dt^2 * (P * (1-q) + P_near * (1-q)^2) * r_hat
     //
     // Surface tension emerges from P being NEGATIVE at the fluid
     // surface (rho < rho_0): the linear-kernel term pulls
     // neighbours closer, but the sharp-spike near-pressure term
-    // still repels at very short range — net effect is a smooth
-    // surface with stable drops and filaments (paper §4.4).
+    // still repels at very short range - net effect is a smooth
+    // surface with stable drops and filaments (paper section 4.4).
     //
     // Paper uses asymmetric scatter (each pair touched once).
     // We use symmetric gather: each particle reads its OWN and its
     // NEIGHBOUR's pressures, applying half the pair force.  The
     // 0.5 factor below compensates for the double-count.
     //
-    // Co-location: when r ≈ 0 the normalised direction is
+    // Co-location: when r ~ 0 the normalised direction is
     // undefined.  We pick a deterministic antisymmetric cardinal
     // so the pair separates (smaller index goes -x, larger goes
     // +x).  Init jitter makes this rare in practice but it's free
@@ -688,9 +688,9 @@ fn step(s: *State) void {
                         r_dist = @sqrt(r_sq);
                         r_hat = r * @as(Vec2, @splat(1.0 / r_dist));
                     } else {
-                        // Co-location fallback: r ≈ 0 → r̂ undefined.
+                        // Co-location fallback: r ~ 0 -> r_hat undefined.
                         // 1D x-only would force all of a corner-clamped
-                        // stack's pressure into ±x and rocket the
+                        // stack's pressure into +/-x and rocket the
                         // extreme-indexed particles out.  Fan across 4
                         // cardinals using a deterministic hash of the
                         // pair: (i+j)&3 picks the axis, i<j flips the
@@ -714,20 +714,20 @@ fn step(s: *State) void {
                     const big_p_j: f32 = k * (dens_j[0] - rest_rho);
                     const big_pn_j: f32 = k_near * dens_j[1];
 
-                    // Symmetric gather × 0.5 matches paper scatter total.
+                    // Symmetric gather x 0.5 matches paper scatter total.
                     const mag: f32 = 0.5 * dt_sq *
                         ((big_p_i + big_p_j) * one_minus_q +
                             (big_pn_i + big_pn_j) * one_minus_q * one_minus_q);
 
                     // r_hat points FROM i TO j; pressure pushes i
-                    // away → subtract.
+                    // away -> subtract.
                     accum -= r_hat * @as(Vec2, @splat(mag));
                 }
             }
         }
         // Note: no per-particle displacement cap.  An earlier
         // version had one, but it breaks pair-momentum
-        // conservation — when accum exceeds the cap, the per-
+        // conservation - when accum exceeds the cap, the per-
         // particle scaling shrinks one side of every pair this
         // particle participates in, while its pair partners
         // (typically less dense, not capped) keep their full
@@ -735,7 +735,7 @@ fn step(s: *State) void {
         // asymmetry pumps net momentum into surface particles
         // and launches them as a fountain.  Co-location NaNs
         // (the original reason for the cap) are handled cleanly
-        // by spawn jitter + the 4-cardinal r̂ fallback above.
+        // by spawn jitter + the 4-cardinal r_hat fallback above.
         delta_i.* = accum;
     }
 
@@ -749,7 +749,7 @@ fn step(s: *State) void {
     }
 
     // ================================================================
-    // Algorithm 1, lines 18-20 — boundary clamp + velocity recompute.
+    // Algorithm 1, lines 18-20 - boundary clamp + velocity recompute.
     //
     // Clamp positions inside the domain (small margin so render
     // circles don't intersect the edge), then recover velocity as
@@ -765,7 +765,7 @@ fn step(s: *State) void {
     // own pushed a particle outside the domain (predict-clamp
     // already handles the velocity-driven case).  When firing,
     // clamp to the wall and zero the velocity component on that
-    // axis — same inelastic-wall response as the predict clamp.
+    // axis - same inelastic-wall response as the predict clamp.
     //
     // Speed cap is a remaining band-aid for high-stiffness
     // setups; breaks momentum conservation when triggered but is
@@ -803,7 +803,7 @@ fn step(s: *State) void {
     }
 }
 
-/// Map normalized density `t ∈ [0,1]` to a 3-stop blue→cyan→white
+/// Map normalized density `t in [0,1]` to a 3-stop blue->cyan->white
 /// gradient that highlights surface (low density) and interior
 /// (high) regions.  Matches the WGSL fragment shader from the
 /// WebGPU version of this demo.
@@ -856,9 +856,9 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Density-coloured particles.  Color stops match the WGSL
     // fragment shader from the WebGPU version:
-    //   low density  (surface)  → deep blue
-    //   rest density            → cyan
-    //   high density (interior) → near-white
+    //   low density  (surface)  -> deep blue
+    //   rest density            -> cyan
+    //   high density (interior) -> near-white
     const inv_max_density: f32 = 1.0 / 15.0; // rest_rho * 1.5
     for (s.positions, s.densities) |p, d| {
         const t: f32 = clamp(d[0] * inv_max_density, 0.0, 1.0);

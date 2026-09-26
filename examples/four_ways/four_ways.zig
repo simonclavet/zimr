@@ -1,4 +1,4 @@
-//! examples/four_ways/four_ways.zig — ONE Zig function, FOUR machines.
+//! examples/four_ways/four_ways.zig - ONE Zig function, FOUR machines.
 //!
 //! `escape.zig` is seven lines and says nothing about threads, GPUs or compile time. This
 //! app runs it on all four:
@@ -14,12 +14,12 @@
 //! the same shape, drawn in characters.
 //!
 //! And the point the demo actually exists to make: **the backends are interchangeable in
-//! CODE, not in COST.** The lines that dispatch them are identical —
+//! CODE, not in COST.** The lines that dispatch them are identical -
 //!
 //!     pipe.run("mandel", n);                     // cpu | worker | gpu
 //!     if (pipe.readLatest(.out)) |px| { ... }    // same line for all three
 //!
-//! — and their costs span four orders of magnitude. Both halves are true, and a demo that
+//! - and their costs span four orders of magnitude. Both halves are true, and a demo that
 //! showed only the first would be a magic trick with a false bottom.
 const std = @import("std");
 const z = @import("zimr");
@@ -47,14 +47,14 @@ const kernel_wgsls: [fk.kernels.len]Pipe.KernelWgsl = blk: {
 };
 
 // ---------------------------------------------------------------------------------------
-// MACHINE 1 — COMPTIME.
+// MACHINE 1 - COMPTIME.
 //
 // The strange one, and it earns its place by being strange: this fractal's pixels were
-// decided before the program ran. There is no loop in the binary for it — just the text.
+// decided before the program ran. There is no loop in the binary for it - just the text.
 //
 // Note what is being called: `escape`, the FUNCTION. Not the kernel. The kernel indexes
 // `M.g.B`, a module-level `var`, and comptime cannot touch runtime memory. So comptime gets
-// the function and the other three get the kernel that wraps it — which is exactly the
+// the function and the other three get the kernel that wraps it - which is exactly the
 // claim this demo is making, and the reason it is worth making.
 const ascii_w: usize = 40;
 const ascii_h: usize = 18;
@@ -82,7 +82,7 @@ const State = struct {
     font: z.Font,
     ui_host: z.UiHost,
 
-    /// Three pipes, three backends, ONE module. Each owns its own state — a `.cpu` pipe and
+    /// Three pipes, three backends, ONE module. Each owns its own state - a `.cpu` pipe and
     /// a `.worker` pipe on the same module used to contaminate each other through kompute's
     /// module-level globals; they no longer can, which is what makes this panel layout
     /// possible at all.
@@ -96,7 +96,7 @@ const State = struct {
     /// Has this pipe been DISPATCHED since the app started?
     ///
     /// Load-bearing, and I got it wrong the first time. A `.cpu` pipe's `readLatest` is
-    /// never "not ready" — it hands back `M.g.B` directly — so polling it before any
+    /// never "not ready" - it hands back `M.g.B` directly - so polling it before any
     /// dispatch returns the ZEROED buffer, and the panel cheerfully drew 12288 pixels of
     /// `escape = 0`. Uniform dark blue, no fractal, and no error anywhere. The `.gpu` and
     /// `.worker` arms genuinely do return null until their readback lands; `.cpu` cannot,
@@ -105,7 +105,7 @@ const State = struct {
     got: [3]bool = @splat(false),
     ms: [3]f32 = @splat(0),
 
-    /// Worst frame gap seen since this machine's dispatch — the number the whole demo rests
+    /// Worst frame gap seen since this machine's dispatch - the number the whole demo rests
     /// on, and the first version could not see it.
     ///
     /// Two reasons it read 0 ms while the main thread stalled for two seconds:
@@ -113,7 +113,7 @@ const State = struct {
     ///   * `gap_watch` was ONE slot, so `RUN ALL` (cpu, then worker, then gpu) left it
     ///     pointing at `.gpu`. The CPU's stall was charged to the GPU, or to nobody.
     ///   * a `.cpu` pipe finishes SYNCHRONOUSLY, so `got[cpu]` went true on the same frame as
-    ///     the dispatch — clearing the watch BEFORE the next frame could report the gap the
+    ///     the dispatch - clearing the watch BEFORE the next frame could report the gap the
     ///     dispatch had just caused. The cost always lands on the frame AFTER.
     ///
     /// So: watch one machine at a time, and keep watching for a few frames after it lands.
@@ -130,7 +130,7 @@ const State = struct {
 
     zoom: f32 = 1.0,
 
-    /// Deliberately EXPENSIVE. At 64 iterations the CPU pass is ~800k inner steps — two
+    /// Deliberately EXPENSIVE. At 64 iterations the CPU pass is ~800k inner steps - two
     /// milliseconds, no hitch, and the `.worker` panel has nothing to prove. The demo only
     /// says anything if the main-thread pass actually costs you frames, so the default is
     /// 12288 px x 1500 = ~18M steps, which visibly stalls a phone.
@@ -151,7 +151,7 @@ fn paramsNow(s: *const State) fk.Params {
 
 fn slot(m: Machine) usize {
     return switch (m) {
-        .comptime_ => 0, // never used — comptime has no pipe
+        .comptime_ => 0, // never used - comptime has no pipe
         .cpu => 0,
         .worker => 1,
         .gpu => 2,
@@ -175,7 +175,7 @@ fn dispatch(s: *State, m: Machine) void {
     s.got[slot(m)] = false;
     s.worst_gap_ms[slot(m)] = 0;
     s.gap_watch = m;
-    s.settle = 3; // keep watching past the landing frame — the cost shows up AFTER
+    s.settle = 3; // keep watching past the landing frame - the cost shows up AFTER
     s.running = m;
 }
 
@@ -209,8 +209,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .cpu = Pipe.initCpu(),
         .gpu = try Pipe.initGpu(gpa, f.gpu.device, f.gpu.queue, &kernel_wgsls),
     };
-    // The worker backend needs a kernel wasm. If the page did not ship one — or the browser
-    // refused `new Worker()` — `jobs` runs the kernel INLINE and the panel behaves exactly
+    // The worker backend needs a kernel wasm. If the page did not ship one - or the browser
+    // refused `new Worker()` - `jobs` runs the kernel INLINE and the panel behaves exactly
     // like the CPU one, hitch and all. That is the honest fallback, and it is why the panel
     // reports which it got rather than assuming.
     s.worker = Pipe.initWorker(gpa) catch null;
@@ -227,7 +227,7 @@ fn update(f: *z.Frame, s: *State) void {
             s.worst_gap_ms[i] = t_frame;
         }
         if (s.got[i]) {
-            // Landed — but do NOT stop watching yet. A `.cpu` dispatch blocks INSIDE its
+            // Landed - but do NOT stop watching yet. A `.cpu` dispatch blocks INSIDE its
             // frame, so the frame time that proves it only arrives on the next one.
             if (s.settle > 0) {
                 s.settle -= 1;
@@ -257,7 +257,7 @@ fn update(f: *z.Frame, s: *State) void {
     const src_fsz: f32 = clamp(w / 54.0, 9.0, 15.0);
 
     // The control bar goes at the TOP. It used to sit at the bottom of a canvas taller than
-    // a phone viewport, which put it off-screen entirely — the demo shipped with no reachable
+    // a phone viewport, which put it off-screen entirely - the demo shipped with no reachable
     // RUN button.
     const bar_h: f32 = fsz * 5.6;
     var y: f32 = bar_h + fsz * 0.8;
@@ -290,7 +290,7 @@ fn update(f: *z.Frame, s: *State) void {
         .font = &s.font,
     });
     y += fsz * 1.3;
-    // The point, said out loud. Four identical fractals prove nothing on their own — the
+    // The point, said out loud. Four identical fractals prove nothing on their own - the
     // claim is about WHERE the same seven lines ran, and what each one COST.
     f.gl.text(
         .{ fsz * 0.5, y },
@@ -345,7 +345,7 @@ fn update(f: *z.Frame, s: *State) void {
             dispatch(s, .gpu);
         }
 
-        // Row 2 — the cost knob. No keyboard on a phone, so halve/double buttons rather
+        // Row 2 - the cost knob. No keyboard on a phone, so halve/double buttons rather
         // than a slider: the whole useful range in a few taps.
         if (u.button("iter /2", .{ .size = .{ bw * 0.8, bh } })) {
             s.max_iter = @max(64, s.max_iter / 2);
@@ -404,7 +404,7 @@ fn drawPanel(
 
     if (m == .comptime_) {
         // The binary holds these characters. There is no loop for them anywhere in the
-        // program — the answer existed before the program did.
+        // program - the answer existed before the program did.
         const cw: f32 = @min(size[0] / float(ascii_w + 1), fsz * 0.5);
         var yy: f32 = body_y;
         for (ascii_art) |row| {
@@ -434,7 +434,7 @@ fn drawPanel(
         return;
     }
 
-    // Draw the fractal as a grid of cells. Deliberately dumb — the interesting thing is the
+    // Draw the fractal as a grid of cells. Deliberately dumb - the interesting thing is the
     // number underneath, not the rendering.
     const cell: f32 = @min(
         (size[0] - fsz) / float(fk.width),
@@ -444,7 +444,7 @@ fn drawPanel(
         for (0..fk.width) |px| {
             const it: u32 = s.img[i][py * fk.width + px];
             if (it >= s.max_iter) {
-                continue; // in the set — leave it black
+                continue; // in the set - leave it black
             }
             const t: f32 = float(it) / float(s.max_iter);
             const c: zm.Color = .{
@@ -468,7 +468,7 @@ fn drawPanel(
     var buf: [96]u8 = undefined;
 
     // An INLINE worker is not a worker. Rather than let the panel imply a contrast it is not
-    // making, it says so — a green 0 ms here with no real thread behind it would be a lie.
+    // making, it says so - a green 0 ms here with no real thread behind it would be a lie.
     if (m == .worker and !z.jobs.parallel()) {
         f.gl.text(
             .{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 },

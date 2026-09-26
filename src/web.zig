@@ -6,7 +6,7 @@
 //     web.audio  - Web Audio sine-wave bindings    (extern "audio")
 //     web.fetch  - async fetch handle protocol     (uses dom internally)
 // Each section's contents are unchanged from before the merge - the
-// only structural change is the `pub const X = struct { … };` wrapper.
+// only structural change is the `pub const X = struct { ... };` wrapper.
 // Callers that did `const dom = @import("web.zig").dom` now use
 // `const dom = @import("web.zig").dom`.
 
@@ -38,7 +38,7 @@ pub const dom = struct {
     ) void;
 
     /// Browser-side log line.  On host (non-wasm) builds, prints to
-    /// stderr instead of routing through the JS bridge — the
+    /// stderr instead of routing through the JS bridge - the
     /// `extern "dom"` symbol resolves only under the wasm32 link
     /// environment, and any caller reachable from a `*.zig` test
     /// aggregator would otherwise drag the undefined symbol into
@@ -51,8 +51,8 @@ pub const dom = struct {
                 .err => "[zimr ERR]",
             };
             // Host-only stderr fallback (the wasm path below routes through
-            // js_log). std.debug.print is the right call on the host — there
-            // is no JS bridge — and the !isWasm gate keeps it off the wasm
+            // js_log). std.debug.print is the right call on the host - there
+            // is no JS bridge - and the !isWasm gate keeps it off the wasm
             // path where the raw-stderr writer traps under ReleaseSmall.
             // lint:off debug-print: host-only stderr fallback, gated !isWasm
             std.debug.print("{s} {s}\n", .{ prefix, msg });
@@ -86,7 +86,7 @@ pub const dom = struct {
             // Native host has no browser wall-clock, and Zig 0.16+ dropped the
             // free `std.time.*Timestamp` helpers (a wall clock now needs an `io`
             // handle threaded through juicy-main, which this browser-only path
-            // has no access to). Mirror `runtime.hostNow`: return 0 on host —
+            // has no access to). Mirror `runtime.hostNow`: return 0 on host -
             // this path is only reached in host analysis/tests, never in the
             // wasm build, which takes `js_epoch_ms()` below.
             return 0;
@@ -470,10 +470,10 @@ pub const dom = struct {
     }
 
     /// Binary-safe save.  localStorage only holds UTF-8 text, so raw binary
-    /// (anything that isn't valid UTF-8 — e.g. serialized structs, float
+    /// (anything that isn't valid UTF-8 - e.g. serialized structs, float
     /// bytes) gets mangled by the string round-trip that `persistence_save`
-    /// does.  This base64-encodes `bytes` first — base64 is pure ASCII, so it
-    /// survives the text round-trip losslessly — then stores that.  Use this
+    /// does.  This base64-encodes `bytes` first - base64 is pure ASCII, so it
+    /// survives the text round-trip losslessly - then stores that.  Use this
     /// (not `persistence_save`) for serialized structs / binary blobs.  Returns
     /// the same status codes as `persistence_save`.
     pub fn persistence_save_bytes(
@@ -488,7 +488,7 @@ pub const dom = struct {
         return persistence_save(key, b64);
     }
 
-    /// Binary-safe load — the counterpart to `persistence_save_bytes`.  Reads
+    /// Binary-safe load - the counterpart to `persistence_save_bytes`.  Reads
     /// the stored base64 string and decodes it back to the exact original
     /// bytes.  Returns null if the key is missing, storage is unavailable, or
     /// the stored value isn't valid base64.  Caller owns the returned slice.
@@ -531,7 +531,7 @@ pub const dom = struct {
     /// Set the HTML `inputmode` attribute on the hidden DOM input
     /// that captures keyboard events on mobile.  Pass the lower-
     /// case mode string ("text", "numeric", "decimal", "email",
-    /// "tel", "url", "search") — the JS bridge writes it through.
+    /// "tel", "url", "search") - the JS bridge writes it through.
     /// An empty slice clears the attribute, restoring the
     /// platform default soft-keyboard.
     pub fn set_input_mode(mode: []const u8) void {
@@ -543,7 +543,7 @@ pub const dom = struct {
     // element AFTER `show_overlay_input` has set up the element
     // (because the element must exist before the property write
     // takes effect).  The JS handlers are idempotent and tolerate
-    // being called when the overlay isn't shown — they store the
+    // being called when the overlay isn't shown - they store the
     // value on `RuntimeState` and the next `show_overlay_input`
     // applies it.
     //
@@ -591,7 +591,7 @@ pub const dom = struct {
     // ----- P9.1 char filters on the web path
     // Bug found via turn 440b phone testing: the host-path
     // `applyCharsFlagFilters` doesn't run on web because the DOM
-    // overlay input is the editor — wasm only polls the final
+    // overlay input is the editor - wasm only polls the final
     // value, never sees individual keystrokes.  The fix layers a
     // JS-side 'input' event listener that applies the same filter
     // logic to the overlay's value on every keystroke.  Wasm
@@ -619,7 +619,7 @@ pub const dom = struct {
     // Today: duplicated structure.  After both paths are
     // exercised in real demos, we'll likely unify the show/hide/
     // poll/attribute machinery behind a "current overlay
-    // element" abstraction — but the right factoring isn't
+    // element" abstraction - but the right factoring isn't
     // obvious until the second overlay exists.
 
     extern "dom" fn js_show_overlay_textarea(
@@ -968,10 +968,10 @@ pub const audio = struct {
     // `decodeAudioData` is async and returns a Promise; on
     // single-threaded JS we can't block on it.  These primitives
     // implement a polling protocol:
-    //   1. `decodeOggBytes(ctx, data, len)` → DecodeId, kicks off
+    //   1. `decodeOggBytes(ctx, data, len)` -> DecodeId, kicks off
     //      the Promise.  Bytes are copied JS-side immediately.
-    //   2. `isDecodeReady(ctx, decode_id)` → 0/1 (poll each frame).
-    //   3. `takeDecodedBuffer(ctx, decode_id)` → BufferId.  Once
+    //   2. `isDecodeReady(ctx, decode_id)` -> 0/1 (poll each frame).
+    //   3. `takeDecodedBuffer(ctx, decode_id)` -> BufferId.  Once
     //      consumed, the decode_id is invalidated.
     //   4. `cancelDecode(ctx, decode_id)` if the caller gives up
     //      (e.g. Sound.unload before decode finished).
@@ -1154,8 +1154,8 @@ pub const audio = struct {
     }
 
     /// Start playing `buffer_id` through a fresh source-graph.  The
-    /// graph is `AudioBufferSourceNode → GainNode → StereoPannerNode
-    /// → masterGain`, with `volume`/`pitch`/`pan` set on the per-play
+    /// graph is `AudioBufferSourceNode -> GainNode -> StereoPannerNode
+    /// -> masterGain`, with `volume`/`pitch`/`pan` set on the per-play
     /// nodes.  Returns a non-zero `SourceId` for use with
     /// `stopBuffer` / `pauseBuffer` / `isBufferPlaying`, or 0 if the
     /// buffer or context is invalid.
@@ -1411,7 +1411,7 @@ pub const audio = struct {
     }
 
     /// Fill `out` with the current magnitude spectrum (one byte per bin, 0..255)
-    /// and return how many bins were written — which may be fewer than `out.len`
+    /// and return how many bins were written - which may be fewer than `out.len`
     /// if the analyser has fewer bins. Web Audio writes STRAIGHT into the wasm
     /// heap here, so there is no intermediate copy.
     /// Host: writes nothing, returns 0.
@@ -1581,7 +1581,7 @@ pub const audio = struct {
 /// (`decodeOggBytes` -> `isDecodeReady` -> `takeDecodedBuffer`): submit, poll, take.
 /// A worker pool is a new BACKEND for an idiom the engine already has, not a new idea.
 ///
-/// Host (and any browser where `new Worker()` throws — a sandboxed iframe does):
+/// Host (and any browser where `new Worker()` throws - a sandboxed iframe does):
 /// `available()` is false, and `jobs.zig` runs the kernel INLINE instead. Nothing
 /// here ever fails; the caller cannot tell the difference.
 pub const jobs = struct {
@@ -1622,12 +1622,12 @@ pub const jobs = struct {
     /// checked `available()` first).
     /// Header and payload cross SEPARATELY, and the host joins them into the one buffer it
     /// was going to allocate anyway. The caller used to have to join them itself, which meant
-    /// a multi-megabyte allocation and memcpy on every dispatch — in the frame path — for a
+    /// a multi-megabyte allocation and memcpy on every dispatch - in the frame path - for a
     /// buffer that was immediately copied again on the other side.
     /// The failed kernel's error NAME, copied into `dst`. Returns how many bytes it wrote.
     ///
     /// The worker always sent this; the host used to print it and drop it. So `KernelFailed`
-    /// was every failure's only description — on a device with no console to read.
+    /// was every failure's only description - on a device with no console to read.
     pub fn errorName(handle: u32, dst: []u8) usize {
         if (comptime !is_wasm) {
             return 0;
@@ -1778,7 +1778,7 @@ pub const fetch = struct {
 
 };
 
-/// WebSocket client — the browser-side transport for zimr's P2P signaling. It
+/// WebSocket client - the browser-side transport for zimr's P2P signaling. It
 /// talks to the L0 signaling server (tools/signal_server.zig) so peers can find
 /// each other and trade WebRTC handshake blobs. Mirrors `fetch`'s handle+poll
 /// shape: nothing blocks; you open a socket, then each frame you poll for
@@ -1807,7 +1807,7 @@ pub const ws = struct {
     pub const State = enum(i32) {
         connecting = 0,
         open = 1,
-        closed = 2, // closed OR errored — either way you can't use it anymore
+        closed = 2, // closed OR errored - either way you can't use it anymore
     };
 
     // ---- JS-side imports (implemented in bridge.zig's "dom" namespace) ----
@@ -1844,7 +1844,7 @@ pub const ws = struct {
     }
 
     /// Send `bytes` as a WebSocket text frame (the L0 server speaks text). Safe
-    /// to call before the socket is open — it's dropped rather than throwing.
+    /// to call before the socket is open - it's dropped rather than throwing.
     pub fn send(handle: Handle, bytes: []const u8) void {
         if (comptime !is_wasm) {
             return;
@@ -1885,7 +1885,7 @@ pub const ws = struct {
         js_ws_close(handle);
     }
 
-    /// The same-origin WebSocket URL for the page this wasm is running in —
+    /// The same-origin WebSocket URL for the page this wasm is running in -
     /// "wss://host" on an https page, "ws://host" otherwise. Writes it into
     /// `out` and returns the slice. Handy when the signaling server also serves
     /// the page: connect to `originUrl(&buf)` and there's nothing to hard-code
@@ -1901,7 +1901,7 @@ pub const ws = struct {
 
 /// WebRTC peer-to-peer data channels. Each `create()` makes one connection to
 /// one remote peer (build a full mesh by making one per peer). The SDP/ICE
-/// payloads are opaque here — you ferry them to the remote peer over whatever
+/// payloads are opaque here - you ferry them to the remote peer over whatever
 /// signaling channel you have (the `ws` above, relayed by the signaling
 /// server), and feed the peer's payloads back in via `setRemote` / `addIce`.
 /// The whole offer/answer/ICE dance is driven by draining `poll()` each frame.
@@ -1913,9 +1913,9 @@ pub const rtc = struct {
 
     pub const EventKind = enum(u8) {
         none = 0,
-        local_offer = 1, // our SDP offer is ready — send it to the peer
-        local_answer = 2, // our SDP answer is ready — send it to the peer
-        local_ice = 3, // one of our ICE candidates — send it to the peer
+        local_offer = 1, // our SDP offer is ready - send it to the peer
+        local_answer = 2, // our SDP answer is ready - send it to the peer
+        local_ice = 3, // one of our ICE candidates - send it to the peer
         channel_open = 4, // a data channel opened (see event.channel)
         data = 5, // bytes arrived on a channel (see event.channel/payload)
         state = 6, // connection state changed (payload is the state text)
@@ -2034,15 +2034,15 @@ pub const rtc = struct {
 // `_ = @import("web.zig")` in tests.zig only sees file-scope tests
 // (of which there are none) and skips the `audio.*` tests.
 
-/// User-supplied files — drag-and-drop on desktop, the OS file picker on mobile.
+/// User-supplied files - drag-and-drop on desktop, the OS file picker on mobile.
 ///
-/// ── WHY THIS EXISTS ──
+/// -- WHY THIS EXISTS --
 ///
 /// Until now nothing in zimr could read bytes the USER chose at runtime: every example gets its
 /// assets through `@embedFile` at comptime. A viewer that only ever shows the one clip compiled
 /// into it is not a viewer.
 ///
-/// ── ★ THE WEB DROP MODEL IS ASYNC AND raylib's IS NOT ──
+/// -- * THE WEB DROP MODEL IS ASYNC AND raylib's IS NOT --
 ///
 /// raylib's `LoadDroppedFiles()` hands back PATHS, synchronously, and the app reads them with
 /// ordinary file I/O. BVHView gets that on the web for free from
@@ -2056,14 +2056,14 @@ pub const rtc = struct {
 /// than hidden, using the same four-step polling protocol `audio`'s OGG decode already uses:
 ///
 ///   1. bytes arrive JS-side (a drop, or the picker closing) and are queued
-///   2. `pendingCount()` — poll each frame
-///   3. `nextSize()` / `readNext(buf)` — take the oldest, copy it into wasm memory
+///   2. `pendingCount()` - poll each frame
+///   3. `nextSize()` / `readNext(buf)` - take the oldest, copy it into wasm memory
 ///   4. `discardNext()` if the caller does not want it after all
 ///
 /// A file lands a frame or two after the user acts, which for someone dragging a file is
 /// invisible.
 ///
-/// ── ★ THE PICKER NEEDS A REAL DOM ELEMENT, NOT A WASM-DRAWN BUTTON ──
+/// -- * THE PICKER NEEDS A REAL DOM ELEMENT, NOT A WASM-DRAWN BUTTON --
 ///
 /// `input.click()` only opens the picker inside a genuine user-gesture handler. zimr's UI is
 /// immediate-mode and drawn INTO the canvas, so a "Load file" button is pixels: the press is
@@ -2128,7 +2128,7 @@ pub const userfile = struct {
     }
 
     /// Copy the oldest waiting file's NAME into `out`; returns the number of bytes written.
-    /// The name is the basename the browser reports — there is no path on the web.
+    /// The name is the basename the browser reports - there is no path on the web.
     pub fn nextName(out: []u8) u32 {
         if (comptime !is_wasm) {
             return 0;
@@ -2137,7 +2137,7 @@ pub const userfile = struct {
     }
 
     /// Copy the oldest waiting file's bytes into `out` and DROP it from the queue. Returns the
-    /// number of bytes written, which is 0 when `out` is too small — in that case the file
+    /// number of bytes written, which is 0 when `out` is too small - in that case the file
     /// stays queued, so a caller that mis-sized its buffer can retry rather than lose the file.
     pub fn readNext(out: []u8) u32 {
         if (comptime !is_wasm) {
@@ -2154,7 +2154,7 @@ pub const userfile = struct {
         js_userfile_discard_next();
     }
 
-    /// Place the invisible `<input type="file">` over `(x, y, w, h)` in CSS pixels — the
+    /// Place the invisible `<input type="file">` over `(x, y, w, h)` in CSS pixels - the
     /// rectangle where the caller draws its own Load button. `accept` is a filter such as
     /// ".bvh"; pass an empty string for any file.
     ///
@@ -2173,7 +2173,7 @@ pub const userfile = struct {
         js_userfile_set_picker_rect(x, y, w, h, accept.ptr, @intCast(accept.len));
     }
 
-    // ── And the other direction: a file the page hands to the user. ──
+    // -- And the other direction: a file the page hands to the user. --
     //
     // The same gesture rule applies, the other way round: a mobile browser saves a file only from
     // inside a genuine user gesture, so a Save button drawn in wasm cannot trigger the download

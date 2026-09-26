@@ -1,4 +1,4 @@
-//! examples/shaders_vertex_displacement_fs_io.zig — fragment schema: consume the
+//! examples/shaders_vertex_displacement_fs_io.zig - fragment schema: consume the
 //! VS varyings (surface normal, world position + height, view direction) and
 //! light the surface.
 const zm = @import("zm");

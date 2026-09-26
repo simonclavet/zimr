@@ -1,4 +1,4 @@
-//! pipeline_uniforms — a custom render pipeline driven by a VERTEX-STAGE
+//! pipeline_uniforms - a custom render pipeline driven by a VERTEX-STAGE
 //! uniform buffer. The UBO holds a 4x4 transform the app rewrites every frame,
 //! so the triangle spins and stays aspect-correct (the matrix replaces the
 //! hand vertex-rewrite the basic example used).
@@ -8,7 +8,7 @@
 //! build transpiles them. What's new vs pipeline_basic:
 //!   - a `Ubo` in the VERTEX schema. Because it's vertex-stage, the codegen
 //!     binds it at @group(0) and `z.shader.loadShaderVF` routes it there for
-//!     us — the app just calls `s.shader.pushUbo(...)` each frame.
+//!     us - the app just calls `s.shader.pushUbo(...)` each frame.
 //!   - the vertex layout is DERIVED from the schema (`z.shader.vertexLayout`).
 //!   - drawing goes THROUGH the shader handle (`bindForDraw`/`setVertex`/`draw`).
 //!
@@ -29,7 +29,7 @@ const common = @import("example_common");
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Build-generated WGSL artifacts + their typed schemas. The app never writes
-// WGSL — these are machine output of the Zig shader pipeline.
+// WGSL - these are machine output of the Zig shader pipeline.
 const vs_wgsl = @embedFile("pipeline_uniforms_vs.wgsl");
 const fs_wgsl = @embedFile("pipeline_uniforms_fs.wgsl");
 const vs_io = @import("pipeline_uniforms_vs_io.zig");
@@ -61,7 +61,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.wgpu.destroyBuffer(s.vbo);
 }
 
-/// transform = scale(sx, sy) · rotateZ(angle), in zm row convention so
+/// transform = scale(sx, sy) * rotateZ(angle), in zm row convention so
 /// `mulMatPoint` in the shader matches WGSL `m * vec4(p, 1)`. Rotating first
 /// then aspect-scaling keeps the triangle equilateral on any window shape.
 fn transform2d(angle: f32, sx: f32, sy: f32) zm.Mat {
@@ -77,7 +77,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&vertices));
 
     // The pipeline, UBO buffer + bind group, and the @group(0) routing are all
-    // derived from the typed schemas — no bind-group boilerplate in the app.
+    // derived from the typed schemas - no bind-group boilerplate in the app.
     const shader: z.shader.LoadedShader(vs_io) = try z.shader.loadShaderVF(vs_io, fs_io, .{
         .f = f.gpu,
         .gpa = gpa,

@@ -1,9 +1,9 @@
-//! examples/julia_gallery.zig — four Julia sets in a 2×2 grid,
+//! examples/julia_gallery.zig - four Julia sets in a 2x2 grid,
 //! each with a different `c` constant, composited into a single
-//! 1280×720 PNG.
+//! 1280x720 PNG.
 //!
 //! The Julia set is parametrized by a complex number `c`.  Tiny
-//! changes to `c` produce wildly different shapes — dragons,
+//! changes to `c` produce wildly different shapes - dragons,
 //! ferns, starfish, spirals.  This gallery shows four classic
 //! choices side-by-side so the parametric beauty is visible at
 //! a glance.
@@ -95,8 +95,8 @@ fn juliaPixel(zx0: f32, zy0: f32, cx: f32, cy: f32, hue_offset: f32) [4]u8 {
     };
 }
 
-/// Render one Julia set into the rectangle (ox, oy)–(ox+cell_w, oy+cell_h)
-/// of the big buffer.  Each cell is independent — the caller could
+/// Render one Julia set into the rectangle (ox, oy)-(ox+cell_w, oy+cell_h)
+/// of the big buffer.  Each cell is independent - the caller could
 /// trivially parallelize across cells by spawning a thread per case.
 fn renderCell(
     buf: []u8,
@@ -138,7 +138,7 @@ pub fn main() !void {
     @memset(buf, 0);
 
     const t0: i128 = monotonicNs();
-    // 2×2 layout: TL=dragon, TR=fern, BL=starfish, BR=spiral.
+    // 2x2 layout: TL=dragon, TR=fern, BL=starfish, BR=spiral.
     renderCell(buf, 0, 0, cases[0], 0.00);
     renderCell(buf, cell_w, 0, cases[1], 0.25);
     renderCell(buf, 0, cell_h, cases[2], 0.50);

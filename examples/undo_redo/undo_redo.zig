@@ -6,10 +6,10 @@
 // Editing is driven by UI BUTTONS (word buttons, Backspace, Undo, Redo) so the
 // whole example is testable by tapping on a phone. A hardware keyboard still
 // works too: typed characters arrive via `z.getCharPressed`, and Backspace via
-// `isKeyPressed` — both feed the exact same edit path as the buttons.
+// `isKeyPressed` - both feed the exact same edit path as the buttons.
 //
 // What this exercises (the engine work this drove):
-//   - `z.getCharPressed(f.input)` — the typed-character queue (raylib's
+//   - `z.getCharPressed(f.input)` - the typed-character queue (raylib's
 //     GetCharPressed), newly exported for text input.
 //
 // Leak-clean (`.memory = .managed`): the UiHost is deinit'd; the atlas is
@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-// Atkinson Hyperlegible Mono — the Braille Institute's legibility font.
+// Atkinson Hyperlegible Mono - the Braille Institute's legibility font.
 // Distinct letterforms (slashed zero, unambiguous I/l/1), and a deliberate
 // break from raylib's look. Latin-only content, so its cmap is plenty:
 // ASCII + Latin-1 accented in full. (It has NO Cyrillic and almost no Greek,
@@ -35,7 +35,7 @@ const max_len: usize = 96;
 const max_hist: usize = 64;
 
 /// One point in the edit history: the whole string, not a diff. Snapshots are
-/// the simplest correct undo model — no inverse operations to get wrong.
+/// the simplest correct undo model - no inverse operations to get wrong.
 const Snapshot = struct {
     buf: [max_len]u8 = undefined,
     len: usize = 0,
@@ -71,7 +71,7 @@ fn current(s: *const State) *const Snapshot {
 }
 
 /// Commit `work` as a new state: drop any redo branch (everything after the
-/// cursor), then append — sliding the window down if the history is full.
+/// cursor), then append - sliding the window down if the history is full.
 fn pushState(s: *State, work: Snapshot) void {
     if (s.hist_pos + 1 >= max_hist) {
         for (0..max_hist - 1) |i| {
@@ -122,7 +122,7 @@ fn redo(s: *State) void {
 fn update(f: *z.Frame, s: *State) void {
     const fw: f32 = f.window.widthf();
 
-    // Hardware keyboard, if there is one — same edit path as the buttons.
+    // Hardware keyboard, if there is one - same edit path as the buttons.
     var typed: [max_len]u8 = undefined;
     var typed_len: usize = 0;
     while (z.getCharPressed(f.input)) |cp| {
@@ -186,7 +186,7 @@ fn update(f: *z.Frame, s: *State) void {
     const box: z.Rectangle = .{ .x = 16, .y = 320, .width = fw - 32.0, .height = 60 };
     f.gl.rect(box, .{ .color = .{ .r = 236, .g = 236, .b = 242, .a = 255 } });
     f.gl.rect(box, .{ .color = c.gray, .outline = 2 });
-    // Caret sits at the true end of the text. MEASURE it — don't assume a
+    // Caret sits at the true end of the text. MEASURE it - don't assume a
     // monospace advance (`len * size * 0.6` was visibly off to the right):
     // measureText walks the font's real per-glyph advances, so this is exact for
     // any font, proportional or not.

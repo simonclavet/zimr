@@ -1,10 +1,10 @@
-//! ssao_fs_io — typed schema for the screen-space ambient occlusion pass.
+//! ssao_fs_io - typed schema for the screen-space ambient occlusion pass.
 //!
 //! Reads the world-position and world-normal halves of the G-buffer and writes a single
 //! occlusion factor: 1 = fully open, 0 = fully occluded. The result is meant to be MULTIPLIED
 //! over an already-lit image, so it is written to all three colour channels.
 //!
-//! ── ★ WHY THIS IS SIMPLER THAN THE REFERENCE ──
+//! -- * WHY THIS IS SIMPLER THAN THE REFERENCE --
 //!
 //! GenoView's `ssao.fs` reconstructs each sample's view-space position from a DEPTH buffer,
 //! which costs it an inverse-projection matrix, an inverse view-projection matrix, and two
@@ -13,7 +13,7 @@
 //! directly and needs only the view matrix, to measure occlusion in view space where the
 //! radius has a consistent meaning.
 //!
-//! ★ The estimator is Scalable Ambient Obscurance (McGuire et al.): sample a spiral around the
+//! * The estimator is Scalable Ambient Obscurance (McGuire et al.): sample a spiral around the
 //! pixel, and for each sample accumulate `max(r*r - vv, 0)^3 * max(vn / (0.001 + vv), 0)`,
 //! normalised by `r^6`. The cubic falloff is what keeps distant geometry from darkening a
 //! surface it merely passes behind.
@@ -28,7 +28,7 @@ pub const Inputs = common.Interp;
 
 /// The two G-buffer channels this pass consumes. Both must be sampled with NEAREST filtering:
 /// a filtered world position is a point on no surface, and the occlusion test against it is
-/// meaningless — the same reason the shadow map wants a nearest sampler.
+/// meaningless - the same reason the shadow map wants a nearest sampler.
 pub const Samplers = struct {
     g_world_pos: shader.Sampler2D(.albedo, .{}),
     g_world_normal: shader.Sampler2D(.normal, .{}),
@@ -43,7 +43,7 @@ pub const Ubo = struct {
     /// units, bias 0.025 to stop a surface occluding itself, intensity 0.15.
     params: Vec,
     /// {turns, inv_width, inv_height, unused}. `turns` is how many times the sample spiral
-    /// winds — 7 is the reference's value and is chosen to be coprime with the sample count so
+    /// winds - 7 is the reference's value and is chosen to be coprime with the sample count so
     /// the samples do not line up into visible spokes.
     spiral: Vec,
 };

@@ -1,4 +1,4 @@
-//! urdf_import — read a URDF, write a Zig model.
+//! urdf_import - read a URDF, write a Zig model.
 //!
 //!     urdf_import <input.urdf> <output.zig> [import-path]
 //!
@@ -7,15 +7,15 @@
 //! process to be exercised.
 //!
 //! The output is CHECKED IN, not a build artifact. A generated model that only exists
-//! during a build cannot be reviewed in a diff — and a diff is exactly how a convention
-//! regression gets noticed (§4i-ter).
+//! during a build cannot be reviewed in a diff - and a diff is exactly how a convention
+//! regression gets noticed (section 4i-ter).
 
 const std = @import("std");
 const urdf = @import("urdf");
 
 /// Reads a mesh named by the URDF, relative to the URDF's own directory.
 ///
-/// ── `package://` ──
+/// -- `package://` --
 ///
 /// ROS models write `package://robot_description/meshes/link.stl`, which resolves through a
 /// package index this tool has no access to. Stripping the scheme and the package name and
@@ -26,7 +26,7 @@ const MeshLoader = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     base: []const u8,
-    /// Every buffer handed out, freed together at the end — the borrower has no idea how
+    /// Every buffer handed out, freed together at the end - the borrower has no idea how
     /// long `urdf.resolveMeshes` keeps them.
     loaded: std.ArrayListUnmanaged([]const u8) = .empty,
 
@@ -108,8 +108,8 @@ pub fn main(init: std.process.Init) !void {
     };
     defer robot.deinit();
 
-    // ★ Load the collision meshes. This is the ONLY place in the import path that touches a
-    // filesystem — `urdf.zig` parses bytes and is handed a callback, which is what lets it
+    // * Load the collision meshes. This is the ONLY place in the import path that touches a
+    // filesystem - `urdf.zig` parses bytes and is handed a callback, which is what lets it
     // be tested without a disk and reused from a build tool, a game or a browser.
     var loader: MeshLoader = .{
         .gpa = gpa,
@@ -122,7 +122,7 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     };
 
-    // Report what was NOT imported. §4i's rule: an importer that quietly drops something
+    // Report what was NOT imported. section 4i's rule: an importer that quietly drops something
     // produces a robot that is subtly the wrong shape, and the person who has to find out
     // why is the person who did not see this line.
     const unresolved: u32 = urdf.meshCount(&robot);

@@ -1,5 +1,5 @@
 // examples/random_sequence.zig - a shuffled, non-repeating integer sequence.
-// Port of raylib's `examples/core/core_random_sequence.c` (★1, ~70 LOC).
+// Port of raylib's `examples/core/core_random_sequence.c` (*1, ~70 LOC).
 // raylib's LoadRandomSequence(count, min, max) returns `count` unique values;
 // here it is a Fisher-Yates shuffle of 0..count-1 done in-place over an array
 // the example owns (no global RNG, matching zimr's no-global-state rule). The

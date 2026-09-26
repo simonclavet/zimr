@@ -1,4 +1,4 @@
-//! tools/zspv_main.zig — the `zspv` command line: argument parsing and the subcommands.
+//! tools/zspv_main.zig - the `zspv` command line: argument parsing and the subcommands.
 //!
 //! `zspv.zig` reads and writes SPIR-V and `zspv_rewrite.zig` rewrites it. This file is the only
 //! one that needs both, which is what keeps the two libraries from importing each other (the
@@ -115,13 +115,13 @@ fn cmdRewriteSamplers(
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = alloc_writer.written() });
 }
 
-/// WGSL-shape variant of cmdRewriteSamplers — produces SPIR-V with
+/// WGSL-shape variant of cmdRewriteSamplers - produces SPIR-V with
 /// SEPARATE texture and sampler bindings and OpSampledImage combine
 /// sites.  This is the shape that survives translation to WGSL via
 /// `tools/spv2wgsl.zig`.  Once Phase F of the wgpu migration ships
 /// (GL deletion), this becomes the only sampler-rewrite mode and
 /// `cmdRewriteSamplers` above goes away.  See
-/// `src/notes/webgpu-migration-plan.md` §3 for context.
+/// `src/notes/webgpu-migration-plan.md` section 3 for context.
 fn cmdRewriteSamplersWgsl(
     io: std.Io,
     gpa: Allocator,
@@ -229,7 +229,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (eql(u8, args[1], "--rewrite-samplers-wgsl")) {
         // Optional `--sampler-group=N` flag: sets the
         // DescriptorSet decoration (== @group(N) in WGSL) for the
-        // synthesized texture+sampler variables.  Default 0 — the
+        // synthesized texture+sampler variables.  Default 0 - the
         // WebGPU convention is "group 0 = per-frame globals," so
         // shaders bundled into a pipeline alongside a VS UBO at
         // group 0 binding 0 want their samplers in a different

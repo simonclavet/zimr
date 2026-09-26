@@ -19,7 +19,7 @@
 // Phone-friendly setup:
 //   - `.scale = .responsive` - canvas coords track CSS pixels
 //     1:1, so widgets size correctly regardless of viewport.
-//   - `style.font_size = 24` - readable on phone (3× the
+//   - `style.font_size = 24` - readable on phone (3x the
 //     default 10).  Default widget heights (buttons, title
 //     bars, item spacing) follow proportionally - bigger
 //     touch targets come for free.
@@ -169,7 +169,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Floating window - drag its title bar onto the dock to
     // exercise the smooth-pull overlay.  No dockBuilder calls
-    // → starts floating.  Position lower-center so its title
+    // -> starts floating.  Position lower-center so its title
     // bar is well within the viewport on phone.
     if (u.window("Notes", .{
         .initial_pos = .{ sw * 0.10, sh * 0.55 },

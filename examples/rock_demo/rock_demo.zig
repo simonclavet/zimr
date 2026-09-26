@@ -1,7 +1,7 @@
-//! rock_demo — a little scatter of procedural rocks, each a noise-displaced
+//! rock_demo - a little scatter of procedural rocks, each a noise-displaced
 //! icosphere. They all share the same generator; only the seed (and size)
 //! differ, so every rock is unique but they're all made the same way. This is
-//! the payoff for the icosphere's even triangles — displacing a UV sphere here
+//! the payoff for the icosphere's even triangles - displacing a UV sphere here
 //! would tear at the poles. Rocks are recomputed-smooth, so they read as
 //! rounded boulders rather than faceted crystals.
 const std = @import("std");

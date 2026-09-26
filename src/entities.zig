@@ -185,8 +185,8 @@ pub const meta = struct {
     }
 
     /// Like `@offsetOf` but the path can dot-traverse nested
-    /// structs.  `offsetOf(Line, "start.x")` walks Line→start
-    /// (Vec2), then Vec2→x.  Escaped field names (`@"..."`) are
+    /// structs.  `offsetOf(Line, "start.x")` walks Line->start
+    /// (Vec2), then Vec2->x.  Escaped field names (`@"..."`) are
     /// not supported - assertion catches the `@` if you try.
     pub fn offsetOf(T: type, comptime path: []const u8) comptime_int {
         for (path) |c| {
@@ -414,7 +414,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
         }
 
         /// Grow to at least `new_capacity` slots, preserving every live entry and its index
-        /// (indices/keys are stable across a grow — only raw `*Slot`/value pointers into the old
+        /// (indices/keys are stable across a grow - only raw `*Slot`/value pointers into the old
         /// arrays are invalidated, so callers must hold none across this call). The free list is
         /// index-based and survives unchanged; `next_index`/`live`/`saturated` are untouched, so a
         /// subsequent `put` simply bump-allocates into the new tail. No-op if already large enough.
@@ -521,7 +521,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
 
             // Bump the generation so stale keys never validate, then return the slot to the
             // free list for reuse. At the max generation, wrap past the reserved `.invalid`
-            // sentinel to the first valid generation rather than retiring the slot — slots stay
+            // sentinel to the first valid generation rather than retiring the slot - slots stay
             // reusable forever under heavy churn (the washer churns thousands of bodies/sec).
             //
             // ABA contract: a freshly issued key can alias a long-dead holder of the same slot
@@ -785,7 +785,7 @@ pub const Any = struct {
 const FlagInt = u6;
 
 /// A tightly packed index for each registered component type.  The
-/// mapping `TypeId → CompFlag` is owned by the `Registry` instance
+/// mapping `TypeId -> CompFlag` is owned by the `Registry` instance
 /// (see `Registry.registerComponent`).  This enum is just the slot
 /// width - knowing "I'm flag 7 in some world" tells you nothing
 /// about which world or which type without going through that
@@ -824,9 +824,9 @@ pub const viewLib = struct {
     };
 
     /// Pull the underlying component type out of a view-field
-    /// type.  `?*const Position` → `Position`; `[]const Velocity`
-    /// → `Velocity`; `Entity` → `Entity`; `[]const Entity.Index`
-    /// → `Entity.Index`.
+    /// type.  `?*const Position` -> `Position`; `[]const Velocity`
+    /// -> `Velocity`; `Entity` -> `Entity`; `[]const Entity.Index`
+    /// -> `Entity.Index`.
     pub fn UnwrapField(T: type, options: ViewOptions) type {
         // Single-entity view directly carries `Entity`.
         if (options.size == .one and T == Entity) {
@@ -905,7 +905,7 @@ pub const viewLib = struct {
 
     /// Lift an entity-View type to its slice-View counterpart.
     /// `struct { p: *Position, v: *const Velocity, e: Entity }`
-    /// → `struct { p: []Position, v: []const Velocity, e: []const Entity.Index }`
+    /// -> `struct { p: []Position, v: []const Velocity, e: []const Entity.Index }`
     /// (as a tuple-struct).  Used by `Chunk.view` to materialise
     /// the slice-shaped view a chunk wants.
     pub fn Slice(EntityView: type) type {
@@ -958,7 +958,7 @@ pub const viewLib = struct {
         return @Tuple(&field_types);
     }
 
-    /// `?T` → `T`, anything else → unchanged.
+    /// `?T` -> `T`, anything else -> unchanged.
     pub fn Unwrap(T: type) type {
         return switch (@typeInfo(T)) {
             .optional => |optional| optional.child,
@@ -1492,7 +1492,7 @@ pub const Chunk = opaque {
         // Index slot: just write the last entity's index.
         indices[@backingInt(index_in_chunk)] = moved;
 
-        // Component slots: memcpy each comp from end → freed slot,
+        // Component slots: memcpy each comp from end -> freed slot,
         // then poison the source slot under runtime_safety.
         {
             var move: CompFlag.Set.Iterator = self.header().arch(&es.arches).iterator();
@@ -2336,7 +2336,7 @@ pub const Entity = packed struct {
         changes: ChangeArchImmediateOptions(Add),
     ) error{ OutOfMemory, EcsArchOverflow, EcsChunkOverflow, EcsChunkPoolOverflow, EcsCompTypeOverflow }!bool {
         // Components are keyed by type (`typeId(Comp)`), so two fields of the SAME type
-        // would register one flag and write to one slot (last write wins) — silently
+        // would register one flag and write to one slot (last write wins) - silently
         // collapsing two components into one. Reject that at comptime: each component
         // needs a distinct type (wrap same-shaped data in named structs).
         comptime {
@@ -3030,7 +3030,7 @@ pub const ChunkList = struct {
         }
     }
 
-    /// Iterator over the chunks in this list, in head→tail order.
+    /// Iterator over the chunks in this list, in head->tail order.
     /// Mutating pointers during iteration trips the
     /// pointer-generation guard.
     pub fn iterator(self: *const @This(), es: *const Registry) Iterator {
@@ -3204,7 +3204,7 @@ pub const ChunkPool = struct {
         /// Chunk count.  Range `[0, maxInt(u32))` - max-int is
         /// reserved as the `.none` sentinel for `Chunk.Index`.
         chunks: u16,
-        /// Per-chunk byte size.  Must be ≥ `TypeInfo.max_align`
+        /// Per-chunk byte size.  Must be >= `TypeInfo.max_align`
         /// (asserted at init).
         chunk: u32,
     };
@@ -3295,7 +3295,7 @@ pub const ChunkPool = struct {
 };
 
 // ============================================================================
-// Arches - archetype → ChunkList map
+// Arches - archetype -> ChunkList map
 // ============================================================================
 
 // ============================================================================
@@ -3372,7 +3372,7 @@ pub const CmdBuf = struct {
         pub const entities_ratio = 4;
 
         /// Reserve space for at least this many commands.  `null`
-        /// → `default_cmds`.  Optional so `CmdPool` can override
+        /// -> `default_cmds`.  Optional so `CmdPool` can override
         /// with a lower per-cpool value.
         cmds: ?usize = null,
         /// Reserve this much byte budget for inline payloads.
@@ -3382,7 +3382,7 @@ pub const CmdBuf = struct {
             bytes: usize,
             bytes_per_cmd: u32,
         } = .{ .bytes_per_cmd = 2 * 16 * @sizeOf(f32) },
-        /// Pre-reserved entity handle cpool size.  `null` →
+        /// Pre-reserved entity handle cpool size.  `null` ->
         /// `cmds / entities_ratio`.
         reserved_entities: ?usize = null,
 
@@ -3977,12 +3977,12 @@ pub const Registry = struct {
     debug_stamp: world_stamp.Stamp = world_stamp.nil_stamp,
 
     /// Per-world component-flag registry.  Owns the mapping
-    /// `TypeId → CompFlag` for components seen by THIS world.  Two
+    /// `TypeId -> CompFlag` for components seen by THIS world.  Two
     /// `Registry` instances in the same process register
     /// independently - flag-7 in world A might be a different
     /// component than flag-7 in world B.
     flag_table: std.AutoHashMapUnmanaged(TypeId, CompFlag) = .{},
-    /// Reverse lookup `CompFlag → TypeId`.  Used by introspection
+    /// Reverse lookup `CompFlag -> TypeId`.  Used by introspection
     /// / debug-print paths and by chunk-layout code that has a
     /// flag and needs to recover the type's size + alignment.
     /// Sized to `CompFlag.max + 1` so flag values
@@ -4055,7 +4055,7 @@ pub const Registry = struct {
     /// count (arches/chunk_pool size archetype and component storage, which are independent), so this
     /// grows just that table. Entity keys/indices are stable across the grow; the pointer generation
     /// is bumped because `Entity.Location` pointers into the handle table move. The archetype/chunk
-    /// side is untouched — primary-only pools never use it; component-bearing pools must size
+    /// side is untouched - primary-only pools never use it; component-bearing pools must size
     /// `cap.chunks` for their working set (chunk-arena growth is a separate concern).
     pub fn growEntities(
         self: *@This(),
@@ -5642,7 +5642,7 @@ test "Entities: pool and ecs allocate matched indices through churn" {
     const e4: Handle(TestPrimary) = try w.spawn(testing.allocator, .{ .v = 4 });
     try testing.expectEqual(e2.index(), e4.index());
 
-    // Different cycle byte → distinct handle.
+    // Different cycle byte -> distinct handle.
     try testing.expect(!e2.eql(e4));
 
     _ = e1;
@@ -5660,7 +5660,7 @@ test "Entities: attach + get(secondary) goes through the archetype" {
 
     const e: Handle(Primary) = try w.spawn(testing.allocator, .{ .x = 99 });
 
-    // Initially no Mark → get returns null.
+    // Initially no Mark -> get returns null.
     try testing.expect(e.get(&w, Mark) == null);
 
     const attached: bool = try e.attach(testing.allocator, &w, Mark{ .id = 7 });
@@ -6540,8 +6540,8 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
 
             switch (relative) {
                 .after => {
-                    // self ←→ other.next_sib  becomes
-                    // other ←→ self ←→ other.next_sib
+                    // self <--> other.next_sib  becomes
+                    // other <--> self <--> other.next_sib
                     self.next_sib = other.next_sib;
                     if (self.next_sib.unwrap()) |next_sib| {
                         next_sib.get(es, Self).?.prev_sib = self_entity.toOptional();
@@ -6550,8 +6550,8 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                     other.next_sib = self_entity.toOptional();
                 },
                 .before => {
-                    // other.prev_sib ←→ other  becomes
-                    // other.prev_sib ←→ self ←→ other
+                    // other.prev_sib <--> other  becomes
+                    // other.prev_sib <--> self <--> other
                     // - but if other was leftmost, self
                     // takes over the first_child anchor on
                     // either parent or tree (whichever owns
@@ -6789,7 +6789,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         };
 
         /// Walk this node and its UPCOMING siblings (next,
-        /// next-next, …).  Self IS yielded as the first
+        /// next-next, ...).  Self IS yielded as the first
         /// item, in contrast to `ancestorIterator`.  Useful
         /// for "do something to this node and everything
         /// after it in the sibling list".

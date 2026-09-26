@@ -1,8 +1,8 @@
-//! textured_cube — validates the new textured-3D pipeline (`drawCubeTexture`):
+//! textured_cube - validates the new textured-3D pipeline (`drawCubeTexture`):
 //! an axis-aligned cube with a generated checker texture mapped 0..1 on each of
 //! its six faces, depth-tested in the immediate 3D pass alongside a ground grid
 //! (so the cube occludes the grid lines behind it). The camera auto-orbits to
-//! show every face. This is the first immediate-mode TEXTURED 3D draw — the 3D
+//! show every face. This is the first immediate-mode TEXTURED 3D draw - the 3D
 //! batch was solid-colour-only before; `drawCubeTexture`/`drawBillboard` add a
 //! texture-sampling pipeline that shares the depth pass + camera with the solids.
 const std = @import("std");
@@ -38,7 +38,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    s.angle += f.time.delta_time * 25.0; // 25°/sec orbit
+    s.angle += f.time.delta_time * 25.0; // 25 deg/sec orbit
 
     z.clearViewport(f, .{ .r = 12, .g = 14, .b = 20, .a = 255 });
 

@@ -1,7 +1,7 @@
-//! kaleidoscope — symmetric trail art ported to WebGPU. A brush follows an
+//! kaleidoscope - symmetric trail art ported to WebGPU. A brush follows an
 //! auto-driven Lissajous path; every frame the new segment is mirrored across N
 //! rotational axes (plus an X-axis reflection) about the screen centre, so the stroke
-//! wraps a full 360° into a kaleidoscope. A short ring buffer of recent brush points
+//! wraps a full 360 deg into a kaleidoscope. A short ring buffer of recent brush points
 //! gives a flowing, fading rainbow trail. The GL original was mouse-painted; this runs
 //! itself so it's alive in a screenshot. Exercises `beginMode2D` (the 2D camera) to
 //! centre the pattern, and is viewport-relative under `.responsive`.

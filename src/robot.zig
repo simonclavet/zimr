@@ -1,8 +1,8 @@
-//! robot.zig — reduced-coordinate articulated-body dynamics, in the style of MuJoCo.
+//! robot.zig - reduced-coordinate articulated-body dynamics, in the style of MuJoCo.
 //!
 //! zimrphysics.zig (a Jolt port) simulates in MAXIMAL coordinates: every body carries a
 //! full 6-DOF pose and joints are constraints a solver enforces to a tolerance. That is
-//! the right model for a game — crates, ragdolls, a thousand loose objects.
+//! the right model for a game - crates, ragdolls, a thousand loose objects.
 //!
 //! This file is the other half. A robot arm with four hinges is FOUR numbers here, not
 //! four bodies with constraints holding them together. The joints are not enforced; they
@@ -12,29 +12,29 @@
 //!
 //! Everything reduces to one equation:
 //!
-//!     M(q) v̇ + c(q,v) = τ + Jᵀ f
+//!     M(q) v_dot + c(q,v) = tau + J^T f
 //!
 //! `M` is the joint-space inertia (composite rigid body), `c` the bias forces from
-//! Coriolis/centrifugal/gravity (recursive Newton-Euler), `τ` the applied and actuator
-//! forces, and `Jᵀf` the constraint forces. Forward dynamics is then one line:
-//! `v̇ = M⁻¹(τ + Jᵀf − c)`. Everything before that computes M and c; everything after
+//! Coriolis/centrifugal/gravity (recursive Newton-Euler), `tau` the applied and actuator
+//! forces, and `J^Tf` the constraint forces. Forward dynamics is then one line:
+//! `v_dot = M^-1(tau + J^Tf - c)`. Everything before that computes M and c; everything after
 //! computes f.
 //!
 //! ## THE UP AXIS IS A MODEL PROPERTY, NOT A PROPERTY OF THIS FILE
 //!
 //! Nothing here assumes an up axis. Gravity is `Options.gravity`, a plain field, and every
-//! other direction in the file comes from the model — joint axes, geom frames, contact
+//! other direction in the file comes from the model - joint axes, geom frames, contact
 //! normals. That is deliberate, and it is why both conventions coexist without a flag:
 //!
-//! * **`Options.gravity` DEFAULTS to `(0, −9.81, 0)`** — zimr is Y-up everywhere else
+//! * **`Options.gravity` DEFAULTS to `(0, -9.81, 0)`** - zimr is Y-up everywhere else
 //!   (cameras, capsules along local Y, every non-robot demo), so a model authored by hand
 //!   in this file's `Spec` gets zimr's convention for free.
 //! * **MJCF models are Z-UP and stay that way.** MuJoCo and essentially every published
 //!   robot model are Z-up, and `robot_mjcf.zig` deliberately does NOT rotate them: the
 //!   acceptance test for import is that forward kinematics agrees with MuJoCo body for
 //!   body, and a frame conversion in the middle turns any disagreement into two candidate
-//!   explanations instead of one. Imported scenes therefore set `gravity = (0, 0, −9.81)`,
-//!   and so do the Go1, humanoid, gripper and cartpole demos. **This is the main path** —
+//!   explanations instead of one. Imported scenes therefore set `gravity = (0, 0, -9.81)`,
+//!   and so do the Go1, humanoid, gripper and cartpole demos. **This is the main path** -
 //!   "load anything from the Menagerie" is the feature.
 //! * **URDF models ARE rotated** to Y-up at the root, because URDF has no MuJoCo to be
 //!   verified against and the demos want zimr's convention.
@@ -48,12 +48,12 @@
 //! make this file a foreign body in its own tree. The risk that buys: a chain with a large
 //! mass ratio has a mass matrix with a condition number in the millions, and an f32
 //! factorization of that loses most of its mantissa. The escape hatch, when the day comes,
-//! is narrow — widen `factorM`/`solveM` internally to f64 and narrow on the way out. Two
+//! is narrow - widen `factorM`/`solveM` internally to f64 and narrow on the way out. Two
 //! functions, invisible to callers. Do not widen anything else, and do not pre-build it.
 //! `src/tests/fixtures/robot/reference.zig` carries f32-sized tolerances (~1e-5) for
 //! exactly this reason; a gap that GROWS with model stiffness is the signal.
 //!
-//! ## Model vs Data — the split that makes everything else work
+//! ## Model vs Data - the split that makes everything else work
 //!
 //! `Model` is constant: tree topology, joint axes, inertias, index tables. Built once,
 //! then never written. `Data` is everything that changes. One `Model` can drive many
@@ -66,16 +66,16 @@
 //! Each stage reads what the ones above it wrote, and every name below is a `pub fn` in
 //! this file, in roughly this order:
 //!
-//!     kinematics          body poses from qpos                      — "Kinematics"
-//!     comPos              the subtree-com frame, cinert, cdof       — makes CRB cheap
-//!     crb + factorM       M, then its LTDL factor                   — "Mass matrix"
+//!     kinematics          body poses from qpos                      - "Kinematics"
+//!     comPos              the subtree-com frame, cinert, cdof       - makes CRB cheap
+//!     crb + factorM       M, then its LTDL factor                   - "Mass matrix"
 //!     comVel              body velocities in that frame
-//!     makeConstraints     limits, contacts and equalities → rows    — "Constraints"
+//!     makeConstraints     limits, contacts and equalities -> rows    - "Constraints"
 //!     biasForce           c(q,v) by recursive Newton-Euler
 //!     passive             springs, damping, tendons
-//!     actuation           ctrl → joint torque, through transmissions
-//!     forwardDynamics     v̇ = M⁻¹(τ − c)                            — unconstrained
-//!     solveConstraints    the constraint impulse, PGS or Newton     — "Solver"
+//!     actuation           ctrl -> joint torque, through transmissions
+//!     forwardDynamics     v_dot = M^-1(tau - c)                            - unconstrained
+//!     solveConstraints    the constraint impulse, PGS or Newton     - "Solver"
 //!     sensors             at three stages, as MuJoCo does
 //!
 //! `step(m, d)` is `forward` plus an integrator (`euler`, `rk4`, `implicitfast`,
@@ -91,14 +91,14 @@
 //! ## What this file does NOT do
 //!
 //! **No collision detection, ever.** Contacts arrive through `Data.pushContact` exactly
-//! the way controls arrive through `Data.ctrl` — an input, not something computed here.
+//! the way controls arrive through `Data.ctrl` - an input, not something computed here.
 //! `robot_physics.zig` is the one file that knows how to get them out of a zimrphysics
 //! world, and it is separate so that a headless rollout or a trajectory optimisation does
 //! not drag an 18k-line collision engine along with it. This file imports `zm` and the
 //! profiler and nothing else.
 //!
 //! The rest of the subsystem, none of which this file knows about:
-//! `mjcf.zig` (XML) → `robot_mjcf.zig` (→ `Model`), `robot_urdf.zig`, `robot_scene.zig`
+//! `mjcf.zig` (XML) -> `robot_mjcf.zig` (-> `Model`), `robot_urdf.zig`, `robot_scene.zig`
 //! (robots + loose bodies in one tree), `robot_control.zig` (PoseHold, IK),
 //! `robot_bench.zig` (the speed acceptance test).
 
@@ -146,7 +146,7 @@ const assertf = zm.assertf;
 //     ANGULAR FIRST, then linear.  (MuJoCo calls this `rot:lin`.)
 //
 // We store them as two `Vec` rather than a `[6]f32`. The fourth lane goes unused, which
-// costs a little memory and buys the whole zm vocabulary — `cross`, `dot3`, `splat` — and
+// costs a little memory and buys the whole zm vocabulary - `cross`, `dot3`, `splat` - and
 // code that reads like the vector maths it is.
 // =============================================================================
 
@@ -173,7 +173,7 @@ pub const Motion = struct {
 };
 
 /// A spatial force vector: a torque and a linear force about the same reference point.
-/// Wrenches live here. Structurally identical to `Motion`, deliberately a separate type —
+/// Wrenches live here. Structurally identical to `Motion`, deliberately a separate type -
 /// adding a velocity to a force is a bug the compiler can catch for free.
 pub const Force = struct {
     ang: Vec = vec_zero,
@@ -191,7 +191,7 @@ pub const Force = struct {
     }
 };
 
-/// The pairing of a motion and a force — the only way the two types legally meet, and the
+/// The pairing of a motion and a force - the only way the two types legally meet, and the
 /// reason they are separate types. `dot6(v, f)` is the rate of work `f` does moving at `v`.
 /// Named for MuJoCo's `mju_dot6` rather than `dot`, because it is emphatically not the
 /// vector dot product: it contracts a 6-vector against its DUAL.
@@ -199,8 +199,8 @@ pub fn dot6(m: Motion, f: Force) f32 {
     return dot3(m.ang, f.ang) + dot3(m.lin, f.lin);
 }
 
-/// Spatial cross product for MOTION vectors: `v × m`. This is what carries a velocity
-/// down a kinematic chain — a child's velocity is its parent's plus its own joint motion,
+/// Spatial cross product for MOTION vectors: `v x m`. This is what carries a velocity
+/// down a kinematic chain - a child's velocity is its parent's plus its own joint motion,
 /// and the coupling term is exactly this.
 pub fn crossMotion(v: Motion, m: Motion) Motion {
     return .{
@@ -209,8 +209,8 @@ pub fn crossMotion(v: Motion, m: Motion) Motion {
     };
 }
 
-/// Spatial cross product for FORCE vectors: `v ×* f`. Not the same operator as
-/// `crossMotion` — forces transform by the dual, which is where gyroscopic terms come
+/// Spatial cross product for FORCE vectors: `v x* f`. Not the same operator as
+/// `crossMotion` - forces transform by the dual, which is where gyroscopic terms come
 /// from. Getting these two confused produces a simulation that looks alive and conserves
 /// nothing.
 pub fn crossForce(v: Motion, f: Force) Force {
@@ -223,18 +223,18 @@ pub fn crossForce(v: Motion, f: Force) Force {
 /// A rigid body's spatial inertia, in the ten-parameter form MuJoCo uses:
 ///
 ///     [  I      skew(h) ]     I = rotational inertia about the reference point
-///     [ -skew(h)  m·1   ]     h = m · (centre of mass − reference point)
+///     [ -skew(h)  m*1   ]     h = m * (centre of mass - reference point)
 ///
 /// The packing matters. Because all bodies in one kinematic tree share a reference frame
-/// (see `comPos` in phase 1), a COMPOSITE inertia is just the sum of its parts — which
+/// (see `comPos` in phase 1), a COMPOSITE inertia is just the sum of its parts - which
 /// makes the composite-rigid-body algorithm three vector adds and a scalar add per body.
-/// That is the whole reason CRB is cheap, and the reason this is not stored as a 6×6.
+/// That is the whole reason CRB is cheap, and the reason this is not stored as a 6x6.
 pub const Inertia = struct {
     /// Ixx, Iyy, Izz.
     diag: Vec = vec_zero,
-    /// Ixy, Ixz, Iyz — the tensor is symmetric, so three numbers cover the rest.
+    /// Ixy, Ixz, Iyz - the tensor is symmetric, so three numbers cover the rest.
     off: Vec = vec_zero,
-    /// First moment of mass: `mass · com`. Zero when the reference point IS the centre
+    /// First moment of mass: `mass * com`. Zero when the reference point IS the centre
     /// of mass, which is why a body's own inertia is usually stored that way.
     h: Vec = vec_zero,
     mass: f32 = 0,
@@ -251,40 +251,40 @@ pub const Inertia = struct {
     }
 
     /// Apply this inertia to a motion, giving the momentum (or, with an acceleration in,
-    /// the force out). The expanded form of the 6×6 above.
+    /// the force out). The expanded form of the 6x6 above.
     pub fn mul(self: Inertia, m: Motion) Force {
         // Rotational block: the symmetric tensor times the angular part.
         const torque: Vec = self.applyTensor(m.ang);
         return .{
-            // torque gains h × v_lin from the off-diagonal block
+            // torque gains h x v_lin from the off-diagonal block
             .ang = torque + cross(self.h, m.lin),
-            // force is m·v_lin, plus the ω × h coupling when the com is offset
+            // force is m*v_lin, plus the omega x h coupling when the com is offset
             .lin = m.lin * splat(self.mass) + cross(m.ang, self.h),
         };
     }
 
-    /// Translate the BODY by `offset`, keeping the reference point fixed — equivalently,
-    /// move the reference point by `−offset`. Used to place each body's own inertia into
+    /// Translate the BODY by `offset`, keeping the reference point fixed - equivalently,
+    /// move the reference point by `-offset`. Used to place each body's own inertia into
     /// the tree's shared frame.
     ///
     /// (The direction is worth stating twice, because both readings are plausible and the
     /// wrong one is a sign error you cannot see. `translate` of a point mass by `+d` puts
-    /// its centre of mass at `+d`, so `h` grows by `+m·d`.)
+    /// its centre of mass at `+d`, so `h` grows by `+m*d`.)
     ///
     /// DERIVATION. Write the body's own inertia about its centre of mass as `I_c`, and its
     /// centre of mass at `c` relative to the reference. Then the inertia about the
     /// reference is the parallel-axis theorem:
     ///
-    ///     I = I_c + m·(cᵀc·1 − c·cᵀ)
+    ///     I = I_c + m*(c^Tc*1 - c*c^T)
     ///
-    /// Translating the body by `d` sends `c → c + d`. Expanding and subtracting the
+    /// Translating the body by `d` sends `c -> c + d`. Expanding and subtracting the
     /// original leaves exactly two groups, which is how the code below is written:
     ///
-    ///     ΔI = m·(dᵀd·1 − d·dᵀ)            ← the pure point-mass term
-    ///        + (2h·d)·1 − (h·dᵀ + d·hᵀ)    ← cross terms, using h = m·c
+    ///     dI = m*(d^Td*1 - d*d^T)            <- the pure point-mass term
+    ///        + (2h*d)*1 - (h*d^T + d*h^T)    <- cross terms, using h = m*c
     ///
     /// The cross terms vanish when `h` is zero, which is the common case: a body's own
-    /// inertia is stored about its own centre of mass. The general form is kept anyway —
+    /// inertia is stored about its own centre of mass. The general form is kept anyway -
     /// a COMPOSITE inertia carries a nonzero `h`, and silently being wrong for it in
     /// phase 2 would be a nasty trap.
     pub fn translate(self: Inertia, offset: Vec) Inertia {
@@ -292,7 +292,7 @@ pub const Inertia = struct {
         const d: Vec = offset;
         const h: Vec = self.h;
 
-        // m·(dᵀd·1 − d·dᵀ), the pure point-mass term.
+        // m*(d^Td*1 - d*d^T), the pure point-mass term.
         const dd: f32 = dot3(d, d);
         var diag: Vec = vec(
             m * (dd - d[0] * d[0]),
@@ -305,7 +305,7 @@ pub const Inertia = struct {
             -m * d[1] * d[2],
         );
 
-        // Cross terms: (h·d)·1 − ½(h·dᵀ + d·hᵀ), symmetric by construction.
+        // Cross terms: (h*d)*1 - 1/2(h*d^T + d*h^T), symmetric by construction.
         const hd: f32 = dot3(h, d);
         diag += vec(
             2.0 * (hd - h[0] * d[0]),
@@ -327,21 +327,21 @@ pub const Inertia = struct {
     }
 
     /// Re-express this inertia in a frame rotated by `q`. The rotational block transforms
-    /// by similarity, `I' = R·I·Rᵀ`, and the first moment just rotates.
+    /// by similarity, `I' = R*I*R^T`, and the first moment just rotates.
     ///
     /// This is the function that lets us skip MuJoCo's principal-axis storage entirely.
-    /// `mjModel` keeps a body's inertia as three principal moments plus a quaternion —
-    /// seven numbers, and producing them needs a symmetric-3×3 eigendecomposition. We
+    /// `mjModel` keeps a body's inertia as three principal moments plus a quaternion -
+    /// seven numbers, and producing them needs a symmetric-3x3 eigendecomposition. We
     /// already store the full symmetric tensor in six, so we can rotate it directly and
     /// never diagonalize. Fewer numbers, no Jacobi iteration, no degenerate-eigenvalue
     /// edge cases. MuJoCo's form is the better one in C, where a diagonal inertia makes
     /// the inner loops cheaper; here the six-float form composes better.
     pub fn rotated(self: Inertia, q: Quat) Inertia {
-        // `I' = R·I·Rᵀ` expands to `I'[a][b] = rowᵃ · (I · rowᵇ)`, so we need the ROWS
-        // of R — and `rotate(q, e_k)` gives the COLUMNS. The rows of R are the columns of
-        // Rᵀ, which is the rotation by the conjugate.
+        // `I' = R*I*R^T` expands to `I'[a][b] = row^a * (I * row^b)`, so we need the ROWS
+        // of R - and `rotate(q, e_k)` gives the COLUMNS. The rows of R are the columns of
+        // R^T, which is the rotation by the conjugate.
         //
-        // This is not pedantry: using the columns computes `Rᵀ·I·R` instead, which has the
+        // This is not pedantry: using the columns computes `R^T*I*R` instead, which has the
         // same eigenvalues and a plausible-looking diagonal, so the error hides in the
         // off-diagonal terms alone. The oracle comparison caught it; nothing else would
         // have, which is the entire argument for having one.
@@ -349,7 +349,7 @@ pub const Inertia = struct {
         const rx: Vec = rotate(inv, vec(1, 0, 0));
         const ry: Vec = rotate(inv, vec(0, 1, 0));
         const rz: Vec = rotate(inv, vec(0, 0, 1));
-        // I·rᵃ for each basis column, then contract.
+        // I*r^a for each basis column, then contract.
         const ix: Vec = self.applyTensor(rx);
         const iy: Vec = self.applyTensor(ry);
         const iz: Vec = self.applyTensor(rz);
@@ -361,7 +361,7 @@ pub const Inertia = struct {
         };
     }
 
-    /// The rotational block alone, applied to a 3-vector: `I · v`. Shared by `mul` and
+    /// The rotational block alone, applied to a 3-vector: `I * v`. Shared by `mul` and
     /// `rotate`, which both need it and would otherwise spell it out twice.
     fn applyTensor(self: Inertia, v: Vec) Vec {
         const ixy: f32 = self.off[0];
@@ -382,7 +382,7 @@ pub const Inertia = struct {
         moments: Vec,
         rot: Quat,
     ) Inertia {
-        // Rotate the diagonal tensor into the body frame: I = R · diag(moments) · Rᵀ.
+        // Rotate the diagonal tensor into the body frame: I = R * diag(moments) * R^T.
         const cx: Vec = rotate(rot, vec(1, 0, 0));
         const cy: Vec = rotate(rot, vec(0, 1, 0));
         const cz: Vec = rotate(rot, vec(0, 0, 1));
@@ -404,7 +404,7 @@ pub const Inertia = struct {
 };
 
 // =============================================================================
-// The model spec — what the user writes
+// The model spec - what the user writes
 //
 // A designated struct literal, exactly like the rest of zimr's API. It is consumed at
 // COMPTIME by `Spec()`, which validates it, generates name enums, and hands back a
@@ -412,7 +412,7 @@ pub const Inertia = struct {
 // =============================================================================
 
 /// The four kinds of degree of freedom, and the only four. A body with no joint is welded
-/// to its parent, which is free and exact — no constraint needed.
+/// to its parent, which is free and exact - no constraint needed.
 pub const JointType = enum {
     /// 7 position coords (xyz + quat), 6 velocity coords. Only on a child of the world.
     free,
@@ -424,7 +424,7 @@ pub const JointType = enum {
     hinge,
 
     /// How many `qpos` entries this joint occupies. Larger than `dofCount` for anything
-    /// carrying a quaternion — the reason `nq != nv` in most models.
+    /// carrying a quaternion - the reason `nq != nv` in most models.
     pub fn posCount(self: JointType) u32 {
         return switch (self) {
             .free => 7,
@@ -448,9 +448,9 @@ pub const JointType = enum {
 ///
 /// MuJoCo calls this `solref` and stores it as two unnamed floats. The parameterization is
 /// the good part and worth keeping: you say how fast the violation should be corrected and
-/// how bouncy the correction is, and the engine derives stiffness and damping from that —
+/// how bouncy the correction is, and the engine derives stiffness and damping from that -
 ///
-///     k = 1 / (d_max² · time_const² · damp_ratio²)      b = 2 / (d_max · time_const)
+///     k = 1 / (d_max^2 * time_const^2 * damp_ratio^2)      b = 2 / (d_max * time_const)
 ///
 /// so `time_const` behaves like a settling time and `damp_ratio = 1` is critically damped.
 /// Below 1 overshoots and bounces; above 1 is sluggish.
@@ -466,14 +466,14 @@ pub const Softness = struct {
 
 /// How MUCH of the constraint is enforced, as a function of how badly it is violated.
 ///
-/// Impedance `d ∈ (0,1)` interpolates between "constraint absent" and "constraint rigid".
+/// Impedance `d in (0,1)` interpolates between "constraint absent" and "constraint rigid".
 /// It is not a constant: it ramps from `min` to `max` as the violation grows past `width`,
 /// following a sigmoid whose shape `midpoint` and `power` control. That ramp is what makes
-/// contact onset SMOOTH — a constraint that switched on abruptly would be a step change in
-/// force, and (per §4d) would have no derivative exactly where one is needed.
+/// contact onset SMOOTH - a constraint that switched on abruptly would be a step change in
+/// force, and (per section 4d) would have no derivative exactly where one is needed.
 ///
-/// The regularizer that results is `R = (1−d)/d · Â`, where `Â` is the constraint-space
-/// inertia. Scaling by `Â` is the detail that makes `Softness` mean the same thing on a
+/// The regularizer that results is `R = (1-d)/d * A_hat`, where `A_hat` is the constraint-space
+/// inertia. Scaling by `A_hat` is the detail that makes `Softness` mean the same thing on a
 /// 1 g finger and a 100 kg torso.
 pub const Impedance = struct {
     /// Impedance at zero violation.
@@ -490,7 +490,7 @@ pub const Impedance = struct {
     /// The sigmoid, evaluated at a residual. Returns impedance in [min, max].
     ///
     /// Faithful to MuJoCo's `getimpedance`, including the two saturated ends and the
-    /// two-piece power curve — `a·x^p` below the midpoint, `1 − b·(1−x)^p` above, with the
+    /// two-piece power curve - `a*x^p` below the midpoint, `1 - b*(1-x)^p` above, with the
     /// coefficients chosen so the pieces meet with matching value at the knee.
     pub fn at(self: Impedance, residual: f32) f32 {
         if (self.min == self.max or self.width <= 1.0e-15) {
@@ -543,7 +543,7 @@ pub const JointSpec = struct {
     /// the limit"; a positive margin engages the constraint early, which lets a soft limit
     /// decelerate rather than catch.
     limit_margin: f32 = 0,
-    /// Rotor inertia reflected through a gearbox — a real physical quantity, and also the
+    /// Rotor inertia reflected through a gearbox - a real physical quantity, and also the
     /// cheapest defence against an ill-conditioned mass matrix. `null` means "derive a
     /// small fraction of this DOF's own inertia at build time", which scales with the
     /// model instead of being an absolute number that is wrong at every scale but one.
@@ -623,13 +623,13 @@ pub fn restOnFloor(m: *const Model, d: *Data, clearance: f32) f32 {
 pub const GeomShape = union(enum) {
     sphere: struct { radius: f32 },
     box: struct { half_extent: Vec },
-    /// Segment along local Y plus a radius — zimr's capsule convention, not MuJoCo's.
+    /// Segment along local Y plus a radius - zimr's capsule convention, not MuJoCo's.
     capsule: struct { half_height: f32, radius: f32 },
     cylinder: struct { half_height: f32, radius: f32 },
     /// An arbitrary convex shape, given as the point cloud its hull is taken of.
     ///
-    /// ★ WHY A POINT CLOUD RATHER THAN A BUILT HULL. robot.zig depends only on zimrmath and
-    /// has no convex-hull builder — nor should it, since it never does collision detection.
+    /// * WHY A POINT CLOUD RATHER THAN A BUILT HULL. robot.zig depends only on zimrmath and
+    /// has no convex-hull builder - nor should it, since it never does collision detection.
     /// The points are what a mesh file provides; the physics engine builds the hull, and the
     /// mass properties below are derived here from the points' bounding box, which is all
     /// the inertia model needs.
@@ -639,7 +639,7 @@ pub const GeomShape = union(enum) {
     hull: struct {
         points: []const Vec,
         /// Inertia is computed from the point cloud's bounding box rather than the true
-        /// hull volume. A box that contains the shape overestimates its moments — safe in
+        /// hull volume. A box that contains the shape overestimates its moments - safe in
         /// the sense that it never makes a link easier to spin than it should be, and
         /// irrelevant for any URDF that states `<inertial>` explicitly, which is nearly all
         /// of them. Exact hull inertia belongs with the hull builder, in the physics engine.
@@ -652,17 +652,17 @@ pub const GeomSpec = struct {
     shape: GeomShape,
     pos: Vec = vec_zero,
     rot: Quat = quat_identity,
-    /// kg/m³. Ignored when `mass` is set.
+    /// kg/m^3. Ignored when `mass` is set.
     /// Coulomb friction against whatever this touches.
     ///
-    /// ── ★★ IT LIVES ON THE GEOM BECAUSE THAT IS WHERE THE MATERIAL IS ──
+    /// -- ** IT LIVES ON THE GEOM BECAUSE THAT IS WHERE THE MATERIAL IS --
     ///
-    /// A contact needs one number and there are two surfaces, so the pair has to be combined —
-    /// geometrically, `sqrt(a·b)`, which is what both MuJoCo and `zimrphysics` use.
+    /// A contact needs one number and there are two surfaces, so the pair has to be combined -
+    /// geometrically, `sqrt(a*b)`, which is what both MuJoCo and `zimrphysics` use.
     ///
-    /// ★ THIS WAS DROPPED FOR SEVERAL SESSIONS and the symptom was nothing like the cause. Every
+    /// * THIS WAS DROPPED FOR SEVERAL SESSIONS and the symptom was nothing like the cause. Every
     /// contact took a hardcoded 0.5 whatever the model said, and a limp humanoid on the ground
-    /// crept sideways at a rate that ACCELERATED — 0.109 m over 25 s, against MuJoCo's 0.071 and
+    /// crept sideways at a rate that ACCELERATED - 0.109 m over 25 s, against MuJoCo's 0.071 and
     /// falling. With the model's own 0.7 the creep goes steady and lands within 7% of MuJoCo.
     /// The default here matches MuJoCo's own default for the same reason.
     friction: f32 = 1.0,
@@ -687,19 +687,19 @@ pub const SiteSpec = struct {
 /// `Spec()` rejects a spec that violates it.
 /// A body's mass properties, stated outright instead of derived from its geoms.
 ///
-/// ★ WHY THIS EXISTS. `geomsToBodyMass` computes mass and inertia from geom shapes and
+/// * WHY THIS EXISTS. `geomsToBodyMass` computes mass and inertia from geom shapes and
 /// densities, which is right for a model you author by hand. Real robot models do not work
 /// that way: a Franka Panda link says
 ///
 ///     mass="0.629769" fullinertia="0.00315 0.00388 0.004285 8.29e-7 0.00015 8.23e-6"
 ///
-/// — numbers from CAD or from weighing the actual part. Its collision geoms are convex
+/// - numbers from CAD or from weighing the actual part. Its collision geoms are convex
 /// hulls chosen for cheap contact, and their volume has nothing to do with the link's real
 /// mass distribution. A census of five Menagerie models found 62 uses of `<inertial>`
-/// (§4i), so this is not an edge case; it is how robots are described.
+/// (section 4i), so this is not an edge case; it is how robots are described.
 ///
 /// When present this REPLACES the geom-derived properties entirely. The geoms still exist
-/// and still collide — they just stop being the source of truth for mass.
+/// and still collide - they just stop being the source of truth for mass.
 pub const InertialSpec = struct {
     mass: f32,
     /// Centre of mass, in the body's frame.
@@ -708,7 +708,7 @@ pub const InertialSpec = struct {
     /// orders it: the three diagonal terms, then xy, xz, yz.
     ///
     /// The full symmetric tensor rather than three principal moments plus a quaternion,
-    /// for the same reason `Inertia` stores it that way (§1 of the plan): no
+    /// for the same reason `Inertia` stores it that way (section 1 of the plan): no
     /// eigendecomposition, one fewer number, and no degenerate-eigenvalue edge cases.
     full_inertia: [6]f32,
 };
@@ -719,7 +719,7 @@ pub const BodySpec = struct {
     /// Pose relative to the parent's frame.
     pos: Vec = vec_zero,
     rot: Quat = quat_identity,
-    /// Several joints on one body is legal and useful — three hinges give a ball joint
+    /// Several joints on one body is legal and useful - three hinges give a ball joint
     /// with per-axis limits, which real robot models do use.
     joints: []const JointSpec = &.{},
     geoms: []const GeomSpec = &.{},
@@ -738,23 +738,23 @@ pub const TendonJoint = struct {
 
 /// A FIXED tendon: a scalar length that is a linear combination of joint coordinates.
 ///
-///     length = Σ coefficientᵢ · qᵢ
+///     length = sum coefficient_i * q_i
 ///
-/// ★ WHAT IT IS FOR. A tendon couples joints WITHOUT introducing a closed kinematic loop.
-/// Two wheels with coefficients `(1, 1)` turn together; `(1, −1)` makes them a
-/// differential — one control drives them forward, another turns. A finger whose knuckles
+/// * WHAT IT IS FOR. A tendon couples joints WITHOUT introducing a closed kinematic loop.
+/// Two wheels with coefficients `(1, 1)` turn together; `(1, -1)` makes them a
+/// differential - one control drives them forward, another turns. A finger whose knuckles
 /// bend in a fixed ratio is one tendon. The alternative, an equality constraint between
 /// the joints, would need a solver row and would only hold approximately; a tendon holds
 /// exactly and costs one dot product, because it is a definition rather than a constraint.
 ///
-/// Its Jacobian is `∂length/∂q`, which for a fixed tendon is just the coefficient vector —
+/// Its Jacobian is `dlength/dq`, which for a fixed tendon is just the coefficient vector -
 /// constant, and known at build time. That is what makes it cheap and what makes it the
 /// simplest possible transmission for an actuator to pull on.
 ///
-/// Spatial tendons — a path through sites, wrapping around spheres and cylinders — come
+/// Spatial tendons - a path through sites, wrapping around spheres and cylinders - come
 /// later; the length and Jacobian would then be geometric and configuration-dependent, but
 /// everything downstream stays identical, which is the point of separating transmission
-/// from force generation (§7 of the tutorial).
+/// from force generation (section 7 of the tutorial).
 pub const TendonSpec = struct {
     name: []const u8,
     joints: []const TendonJoint,
@@ -772,8 +772,8 @@ pub const Transmission = union(enum) {
     /// Push directly on one scalar joint. `gear` scales control units to force units.
     joint: struct { name: []const u8, gear: f32 = 1 },
     /// Pull on a tendon. The actuator's scalar force is spread across every joint the
-    /// tendon touches, in proportion to that joint's coefficient — which is exactly the
-    /// tendon Jacobian, so this is `Jᵀf` again in miniature.
+    /// tendon touches, in proportion to that joint's coefficient - which is exactly the
+    /// tendon Jacobian, so this is `J^Tf` again in miniature.
     tendon: struct { name: []const u8, gear: f32 = 1 },
 };
 
@@ -781,48 +781,48 @@ pub const Transmission = union(enum) {
 ///
 /// Real actuators are not instantaneous. A pneumatic cylinder fills; a muscle activates; a
 /// motor's current takes time to build. Giving the actuator its own state makes the system
-/// THIRD order — position, velocity, and activation — which is the honest model.
+/// THIRD order - position, velocity, and activation - which is the honest model.
 /// Parameters shared by both filter forms. Named rather than anonymous so a `switch` can
-/// capture both prongs at once — two anonymous structs with identical fields are still
+/// capture both prongs at once - two anonymous structs with identical fields are still
 /// different types.
 pub const FilterParams = struct { time_const_s: f32 };
 
 pub const Activation = union(enum) {
     /// No internal state: the control IS the input to the force law.
     none,
-    /// `ẇ = u`. The control commands a RATE of change, which is how you build an actuator
+    /// `w_dot = u`. The control commands a RATE of change, which is how you build an actuator
     /// that holds its position when you let go.
     integrator,
-    /// `ẇ = (u − w)/τ`. A first-order lag: the actuator chases the command.
+    /// `w_dot = (u - w)/tau`. A first-order lag: the actuator chases the command.
     filter: FilterParams,
     /// The same filter, integrated analytically instead of by Euler.
     ///
     /// Worth having as a separate type rather than an implementation detail: an
-    /// Euler-integrated filter DIVERGES when `τ < dt`, and a fast actuator in a slow
+    /// Euler-integrated filter DIVERGES when `tau < dt`, and a fast actuator in a slow
     /// simulation is a completely ordinary thing to want. The exact form is stable for any
-    /// positive `τ`, and the two agree as `dt → 0`.
+    /// positive `tau`, and the two agree as `dt -> 0`.
     filter_exact: FilterParams,
 };
 
 /// An actuator. The three shortcuts cover almost every real use; `general` exposes the
 /// affine law underneath for the rest.
 ///
-/// ★ THE MODEL, which is worth understanding because the shortcuts are not special cases —
+/// * THE MODEL, which is worth understanding because the shortcuts are not special cases -
 /// they are the same law with different coefficients:
 ///
-///     force = gain · (activation or control) + bias0 + bias1·length + bias2·velocity
+///     force = gain * (activation or control) + bias0 + bias1*length + bias2*velocity
 ///
 /// where `length` is the transmission's scalar coordinate (a joint angle, say) and
 /// `velocity` its rate. Then:
 ///
-///     motor    gain = gear,  bias = (0, 0, 0)          — commanded force
-///     position gain = kp,    bias = (0, −kp, −kv)      — control is a TARGET POSITION
-///     velocity gain = kv,    bias = (0, 0, −kv)        — control is a TARGET VELOCITY
+///     motor    gain = gear,  bias = (0, 0, 0)          - commanded force
+///     position gain = kp,    bias = (0, -kp, -kv)      - control is a TARGET POSITION
+///     velocity gain = kv,    bias = (0, 0, -kv)        - control is a TARGET VELOCITY
 ///
-/// Read the position row: `kp·u − kp·l − kv·l̇` is exactly `kp·(u − l) − kv·l̇`, a PD
+/// Read the position row: `kp*u - kp*l - kv*l_dot` is exactly `kp*(u - l) - kv*l_dot`, a PD
 /// controller. A servo is not a different mechanism from a motor; it is a motor whose bias
 /// terms happen to subtract the current state. That is the whole idea, and it is why the
-/// force law is deliberately kept affine — an affine law can be INVERTED, so inverse
+/// force law is deliberately kept affine - an affine law can be INVERTED, so inverse
 /// dynamics can recover what control would have produced a given force.
 pub const ActuatorSpec = struct {
     name: []const u8,
@@ -846,7 +846,7 @@ pub const ActuatorSpec = struct {
         general: struct { gain: f32 = 1, bias: [3]f32 = .{ 0, 0, 0 } },
     };
 
-    /// The affine law's coefficients: `force = gain·input + bias[0] + bias[1]·l + bias[2]·l̇`.
+    /// The affine law's coefficients: `force = gain*input + bias[0] + bias[1]*l + bias[2]*l_dot`.
     pub const Coefficients = struct { gain: f32, bias: [3]f32 };
 
     /// Collapse the shortcut into the affine coefficients the engine actually runs.
@@ -860,12 +860,12 @@ pub const ActuatorSpec = struct {
     }
 };
 
-/// What a sensor measures. The target it names depends on the kind — a joint, a tendon,
-/// an actuator or a site — and `Spec()` checks that the name resolves to the right thing.
+/// What a sensor measures. The target it names depends on the kind - a joint, a tendon,
+/// an actuator or a site - and `Spec()` checks that the name resolves to the right thing.
 ///
-/// ★ EACH KIND BELONGS TO A PIPELINE STAGE, and that is not an implementation detail. A
+/// * EACH KIND BELONGS TO A PIPELINE STAGE, and that is not an implementation detail. A
 /// gyro can only be read once velocities are known; an accelerometer only once forces have
-/// been resolved. Computing them at the wrong point would not be slightly stale — it would
+/// been resolved. Computing them at the wrong point would not be slightly stale - it would
 /// be a different quantity. MuJoCo evaluates its sensors at exactly three points for this
 /// reason, and so do we.
 pub const SensorKind = enum {
@@ -886,15 +886,15 @@ pub const SensorKind = enum {
     site_lin_vel,
     /// Site angular velocity, WORLD frame.
     site_ang_vel,
-    /// Linear velocity in the SITE's own frame — what a mounted velocimeter reads.
+    /// Linear velocity in the SITE's own frame - what a mounted velocimeter reads.
     velocimeter,
-    /// Angular velocity in the site's own frame — what a mounted gyro reads.
+    /// Angular velocity in the site's own frame - what a mounted gyro reads.
     gyro,
 
     // ---- acceleration stage: needs forces, so after the solve ----
     /// Scalar actuator force.
     actuator_force,
-    /// PROPER acceleration in the site's frame — what a real accelerometer reads,
+    /// PROPER acceleration in the site's frame - what a real accelerometer reads,
     /// gravity included. See `sensorAcc`.
     accelerometer,
 
@@ -927,17 +927,17 @@ pub const SensorSpec = struct {
 
 /// Which integrator `step` uses. Only `euler` and `rk4` exist before phase 10.
 pub const Integrator = enum {
-    /// Semi-implicit, with joint damping treated implicitly — MuJoCo's `mjINT_EULER`.
+    /// Semi-implicit, with joint damping treated implicitly - MuJoCo's `mjINT_EULER`.
     euler,
     /// Explicit 4th-order Runge-Kutta. Accurate and unstable in the same places Euler is.
     rk4,
-    /// Implicit in velocity, INCLUDING the Coriolis derivative — MuJoCo's `mjINT_IMPLICIT`.
+    /// Implicit in velocity, INCLUDING the Coriolis derivative - MuJoCo's `mjINT_IMPLICIT`.
     ///
-    /// **Four times more accurate than `implicitfast` on gyroscopically coupled systems** — a
-    /// fast rotor on a damped gimbal — at one linear solve per step. Measured; see the
+    /// **Four times more accurate than `implicitfast` on gyroscopically coupled systems** - a
+    /// fast rotor on a damped gimbal - at one linear solve per step. Measured; see the
     /// integrator comparison test for the numbers and for the case where it does NOT help.
     implicit,
-    /// Implicit in velocity without the Coriolis derivative — MuJoCo's `mjINT_IMPLICITFAST`,
+    /// Implicit in velocity without the Coriolis derivative - MuJoCo's `mjINT_IMPLICITFAST`,
     /// and its recommended default. For a damped, actuated mechanism the omitted term
     /// contributes little and costs the most.
     implicitfast,
@@ -946,21 +946,21 @@ pub const Integrator = enum {
 /// Simulation-wide settings, mirroring `mjModel.opt`.
 pub const Options = struct {
     /// Defaults to zimr's Y-up convention. **An MJCF-imported model is Z-up and sets
-    /// `(0, 0, -9.81)` instead** — nothing in this file cares which, but your contact
+    /// `(0, 0, -9.81)` instead** - nothing in this file cares which, but your contact
     /// normals and your camera do. See the file header.
     gravity: Vec = vec(0, -9.81, 0),
     timestep: f32 = 1.0 / 240.0,
     integrator: Integrator = .euler,
     /// Ceiling on any single velocity DOF, in m/s or rad/s.
     ///
-    /// Standard in every production engine — Bullet's `setMaxLinearVelocity`, PhysX's
-    /// `maxLinearVelocity`, Jolt's `mMaxLinearVelocity` — and for the same reason: a
+    /// Standard in every production engine - Bullet's `setMaxLinearVelocity`, PhysX's
+    /// `maxLinearVelocity`, Jolt's `mMaxLinearVelocity` - and for the same reason: a
     /// rigid-body step cannot describe a body that moves further than its own size in one
     /// timestep, so a speed past that point is not physics being violent, it is the
     /// discretisation having stopped applying.
     ///
-    /// 100 m/s is far above anything a robot or a thrown object does — a projectile at 30 m/s
-    /// is a hard throw — and far below where f32 products begin to overflow.
+    /// 100 m/s is far above anything a robot or a thrown object does - a projectile at 30 m/s
+    /// is a hard throw - and far below where f32 products begin to overflow.
     ///
     /// See `boundVelocity` for the failure that motivated it.
     max_velocity: f32 = 100.0,
@@ -969,18 +969,18 @@ pub const Options = struct {
     ///
     /// On by default because it is a large, free win: measured at 29 iterations cold versus
     /// a handful warm on a seven-axis arm against its limits. The switch exists so a test
-    /// can prove the converged answer does not depend on it — and so a determinism-sensitive
-    /// caller (differential rollouts, §4d) can turn it off and get a solve that depends on
+    /// can prove the converged answer does not depend on it - and so a determinism-sensitive
+    /// caller (differential rollouts, section 4d) can turn it off and get a solve that depends on
     /// nothing but the current state.
     warm_start: bool = true,
     /// How many simultaneous contacts to make room for. Sizing happens at build, so this
     /// is a promise about the worst case rather than a limit the simulation enforces
-    /// gracefully — exceeding it is an assert, on the zimr392 principle that a silently
+    /// gracefully - exceeding it is an assert, on the zimr392 principle that a silently
     /// clamped contact pool is far worse than a loud one.
     max_contacts: u32 = 32,
 };
 
-/// Which kind of transmission an actuator uses — the tag of `Transmission`, stored
+/// Which kind of transmission an actuator uses - the tag of `Transmission`, stored
 /// separately because the payloads have been resolved to indices by then.
 pub const TransmissionKind = enum { joint, tendon };
 
@@ -993,14 +993,14 @@ pub const ModelSpec = struct {
     tendons: []const TendonSpec = &.{},
     sensors: []const SensorSpec = &.{},
     actuators: []const ActuatorSpec = &.{},
-    /// Loop closures. See `EqualitySpec` — a tree cannot express a ring, so the rings are
+    /// Loop closures. See `EqualitySpec` - a tree cannot express a ring, so the rings are
     /// stated separately and enforced by the solver.
     equalities: []const EqualitySpec = &.{},
     options: Options = .{},
 };
 
-/// A hemisphere's transverse moment about its own centroid, as a multiple of `m·r²`:
-/// `2/5 − 9/64`. The `2/5` is the moment about the flat face; the `9/64` walks it back to
+/// A hemisphere's transverse moment about its own centroid, as a multiple of `m*r^2`:
+/// `2/5 - 9/64`. The `2/5` is the moment about the flat face; the `9/64` walks it back to
 /// the centroid, which sits `3r/8` out. See `shapeMoments`.
 const hemisphere_transverse: f32 = 2.0 / 5.0 - 9.0 / 64.0;
 
@@ -1009,7 +1009,7 @@ const hemisphere_transverse: f32 = 2.0 / 5.0 - 9.0 / 64.0;
 const default_armature_fraction: f32 = 0.01;
 
 // =============================================================================
-// Spec() — the comptime layer
+// Spec() - the comptime layer
 //
 // Validates the spec, generates name enums, and computes the counts. Everything that can
 // be wrong with a model becomes a compile error here rather than a runtime check. What it
@@ -1073,7 +1073,7 @@ pub fn Spec(comptime spec: ModelSpec) type {
     // Zig caps comptime loop iterations to catch runaway evaluation, and the default of
     // 1000 is reached by a perfectly ordinary humanoid: the validation pass alone is
     // bodies x joints x geoms, and the name collection is quadratic in the name count.
-    // Measured — an 18-body model failed to COMPILE before this line existed.
+    // Measured - an 18-body model failed to COMPILE before this line existed.
     //
     // The quota scales with the spec so a bigger model does not hit the same wall, with a
     // generous constant because the cost of over-estimating is nothing (it is a ceiling,
@@ -1097,7 +1097,7 @@ pub fn Spec(comptime spec: ModelSpec) type {
         assertUniqueNames(&body_names, "body");
 
         for (spec.bodies, 0..) |b, bi| {
-            // A parent must exist AND be declared earlier — the tree passes rely on it.
+            // A parent must exist AND be declared earlier - the tree passes rely on it.
             if (b.parent) |parent| {
                 var found: bool = false;
                 for (spec.bodies[0..bi]) |earlier| {
@@ -1190,10 +1190,10 @@ pub fn Spec(comptime spec: ModelSpec) type {
                     @compileError("robot: body '" ++ b.name ++ "' has a geom with a non-positive size");
                 }
                 if (g.mass) |m| {
-                    // ★ ZERO IS LEGAL AND MEANINGFUL: a COLLISION-ONLY geom.
+                    // * ZERO IS LEGAL AND MEANINGFUL: a COLLISION-ONLY geom.
                     //
                     // An imported robot states its mass properties in `<inertial>` and its
-                    // collision geometry separately, so its geoms must contribute no mass —
+                    // collision geometry separately, so its geoms must contribute no mass -
                     // otherwise a link is counted twice and comes out several times too
                     // heavy. `mass = 0` says exactly that, and the body's own `inertial`
                     // supplies the physics.
@@ -1217,13 +1217,13 @@ pub fn Spec(comptime spec: ModelSpec) type {
             // factorization divides by zero. Catch it here with the body's name rather
             // than as a NaN three phases downstream.
             if (b.inertial) |inertial| {
-                // ★ A zero mass is legal on a body with NO degrees of freedom, and real
+                // * A zero mass is legal on a body with NO degrees of freedom, and real
                 // models rely on it: a KUKA iiwa's `lbr_iiwa_link_0` is the bolted-down
                 // base and declares `mass="0.0"`. Nothing accelerates it, so nothing
                 // divides by it.
                 //
-                // With joints it is fatal — the mass matrix is singular and `factorM`
-                // divides by zero — which is the same rule as the geom check below, and
+                // With joints it is fatal - the mass matrix is singular and `factorM`
+                // divides by zero - which is the same rule as the geom check below, and
                 // for the same reason.
                 if (b.joints.len > 0 and inertial.mass <= 0.0) {
                     @compileError("robot: body '" ++ b.name ++
@@ -1518,7 +1518,7 @@ pub fn Spec(comptime spec: ModelSpec) type {
         pub const nv: u32 = counts.nv;
         /// Number of actuators, and therefore of controls.
         pub const nu: u32 = @intCast(spec.actuators.len);
-        /// Number of ACTIVATION states — only actuators with internal dynamics have one.
+        /// Number of ACTIVATION states - only actuators with internal dynamics have one.
         pub const na: u32 = counts.na;
         /// Number of tendons.
         pub const ntendon: u32 = @intCast(spec.tendons.len);
@@ -1541,7 +1541,7 @@ pub fn Spec(comptime spec: ModelSpec) type {
 }
 
 // =============================================================================
-// Model — constant once built
+// Model - constant once built
 //
 // Parallel arrays, indexed by body / joint / dof, exactly like `mjModel`. Flat arrays
 // rather than a tree of structs because every algorithm here is a linear sweep over one
@@ -1555,8 +1555,8 @@ pub fn Spec(comptime spec: ModelSpec) type {
 pub const world_body: u32 = 0;
 
 /// NAMING NOTE. Counts stay as `nq`, `nv`, `nu`, `na` rather than becoming
-/// `position_count` and friends. Those four are the universal notation of the field —
-/// Featherstone, MuJoCo, Pinocchio and every robotics paper use them — and a reader
+/// `position_count` and friends. Those four are the universal notation of the field -
+/// Featherstone, MuJoCo, Pinocchio and every robotics paper use them - and a reader
 /// checking this file against a reference would have to translate every line. Everything
 /// that is NOT standard notation is spelled out in full.
 pub const Model = struct {
@@ -1566,7 +1566,7 @@ pub const Model = struct {
     /// The pointer is not decoration: an `ArenaAllocator` is NOT movable once an
     /// `Allocator` has been taken from it, because that allocator holds the arena
     /// struct's ADDRESS. Storing it by value and returning the model would strand every
-    /// allocation in a copy nobody frees. (zimr has been bitten by this shape before —
+    /// allocation in a copy nobody frees. (zimr has been bitten by this shape before -
     /// see the wgpu_bringup use-after-scope note in claude.md.)
     arena: *std.heap.ArenaAllocator,
     opt: Options,
@@ -1584,7 +1584,7 @@ pub const Model = struct {
     /// hard way (zimr392) that a silently-clamped constraint pool freezes a world without
     /// saying so, so this is generous and the overflow is a loud assert.
     constraint_capacity: u32,
-    /// Total nonzeros in the lower triangle of M — the size of `Data.mass_matrix`.
+    /// Total nonzeros in the lower triangle of M - the size of `Data.mass_matrix`.
     mass_nonzero_count: u32,
 
     // ---- bodies ----
@@ -1600,10 +1600,10 @@ pub const Model = struct {
     /// Centre of mass in the body frame.
     body_ipos: []Vec,
     /// Inertia about that centre of mass, in the body frame. A FULL symmetric tensor,
-    /// not MuJoCo's principal moments plus a quaternion — see `geomsToBodyMass`.
+    /// not MuJoCo's principal moments plus a quaternion - see `geomsToBodyMass`.
     body_inertia: []Inertia,
     body_mass: []f32,
-    /// Mass of this body plus everything below it — needed by the subtree-COM frames.
+    /// Mass of this body plus everything below it - needed by the subtree-COM frames.
     body_subtree_mass: []f32,
     body_jnt_adr: []u32,
     body_jnt_num: []u32,
@@ -1670,7 +1670,7 @@ pub const Model = struct {
     sensor_adr: []u32,
 
     // ---- equality constraints ----
-    /// Loop closures. ★ STRUCT-OF-ONE rather than the parallel arrays the rest of `Model`
+    /// Loop closures. * STRUCT-OF-ONE rather than the parallel arrays the rest of `Model`
     /// uses: those exist because per-DOF and per-geom data is walked every step in tight
     /// loops, and equalities are neither hot nor numerous. `m.equalities[e].a.body` says what
     /// it is; `m.eq_body[e][0]` needs a comment to say the same thing.
@@ -1679,9 +1679,9 @@ pub const Model = struct {
 
     // ---- tendons ----
     ntendon: u32,
-    /// Each tendon's length coefficients over the DOFs: `ntendon × nv`, row-major.
+    /// Each tendon's length coefficients over the DOFs: `ntendon x nv`, row-major.
     ///
-    /// This IS the tendon Jacobian `∂length/∂q`, and for a FIXED tendon it is CONSTANT, so
+    /// This IS the tendon Jacobian `dlength/dq`, and for a FIXED tendon it is CONSTANT, so
     /// it belongs in the model rather than being recomputed every step. A spatial tendon's
     /// would be configuration-dependent and would move to `Data`; the row layout is chosen
     /// so that change stays local.
@@ -1720,7 +1720,7 @@ pub const Model = struct {
     }
 };
 
-/// Sentinel for "this DOF has no parent" — the top of a kinematic chain.
+/// Sentinel for "this DOF has no parent" - the top of a kinematic chain.
 pub const no_dof: u32 = maxInt(u32);
 
 /// Mass below which a body counts as massless for the purpose of deriving a com.
@@ -1729,33 +1729,33 @@ const min_mass: f32 = 1.0e-9;
 /// Build a model from a spec assembled at runtime.
 ///
 /// The public door onto `buildFromSpec` for callers who did not have their model in source
-/// — a URDF loader, an editor, a procedural generator. Same construction code, same index
+/// - a URDF loader, an editor, a procedural generator. Same construction code, same index
 /// tables, same `Model`; what is missing is `Spec()`'s compile-time validation and its
 /// generated name enums, which a runtime spec cannot have by definition.
 ///
 /// Validation that `Spec()` performs at compile time is NOT repeated here. That is a
 /// deliberate gap and worth stating: a malformed runtime spec will fail later, and less
-/// helpfully. The loaders that build these specs do their own checking — `urdf.zig` refuses
-/// a forest, a cycle, a duplicate name and a missing limit before ever reaching this — which
+/// helpfully. The loaders that build these specs do their own checking - `urdf.zig` refuses
+/// a forest, a cycle, a duplicate name and a missing limit before ever reaching this - which
 /// is the right place for it, since they can name the offending element and line.
 /// Recompute `body_subtree_mass` from `body_mass`, for a caller that changed a mass.
 ///
-/// ── ★ WHY THIS IS PUBLIC, AND WHAT IT COST TO LEARN ──
+/// -- * WHY THIS IS PUBLIC, AND WHAT IT COST TO LEARN --
 ///
 /// `body_mass` and `body_inertia` are read every step, so scaling them changes the physics
-/// immediately — which makes a live mass slider look trivial to write. `body_subtree_mass`
+/// immediately - which makes a live mass slider look trivial to write. `body_subtree_mass`
 /// is NOT recomputed each step: it is accumulated once at build time, and it feeds the
 /// centre-of-mass reductions that `comPos` and `comVel` perform before the mass matrix is
 /// factored.
 ///
 /// Leave it stale and the model is INTERNALLY INCONSISTENT: bodies that weigh 100 kg inside
-/// a subtree that still believes it weighs 0.8. The result is not a small error — it is a
+/// a subtree that still believes it weighs 0.8. The result is not a small error - it is a
 /// mass matrix built from two different systems, and it showed up as `factorM: pivot 34 is
 /// negative` after peak forces above 1 MN.
 ///
 /// The tell, and it is worth remembering: a tower BUILT at 300 kg was perfectly stable
 /// (6.2 kN peak, no NaN), while the same tower SCALED to 300 kg exploded. When two paths to
-/// the same state disagree, print both states and diff them — every field matched except
+/// the same state disagree, print both states and diff them - every field matched except
 /// this one.
 pub fn refreshSubtreeMass(m: *Model) void {
     for (m.body_subtree_mass, m.body_mass) |*dst, own| {
@@ -1774,18 +1774,18 @@ pub fn buildRuntime(gpa: Allocator, spec: ModelSpec) !Model {
 
 /// Build a `Model` from a spec.
 ///
-/// ★ THE SPEC IS A RUNTIME VALUE, and that is what makes a loaded robot possible.
+/// * THE SPEC IS A RUNTIME VALUE, and that is what makes a loaded robot possible.
 ///
-/// `ModelSpec` is plain data — slices of structs with string names — so nothing about
+/// `ModelSpec` is plain data - slices of structs with string names - so nothing about
 /// building a model needs the spec to be known at compile time. `Spec()` passes a comptime
 /// one and gets its validation and name enums; a URDF loader passes one it assembled at
 /// startup and gets the same `Model`. **One construction path, not two**, which matters
 /// because two builders that must agree about a hundred index tables is exactly the
-/// duplication §4i's architecture note argues against.
+/// duplication section 4i's architecture note argues against.
 ///
 /// What the comptime path keeps that the runtime one does not: `@compileError` on a bad
 /// model, and generated name enums. What the runtime path keeps: the ability to load a
-/// robot the program was handed rather than written against. See §4i-quater.
+/// robot the program was handed rather than written against. See section 4i-quater.
 fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
     const arena: *std.heap.ArenaAllocator = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
@@ -1830,20 +1830,20 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         }
     }
     // Plus room for contacts, four pyramid-edge rows each. The count is a budget rather
-    // than a bound — collision detection decides how many contacts there are — so it is
+    // than a bound - collision detection decides how many contacts there are - so it is
     // generous and overflowing it is a loud, named assert rather than a silent clamp.
     constraint_capacity += rows_per_contact * spec.options.max_contacts;
 
-    // ★★ AND THREE ROWS PER LOOP CLOSURE, WHICH ARE NOT A BUDGET BUT A REQUIREMENT.
+    // ** AND THREE ROWS PER LOOP CLOSURE, WHICH ARE NOT A BUDGET BUT A REQUIREMENT.
     //
     // Contacts come and go, so their share is a generous guess. An equality is part of the
-    // MECHANISM — it is emitted every step, unconditionally, and a linkage that silently loses
+    // MECHANISM - it is emitted every step, unconditionally, and a linkage that silently loses
     // its closure because a busy contact step used the space is not a linkage. Reserving for
     // them here is what lets `addEqualityRows` treat "no room" as impossible rather than as a
     // case to degrade through.
     //
-    // ★ AND THE COUNT IS PER KIND, NOT A FLAT THREE. A `connect` is three rows and a `weld` is
-    // SIX — the three position rows plus three for orientation — so a flat three under-reserves
+    // * AND THE COUNT IS PER KIND, NOT A FLAT THREE. A `connect` is three rows and a `weld` is
+    // SIX - the three position rows plus three for orientation - so a flat three under-reserves
     // every weld in the model. `addEqualityRows` then finds no room, returns silently, and the
     // weld quietly stops existing on a busy step: a gripped object drifting out of the hand
     // with nothing in the log. Counting properly is what makes the reservation true.
@@ -1970,7 +1970,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         m.body_rot[bi] = b.rot;
 
         // Mass properties: stated outright if the model says so, otherwise summed from the
-        // geoms. Real robot models state them (§4i), hand-written ones usually do not.
+        // geoms. Real robot models state them (section 4i), hand-written ones usually do not.
         const mass_props: BodyMass = if (b.inertial) |inertial|
             inertialToBodyMass(inertial)
         else
@@ -1984,7 +1984,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
         m.body_dof_adr[bi] = dof_n;
 
         // Every DOF on this body chains onto the previous one, ACROSS joints as well as
-        // within them — three hinges on one body are three links in one chain, not three
+        // within them - three hinges on one body are three links in one chain, not three
         // parallel branches. The first one attaches to wherever the parent body ended.
         var prev_dof: u32 = lastDofOf(&m, m.body_parent[bi]);
         var body_dofs: u32 = 0;
@@ -2012,7 +2012,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
             m.jnt_limit_impedance[jnt_n] = j.limit_impedance;
             m.jnt_limit_margin[jnt_n] = j.limit_margin;
             m.jnt_damping[jnt_n] = j.damping;
-            // ★ ONE FLAG FOR THE WHOLE MODEL, decided at build time — see `dampedVelocityStep`.
+            // * ONE FLAG FOR THE WHOLE MODEL, decided at build time - see `dampedVelocityStep`.
             if (j.damping != 0) {
                 m.has_dof_damping = true;
             }
@@ -2023,17 +2023,17 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
             // zm stores a quat as (x, y, z, w), so the w lane is the one that starts at 1.
             switch (j.kind) {
                 .free => {
-                    // ★★ A FREE JOINT'S REFERENCE POSE IS THE BODY'S DECLARED POSE.
+                    // ** A FREE JOINT'S REFERENCE POSE IS THE BODY'S DECLARED POSE.
                     //
                     // For every other joint the body's `pos`/`rot` is a fixed offset from the
                     // parent and the joint moves relative to it. A free joint HAS no fixed
-                    // offset — its seven coordinates ARE the body's pose — so leaving `qpos0`
+                    // offset - its seven coordinates ARE the body's pose - so leaving `qpos0`
                     // at zero silently discards wherever the model said the body was.
                     //
                     // Found by stacking five crates and watching all five appear at the
                     // origin on step zero, already interpenetrating. Nothing warned: the
                     // model was valid, the simulation stable, and every body simply in the
-                    // wrong place. MuJoCo does the same thing — `qpos0` for a free joint is
+                    // wrong place. MuJoCo does the same thing - `qpos0` for a free joint is
                     // seeded from `body_pos`/`body_quat`.
                     m.qpos0[qpos_n + 0] = b.pos[0];
                     m.qpos0[qpos_n + 1] = b.pos[1];
@@ -2092,8 +2092,8 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
     // ---- sensors ----
     var sensor_adr: u32 = 0;
     for (spec.equalities, 0..) |eq, ei| {
-        // ★ RESOLVED BY NAME, LIKE EVERY OTHER CROSS-REFERENCE in a spec. A loop closure names
-        // two bodies that are already in the tree — it adds no bodies of its own, which is
+        // * RESOLVED BY NAME, LIKE EVERY OTHER CROSS-REFERENCE in a spec. A loop closure names
+        // two bodies that are already in the tree - it adds no bodies of its own, which is
         // exactly what makes it a closure rather than a link.
         m.equalities[ei] = .{
             .holds = if (eq.couple) |couple| .{ .joint = .{
@@ -2103,7 +2103,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
             } } else blk: {
                 const body_a: u32 = try bodyIndexByName(spec, eq.body_a);
                 const body_b: u32 = try bodyIndexByName(spec, eq.body_b);
-                // ★ DERIVED WHEN NOT STATED, so the closure is exact at the rest pose. See
+                // * DERIVED WHEN NOT STATED, so the closure is exact at the rest pose. See
                 // `EqualitySpec.anchor_b`: both anchors name the same physical point, and
                 // writing it twice in two frames is a typo waiting to happen.
                 const at_a: Anchor = .{ .body = body_a, .point = eq.anchor_a };
@@ -2115,7 +2115,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
                     .weld = .{
                         .a = at_a,
                         .b = at_b,
-                        // ★ THE RELATIVE ORIENTATION IS DERIVED TOO, for the same reason: a
+                        // * THE RELATIVE ORIENTATION IS DERIVED TOO, for the same reason: a
                         // weld almost always means "hold them as they are now", and writing a
                         // quaternion by hand to say that is a needless chance to be wrong.
                         .relative = qmul(conjugate(restPose(&m, body_b).rot), restPose(&m, body_a).rot),
@@ -2199,7 +2199,7 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
     }
 
     // ---- subtree mass, accumulated leaf-to-root ----
-    // Same accumulation `refreshSubtreeMass` performs, and it IS that function — a caller
+    // Same accumulation `refreshSubtreeMass` performs, and it IS that function - a caller
     // mutating mass at runtime has to redo exactly this, so having one copy is what keeps
     // the two from drifting.
     refreshSubtreeMass(&m);
@@ -2248,29 +2248,29 @@ const BodyMass = struct {
 ///
 /// Three steps per geom, each one an operation that already exists:
 ///   1. `shapeMoments` gives the principal moments about the geom's own centre, in the
-///      geom's own frame — diagonal, because a primitive's axes ARE its principal axes.
+///      geom's own frame - diagonal, because a primitive's axes ARE its principal axes.
 ///   2. `rotated` re-expresses that in the BODY frame, which is where a rotated geom stops
 ///      being a special case.
 ///   3. `translate` moves it from the geom's centre out to the body origin.
-/// Then they simply add, because §2's ten-parameter packing makes summation valid once
+/// Then they simply add, because section 2's ten-parameter packing makes summation valid once
 /// everything shares a frame and a reference point.
 ///
 /// Finally the total is shifted from the body origin to the body's centre of mass, since
 /// that is the form `comPos` wants and the form a parallel-axis shift starts from.
 ///
 /// MUJOCO DIVERGENCE, deliberate: `mjModel` stores three principal moments plus a
-/// quaternion, which requires diagonalizing this tensor with a symmetric-3×3
-/// eigendecomposition. We keep the six-float symmetric form and skip that entirely — one
+/// quaternion, which requires diagonalizing this tensor with a symmetric-3x3
+/// eigendecomposition. We keep the six-float symmetric form and skip that entirely - one
 /// fewer numerical routine, no degenerate-eigenvalue edge cases, and one float less to
 /// store. See `Inertia.rotated`.
 /// Convert a stated `<inertial>` into the engine's form.
 ///
 /// A near-transcription rather than a computation, which is the payoff for `Inertia`
 /// storing the full symmetric tensor. MuJoCo's `fullinertia` orders its six numbers as
-/// `(xx, yy, zz, xy, xz, yz)`, and `Inertia` splits them into `diag` and `off` — where
+/// `(xx, yy, zz, xy, xz, yz)`, and `Inertia` splits them into `diag` and `off` - where
 /// `off` is `(xy, xz, yz)` in that same order, so the two halves copy straight across.
 ///
-/// `h` is the FIRST MOMENT, `mass · com`, and is zero here because a stated inertia is
+/// `h` is the FIRST MOMENT, `mass * com`, and is zero here because a stated inertia is
 /// given about the centre of mass by definition. `body_ipos` carries the offset separately,
 /// exactly as it does for the geom-derived path.
 fn inertialToBodyMass(inertial: InertialSpec) BodyMass {
@@ -2299,7 +2299,7 @@ fn geomsToBodyMass(geoms: []const GeomSpec) BodyMass {
     if (total.mass <= min_mass) {
         return .{ .mass = 0, .com = vec_zero, .inertia = .zero };
     }
-    // `h` is `mass · com`, so the centre of mass falls out of the sum for free.
+    // `h` is `mass * com`, so the centre of mass falls out of the sum for free.
     const com: Vec = total.h / splat(total.mass);
     // Shift from the body origin back to the centre of mass: the inverse of step 3.
     return .{ .mass = total.mass, .com = com, .inertia = total.translate(-com) };
@@ -2326,7 +2326,7 @@ fn shapeVolume(shape: GeomShape) f32 {
 fn shapeMoments(shape: GeomShape, mass: f32) Vec {
     switch (shape) {
         // A hull is treated as its bounding box: an OVERESTIMATE of the true moments, which
-        // is the safe direction — it never makes a link easier to spin than it really is.
+        // is the safe direction - it never makes a link easier to spin than it really is.
         // As with the volume above, a model carrying hulls states its inertias anyway.
         .hull => |s| {
             const x: f32 = 2.0 * s.bounds_half_extent[0];
@@ -2360,15 +2360,15 @@ fn shapeMoments(shape: GeomShape, mass: f32) Vec {
             // comes out right either way, and only the side moment is off by ~0.15%.
             //
             //   * A hemisphere's transverse moment about the CENTRE OF ITS FLAT FACE is
-            //     (2/5)m·r², the same as a full sphere, by symmetry.
-            //   * Its centroid is NOT there — it sits 3r/8 out along the axis.
+            //     (2/5)m*r^2, the same as a full sphere, by symmetry.
+            //   * Its centroid is NOT there - it sits 3r/8 out along the axis.
             //   * Parallel axis moves an inertia between a point and the CENTROID, so
             //     before shifting out to the capsule's centre we must first come back to
             //     the centroid:
-            //         I_centroid = (2/5)m·r² − m·(3r/8)² = (2/5 − 9/64)·m·r²
+            //         I_centroid = (2/5)m*r^2 - m*(3r/8)^2 = (2/5 - 9/64)*m*r^2
             //     and only then push out to (half_height + 3r/8).
             //
-            // Using (2/5)m·r² directly as the centroid moment double-counts m·(3r/8)².
+            // Using (2/5)m*r^2 directly as the centroid moment double-counts m*(3r/8)^2.
             // Verified against MuJoCo to 3e-10; see the test below.
             const r: f32 = s.radius;
             const r2: f32 = r * r;
@@ -2397,7 +2397,7 @@ fn shapeMoments(shape: GeomShape, mass: f32) Vec {
 fn representativeInertia(props: BodyMass, kind: JointType) f32 {
     return switch (kind) {
         .slide => props.mass,
-        // The mean of the diagonal is the trace over three — basis-independent, so it does
+        // The mean of the diagonal is the trace over three - basis-independent, so it does
         // not matter which frame the tensor happens to be expressed in.
         .free, .ball, .hinge => (props.inertia.diag[0] + props.inertia.diag[1] +
             props.inertia.diag[2]) / 3.0,
@@ -2409,7 +2409,7 @@ fn representativeInertia(props: BodyMass, kind: JointType) f32 {
 /// rather than in source.
 pub const BuildError = error{
     /// A joint coupling named a ball or free joint. Those have no scalar coordinate to
-    /// couple — a quaternion is not a number — so this is a modelling error rather than
+    /// couple - a quaternion is not a number - so this is a modelling error rather than
     /// something to approximate.
     UnsupportedJointForCoupling,
     /// A name referenced by a joint, tendon, actuator or sensor that no such thing has.
@@ -2419,9 +2419,9 @@ pub const BuildError = error{
 
 /// Index of the named actuator, or an error.
 ///
-/// ★ WHY THESE ARE RUNTIME SCANS. They used to be comptime, which was fine when every model
+/// * WHY THESE ARE RUNTIME SCANS. They used to be comptime, which was fine when every model
 /// was a source literal. A loaded robot's names are not known until startup, so the lookup
-/// has to work either way — and a linear scan over a few dozen names costs nothing at build
+/// has to work either way - and a linear scan over a few dozen names costs nothing at build
 /// time, once, where a hash map would cost more than it saves. `Spec()` still catches a bad
 /// name at COMPILE time via its own validation pass; this is the fallback for models the
 /// program was handed.
@@ -2484,7 +2484,7 @@ fn bodyIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
 }
 
 /// The last DOF belonging to `body`, walking up until a body with DOFs is found. That is
-/// the DOF a child's first DOF chains onto — welded bodies are transparent here, which is
+/// the DOF a child's first DOF chains onto - welded bodies are transparent here, which is
 /// exactly what makes a weld free.
 fn lastDofOf(m: *const Model, body: u32) u32 {
     var b: u32 = body;
@@ -2500,7 +2500,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 }
 
 // =============================================================================
-// Data — everything that changes
+// Data - everything that changes
 //
 // Sized from the model, flat, and free of pointers so a batched rollout can slice many
 // instances out of one allocation later. Fields are grouped by the PIPELINE STAGE that
@@ -2516,7 +2516,7 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 /// nothing or to pay for a check forever.
 ///
 /// Zig gets a third option. `Data` carries a watermark, every stage sets it, and every
-/// reader asserts on it — through `assertf`, which compiles out of a ship build entirely.
+/// reader asserts on it - through `assertf`, which compiles out of a ship build entirely.
 /// So a development build says
 ///
 ///     robot: crb needs the position stage, but this Data is only at .stale
@@ -2541,20 +2541,20 @@ pub const Stage = enum(u8) {
 };
 
 pub const Data = struct {
-    /// Heap-allocated for the same reason as `Model.arena` — see the note there.
+    /// Heap-allocated for the same reason as `Model.arena` - see the note there.
     arena: *std.heap.ArenaAllocator,
 
     /// How far the pipeline has been advanced. Writing state knocks it back to `.stale`;
-    /// each stage raises it; readers assert on it. Never read it to DECIDE anything — it
+    /// each stage raises it; readers assert on it. Never read it to DECIDE anything - it
     /// is a debugging aid, not control flow, and the pipeline stays explicit.
     stage: Stage = .stale,
-    /// Set when `pos` was written WHOLESALE rather than integrated — a keyframe applied, a
+    /// Set when `pos` was written WHOLESALE rather than integrated - a keyframe applied, a
     /// state restored, an editor drag. Consumed and cleared by whoever acts on it.
     ///
-    /// ── ★★ WHY THE ENGINE CARRIES A FLAG IT DOES NOT ITSELF USE ──
+    /// -- ** WHY THE ENGINE CARRIES A FLAG IT DOES NOT ITSELF USE --
     ///
     /// `robot.zig` does not care: a position is a position. The COLLISION side does, and
-    /// cannot tell by looking — a proxy that was there and is now here looks identical whether
+    /// cannot tell by looking - a proxy that was there and is now here looks identical whether
     /// it travelled or was moved, and every "too far to be real" threshold is a number some
     /// scene sits on the wrong side of. One was tried: twenty times a geom's own radius, which
     /// is generous for a ball and useless for a 1 cm capsule, where a 0.18 m reset is only
@@ -2562,23 +2562,23 @@ pub const Data = struct {
     /// pinned at 100 m/s**.
     ///
     /// So the fact travels with the data. The handful of functions that write `pos` wholesale
-    /// set it, rather than every CALLER of those functions remembering to tell the bridge —
+    /// set it, rather than every CALLER of those functions remembering to tell the bridge -
     /// which was thirty-one places and counting.
     teleported: bool = false,
 
     // ---- state: the only inputs the user owns ----
     /// Generalized position, length `nq`. Quaternion blocks are unit-norm.
     pos: []f32,
-    /// Generalized velocity, length `nv`. NOT the derivative of `pos` — see the header.
+    /// Generalized velocity, length `nv`. NOT the derivative of `pos` - see the header.
     vel: []f32,
     /// Generalized acceleration, length `nv`. The output of forward dynamics.
     acc: []f32,
     /// Actuator controls, length `nu`. What the user commands.
     ctrl: []f32,
-    /// Actuator activations, length `na`. The internal state of stateful actuators — a
+    /// Actuator activations, length `na`. The internal state of stateful actuators - a
     /// genuine third dynamic variable alongside position and velocity.
     act: []f32,
-    /// Scratch for the implicit integrator: the dense `M − h·D` system, its pivots, and
+    /// Scratch for the implicit integrator: the dense `M - h*D` system, its pivots, and
     /// the right-hand side. Sized once, like everything else.
     implicit_matrix: []f32,
     implicit_pivot: []u32,
@@ -2600,7 +2600,7 @@ pub const Data = struct {
     /// Rate of change of each activation state, length `na`.
     ///
     /// Separate from `act` on purpose. `actuation` COMPUTES this and the integrator APPLIES
-    /// it, exactly once per step — because RK4 evaluates the dynamics four times, and an
+    /// it, exactly once per step - because RK4 evaluates the dynamics four times, and an
     /// `actuation` that advanced `act` itself would advance it four times per step.
     act_dot: []f32,
 
@@ -2619,7 +2619,7 @@ pub const Data = struct {
 
     // ---- written by `comPos` (phase 1) ----
     /// Centre of mass of each body's subtree, in world space. The frame every spatial
-    /// quantity below is expressed in — global orientation, translated here for accuracy.
+    /// quantity below is expressed in - global orientation, translated here for accuracy.
     subtree_com: []Vec,
     /// Each DOF's motion axis as a spatial vector, in that shared frame.
     cdof: []Motion,
@@ -2631,7 +2631,7 @@ pub const Data = struct {
     crb: []Inertia,
     /// Lower triangle of M, packed by the model's sparsity tables. Length `mass_nonzero_count`.
     mass_matrix: []f32,
-    /// The LᵀDL factorization, same packing.
+    /// The L^TDL factorization, same packing.
     qLD: []f32,
     /// Reciprocals of D, so the solve multiplies instead of dividing.
     qLDiagInv: []f32,
@@ -2642,10 +2642,10 @@ pub const Data = struct {
     /// Per-body scratch for `rne`. Kept here rather than allocated per call so the hot
     /// path never touches an allocator, and so `Data` remains the single description of
     /// everything a simulation instance owns.
-    /// Scratch for `rneVelDerivative` — one 6-vector per (body, DOF) pair, so `nbody × nv`.
+    /// Scratch for `rneVelDerivative` - one 6-vector per (body, DOF) pair, so `nbody x nv`.
     ///
-    /// ★ ALLOCATED ONLY FOR `.implicit`. On a humanoid that is 17 × 27 × four arrays of 16
-    /// bytes ≈ 29 kB, which is nothing — but it is also completely dead weight for the three
+    /// * ALLOCATED ONLY FOR `.implicit`. On a humanoid that is 17 x 27 x four arrays of 16
+    /// bytes ~ 29 kB, which is nothing - but it is also completely dead weight for the three
     /// integrators that never touch it, and a model built for `.euler` should not carry it.
     deriv_cacc: []Motion,
     deriv_cfrc: []Force,
@@ -2667,15 +2667,15 @@ pub const Data = struct {
     // ---- forces the user, the springs and the actuators apply ----
     /// Extra generalized forces the caller applies. **PERSISTENT: nothing clears this for you.**
     ///
-    /// ── ★★★ THE LIFETIME MATTERS AND WAS NEVER WRITTEN DOWN ──
+    /// -- *** THE LIFETIME MATTERS AND WAS NEVER WRITTEN DOWN --
     ///
     /// It was the only field in this block without a doc comment, and both readings are
-    /// defensible — which is exactly why it cost a day. `PoseHold` clears it at the top of every
+    /// defensible - which is exactly why it cost a day. `PoseHold` clears it at the top of every
     /// `apply`, so a servo is self-cleaning. A planner drives `ctrl` instead and never touches
     /// this array, so it **inherits whatever the last servo left** and `step` adds both.
     ///
-    /// ★ MEASURED: the same planner, same weights, same reference, scored **0.096 rad run first
-    /// and 2.69 rad run after a PD** — its solver cost 7.5 clean against 5554 contaminated. It
+    /// * MEASURED: the same planner, same weights, same reference, scored **0.096 rad run first
+    /// and 2.69 rad run after a PD** - its solver cost 7.5 clean against 5554 contaminated. It
     /// was not failing to optimise; it was optimising correctly against a robot with another
     /// controller's torques bolted on.
     ///
@@ -2694,26 +2694,26 @@ pub const Data = struct {
     /// What each row is, and which joint (or later geom pair) produced it.
     constraint_kind: []ConstraintKind,
     constraint_source: []u32,
-    /// Row-major `constraint_capacity × nv` Jacobian. Dense because `nv` is small and a row is one
+    /// Row-major `constraint_capacity x nv` Jacobian. Dense because `nv` is small and a row is one
     /// contiguous run; the sparsity that matters is that most ROWS are absent, not that
     /// entries within a row are zero.
     constraint_jacobian: []f32,
     /// Violation, negative when the constraint is being pushed into.
     constraint_violation: []f32,
-    /// Reference acceleration: what the constraint WANTS to happen, `−b·(Jv) − k·r`.
+    /// Reference acceleration: what the constraint WANTS to happen, `-b*(Jv) - k*r`.
     constraint_target_acc: []f32,
-    /// Diagonal regularizer `R = (1−d)/d · Â`. Softness, made numerical.
+    /// Diagonal regularizer `R = (1-d)/d * A_hat`. Softness, made numerical.
     constraint_regularizer: []f32,
-    /// Constraint-space inertia diagonal `Â = (J M⁻¹ Jᵀ)_ii`, computed exactly.
+    /// Constraint-space inertia diagonal `A_hat = (J M^-1 J^T)_ii`, computed exactly.
     constraint_inertia: []f32,
-    /// Constraint velocity `J·v`, kept because both `aref` and the solver want it.
+    /// Constraint velocity `J*v`, kept because both `aref` and the solver want it.
     constraint_velocity: []f32,
     /// World-space direction of each contact row. See where it is filled in.
     constraint_direction: []Vec,
     /// A stable identity for each row, so a force can be carried across steps.
     ///
-    /// ★ ROW INDEX IS NOT IDENTITY. Rows are rebuilt every step and their order shifts as
-    /// constraints activate and deactivate — slot 3 is a different physical constraint from
+    /// * ROW INDEX IS NOT IDENTITY. Rows are rebuilt every step and their order shifts as
+    /// constraints activate and deactivate - slot 3 is a different physical constraint from
     /// one step to the next. Warm starting needs to know THIS row was THAT row, which is
     /// what this key provides: the joint and which end for a limit, the detector's stable
     /// contact id and which pyramid edge for a contact.
@@ -2723,7 +2723,7 @@ pub const Data = struct {
     warm_force: []f32,
     warm_count: u32,
     // NOTE: whoever mutates the MODEL while a `Data` is live must call
-    // `forgetWarmStart` — see below.
+    // `forgetWarmStart` - see below.
     /// The unconstrained acceleration, saved so a warm start that turns out to be worse
     /// than starting from zero can be undone. See the cost check in `solveConstraints`.
     free_acc: []f32,
@@ -2738,42 +2738,42 @@ pub const Data = struct {
     constraint_softness: []Softness,
     constraint_impedance: []Impedance,
     /// Contacts to enforce this step. An INPUT, filled before `forward` exactly like
-    /// `ctrl` — not something the engine discovers, because robot.zig has no collision
+    /// `ctrl` - not something the engine discovers, because robot.zig has no collision
     /// detector and deliberately never will.
     ///
     /// A buffer rather than an `addContact` call, and the difference is a real hole closed:
     /// `forward` runs the constraint stages back to back, so a function that built rows
-    /// directly had no moment at which a caller could invoke it — the main entry point
+    /// directly had no moment at which a caller could invoke it - the main entry point
     /// silently ignored contacts. Now there is no ordering to get wrong.
     contacts: []Contact,
     contact_count: u32,
     /// Scratch for `addContact`: two point Jacobians and the frame-projected rows.
-    /// Two bodies' point Jacobians, for any row built from a PAIR of bodies — contacts and
+    /// Two bodies' point Jacobians, for any row built from a PAIR of bodies - contacts and
     /// loop closures both. Named for the shape of the problem rather than for the first thing
     /// that used them: they were `contact_jac_*` until equalities started borrowing them, at
     /// which point the name said something untrue about half the callers.
     pair_jac_a: []Vec,
     pair_jac_b: []Vec,
     contact_projected: []f32,
-    /// Solved constraint force, one scalar per row, always ≥ 0.
+    /// Solved constraint force, one scalar per row, always >= 0.
     constraint_force: []f32,
     /// Previous iterate and pre-extrapolation point, for Nesterov acceleration. See
     /// `solveConstraints`.
     momentum_prev: []f32,
     momentum_extrapolated: []f32,
-    /// The same forces mapped back into joint coordinates: `Jᵀf`.
+    /// The same forces mapped back into joint coordinates: `J^Tf`.
     constraint_joint_force: []f32,
-    /// How many sweeps the last solve took. A cheap health signal — if this sits at
+    /// How many sweeps the last solve took. A cheap health signal - if this sits at
     /// `max_iterations`, the solver is not converging and the answer is approximate.
     solver_iterations: u32,
-    /// `M⁻¹Jᵀ` for each row — the joint-space acceleration a unit force on that row
-    /// produces. Row-major `constraint_capacity × nv`.
+    /// `M^-1J^T` for each row - the joint-space acceleration a unit force on that row
+    /// produces. Row-major `constraint_capacity x nv`.
     ///
-    /// Computed once in `projectConstraints`, where it is needed anyway to form `Â`, and
+    /// Computed once in `projectConstraints`, where it is needed anyway to form `A_hat`, and
     /// then reused by every solver iteration. That reuse is the difference between one
     /// back-substitution per row per STEP and one per row per ITERATION.
-    /// Newton's working set. Allocated only when `solver.algorithm == .newton` — the Hessian
-    /// alone is `nv × nv`, which is fine at tens of DOFs and pure waste for a solver that never
+    /// Newton's working set. Allocated only when `solver.algorithm == .newton` - the Hessian
+    /// alone is `nv x nv`, which is fine at tens of DOFs and pure waste for a solver that never
     /// forms one.
     newton_hessian: []f32,
     newton_gradient: []f32,
@@ -2793,12 +2793,12 @@ pub const Data = struct {
         errdefer arena.deinit();
         const a: Allocator = arena.allocator();
 
-        // ★ THE CORIOLIS-DERIVATIVE SCRATCH IS ONLY FOR `.implicit`. See `Data.deriv_cacc`:
-        // `nbody × nv` six-vectors is small in absolute terms and entirely dead weight for the
+        // * THE CORIOLIS-DERIVATIVE SCRATCH IS ONLY FOR `.implicit`. See `Data.deriv_cacc`:
+        // `nbody x nv` six-vectors is small in absolute terms and entirely dead weight for the
         // three integrators that never form that matrix.
         const deriv_scratch: usize = if (m.opt.integrator == .implicit) m.nbody * m.nv else 0;
 
-        // Same reasoning for Newton: an `nv × nv` Hessian is small in absolute terms and
+        // Same reasoning for Newton: an `nv x nv` Hessian is small in absolute terms and
         // entirely dead weight for a model that solves with PGS.
         const deriv_dof_scratch: usize = if (m.opt.integrator == .implicit) m.nv * m.nv else 0;
         const newton_nv: usize = if (m.opt.solver.algorithm == .newton) m.nv else 0;
@@ -2841,11 +2841,11 @@ pub const Data = struct {
             .deriv_cacc = try a.alloc(Motion, deriv_scratch),
             .deriv_cfrc = try a.alloc(Force, deriv_scratch),
             .deriv_cvel = try a.alloc(Motion, deriv_scratch),
-            // ★★ INDEXED PER DOF, NOT PER BODY — so `nv × nv`, where the three above are
-            // `nbody × nv`. Sized with the others it overflowed on the first free joint: for a
+            // ** INDEXED PER DOF, NOT PER BODY - so `nv x nv`, where the three above are
+            // `nbody x nv`. Sized with the others it overflowed on the first free joint: for a
             // 7-DOF model with three bodies the buffer held 21 and the code reached 48.
             //
-            // ★ AND A ReleaseFast PROBE DID NOT NOTICE. Bounds checks are off there, so the
+            // * AND A ReleaseFast PROBE DID NOT NOTICE. Bounds checks are off there, so the
             // writes landed in whatever followed and the numbers still looked right. The test
             // suite, which builds with safety on, caught it on the first run.
             .deriv_cdof_dot = try a.alloc(Motion, deriv_dof_scratch),
@@ -2996,7 +2996,7 @@ pub const Data = struct {
         @memset(self.actuator_force, 0);
     }
 
-    /// Read a scalar joint's position. Only valid for hinge and slide — a ball or free
+    /// Read a scalar joint's position. Only valid for hinge and slide - a ball or free
     /// joint has no single number, and asking for one is a programming error.
     pub fn jointPos(self: *const Data, m: *const Model, joint: anytype) f32 {
         const ji: u32 = jointIndex(joint);
@@ -3023,11 +3023,11 @@ pub const Data = struct {
         self.pos[m.jnt_qpos_adr[ji]] = value;
     }
 
-    /// Drop all contacts. Call once per step before pushing the new set — or use
+    /// Drop all contacts. Call once per step before pushing the new set - or use
     /// `setContacts`, which does it for you.
     /// Throw away the warm-start cache, because the system it describes no longer exists.
     ///
-    /// ── ★ WHY THIS HAS TO BE CALLED, AND WHAT HAPPENS OTHERWISE ──
+    /// -- * WHY THIS HAS TO BE CALLED, AND WHAT HAPPENS OTHERWISE --
     ///
     /// Warm starting seeds each row with the force that satisfied it LAST step, which is a
     /// large win precisely because the system barely changes between steps. Change the mass
@@ -3035,13 +3035,13 @@ pub const Data = struct {
     /// for a different set of inertias.
     ///
     /// Found by putting a live mass slider on `robot_3d`. Dragging a crate from 0.8 kg to
-    /// 92 kg re-scales `body_inertia` between one step and the next, and the seeded forces —
-    /// correct for a body a hundred times lighter — arrived as an enormous impulse. **Peak
+    /// 92 kg re-scales `body_inertia` between one step and the next, and the seeded forces -
+    /// correct for a body a hundred times lighter - arrived as an enormous impulse. **Peak
     /// contact force 48 kN, crates at 35 m/s, and then `factorM: pivot 34 is negative`,
     /// which is the mass matrix having been corrupted by what came before it.**
     ///
     /// The cost guard in `solveConstraints` catches a warm start that RAISES the cost, but
-    /// it compares against the current step's own reference — it cannot know the inertias
+    /// it compares against the current step's own reference - it cannot know the inertias
     /// changed. Nothing else can notice this; only the mutator knows.
     ///
     /// Cheap, and safe to call whenever in doubt: the next step simply solves cold.
@@ -3060,7 +3060,7 @@ pub const Data = struct {
         assertf(
             self.contact_count < self.contacts.len,
             @src(),
-            // ★ THE SWEPT CONTACTS ARE NAMED because they are a cause that is not obvious from
+            // * THE SWEPT CONTACTS ARE NAMED because they are a cause that is not obvious from
             // the scene. A robot flung across the room can produce one per geom in a single
             // step, on top of everything the detector found, and someone counting the touching
             // surfaces will conclude the budget is generous when it is not.
@@ -3122,14 +3122,14 @@ fn jointIndex(joint: anytype) u32 {
 }
 
 // =============================================================================
-// Kinematics — phase 1
+// Kinematics - phase 1
 //
 // One forward pass over the tree, parent before child, turning generalized positions into
 // world poses. This is the first stage of the pipeline and everything else depends on it.
 // =============================================================================
 
 /// A rigid placement in some frame. Named rather than anonymous because a pose is a real
-/// concept here — bodies, joints and sites all have one, and `compose` is how they relate.
+/// concept here - bodies, joints and sites all have one, and `compose` is how they relate.
 pub const Pose = struct {
     pos: Vec = vec_zero,
     rot: Quat = quat_identity,
@@ -3158,10 +3158,10 @@ pub const Pose = struct {
 /// rule is what lets this be a flat loop instead of a recursive walk.
 ///
 /// The subtle step is the off-centre correction. A hinge does not rotate the body about
-/// the body's own origin — it rotates it about the ANCHOR. So after composing the
+/// the body's own origin - it rotates it about the ANCHOR. So after composing the
 /// rotation we recompute where the origin must be for the anchor to have stayed put:
 ///
-///     xpos = xanchor − R_new · jnt_pos
+///     xpos = xanchor - R_new * jnt_pos
 ///
 /// Skip it and every joint whose anchor is not at the body origin swings the body through
 /// an arc it should never take. Almost every real robot joint is off-centre, so this is
@@ -3200,7 +3200,7 @@ pub fn kinematics(m: *const Model, d: *Data) void {
             for (jnt_adr..jnt_adr + jnt_num) |ji| {
                 const qadr: u32 = m.jnt_qpos_adr[ji];
 
-                // Axis and anchor, in the frame the joint acts in — which is the pose as
+                // Axis and anchor, in the frame the joint acts in - which is the pose as
                 // built SO FAR, so several joints on one body compose in declared order.
                 const axis: Vec = rotate(rot, m.jnt_axis[ji]);
                 const anchor: Vec = pos + rotate(rot, m.jnt_pos[ji]);
@@ -3254,7 +3254,7 @@ pub fn kinematics(m: *const Model, d: *Data) void {
 ///
 /// WHY A SHARED FRAME AT ALL. Two inertias can only be added when they are expressed about
 /// the same reference point in the same orientation. `crb` in phase 2 accumulates a
-/// subtree's inertia by literally summing the ten numbers of each body — which is legal
+/// subtree's inertia by literally summing the ten numbers of each body - which is legal
 /// only because this function first moved them all into one frame. That summation is the
 /// entire reason the composite-rigid-body algorithm is cheap, and this is where it is paid
 /// for.
@@ -3262,9 +3262,9 @@ pub fn kinematics(m: *const Model, d: *Data) void {
 /// WHICH FRAME. Global ORIENTATION (so collision, which happens in world space, shares it),
 /// translated to the root's subtree centre of mass. The translation is purely for floating
 /// point: an inertia expressed about a distant origin has its useful bits swamped by the
-/// `m·d²` parallel-axis term. MuJoCo does this at f64; we are at f32 and need it more.
+/// `m*d^2` parallel-axis term. MuJoCo does this at f64; we are at f32 and need it more.
 ///
-/// The frame is per TREE, not per body — every body in one tree shares its root's subtree
+/// The frame is per TREE, not per body - every body in one tree shares its root's subtree
 /// com, which is what makes their inertias summable. `subtree_com` is computed for every
 /// body anyway because sensors and the phase-3 `subtreeVel` want it.
 pub fn comPos(m: *const Model, d: *Data) void {
@@ -3273,7 +3273,7 @@ pub fn comPos(m: *const Model, d: *Data) void {
     d.requireStage(.position, "comPos");
 
     // ---- subtree centres of mass, accumulated leaf-to-root ----
-    // Start each body holding its own first moment (mass × com), add children into
+    // Start each body holding its own first moment (mass x com), add children into
     // parents walking backwards, then divide out the subtree mass. Backwards works
     // because a parent always has a lower index than its children.
     for (0..m.nbody) |bi| {
@@ -3311,7 +3311,7 @@ pub fn comPos(m: *const Model, d: *Data) void {
         const body: u32 = m.jnt_body[ji];
         const frame_origin: Vec = d.subtree_com[m.body_root[body]];
         // From the frame's origin TO the joint anchor: a rotation about the anchor moves
-        // the origin by `axis × offset`, which is the linear half of the motion vector.
+        // the origin by `axis x offset`, which is the linear half of the motion vector.
         const offset: Vec = frame_origin - d.jnt_xanchor[ji];
         const dof_adr: u32 = m.jnt_dof_adr[ji];
 
@@ -3348,12 +3348,12 @@ pub fn comPos(m: *const Model, d: *Data) void {
 
 /// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
 /// `offset` from the axis. Rotating about a line that does not pass through the origin
-/// moves the origin too, and `axis × offset` is exactly how much.
+/// moves the origin too, and `axis x offset` is exactly how much.
 fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
     return .{ .ang = axis, .lin = cross(axis, offset) };
 }
 
-/// Column `k` of a body's world rotation — its local X, Y or Z axis in world space.
+/// Column `k` of a body's world rotation - its local X, Y or Z axis in world space.
 fn bodyAxis(rot: Quat, comptime k: usize) Vec {
     return rotate(rot, worldAxis(k));
 }
@@ -3370,38 +3370,38 @@ fn worldAxis(comptime k: usize) Vec {
 }
 
 // =============================================================================
-// The mass matrix — phase 2
+// The mass matrix - phase 2
 //
 // M(q) is the object that turns "what forces are acting" into "how does it accelerate".
 // Two ways to read it, both worth holding:
 //
-//   * ENERGY.  Kinetic energy is ½·vᵀ·M·v. M is the quadratic form that measures how much
+//   * ENERGY.  Kinetic energy is 1/2*v^T*M*v. M is the quadratic form that measures how much
 //     energy a given joint-space motion carries.
 //   * COUPLING.  M[i][j] answers "if I accelerate DOF j by one unit, how much torque does
 //     that demand at DOF i?" A robot arm is harder to swing when extended than when
 //     folded, and that difference IS M changing with q.
 //
 // The second reading explains the sparsity. Moving joint i moves only the bodies BELOW i.
-// So DOFs i and j interact exactly when one lies on the other's path to the root — which
+// So DOFs i and j interact exactly when one lies on the other's path to the root - which
 // is the ancestor relation the model tabulated at build time.
 // =============================================================================
 
 /// Composite Rigid Body: build the joint-space inertia matrix M.
 ///
 /// THE IDEA, which is genuinely simple once seen. Suppose only DOF `i` accelerates and
-/// every other joint is locked. Then everything below `i` moves as ONE RIGID BODY — that
+/// every other joint is locked. Then everything below `i` moves as ONE RIGID BODY - that
 /// is what locking the joints below means. Call that body's spatial inertia `I_comp(i)`.
-/// The spatial force needed to produce that acceleration is `I_comp(i) · cdof_i`, and the
+/// The spatial force needed to produce that acceleration is `I_comp(i) * cdof_i`, and the
 /// torque it demands at any DOF `j` is that force projected onto `j`'s motion axis:
 ///
-///     M[i][j] = cdof_j · (I_comp(i) · cdof_i)
+///     M[i][j] = cdof_j * (I_comp(i) * cdof_i)
 ///
 /// That single line is the whole algorithm. Everything else is bookkeeping: getting the
 /// composite inertias (a backward sum, cheap because `comPos` put them in a shared frame)
 /// and visiting only the `j` that can be nonzero (the ancestor chain).
 ///
 /// COST. The outer loop is `nv`; the inner walks one ancestor chain. For a chain robot
-/// that is O(nv²) entries but each is a 6-vector dot — and for a tree with branches it is
+/// that is O(nv^2) entries but each is a 6-vector dot - and for a tree with branches it is
 /// far less, because siblings never interact. This is why the sparsity is not an
 /// optimisation bolted on afterwards: it is the shape of the physics.
 pub fn crb(m: *const Model, d: *Data) void {
@@ -3413,7 +3413,7 @@ pub fn crb(m: *const Model, d: *Data) void {
     // Start each body holding its own inertia, then fold children into parents walking
     // backwards. Because a parent always has a lower index, one reverse pass suffices.
     //
-    // This sum is only legal because every `cinert` is expressed in the same frame — the
+    // This sum is only legal because every `cinert` is expressed in the same frame - the
     // shared subtree-COM frame `comPos` built. That is the payoff for the whole previous
     // section, collected here in three lines.
     @memcpy(d.crb, d.cinert);
@@ -3438,7 +3438,7 @@ pub fn crb(m: *const Model, d: *Data) void {
 
         // Walk the ancestor chain, writing backwards. The row is stored root-first with
         // the diagonal LAST (see `Model.mass_col_index`), and walking UP from `i` visits the
-        // diagonal first — so the cursor starts at the end and decrements. Storage order
+        // diagonal first - so the cursor starts at the end and decrements. Storage order
         // and traversal order were chosen to match precisely here.
         var slot: u32 = nnz;
         var j: u32 = @intCast(i);
@@ -3449,15 +3449,15 @@ pub fn crb(m: *const Model, d: *Data) void {
 
         // Armature is rotor inertia reflected through a gearbox: a real physical mass that
         // the motor must spin up, felt at this DOF alone. It lands on the diagonal, which
-        // is also why it is the cheapest defence against an ill-conditioned M — it is
+        // is also why it is the cheapest defence against an ill-conditioned M - it is
         // literally diagonal regularization that happens to be true.
         d.mass_matrix[row + nnz - 1] += m.dof_armature[i];
     }
 }
 
-/// Expand the packed lower triangle into a dense `nv × nv` matrix, row-major.
+/// Expand the packed lower triangle into a dense `nv x nv` matrix, row-major.
 ///
-/// For tests, debugging and teaching — never for the hot path, which is why it takes a
+/// For tests, debugging and teaching - never for the hot path, which is why it takes a
 /// caller-provided buffer rather than allocating. The sparse form is the real one; this is
 /// the form a human (or an oracle) can read.
 pub fn massMatrixDense(m: *const Model, d: *const Data, out: []f32) void {
@@ -3481,28 +3481,28 @@ pub fn massMatrixDense(m: *const Model, d: *const Data, out: []f32) void {
     }
 }
 
-/// Factorize the mass matrix as `M = Lᵀ·D·L`, in place and without fill-in.
+/// Factorize the mass matrix as `M = L^T*D*L`, in place and without fill-in.
 ///
-/// WHY FACTOR AT ALL. Forward dynamics needs `M⁻¹(τ + Jᵀf − c)`, and a constraint solver
-/// needs `M⁻¹Jᵀ` for every constraint row. Inverting `M` outright would be both slower and
-/// numerically worse; factoring once per step turns every later `M⁻¹x` into two cheap
+/// WHY FACTOR AT ALL. Forward dynamics needs `M^-1(tau + J^Tf - c)`, and a constraint solver
+/// needs `M^-1J^T` for every constraint row. Inverting `M` outright would be both slower and
+/// numerically worse; factoring once per step turns every later `M^-1x` into two cheap
 /// back-substitutions.
 ///
-/// ★ WHY THERE IS NO FILL-IN, which is the good part. Ordinary sparse elimination creates
+/// * WHY THERE IS NO FILL-IN, which is the good part. Ordinary sparse elimination creates
 /// new nonzeros: eliminating a variable couples everything it touched, and the matrix
 /// gradually fills up. Here it cannot, and the reason is structural.
 ///
 /// Row `k` of `M` holds `k`'s ancestor chain. Row `i`, for any `i` ON that chain, holds
-/// `i`'s ancestor chain — which is a PREFIX of `k`'s, because `i`'s path to the root is
+/// `i`'s ancestor chain - which is a PREFIX of `k`'s, because `i`'s path to the root is
 /// the tail of `k`'s. Eliminating `k` only ever updates rows whose sparsity pattern is
 /// already contained in `k`'s. Nothing new can appear.
 ///
 /// And since rows are stored root-first, a prefix in the tree is a prefix in MEMORY: the
 /// update to row `i` is a contiguous run starting at `i`'s row address, aligned element for
 /// element with the head of row `k`. No index translation, no scatter. That alignment is
-/// why §5 chose root-first-with-the-diagonal-last, several phases before anything used it.
+/// why section 5 chose root-first-with-the-diagonal-last, several phases before anything used it.
 ///
-/// The loop runs BACKWARD over rows because elimination proceeds from the leaves inward —
+/// The loop runs BACKWARD over rows because elimination proceeds from the leaves inward -
 /// a DOF can only be eliminated once everything that depends on it is gone, and children
 /// always have higher indices than their parents.
 /// How many velocity coordinates a joint kind carries.
@@ -3518,27 +3518,27 @@ pub fn factorM(m: *const Model, d: *Data) void {
     factorMDamped(m, d, 0);
 }
 
-/// Factor `M + damping_dt · diag(B)`.
+/// Factor `M + damping_dt * diag(B)`.
 ///
-/// ★ THE DAMPING GOES ON THE FACTORISATION, NOT ON `mass_matrix`. That array is read by the
+/// * THE DAMPING GOES ON THE FACTORISATION, NOT ON `mass_matrix`. That array is read by the
 /// constraint solver and by `massDiagonal`, and must keep meaning inertia; `qLD` is scratch
 /// this function overwrites every time it runs. `damping_dt = 0` is the plain mass matrix and
 /// is what every caller outside the integrator wants.
 pub fn factorMDamped(m: *const Model, d: *Data, damping_dt: f32) void {
-    // ── ★ THE ZONE IS NAMED BY WHAT IT DID, BECAUSE `factorM` IS THIS FUNCTION ──
+    // -- * THE ZONE IS NAMED BY WHAT IT DID, BECAUSE `factorM` IS THIS FUNCTION --
     //
-    // A fixed name here reported `robot.factorM x3.0/step` under an implicit integrator —
+    // A fixed name here reported `robot.factorM x3.0/step` under an implicit integrator -
     // true, and useless: two of those three are plain factorisations and one is damped, and
     // a breakdown that cannot separate them cannot tell you which to go and look at.
     //
-    // ★ RENAMING IT TO `factorMDamped` MADE IT WORSE, and the output said so immediately:
+    // * RENAMING IT TO `factorMDamped` MADE IT WORSE, and the output said so immediately:
     // `robot.factorM` VANISHED from the breakdown and the damped row absorbed all three
     // calls. `factorM` is a one-line wrapper around this function with no zone of its own,
     // so a fixed name here labels every factorisation in the engine, whichever it was.
     // **A row disappearing when you rename another row means they were always the same
     // row.**
     //
-    // Choosing at runtime works because `internSrc` keys on (file, line, NAME) — two
+    // Choosing at runtime works because `internSrc` keys on (file, line, NAME) - two
     // literals at one call site intern as two entries, which is precisely the case that
     // condition exists to allow.
     const zone: profiler.Zone = profiler.zoneNamed(
@@ -3557,7 +3557,7 @@ pub fn factorMDamped(m: *const Model, d: *Data, damping_dt: f32) void {
             const first: u32 = m.jnt_dof_adr[j];
             for (0..dofWidth(m.jnt_type[j])) |k| {
                 const v: u32 = first + @as(u32, @intCast(k));
-                // The diagonal is the last slot in the row — see `massDiagonal`.
+                // The diagonal is the last slot in the row - see `massDiagonal`.
                 d.qLD[m.mass_row_start[v] + m.mass_row_nonzeros[v] - 1] += damping_dt * damping;
             }
         }
@@ -3569,7 +3569,7 @@ pub fn factorMDamped(m: *const Model, d: *Data, damping_dt: f32) void {
         const start: u32 = m.mass_row_start[k];
         const diag: u32 = start + m.mass_row_nonzeros[k] - 1;
 
-        // M is positive definite, so every pivot is positive — armature guarantees it even
+        // M is positive definite, so every pivot is positive - armature guarantees it even
         // for a massless-looking DOF. A non-positive pivot means the model is degenerate
         // (a zero-mass body, or an inertia that has gone bad upstream) and every number
         // after this point would be meaningless.
@@ -3606,11 +3606,11 @@ pub fn factorMDamped(m: *const Model, d: *Data, damping_dt: f32) void {
     d.stage = .position;
 }
 
-/// Solve `M·x = y` in place, using the factorization from `factorM`.
+/// Solve `M*x = y` in place, using the factorization from `factorM`.
 ///
-/// Three passes, one per factor of `Lᵀ·D·L`, in the order that undoes them:
-/// `x ← L⁻ᵀx`, then `x ← D⁻¹x`, then `x ← L⁻¹x`. Each is a sweep over the same ancestor
-/// chains — no iteration, no tolerance, no convergence. The chain structure that made `M`
+/// Three passes, one per factor of `L^T*D*L`, in the order that undoes them:
+/// `x <- L^-Tx`, then `x <- D^-1x`, then `x <- L^-1x`. Each is a sweep over the same ancestor
+/// chains - no iteration, no tolerance, no convergence. The chain structure that made `M`
 /// cheap to build makes it cheap to invert.
 pub fn solveM(m: *const Model, d: *const Data, x: []f32) void {
     assertf(x.len == m.nv, @src(), "solveM wants {d} entries, got {d}", .{ m.nv, x.len });
@@ -3656,14 +3656,14 @@ pub fn solveM(m: *const Model, d: *const Data, x: []f32) void {
 
 /// A cheap estimate of `M`'s condition number: the spread of the factorization's diagonal.
 ///
-/// Free, because `D` was computed anyway. It is not the true condition number — that would
-/// need eigenvalues — but it tracks it closely enough to be the warning we want, and it is
+/// Free, because `D` was computed anyway. It is not the true condition number - that would
+/// need eigenvalues - but it tracks it closely enough to be the warning we want, and it is
 /// the only diagnostic available for the failure mode f32 makes possible.
 ///
 /// A robot with a large mass ratio (a heavy torso driving a light fingertip) can push this
 /// past what 24 bits of mantissa can carry, and the symptom is a simulation that goes soft
 /// or diverges with no obvious cause. If this number is large and something looks wrong,
-/// that is the answer. See §1.1 of the port plan for the fix, which is narrow.
+/// that is the answer. See section 1.1 of the port plan for the fix, which is narrow.
 pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
     if (m.nv == 0) {
         return 1.0;
@@ -3680,7 +3680,7 @@ pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
 }
 
 // =============================================================================
-// Velocity and bias forces — phase 3
+// Velocity and bias forces - phase 3
 //
 // With M in hand we need the other side of the equation: `c(q,v)`, the forces that arise
 // from motion and gravity alone, with no actuation and no contact. Coriolis, centrifugal
@@ -3690,7 +3690,7 @@ pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
 
 /// Body velocities and the rate of change of each DOF's motion axis, in the shared frame.
 ///
-/// A child's velocity is its parent's plus whatever its own joints contribute — one
+/// A child's velocity is its parent's plus whatever its own joints contribute - one
 /// forward pass, accumulating down the tree. That part is obvious.
 ///
 /// The interesting output is `cdof_dot`. A DOF's motion axis is not fixed in space: if a
@@ -3700,7 +3700,7 @@ pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
 /// axis is being dragged.
 ///
 /// Note which velocity is used: the axis is differentiated against the velocity ACCUMULATED
-/// SO FAR — the parent's plus any earlier joints on this body, but not this joint's own
+/// SO FAR - the parent's plus any earlier joints on this body, but not this joint's own
 /// contribution. That is not an approximation. `crossMotion(x, x) = 0`, so a DOF's own
 /// motion cannot drag its own axis, and leaving it out is both correct and more accurate in
 /// floating point than adding a term that must cancel.
@@ -3715,7 +3715,7 @@ pub fn comVel(m: *const Model, d: *Data) void {
         const jnt_adr: u32 = m.body_jnt_adr[bi];
 
         // Walk JOINTS, not DOFs. The distinction is invisible for scalar joints and
-        // load-bearing for ball and free ones — see the note on `rotationTriple`.
+        // load-bearing for ball and free ones - see the note on `rotationTriple`.
         for (jnt_adr..jnt_adr + m.body_jnt_num[bi]) |ji| {
             const dof: u32 = m.jnt_dof_adr[ji];
             switch (m.jnt_type[ji]) {
@@ -3744,13 +3744,13 @@ pub fn comVel(m: *const Model, d: *Data) void {
 
 /// The three rotational DOFs of a ball joint (or a free joint's rotation half).
 ///
-/// ★ ALL THREE differentiate against the SAME velocity — the one before ANY of them has
+/// * ALL THREE differentiate against the SAME velocity - the one before ANY of them has
 /// contributed. That is not an optimisation, it is the definition: the three axes are
 /// simultaneous components of one rotation, not a sequence of three joints. Updating the
 /// velocity between them makes the second and third axes see motion that is really their
 /// own siblings', which produces a plausible, wrong gyroscopic force.
 ///
-/// A scalar joint cannot show this bug, because there is nothing to be out of order with —
+/// A scalar joint cannot show this bug, because there is nothing to be out of order with -
 /// which is exactly why it survives a test suite built on hinge models.
 fn rotationTriple(d: *Data, dof: u32, vel: *Motion) void {
     const snapshot: Motion = vel.*;
@@ -3768,24 +3768,24 @@ fn rotationTriple(d: *Data, dof: u32, vel: *Motion) void {
 /// that would produce it. Two passes:
 ///
 ///   * FORWARD, propagating acceleration down the tree and computing the spatial force on
-///     each body from Newton-Euler: `f = I·a + v ×* (I·v)`. The first term is the familiar
+///     each body from Newton-Euler: `f = I*a + v x* (I*v)`. The first term is the familiar
 ///     one; the second is the gyroscopic term, and it is why `crossForce` exists.
-///   * BACKWARD, summing each body's force into its parent — because the force a joint
+///   * BACKWARD, summing each body's force into its parent - because the force a joint
 ///     must supply is the total for everything hanging below it.
 ///
-/// Then each DOF's share is its motion axis contracted against that total: `cdof · f`.
+/// Then each DOF's share is its motion axis contracted against that total: `cdof * f`.
 ///
-/// ★ THE GRAVITY TRICK. Gravity is not applied to the bodies. Instead the WORLD is given
-/// an acceleration of `−g`, and it propagates down the tree like any other. In a frame
-/// accelerating upward at `g`, weight appears exactly as a fictitious force — which is what
+/// * THE GRAVITY TRICK. Gravity is not applied to the bodies. Instead the WORLD is given
+/// an acceleration of `-g`, and it propagates down the tree like any other. In a frame
+/// accelerating upward at `g`, weight appears exactly as a fictitious force - which is what
 /// weight is. One line, no per-body special case, and it means gravity is switched off by
 /// passing a zero vector rather than by branching anywhere.
 ///
 /// Run with zero acceleration, this IS the definition of `c(q,v)`: the forces required to
 /// hold the system at rest are precisely those that must be cancelled to achieve rest.
 ///
-/// Note what is deliberately NOT here: an acceleration input. RNE can compute `M·a + c` in
-/// one recursion, and MuJoCo's `mj_rne` offers that — but we do not use it, because the
+/// Note what is deliberately NOT here: an acceleration input. RNE can compute `M*a + c` in
+/// one recursion, and MuJoCo's `mj_rne` offers that - but we do not use it, because the
 /// tree recursion knows nothing about ARMATURE. Armature is rotor inertia: real mass, but
 /// living in a gearbox rather than in a link, so it appears on `M`'s diagonal and nowhere
 /// in the tree. Inverse dynamics therefore multiplies by the actual `M` instead (see
@@ -3836,7 +3836,7 @@ fn rne(m: *const Model, d: *Data, out: []f32) void {
     }
 }
 
-/// Compute `c(q,v)` — Coriolis, centrifugal and gravitational forces — into
+/// Compute `c(q,v)` - Coriolis, centrifugal and gravitational forces - into
 /// `Data.bias_force`. This is RNE with the acceleration set to zero.
 pub fn biasForce(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.rne");
@@ -3844,9 +3844,9 @@ pub fn biasForce(m: *const Model, d: *Data) void {
     rne(m, d, d.bias_force);
 }
 
-/// Multiply by the mass matrix: `out = M·x`.
+/// Multiply by the mass matrix: `out = M*x`.
 ///
-/// Only the lower triangle is stored, so each entry is used twice — once for its own row,
+/// Only the lower triangle is stored, so each entry is used twice - once for its own row,
 /// once mirrored into the column. The symmetric storage that halved the memory costs one
 /// extra accumulate here, which is a good trade.
 pub fn mulM(m: *const Model, d: *const Data, x: []const f32, out: []f32) void {
@@ -3868,9 +3868,9 @@ pub fn mulM(m: *const Model, d: *const Data, x: []const f32, out: []f32) void {
 
 /// Inverse dynamics: the joint forces that would produce acceleration `acc`.
 ///
-///     τ = M·a + c
+///     tau = M*a + c
 ///
-/// Useful on its own — gravity compensation is this with zero acceleration — and it is
+/// Useful on its own - gravity compensation is this with zero acceleration - and it is
 /// half of the sharpest test in the project: run it on the output of forward dynamics and
 /// it must return the force you started with, which checks `M`, its factorization, `c` and
 /// every frame convention between them at once.
@@ -3887,12 +3887,12 @@ pub fn inverseDynamics(m: *const Model, d: *Data, acc: []const f32, out: []f32) 
 
 /// Forward dynamics: solve for the acceleration, given the forces.
 ///
-///     v̇ = M⁻¹ (τ − c)
+///     v_dot = M^-1 (tau - c)
 ///
 /// The entire point of everything above. `M` is factored, `c` is known, so this is one
-/// subtraction and one direct solve — no iteration, no tolerance.
+/// subtraction and one direct solve - no iteration, no tolerance.
 ///
-/// Constraint forces (`Jᵀf`) join the right-hand side in phase 6; until then a robot can
+/// Constraint forces (`J^Tf`) join the right-hand side in phase 6; until then a robot can
 /// be driven by applied joint forces and gravity, which is enough for a pendulum and for
 /// a torque-controlled arm.
 pub fn forwardDynamics(m: *const Model, d: *Data) void {
@@ -3908,7 +3908,7 @@ pub fn forwardDynamics(m: *const Model, d: *Data) void {
 // Passive forces
 //
 // Forces that depend only on position and velocity, with no control input: joint springs
-// and dampers. They are "passive" in the technical sense that they cannot inject energy —
+// and dampers. They are "passive" in the technical sense that they cannot inject energy -
 // a damper always removes it, a spring stores and returns it.
 // =============================================================================
 
@@ -3916,18 +3916,18 @@ pub fn forwardDynamics(m: *const Model, d: *Data) void {
 ///
 /// Damping is the workhorse. Real joints have friction and real actuators have back-EMF;
 /// a model with none of it rings forever and is harder to control than the machine it
-/// represents. It also costs nothing numerically — damping is the one force that makes an
+/// represents. It also costs nothing numerically - damping is the one force that makes an
 /// explicit integrator MORE stable rather than less.
 ///
 /// LIMITATION, stated rather than hidden: stiffness applies to scalar joints only. A ball
 /// or free joint's spring needs a rotation residual against a reference orientation, which
-/// is a different computation from `q − q_ref` and is not worth writing until something
+/// is a different computation from `q - q_ref` and is not worth writing until something
 /// asks for it. Damping applies to every DOF of every joint type, which is the part models
 /// actually use.
 pub fn passive(m: *const Model, d: *Data) void {
     @memset(d.passive_force, 0);
 
-    // Tendon springs and dampers. Same Jᵀ spreading as an actuator's: a tendon's spring
+    // Tendon springs and dampers. Same J^T spreading as an actuator's: a tendon's spring
     // acts on its LENGTH, and that scalar force reaches the joints through the
     // coefficients. Requires `tendonLengths` to have run, which `forward` guarantees by
     // ordering `actuation` after `passive`... so do it here rather than depend on that.
@@ -3975,7 +3975,7 @@ pub fn passive(m: *const Model, d: *Data) void {
 }
 
 // =============================================================================
-// Actuators — phase 5
+// Actuators - phase 5
 //
 // This is where a mechanism becomes a robot. Everything so far responds to forces; nothing
 // so far DECIDES what force to apply.
@@ -3985,8 +3985,8 @@ pub fn passive(m: *const Model, d: *Data) void {
 ///
 /// For a FIXED tendon this is two dot products per tendon and nothing else:
 ///
-///     length   = Σ coefficientᵢ · qᵢ
-///     velocity = Σ coefficientᵢ · vᵢ
+///     length   = sum coefficient_i * q_i
+///     velocity = sum coefficient_i * v_i
 ///
 /// which follows immediately from the definition, since the coefficients do not depend on
 /// configuration. That is the whole reason a fixed tendon is a good way to couple joints:
@@ -3995,7 +3995,7 @@ pub fn passive(m: *const Model, d: *Data) void {
 /// approximately; this holds exactly and costs a dot product.
 ///
 /// A spatial tendon would compute both quantities geometrically here and everything after
-/// would be unchanged — that separation is the point of §7's transmission/force split.
+/// would be unchanged - that separation is the point of section 7's transmission/force split.
 pub fn tendonLengths(m: *const Model, d: *Data) void {
     for (0..m.ntendon) |ti| {
         const coefficients: []const f32 = m.tendon_jacobian[ti * m.nv ..][0..m.nv];
@@ -4006,7 +4006,7 @@ pub fn tendonLengths(m: *const Model, d: *Data) void {
                 continue;
             }
             // A tendon's coefficients index DOFs, but its LENGTH reads position
-            // coordinates — and those are different index spaces in general (nq != nv).
+            // coordinates - and those are different index spaces in general (nq != nv).
             // The hop through the owning joint is what translates between them, and it is
             // exact here because `Spec()` only lets a tendon touch scalar joints, whose
             // single DOF and single position coordinate correspond one to one.
@@ -4022,7 +4022,7 @@ pub fn tendonLengths(m: *const Model, d: *Data) void {
 ///
 /// For a joint transmission that is simply the joint's own position and velocity. The
 /// indirection exists because a tendon or site transmission computes them very differently
-/// while everything downstream stays identical — which is the point of separating
+/// while everything downstream stays identical - which is the point of separating
 /// transmission from force generation.
 pub fn transmission(m: *const Model, d: *Data) void {
     tendonLengths(m, d);
@@ -4044,7 +4044,7 @@ pub fn transmission(m: *const Model, d: *Data) void {
 
 /// Compute the actuator forces, and the RATE of change of each activation state.
 ///
-/// ★ It does not advance `act`. That is `advance`'s job, and the separation is not
+/// * It does not advance `act`. That is `advance`'s job, and the separation is not
 /// stylistic: RK4 evaluates the dynamics four times per step, so an `actuation` that
 /// integrated its own state would advance the activation four times per step. Computing a
 /// rate and integrating it once is the only arrangement that is correct under both
@@ -4052,7 +4052,7 @@ pub fn transmission(m: *const Model, d: *Data) void {
 ///
 /// `filter_exact` is the reason `dt` is a parameter at all. Its update is analytic rather
 /// than a rate, so it reports the rate that REPRODUCES the exact update over `dt`:
-/// `(u − w)·(1 − e^{−dt/τ})/dt`. Under Euler that is exact. Under RK4's sub-steps it is an
+/// `(u - w)*(1 - e^{-dt/tau})/dt`. Under Euler that is exact. Under RK4's sub-steps it is an
 /// approximation of an exact formula, which is a fair trade for keeping one code path.
 pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
     d.requireStage(.velocity, "actuation");
@@ -4080,8 +4080,8 @@ pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
                 break :blk d.act[state];
             },
             .filter_exact => |f| blk: {
-                // The exact update is `w += (u − w)(1 − e^{−dt/τ})`, which is stable for
-                // ANY positive τ where the Euler form above diverges once τ < dt. Reported
+                // The exact update is `w += (u - w)(1 - e^{-dt/tau})`, which is stable for
+                // ANY positive tau where the Euler form above diverges once tau < dt. Reported
                 // as the equivalent rate so the integrator stays uniform.
                 const alpha: f32 = 1.0 - @exp(-dt / f.time_const_s);
                 d.act_dot[state] = (u - d.act[state]) * alpha / dt;
@@ -4100,10 +4100,10 @@ pub fn actuation(m: *const Model, d: *Data, dt: f32) void {
 
         // ---- 3. through the transmission into joint coordinates ----
         //
-        // This is `Jᵀf` again, in miniature. For a joint transmission the moment arm is a
+        // This is `J^Tf` again, in miniature. For a joint transmission the moment arm is a
         // single 1 (the gear is already folded into gain and bias), so it is one
         // accumulate. For a tendon the moment arm IS the coefficient vector, so one scalar
-        // force spreads across every DOF the tendon touches — which is exactly how a real
+        // force spreads across every DOF the tendon touches - which is exactly how a real
         // tendon distributes tension along its path.
         switch (m.act_kind[ai]) {
             .joint => d.actuator_force[m.act_dof[ai]] += force,
@@ -4125,7 +4125,7 @@ pub fn setCtrl(m: *const Model, d: *Data, actuator: anytype, value: f32) void {
 }
 
 // =============================================================================
-// Jacobians — phase 4
+// Jacobians - phase 4
 //
 // A Jacobian answers: "if I move the joints, how does THIS point move?" It is the bridge
 // between the space you control (joint angles) and the space you care about (where the
@@ -4134,11 +4134,11 @@ pub fn setCtrl(m: *const Model, d: *Data, actuator: anytype, value: f32) void {
 //   * a CONTACT is a row of J along the contact normal;
 //   * a JOINT LIMIT is a row of J that is a unit vector on that DOF;
 //   * an ACTUATOR's moment arm is the gradient of its transmission length;
-//   * an END-EFFECTOR task — "move the gripper this way" — is a body Jacobian;
-//   * and Jᵀ maps a force applied at a point back into joint torques, which is how you
+//   * an END-EFFECTOR task - "move the gripper this way" - is a body Jacobian;
+//   * and J^T maps a force applied at a point back into joint torques, which is how you
 //     work out what your motors must do to push on the world.
 //
-// Layout note: a Jacobian is stored as one `Vec` PER DOF rather than a 3×nv matrix in
+// Layout note: a Jacobian is stored as one `Vec` PER DOF rather than a 3xnv matrix in
 // row-major floats. Column `i` is then "the velocity this point gains per unit of DOF i",
 // which is what every use above actually wants, and it keeps the arithmetic in zm's
 // vocabulary instead of index expressions.
@@ -4151,15 +4151,15 @@ pub fn setCtrl(m: *const Model, d: *Data, actuator: anytype, value: f32) void {
 /// Either may be null when you only need the other.
 ///
 /// THE DERIVATION, which is two lines. `cdof[i]` is DOF `i`'s motion as a spatial vector
-/// about the tree's shared frame origin. A spatial motion `(ω, v)` about origin `O` moves
-/// a point `p` at velocity `v + ω × (p − O)`. So:
+/// about the tree's shared frame origin. A spatial motion `(omega, v)` about origin `O` moves
+/// a point `p` at velocity `v + omega x (p - O)`. So:
 ///
 ///     jac_r[i] = cdof[i].ang
-///     jac_p[i] = cdof[i].lin + cdof[i].ang × (point − frame_origin)
+///     jac_p[i] = cdof[i].lin + cdof[i].ang x (point - frame_origin)
 ///
 /// That is the whole computation. `comPos` did the hard part.
 ///
-/// Only DOFs that actually move this body get a column — the rest are zero, and we find
+/// Only DOFs that actually move this body get a column - the rest are zero, and we find
 /// them by walking the body's ancestor chain, the same chain `crb` and `factorM` walk.
 pub fn jacPoint(
     m: *const Model,
@@ -4192,7 +4192,7 @@ pub fn jacPoint(
     }
 }
 
-/// Jacobian of a body's centre of mass — the one MuJoCo's `mj_jacBodyCom` returns, and
+/// Jacobian of a body's centre of mass - the one MuJoCo's `mj_jacBodyCom` returns, and
 /// the natural target when you care about where the mass is rather than where the origin
 /// happens to be.
 pub fn jacBodyCom(
@@ -4219,9 +4219,9 @@ pub fn jacSite(
     jacPoint(m, d, m.site_body[si], d.site_xpos[si], jac_p, jac_r);
 }
 
-/// Map a force and torque applied at a point back into joint forces: `τ += Jᵀ·(f, t)`.
+/// Map a force and torque applied at a point back into joint forces: `tau += J^T*(f, t)`.
 ///
-/// This is what `Jᵀ` is FOR, and it is the reason the transpose shows up in the equation of
+/// This is what `J^T` is FOR, and it is the reason the transpose shows up in the equation of
 /// motion. Pushing on the world with your hand produces a torque at every joint between
 /// your hand and the ground, and the Jacobian transpose is exactly that bookkeeping.
 ///
@@ -4254,9 +4254,9 @@ fn siteIndex(site: anytype) u32 {
 }
 
 // =============================================================================
-// Constraints — phase 6a: the ROWS, with no solver
+// Constraints - phase 6a: the ROWS, with no solver
 //
-// Every constraint in this engine — a joint limit today, a contact and an equality later —
+// Every constraint in this engine - a joint limit today, a contact and an equality later -
 // reduces to the same three numbers per scalar row:
 //
 //   * a JACOBIAN row `J_i`, saying which joint motions violate it;
@@ -4264,17 +4264,17 @@ fn siteIndex(site: anytype) u32 {
 //   * a REGULARIZER `R_i`, saying how hard it insists.
 //
 // Given those, the solver's job (phase 6c) is to find forces `f` with
-// `(A + R) f = aref − a_unconstrained` subject to `f` lying in an allowed set. Nothing
+// `(A + R) f = aref - a_unconstrained` subject to `f` lying in an allowed set. Nothing
 // about the rows depends on how that is solved, which is exactly why they are built and
 // TESTED first: a wrong row and a wrong solver produce the same symptom, and separating
 // them is the difference between a day and a week.
 //
-// ★ WHY SOFT. Every other rigid-body engine treats contact as a HARD complementarity
+// * WHY SOFT. Every other rigid-body engine treats contact as a HARD complementarity
 // problem: either the bodies touch and there is force, or they separate and there is none.
 // That is an LCP, it is NP-hard with friction, and it has no unique solution in general.
-// Making every constraint soft — allowing a little penetration in exchange for a force
-// that grows smoothly — turns it into a CONVEX problem: always solvable, unique, and
-// differentiable. The last of those is not a bonus; it is the property §4d needs.
+// Making every constraint soft - allowing a little penetration in exchange for a force
+// that grows smoothly - turns it into a CONVEX problem: always solvable, unique, and
+// differentiable. The last of those is not a bonus; it is the property section 4d needs.
 // =============================================================================
 
 /// What produced a constraint row. Only limits exist today; contacts and equalities join
@@ -4290,16 +4290,16 @@ pub const ConstraintKind = enum {
 
     /// Whether this row may only PUSH, never pull.
     ///
-    /// ── ★ THE ONE QUESTION EVERY SOLVER ASKS ABOUT A ROW ──
+    /// -- * THE ONE QUESTION EVERY SOLVER ASKS ABOUT A ROW --
     ///
     /// A surface can separate and a joint limit can be left; a loop closure cannot, because the
     /// two points are welded together. PGS clamps a unilateral row's force at zero and leaves a
     /// bilateral one free; Newton includes a unilateral row in the objective only while it is
     /// violated, which is what makes that objective piecewise quadratic.
     ///
-    /// ★ ASKING THE ENUM BEATS COMPARING AGAINST IT. This was written inline as
+    /// * ASKING THE ENUM BEATS COMPARING AGAINST IT. This was written inline as
     /// `kind != .connect` in four places, which is correct today and silently wrong the moment
-    /// a second bilateral kind is added — a `weld`'s orientation rows, say. Here the compiler
+    /// a second bilateral kind is added - a `weld`'s orientation rows, say. Here the compiler
     /// will point at this switch instead.
     pub fn isUnilateral(self: ConstraintKind) bool {
         return switch (self) {
@@ -4317,8 +4317,8 @@ pub const Anchor = struct {
 
 /// Resolve a joint name to where its scalar coordinate lives.
 ///
-/// ★ HINGE AND SLIDE ONLY. A ball or free joint has no scalar to couple — its coordinate is a
-/// quaternion or a whole pose — so a coupling naming one is a modelling error rather than
+/// * HINGE AND SLIDE ONLY. A ball or free joint has no scalar to couple - its coordinate is a
+/// quaternion or a whole pose - so a coupling naming one is a modelling error rather than
 /// something to approximate.
 fn coordinateOf(spec: ModelSpec, m: Model, name: []const u8) BuildError!Coordinate {
     const j: u32 = try jointIndexByName(spec, name);
@@ -4335,7 +4335,7 @@ fn coordinateOf(spec: ModelSpec, m: Model, name: []const u8) BuildError!Coordina
 
 /// Express a point given in one body's frame in another body's frame, at the REST pose.
 ///
-/// Walks each body's parent chain to the world using the model's own `body_pos`/`body_rot` —
+/// Walks each body's parent chain to the world using the model's own `body_pos`/`body_rot` -
 /// which is `qpos0`, since a joint at its zero coordinate contributes nothing. That is exactly
 /// the configuration a spec describes, so a closure derived here is satisfied the moment the
 /// model is built.
@@ -4366,39 +4366,39 @@ fn restToWorld(m: *const Model, body: u32, point: Vec) Vec {
 /// A resolved loop closure, as the model stores it.
 pub const Equality = struct {
     /// What is being held equal. The two variants share nothing but their softness, which is
-    /// why this is a field rather than the whole type being a union — every caller that only
+    /// why this is a field rather than the whole type being a union - every caller that only
     /// cares how STIFFLY a closure is held can read `softness` without unwrapping anything.
     holds: union(enum) {
         /// Two points on two bodies that must coincide.
         connect: struct { a: Anchor, b: Anchor },
-        /// Two bodies held at a fixed relative POSE — position and orientation both.
+        /// Two bodies held at a fixed relative POSE - position and orientation both.
         ///
-        /// ── ★ WHY THIS IS NOT JUST A JOINTLESS BODY ──
+        /// -- * WHY THIS IS NOT JUST A JOINTLESS BODY --
         ///
         /// A body with no joint is welded to its PARENT, which the tree already expresses for
-        /// free. This welds two bodies that are not related that way — a hand gripping a
+        /// free. This welds two bodies that are not related that way - a hand gripping a
         /// crate, two halves of a mechanism bolted together at runtime, a robot clamped to a
         /// bench it did not grow from. The tie can also be removed again, which a topology
         /// cannot.
         weld: struct {
             a: Anchor,
             b: Anchor,
-            /// The relative orientation to hold: `rot_b · relative = rot_a`.
+            /// The relative orientation to hold: `rot_b * relative = rot_a`.
             relative: Quat,
             /// How much the orientation rows count for relative to the position ones.
             /// MuJoCo's `torquescale`, and for the same reason: the two halves are in
-            /// different units — metres against radians — so one number has to say how they
+            /// different units - metres against radians - so one number has to say how they
             /// trade, and 1 means "a radian matters as much as a metre".
             torque_scale: f32,
         },
-        /// One joint's coordinate as a polynomial in another's — MuJoCo's
+        /// One joint's coordinate as a polynomial in another's - MuJoCo's
         /// `<equality type="joint">`. See `JointCouplingSpec`.
         joint: struct {
             /// The joint whose value is DETERMINED. Its qpos and dof addresses, resolved.
             driven: Coordinate,
             /// The joint it follows. Null couples `driven` to a constant.
             driver: ?Coordinate,
-            /// `driven − ref = c0 + c1·x + c2·x² + c3·x³ + c4·x⁴`, where `x = driver − ref`.
+            /// `driven - ref = c0 + c1*x + c2*x^2 + c3*x^3 + c4*x^4`, where `x = driver - ref`.
             poly: [5]f32,
         },
     },
@@ -4410,18 +4410,18 @@ pub const Equality = struct {
 pub const Coordinate = struct {
     qpos: u32,
     dof: u32,
-    /// The joint's rest value, which the polynomial is measured from — the same `qpos0`
+    /// The joint's rest value, which the polynomial is measured from - the same `qpos0`
     /// convention MuJoCo uses, so a coupling written for one reads the same in the other.
     rest: f32,
 };
 
-/// A point on two bodies that must coincide — MuJoCo's `<equality type="connect">`.
+/// A point on two bodies that must coincide - MuJoCo's `<equality type="connect">`.
 ///
-/// ── ★★ WHY A TREE NEEDS THIS AT ALL ──
+/// -- ** WHY A TREE NEEDS THIS AT ALL --
 ///
 /// Reduced coordinates buy exact joints and no drift, and they pay for it in TOPOLOGY: a tree
 /// has no loops, so a mechanism whose links form a ring cannot be spelled at all. That rules
-/// out a whole class of real machine — Cassie and Digit's parallel shin linkages, four-bar
+/// out a whole class of real machine - Cassie and Digit's parallel shin linkages, four-bar
 /// suspensions, most delta arms, and nearly every rigid gripper whose fingers are geared to
 /// each other.
 ///
@@ -4429,7 +4429,7 @@ pub const Coordinate = struct {
 /// loops with constraints the solver enforces. The joints stay exact; the loop closure is
 /// approximate in the same way contact is, and to the same tolerance.
 ///
-/// ★ THREE ROWS, NOT ONE. A point constraint is three scalar equations — one per world axis —
+/// * THREE ROWS, NOT ONE. A point constraint is three scalar equations - one per world axis -
 /// and they go to the solver as three rows sharing a body pair. Writing it as a single row
 /// along the current error direction would look right while the error is small and drift
 /// sideways, because a direction computed from an error cannot constrain the two axes the
@@ -4447,31 +4447,31 @@ pub const EqualitySpec = struct {
     torque_scale: f32 = 1.0,
     /// Couple two joints instead of two points. When set, the anchors are ignored.
     ///
-    /// ── ★ WHAT THIS IS FOR ──
+    /// -- * WHAT THIS IS FOR --
     ///
     /// A parallel gripper's two fingers driven by one motor; a geared pair; a linkage whose
-    /// ratio is known rather than derived from geometry. `driven − rest = c0 + c1·x + ... `
-    /// where `x = driver − rest`, which is MuJoCo's `polycoef` exactly — a coupling written
+    /// ratio is known rather than derived from geometry. `driven - rest = c0 + c1*x + ... `
+    /// where `x = driver - rest`, which is MuJoCo's `polycoef` exactly - a coupling written
     /// for one engine reads the same in the other.
     ///
     /// A LINEAR coupling is `.{ offset, ratio }` and covers essentially every gripper. The
     /// higher terms exist because MuJoCo has them and a model may use them, not because they
     /// are usually wanted.
     couple: ?JointCouplingSpec = null,
-    /// Where the point sits in `body_b`'s frame — or **null to derive it**, which is almost
+    /// Where the point sits in `body_b`'s frame - or **null to derive it**, which is almost
     /// always what you want.
     ///
-    /// ── ★★ A LOOP CLOSURE THAT STARTS VIOLATED SNAPS ──
+    /// -- ** A LOOP CLOSURE THAT STARTS VIOLATED SNAPS --
     ///
     /// Both anchors describe the same physical point, so stating both is stating the same
-    /// fact twice in two different frames — and getting the second one wrong by a centimetre
+    /// fact twice in two different frames - and getting the second one wrong by a centimetre
     /// gives a mechanism that lurches on frame one and then behaves, which reads as a solver
     /// problem and is a typo.
     ///
     /// Null means "whatever makes this exact at the rest pose": the builder places `anchor_a`
     /// in the world using `qpos0`, then expresses that point in `body_b`'s frame. **MuJoCo
-    /// does the same derivation** — its `<connect anchor="...">` takes one point and the
-    /// compiler fills in the other — but only in the file format. Having it in the API means
+    /// does the same derivation** - its `<connect anchor="...">` takes one point and the
+    /// compiler fills in the other - but only in the file format. Having it in the API means
     /// a model built in code gets it too.
     anchor_b: ?Vec = null,
     /// How stiffly the loop is held. The default is stiffer than contact: a loop closure is a
@@ -4488,7 +4488,7 @@ pub const JointCouplingSpec = struct {
     /// The joint it follows. Null pins `driven` to a constant offset from its rest value,
     /// which is how a joint is locked without removing it from the model.
     driver: ?[]const u8 = null,
-    /// `c0 … c4`. `.{ 0, 1 }` makes the two joints equal; `.{ 0, -1 }` mirrors them.
+    /// `c0 ... c4`. `.{ 0, 1 }` makes the two joints equal; `.{ 0, -1 }` mirrors them.
     poly: [5]f32 = .{ 0, 1, 0, 0, 0 },
 };
 
@@ -4499,7 +4499,7 @@ pub const JointCouplingSpec = struct {
 pub const Contact = struct {
     /// Where the contact acts, in world coordinates.
     position: Vec,
-    /// Unit normal, pointing from `body_a` toward `body_b` — so a positive normal force
+    /// Unit normal, pointing from `body_a` toward `body_b` - so a positive normal force
     /// pushes `body_b` along it and `body_a` against it.
     normal: Vec,
     /// Two unit vectors completing a right-handed frame with `normal`. The friction
@@ -4514,16 +4514,16 @@ pub const Contact = struct {
     /// geometry and for anything outside the tree.
     body_a: u32,
     body_b: u32,
-    /// ── ★ WHY THERE IS NO `external_mass` HERE (§4k) ──
+    /// -- * WHY THERE IS NO `external_mass` HERE (section 4k) --
     ///
     /// There was, briefly. When a contact's other side lived in a different engine, this
     /// struct carried its inverse mass, inverse inertia, centre of mass, velocity and
-    /// acceleration, and `Â` added an effective-mass term for it. All of that existed to
+    /// acceleration, and `A_hat` added an effective-mass term for it. All of that existed to
     /// describe a body the solver could not see.
     ///
     /// In one tree it can see it. `addContactRows` builds the RELATIVE Jacobian
-    /// `jac_b − jac_a`, so `J M⁻¹ Jᵀ` already contains BOTH inertias, `J·v` is already the
-    /// relative velocity and `J·a` the relative acceleration. Every one of those fields was
+    /// `jac_b - jac_a`, so `J M^-1 J^T` already contains BOTH inertias, `J*v` is already the
+    /// relative velocity and `J*a` the relative acceleration. Every one of those fields was
     /// a hand-rolled reconstruction of something the Jacobian does exactly.
     ///
     /// **`world_body` on either side still means immovable**, which is correct for static
@@ -4549,22 +4549,22 @@ pub const Contact = struct {
 /// A limit end is ACTIVE when the joint is within `margin` of it. The distance is measured
 /// per END, not to the nearest one:
 ///
-///     lower:  q − lo          upper:  hi − q
+///     lower:  q - lo          upper:  hi - q
 ///
 /// and either being below `margin` produces a row. Negative means already violated.
 ///
-/// ★ BOTH ENDS CAN BE ACTIVE AT ONCE, and the code must allow it. It looks impossible —
-/// a joint cannot be past its lower and upper stops simultaneously — but `margin` is what
-/// makes it reachable: if the range is narrower than `2·margin`, the joint is within margin
+/// * BOTH ENDS CAN BE ACTIVE AT ONCE, and the code must allow it. It looks impossible -
+/// a joint cannot be past its lower and upper stops simultaneously - but `margin` is what
+/// makes it reachable: if the range is narrower than `2*margin`, the joint is within margin
 /// of both ends everywhere in its travel, and MuJoCo emits two rows. A tempting shortcut
-/// (`residual = min(q − lo, hi − q)`, one row) is correct for every model with the default
+/// (`residual = min(q - lo, hi - q)`, one row) is correct for every model with the default
 /// zero margin and silently wrong for a narrow range with a generous one. The two rows then
 /// oppose each other and the solver balances them, which is the right behaviour: the joint
 /// is being softly squeezed from both sides.
 ///
-/// The Jacobian row is `+1` for a lower end and `−1` for an upper one, so a positive
+/// The Jacobian row is `+1` for a lower end and `-1` for an upper one, so a positive
 /// constraint force always pushes the joint back INTO its range whichever end it hit. That
-/// convention is what lets the solver clamp every row to `f ≥ 0` uniformly instead of
+/// convention is what lets the solver clamp every row to `f >= 0` uniformly instead of
 /// tracking which direction each row wants to push.
 pub fn makeConstraints(m: *const Model, d: *Data) void {
     const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.constraints");
@@ -4572,17 +4572,17 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
     d.requireStage(.position, "makeConstraints");
     d.constraint_count = 0;
 
-    // ── ★★ EQUALITIES FIRST, BECAUSE THEY ARE THE ONLY ROWS THAT ARE NOT OPTIONAL ──
+    // -- ** EQUALITIES FIRST, BECAUSE THEY ARE THE ONLY ROWS THAT ARE NOT OPTIONAL --
     //
     // A contact appears when two things touch and a limit when a joint runs out of travel;
-    // both are conditions of the moment. A loop closure is part of the MECHANISM — emitted
-    // every step, unconditionally — and a linkage that loses its closure because a busy contact
+    // both are conditions of the moment. A loop closure is part of the MECHANISM - emitted
+    // every step, unconditionally - and a linkage that loses its closure because a busy contact
     // step filled the buffer is not a linkage.
     //
     // Capacity reserves exact room for them, so this should never be the difference. It is
     // ordered this way anyway: the reservation is a promise made in one function and kept in
     // another, and putting the unconditional rows first means a mistake in either shows up as
-    // a dropped CONTACT — visible, recoverable — rather than as a limb quietly falling off.
+    // a dropped CONTACT - visible, recoverable - rather than as a limb quietly falling off.
     for (0..m.neq) |eq| {
         addEqualityRows(m, d, @intCast(eq));
     }
@@ -4596,7 +4596,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
         const q: f32 = d.pos[qadr];
         const margin: f32 = m.jnt_limit_margin[ji];
 
-        // Lower end first, then upper — the order MuJoCo emits them in, which matters
+        // Lower end first, then upper - the order MuJoCo emits them in, which matters
         // because the fixtures compare row by row.
         const ends = [_]struct { distance: f32, jacobian: f32 }{
             .{ .distance = q - range[0], .jacobian = 1.0 },
@@ -4632,11 +4632,11 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
     }
 
     // ---- contacts ----
-    // ★ SORTED FIRST, and this is not tidiness. A constraint solver is order-sensitive:
+    // * SORTED FIRST, and this is not tidiness. A constraint solver is order-sensitive:
     // Gauss-Seidel sweeps rows in sequence, so a different row order gives a different
-    // (equally valid) answer. Collision detectors do not promise a stable order —
+    // (equally valid) answer. Collision detectors do not promise a stable order -
     // zimrphysics's broad phase certainly does not, and MuJoCo sorts its own contacts for
-    // exactly this reason — so without a sort here the same scene replayed from the same
+    // exactly this reason - so without a sort here the same scene replayed from the same
     // state can diverge. Sorting inside the engine means a caller cannot forget to.
     std.mem.sort(Contact, d.contacts[0..d.contact_count], {}, contactBefore);
     for (d.contacts[0..d.contact_count], 0..) |contact, index| {
@@ -4645,7 +4645,7 @@ pub fn makeConstraints(m: *const Model, d: *Data) void {
 }
 
 /// Total order on contacts: body pair first, then the detector's stable id. Ties fall back
-/// to insertion order because `std.mem.sort` is not stable — which is why `Contact.id`
+/// to insertion order because `std.mem.sort` is not stable - which is why `Contact.id`
 /// exists and why a detector that supplies one gets a stronger guarantee than one that
 /// does not.
 fn contactBefore(_: void, a: Contact, b: Contact) bool {
@@ -4660,26 +4660,26 @@ fn contactBefore(_: void, a: Contact, b: Contact) bool {
 
 /// Turn one contact into constraint rows, using a PYRAMIDAL friction cone.
 ///
-/// ── WHAT COULOMB FRICTION ACTUALLY DEMANDS ──
+/// -- WHAT COULOMB FRICTION ACTUALLY DEMANDS --
 /// The physical condition is that the tangential force stays inside a cone around the
-/// normal: `‖f_tangential‖ ≤ μ · f_normal`. That is a second-order cone constraint, and
+/// normal: `||f_tangential|| <= mu * f_normal`. That is a second-order cone constraint, and
 /// projecting onto it is a different and harder operation than clamping a scalar.
 ///
-/// ── THE PYRAMID TRICK ──
-/// Approximate the cone by a pyramid whose EDGES are the directions `n ± μ_k·t_k`, and give
+/// -- THE PYRAMID TRICK --
+/// Approximate the cone by a pyramid whose EDGES are the directions `n +/- mu_k*t_k`, and give
 /// each edge its own non-negative force. Then:
 ///
 ///   * the total force is a non-negative combination of edge directions, so it lies inside
 ///     the pyramid automatically;
 ///   * the normal components add up, so `f_normal` is the sum of the edge forces;
 ///   * the tangential components cancel in pairs unless the edges are loaded unevenly, and
-///     the imbalance is bounded by `μ` times the normal force — which IS the friction law.
+///     the imbalance is bounded by `mu` times the normal force - which IS the friction law.
 ///
-/// ★ The consequence is the good part: **friction needs no special projection**. Each edge
-/// row is just `f ≥ 0`, exactly like a joint limit, so the solver written in 6c handles
-/// friction without a single line of change. The cost is that a pyramid is not a cone —
-/// friction is slightly stronger along the pyramid's edges (by up to √2 for two tangents)
-/// than along its faces — which is the standard, well-understood approximation and the one
+/// * The consequence is the good part: **friction needs no special projection**. Each edge
+/// row is just `f >= 0`, exactly like a joint limit, so the solver written in 6c handles
+/// friction without a single line of change. The cost is that a pyramid is not a cone -
+/// friction is slightly stronger along the pyramid's edges (by up to sqrt2 for two tangents)
+/// than along its faces - which is the standard, well-understood approximation and the one
 /// MuJoCo uses by default.
 ///
 /// All rows of one contact share the SAME residual, the penetration depth. That looks odd
@@ -4692,7 +4692,7 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
     }
 
     // The contact-frame Jacobian: how the CONTACT POINT's relative velocity depends on
-    // joint motion. Relative, so it is the difference of the two bodies' point Jacobians —
+    // joint motion. Relative, so it is the difference of the two bodies' point Jacobians -
     // and because a static body's Jacobian is identically zero, contact against the world
     // falls out of the same expression with no special case.
     const jac_a: []Vec = d.pair_jac_a;
@@ -4718,7 +4718,7 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
     //
     // `margin` shifts the equilibrium: a contact with a positive margin settles that far
     // apart, which lets a constraint engage before the surfaces meet. Contacts from
-    // `robot_physics` use zero — see the note there for why, and for what was measured
+    // `robot_physics` use zero - see the note there for why, and for what was measured
     // before arriving at it.
     const violation: f32 = contact.distance - contact.margin;
     for (0..2) |tangent_index| {
@@ -4735,10 +4735,10 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
             for (0..m.nv) |i| {
                 d.constraint_jacobian[base + i] = projected[0][i] + sign * mu * projected[tangent_index + 1][i];
             }
-            // ★ The row's WORLD-SPACE direction, kept because §4h-ter needs it.
+            // * The row's WORLD-SPACE direction, kept because section 4h-ter needs it.
             //
-            // Each pyramid edge is `normal + sign·mu·tangent`, a different direction per
-            // row — so the external body's resistance differs per row too, and computing it
+            // Each pyramid edge is `normal + sign*mu*tangent`, a different direction per
+            // row - so the external body's resistance differs per row too, and computing it
             // from the contact NORMAL would be right for one row in four. Storing the
             // direction here, where it is already being formed, costs a vector and saves
             // reconstructing it (and the chance of reconstructing it differently).
@@ -4747,13 +4747,13 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
             d.constraint_kind[row] = .contact;
             // For a contact row this is the index into `Data.contacts`; for a limit row it
             // is the joint index. Two meanings in one array, discriminated by
-            // `constraint_kind` — read one without checking the other and you will get a
+            // `constraint_kind` - read one without checking the other and you will get a
             // plausible wrong answer.
             d.constraint_source[row] = contact_index;
-            // `contact.id` is the detector's stable per-point identity — the reason
+            // `contact.id` is the detector's stable per-point identity - the reason
             // `Contact` carries one. The pyramid edge index completes it.
             // `contact.id` is a u64 from the detector, so it is narrowed here rather than in
-            // `constraintKey` — the packing there reserves 48 bits for the source, which is
+            // `constraintKey` - the packing there reserves 48 bits for the source, which is
             // ample for any id a broad phase produces and keeps the key one integer.
             d.constraint_key[row] = constraintKey(
                 .contact,
@@ -4769,25 +4769,25 @@ fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u3
     }
 }
 
-/// Rows for one equality constraint — three, one per world axis.
+/// Rows for one equality constraint - three, one per world axis.
 ///
-/// ── ★★ A CONNECT ROW IS A CONTACT ROW WITHOUT THE INEQUALITY ──
+/// -- ** A CONNECT ROW IS A CONTACT ROW WITHOUT THE INEQUALITY --
 ///
 /// The machinery is nearly identical: take both bodies' point Jacobians at the shared point,
 /// subtract them for the relative Jacobian, project onto a direction, and give the solver the
 /// violation along it. What differs is the SIGN CONDITION. A contact may only push
-/// (`f ≥ 0`) — the surfaces are free to separate. A loop closure may push OR pull, because the
+/// (`f >= 0`) - the surfaces are free to separate. A loop closure may push OR pull, because the
 /// two points are welded together and neither is allowed to leave.
 ///
-/// ★ THREE AXES, NOT ONE ALONG THE ERROR. Projecting onto the error direction would look right
+/// * THREE AXES, NOT ONE ALONG THE ERROR. Projecting onto the error direction would look right
 /// while the error is small and drift sideways: a direction derived from the error cannot
 /// constrain the two axes the error does not happen to point along. World X, Y and Z always
 /// span the space, whatever the error is doing.
 /// How far apart a loop closure's two anchors currently are, in metres.
 ///
-/// ── ★ THE ONE NUMBER ANYONE DEBUGGING A LINKAGE WANTS ──
+/// -- * THE ONE NUMBER ANYONE DEBUGGING A LINKAGE WANTS --
 ///
-/// A loop closure is SOFT, like contact — it holds to a tolerance rather than exactly, and the
+/// A loop closure is SOFT, like contact - it holds to a tolerance rather than exactly, and the
 /// tolerance depends on the mechanism's stiffness, the timestep and how hard the loop is being
 /// worked. So "is my linkage holding?" is a real question with a real answer, and it should not
 /// require knowing that the answer lives in three rows of `constraint_violation` indexed by
@@ -4800,14 +4800,14 @@ pub fn equalityError(m: *const Model, d: *const Data, eq: u32) f32 {
     const closure: Equality = m.equalities[eq];
     return switch (closure.holds) {
         .connect => |points| length3(worldAnchor(d, points.b) - worldAnchor(d, points.a)),
-        // ★ A WELD'S ERROR IS REPORTED AS THE POSITION PART ONLY. It has two halves in
-        // different units — metres and radians — and no single number honestly combines them.
+        // * A WELD'S ERROR IS REPORTED AS THE POSITION PART ONLY. It has two halves in
+        // different units - metres and radians - and no single number honestly combines them.
         // Position is the one a caller can act on ("has the grip slipped?"), so that is what
         // this answers, and the orientation rows are visible in `constraint_violation` for
         // anyone who needs them.
         .weld => |w| length3(worldAnchor(d, w.b) - worldAnchor(d, w.a)),
         // For a coupling the error is already scalar, and its sign carries which way the
-        // driven joint has drifted — which the caller usually wants, so it is not made
+        // driven joint has drifted - which the caller usually wants, so it is not made
         // absolute here.
         .joint => |couple| blk: {
             var wanted: f32 = couple.poly[0];
@@ -4826,8 +4826,8 @@ pub fn equalityError(m: *const Model, d: *const Data, eq: u32) f32 {
 
 /// Where an anchor currently sits in the world.
 ///
-/// ★ ONE DEFINITION, TWO CALLERS. The row builder and the diagnostic both need this, and two
-/// copies of `body_xpos + rotate(body_xrot, point)` is exactly the duplication that drifts —
+/// * ONE DEFINITION, TWO CALLERS. The row builder and the diagnostic both need this, and two
+/// copies of `body_xpos + rotate(body_xrot, point)` is exactly the duplication that drifts -
 /// one gets a fix and the other keeps reporting the old answer, which is worse than either
 /// being wrong on its own.
 fn worldAnchor(d: *const Data, anchor: Anchor) Vec {
@@ -4842,11 +4842,11 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
             if (d.constraint_count >= m.constraint_capacity) {
                 return;
             }
-            // ── ★ ONE ROW, AND THE JACOBIAN IS THE POLYNOMIAL'S DERIVATIVE ──
+            // -- * ONE ROW, AND THE JACOBIAN IS THE POLYNOMIAL'S DERIVATIVE --
             //
-            // The constraint is `driven − rest = poly(x)` with `x = driver − rest`, so the
+            // The constraint is `driven - rest = poly(x)` with `x = driver - rest`, so the
             // row's violation is how far that is from holding, and its Jacobian is
-            // `∂/∂q = [1 on driven, −poly'(x) on driver]`. Linear coupling makes the
+            // `d/dq = [1 on driven, -poly'(x) on driver]`. Linear coupling makes the
             // derivative a constant, which is the case every gripper uses.
             const row: u32 = d.constraint_count;
             const projected: []f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
@@ -4863,7 +4863,7 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
                     slope += float(k) * couple.poly[k] * (power / x);
                     power *= x;
                 }
-                // ★ AT x = 0 THE DIVISION ABOVE IS 0/0. Rebuild the slope directly there — it
+                // * AT x = 0 THE DIVISION ABOVE IS 0/0. Rebuild the slope directly there - it
                 // is `c1`, and a NaN in one row poisons the whole solve.
                 projected[driver.dof] = -(if (x == 0) couple.poly[1] else slope);
             }
@@ -4877,8 +4877,8 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
             return;
         },
     }
-    // ★ BOTH `connect` AND `weld` HAVE THE SAME TWO ANCHORS, and the position rows below are
-    // identical for either — a weld is a connect with three more rows after it. Reading
+    // * BOTH `connect` AND `weld` HAVE THE SAME TWO ANCHORS, and the position rows below are
+    // identical for either - a weld is a connect with three more rows after it. Reading
     // `.connect` unconditionally happened to compile and crashed on the first weld, which is
     // the union doing its job.
     const points: struct { a: Anchor, b: Anchor } = switch (closure.holds) {
@@ -4892,17 +4892,17 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
 
     const jac_a: []Vec = d.pair_jac_a;
     const jac_b: []Vec = d.pair_jac_b;
-    // ★ EACH BODY'S JACOBIAN AT ITS OWN ANCHOR, not at a shared point. For a contact the two
+    // * EACH BODY'S JACOBIAN AT ITS OWN ANCHOR, not at a shared point. For a contact the two
     // touching points coincide by definition; for a loop closure they coincide only once the
     // constraint is satisfied, and using one point for both would compute the wrong velocity
     // relationship exactly when the error is largest.
     jacPoint(m, d, points.a.body, at_a, jac_a, null);
     jacPoint(m, d, points.b.body, at_b, jac_b, null);
 
-    // ★ ALL THREE ROWS OR NONE, and the capacity is reserved so this cannot fire in practice.
+    // * ALL THREE ROWS OR NONE, and the capacity is reserved so this cannot fire in practice.
     //
     // Emitting two rows because the third did not fit would leave the mechanism held in X and
-    // Y and free to slide apart in Z — worse than no constraint, and it reads as a solver bug
+    // Y and free to slide apart in Z - worse than no constraint, and it reads as a solver bug
     // rather than the capacity limit it is. The first version checked inside the row loop and
     // could return mid-constraint; `Spec` now reserves `3 * equalities.len` up front, so this
     // is a belt-and-braces guard rather than a live path.
@@ -4910,16 +4910,16 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
         return;
     }
 
-    // ★★ ONE ROW PER WORLD AXIS, AND THE PROJECTION IS JUST AN INDEX.
+    // ** ONE ROW PER WORLD AXIS, AND THE PROJECTION IS JUST AN INDEX.
     //
     // This read `dot3(axis, jac_b[i] - jac_a[i])` over the three basis vectors, which is an
-    // elaborate way of writing `(jac_b[i] - jac_a[i])[k]` — a dot product with `(1,0,0)`
+    // elaborate way of writing `(jac_b[i] - jac_a[i])[k]` - a dot product with `(1,0,0)`
     // selects a component. Same for the violation. Writing what it means is shorter, faster,
     // and stops a reader wondering which frame the axes are in.
     //
     // MuJoCo does the same: `mju_sub3(cpos, pos[0], pos[1])` for the error and
     // `mj_jacDifPair` for the Jacobian, three rows straight out, no projection.
-    // `inline` because `Vec` is a SIMD vector and its index must be comptime — and the loop
+    // `inline` because `Vec` is a SIMD vector and its index must be comptime - and the loop
     // is three iterations of straight-line work, so unrolling it costs nothing.
     inline for (0..3) |axis| {
         const row: u32 = d.constraint_count;
@@ -4941,27 +4941,27 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
         else => return,
     };
 
-    // ── ★★ THREE MORE ROWS FOR ORIENTATION, AND THE ERROR IS A ROTATION VECTOR ──
+    // -- ** THREE MORE ROWS FOR ORIENTATION, AND THE ERROR IS A ROTATION VECTOR --
     //
-    // The rotation still needed to satisfy the weld is `rot_a · (rot_b · relative)⁻¹`, read in
+    // The rotation still needed to satisfy the weld is `rot_a * (rot_b * relative)^-1`, read in
     // the WORLD frame. For any rotation the quaternion's vector part is half the rotation
-    // vector to first order, so `2·vec` is the error in radians about each world axis — which
+    // vector to first order, so `2*vec` is the error in radians about each world axis - which
     // is exactly what three rows want.
     //
-    // ★ WORLD FRAME, WHERE MuJoCo USES THE ERROR'S OWN. MuJoCo rotates every Jacobian column
-    // by `neg(q1)·(jac0−jac1)·q0·relpose` so both sides live in the error frame; this leaves
-    // both in the world. **They are equivalent** — rotating the error and all three Jacobian
+    // * WORLD FRAME, WHERE MuJoCo USES THE ERROR'S OWN. MuJoCo rotates every Jacobian column
+    // by `neg(q1)*(jac0-jac1)*q0*relpose` so both sides live in the error frame; this leaves
+    // both in the world. **They are equivalent** - rotating the error and all three Jacobian
     // rows by the same rotation gives three rows spanning the same space with the same
-    // solution — and the world costs one quaternion multiply instead of one per DOF, with no
+    // solution - and the world costs one quaternion multiply instead of one per DOF, with no
     // frame left to explain.
     if (d.constraint_count + 3 > m.constraint_capacity) {
         return;
     }
     const target: Quat = qmul(d.body_xrot[weld.b.body], weld.relative);
     const misalignment: Quat = qmul(d.body_xrot[weld.a.body], conjugate(target));
-    // ★ `q` AND `−q` ARE THE SAME ROTATION, and the vector part flips between them. Taking the
-    // one with positive `w` picks the SHORT way round, so a weld 179° out corrects by 1°
-    // rather than by 359°.
+    // * `q` AND `-q` ARE THE SAME ROTATION, and the vector part flips between them. Taking the
+    // one with positive `w` picks the SHORT way round, so a weld 179 deg out corrects by 1 deg
+    // rather than by 359 deg.
     const shortest: Quat = if (misalignment[3] < 0) -misalignment else misalignment;
 
     // The angular Jacobians, which the position rows did not need.
@@ -4984,22 +4984,22 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
     }
 }
 
-/// Fill in `Â`, `R`, `J·v` and `aref` for the rows `makeConstraints` produced.
+/// Fill in `A_hat`, `R`, `J*v` and `aref` for the rows `makeConstraints` produced.
 ///
-/// ★ THE EXACT DIAGONAL. `Â_ii = (J M⁻¹ Jᵀ)_ii` is the inertia the constraint actually
-/// feels — how hard it is to accelerate along its own direction. MuJoCo approximates it,
+/// * THE EXACT DIAGONAL. `A_hat_ii = (J M^-1 J^T)_ii` is the inertia the constraint actually
+/// feels - how hard it is to accelerate along its own direction. MuJoCo approximates it,
 /// evaluated once at `qpos0`, with three documented error sources and a `diagexact` flag
 /// for when that is not good enough. We compute it exactly: one back-substitution per row
 /// through the factorization `factorM` already produced. That costs a solve per row and
 /// removes an entire class of "why is this constraint behaving oddly" from the solver
-/// phase, which is the more expensive place to be confused (§4e).
+/// phase, which is the more expensive place to be confused (section 4e).
 ///
 /// Then the softness parameterization, which is the part worth understanding:
 ///
-///     R    = (1 − d)/d · Â            d from the impedance sigmoid at this residual
-///     aref = −b·(J v) − k·r           k, b derived from time_const and damp_ratio
+///     R    = (1 - d)/d * A_hat            d from the impedance sigmoid at this residual
+///     aref = -b*(J v) - k*r           k, b derived from time_const and damp_ratio
 ///
-/// Because `R` is scaled by `Â`, a given `Softness` produces the same settling behaviour
+/// Because `R` is scaled by `A_hat`, a given `Softness` produces the same settling behaviour
 /// whether the constraint is holding back a fingertip or a torso. Without that scaling
 /// every constraint in a model would need its own hand-tuned gains, which is the usability
 /// difference between this model and a penalty-based one.
@@ -5013,42 +5013,42 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
         const inv_inertia_jacobian: []f32 =
             d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
 
-        // M⁻¹Jᵀ for this row: the joint-space acceleration a unit force here produces.
+        // M^-1J^T for this row: the joint-space acceleration a unit force here produces.
         // Kept, because the solver needs it every iteration.
         @memcpy(inv_inertia_jacobian, jacobian);
         solveM(m, d, inv_inertia_jacobian);
 
-        // Â = J M⁻¹ Jᵀ, exactly — contract the row back against it.
+        // A_hat = J M^-1 J^T, exactly - contract the row back against it.
         var diag: f32 = 0;
         for (jacobian, inv_inertia_jacobian) |j, mj| {
             diag += j * mj;
         }
-        // ★ A row with Â ≈ 0 is one the mechanism CANNOT MOVE ALONG — no joint motion
+        // * A row with A_hat ~ 0 is one the mechanism CANNOT MOVE ALONG - no joint motion
         // produces any acceleration in that direction. A contact's friction edges do this
         // routinely: a planar mechanism has no motion in the out-of-plane tangent, so both
         // of that tangent's pyramid edges collapse onto the normal and one may come out
         // exactly zero.
         //
         // Such a row is satisfied by definition and needs no force. Recording it as-is and
-        // letting the solver divide by a clamped 1e-10 would produce a force around 1e11 —
-        // harmless for the acceleration, since `M⁻¹Jᵀ` is zero too, but it poisons the
+        // letting the solver divide by a clamped 1e-10 would produce a force around 1e11 -
+        // harmless for the acceleration, since `M^-1J^T` is zero too, but it poisons the
         // reported forces and the convergence residual. The solver skips these rows
         // instead; see `solveConstraints`.
-        // Recorded AS COMPUTED, including a genuine zero. Everything below — R, the
-        // constraint velocity, the reference acceleration — remains well defined for such
-        // a row (`R = (1−d)/d · 0 = 0`), and MuJoCo reports them too, so clamping or
+        // Recorded AS COMPUTED, including a genuine zero. Everything below - R, the
+        // constraint velocity, the reference acceleration - remains well defined for such
+        // a row (`R = (1-d)/d * 0 = 0`), and MuJoCo reports them too, so clamping or
         // zeroing them here would make the values disagree with the reference for no gain.
         // The row is skipped where it actually matters: in the solver and the residual.
         //
-        // ★★ AND THE OTHER SIDE'S INERTIA, when the contact is against a body outside the
-        // tree (§4h-ter).
+        // ** AND THE OTHER SIDE'S INERTIA, when the contact is against a body outside the
+        // tree (section 4h-ter).
         //
-        // A contact constrains TWO inertias. `J M⁻¹ Jᵀ` above is only the robot's share; a
+        // A contact constrains TWO inertias. `J M^-1 J^T` above is only the robot's share; a
         // free body resists too, and its resistance at the contact point is
         //
-        //     1/m  +  (r × n)ᵀ I⁻¹ (r × n)
+        //     1/m  +  (r x n)^T I^-1 (r x n)
         //
-        // — the familiar effective-mass term, translation plus the rotation the lever arm
+        // - the familiar effective-mass term, translation plus the rotation the lever arm
         // induces. Adding it makes the row describe what is actually being pushed.
         //
         // Both terms are ZERO for static geometry, so this reproduces the previous
@@ -5059,7 +5059,7 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
 
         // Constraint-space velocity, wanted here and again by the solver.
         //
-        // ★ RELATIVE, when the other side can move. `J·v` is the robot's velocity along the
+        // * RELATIVE, when the other side can move. `J*v` is the robot's velocity along the
         // row; subtracting the external body's velocity along the same direction makes the
         // row measure what it is actually constraining. Zero for static geometry, so nothing
         // that was correct before changes.
@@ -5079,9 +5079,9 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
         // model asked for rather than specified directly. `d_max` appears in both because
         // the gains are defined against a fully-engaged constraint.
         const d_max: f32 = @max(imp.max, min_impedance);
-        // ★★★ REFSAFE: NO TIME CONSTANT BELOW TWO TIMESTEPS. A soft constraint asked to settle
-        // faster than the step can represent does not settle faster — it overshoots, and
-        // every step it overshoots by more. MuJoCo clamps `timeconst` to 2·timestep for exactly
+        // *** REFSAFE: NO TIME CONSTANT BELOW TWO TIMESTEPS. A soft constraint asked to settle
+        // faster than the step can represent does not settle faster - it overshoots, and
+        // every step it overshoots by more. MuJoCo clamps `timeconst` to 2*timestep for exactly
         // this (its `refsafe` flag, on by default); this file said so in `Softness` and did not
         // do it. Measured: MuJoCo's humanoid, limp, dropped at 60 Hz, its contacts asking for
         // 0.015 s against a 0.033 s floor, fell THROUGH the floor to -58 m at the velocity cap.
@@ -5091,26 +5091,26 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
             soft.damp_ratio * soft.damp_ratio);
         const b: f32 = 2.0 / @max(min_impedance, d_max * tc);
 
-        // aref = −b·(Jv) − k·d·r.
+        // aref = -b*(Jv) - k*d*r.
         //
-        // ★ Note the asymmetry: impedance scales the STIFFNESS term and not the damping
+        // * Note the asymmetry: impedance scales the STIFFNESS term and not the damping
         // one. It is easy to assume `d` multiplies the whole reference (it does not) or
         // neither term (it does not), and both give a reference that is wrong by a
-        // constant factor — which looks like a mistuned constraint rather than a bug.
-        // MuJoCo's `mj_referenceConstraint` is explicit: `aref = −B·vel − K·I·(pos−margin)`.
+        // constant factor - which looks like a mistuned constraint rather than a bug.
+        // MuJoCo's `mj_referenceConstraint` is explicit: `aref = -B*vel - K*I*(pos-margin)`.
         //
         // The reading: `d` says how much of the constraint is switched ON, so it gates how
         // hard the spring pulls toward satisfaction. Damping opposes constraint-space
         // motion regardless, because a half-engaged constraint still resists velocity.
         const damping_term: f32 = -b * vel;
 
-        // ★★ THE POSITION-CORRECTION TERM IS BOUNDED, and this is standard practice rather
+        // ** THE POSITION-CORRECTION TERM IS BOUNDED, and this is standard practice rather
         // than a fudge.
         //
-        // `−K·I·violation` grows LINEARLY with overlap, and nothing in the formulation limits
+        // `-K*I*violation` grows LINEARLY with overlap, and nothing in the formulation limits
         // how deep an overlap can get: a fast link crossing a crate between two steps is
-        // first seen already buried. **Measured: a 0.11 m crate reported a 0.25 m overlap** —
-        // twice its own size — and the resulting reference acceleration asked for 250x what a
+        // first seen already buried. **Measured: a 0.11 m crate reported a 0.25 m overlap** -
+        // twice its own size - and the resulting reference acceleration asked for 250x what a
         // 1 mm contact does. That is the whole of the "tunnelling" behaviour, and it is not
         // caused by speed: a SLOW sweep produced 88 m/s ejections where a sweep seven times
         // faster produced 18.
@@ -5121,12 +5121,12 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
         // worth of separation per timestep.** A contact that IS deeply overlapped then
         // recovers steadily over several steps instead of being fired apart in one.
         //
-        // It does not soften ordinary contact. At the depths a settled body reaches — under a
-        // millimetre — the bound is orders of magnitude away and never binds, which is why
+        // It does not soften ordinary contact. At the depths a settled body reaches - under a
+        // millimetre - the bound is orders of magnitude away and never binds, which is why
         // every existing test passes unchanged.
-        // ★ CONTACTS ONLY. A joint limit's violation is an ANGLE and a slider's is a length;
+        // * CONTACTS ONLY. A joint limit's violation is an ANGLE and a slider's is a length;
         // capping either in metres per second is a category error, and doing so broke two
-        // existing tests immediately — a wide-margin limit and the KKT check both rely on the
+        // existing tests immediately - a wide-margin limit and the KKT check both rely on the
         // reference being exactly what the formula says. Contacts are the rows whose
         // violation can be made arbitrarily deep by geometry arriving late, so they are the
         // rows that need the bound.
@@ -5149,50 +5149,50 @@ const min_regularizer: f32 = 1.0e-10;
 const min_constraint_diag: f32 = 1.0e-10;
 
 // =============================================================================
-// The constraint solver — phase 6c
+// The constraint solver - phase 6c
 //
 // --------------------------------------------------------------------------
 // DERIVATION, in full, because every later decision refers back to it.
 //
 // Without constraints, Newton's law in joint coordinates is
 //
-//     M · a_unconstrained = τ                                              (1)
+//     M * a_unconstrained = tau                                              (1)
 //
-// where τ collects everything already computed: applied, actuator and passive forces,
+// where tau collects everything already computed: applied, actuator and passive forces,
 // minus the bias term c. `forwardDynamics` solved that.
 //
 // A constraint force does not act in joint space directly. It acts along its own row of J
-// — a contact pushes along its normal, a limit pushes along one DOF — and `Jᵀ` carries it
-// back into joint coordinates (§18). So with constraint forces `f`,
+// - a contact pushes along its normal, a limit pushes along one DOF - and `J^T` carries it
+// back into joint coordinates (section 18). So with constraint forces `f`,
 //
-//     M · a = τ + Jᵀ f
-//     a     = a_unconstrained + M⁻¹ Jᵀ f                                   (2)
+//     M * a = tau + J^T f
+//     a     = a_unconstrained + M^-1 J^T f                                   (2)
 //
 // Now look at what the constraints themselves experience. Multiplying (2) by J gives the
 // acceleration in CONSTRAINT space:
 //
-//     J a = J a_unconstrained + (J M⁻¹ Jᵀ) f
+//     J a = J a_unconstrained + (J M^-1 J^T) f
 //         = a_free + A f                                                   (3)
 //
-// where `A = J M⁻¹ Jᵀ` is the constraint-space inverse inertia — how much each row
+// where `A = J M^-1 J^T` is the constraint-space inverse inertia - how much each row
 // accelerates per unit of force on each row, including how rows push each other around
-// through the mechanism. Its diagonal is the `Â` phase 6a already computes exactly.
+// through the mechanism. Its diagonal is the `A_hat` phase 6a already computes exactly.
 //
 // A HARD constraint would demand `J a = aref` exactly. The soft model asks for something
 // weaker and much better behaved: the constraint is allowed to be violated in proportion
-// to the force it is carrying, with `R` setting the exchange rate —
+// to the force it is carrying, with `R` setting the exchange rate -
 //
-//     J a = aref − R f                                                     (4)
+//     J a = aref - R f                                                     (4)
 //
 // Substituting (3) into (4) and collecting terms gives the whole problem in one line:
 //
-//     ★ (A + R) f = aref − a_free                                          (5)
+//     * (A + R) f = aref - a_free                                          (5)
 //
-// subject to `f` lying in the allowed set K (for a limit or a contact normal, `f ≥ 0`:
+// subject to `f` lying in the allowed set K (for a limit or a contact normal, `f >= 0`:
 // a limit can push you back into range but never pull you out of it).
 //
-// WHY R IS NOT A HACK. `A` is positive SEMI-definite — it is `J M⁻¹ Jᵀ` with M positive
-// definite — and it is genuinely singular whenever constraints are redundant, which is the
+// WHY R IS NOT A HACK. `A` is positive SEMI-definite - it is `J M^-1 J^T` with M positive
+// definite - and it is genuinely singular whenever constraints are redundant, which is the
 // normal case (a box resting on four points has a one-dimensional family of force
 // distributions that all produce the same motion). A singular system has no unique answer,
 // and an iterative solver on one wanders. Adding `R > 0` to the diagonal makes `(A + R)`
@@ -5213,30 +5213,30 @@ pub const Algorithm = enum {
 
 pub const SolverOptions = struct {
     /// Ceiling on sweeps. PGS converges linearly, so this bounds the work rather than the
-    /// accuracy — `tolerance` is what decides when to stop.
+    /// accuracy - `tolerance` is what decides when to stop.
     /// Which algorithm drives the constraint rows to their targets.
     ///
-    /// ── ★★ THE TRADE, MEASURED ON A SIX-BOX STACK (96 rows) ──
+    /// -- ** THE TRADE, MEASURED ON A SIX-BOX STACK (96 rows) --
     ///
     /// PGS sweeps rows one at a time; Newton minimises the whole convex objective at once.
     /// Sweeping is cheap per iteration and converges LINEARLY, which is fine until the rows are
-    /// strongly coupled — and a stack couples every row to every other through the boxes
+    /// strongly coupled - and a stack couples every row to every other through the boxes
     /// between them.
     ///
-    ///     PGS residual:   1 iter 26.7 · 5 iters 13.4 · 20 iters 4.83 · 100 iters 0.269
+    ///     PGS residual:   1 iter 26.7 * 5 iters 13.4 * 20 iters 4.83 * 100 iters 0.269
     ///
     /// Still falling at a hundred iterations, and the stack collapses. Newton's whole point is
     /// that it does not have to propagate information one contact per sweep.
     ///
-    /// ★ PGS REMAINS THE DEFAULT, and it is not a grudging one: at FIVE iterations it beats
-    /// MuJoCo's own PGS by 4.5x and matches MuJoCo's Newton, because the exact `Â` diagonal and
+    /// * PGS REMAINS THE DEFAULT, and it is not a grudging one: at FIVE iterations it beats
+    /// MuJoCo's own PGS by 4.5x and matches MuJoCo's Newton, because the exact `A_hat` diagonal and
     /// the stall check do real work. Most scenes never reach the regime where this matters, and
     /// PGS is markedly cheaper per iteration.
     ///
-    /// ── ★★ AND ON A REAL ROBOT PGS STOPS SHORT OF `tolerance`, EVERY STEP ──
+    /// -- ** AND ON A REAL ROBOT PGS STOPS SHORT OF `tolerance`, EVERY STEP --
     ///
     /// Worth knowing before `constraintConverged` surprises you. A Go1 holding its home pose
-    /// on four feet — sixteen rows, `zig build robot-bench` case 4 — measured over 20 000
+    /// on four feet - sixteen rows, `zig build robot-bench` case 4 - measured over 20 000
     /// steps at two controller stiffnesses:
     ///
     ///     pgs     kp 100   residual 6.8e-6   converged FALSE
@@ -5244,13 +5244,13 @@ pub const SolverOptions = struct {
     ///     newton  kp 100   residual 1.8e-7   converged true
     ///     newton  kp 300   residual 1.2e-7   converged true
     ///
-    /// PGS is stopping on `min_progress`, not on `tolerance` — the linear-convergence floor
+    /// PGS is stopping on `min_progress`, not on `tolerance` - the linear-convergence floor
     /// the table under `tolerance` documents, reached here at a few times the target. **The
     /// simulation is fine**: 3e-6 of constraint residual is far below anything the robot can
     /// feel, both solvers agree on the resting trunk height to four decimals, and the stance
     /// is stable indefinitely. What is NOT fine is reading `constraintConverged` as a health
-    /// check and concluding something is broken. It reports what it says — did the residual
-    /// reach `tolerance` — and under PGS on a coupled scene the honest answer is no.
+    /// check and concluding something is broken. It reports what it says - did the residual
+    /// reach `tolerance` - and under PGS on a coupled scene the honest answer is no.
     ///
     /// If you need `converged` to mean something, use `.newton`; if you need a number, use
     /// `constraintResidual` and pick a threshold your mechanism actually cares about.
@@ -5259,8 +5259,8 @@ pub const SolverOptions = struct {
     /// How fast a constraint may push itself out of a violation, in metres per second.
     ///
     /// Bounds the POSITION-correction half of the reference acceleration. A soft constraint's
-    /// `−K·I·violation` grows without limit as overlap deepens, and overlap can deepen
-    /// arbitrarily when a fast body is first seen already buried — so this caps how much
+    /// `-K*I*violation` grows without limit as overlap deepens, and overlap can deepen
+    /// arbitrarily when a fast body is first seen already buried - so this caps how much
     /// separation one step may demand. 2 m/s recovers a centimetre in five milliseconds,
     /// which is far quicker than anything looks wrong, while a 0.25 m overlap unwinds over a
     /// handful of steps instead of exploding.
@@ -5269,7 +5269,7 @@ pub const SolverOptions = struct {
     /// from binding.
     /// Accelerate Gauss-Seidel with Nesterov momentum, as MuJoCo's PGS does.
     ///
-    /// ── ★★ IMPLEMENTED, CORRECT, AND OFF BY DEFAULT — because it MEASURED SLOWER ──
+    /// -- ** IMPLEMENTED, CORRECT, AND OFF BY DEFAULT - because it MEASURED SLOWER --
     ///
     /// Plain PGS converges linearly; Nesterov extrapolation reaches the accelerated rate. On a
     /// standing Go1 it does exactly what the theory says:
@@ -5278,7 +5278,7 @@ pub const SolverOptions = struct {
     ///     momentum on:    3 solver iterations,  19,280 ns/step
     ///
     /// **A 4.7x reduction in iterations, and 8% SLOWER.** Each iteration costs roughly twice
-    /// as much, because extrapolating the forces invalidates `d.acc` and it must be rebuilt —
+    /// as much, because extrapolating the forces invalidates `d.acc` and it must be rebuilt -
     /// `rebuildAccelerationFromForces` is O(rows x nv), the same order as the sweep it is
     /// accelerating. At sixteen rows the fixed cost dominates the saved sweeps.
     ///
@@ -5289,13 +5289,13 @@ pub const SolverOptions = struct {
     ///
     /// **The lesson is about MuJoCo rather than about momentum.** MuJoCo runs f64 with elliptic
     /// friction cones and a Newton solver whose inner loop is far more expensive than a
-    /// Gauss-Seidel sweep — the same acceleration pays for itself there and does not here.
+    /// Gauss-Seidel sweep - the same acceleration pays for itself there and does not here.
     /// **Copying a technique from a reference implementation copies its cost model too**, and
     /// that has to be measured rather than inherited.
     momentum: bool = false,
     /// Stop when one sweep improves the residual by less than this FRACTION of it.
     ///
-    /// PGS has a floor — set by f32 and by its own linear convergence — and `tolerance` can
+    /// PGS has a floor - set by f32 and by its own linear convergence - and `tolerance` can
     /// sit below it. When it does, the solver reaches its best answer and then spends every
     /// remaining iteration failing to improve on it. Measured on a standing Go1, solved cold
     /// from a settled stance:
@@ -5304,18 +5304,18 @@ pub const SolverOptions = struct {
     ///     residual:  19.70  10.14   6.74   3.93   1.35  0.0199  4.0e-6  4.0e-6
     ///
     /// It converges by ~200 sweeps and then **plateaus at 4.013e-6 against a target of
-    /// 3.55e-6** — thirteen percent away and unreachable — so it ran to the 60-iteration cap
+    /// 3.55e-6** - thirteen percent away and unreachable - so it ran to the 60-iteration cap
     /// on every step of a robot standing still. The readout said `60 it`, which reads as
     /// failure to converge and was failure to NOTICE convergence.
     ///
     /// Relative, so it is scale-free. 1% is far below the per-sweep progress of a problem
-    /// that is genuinely still descending — the Go1 above was still halving its residual per
-    /// sweep at iteration 20 — so this cannot fire early on real work.
+    /// that is genuinely still descending - the Go1 above was still halving its residual per
+    /// sweep at iteration 20 - so this cannot fire early on real work.
     min_progress: f32 = 0.01,
     /// How close to the tolerance target a residual must be before `min_progress` may stop
     /// the solve, as a multiple of that target.
     ///
-    /// ★ THIS IS WHAT KEEPS THE STALL CHECK FROM ABANDONING HARD PROBLEMS. Slow progress near
+    /// * THIS IS WHAT KEEPS THE STALL CHECK FROM ABANDONING HARD PROBLEMS. Slow progress near
     /// the floor means the answer is finished; slow progress mid-impact means the problem is
     /// hard. Without this bound the two are indistinguishable, and the check took a KUKA
     /// sweeping a crate tower from 14 m/s of ejection to 32 by walking away from half-solved
@@ -5326,8 +5326,8 @@ pub const SolverOptions = struct {
     /// well outside it.
     stall_window: f32 = 100.0,
     max_recovery_velocity: f32 = 2.0,
-    // ★ AUDIT NOTE: this currently fires ZERO times in 280,000 row-solves of the worst scene
-    // available — a KUKA sweeping a five-crate tower at four times its normal rate. It is
+    // * AUDIT NOTE: this currently fires ZERO times in 280,000 row-solves of the worst scene
+    // available - a KUKA sweeping a five-crate tower at four times its normal rate. It is
     // kept anyway, and a sibling bound was removed, and the difference is worth stating.
     //
     // A `max_force_scale` was added beside this in the same session, capping each row's force
@@ -5346,7 +5346,7 @@ pub const SolverOptions = struct {
     /// Relative, not absolute, and the reason is f32. The residual has units of
     /// acceleration, and reference accelerations for a stiff limit run to several hundred.
     /// A single-precision float carries about seven significant digits, so the smallest
-    /// residual representable near a magnitude of 500 is around 5e-5 — an absolute
+    /// residual representable near a magnitude of 500 is around 5e-5 - an absolute
     /// tolerance below that is unreachable, and the solver would spin to `max_iterations`
     /// on a problem it had already solved exactly. Scaling by the problem removes the
     /// dependence on how stiff the model happens to be.
@@ -5358,7 +5358,7 @@ pub const SolverOptions = struct {
 /// Three fields, no hashing: the kind, the thing it came from (a joint index or a contact
 /// id), and a discriminator for rows that share a source (which end of a limit, which edge
 /// of a friction pyramid). Exact rather than hashed, because a collision would silently
-/// warm-start a row from an unrelated force — a wrong answer that converges, which is the
+/// warm-start a row from an unrelated force - a wrong answer that converges, which is the
 /// worst kind.
 /// The bits `constraintKey` reserves for a source id, derived once so nothing re-spells it.
 ///
@@ -5380,46 +5380,46 @@ fn constraintKey(kind: ConstraintKind, source: u64, discriminator: usize) u64 {
 
 /// Newton's method on the constraint objective, with a line search.
 ///
-/// ── ★★★ WHY A SECOND SOLVER AT ALL ──
+/// -- *** WHY A SECOND SOLVER AT ALL --
 ///
 /// PGS sweeps rows. Each sweep moves information exactly one contact along a chain, so a stack
-/// of six boxes needs six sweeps before the floor's support is felt at the top — and every
+/// of six boxes needs six sweeps before the floor's support is felt at the top - and every
 /// sweep after that is correcting what the previous one disturbed. Measured on that stack, 96
 /// rows, one cold solve:
 ///
-///     1 iter 26.7 · 5 iters 13.4 · 20 iters 4.83 · 40 iters 1.11 · 100 iters 0.269
+///     1 iter 26.7 * 5 iters 13.4 * 20 iters 4.83 * 40 iters 1.11 * 100 iters 0.269
 ///
 /// Linear convergence, halving every fifteen or so iterations, still falling at a hundred, and
 /// the stack visibly collapses. MuJoCo's Newton reaches its answer in FIVE.
 ///
-/// ── ★★ THE OBJECTIVE, WHICH IS WHERE ALL THE STRUCTURE COMES FROM ──
+/// -- ** THE OBJECTIVE, WHICH IS WHERE ALL THE STRUCTURE COMES FROM --
 ///
 /// Constrained dynamics is a convex minimisation in ACCELERATION space:
 ///
-///     L(a) = ½·(a − a_free)ᵀ M (a − a_free)  +  Σ over active rows  ½·(Jᵢ·a − aref_i)² / R_i
+///     L(a) = 1/2*(a - a_free)^T M (a - a_free)  +  sum over active rows  1/2*(J_i*a - aref_i)^2 / R_i
 ///
 /// The first term says "stay near the acceleration you would have had"; the second penalises
 /// each violated row. `a_free` is exactly `free_acc`, already computed.
 ///
-/// ★ ITS GRADIENT AND HESSIAN ARE BOTH CHEAP AND EXACT:
+/// * ITS GRADIENT AND HESSIAN ARE BOTH CHEAP AND EXACT:
 ///
-///     ∇L  =  M(a − a_free)  +  Jᵀ D r        r_i = Jᵢ·a − aref_i,  D_i = 1/R_i or 0
-///     H   =  M  +  Jᵀ D J
+///     grad L  =  M(a - a_free)  +  J^T D r        r_i = J_i*a - aref_i,  D_i = 1/R_i or 0
+///     H   =  M  +  J^T D J
 ///
 /// `D` is diagonal, so `H` costs one pass over the active rows. **`H` is exact, not an
-/// approximation** — which is what buys quadratic convergence near the solution and is the
+/// approximation** - which is what buys quadratic convergence near the solution and is the
 /// entire difference from sweeping.
 ///
-/// ── ★ THE ACTIVE SET IS RE-DECIDED EVERY ITERATION ──
+/// -- * THE ACTIVE SET IS RE-DECIDED EVERY ITERATION --
 ///
 /// A unilateral row (contact, limit) only pushes, so it contributes to the cost only while
 /// violated. That makes `L` piecewise quadratic rather than quadratic, and Newton on a
 /// piecewise-quadratic needs the line search below: a full step can cross into a region where
 /// a different set of rows is active and overshoot badly.
 fn solveNewton(m: *const Model, d: *Data) void {
-    // ★★ THE WORKING SET IS SIZED AT `Data.init` FROM `opt.solver.algorithm`, and that option
+    // ** THE WORKING SET IS SIZED AT `Data.init` FROM `opt.solver.algorithm`, and that option
     // stays mutable afterwards. Switching to Newton on an already-built `Data` therefore hands
-    // this function empty buffers — an out-of-bounds write into whatever follows them, which is
+    // this function empty buffers - an out-of-bounds write into whatever follows them, which is
     // the worst possible way to learn about an ordering mistake. Naming it costs one comparison
     // per step.
     assertf(
@@ -5438,7 +5438,7 @@ fn solveNewton(m: *const Model, d: *Data) void {
     while (iteration < m.opt.solver.max_iterations) : (iteration += 1) {
         // ---- residual, active set, and gradient ----
         //
-        // `newton_residual[i]` is `Jᵢ·a − aref_i`: how far row `i` is from its target.
+        // `newton_residual[i]` is `J_i*a - aref_i`: how far row `i` is from its target.
         var active: usize = 0;
         for (0..rows) |row| {
             const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
@@ -5448,7 +5448,7 @@ fn solveNewton(m: *const Model, d: *Data) void {
             }
             const residual: f32 = value - d.constraint_target_acc[row];
             d.newton_residual[row] = residual;
-            // ★ THE SIGN CONVENTION IS `makeConstraints`': positive violation means "restore".
+            // * THE SIGN CONVENTION IS `makeConstraints`': positive violation means "restore".
             // A row that may only push is in the objective only while it would push; one that
             // may pull as well is always in it.
             d.newton_active[row] = !d.constraint_kind[row].isUnilateral() or residual < 0;
@@ -5460,7 +5460,7 @@ fn solveNewton(m: *const Model, d: *Data) void {
             break;
         }
 
-        // ∇L = M(a − a_free) + Jᵀ D r
+        // grad L = M(a - a_free) + J^T D r
         for (0..nv) |i| {
             d.newton_step[i] = acc[i] - d.free_acc[i];
         }
@@ -5484,10 +5484,10 @@ fn solveNewton(m: *const Model, d: *Data) void {
             break;
         }
 
-        // ---- H = M + Jᵀ D J, dense ----
+        // ---- H = M + J^T D J, dense ----
         //
-        // ★ DENSE IS THE RIGHT CALL HERE. `H` is nv×nv where nv is tens, not thousands, and
-        // `Jᵀ D J` fills in anyway the moment two contacts share a body — which in a stack is
+        // * DENSE IS THE RIGHT CALL HERE. `H` is nvxnv where nv is tens, not thousands, and
+        // `J^T D J` fills in anyway the moment two contacts share a body - which in a stack is
         // every pair. A sparse structure would cost more to maintain than it saves.
         const hessian: []f32 = d.newton_hessian;
         @memset(hessian, 0);
@@ -5519,10 +5519,10 @@ fn solveNewton(m: *const Model, d: *Data) void {
             }
         }
 
-        // ---- Newton direction: H·Δ = −∇ ----
+        // ---- Newton direction: H*delta = -grad  ----
         //
-        // ★ `H` IS SYMMETRIC POSITIVE DEFINITE — `M` is, and `Jᵀ D J` is positive
-        // semi-definite with `D ≥ 0` — so a Cholesky is both valid and half the work of an LU.
+        // * `H` IS SYMMETRIC POSITIVE DEFINITE - `M` is, and `J^T D J` is positive
+        // semi-definite with `D >= 0` - so a Cholesky is both valid and half the work of an LU.
         // If it fails anyway (a degenerate model, an f32 accident), fall back to the gradient
         // direction, which is always a descent direction and merely slower.
         const factored: bool = choleskyFactor(hessian, nv);
@@ -5535,7 +5535,7 @@ fn solveNewton(m: *const Model, d: *Data) void {
 
         // ---- line search ----
         //
-        // ★ NEEDED BECAUSE `L` IS PIECEWISE QUADRATIC, not quadratic: a full Newton step can
+        // * NEEDED BECAUSE `L` IS PIECEWISE QUADRATIC, not quadratic: a full Newton step can
         // cross into a region where a different set of rows is active, where it is no longer
         // the minimiser and can be much worse. Backtracking from a full step is the cheapest
         // thing that is always safe.
@@ -5560,8 +5560,8 @@ fn solveNewton(m: *const Model, d: *Data) void {
 
     // ---- recover the constraint forces the accelerations imply ----
     //
-    // ★ THE CALLER'S CONTRACT IS FORCES, not accelerations — warm starting, `equalityError`
-    // and every diagnostic read `constraint_force`. `f = −r/R` on active rows is the force
+    // * THE CALLER'S CONTRACT IS FORCES, not accelerations - warm starting, `equalityError`
+    // and every diagnostic read `constraint_force`. `f = -r/R` on active rows is the force
     // that produced the acceleration just solved for.
     for (0..rows) |row| {
         const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
@@ -5587,20 +5587,20 @@ fn solveNewton(m: *const Model, d: *Data) void {
     }
 }
 
-/// The objective at `acc + alpha·step`, for the line search.
+/// The objective at `acc + alpha*step`, for the line search.
 fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
     const nv: usize = m.nv;
     for (0..nv) |i| {
         d.newton_trial[i] = acc[i] + alpha * d.newton_step[i];
         d.newton_scratch[i] = d.newton_trial[i] - d.free_acc[i];
     }
-    // ½·(a − a_free)ᵀ M (a − a_free)
+    // 1/2*(a - a_free)^T M (a - a_free)
     mulM(m, d, d.newton_scratch, d.newton_mv);
     var cost: f32 = 0;
     for (0..nv) |i| {
         cost += 0.5 * d.newton_scratch[i] * d.newton_mv[i];
     }
-    // plus the penalty on every row that is violated AT THE TRIAL POINT — re-deciding the
+    // plus the penalty on every row that is violated AT THE TRIAL POINT - re-deciding the
     // active set here is what makes this a valid cost for a piecewise-quadratic objective.
     for (0..d.constraint_count) |row| {
         const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
@@ -5618,7 +5618,7 @@ fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
     return cost;
 }
 
-/// In-place Cholesky, `A = L·Lᵀ`, lower triangle. False if `A` is not positive definite.
+/// In-place Cholesky, `A = L*L^T`, lower triangle. False if `A` is not positive definite.
 fn choleskyFactor(a: []f32, n: usize) bool {
     for (0..n) |i| {
         for (0..i + 1) |j| {
@@ -5639,7 +5639,7 @@ fn choleskyFactor(a: []f32, n: usize) bool {
     return true;
 }
 
-/// Solve `L·Lᵀ·x = b` in place, given `choleskyFactor`'s output.
+/// Solve `L*L^T*x = b` in place, given `choleskyFactor`'s output.
 fn choleskySolve(a: []const f32, n: usize, b: []f32) void {
     for (0..n) |i| {
         var sum: f32 = b[i];
@@ -5666,39 +5666,39 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
     if (d.constraint_count == 0) {
         @memset(d.constraint_joint_force, 0);
         // Reset the diagnostic too. Leaving it stale means a step with no constraints
-        // reports whatever the last constrained step happened to need — which reads as "the
+        // reports whatever the last constrained step happened to need - which reads as "the
         // solver is struggling" when in fact it did not run, and sent me chasing a
         // convergence problem that did not exist.
         d.solver_iterations = 0;
         return;
     }
 
-    // ★ WARM STARTING (§4g S3). Start each row from the force that same constraint carried
+    // * WARM STARTING (section 4g S3). Start each row from the force that same constraint carried
     // last step, instead of from zero.
     //
     // The benchmark is what made this the top priority rather than a nice-to-have: on a KUKA
     // with five active limits, PGS needed **29 iterations** from a cold start, and MuJoCo's
     // constrained case cost only 1.12x its unconstrained one. The physics barely changes
-    // between two steps 4 ms apart, so the previous solution is very nearly the answer —
+    // between two steps 4 ms apart, so the previous solution is very nearly the answer -
     // starting there turns a solve into a correction.
     //
     // Matching is by KEY, not row index: rows are rebuilt each step and their order shifts
     // as constraints come and go. A row with no match starts at zero, which is exactly right
-    // — it is a constraint that did not exist last step.
+    // - it is a constraint that did not exist last step.
     //
     // This changes only the STARTING POINT. The converged answer is the same fixed point of
     // the same projection, and there is a test asserting that, because a solver that gets a
     // different answer when warm-started is not converging.
-    // ★ THE UNCONSTRAINED ACCELERATION IS SAVED UNCONDITIONALLY.
+    // * THE UNCONSTRAINED ACCELERATION IS SAVED UNCONDITIONALLY.
     //
     // It was originally kept only under warm start, to undo a bad seed. Nesterov extrapolation
-    // needs it too — `rebuildAccelerationFromForces` reconstructs `acc` from the free
-    // acceleration plus the current forces — and with the copy inside the `if`, a cold solve
+    // needs it too - `rebuildAccelerationFromForces` reconstructs `acc` from the free
+    // acceleration plus the current forces - and with the copy inside the `if`, a cold solve
     // rebuilt from a STALE snapshot. Two tests caught it immediately, which is the argument
     // for having a resting-contact test at all.
     @memcpy(d.free_acc, d.acc);
 
-    // ★ NEWTON WORKS IN ACCELERATION SPACE and wants no warm-started forces — it starts from
+    // * NEWTON WORKS IN ACCELERATION SPACE and wants no warm-started forces - it starts from
     // `free_acc` and the line search takes it from there. It recovers `constraint_force` and
     // `constraint_joint_force` at its end, which is the caller's whole contract, so everything
     // downstream is unchanged.
@@ -5720,20 +5720,20 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
                     break;
                 }
             }
-            // ★★ AND THE ACCELERATION MUST BE SEEDED TO MATCH. This is the part a naive
+            // ** AND THE ACCELERATION MUST BE SEEDED TO MATCH. This is the part a naive
             // warm start omits, and omitting it is catastrophic rather than merely slow.
             //
             // The loop below reads `d.acc` to work out how much force a row still needs,
             // then ADDS the difference to `constraint_force[row]`. If the force starts
             // non-zero while `d.acc` still holds the FREE acceleration, the first iteration
-            // computes the whole force again and adds it on top of the warm value — so the
+            // computes the whole force again and adds it on top of the warm value - so the
             // force doubles every step. Measured before this line existed: a joint resting
             // on its limit sank straight through and its constraint force reached 7619 N.
             //
-            // Seeding `acc += M⁻¹Jᵀf` puts the two in agreement, so the iteration measures
-            // only what is still MISSING — which is the entire point of warm starting.
+            // Seeding `acc += M^-1J^Tf` puts the two in agreement, so the iteration measures
+            // only what is still MISSING - which is the entire point of warm starting.
             if (d.constraint_force[row] != 0) {
-                // `M⁻¹Jᵀ` for this row was already computed by `projectConstraints` — the
+                // `M^-1J^T` for this row was already computed by `projectConstraints` - the
                 // same array the iteration below uses to push accelerations. Reusing it
                 // means seeding costs one multiply-add per DOF and cannot disagree with
                 // what the solver does with the same force.
@@ -5744,23 +5744,23 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
                 }
             }
         }
-        // ★★ IS THE WARM START ACTUALLY BETTER THAN ZERO? Discard it if not.
+        // ** IS THE WARM START ACTUALLY BETTER THAN ZERO? Discard it if not.
         //
         // Learned from MuJoCo, which does exactly this and which I had missed. PGS minimises
         //
-        //     cost(f) = ½ fᵀ(A+R) f − fᵀ(aref − a_free)
+        //     cost(f) = 1/2 f^T(A+R) f - f^T(aref - a_free)
         //
-        // subject to `f ≥ 0`, and **cost(0) = 0 identically**. So a warm force with POSITIVE
-        // cost is worse than no warm start at all — the solver would spend iterations
+        // subject to `f >= 0`, and **cost(0) = 0 identically**. So a warm force with POSITIVE
+        // cost is worse than no warm start at all - the solver would spend iterations
         // undoing it before making progress.
         //
-        // That is not a rare case. Any step where the physics genuinely changed — an
-        // impact, a teleport, a constraint set that turned over — leaves last step's forces
+        // That is not a rare case. Any step where the physics genuinely changed - an
+        // impact, a teleport, a constraint set that turned over - leaves last step's forces
         // describing a situation that no longer exists. Warm starting is a bet that the
         // world moved a little; this is the check on whether it did.
         //
         // The cost is computable from what seeding already produced: after seeding,
-        // `J·acc = J·a_free + A·f`, so `(A·f)ᵢ = J·accᵢ − J·a_freeᵢ` and no matrix is ever
+        // `J*acc = J*a_free + A*f`, so `(A*f)_i = J*acc_i - J*a_free_i` and no matrix is ever
         // formed. One pass over the rows, one dot product each.
         var warm_cost: f32 = 0;
         for (0..d.constraint_count) |row| {
@@ -5797,18 +5797,18 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
     var restarted: bool = false;
     while (iteration < m.opt.solver.max_iterations) : (iteration += 1) {
         restarted = false;
-        // ── ★★ NESTEROV ACCELERATION, as MuJoCo's PGS does it ──
+        // -- ** NESTEROV ACCELERATION, as MuJoCo's PGS does it --
         //
         // Plain Gauss-Seidel converges linearly, and on a contact problem that is slow: a
         // standing Go1's 16 rows needed ~200 sweeps to reach their floor. Extrapolating along
         // the direction the force vector is already travelling turns that into the accelerated
         // rate, for one extra vector and no extra matrix work.
         //
-        //     β = (k − 1) / (k + 2)          the standard sequence
-        //     f ← f + β·(f − f_prev)         step past the current iterate
+        //     beta = (k - 1) / (k + 2)          the standard sequence
+        //     f <- f + beta*(f - f_prev)         step past the current iterate
         //
-        // ★ THE EXTRAPOLATION MUST BE PROJECTED. Overshooting can send a unilateral row
-        // negative, which is a pulling contact — a foot sucking the floor upward. MuJoCo
+        // * THE EXTRAPOLATION MUST BE PROJECTED. Overshooting can send a unilateral row
+        // negative, which is a pulling contact - a foot sucking the floor upward. MuJoCo
         // projects onto the cone right after extrapolating and so does this.
         if (m.opt.solver.momentum and iteration > 0 and momentum_k > 1) {
             const beta: f32 = float(momentum_k - 1) /
@@ -5823,9 +5823,9 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
                 d.momentum_extrapolated[row] = d.constraint_force[row];
             }
             // The extrapolation changed the forces, so the acceleration it implies has to be
-            // rebuilt before the sweep reads it — otherwise the sweep corrects against a state
+            // rebuilt before the sweep reads it - otherwise the sweep corrects against a state
             // that no longer exists, which is the same class of error as the seam's positional
-            // lag (§4k).
+            // lag (section 4k).
             rebuildAccelerationFromForces(m, d);
         } else {
             for (0..d.constraint_count) |row| {
@@ -5845,7 +5845,7 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
             const inv_inertia_jacobian: []const f32 =
                 d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
 
-            // J_i · a — what this constraint is currently experiencing.
+            // J_i * a - what this constraint is currently experiencing.
             var current_acc: f32 = 0;
             for (jacobian, d.acc) |j, a| {
                 current_acc += j * a;
@@ -5857,14 +5857,14 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
                 (d.constraint_target_acc[row] - current_acc - d.constraint_regularizer[row] * force_before) /
                 denominator;
 
-            // ── ★★ PROJECT INTO THE ALLOWED SET, AND THE SET DEPENDS ON THE ROW ──
+            // -- ** PROJECT INTO THE ALLOWED SET, AND THE SET DEPENDS ON THE ROW --
             //
             // Limits and contacts are UNILATERAL: a surface may push and may not pull, and the
             // sign convention from `makeConstraints` makes "positive" mean "restore", so a
             // clamp at zero serves both.
             //
-            // ★ AN EQUALITY IS BILATERAL. A loop closure welds two points together and neither
-            // may leave, so its row must be free to pull as well as push — clamping it at zero
+            // * AN EQUALITY IS BILATERAL. A loop closure welds two points together and neither
+            // may leave, so its row must be free to pull as well as push - clamping it at zero
             // gives a linkage that resists being compressed and comes apart under tension,
             // which is a rubber band rather than a rod.
             const force_after: f32 = if (d.constraint_kind[row].isUnilateral())
@@ -5885,16 +5885,16 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
             }
         }
 
-        // ── ★★ ADAPTIVE RESTART (O'Donoghue–Candès), and it is NOT optional ──
+        // -- ** ADAPTIVE RESTART (O'Donoghue-Candes), and it is NOT optional --
         //
         // Nesterov momentum is only stable while the extrapolation points somewhere useful.
         // When it overshoots, the sweep's correction starts opposing it and the iterate
-        // oscillates instead of converging — measured here as a resting contact that stopped
+        // oscillates instead of converging - measured here as a resting contact that stopped
         // pushing at all, failing a test that had passed for a hundred turns.
         //
-        // The test is the sign of `⟨correction, extrapolation⟩`: negative means the sweep is
-        // undoing what the momentum did, so the momentum counter resets and β returns to zero.
-        // Restarting on the ITERATE rather than on a schedule is what makes this robust —
+        // The test is the sign of `<correction, extrapolation>`: negative means the sweep is
+        // undoing what the momentum did, so the momentum counter resets and beta returns to zero.
+        // Restarting on the ITERATE rather than on a schedule is what makes this robust -
         // there is no tuning, and a problem that never overshoots never restarts.
         if (m.opt.solver.momentum and d.constraint_count > 0) {
             var opposition: f32 = 0;
@@ -5916,16 +5916,16 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
             break;
         }
 
-        // ★★ AND STOP WHEN THE RESIDUAL STOPS FALLING, not only when it reaches the target.
+        // ** AND STOP WHEN THE RESIDUAL STOPS FALLING, not only when it reaches the target.
         //
         // PGS has a FLOOR, set by f32 and by its own linear convergence, and the tolerance can
-        // sit below it. Measured on a standing Go1 — 16 rows, settled, solved from cold:
+        // sit below it. Measured on a standing Go1 - 16 rows, settled, solved from cold:
         //
         //     iterations:   1      2      5     10     20     60    200   1000
         //     residual:  19.70  10.14   6.74   3.93   1.35  0.0199  4.0e-6  4.0e-6
         //
         // It converges completely by ~200 and then **plateaus at 4.013e-6 against a target of
-        // 3.55e-6** — thirteen percent away, and unreachable. Without this check the solver
+        // 3.55e-6** - thirteen percent away, and unreachable. Without this check the solver
         // ran to the cap on every step of a robot standing still, and the readout said
         // `60 it` in a way that looked like failure to converge. It was failure to NOTICE
         // convergence.
@@ -5933,11 +5933,11 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
         // The test is relative progress, so it is scale-free and cannot fire early on a
         // problem that is genuinely still descending: at iteration 20 above the residual is
         // falling by a factor of two per sweep, nowhere near this threshold.
-        // ★ AND ONLY WHEN THE ANSWER IS ALREADY GOOD. Slow progress means two different
+        // * AND ONLY WHEN THE ANSWER IS ALREADY GOOD. Slow progress means two different
         // things and they need opposite responses.
         //
-        // Near the floor it means "finished, and the target is unreachable" — stop. In the
-        // middle of a violent contact it means "this problem is hard" — keep going. Testing
+        // Near the floor it means "finished, and the target is unreachable" - stop. In the
+        // middle of a violent contact it means "this problem is hard" - keep going. Testing
         // progress alone conflates them, and the first version did: it took the Go1 from 60
         // sweeps to 4 (a 2.3x speedup, correct), and simultaneously took a KUKA sweeping a
         // crate tower from **14 m/s of ejection to 32**, because it walked away from
@@ -5947,11 +5947,11 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
         // The measured plateau sat 1.13x above its target, so a hundredfold window is far
         // more than the case needs and still nowhere near a mid-impact residual, which runs
         // thousands of times larger.
-        // ★ AND A SWEEP THAT FOLLOWS A RESTART CANNOT END THE SOLVE.
+        // * AND A SWEEP THAT FOLLOWS A RESTART CANNOT END THE SOLVE.
         //
         // Restarting throws the momentum away deliberately, so the next sweep starts from a
         // standstill and makes little progress BY CONSTRUCTION. Reading that as a stall stops
-        // the solve exactly when it is about to resume descending — two tests caught it: one
+        // the solve exactly when it is about to resume descending - two tests caught it: one
         // that requires an unsolvable problem to run to the cap, and one that requires a
         // solvable one to reach tolerance.
         const progress: f32 = previous_residual - residual;
@@ -5967,12 +5967,12 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
     d.solver_iterations = iteration;
 
     // Snapshot this step's solution for the next one. Done here rather than in `step` so
-    // that any caller of `solveConstraints` — including the tests — gets the same behaviour.
+    // that any caller of `solveConstraints` - including the tests - gets the same behaviour.
     d.warm_count = d.constraint_count;
     @memcpy(d.warm_key[0..d.constraint_count], d.constraint_key[0..d.constraint_count]);
     @memcpy(d.warm_force[0..d.constraint_count], d.constraint_force[0..d.constraint_count]);
 
-    // Report the constraint forces in joint coordinates too — `Jᵀf` is what a sensor reads
+    // Report the constraint forces in joint coordinates too - `J^Tf` is what a sensor reads
     // and what a user asking "how hard is this limit pushing?" means.
     @memset(d.constraint_joint_force, 0);
     for (0..d.constraint_count) |row| {
@@ -5997,16 +5997,16 @@ pub fn constraintScale(d: *const Data) f32 {
 }
 
 /// Has the solver actually solved it? The check `solveConstraints` uses internally, exposed
-/// because a caller — or a test — asking "did that converge?" should not have to reconstruct
+/// because a caller - or a test - asking "did that converge?" should not have to reconstruct
 /// the scaling rule, and two copies of a convergence criterion is one copy too many.
 /// Rebuild `d.acc` so it agrees with `d.constraint_force` after the forces were changed
 /// outside the sweep.
 ///
-/// ── ★★ THE SOLVER'S ONE INVARIANT: `acc` AND `constraint_force` MUST AGREE ──
+/// -- ** THE SOLVER'S ONE INVARIANT: `acc` AND `constraint_force` MUST AGREE --
 ///
 /// Every sweep reads `d.acc` to work out how much force a row still needs, then adds the
 /// difference. That only works if `acc` already reflects the forces currently held. Warm
-/// starting learned this the hard way — seeding forces without seeding `acc` made them double
+/// starting learned this the hard way - seeding forces without seeding `acc` made them double
 /// every step, and a joint on its limit reached 7619 N.
 ///
 /// Nesterov extrapolation changes the forces the same way, so it needs the same repair. It is
@@ -6033,38 +6033,38 @@ pub fn constraintConverged(m: *const Model, d: *const Data) bool {
 
 /// How far the current forces are from actually solving (5), as a single number.
 ///
-/// ABSOLUTE, in units of acceleration. The caller decides what "small" means — the solver
+/// ABSOLUTE, in units of acceleration. The caller decides what "small" means - the solver
 /// compares it against a fraction of the problem's own scale (see `SolverOptions.tolerance`),
 /// but a gradient computation will want the raw quantity.
 ///
-/// ── WHAT "SOLVED" MEANS WITH AN INEQUALITY ──
+/// -- WHAT "SOLVED" MEANS WITH AN INEQUALITY --
 /// Define the per-row shortfall
 ///
-///     s_i = J_i·a + R_i f_i − aref_i
+///     s_i = J_i*a + R_i f_i - aref_i
 ///
-/// which is the residual of (5) rearranged: `s = (A + R) f − (aref − a_free)`. Without the
-/// inequality, solved would mean `s = 0`. With `f ≥ 0` it means the
+/// which is the residual of (5) rearranged: `s = (A + R) f - (aref - a_free)`. Without the
+/// inequality, solved would mean `s = 0`. With `f >= 0` it means the
 /// Karush-Kuhn-Tucker conditions
 ///
-///     f_i ≥ 0,     s_i ≥ 0,     f_i · s_i = 0
+///     f_i >= 0,     s_i >= 0,     f_i * s_i = 0
 ///
 /// read as: a row either carries force and is exactly satisfied (`s_i = 0`), or carries no
 /// force and is over-satisfied (`s_i > 0`, the constraint would have to PULL to do better,
 /// which it may not). The two cases are captured in one expression by the natural
 /// complementarity function, which is zero exactly when the conditions hold:
 ///
-///     ★ residual = ‖ min(f_i, s_i) ‖
+///     * residual = || min(f_i, s_i) ||
 ///
-/// ── WHY THIS FUNCTION EXISTS AT ALL ──
+/// -- WHY THIS FUNCTION EXISTS AT ALL --
 /// It is a convergence check, and an honest one: a solver that has stopped is not the same
 /// as a solver that has converged, and iteration count alone cannot tell them apart.
 ///
-/// But it is also the groundwork for §4d. Differentiating through an iterative solver by
+/// But it is also the groundwork for section 4d. Differentiating through an iterative solver by
 /// unrolling its iterations onto an autodiff tape is slow, memory-hungry and numerically
 /// poor. The right technique is IMPLICIT differentiation: differentiate the optimality
 /// conditions at the converged point and solve one linear system, at a cost independent of
 /// how many iterations it took. Those optimality conditions are precisely the `s_i` above.
-/// Writing them down now — as a diagnostic that earns its place immediately — means the
+/// Writing them down now - as a diagnostic that earns its place immediately - means the
 /// gradient path later is an addition rather than a rewrite.
 pub fn constraintResidual(m: *const Model, d: *const Data) f32 {
     var sum_squares: f32 = 0;
@@ -6089,9 +6089,9 @@ pub fn constraintResidual(m: *const Model, d: *const Data) f32 {
 }
 
 // =============================================================================
-// Sensors — phase 9
+// Sensors - phase 9
 //
-// ★ WHY SENSORS ARE PART OF THE ENGINE AND NOT OF THE APPLICATION.
+// * WHY SENSORS ARE PART OF THE ENGINE AND NOT OF THE APPLICATION.
 //
 // It is tempting to leave them to the caller: everything a sensor reports is derivable
 // from `Data`, so why not let whoever wants a gyro reading compute it? Because the
@@ -6103,9 +6103,9 @@ pub fn constraintResidual(m: *const Model, d: *const Data) f32 {
 // So sensors are evaluated at three points in the pipeline, as MuJoCo does, and for the
 // same reason. `SensorKind.stage` records which.
 //
-// They are also the OBSERVATION half of the loop that §4d is heading toward: a learned
+// They are also the OBSERVATION half of the loop that section 4d is heading toward: a learned
 // policy reads sensors and writes controls. `sensor_data` being one flat array is chosen
-// with that in mind — it is the vector a policy consumes.
+// with that in mind - it is the vector a policy consumes.
 // =============================================================================
 
 /// Evaluate the sensors belonging to one stage. Called three times per `forward`.
@@ -6158,8 +6158,8 @@ fn writeVec(out: []f32, v: Vec) void {
 /// A site's spatial velocity, in WORLD axes about the site's own point.
 ///
 /// `cvel` is about the tree's shared frame origin, so the linear part has to be carried out
-/// to the site: a spatial motion `(ω, v)` about `O` moves a point `p` at `v + ω × (p − O)`.
-/// The same identity as `jacPoint`, which is not a coincidence — one is this evaluated at a
+/// to the site: a spatial motion `(omega, v)` about `O` moves a point `p` at `v + omega x (p - O)`.
+/// The same identity as `jacPoint`, which is not a coincidence - one is this evaluated at a
 /// velocity, the other its derivative with respect to each DOF.
 fn siteVelocity(m: *const Model, d: *const Data, site: u32) Motion {
     const body: u32 = m.site_body[site];
@@ -6177,8 +6177,8 @@ fn siteVelocity(m: *const Model, d: *const Data, site: u32) Motion {
 /// acceleration the solver actually produced (`Data.acc`, constraint forces included)
 /// rather than zero, and it keeps the result instead of turning it into forces.
 ///
-/// The world is seeded with `−gravity`, exactly as in `rne`, and that is what makes the
-/// accelerometer read PROPER acceleration — an instrument at rest on a table reads `g`
+/// The world is seeded with `-gravity`, exactly as in `rne`, and that is what makes the
+/// accelerometer read PROPER acceleration - an instrument at rest on a table reads `g`
 /// upward, not zero, and one in free fall reads zero. Getting this right is free here and
 /// impossible to bolt on afterwards.
 pub fn bodyAccelerations(m: *const Model, d: *Data) void {
@@ -6198,19 +6198,19 @@ pub fn bodyAccelerations(m: *const Model, d: *Data) void {
     }
 }
 
-/// Proper linear acceleration at a site, in the site's own frame — what an accelerometer
+/// Proper linear acceleration at a site, in the site's own frame - what an accelerometer
 /// reads.
 ///
-/// ★ THE TERM THAT IS EASY TO MISS. Carrying a spatial acceleration out to a point is not
+/// * THE TERM THAT IS EASY TO MISS. Carrying a spatial acceleration out to a point is not
 /// the same operation as carrying a velocity out. A point fixed on a rotating body is
 /// accelerating even at constant spatial acceleration, because the frame it sits in is
 /// turning, and the correction is
 ///
-///     a_point = a_spatial.lin + α × r  +  ω × v_point
+///     a_point = a_spatial.lin + alpha x r  +  omega x v_point
 ///
 /// The last term is the Coriolis correction from the rotating frame, and MuJoCo's
 /// `mj_objectAcceleration` adds it explicitly for the same reason. Omit it and a spinning
-/// sensor reads plausibly and wrongly — the error is exactly zero whenever the body is not
+/// sensor reads plausibly and wrongly - the error is exactly zero whenever the body is not
 /// rotating, which is every simple test one would think to write.
 fn siteProperAcceleration(m: *const Model, d: *const Data, site: u32) Vec {
     const body: u32 = m.site_body[site];
@@ -6227,7 +6227,7 @@ fn siteProperAcceleration(m: *const Model, d: *const Data, site: u32) Vec {
 }
 
 // =============================================================================
-// Stepping — putting the pipeline together
+// Stepping - putting the pipeline together
 // =============================================================================
 
 /// Run everything that depends on position and velocity, ending with the acceleration.
@@ -6248,27 +6248,27 @@ pub fn forward(m: *const Model, d: *Data) void {
     sensors(m, d, .position);
     comVel(m, d);
     makeConstraints(m, d);
-    // ── ★★ A QUARTER OF THE STEP, AND ONLY HALF OF IT IS FOR THE DUAL SOLVER ──
+    // -- ** A QUARTER OF THE STEP, AND ONLY HALF OF IT IS FOR THE DUAL SOLVER --
     //
     // `robot.project` is 25.5% of a standing Go1 step, and it does TWO jobs in one pass:
     //
-    //   (a) M⁻¹Jᵀ per row, which PGS needs every sweep and Newton never reads. Newton here
-    //       is PRIMAL — nv×nv Hessian over accelerations, `solveNewton` asserts exactly
-    //       that — and it returns before the PGS body without touching that array.
-    //   (b) the exact Â = J M⁻¹ Jᵀ diagonal, which becomes `R = (1−d)/d · Â`. **BOTH
+    //   (a) M^-1J^T per row, which PGS needs every sweep and Newton never reads. Newton here
+    //       is PRIMAL - nvxnv Hessian over accelerations, `solveNewton` asserts exactly
+    //       that - and it returns before the PGS body without touching that array.
+    //   (b) the exact A_hat = J M^-1 J^T diagonal, which becomes `R = (1-d)/d * A_hat`. **BOTH
     //       solvers need R**: it is the constraint softness, and it sits in Newton's
     //       Hessian as well as in PGS's per-row division.
     //
-    // ★ SKIPPING THE WHOLE CALL FOR NEWTON WAS TRIED AND IS WRONG. Four tests failed
-    // instantly — a box stack fell to −19.6, the MuJoCo force check read 0 against 19.62,
-    // the Go1 dropped to −78 m. R was gone, so every constraint was infinitely soft. The
+    // * SKIPPING THE WHOLE CALL FOR NEWTON WAS TRIED AND IS WRONG. Four tests failed
+    // instantly - a box stack fell to -19.6, the MuJoCo force check read 0 against 19.62,
+    // the Go1 dropped to -78 m. R was gone, so every constraint was infinitely soft. The
     // 25% is not waste; (a) is dual-only and (b) is load-bearing for everyone.
     //
-    // ★ MuJoCo SPLITS THESE TWO, which is the shape of the real fix. `mj_diagApprox` runs
+    // * MuJoCo SPLITS THESE TWO, which is the shape of the real fix. `mj_diagApprox` runs
     // always and is cheap; `mj_makeY`/`mj_makeAR` build the full projection only
     // `if (isDual || diagexact)`, and `mj_isDual` is true just for `mjSOL_PGS`. Their exact
     // diagonal is opt-in behind `mjENBL_DIAGEXACT`. Doing the same here means approximating
-    // Â for R and building M⁻¹Jᵀ only for PGS — which CHANGES THE PHYSICS (R moves, so
+    // A_hat for R and building M^-1J^T only for PGS - which CHANGES THE PHYSICS (R moves, so
     // contact softness moves) and must be re-verified against the `efc_R` fixtures before
     // it is believed. Their sparse `mj_makeY` also pre-counts row nonzeros, so it exploits
     // the Jacobian sparsity this does not.
@@ -6287,19 +6287,19 @@ pub fn forward(m: *const Model, d: *Data) void {
 
 /// Advance the state by `dt` using semi-implicit Euler.
 ///
-/// The `q` update uses the NEW velocity, not the old one — that single change is what
+/// The `q` update uses the NEW velocity, not the old one - that single change is what
 /// separates semi-implicit Euler from explicit Euler, and it is the difference between a
 /// pendulum that gains energy until it explodes and one that oscillates stably forever.
 /// Explicit Euler is not offered here; it has pedagogical value and no other kind.
 /// Advance velocity by one step, treating joint damping IMPLICITLY when any is present.
 ///
-/// ── ★★★ WHY THE DEFAULT INTEGRATOR HAS TO DO THIS ──
+/// -- *** WHY THE DEFAULT INTEGRATOR HAS TO DO THIS --
 ///
-/// Explicit integration of a damping force is stable only while `c·h/I < 2`. That is a
+/// Explicit integration of a damping force is stable only while `c*h/I < 2`. That is a
 /// generous bound for a robot's shoulder and a very tight one for anything light: measured on
 /// a 4-DOF arm whose wrist carries only two fingers, the mass-matrix diagonal there is
-/// **0.00041** against 0.13 for the shoulder — three hundred times smaller — so the model's
-/// perfectly ordinary `damping="0.5"` gives `c·h/I = 2.44` and the velocity flips sign and
+/// **0.00041** against 0.13 for the shoulder - three hundred times smaller - so the model's
+/// perfectly ordinary `damping="0.5"` gives `c*h/I = 2.44` and the velocity flips sign and
 /// grows every step:
 ///
 ///     damping 0.50  ->  |v| = 100.000   (the velocity clamp, i.e. diverged)
@@ -6307,16 +6307,16 @@ pub fn forward(m: *const Model, d: *Data) void {
 ///     damping 0.00  ->  |v| =   0.17
 ///
 /// Positions still LOOK settled, because a velocity that alternates sign integrates to nearly
-/// nothing — so the symptom is not an obviously exploding robot but a joint that will not track
+/// nothing - so the symptom is not an obviously exploding robot but a joint that will not track
 /// and a controller that appears to be badly tuned. Two rounds of gain-hunting went past this.
 ///
-/// ★ MuJoCo'S `mj_Euler` DOES EXACTLY THIS, and it is worth being precise about what "MuJoCo's
+/// * MuJoCo'S `mj_Euler` DOES EXACTLY THIS, and it is worth being precise about what "MuJoCo's
 /// default is Euler" means: its Euler is explicit ONLY when no DOF is damped. The moment any
-/// is, it forms `qH = M + h·diag(B)`, factors that, and solves — which is unconditionally
+/// is, it forms `qH = M + h*diag(B)`, factors that, and solves - which is unconditionally
 /// stable for any damping. Matching it is not adopting an exotic integrator; it is finishing
 /// the ordinary one.
 ///
-/// ★ AND IT COSTS NOTHING WHEN NOTHING IS DAMPED — the undamped path is the original two-line
+/// * AND IT COSTS NOTHING WHEN NOTHING IS DAMPED - the undamped path is the original two-line
 /// loop, chosen by a flag computed once at build time rather than by scanning every step.
 fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
     if (!m.has_dof_damping) {
@@ -6326,7 +6326,7 @@ fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
         return;
     }
 
-    // `M·Δv = h·M·a` explicitly; implicitly it is `(M + h·B)·Δv = h·M·a`, with the same right
+    // `M*dv = h*M*a` explicitly; implicitly it is `(M + h*B)*dv = h*M*a`, with the same right
     // hand side. Building the impulse first keeps this true whatever produced `acc`.
     mulM(m, d, d.acc, d.implicit_rhs);
     for (d.implicit_rhs) |*value| {
@@ -6339,28 +6339,28 @@ fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
         d.vel[i] += d.implicit_rhs[i];
     }
 
-    // ★ AND THE PLAIN FACTORISATION IS RESTORED. `qLD` is shared scratch: anything reaching for
+    // * AND THE PLAIN FACTORISATION IS RESTORED. `qLD` is shared scratch: anything reaching for
     // `solveM` afterwards expects the mass matrix, and leaving a damped factorisation behind
     // would quietly change every constraint's effective inertia.
     //
-    // ── ★★ WHAT THIS COSTS, SO THE TRADE IS AN INFORMED ONE ──
+    // -- ** WHAT THIS COSTS, SO THE TRADE IS AN INFORMED ONE --
     //
     // Measured on the standing Go1 (`zig build robot-bench`): a factorisation is ~690 ns
-    // against a ~15 300 ns step, so this restore alone is **about 4.5% of every step** —
+    // against a ~15 300 ns step, so this restore alone is **about 4.5% of every step** -
     // and the very next `forward` opens with `factorM` and overwrites it. Between the two
     // there is nothing in the engine that reads `qLD`.
     //
     // It is kept anyway, and the reason is the word "engine". A CALLER sits in that gap by
-    // design — that is the entire point of the `step1`/`step2` split — and `solveM`,
+    // design - that is the entire point of the `step1`/`step2` split - and `solveM`,
     // `massDiagonal` and anything built on them are public. The stage watermark catches
     // calling a stage out of ORDER; it cannot catch reading a factorisation that is of the
     // wrong MATRIX, because the stage is legitimately `.position` either way. A controller
     // scaling gains by `massDiagonal` between steps would silently get damped inertias.
     //
-    // ★ The cheap fix is a flag on `Data` saying which matrix `qLD` currently holds, so the
+    // * The cheap fix is a flag on `Data` saying which matrix `qLD` currently holds, so the
     // restore becomes lazy and the assert becomes possible. It is not done here because
     // "nothing is lazy, nothing is cached" is a property of this file worth more than 4.5%
-    // — but if this step ever needs to be twice as fast, this is a known 4.5% with a known
+    // - but if this step ever needs to be twice as fast, this is a known 4.5% with a known
     // and testable price.
     factorM(m, d);
 }
@@ -6370,7 +6370,7 @@ fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
         d.act[i] += dt * d.act_dot[i];
     }
     dampedVelocityStep(m, d, dt);
-    // ★★ BOUNDED HERE, BETWEEN THE TWO INTEGRATIONS — the placement is the whole fix.
+    // ** BOUNDED HERE, BETWEEN THE TWO INTEGRATIONS - the placement is the whole fix.
     //
     // Doing it after `step` returns was the first attempt and did nothing: `integratePos` had
     // already carried the bad velocity into `pos`, so clamping afterwards cleaned `vel` and
@@ -6384,8 +6384,8 @@ fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
 /// Advance by `dt` using classical fourth-order Runge-Kutta.
 ///
 /// Four evaluations of the dynamics per step, combined so that the error per step is
-/// O(dt⁵) instead of Euler's O(dt²). Worth it when you care about energy over a long
-/// horizon — a double pendulum integrated with RK4 conserves energy to a fraction of a
+/// O(dt^5) instead of Euler's O(dt^2). Worth it when you care about energy over a long
+/// horizon - a double pendulum integrated with RK4 conserves energy to a fraction of a
 /// percent over ten seconds, where Euler visibly drifts.
 ///
 /// Not worth it once contact is involved: contact makes the dynamics non-smooth, and a
@@ -6450,7 +6450,7 @@ fn advanceRk4(m: *const Model, d: *Data, dt: f32) void {
     normalizeQuats(m, d.pos);
 }
 
-/// The half of the pipeline that depends only on the STATE — everything through the bias
+/// The half of the pipeline that depends only on the STATE - everything through the bias
 /// forces, stopping before any force is committed.
 ///
 /// This is the natural place for a controller: every derived quantity is current, and
@@ -6486,61 +6486,61 @@ pub fn step2(m: *const Model, d: *Data) void {
     d.stage = .stale;
 }
 
-// ---- Implicit-in-velocity integration ------------------------------────────────
+// ---- Implicit-in-velocity integration ------------------------------------------
 //
 // DERIVATION. Explicit Euler evaluates the acceleration at the CURRENT velocity:
 //
-//     v_new = v + h·a(v)
+//     v_new = v + h*a(v)
 //
 // which is why a strong damper destabilises it: damping force grows with velocity, so a
 // step that overshoots produces an even larger restoring force next step, and the
 // oscillation grows. The classic remedy is to evaluate at the NEW velocity instead,
 //
-//     v_new = v + h·a(v_new)
+//     v_new = v + h*a(v_new)
 //
-// which is stable for any damping — but `v_new` appears on both sides. One Newton step
+// which is stable for any damping - but `v_new` appears on both sides. One Newton step
 // resolves it. Write the total force as `F`, linearise about the current velocity with
-// `D = ∂F/∂v`, and use `M·Δv/h = F(v) + D·Δv`:
+// `D = dF/dv`, and use `M*dv/h = F(v) + D*dv`:
 //
-//     ★ (M − h·D)·Δv = h·F(v) = h·M·a
+//     * (M - h*D)*dv = h*F(v) = h*M*a
 //
-// The right-hand side is `h·M·a` because `a` is exactly `M⁻¹F` — the acceleration
-// `forwardDynamics` already computed. When `D` is zero this collapses to `Δv = h·a`, which
+// The right-hand side is `h*M*a` because `a` is exactly `M^-1F` - the acceleration
+// `forwardDynamics` already computed. When `D` is zero this collapses to `dv = h*a`, which
 // is explicit Euler, and that identity is worth testing rather than trusting.
 //
 // WHAT "FAST" MEANS. `D` has three sources: damping and springs (`passive`), the actuators'
 // velocity terms, and the Coriolis/centrifugal term inside `rne`. MuJoCo's `implicit`
 // includes all three; its `implicitfast` skips the last, and that omission IS the speed
-// difference — `mjd_rne_vel` is by far the most expensive of the three. What it costs is
+// difference - `mjd_rne_vel` is by far the most expensive of the three. What it costs is
 // accuracy for a fast-TUMBLING free body, where the gyroscopic term is what wants damping.
-// For a damped, actuated mechanism — which is what a robot is — the first two carry the
+// For a damped, actuated mechanism - which is what a robot is - the first two carry the
 // stability, and that is the trade this integrator makes.
 
-/// `∂(v × f)/∂v` for a fixed force `f` — a 6×6 block, row-major.
+/// `d(v x f)/dv` for a fixed force `f` - a 6x6 block, row-major.
 ///
 /// `crossForce(v, f)` is bilinear, so its derivative in `v` is just the other operand arranged
 /// as a matrix. Written out rather than derived at runtime because it is the inner loop of
 /// `rneVelDerivative` and gets no clearer for being clever.
 fn crossForceVelJacobian(f: Force, out: *[36]f32) void {
     @memset(out, 0);
-    // crossForce(v, f).ang = v.ang × f.ang + v.lin × f.lin
+    // crossForce(v, f).ang = v.ang x f.ang + v.lin x f.lin
     setSkew(out, 0, 0, -f.ang);
     setSkew(out, 0, 3, -f.lin);
-    // crossForce(v, f).lin = v.ang × f.lin
+    // crossForce(v, f).lin = v.ang x f.lin
     setSkew(out, 3, 0, -f.lin);
 }
 
-/// `∂(v × m)/∂v` for a fixed motion `m`.
+/// `d(v x m)/dv` for a fixed motion `m`.
 fn crossMotionVelJacobian(mo: Motion, out: *[36]f32) void {
     @memset(out, 0);
-    // crossMotion(v, m).ang = v.ang × m.ang
+    // crossMotion(v, m).ang = v.ang x m.ang
     setSkew(out, 0, 0, -mo.ang);
-    // crossMotion(v, m).lin = v.ang × m.lin + v.lin × m.ang
+    // crossMotion(v, m).lin = v.ang x m.lin + v.lin x m.ang
     setSkew(out, 3, 0, -mo.lin);
     setSkew(out, 3, 3, -mo.ang);
 }
 
-/// Write `skew(v)` — the matrix with `skew(v)·x = v × x` — into a 6×6 block at `(row, col)`.
+/// Write `skew(v)` - the matrix with `skew(v)*x = v x x` - into a 6x6 block at `(row, col)`.
 fn setSkew(out: *[36]f32, row: usize, col: usize, v: Vec) void {
     out[(row + 0) * 6 + col + 1] += -v[2];
     out[(row + 0) * 6 + col + 2] += v[1];
@@ -6552,7 +6552,7 @@ fn setSkew(out: *[36]f32, row: usize, col: usize, v: Vec) void {
 
 /// The derivative of `rotationTriple`, for a ball joint or a free joint's rotational half.
 ///
-/// ★ ONE SNAPSHOT FOR ALL THREE. `rotationTriple` takes the velocity once, before any of its
+/// * ONE SNAPSHOT FOR ALL THREE. `rotationTriple` takes the velocity once, before any of its
 /// three DOFs is folded in, and builds all three `cdof_dot` from that same value. The
 /// derivative has to do the same: taking a fresh partial per DOF makes the second and third
 /// depend on the first, which is a different function.
@@ -6569,44 +6569,44 @@ fn rotationTripleDerivative(
         var block: [36]f32 = undefined;
         crossMotionVelJacobian(d.cdof[dof + k], &block);
         for (0..nv) |j| {
-            // ★ READ FROM THE SNAPSHOT, which is `dcvel[body]` as it stands BEFORE the loop
-            // below adds anything — the same value for all three.
+            // * READ FROM THE SNAPSHOT, which is `dcvel[body]` as it stands BEFORE the loop
+            // below adds anything - the same value for all three.
             dcdof_dot[(dof + k) * nv + j] = applyBlock(&block, dcvel[body * nv + j]);
         }
     }
-    // Only now are the three folded into the running total — after all three partials above
+    // Only now are the three folded into the running total - after all three partials above
     // have been taken from the snapshot.
     inline for (0..3) |k| {
         dcvel[body * nv + dof + k] = dcvel[body * nv + dof + k].add(d.cdof[dof + k]);
     }
 }
 
-/// `∂(bias force)/∂v` — the Coriolis and centrifugal derivative, added into `out`.
+/// `d(bias force)/dv` - the Coriolis and centrifugal derivative, added into `out`.
 ///
-/// ── ★★★ WHAT SEPARATES `implicit` FROM `implicitfast` ──
+/// -- *** WHAT SEPARATES `implicit` FROM `implicitfast` --
 ///
-/// Everything else in `D` — joint damping, tendon damping, actuator velocity terms — is a
+/// Everything else in `D` - joint damping, tendon damping, actuator velocity terms - is a
 /// MODEL constant. This one is not: it is the derivative of the velocity-product terms inside
 /// `rne`, it changes every step, and computing it is most of the cost difference between the
 /// two integrators. MuJoCo draws exactly this line, in `mjd_smooth_vel`'s `flg_bias`.
 ///
-/// **What it buys is GYROSCOPIC COUPLING** — a fast rotor whose spin feeds velocity-dependent
+/// **What it buys is GYROSCOPIC COUPLING** - a fast rotor whose spin feeds velocity-dependent
 /// torque into other, damped axes. Measured on exactly that: four times more accurate than
 /// `implicitfast` at both dt = 1/500 and dt = 1/100.
 ///
-/// ★ AND NOT what it was first assumed to buy. "Stabilises a fast-tumbling free body" was the
+/// * AND NOT what it was first assumed to buy. "Stabilises a fast-tumbling free body" was the
 /// original claim here and measurement refused it: on a torque-free plate spun about its
 /// intermediate axis, **rk4 dominates** (energy drift 0.00000) and `implicit` was WORSE than
 /// `implicitfast` at the lower spin. Implicit methods buy stiffness, not accuracy, and a
-/// torque-free tumbler is not stiff — it is merely fast.
+/// torque-free tumbler is not stiff - it is merely fast.
 ///
-/// ── ★ THE STRUCTURE MIRRORS `rne` EXACTLY, one derivative level up ──
+/// -- * THE STRUCTURE MIRRORS `rne` EXACTLY, one derivative level up --
 ///
-/// `rne` propagates a 6-vector per body; this propagates a 6×nv matrix per body — the same
+/// `rne` propagates a 6-vector per body; this propagates a 6xnv matrix per body - the same
 /// forward sweep, the same backward sum, the same final projection onto `cdof`. Reading them
 /// side by side is the only sane way to check either.
 ///
-/// ★ AND THE RESULT IS ASYMMETRIC, which is why MuJoCo solves `implicit` with an LU rather
+/// * AND THE RESULT IS ASYMMETRIC, which is why MuJoCo solves `implicit` with an LU rather
 /// than the sparse Cholesky it uses for `implicitfast`. A velocity cross-product has no reason
 /// to be symmetric in the two DOFs it couples.
 fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
@@ -6628,9 +6628,9 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
     const dcvel: []Motion = d.deriv_cvel;
     const dcdof_dot: []Motion = d.deriv_cdof_dot;
 
-    // ---- ∂cvel/∂qvel and ∂cdof_dot/∂qvel, mirroring `comVel` ----
+    // ---- dcvel/dqvel and dcdof_dot/dqvel, mirroring `comVel` ----
     //
-    // `cvel[i] = cvel[parent] + Σ cdof[k]·qvel[k]`, so ∂cvel[i]/∂qvel[j] is the parent's
+    // `cvel[i] = cvel[parent] + sum cdof[k]*qvel[k]`, so dcvel[i]/dqvel[j] is the parent's
     // derivative plus `cdof[j]` when `j` is one of this body's own DOFs. `cdof_dot` is
     // `crossMotion(vel, cdof)`, whose derivative follows through `vel`.
     for (0..nv) |j| {
@@ -6641,19 +6641,19 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
         for (0..nv) |j| {
             dcvel[bi * nv + j] = dcvel[parent * nv + j];
         }
-        // ── ★★★ THIS MUST MIRROR `comVel` JOINT BY JOINT, NOT DOF BY DOF ──
+        // -- *** THIS MUST MIRROR `comVel` JOINT BY JOINT, NOT DOF BY DOF --
         //
         // The first version walked every DOF as though it were a hinge. That is right for a
         // hinge and a slide and WRONG for the other two, because `comVel` treats them
-        // specially — and the error is invisible on any model made only of hinges.
+        // specially - and the error is invisible on any model made only of hinges.
         //
         // Measured against finite differences: a three-hinge chain agreed to 0.0009 and a
         // branching tree to 0.00005, while a free base was out by 1.30 and a ball joint by
         // 1.31, against matrices whose largest entries were 3.7 and 2.5. **The original test
         // used two bodies and three hinges**, which is exactly the shape that cannot see it.
         //
-        //   * a FREE joint's three translation DOFs have `cdof_dot = 0` — a pure translation
-        //     generates no Coriolis term — so their derivative is zero too;
+        //   * a FREE joint's three translation DOFs have `cdof_dot = 0` - a pure translation
+        //     generates no Coriolis term - so their derivative is zero too;
         //   * a BALL joint's three rotation DOFs, and a free joint's, share ONE snapshot of the
         //     velocity taken before any of them is added. Folding each into the running total
         //     as it goes makes the second and third terms depend on the first, which is not
@@ -6685,7 +6685,7 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
         }
     }
 
-    // ---- forward sweep: ∂cacc/∂qvel and ∂cfrc/∂qvel ----
+    // ---- forward sweep: dcacc/dqvel and dcfrc/dqvel ----
     for (0..nv) |j| {
         dcacc[world_body * nv + j] = .zero;
     }
@@ -6697,7 +6697,7 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
         const dof_adr: u32 = m.body_dof_adr[bi];
         for (0..m.body_dof_num[bi]) |k| {
             const dof: usize = dof_adr + k;
-            // ∂(cdof_dot[dof]·qvel[dof])/∂qvel[j] has two terms: the explicit one when j == dof,
+            // d(cdof_dot[dof]*qvel[dof])/dqvel[j] has two terms: the explicit one when j == dof,
             // and the implicit one through cdof_dot itself.
             dcacc[bi * nv + dof] = dcacc[bi * nv + dof].add(d.cdof_dot[dof]);
             const speed: f32 = d.vel[dof];
@@ -6706,7 +6706,7 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
             }
         }
 
-        // ∂cfrc/∂qvel = I·∂cacc/∂qvel + ∂(cvel × I·cvel)/∂cvel · ∂cvel/∂qvel
+        // dcfrc/dqvel = I*dcacc/dqvel + d(cvel x I*cvel)/dcvel * dcvel/dqvel
         const inertia: Inertia = d.cinert[bi];
         var cross_block: [36]f32 = undefined;
         crossForceVelJacobian(inertia.mul(d.cvel[bi]), &cross_block);
@@ -6732,7 +6732,7 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
         }
     }
 
-    // ---- project onto cdof, and SUBTRACT: `D` is ∂force/∂v and the bias is subtracted ----
+    // ---- project onto cdof, and SUBTRACT: `D` is dforce/dv and the bias is subtracted ----
     for (0..nv) |i| {
         const body: usize = m.dof_body[i];
         for (0..nv) |j| {
@@ -6741,7 +6741,7 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
     }
 }
 
-/// Apply a 6×6 block to a motion vector.
+/// Apply a 6x6 block to a motion vector.
 fn applyBlock(block: *const [36]f32, v: Motion) Motion {
     const x = [6]f32{ v.ang[0], v.ang[1], v.ang[2], v.lin[0], v.lin[1], v.lin[2] };
     var y: [6]f32 = @splat(0);
@@ -6753,23 +6753,23 @@ fn applyBlock(block: *const [36]f32, v: Motion) Motion {
     return .{ .ang = vec(y[0], y[1], y[2]), .lin = vec(y[3], y[4], y[5]) };
 }
 
-/// Apply a 6×6 block to a motion vector, producing a force.
+/// Apply a 6x6 block to a motion vector, producing a force.
 fn applyBlockForce(block: *const [36]f32, v: Motion) Force {
     const out: Motion = applyBlock(block, v);
     return .{ .ang = out.ang, .lin = out.lin };
 }
 
-/// `D = ∂(velocity-dependent smooth forces)/∂v`, dense and row-major.
+/// `D = d(velocity-dependent smooth forces)/dv`, dense and row-major.
 ///
 /// Dense on purpose, for now. `D` is NOT tree-sparse: a tendon couples every DOF it touches
-/// to every other, so `M − h·D` loses the ancestor-chain structure that makes `factorM`
+/// to every other, so `M - h*D` loses the ancestor-chain structure that makes `factorM`
 /// free of fill-in. Rather than pretend otherwise, this is a dense matrix with a dense
-/// solve, and §4g's table records the cost.
+/// solve, and section 4g's table records the cost.
 ///
 /// Takes no `Data`: for the force set `implicitfast` covers, every term is a MODEL constant.
 /// Joint damping, tendon damping and the actuators' `bias[2]` do not depend on the state at
-/// all — which also means the matrix could be built once per model rather than per step, an
-/// optimisation §4g can take when it wants it.
+/// all - which also means the matrix could be built once per model rather than per step, an
+/// optimisation section 4g can take when it wants it.
 fn smoothVelDerivative(m: *const Model, out: []f32) void {
     @memset(out, 0);
 
@@ -6786,8 +6786,8 @@ fn smoothVelDerivative(m: *const Model, out: []f32) void {
     }
 
     // ---- tendon damping: NOT diagonal ----
-    // A tendon's damping force is `−b·(c·v)` on its length, and that scalar reaches DOF `j`
-    // scaled by `c_j`. So the contribution is `−b·cⱼcₖ` — an outer product, coupling every
+    // A tendon's damping force is `-b*(c*v)` on its length, and that scalar reaches DOF `j`
+    // scaled by `c_j`. So the contribution is `-b*c_jc_k` - an outer product, coupling every
     // DOF the tendon touches to every other. This is the term that costs the tree sparsity,
     // and it is also the term a diagonal approximation would silently drop.
     for (0..m.ntendon) |ti| {
@@ -6806,7 +6806,7 @@ fn smoothVelDerivative(m: *const Model, out: []f32) void {
         }
     }
 
-    // ---- actuators: the `bias[2]·l̇` term, the only velocity-dependent one ----
+    // ---- actuators: the `bias[2]*l_dot` term, the only velocity-dependent one ----
     // The gain term reads either the control or the activation, neither of which depends on
     // this step's velocity, so it contributes nothing here. A velocity servo's whole
     // restoring action lives in `bias[2]`, which is exactly why such a servo is the thing
@@ -6841,8 +6841,8 @@ fn smoothVelDerivative(m: *const Model, out: []f32) void {
 /// Dense LU factorization with partial pivoting, in place. Returns false if the matrix is
 /// singular to working precision.
 ///
-/// A dense solve rather than a reuse of `factorM`, because `M − h·D` is not tree-sparse
-/// (see `smoothVelDerivative`) and is not guaranteed symmetric — a future velocity-dependent
+/// A dense solve rather than a reuse of `factorM`, because `M - h*D` is not tree-sparse
+/// (see `smoothVelDerivative`) and is not guaranteed symmetric - a future velocity-dependent
 /// force need not produce a symmetric derivative, and a Cholesky would fail silently on the
 /// day one does. MuJoCo uses an LU here for the same reason.
 fn luFactor(a: []f32, n: u32, pivot: []u32) bool {
@@ -6910,8 +6910,8 @@ fn luSolve(a: []const f32, n: u32, pivot: []const u32, x: []f32) void {
 
 /// Advance by `dt`, treating velocity-dependent forces implicitly.
 ///
-/// Falls back to the explicit update if the system is singular — which should not happen,
-/// since `M` is positive definite and `−h·D` only adds damping-like terms, but a model can
+/// Falls back to the explicit update if the system is singular - which should not happen,
+/// since `M` is positive definite and `-h*D` only adds damping-like terms, but a model can
 /// always be built badly enough and an integrator that silently produces NaN is worse than
 /// one that visibly loses an accuracy guarantee.
 fn advanceImplicitFast(m: *const Model, d: *Data, dt: f32) void {
@@ -6920,16 +6920,16 @@ fn advanceImplicitFast(m: *const Model, d: *Data, dt: f32) void {
         return;
     }
 
-    // rhs = h·M·a, the impulse the explicit step would have applied.
+    // rhs = h*M*a, the impulse the explicit step would have applied.
     mulM(m, d, d.acc, d.implicit_rhs);
     for (d.implicit_rhs) |*value| {
         value.* *= dt;
     }
 
-    // A = M − h·D. `M` is expanded dense here; the sparse form cannot represent `D`'s
+    // A = M - h*D. `M` is expanded dense here; the sparse form cannot represent `D`'s
     // tendon coupling.
     smoothVelDerivative(m, d.implicit_matrix);
-    // ★ AND THE CORIOLIS TERM, FOR `.implicit` ONLY. Everything above is a model constant;
+    // * AND THE CORIOLIS TERM, FOR `.implicit` ONLY. Everything above is a model constant;
     // this one depends on the current velocity, changes every step, and is most of the cost.
     if (m.opt.integrator == .implicit) {
         rneVelDerivative(m, d, d.implicit_matrix);
@@ -6973,7 +6973,7 @@ fn advanceImplicitFast(m: *const Model, d: *Data, dt: f32) void {
 
 /// Advance the simulation by one timestep: `forward`, then integrate.
 ///
-/// After this returns, `Data`'s derived quantities describe the state BEFORE the step —
+/// After this returns, `Data`'s derived quantities describe the state BEFORE the step -
 /// the same convention MuJoCo uses, and for the same reason: the step ends by writing the
 /// new state, and recomputing everything from it would double the work for a caller who is
 /// about to call `step` again anyway. Call `forward` explicitly if you need the derived
@@ -6986,7 +6986,7 @@ pub fn step(m: *const Model, d: *Data) void {
             forward(m, d);
             advanceEuler(m, d, m.opt.timestep);
         },
-        // ★ THE TWO IMPLICIT MODES SHARE A STEP AND DIFFER ONLY IN WHAT GOES INTO `D`. MuJoCo
+        // * THE TWO IMPLICIT MODES SHARE A STEP AND DIFFER ONLY IN WHAT GOES INTO `D`. MuJoCo
         // splits them the same way, at `mjd_smooth_vel`'s `flg_bias`: one function, one flag,
         // and the entire cost difference sitting behind it.
         .implicitfast, .implicit => {
@@ -7001,7 +7001,7 @@ pub fn step(m: *const Model, d: *Data) void {
 
 /// Keep velocities inside a physically meaningful range, and stop a non-finite one spreading.
 ///
-/// ── ★★ WHY A HARD BOUND IS RIGHT, NOT A PLASTER ──
+/// -- ** WHY A HARD BOUND IS RIGHT, NOT A PLASTER --
 ///
 /// Every production engine has one, because a rigid-body step has a maximum speed it can
 /// describe at all. A body moving further than its own size in one timestep is past the point
@@ -7009,12 +7009,12 @@ pub fn step(m: *const Model, d: *Data) void {
 /// into a corrupted model.
 ///
 /// **The failure this ends, measured:** a KUKA driven by IK at a target INSIDE a stack of
-/// 6.8 kg crates, at a gain high enough to keep trying. Accelerations sat at ~10,000 — a
-/// thousand g — for forty steps with the solver capped at 60 iterations, a row reached
+/// 6.8 kg crates, at a gain high enough to keep trying. Accelerations sat at ~10,000 - a
+/// thousand g - for forty steps with the solver capped at 60 iterations, a row reached
 /// 1536 N, and then the mass matrix went NaN: `factorM: pivot 24 is nan`, on screen, in a
 /// demo someone was using.
 ///
-/// ★ THE NON-FINITE CHECK IS THE IMPORTANT HALF. A clamp alone passes NaN straight through,
+/// * THE NON-FINITE CHECK IS THE IMPORTANT HALF. A clamp alone passes NaN straight through,
 /// because every comparison against NaN is false. Zeroing it contains the corruption at the
 /// one place all motion flows through, rather than letting it reach `crb` and take the whole
 /// model with it.
@@ -7030,8 +7030,8 @@ fn boundVelocity(m: *const Model, d: *Data) void {
     }
 }
 
-/// Total mechanical energy, for testing and for a HUD. Kinetic is `½vᵀMv`; potential is
-/// `−Σ mᵢ·g·xᵢ` over the bodies' centres of mass.
+/// Total mechanical energy, for testing and for a HUD. Kinetic is `1/2v^TMv`; potential is
+/// `-sum m_i*g*x_i` over the bodies' centres of mass.
 ///
 /// A conserved quantity is the sharpest thing you can watch in a simulation without a
 /// reference to compare against: it should be constant, and how it fails to be constant
@@ -7058,7 +7058,7 @@ pub fn energy(m: *const Model, d: *const Data) f32 {
 
 /// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
 /// user input both walk quaternions off the unit sphere, and a zero-norm quaternion has no
-/// orientation to recover — identity keeps the simulation running instead of emitting NaN.
+/// orientation to recover - identity keeps the simulation running instead of emitting NaN.
 fn normalizeQuat(q: Quat) Quat {
     const n: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
     return if (n > 1.0e-9) q / splat(n) else quat_identity;
@@ -7395,7 +7395,7 @@ test "data: the stage watermark tracks what is current" {
     try expect(!d.stage.atLeast(.force));
 
     // Writing a VELOCITY leaves positions valid, so it falls back to .position rather
-    // than all the way to .stale — the distinction a single dirty bit could not make.
+    // than all the way to .stale - the distinction a single dirty bit could not make.
     d.setJointVel(&m, DoublePendulum.Joint.elbow, 1.0);
     try expectEqual(Stage.position, d.stage);
 
@@ -7450,7 +7450,7 @@ test "kinematics: body positions match MuJoCo" {
 
 test "comPos: subtree com, cinert and cdof all match MuJoCo" {
     // The decisive test for phase 1. `cdof` in particular is the one the plan flagged as
-    // P2 — the highest-cost trap in the port, because a wrong sign or a wrong offset there
+    // P2 - the highest-cost trap in the port, because a wrong sign or a wrong offset there
     // produces a simulation that runs and looks alive and is quietly wrong. Comparing
     // against an independent implementation is the only way to be sure.
     const gpa: Allocator = std.testing.allocator;
@@ -7473,7 +7473,7 @@ test "comPos: subtree com, cinert and cdof all match MuJoCo" {
                 try expectApproxEqAbs(c.subtree_com[bi * 3 + k], d.subtree_com[bi][k], 1.0e-5);
                 try expectApproxEqAbs(c.body_ipos[bi * 3 + k], d.body_xipos[bi][k], 1.0e-5);
             }
-            // MuJoCo's cinert packing is [Ixx Iyy Izz, Ixy Ixz Iyz, h(3), m] — the same
+            // MuJoCo's cinert packing is [Ixx Iyy Izz, Ixy Ixz Iyz, h(3), m] - the same
             // ten numbers as robot.Inertia, in the same order, which is not a coincidence:
             // the packing was chosen to match.
             const got: Inertia = d.cinert[bi];
@@ -7486,7 +7486,7 @@ test "comPos: subtree com, cinert and cdof all match MuJoCo" {
             try expectApproxEqAbs(c.cinert[base + 9], got.mass, 1.0e-5);
         }
 
-        // cdof is (rot:lin), angular first — the convention the whole file hangs on.
+        // cdof is (rot:lin), angular first - the convention the whole file hangs on.
         for (0..m.nv) |vi| {
             const got: Motion = d.cdof[vi];
             inline for (0..3) |k| {
@@ -7521,7 +7521,7 @@ test "crb: the mass matrix matches MuJoCo" {
 
         // MuJoCo has no armature here, so its M is ours minus the diagonal default. Rather
         // than special-case that, compare the OFF-diagonal exactly and allow the diagonal
-        // to exceed MuJoCo's by exactly the armature — which also pins that armature lands
+        // to exceed MuJoCo's by exactly the armature - which also pins that armature lands
         // where it should and nowhere else.
         for (0..m.nv) |i| {
             for (0..m.nv) |j| {
@@ -7538,7 +7538,7 @@ test "crb: the mass matrix matches MuJoCo" {
 
 test "factorM: solving M x = y round-trips through the dense matrix" {
     // The definitive test for a linear solve, and it needs no reference values: pick an
-    // x, form y = M·x with the dense matrix, solve M·x' = y, and require x' == x. It
+    // x, form y = M*x with the dense matrix, solve M*x' = y, and require x' == x. It
     // checks the factorization and the three back-substitution passes together, and it
     // cannot be satisfied by a factorization that is merely self-consistent.
     const gpa: Allocator = std.testing.allocator;
@@ -7573,7 +7573,7 @@ test "factorM: solving M x = y round-trips through the dense matrix" {
 test "factorM: no fill-in, and the factor reproduces M" {
     // Two structural claims. First, the factorization writes only where M already had
     // entries -- that is the no-fill-in property, and it is why the sparsity tables can be
-    // shared between M and its factor. Second, reassembling Lᵀ·D·L must give M back.
+    // shared between M and its factor. Second, reassembling L^T*D*L must give M back.
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
@@ -7595,7 +7595,7 @@ test "factorM: no fill-in, and the factor reproduces M" {
     const l10: f32 = d.qLD[m.mass_row_start[1]];
     const d0: f32 = 1.0 / d.qLDiagInv[0];
     const d1: f32 = 1.0 / d.qLDiagInv[1];
-    // M = Lᵀ D L  =>  M00 = d0 + l10²·d1,  M01 = l10·d1,  M11 = d1.
+    // M = L^T D L  =>  M00 = d0 + l10^2*d1,  M01 = l10*d1,  M11 = d1.
     try expectApproxEqAbs(dense[0], d0 + l10 * l10 * d1, 1.0e-4);
     try expectApproxEqAbs(dense[1], l10 * d1, 1.0e-5);
     try expectApproxEqAbs(dense[3], d1, 1.0e-5);
@@ -7804,7 +7804,7 @@ test "dynamics: a free body follows a parabola" {
     for (0..steps) |_| {
         step(&m, &d);
     }
-    // y = y0 - ½g t². Semi-implicit Euler is off by O(dt) per step in a known direction,
+    // y = y0 - 1/2g t^2. Semi-implicit Euler is off by O(dt) per step in a known direction,
     // so allow a millimetre or so rather than pretending it is exact.
     const want: f32 = 10.0 - 0.5 * 9.81 * seconds * seconds;
     try expectApproxEqAbs(want, d.pos[1], 0.02);
@@ -7964,7 +7964,7 @@ test "jacobian: transpose turns a tip force into joint torques" {
     try expectApproxEqAbs(@as(f32, 0.4), torque[1], 1.0e-4);
 }
 
-/// A one-link arm with a position servo — the smallest model that exercises the whole
+/// A one-link arm with a position servo - the smallest model that exercises the whole
 /// actuator path.
 const ServoArm = Spec(.{
     .bodies = &.{.{
@@ -7984,8 +7984,8 @@ const ServoArm = Spec(.{
 });
 
 test "actuator: a position servo is a PD controller in disguise" {
-    // The claim from the docs, tested: `gain·u + bias1·l + bias2·l̇` with the servo's
-    // coefficients must equal `kp·(u − l) − kv·l̇` exactly.
+    // The claim from the docs, tested: `gain*u + bias1*l + bias2*l_dot` with the servo's
+    // coefficients must equal `kp*(u - l) - kv*l_dot` exactly.
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try ServoArm.build(gpa);
     defer m.deinit();
@@ -8024,7 +8024,7 @@ test "actuator: a position servo holds a load against gravity" {
 
     // Settled: velocity gone, and the position error is where servo torque cancels gravity.
     try expectApproxEqAbs(@as(f32, 0), d.vel[0], 1.0e-2);
-    // At equilibrium: kp·(target − l) = gravity torque at l. Straight down the gravity
+    // At equilibrium: kp*(target - l) = gravity torque at l. Straight down the gravity
     // torque is zero, so the servo should sit essentially at the target.
     try expectApproxEqAbs(target, d.pos[0], 2.0e-2);
 }
@@ -8124,7 +8124,7 @@ test "integration: Jacobian-transpose IK reaches an off-axis target" {
     // from checking any single stage: it only converges if kinematics, comPos, M, its
     // factorization, c, the Jacobian and the integrator are ALL right together.
     //
-    // The law is three lines -- cancel gravity, then push with Jᵀ·(target − tip) and a
+    // The law is three lines -- cancel gravity, then push with J^T*(target - tip) and a
     // little joint damping. No matrix inverse, no iteration.
     const Arm = Spec(.{
         .bodies = &.{
@@ -8192,7 +8192,7 @@ test "integration: Jacobian-transpose IK reaches an off-axis target" {
 }
 
 // The other oracle models, transcribed from scripts/robot_oracle.py. They exist so the
-// BALL and FREE joint paths — which the double pendulum never touches — are validated
+// BALL and FREE joint paths - which the double pendulum never touches - are validated
 // against the reference rather than merely compiling.
 const SinglePendulum = Spec(.{
     .bodies = &.{.{
@@ -8242,7 +8242,7 @@ const BallChain = Spec(.{
 
 /// Compare one model against every fixture case bearing its name. Factored out because the
 /// per-model boilerplate was hiding the fact that only ONE model was actually being
-/// checked — five of six fixture models were generated and never read.
+/// checked - five of six fixture models were generated and never read.
 fn checkAgainstOracle(
     comptime name: []const u8,
     m: *Model,
@@ -8298,7 +8298,7 @@ test "oracle: single pendulum" {
     try checkAgainstOracle("single_pendulum", &m, &d, 1.0e-4);
 }
 
-test "oracle: free body — the nq != nv path, and the quaternion ordering" {
+test "oracle: free body - the nq != nv path, and the quaternion ordering" {
     // A free joint is 7 position coordinates and 6 velocity ones, and its quaternion is
     // stored (x, y, z, w) here against MuJoCo's (w, x, y, z). The fixture generator
     // converts, so a mismatch here means either the conversion or our layout is wrong.
@@ -8312,7 +8312,7 @@ test "oracle: free body — the nq != nv path, and the quaternion ordering" {
     try checkAgainstOracle("free_body", &m, &d, 2.0e-4);
 }
 
-test "oracle: ball chain — three rotational DOFs from one joint" {
+test "oracle: ball chain - three rotational DOFs from one joint" {
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try BallChain.build(gpa);
     defer m.deinit();
@@ -8369,7 +8369,7 @@ const Arm3 = Spec(.{
 /// Takes local +Y (zimr's capsule axis) to +X. A quarter turn the negative way about Z.
 const y_to_x: Quat = zm.quatFromNormAxisAngle(vec(0, 0, 1), -pi * 0.5);
 
-/// A 1000:1 mass ratio — a heavy box driving a tiny sliver. The P1 conditioning probe,
+/// A 1000:1 mass ratio - a heavy box driving a tiny sliver. The P1 conditioning probe,
 /// made into a model so the diagnostic can be checked against a case that should trip it.
 const MassRatio = Spec(.{
     .bodies = &.{
@@ -8396,7 +8396,7 @@ const MassRatio = Spec(.{
     },
 });
 
-test "oracle: arm3 — mixed axes and rotated geoms" {
+test "oracle: arm3 - mixed axes and rotated geoms" {
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try Arm3.build(gpa);
     defer m.deinit();
@@ -8414,7 +8414,7 @@ test "oracle: mass ratio, and the conditioning probe earns its keep" {
     defer d.deinit();
     try checkAgainstOracle("mass_ratio", &m, &d, 1.0e-3);
 
-    // The diagnostic must actually diagnose. A 1000:1 mass ratio is exactly the case §1.1
+    // The diagnostic must actually diagnose. A 1000:1 mass ratio is exactly the case section 1.1
     // says f32 will struggle with, so `conditionEstimate` should be ORDERS larger here than
     // on a balanced arm -- otherwise it is a number that never says anything.
     forward(&m, &d);
@@ -8574,7 +8574,7 @@ test "actuator: activation advances once per step under RK4 too" {
         }
         reached[idx] = d.act[0];
     }
-    // ẇ = u = 1 for one second, so w must be 1 -- under BOTH integrators.
+    // w_dot = u = 1 for one second, so w must be 1 -- under BOTH integrators.
     try expectApproxEqAbs(@as(f32, 1.0), reached[0], 1.0e-3);
     try expectApproxEqAbs(@as(f32, 1.0), reached[1], 1.0e-3);
 }
@@ -8623,7 +8623,7 @@ test "slide joint: a prismatic DOF falls like a free mass" {
 
 test "several joints on one body chain, and gimbal-lock like real hinges" {
     // R6: three hinges on one body is how a ball joint with per-axis limits is built. Two
-    // things to establish — that the DOFs CHAIN (they are three links in one chain, not
+    // things to establish - that the DOFs CHAIN (they are three links in one chain, not
     // three parallel branches off the parent), and that they are genuinely NOT a ball
     // joint, because three sequential rotations have singular configurations a ball joint
     // does not.
@@ -8662,9 +8662,9 @@ test "several joints on one body chain, and gimbal-lock like real hinges" {
     try expectApproxEqAbs(@as(f32, 0), d.jnt_xaxis[1][0], 1.0e-5);
     try expectApproxEqAbs(@as(f32, -1), d.jnt_xaxis[1][2], 1.0e-5);
 
-    // ★ GIMBAL LOCK. Add a quarter turn of pitch and the ROLL axis swings onto the YAW
+    // * GIMBAL LOCK. Add a quarter turn of pitch and the ROLL axis swings onto the YAW
     // axis: two of the three DOFs become the same rotation, the arm loses a degree of
-    // freedom, and M becomes singular. This is not a defect of the port — it is why a ball
+    // freedom, and M becomes singular. This is not a defect of the port - it is why a ball
     // joint is a distinct joint type rather than three hinges in a trench coat.
     d.pos[1] = pi * 0.5;
     kinematics(&m, &d);
@@ -8818,7 +8818,7 @@ const deg45: f32 = 45.0 * pi / 180.0;
 const deg90: f32 = 90.0 * pi / 180.0;
 
 /// Compare every constraint row against MuJoCo for one model. Phase 6a's whole point is
-/// that this passes BEFORE any solver exists — a wrong row and a wrong solver produce the
+/// that this passes BEFORE any solver exists - a wrong row and a wrong solver produce the
 /// same symptom, so they are separated deliberately.
 fn checkConstraintRows(
     comptime name: []const u8,
@@ -8852,14 +8852,14 @@ fn checkConstraintRows(
                 try expectApproxEqAbs(c.efc_j[row * m.nv + i], d.constraint_jacobian[row * m.nv + i], tol);
             }
             try expectApproxEqAbs(c.efc_pos[row], d.constraint_violation[row], tol);
-            // The exact constraint-space inertia — the fixture is generated with MuJoCo's
+            // The exact constraint-space inertia - the fixture is generated with MuJoCo's
             // DIAGEXACT flag so this compares like with like.
             try expectApproxEqAbs(
                 c.efc_diag[row],
                 d.constraint_inertia[row],
                 @max(tol, @abs(c.efc_diag[row]) * 1.0e-4),
             );
-            // R is compared as the RATIO R/Â — that is `(1−d)/d`, the impedance sigmoid's
+            // R is compared as the RATIO R/A_hat - that is `(1-d)/d`, the impedance sigmoid's
             // output, and it is independent of whichever constraint-space diagonal was
             // used. Comparing R absolutely would inherit MuJoCo's `efc_diagA`, which is
             // degenerate for contact rows (see scripts/robot_oracle.py).
@@ -8967,8 +8967,8 @@ const ContactGround = Spec(.{
 });
 
 test "contact: pyramidal rows match MuJoCo, fed MuJoCo's own contact" {
-    // ★ The row math tested with collision detection entirely out of the picture. The
-    // fixture carries the contact MuJoCo found — position, normal, penetration, friction —
+    // * The row math tested with collision detection entirely out of the picture. The
+    // fixture carries the contact MuJoCo found - position, normal, penetration, friction -
     // and we build rows from THAT. So a mismatch here is a bug in the constraint algebra
     // and cannot be a difference of opinion about where two shapes touch, which is the
     // same separation that made 6a debuggable.
@@ -9039,9 +9039,9 @@ test "contact: pyramidal rows match MuJoCo, fed MuJoCo's own contact" {
     try expect(compared >= 3);
 }
 
-test "contact: the pyramid's edge rows are normal ± mu·tangent" {
+test "contact: the pyramid's edge rows are normal +/- mu*tangent" {
     // The structural claim behind the whole pyramid trick, checked directly: opposing edges
-    // must average back to the pure normal direction, and differ by exactly 2·mu·tangent.
+    // must average back to the pure normal direction, and differ by exactly 2*mu*tangent.
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try ContactGround.build(gpa);
     defer m.deinit();
@@ -9074,7 +9074,7 @@ test "contact: the pyramid's edge rows are normal ± mu·tangent" {
     // Rows 0 and 1 are the +mu and -mu edges of tangent 0.
     try expectApproxEqAbs(normal_row + mu * tangent0_row, d.constraint_jacobian[0], 1.0e-5);
     try expectApproxEqAbs(normal_row - mu * tangent0_row, d.constraint_jacobian[m.nv], 1.0e-5);
-    // Their average is the pure normal — which is what makes an evenly-loaded pyramid
+    // Their average is the pure normal - which is what makes an evenly-loaded pyramid
     // produce a purely normal force.
     try expectApproxEqAbs(
         normal_row,
@@ -9089,8 +9089,8 @@ test "contact: the pyramid's edge rows are normal ± mu·tangent" {
 }
 
 test "contact: row order is deterministic whatever order the detector reports" {
-    // ★ The property the sort exists for. A constraint solver sweeps rows in sequence, so
-    // a different row order gives a different (equally valid) answer — and collision
+    // * The property the sort exists for. A constraint solver sweeps rows in sequence, so
+    // a different row order gives a different (equally valid) answer - and collision
     // detectors do not promise a stable order. Feed the SAME contacts in reversed order and
     // the resulting rows, forces and acceleration must be identical.
     const gpa: Allocator = std.testing.allocator;
@@ -9151,7 +9151,7 @@ test "contact: forward() enforces contacts, and a resting link stops falling" {
 
     // Now a floor contact under the tip. Swinging back toward vertical carries the tip
     // downward, so a ground normal opposes the motion and the constraint must fight it.
-    // The contact point is the sphere's CENTRE (`body_xipos`), not the body origin — the
+    // The contact point is the sphere's CENTRE (`body_xipos`), not the body origin - the
     // origin is the hinge itself, where the Jacobian is identically zero and no contact
     // there could do anything.
     const contact_point: Vec = d.body_xipos[1];
@@ -9169,12 +9169,12 @@ test "contact: forward() enforces contacts, and a resting link stops falling" {
     forward(&m, &d);
     try expectEqual(rows_per_contact, d.constraint_count);
     try expect(d.constraint_force[0] > 0.0); // actually pushing
-    // The acceleration must move in the POSITIVE direction — away from the penetration.
+    // The acceleration must move in the POSITIVE direction - away from the penetration.
     // Not merely "smaller in magnitude": a stiff contact that is already 5 mm deep is
     // asked to undo that penetration, so reversing the sign is the correct answer, and
     // asserting a magnitude decrease would be asserting a weaker contact than we want.
     try expect(d.acc[0] > free_acc + 1.0);
-    // Every force is finite and non-negative — the property the zero-Â skip protects.
+    // Every force is finite and non-negative - the property the zero-A_hat skip protects.
     for (0..d.constraint_count) |row| {
         try expect(d.constraint_force[row] >= 0.0);
         try expect(d.constraint_force[row] < 1.0e6);
@@ -9182,13 +9182,13 @@ test "contact: forward() enforces contacts, and a resting link stops falling" {
 }
 
 test "contact: a row the mechanism cannot move along carries no force" {
-    // ★ The degenerate case, and it is not exotic — it happens on the very first fixture.
+    // * The degenerate case, and it is not exotic - it happens on the very first fixture.
     // A planar 1-DOF pendulum touching a floor has no motion along the out-of-plane
     // tangent, so that tangent's two pyramid edges have an identically zero Jacobian.
     // Such a row cannot be violated by any joint motion, so it must carry zero force.
     //
     // Without the skip in `solveConstraints` these rows get a denominator of ~1e-10 and a
-    // force around 1e11. It is invisible in the acceleration (their `M⁻¹Jᵀ` is zero too),
+    // force around 1e11. It is invisible in the acceleration (their `M^-1J^T` is zero too),
     // which is exactly why it needs asserting rather than eyeballing: it silently corrupts
     // the reported forces and the convergence residual.
     const gpa: Allocator = std.testing.allocator;
@@ -9226,7 +9226,7 @@ test "contact: a row the mechanism cannot move along carries no force" {
     // The situation must actually have arisen, or this test proves nothing.
     try expect(degenerate_rows >= 2);
 
-    // ★ AND THIS CONFIGURATION DOES NOT CONVERGE — correctly so, which is worth asserting
+    // * AND THIS CONFIGURATION DOES NOT CONVERGE - correctly so, which is worth asserting
     // rather than hiding. A 1-DOF pendulum cannot move along a floor normal at ALL, so a
     // 35 mm penetration is not something any force can undo: the normal rows are powerless
     // (that is what makes them degenerate) and the two friction edges oppose each other,
@@ -9238,7 +9238,7 @@ test "contact: a row the mechanism cannot move along carries no force" {
     // "gave up", and a model that asks for the impossible should be visibly unsolved rather
     // than quietly approximated.
     //
-    // ★ THIS USED TO ASSERT `solver_iterations == max_iterations` AND THAT WAS A PROXY, not
+    // * THIS USED TO ASSERT `solver_iterations == max_iterations` AND THAT WAS A PROXY, not
     // the property. It held only because plain PGS was slow enough to burn the whole budget
     // here; adding Nesterov acceleration made the solver do everything it could and stop,
     // which is BETTER behaviour and broke the assertion. Pinning an iteration count pins the
@@ -9366,7 +9366,7 @@ test "constraints: R scales with constraint-space inertia, which is the whole po
 
 test "solver: converges, and the residual says so" {
     // The honest convergence check. A solver that STOPPED is not a solver that CONVERGED,
-    // and the iteration count alone cannot distinguish them — which is exactly why
+    // and the iteration count alone cannot distinguish them - which is exactly why
     // `constraintResidual` exists.
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try LimitChain.build(gpa);
@@ -9385,7 +9385,7 @@ test "solver: converges, and the residual says so" {
     try expect(d.solver_iterations < m.opt.solver.max_iterations);
     try expect(constraintConverged(&m, &d));
     // And the raw residual is tiny in absolute terms too, not merely small relative to a
-    // large scale — the relative test must not be hiding a big absolute error.
+    // large scale - the relative test must not be hiding a big absolute error.
     try expect(constraintResidual(&m, &d) < 0.05);
 }
 
@@ -9421,20 +9421,20 @@ test "solver: the KKT conditions actually hold at the answer" {
 }
 
 test "unified tree: a robot pushing a FREE BODY conserves momentum" {
-    // ★★★ THE EVIDENCE FOR §5, and the number that decides the architecture.
+    // *** THE EVIDENCE FOR section 5, and the number that decides the architecture.
     //
     // Four attempts at coupling two solvers across a seam each found a real bug and none
-    // fixed the symptom — a 0.4 kg crate still left at 76 m/s. This is the same physics with
+    // fixed the symptom - a 0.4 kg crate still left at 76 m/s. This is the same physics with
     // the seam removed: the crate is a body with a FREE JOINT in the robot's own tree, so
     // the contact is between two bodies of one system. One Jacobian spanning both sides, one
     // mass matrix containing both inertias, one solver.
     //
     // **Momentum is then conserved by construction rather than by handoff**, and the test is
-    // that it actually is — to 0.002% over 600 steps, against a coupling that could not
+    // that it actually is - to 0.002% over 600 steps, against a coupling that could not
     // conserve it at all because the two halves had no common ledger.
     //
     // Nothing here is new machinery. `JointKind.free` landed in phase 2; `addContactRows`
-    // has always built the RELATIVE Jacobian `jac_b − jac_a` between two tree bodies. The
+    // has always built the RELATIVE Jacobian `jac_b - jac_a` between two tree bodies. The
     // crate that would not behave was a crate on the wrong side of a line that did not need
     // to exist.
     const Scene = Spec(.{
@@ -9445,9 +9445,9 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
                     .name = "slide",
                     .kind = .slide,
                     .axis = vec(1, 0, 0),
-                    // ★ ZERO ARMATURE, and it matters for this test specifically. Armature is
-                    // rotor inertia — resistance that is NOT mass — so a slider carrying it
-                    // has an effective inertia the momentum sum `m·v` does not account for.
+                    // * ZERO ARMATURE, and it matters for this test specifically. Armature is
+                    // rotor inertia - resistance that is NOT mass - so a slider carrying it
+                    // has an effective inertia the momentum sum `m*v` does not account for.
                     // Left at the default the books came out 0.58% out, which looks like a
                     // conservation failure and is a bookkeeping one.
                     .armature = 0.0,
@@ -9491,7 +9491,7 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
     for (0..600) |_| {
         forward(&m, &d);
         d.clearContacts();
-        // A contact between two TREE BODIES — `body_b` is the crate, not `world_body`.
+        // A contact between two TREE BODIES - `body_b` is the crate, not `world_body`.
         const gap: f32 = d.body_xpos[2][0] - d.body_xpos[1][0] - 0.10;
         if (gap < 0.01) {
             d.pushContact(.{
@@ -9509,7 +9509,7 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
     }
     forward(&m, &d);
 
-    // The push happened: the pusher slowed and the crate is moving. Deliberately loose —
+    // The push happened: the pusher slowed and the crate is moving. Deliberately loose -
     // these were once tight thresholds tuned against a BUG (free bodies all started at the
     // origin, so the crate was permanently overlapping the pusher), and tight numbers on a
     // wrong setup are how a fix looks like a regression. The property is that momentum
@@ -9517,7 +9517,7 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
     try expect(d.vel[0] < 0.95);
     try expect(d.vel[1] > 0.3);
 
-    // ★ And the books balance. 0.1% is generous for f32 over 600 steps; the measured error
+    // * And the books balance. 0.1% is generous for f32 over 600 steps; the measured error
     // is 0.002%, and a loose bound here keeps the test about CONSERVATION rather than about
     // the integrator's exact accuracy.
     const final_momentum: f32 = 2.0 * d.vel[0] + 0.5 * d.vel[1];
@@ -9525,9 +9525,9 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
 }
 
 test "warm start: same answer, far fewer iterations" {
-    // ★★ THE TWO PROPERTIES WARM STARTING MUST HAVE, and they pull in opposite directions.
+    // ** THE TWO PROPERTIES WARM STARTING MUST HAVE, and they pull in opposite directions.
     //
-    // It must be FASTER — that is the whole point, and §4g's benchmark said the constraint
+    // It must be FASTER - that is the whole point, and section 4g's benchmark said the constraint
     // path needed 29 iterations where MuJoCo needed a handful.
     //
     // It must not change the ANSWER. Warm starting only moves the starting point; the
@@ -9535,12 +9535,12 @@ test "warm start: same answer, far fewer iterations" {
     // lands somewhere else when started from a different place is not converging, and would
     // make every result depend on history in a way nothing downstream could reason about.
     //
-    // ── AND THE BUG THIS WOULD HAVE CAUGHT ──
+    // -- AND THE BUG THIS WOULD HAVE CAUGHT --
     //
     // The first implementation warm-started the FORCES but left `d.acc` holding the free
     // acceleration. The iteration then computed the whole force again and added it on top,
     // doubling it every step: a joint resting on its limit sank straight through, and its
-    // constraint force reached 7619 N. Seeding `acc += M⁻¹Jᵀf` is what makes the two agree.
+    // constraint force reached 7619 N. Seeding `acc += M^-1J^Tf` is what makes the two agree.
     const lower: f32 = 30.0 * pi / 180.0;
     const upper: f32 = 90.0 * pi / 180.0;
     const Held = Spec(.{
@@ -9608,7 +9608,7 @@ test "warm start: same answer, far fewer iterations" {
 test "solver: a joint held against its limit comes to rest there" {
     // The behavioural test, and the phase's stated goal.
     //
-    // The model matters. The limit must be somewhere gravity actually PRESSES INTO — a
+    // The model matters. The limit must be somewhere gravity actually PRESSES INTO - a
     // range straddling the pendulum's equilibrium would never engage, because the joint
     // simply settles at the bottom and the constraint is never touched. So the range stops
     // short of vertical, and gravity holds the link against it. Damping is present so the
@@ -9649,14 +9649,14 @@ test "solver: a joint held against its limit comes to rest there" {
     try expect(d.constraint_force[0] > 0.0); // actively holding
 }
 
-test "solver: penetration under load is independent of mass — the Â payoff" {
-    // ★ The invariance the whole impedance parameterization exists for, measured end to
+test "solver: penetration under load is independent of mass - the A_hat payoff" {
+    // * The invariance the whole impedance parameterization exists for, measured end to
     // end rather than argued. Two arms differing only by 100x in density, each pressed
-    // into its limit by gravity, must settle at the SAME penetration — because `R` is
+    // into its limit by gravity, must settle at the SAME penetration - because `R` is
     // scaled by the constraint-space inertia, so the softness the modeller asked for means
     // the same thing at both scales.
     //
-    // Without the Â scaling this test fails by two orders of magnitude, and every model in
+    // Without the A_hat scaling this test fails by two orders of magnitude, and every model in
     // a scene would need its limits retuned by hand.
     const gpa: Allocator = std.testing.allocator;
     var penetration: [2]f32 = undefined;
@@ -9727,7 +9727,7 @@ test "solver: no constraints means no work and no force" {
     try expect(d.acc[0] < -1.0);
 }
 
-test "solver: constraint force is reported in joint coordinates as Jᵀf" {
+test "solver: constraint force is reported in joint coordinates as J^T f" {
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try LimitDefault.build(gpa);
     defer m.deinit();
@@ -9798,7 +9798,7 @@ test "tendon: length and velocity are the linear combination they are defined as
     d.vel[1] = -0.5;
     forward(&m, &d);
 
-    // forward = qL + qR, turn = qL − qR. Straight from the definition, which is the point:
+    // forward = qL + qR, turn = qL - qR. Straight from the definition, which is the point:
     // a fixed tendon is evaluated, not enforced.
     try expectApproxEqAbs(@as(f32, 0.9), d.tendon_length[0], 1.0e-6);
     try expectApproxEqAbs(@as(f32, 0.5), d.tendon_length[1], 1.0e-6);
@@ -9807,7 +9807,7 @@ test "tendon: length and velocity are the linear combination they are defined as
 }
 
 test "tendon: a differential drive turns two controls into forward and turn" {
-    // ★ The phase's stated goal, and the thing tendons are FOR. Two wheels, two controls,
+    // * The phase's stated goal, and the thing tendons are FOR. Two wheels, two controls,
     // and neither control is a wheel: one drives, one steers, and the coupling is exact
     // because it is a definition rather than a constraint the solver has to hold.
     const gpa: Allocator = std.testing.allocator;
@@ -9842,8 +9842,8 @@ test "tendon: a differential drive turns two controls into forward and turn" {
 }
 
 test "tendon: one scalar force spreads across the DOFs by its coefficients" {
-    // The Jᵀ half. A tendon actuator's force reaches each joint in proportion to that
-    // joint's coefficient — the same transpose that carries a contact force into joint
+    // The J^T half. A tendon actuator's force reaches each joint in proportion to that
+    // joint's coefficient - the same transpose that carries a contact force into joint
     // space, applied to a one-row Jacobian.
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try DifferentialDrive.build(gpa);
@@ -9858,7 +9858,7 @@ test "tendon: one scalar force spreads across the DOFs by its coefficients" {
     try expectApproxEqAbs(@as(f32, 2.0), d.actuator_force[1], 1.0e-5);
 
     d.ctrl[0] = 0.0;
-    d.ctrl[1] = 3.0; // turn: coefficients (+1, −1)
+    d.ctrl[1] = 3.0; // turn: coefficients (+1, -1)
     forward(&m, &d);
     try expectApproxEqAbs(@as(f32, 3.0), d.actuator_force[0], 1.0e-5);
     try expectApproxEqAbs(@as(f32, -3.0), d.actuator_force[1], 1.0e-5);
@@ -9866,7 +9866,7 @@ test "tendon: one scalar force spreads across the DOFs by its coefficients" {
 
 test "tendon: a spring on the tendon pulls its length toward rest" {
     // A tendon carries its own spring and damper, acting on its LENGTH rather than on any
-    // one joint — which is how a coupled finger springs back to a pose rather than each
+    // one joint - which is how a coupled finger springs back to a pose rather than each
     // knuckle springing back independently.
     const Sprung = Spec(.{
         .bodies = &.{
@@ -9906,7 +9906,7 @@ test "tendon: a spring on the tendon pulls its length toward rest" {
 
     // The tendon's LENGTH is what the spring controls, so that is what must reach rest.
     try expectApproxEqAbs(@as(f32, 0), d.tendon_length[0], 0.02);
-    // The individual joints need not be zero — only their sum is constrained, which is
+    // The individual joints need not be zero - only their sum is constrained, which is
     // exactly the difference between a tendon spring and two joint springs.
     try expect(@abs(d.tendon_velocity[0]) < 0.05);
 }
@@ -9968,14 +9968,14 @@ test "sensor: position and velocity readings agree with the state they report" {
     // The tip site is 0.5 m down the link, so it sits on a circle of radius 0.5.
     const tip: Vec = vec(d.sensor_data[2], d.sensor_data[3], d.sensor_data[4]);
     try expectApproxEqAbs(@as(f32, 0.5), length3(tip), 1.0e-5);
-    // And its speed is ω·r.
+    // And its speed is omega*r.
     const tip_vel: Vec = vec(d.sensor_data[5], d.sensor_data[6], d.sensor_data[7]);
     try expectApproxEqAbs(@as(f32, 1.3 * 0.5), length3(tip_vel), 1.0e-4);
 }
 
 test "sensor: a gyro reads in its OWN frame, which is the whole point of mounting it" {
     // The hinge turns about world Z and the site rides the link, so the gyro's reading is
-    // the same magnitude however the arm is posed — but a WORLD-frame angular velocity
+    // the same magnitude however the arm is posed - but a WORLD-frame angular velocity
     // would be too, since the axis happens to be fixed. The discriminating check is the
     // velocimeter: in world axes the tip's velocity direction rotates with the arm, while
     // in the site's own frame it is always the same local direction.
@@ -10011,11 +10011,11 @@ test "sensor: a gyro reads in its OWN frame, which is the whole point of mountin
     try expectApproxEqAbs(@as(f32, 2.0), gyro[2], 1.0e-4);
 }
 
-test "sensor: an accelerometer reads PROPER acceleration — g at rest, zero in free fall" {
-    // ★ The physical definition, checked both ways. A real accelerometer measures the force
+test "sensor: an accelerometer reads PROPER acceleration - g at rest, zero in free fall" {
+    // * The physical definition, checked both ways. A real accelerometer measures the force
     // per unit mass its case applies to the proof mass, so one sitting still on a table
     // reads g UPWARD, and one in free fall reads zero. Getting this right is what the
-    // world-seeded-with-−gravity trick in `bodyAccelerations` buys.
+    // world-seeded-with--gravity trick in `bodyAccelerations` buys.
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try SensedArm.build(gpa);
     defer m.deinit();
@@ -10024,7 +10024,7 @@ test "sensor: an accelerometer reads PROPER acceleration — g at rest, zero in 
 
     // HELD STILL at the bottom of its swing: the arm is in equilibrium there, so the site
     // is stationary and the instrument must read g along its own +Y (the link hangs along
-    // −Y, so the site's +Y points back up toward the pivot).
+    // -Y, so the site's +Y points back up toward the pivot).
     d.pos[0] = 0;
     d.vel[0] = 0;
     forward(&m, &d);
@@ -10032,7 +10032,7 @@ test "sensor: an accelerometer reads PROPER acceleration — g at rest, zero in 
     try expectApproxEqAbs(@as(f32, 9.81), at_rest[1], 0.05);
     try expectApproxEqAbs(@as(f32, 0), at_rest[0], 0.05);
 
-    // FREE FALL: cancel the joint's own dynamics is not enough — instead remove gravity and
+    // FREE FALL: cancel the joint's own dynamics is not enough - instead remove gravity and
     // check the reading collapses, which is the same statement from the other side.
     var falling: Model = try SensedArm.build(gpa);
     defer falling.deinit();
@@ -10046,8 +10046,8 @@ test "sensor: an accelerometer reads PROPER acceleration — g at rest, zero in 
 
 test "sensor: the accelerometer's Coriolis term is not optional" {
     // A site spinning at constant rate on a body has a centripetal acceleration even though
-    // nothing is angularly accelerating. That term comes ONLY from the `ω × v_point`
-    // correction, so this is the test that would fail if it were dropped — and note it
+    // nothing is angularly accelerating. That term comes ONLY from the `omega x v_point`
+    // correction, so this is the test that would fail if it were dropped - and note it
     // needs a nonzero angular VELOCITY, which is exactly why a static test cannot see it.
     const gpa: Allocator = std.testing.allocator;
     var m: Model = try SensedArm.build(gpa);
@@ -10062,17 +10062,17 @@ test "sensor: the accelerometer's Coriolis term is not optional" {
     d.ctrl[0] = 0;
     forward(&m, &d);
 
-    // Spinning at ω about the pivot, a point at radius r feels ω²r toward the centre. The
-    // site is 0.5 m out along the link's −Y, so "toward the centre" is its local +Y.
+    // Spinning at omega about the pivot, a point at radius r feels omega^2r toward the centre. The
+    // site is 0.5 m out along the link's -Y, so "toward the centre" is its local +Y.
     const acc: Vec = vec(d.sensor_data[14], d.sensor_data[15], d.sensor_data[16]);
     try expectApproxEqAbs(rate * rate * 0.5, acc[1], 0.02);
 }
 
 test "implicit: with no velocity-dependent forces it IS explicit Euler" {
-    // ★ The structural test, and the one that catches the widest class of error. When D is
-    // zero the system collapses to `Δv = h·a`, so implicitfast must agree with Euler to
-    // the last bit — not approximately, EXACTLY. Any sign error, transpose, or stray term
-    // in building `M − h·D` shows up here, on a model with no damping to hide behind.
+    // * The structural test, and the one that catches the widest class of error. When D is
+    // zero the system collapses to `dv = h*a`, so implicitfast must agree with Euler to
+    // the last bit - not approximately, EXACTLY. Any sign error, transpose, or stray term
+    // in building `M - h*D` shows up here, on a model with no damping to hide behind.
     const gpa: Allocator = std.testing.allocator;
     var euler_model: Model = try DoublePendulum.build(gpa);
     defer euler_model.deinit();
@@ -10102,7 +10102,7 @@ test "implicit: with no velocity-dependent forces it IS explicit Euler" {
 }
 
 test "implicit: the velocity derivative matches a finite difference of the force" {
-    // The same trick that pinned the Jacobians in phase 4, applied to D. `D = ∂F/∂v` is by
+    // The same trick that pinned the Jacobians in phase 4, applied to D. `D = dF/dv` is by
     // definition the derivative of the velocity-dependent forces, so nudge each velocity
     // and measure. Needs no reference values and cannot be satisfied by a self-consistent
     // mistake.
@@ -10183,10 +10183,10 @@ test "implicit: the velocity derivative matches a finite difference of the force
     try expect(@abs(analytic[1]) > 0.1);
 }
 
-test "★ integrators: joint damping is implicit in BOTH, as in MuJoCo" {
+test "* integrators: joint damping is implicit in BOTH, as in MuJoCo" {
     // A stiff damper at a timestep an explicit step cannot survive: the restoring force grows
     // with velocity, so an overshoot begets a larger overshoot. Evaluating that force at the
-    // NEW velocity is what breaks the feedback — and BOTH integrators now do it, because
+    // NEW velocity is what breaks the feedback - and BOTH integrators now do it, because
     // `advanceEuler` treats joint damping implicitly exactly as MuJoCo's does.
     //
     // `implicitfast` still earns its place: it handles the whole velocity derivative, including
@@ -10219,14 +10219,14 @@ test "★ integrators: joint damping is implicit in BOTH, as in MuJoCo" {
             step(&m, &d);
             // Stop as soon as divergence is established.
             //
-            // ★ THE THRESHOLD IS `max_velocity` NOW, and the change is worth recording.
-            // This used to watch for 1e3 — an arbitrary "obviously diverged" number chosen
+            // * THE THRESHOLD IS `max_velocity` NOW, and the change is worth recording.
+            // This used to watch for 1e3 - an arbitrary "obviously diverged" number chosen
             // when velocity was unbounded, because Euler here reached infinity in under a
             // second and then NaN, tripping `factorM`'s positive-definite assert.
             //
             // `boundVelocity` means that can no longer happen: divergence now SATURATES the
             // bound instead of running away. Saturating it is a sharper statement than
-            // passing an arbitrary line, so the test asserts that instead — and it still
+            // passing an arbitrary line, so the test asserts that instead - and it still
             // observes the failure rather than being killed by it, which was always the
             // point.
             if (@abs(d.vel[0]) >= m.opt.max_velocity * 0.99) {
@@ -10236,17 +10236,17 @@ test "★ integrators: joint damping is implicit in BOTH, as in MuJoCo" {
         results[idx] = @abs(d.vel[0]);
     }
 
-    // ── ★★★ EULER NO LONGER DIVERGES HERE, AND THAT IS THE POINT OF THE CHANGE ──
+    // -- *** EULER NO LONGER DIVERGES HERE, AND THAT IS THE POINT OF THE CHANGE --
     //
-    // This assertion used to read `results[0] >= 99.0` — Euler running away in TWO steps until
+    // This assertion used to read `results[0] >= 99.0` - Euler running away in TWO steps until
     // the velocity bound caught it. It was true, and it was a LIMITATION rather than a law:
     // MuJoCo's `mj_Euler` is explicit only while nothing is damped, and forms
-    // `qH = M + h·diag(B)` the moment anything is. This engine now does the same, so the
+    // `qH = M + h*diag(B)` the moment anything is. This engine now does the same, so the
     // damping that used to destroy the step is integrated implicitly and survives it.
     //
-    // ★ THE COST OF NOT DOING THIS WAS NOT AN OBVIOUS EXPLOSION. On a 4-DOF arm whose wrist
+    // * THE COST OF NOT DOING THIS WAS NOT AN OBVIOUS EXPLOSION. On a 4-DOF arm whose wrist
     // carries only two fingers, the mass diagonal is 0.00041 against 0.13 at the shoulder, so
-    // an unremarkable `damping="0.5"` put `c·h/I` at 2.44 — just past the explicit limit of 2.
+    // an unremarkable `damping="0.5"` put `c*h/I` at 2.44 - just past the explicit limit of 2.
     // The velocity alternated sign and grew while the POSITION sat almost still, which reads
     // as a badly tuned controller rather than a broken integrator. Two rounds of gain-hunting
     // went past it.
@@ -10304,7 +10304,7 @@ test "implicit: a damped system loses energy monotonically, as damping must" {
         try expect(now <= previous + 1.0e-4);
         previous = now;
     }
-    // And it really was DISSIPATING rather than merely sitting still — a system that never
+    // And it really was DISSIPATING rather than merely sitting still - a system that never
     // moved would also pass a monotonicity test. The pendulum is lightly damped, so it is
     // still ringing down after five seconds; what must be true is that a good fraction of
     // the starting energy is gone.
@@ -10313,8 +10313,8 @@ test "implicit: a damped system loses energy monotonically, as damping must" {
 }
 
 test "inertial: a jointed body with mass but NO geoms is legal" {
-    // ★ The path §4i-ter flagged. Real URDF links routinely state a mass and no collision
-    // shape — a wrist that has inertia but nothing to collide with. `Spec()` rejects a
+    // * The path section 4i-ter flagged. Real URDF links routinely state a mass and no collision
+    // shape - a wrist that has inertia but nothing to collide with. `Spec()` rejects a
     // jointed body with no geoms as massless, and that check must NOT fire when an explicit
     // inertial is present: the body has mass, it simply has no geometry.
     //
@@ -10349,11 +10349,11 @@ test "inertial: a jointed body with mass but NO geoms is legal" {
 }
 
 test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
-    // ★ The numbers are a REAL Franka Panda link, copied from the Menagerie model. That
+    // * The numbers are a REAL Franka Panda link, copied from the Menagerie model. That
     // matters: the whole reason `<inertial>` exists is that a robot's mass distribution
     // comes from CAD or a scale, and has nothing to do with the volume of the convex hulls
-    // chosen for cheap collision. The geom here is deliberately absurd — a huge dense
-    // sphere — so that if the stated values were ignored, the mass would be off by orders
+    // chosen for cheap collision. The geom here is deliberately absurd - a huge dense
+    // sphere - so that if the stated values were ignored, the mass would be off by orders
     // of magnitude rather than subtly.
     const Stated = Spec(.{
         .bodies = &.{.{
@@ -10377,7 +10377,7 @@ test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
     try expectApproxEqAbs(@as(f32, 0.629769), m.body_mass[1], 1.0e-6);
     try expectApproxEqAbs(@as(f32, -0.041018), m.body_ipos[1][0], 1.0e-6);
     try expectApproxEqAbs(@as(f32, 0.049974), m.body_ipos[1][2], 1.0e-6);
-    // The tensor copies across without an eigendecomposition — the payoff for `Inertia`
+    // The tensor copies across without an eigendecomposition - the payoff for `Inertia`
     // storing the full symmetric form.
     const inertia: Inertia = m.body_inertia[1];
     try expectApproxEqAbs(@as(f32, 0.00315), inertia.diag[0], 1.0e-9);
@@ -10387,7 +10387,7 @@ test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
     try expectApproxEqAbs(@as(f32, 0.00015), inertia.off[1], 1.0e-9);
     try expectApproxEqAbs(@as(f32, 8.2299e-6), inertia.off[2], 1.0e-11);
     // A stated inertia is about the COM by definition, so the first moment is zero and the
-    // offset lives in `body_ipos` — the same split the geom-derived path uses.
+    // offset lives in `body_ipos` - the same split the geom-derived path uses.
     try expectApproxEqAbs(@as(f32, 0), length3(inertia.h), 1.0e-9);
 
     // And the model actually SIMULATES with it: the mass matrix must still be positive
@@ -10403,7 +10403,7 @@ test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
 test "inertial: geom-derived and stated agree when they describe the same body" {
     // The bridge between the two paths. Take a body whose mass properties the geom path
     // computes, read them back out, feed them in as a stated inertial, and the resulting
-    // model must be indistinguishable — same mass matrix, same dynamics.
+    // model must be indistinguishable - same mass matrix, same dynamics.
     //
     // This is what makes the stated path trustworthy: it is not a second, parallel way of
     // describing mass that might disagree, it is the SAME quantity entered differently.
@@ -10432,7 +10432,7 @@ test "inertial: geom-derived and stated agree when they describe the same body" 
                 .shape = .{ .capsule = .{ .half_height = 0.25, .radius = 0.05 } },
                 .pos = vec(0, -0.25, 0),
             }},
-            // Read back out of the geom-derived model rather than estimated — the point
+            // Read back out of the geom-derived model rather than estimated - the point
             // is that these are the SAME quantity entered a different way, and an
             // approximation here would test transcription rather than equivalence.
             .inertial = .{
@@ -10558,7 +10558,7 @@ test "crb: a locked subtree behaves as one rigid body" {
 
 test "kinematics: a hinge rotates about its ANCHOR, not the body origin" {
     // The off-centre correction, isolated. A hinge whose anchor sits 1 m out along X,
-    // turned a quarter turn about Z, must swing the body origin onto the Y axis — if the
+    // turned a quarter turn about Z, must swing the body origin onto the Y axis - if the
     // correction were missing the origin would stay put and only the orientation change.
     const Offset = Spec(.{
         .bodies = &.{.{
@@ -10581,7 +10581,7 @@ test "kinematics: a hinge rotates about its ANCHOR, not the body origin" {
     d.pos[0] = pi * 0.5;
     kinematics(&m, &d);
 
-    // Anchor at (1,0,0); origin starts 1 m along −X from it and ends 1 m along −Y.
+    // Anchor at (1,0,0); origin starts 1 m along -X from it and ends 1 m along -Y.
     try expectApproxEqAbs(@as(f32, 1), d.jnt_xanchor[0][0], 1.0e-5);
     try expectApproxEqAbs(@as(f32, 1), d.body_xpos[0 + 1][0], 1.0e-5);
     try expectApproxEqAbs(@as(f32, -1), d.body_xpos[0 + 1][1], 1.0e-5);
@@ -10700,7 +10700,7 @@ test "spatial algebra: composite inertia is a plain sum" {
 
 test "spatial algebra: translate is the parallel-axis theorem" {
     // A point mass at the origin, moved so the reference point sits 2 m away on X. The
-    // textbook answer is m·d² about the two axes perpendicular to the offset, and zero
+    // textbook answer is m*d^2 about the two axes perpendicular to the offset, and zero
     // about the offset axis itself.
     const mass: f32 = 3.0;
     const point: Inertia = .{ .mass = mass };
@@ -10739,12 +10739,12 @@ test "spatial algebra: a solid sphere's moments match the textbook" {
 test "spatial algebra: every primitive matches MuJoCo" {
     // Ground truth from real MuJoCo at density 1000 (see scripts/robot_oracle.py for the
     // fixture pipeline). MuJoCo is Z-up and spins its cylinders/capsules about Z, so its
-    // (Ixx, Iyy, Izz) maps to our (Ixx, Izz, Iyy) — the two side moments are equal, and
+    // (Ixx, Iyy, Izz) maps to our (Ixx, Izz, Iyy) - the two side moments are equal, and
     // only the axial one moves.
     //
     // This test exists because the capsule was WRONG and nothing caught it: the axial
     // moment was right, the analytic sphere/cylinder tests passed, and only the side
-    // moment was off — by 0.15%, which no eye and no invariant would ever notice.
+    // moment was off - by 0.15%, which no eye and no invariant would ever notice.
     const Case = struct {
         shape: GeomShape,
         mass: f32,
@@ -10800,8 +10800,8 @@ test "spatial algebra: a cylinder spins about Y, zimr's capsule axis" {
 }
 
 test "solver: Nesterov momentum reaches the same answer, in fewer iterations" {
-    // ★★ A SWITCHED-OFF FEATURE ROTS UNLESS SOMETHING EXERCISES IT. Momentum is disabled by
-    // default because it measured 8% slower at sixteen rows — but the trade reverses with
+    // ** A SWITCHED-OFF FEATURE ROTS UNLESS SOMETHING EXERCISES IT. Momentum is disabled by
+    // default because it measured 8% slower at sixteen rows - but the trade reverses with
     // problem size, so it is kept, and kept working.
     //
     // The property that matters is that acceleration changes the PATH and not the DESTINATION:
@@ -10853,17 +10853,17 @@ test "solver: Nesterov momentum reaches the same answer, in fewer iterations" {
         }
     }
 
-    // ★ THE SAME ANSWER. Loose enough for a different iterate path in f32, tight enough that a
+    // * THE SAME ANSWER. Loose enough for a different iterate path in f32, tight enough that a
     // genuinely different solution would fail.
     try expect(plain > 0.0);
     try expectApproxEqAbs(plain, accelerated, @max(0.01, 0.02 * plain));
-    // And the acceleration is doing something — not silently disabled by a wiring mistake,
+    // And the acceleration is doing something - not silently disabled by a wiring mistake,
     // which is the failure mode a "same answer" test alone would pass.
     try expect(accelerated_iterations <= plain_iterations);
 }
 
-test "★ equality: a four-bar linkage, which a tree cannot express" {
-    // ★★★ THE WHOLE POINT OF LOOP CLOSURES. Reduced coordinates buy exact joints and no drift
+test "* equality: a four-bar linkage, which a tree cannot express" {
+    // *** THE WHOLE POINT OF LOOP CLOSURES. Reduced coordinates buy exact joints and no drift
     // and pay for it in TOPOLOGY: a tree has no rings, so a mechanism whose links form one
     // cannot be spelled at all. That excludes Cassie and Digit's parallel shins, four-bar
     // suspensions, delta arms, and most geared grippers.
@@ -10911,8 +10911,8 @@ test "★ equality: a four-bar linkage, which a tree cannot express" {
     // Twist one arm and let go. Without the closure the other would not move at all.
     data.pos[0] = 0.35;
     data.stage = .stale;
-    // ★ THE COUPLING IS TRACKED DURING THE SWING, NOT AT THE END. Both arms hang straight down
-    // at rest, and the anchors were chosen so the tips coincide THERE — so the final state
+    // * THE COUPLING IS TRACKED DURING THE SWING, NOT AT THE END. Both arms hang straight down
+    // at rest, and the anchors were chosen so the tips coincide THERE - so the final state
     // satisfies the closure trivially, with both angles at zero. Measuring only the end would
     // read "the second arm never moved" for a linkage that worked perfectly.
     var follower_swing: f32 = 0;
@@ -10923,29 +10923,29 @@ test "★ equality: a four-bar linkage, which a tree cannot express" {
     }
     forward(&model, &data);
 
-    // ── ★ THE LOOP HELD, AND IT MOVED THE OTHER ARM ──
-    // ★ ASKED THROUGH `equalityError` RATHER THAN RE-DERIVED HERE. A test that recomputes the
-    // quantity it is checking can agree perfectly with a broken implementation — both would be
+    // -- * THE LOOP HELD, AND IT MOVED THE OTHER ARM --
+    // * ASKED THROUGH `equalityError` RATHER THAN RE-DERIVED HERE. A test that recomputes the
+    // quantity it is checking can agree perfectly with a broken implementation - both would be
     // wrong the same way. Going through the accessor means this also tests the accessor.
     const separation: f32 = equalityError(&model, &data, 0);
-    // A millimetre on a 0.4 m linkage. Loop closures are soft in the same way contact is —
-    // this is not a hard constraint and does not claim to be — but a visibly stretchy linkage
+    // A millimetre on a 0.4 m linkage. Loop closures are soft in the same way contact is -
+    // this is not a hard constraint and does not claim to be - but a visibly stretchy linkage
     // would be useless, which is why `EqualitySpec` defaults stiffer than contact does.
     try expect(separation < 0.005);
 
-    // ★ AND THE SECOND ARM WENT SOMEWHERE. Untied it never leaves zero — nothing touches it,
-    // and gravity on a hanging arm produces no torque about its own pivot — so **any** motion
+    // * AND THE SECOND ARM WENT SOMEWHERE. Untied it never leaves zero - nothing touches it,
+    // and gravity on a hanging arm produces no torque about its own pivot - so **any** motion
     // at all arrived through the closure.
     //
     // Measured peak: 0.012 rad, and the bar is set below it deliberately rather than at a
     // round number that happened to pass. It is small because the geometry keeps the closure
     // nearly satisfied all the way down: the leader's tip travels mostly along the line joining
     // the two anchors, which is the direction the constraint cares least about. The separation
-    // check above is the strong evidence — 0.168 m closed to under a millimetre.
+    // check above is the strong evidence - 0.168 m closed to under a millimetre.
     try expect(follower_swing > 0.005);
 
-    // ★ THE CONSTRAINT PULLS AS WELL AS PUSHES. Three rows, and at least one carries a
-    // negative force — the property a unilateral clamp at zero would destroy, turning the rod
+    // * THE CONSTRAINT PULLS AS WELL AS PUSHES. Three rows, and at least one carries a
+    // negative force - the property a unilateral clamp at zero would destroy, turning the rod
     // into a rubber band.
     try expect(data.constraint_count >= 3);
     var negative: u32 = 0;
@@ -10957,9 +10957,9 @@ test "★ equality: a four-bar linkage, which a tree cannot express" {
     try expect(negative >= 1);
 }
 
-test "★ equality: the partner anchor is derived, and the loop starts satisfied" {
-    // ★★ THE ERGONOMIC HALF OF LOOP CLOSURES. Both anchors describe the SAME physical point in
-    // two different frames, so stating both is stating one fact twice — and getting the second
+test "* equality: the partner anchor is derived, and the loop starts satisfied" {
+    // ** THE ERGONOMIC HALF OF LOOP CLOSURES. Both anchors describe the SAME physical point in
+    // two different frames, so stating both is stating one fact twice - and getting the second
     // wrong by a centimetre gives a mechanism that lurches on frame one and then behaves,
     // which reads as a solver problem and is a typo.
     //
@@ -10995,14 +10995,14 @@ test "★ equality: the partner anchor is derived, and the loop starts satisfied
     var data: Data = try Data.init(gpa, &model);
     defer data.deinit();
 
-    // ★ THE DERIVED POINT IS THE ONE A PERSON WOULD HAVE WRITTEN. `left` sits at x = −0.2 and
-    // `right` at x = +0.2, so a point 0.4 along `left` is at the origin of `right` — offset
-    // (0, −0.3, 0) in its frame.
+    // * THE DERIVED POINT IS THE ONE A PERSON WOULD HAVE WRITTEN. `left` sits at x = -0.2 and
+    // `right` at x = +0.2, so a point 0.4 along `left` is at the origin of `right` - offset
+    // (0, -0.3, 0) in its frame.
     const derived: Vec = model.equalities[0].holds.connect.b.point;
     try expectApproxEqAbs(@as(f32, 0.0), derived[0], 1.0e-5);
     try expectApproxEqAbs(@as(f32, -0.3), derived[1], 1.0e-5);
 
-    // ★★ AND THE CONSTRAINT IS SATISFIED BEFORE ANYTHING MOVES — the property the derivation
+    // ** AND THE CONSTRAINT IS SATISFIED BEFORE ANYTHING MOVES - the property the derivation
     // exists to guarantee. A hand-written partner that is even slightly off shows up here as a
     // non-zero violation, which is the moment to catch it rather than as a lurch later.
     forward(&model, &data);
@@ -11014,8 +11014,8 @@ test "★ equality: the partner anchor is derived, and the loop starts satisfied
     }
 }
 
-test "★ equality: a geared gripper — two fingers, one motor" {
-    // ★★ WHAT JOINT COUPLING IS FOR. A parallel gripper has two fingers that must mirror each
+test "* equality: a geared gripper - two fingers, one motor" {
+    // ** WHAT JOINT COUPLING IS FOR. A parallel gripper has two fingers that must mirror each
     // other exactly, driven by one actuator. Modelling that as two independent joints and
     // hoping the controller keeps them synchronised is how a gripper ends up gripping crooked;
     // stating the relationship makes it a property of the MECHANISM, which is what it is.
@@ -11033,7 +11033,7 @@ test "★ equality: a geared gripper — two fingers, one motor" {
                 .geoms = &.{.{ .shape = .{ .sphere = .{ .radius = 0.02 } } }},
             },
         },
-        // ★ MIRRORED: right = −left. `.{ 0, -1 }` is offset zero, ratio minus one.
+        // * MIRRORED: right = -left. `.{ 0, -1 }` is offset zero, ratio minus one.
         .equalities = &.{.{
             .body_a = "left_finger",
             .body_b = "right_finger",
@@ -11046,12 +11046,12 @@ test "★ equality: a geared gripper — two fingers, one motor" {
     var data: Data = try Data.init(gpa, &model);
     defer data.deinit();
 
-    // ★ ONE ROW, not three: a scalar relationship needs one equation.
+    // * ONE ROW, not three: a scalar relationship needs one equation.
     forward(&model, &data);
     try expect(data.constraint_count == 1);
 
     // Drive the left finger and let the coupling carry the right one. Nothing else touches it
-    // — no gravity, no contact — so any motion at all arrived through the constraint.
+    // - no gravity, no contact - so any motion at all arrived through the constraint.
     for (0..1500) |_| {
         forward(&model, &data);
         data.applied_force[model.jnt_dof_adr[0]] = 3.0;
@@ -11062,14 +11062,14 @@ test "★ equality: a geared gripper — two fingers, one motor" {
     const left: f32 = data.pos[model.jnt_qpos_adr[0]];
     const right: f32 = data.pos[model.jnt_qpos_adr[1]];
     try expect(left > 0.05); // it actually moved
-    // ★ AND THE MIRROR HELD. A hair of error is expected — a loop closure is soft in the same
-    // way contact is — but the fingers track each other to well under a millimetre.
+    // * AND THE MIRROR HELD. A hair of error is expected - a loop closure is soft in the same
+    // way contact is - but the fingers track each other to well under a millimetre.
     try expectApproxEqAbs(-left, right, 1.0e-3);
     try expectApproxEqAbs(@as(f32, 0), equalityError(&model, &data, 0), 1.0e-3);
 }
 
 test "equality: a coupling with no driver locks a joint" {
-    // A null driver pins the joint to a constant offset from its rest value — which is how a
+    // A null driver pins the joint to a constant offset from its rest value - which is how a
     // joint is locked WITHOUT removing it from the model, so the same robot can be simulated
     // with a wrist free or fixed without two model definitions.
     const gpa: Allocator = std.testing.allocator;
@@ -11100,10 +11100,10 @@ test "equality: a coupling with no driver locks a joint" {
     try expectApproxEqAbs(@as(f32, 0.4), data.pos[0], 0.01);
 }
 
-test "★ equality: a weld holds orientation, not just position" {
-    // ★★ WHAT A WELD IS FOR, AND WHY IT IS NOT JUST A JOINTLESS BODY. A body with no joint is
+test "* equality: a weld holds orientation, not just position" {
+    // ** WHAT A WELD IS FOR, AND WHY IT IS NOT JUST A JOINTLESS BODY. A body with no joint is
     // welded to its PARENT and the tree expresses that for free. This ties two bodies that are
-    // not related that way — a hand gripping a crate, two halves bolted together at runtime —
+    // not related that way - a hand gripping a crate, two halves bolted together at runtime -
     // and it can be removed again, which a topology cannot.
     //
     // The distinguishing property is ORIENTATION. A `connect` pins a point and leaves the two
@@ -11131,11 +11131,11 @@ test "★ equality: a weld holds orientation, not just position" {
     var data: Data = try Data.init(gpa, &model);
     defer data.deinit();
 
-    // ★ SIX ROWS, not three: position and orientation both.
+    // * SIX ROWS, not three: position and orientation both.
     forward(&model, &data);
     try expect(data.constraint_count == 6);
 
-    // Turn the anchor. A welded body must come with it — position AND heading.
+    // Turn the anchor. A welded body must come with it - position AND heading.
     const spin: u32 = model.jnt_qpos_adr[0];
     for (0..3000) |_| {
         forward(&model, &data);
@@ -11146,7 +11146,7 @@ test "★ equality: a weld holds orientation, not just position" {
     forward(&model, &data);
 
     try expect(@abs(data.pos[spin] - 0.7) < 0.1); // the anchor got there
-    // ★ AND THE HELD BODY TURNED WITH IT. Under a `connect` this would hang plumb whatever the
+    // * AND THE HELD BODY TURNED WITH IT. Under a `connect` this would hang plumb whatever the
     // anchor did, because a shared point permits any rotation about itself.
     const held_heading: Vec = rotate(data.body_xrot[2], vec(1, 0, 0));
     const anchor_heading: Vec = rotate(data.body_xrot[1], vec(1, 0, 0));
@@ -11155,19 +11155,19 @@ test "★ equality: a weld holds orientation, not just position" {
     try expect(equalityError(&model, &data, 0) < 0.02);
 }
 
-/// The mass matrix's diagonal entry for one velocity DOF — how much inertia that coordinate
+/// The mass matrix's diagonal entry for one velocity DOF - how much inertia that coordinate
 /// actually carries, in its own units.
 ///
-/// ── ★ WHY A CONTROLLER WANTS THIS ──
+/// -- * WHY A CONTROLLER WANTS THIS --
 ///
 /// A gain in torque units is only meaningful next to an inertia. The same `kp` that is gentle
 /// on a robot's shoulder is violently unstable on its wrist, because the two differ by two
-/// orders of magnitude — and nothing about the number says so. Dividing it out turns `kp` into
+/// orders of magnitude - and nothing about the number says so. Dividing it out turns `kp` into
 /// a frequency, which is a property of the RESPONSE you want rather than of the link you
 /// happen to be pushing.
 ///
-/// ★ O(1). The row walk in `buildRuntime` starts at `i` and fills backwards, so the diagonal
-/// is the last slot in the row — no search needed.
+/// * O(1). The row walk in `buildRuntime` starts at `i` and fills backwards, so the diagonal
+/// is the last slot in the row - no search needed.
 pub fn massDiagonal(m: *const Model, d: *const Data, dof: u32) f32 {
     // The mass matrix is built during the position stage, alongside the composite inertias.
     d.requireStage(.position, "massDiagonal");
@@ -11177,15 +11177,15 @@ pub fn massDiagonal(m: *const Model, d: *const Data, dof: u32) f32 {
 
 /// Pack a flat observation vector: joint coordinates, joint velocities, then every sensor.
 ///
-/// ── ★ WHY THIS EXISTS RATHER THAN LEAVING IT TO THE CALLER ──
+/// -- * WHY THIS EXISTS RATHER THAN LEAVING IT TO THE CALLER --
 ///
 /// Every caller writes the same three memcpys, and the ones who get it wrong get it wrong the
 /// same way: reading `nq` floats of velocity, or `nv` of position. Those differ exactly when a
-/// model has a free or ball joint — a quaternion is four numbers of position and three of
-/// velocity — so the mistake is invisible on a fixed-base arm and silently corrupts every
+/// model has a free or ball joint - a quaternion is four numbers of position and three of
+/// velocity - so the mistake is invisible on a fixed-base arm and silently corrupts every
 /// legged robot. The engine knows both sizes; the caller should not have to.
 ///
-/// ★ SENSORS COME LAST AND ARE OPTIONAL. A model with none packs nothing, so the layout of the
+/// * SENSORS COME LAST AND ARE OPTIONAL. A model with none packs nothing, so the layout of the
 /// first two blocks never depends on whether sensors were declared.
 ///
 /// Returns how much of `out` was used, so a caller can size it once with `observationSize` and
@@ -11208,9 +11208,9 @@ pub fn observationSize(m: *const Model) usize {
 
 /// Everything that determines the next step, and nothing that does not.
 ///
-/// ── ★★ WHAT A STATE ACTUALLY IS ──
+/// -- ** WHAT A STATE ACTUALLY IS --
 ///
-/// `Data` is mostly SCRATCH — Jacobians, mass factorisations, body poses, sensor readings.
+/// `Data` is mostly SCRATCH - Jacobians, mass factorisations, body poses, sensor readings.
 /// All of it is recomputed by `forward` from a much smaller core, so copying it would be
 /// slower and would invite a subtler bug: two "states" that differ only in stale scratch
 /// compare unequal while describing the same physics.
@@ -11218,9 +11218,9 @@ pub fn observationSize(m: *const Model) usize {
 /// The core is: joint coordinates, joint velocities, actuator activation, and the warm-start
 /// forces.
 ///
-/// ★ THE WARM START IS PART OF THE STATE, and leaving it out is the trap. Restoring position
+/// * THE WARM START IS PART OF THE STATE, and leaving it out is the trap. Restoring position
 /// and velocity but not the forces the solver was carrying gives a step that is CLOSE and not
-/// identical — which is worse than being obviously wrong, because it survives a short test and
+/// identical - which is worse than being obviously wrong, because it survives a short test and
 /// fails a long one. Determinism is the whole reason this exists: an RL rollout replayed from
 /// a snapshot must produce the same trajectory, and a planner branching from a state must not
 /// have its branches disagree about where they started.
@@ -11229,17 +11229,17 @@ pub const State = struct {
     vel: []f32,
     act: []f32,
     warm_force: []f32,
-    // ── ★★ THE WARM FORCES ARE USELESS WITHOUT THE KEYS THAT INDEX THEM ──
+    // -- ** THE WARM FORCES ARE USELESS WITHOUT THE KEYS THAT INDEX THEM --
     //
     // Warm starting matches rows by KEY, not by index, because rows are rebuilt every step
     // and their order shifts as constraints come and go. Saving `warm_force` alone and
     // leaving `warm_key`/`warm_count` at whatever the last step wrote means a restore hands
-    // the solver last step's forces under this step's keys — right array, wrong labels.
+    // the solver last step's forces under this step's keys - right array, wrong labels.
     //
     // It survived the replay test because that test restores into a Data whose contact set
     // never changed, so the stale keys happened to be the correct ones. It does NOT survive
     // finite differencing, where every perturbed rollout restores from the same snapshot and
-    // warm state would leak between neighbouring columns — contaminating the very derivative
+    // warm state would leak between neighbouring columns - contaminating the very derivative
     // being measured. MuJoCo saves `mjSTATE_WARMSTART` in its restore spec for this reason.
     warm_key: []u64,
     warm_count: u32,
@@ -11277,9 +11277,9 @@ pub const State = struct {
 
     /// Put it back.
     ///
-    /// ★ MARKS THE DERIVED DATA STALE, so the next `forward` rebuilds everything from the
+    /// * MARKS THE DERIVED DATA STALE, so the next `forward` rebuilds everything from the
     /// restored core. Skipping that leaves body poses describing the state that was there
-    /// before — which reads correctly right up until something uses a pose without calling
+    /// before - which reads correctly right up until something uses a pose without calling
     /// `forward` first.
     pub fn restore(self: *const State, d: *Data) void {
         @memcpy(d.pos, self.pos);
@@ -11289,24 +11289,24 @@ pub const State = struct {
         @memcpy(d.warm_key, self.warm_key);
         d.warm_count = self.warm_count;
         d.stage = .stale;
-        // ★ A RESTORE IS A TELEPORT. Replaying from a snapshot moves every body at once, which
+        // * A RESTORE IS A TELEPORT. Replaying from a snapshot moves every body at once, which
         // is exactly the case a swept contact must not try to interpolate.
         d.teleported = true;
     }
 };
 
-test "★★ state: a snapshot carries the warm-start KEYS, not just the forces" {
-    // ── THE GAP THE REPLAY TEST ABOVE CANNOT SEE ──
+test "** state: a snapshot carries the warm-start KEYS, not just the forces" {
+    // -- THE GAP THE REPLAY TEST ABOVE CANNOT SEE --
     //
     // Warm starting matches rows by KEY, because rows are rebuilt every step and their order
     // shifts as constraints come and go. `State` saved `warm_force` and not `warm_key` /
     // `warm_count`, so a restore handed the solver the snapshot's forces indexed by whatever
-    // keys the LAST step happened to leave behind — right array, wrong labels.
+    // keys the LAST step happened to leave behind - right array, wrong labels.
     //
-    // ★ THE REPLAY TEST PASSES EITHER WAY, which is why this needs its own. That test restores
+    // * THE REPLAY TEST PASSES EITHER WAY, which is why this needs its own. That test restores
     // into a Data whose contact set never changed, so the stale keys are accidentally the
     // correct ones. The bug only appears when the contact set MOVES between the snapshot and
-    // the restore — which is precisely what a planner branching from a state does, and what
+    // the restore - which is precisely what a planner branching from a state does, and what
     // every column of a finite-difference derivative does.
     const gpa: Allocator = std.testing.allocator;
     const Ball = Spec(.{
@@ -11342,7 +11342,7 @@ test "★★ state: a snapshot carries the warm-start KEYS, not just the forces"
     saved.save(&d);
     const snapshot_key: u64 = d.warm_key[0];
 
-    // Now step with a DIFFERENT contact — same count, different identity — so the live warm
+    // Now step with a DIFFERENT contact - same count, different identity - so the live warm
     // keys diverge from the snapshot's while everything else looks unchanged. That is the
     // shape of the bug: nothing about the sizes is wrong, only the labels.
     for (0..3) |_| {
@@ -11366,13 +11366,13 @@ test "★★ state: a snapshot carries the warm-start KEYS, not just the forces"
     try expectEqual(snapshot_key, d.warm_key[0]);
 }
 
-test "★ state: a saved state replays bit-for-bit" {
-    // ★★★ THE PROPERTY EVERYTHING ELSE RESTS ON. An RL rollout replayed from a snapshot must
+test "* state: a saved state replays bit-for-bit" {
+    // *** THE PROPERTY EVERYTHING ELSE RESTS ON. An RL rollout replayed from a snapshot must
     // produce the same trajectory; a planner branching from a state must not have its branches
     // disagree about where they started. Both are silent failures if this is only ALMOST true.
     //
     // So the test is a replay, not a spot check: run, snapshot, run further, restore, run the
-    // same further steps again, and require the two continuations to be IDENTICAL — not close.
+    // same further steps again, and require the two continuations to be IDENTICAL - not close.
     const gpa: Allocator = std.testing.allocator;
     const Arm = Spec(.{
         .bodies = &.{
@@ -11403,9 +11403,9 @@ test "★ state: a saved state replays bit-for-bit" {
     var snapshot: State = try State.init(gpa, &model);
     defer snapshot.deinit();
 
-    // ★ RUN INTO THE JOINT LIMIT FIRST, so the warm start is carrying real force when the
+    // * RUN INTO THE JOINT LIMIT FIRST, so the warm start is carrying real force when the
     // snapshot is taken. A state saved while nothing is in contact would round-trip even if
-    // `warm_force` were omitted entirely — which is exactly how that omission survives a test.
+    // `warm_force` were omitted entirely - which is exactly how that omission survives a test.
     for (0..900) |_| {
         forward(&model, &data);
         data.applied_force[0] = 8.0;
@@ -11433,7 +11433,7 @@ test "★ state: a saved state replays bit-for-bit" {
         step(&model, &data);
     }
 
-    // ── ★ BIT-FOR-BIT, NOT APPROXIMATELY ──
+    // -- * BIT-FOR-BIT, NOT APPROXIMATELY --
     //
     // `expectApproxEqAbs` would pass on a state that had lost its warm start: the trajectory
     // would be close for a few hundred steps and diverge later. Exact equality is the only
@@ -11445,8 +11445,8 @@ test "★ state: a saved state replays bit-for-bit" {
 }
 
 test "state: what a snapshot must carry, and what it need not" {
-    // ★★ WRITTEN TO JUSTIFY `warm_force` AND IT DID THE OPPOSITE. Two boxes with eight contact
-    // rows replay identically with or without it — the solver reaches the same answer either
+    // ** WRITTEN TO JUSTIFY `warm_force` AND IT DID THE OPPOSITE. Two boxes with eight contact
+    // rows replay identically with or without it - the solver reaches the same answer either
     // way, so on this scene the warm start is a cost optimisation and not state. The comment
     // at the end of this test is the finding; the assertions record it rather than argue with
     // it.
@@ -11474,7 +11474,7 @@ test "state: what a snapshot must carry, and what it need not" {
     var snapshot: State = try State.init(gpa, &model);
     defer snapshot.deinit();
 
-    // Two boxes resting on each other, held by contacts written directly — enough rows that
+    // Two boxes resting on each other, held by contacts written directly - enough rows that
     // the solver is doing real work and its carried forces matter.
     const settle = struct {
         fn go(m: *const Model, d: *Data, steps: usize) void {
@@ -11508,13 +11508,13 @@ test "state: what a snapshot must carry, and what it need not" {
     settle(&model, &data, 200);
     const replayed_height: f32 = data.pos[1];
 
-    // Full restore replays exactly — this is the first test's property, re-checked on a scene
+    // Full restore replays exactly - this is the first test's property, re-checked on a scene
     // with many rows.
     snapshot.restore(&data);
     settle(&model, &data, 200);
     try expectEqual(replayed_height, data.pos[1]);
 
-    // ── ★★ AND WITHOUT THE WARM START IT REPLAYS TOO — WHICH WAS NOT THE EXPECTED ANSWER ──
+    // -- ** AND WITHOUT THE WARM START IT REPLAYS TOO - WHICH WAS NOT THE EXPECTED ANSWER --
     //
     // This test was written to prove `warm_force` belongs in the snapshot, by showing a replay
     // that diverges without it. **It does not diverge.** With eight contact rows and two free
@@ -11535,9 +11535,9 @@ test "state: what a snapshot must carry, and what it need not" {
     try expectEqual(replayed_height, data.pos[1]);
 }
 
-test "★ state: many Data against one Model do not interfere" {
-    // ★★★ THE PROPERTY A BATCHED ROLLOUT RESTS ON. Reinforcement learning runs hundreds of
-    // environments at once against ONE model — the tables are large, identical, and read-only,
+test "* state: many Data against one Model do not interfere" {
+    // *** THE PROPERTY A BATCHED ROLLOUT RESTS ON. Reinforcement learning runs hundreds of
+    // environments at once against ONE model - the tables are large, identical, and read-only,
     // so sharing them is most of why batching is affordable. If any of `forward` or `step`
     // wrote through to the model, the environments would silently couple and produce a policy
     // trained on physics that does not exist.
@@ -11575,7 +11575,7 @@ test "★ state: many Data against one Model do not interfere" {
     // has something to leak.
     const torques = [3]f32{ -6.0, 0.0, 9.0 };
 
-    // ── First: each one alone, start to finish ──
+    // -- First: each one alone, start to finish --
     var alone: [3][2]f32 = undefined;
     for (torques, 0..) |torque, i| {
         var data: Data = try Data.init(gpa, &model);
@@ -11588,7 +11588,7 @@ test "★ state: many Data against one Model do not interfere" {
         alone[i] = .{ data.pos[0], data.pos[1] };
     }
 
-    // ── Then: all three interleaved, sharing the model ──
+    // -- Then: all three interleaved, sharing the model --
     var batch: [3]Data = undefined;
     for (&batch, 0..) |*data, i| {
         data.* = try Data.init(gpa, &model);
@@ -11598,7 +11598,7 @@ test "★ state: many Data against one Model do not interfere" {
         data.deinit();
     };
     for (0..800) |_| {
-        // ★ INTERLEAVED, NOT ONE AFTER THE OTHER. Running them sequentially would miss exactly
+        // * INTERLEAVED, NOT ONE AFTER THE OTHER. Running them sequentially would miss exactly
         // the bug this looks for: state left in the model by environment 0 that environment 1
         // then reads. Stepping them in turn puts every write between two reads.
         for (&batch, torques) |*data, torque| {
@@ -11608,17 +11608,17 @@ test "★ state: many Data against one Model do not interfere" {
         }
     }
 
-    // ── ★ BIT-FOR-BIT THE SAME AS ALONE ──
+    // -- * BIT-FOR-BIT THE SAME AS ALONE --
     for (&batch, alone) |*data, want| {
         try expectEqual(want[0], data.pos[0]);
         try expectEqual(want[1], data.pos[1]);
     }
 }
 
-test "★★ implicit: the Coriolis derivative, on every joint kind" {
-    // ★★★ THE TEST THAT WAS NOT ADVERSARIAL ENOUGH, AND WHAT IT MISSED.
+test "** implicit: the Coriolis derivative, on every joint kind" {
+    // *** THE TEST THAT WAS NOT ADVERSARIAL ENOUGH, AND WHAT IT MISSED.
     //
-    // The original used one model — two bodies, three hinges — and passed to 0.002. Checked
+    // The original used one model - two bodies, three hinges - and passed to 0.002. Checked
     // against finite differences on other SHAPES, with the same code:
     //
     //     3-hinge chain      worst 0.0009    ok
@@ -11631,7 +11631,7 @@ test "★★ implicit: the Coriolis derivative, on every joint kind" {
     // free and ball joints share ONE snapshot of the velocity taken before any of the three is
     // folded in. A hinge-only model cannot see either difference.
     //
-    // ★ THE LESSON IS ABOUT COVERAGE, NOT ABOUT SPATIAL ALGEBRA. A mirror of an existing
+    // * THE LESSON IS ABOUT COVERAGE, NOT ABOUT SPATIAL ALGEBRA. A mirror of an existing
     // function needs a case for every branch the original has, and the original's branches were
     // right there in `comVel`'s switch.
     const gpa: Allocator = std.testing.allocator;
@@ -11741,9 +11741,9 @@ test "★★ implicit: the Coriolis derivative, on every joint kind" {
     }
 }
 
-test "★ implicit: the Coriolis derivative matches finite differences" {
-    // ★★★ THE ONLY HONEST TEST FOR AN ANALYTIC DERIVATIVE. `rneVelDerivative` mirrors `rne`
-    // one level up — the same forward sweep, the same backward sum — and a mirror is exactly
+test "* implicit: the Coriolis derivative matches finite differences" {
+    // *** THE ONLY HONEST TEST FOR AN ANALYTIC DERIVATIVE. `rneVelDerivative` mirrors `rne`
+    // one level up - the same forward sweep, the same backward sum - and a mirror is exactly
     // the kind of code that looks right while being one term out. So it is checked against the
     // thing it claims to be: perturb each velocity, re-run `rne`, and compare.
     //
@@ -11799,7 +11799,7 @@ test "★ implicit: the Coriolis derivative matches finite differences" {
     @memset(analytic, 0);
     rneVelDerivative(&model, &data, analytic);
 
-    // ── Finite differences on `rne` itself ──
+    // -- Finite differences on `rne` itself --
     const base: []f32 = try gpa.alloc(f32, nv);
     defer gpa.free(base);
     const shifted: []f32 = try gpa.alloc(f32, nv);
@@ -11819,35 +11819,35 @@ test "★ implicit: the Coriolis derivative matches finite differences" {
         forward(&model, &data);
 
         for (0..nv) |i| {
-            // `rneVelDerivative` writes ∂force/∂v and the bias enters with a minus, so the
+            // `rneVelDerivative` writes dforce/dv and the bias enters with a minus, so the
             // finite difference of `rne` is negated to match.
             const numeric: f32 = -(shifted[i] - base[i]) / step_size;
             worst = @max(worst, @abs(analytic[i * nv + j] - numeric));
         }
     }
 
-    // ★ THE TOLERANCE IS SET BY THE DIFFERENCE, NOT BY THE DERIVATIVE. A one-sided difference
+    // * THE TOLERANCE IS SET BY THE DIFFERENCE, NOT BY THE DERIVATIVE. A one-sided difference
     // at h = 1e-3 on terms of order 10 carries truncation error around 1e-2 in f32, so a
     // tighter bar would be testing the reference rather than the code under test.
-    // ★ MEASURED AT 0.002 — the analytic derivative and the finite difference agree to well
+    // * MEASURED AT 0.002 - the analytic derivative and the finite difference agree to well
     // inside the difference's own truncation error, which is the strongest statement this
     // comparison can make.
     try expect(worst < 0.05);
 
-    // And the matrix is genuinely non-trivial — a function returning zeros would sail past a
+    // And the matrix is genuinely non-trivial - a function returning zeros would sail past a
     // comparison against a difference that was also nearly zero.
     var largest: f32 = 0;
     for (analytic) |value| {
         largest = @max(largest, @abs(value));
     }
     // Measured: 0.98 on this model. The bar sits below it rather than at a round number that
-    // happened to pass — a first attempt at `> 1.0` failed on a derivative that was correct to
+    // happened to pass - a first attempt at `> 1.0` failed on a derivative that was correct to
     // 0.002, which is the wrong reason for a test to go red.
     try expect(largest > 0.5);
 }
 
-test "★ integrators: what each one is actually for, measured" {
-    // ★★★ THE TABLE THAT JUSTIFIES HAVING FOUR OF THESE. A rotor at 80 rad/s on a damped
+test "* integrators: what each one is actually for, measured" {
+    // *** THE TABLE THAT JUSTIFIES HAVING FOUR OF THESE. A rotor at 80 rad/s on a damped
     // gimbal: the gyroscopic coupling into the gimbal axes is large AND velocity-dependent,
     // which is exactly the term `implicitfast` omits and `implicit` keeps.
     //
@@ -11859,10 +11859,10 @@ test "★ integrators: what each one is actually for, measured" {
     // **`implicit` is four times more accurate than `implicitfast` here**, at one linear solve
     // per step against rk4's four force evaluations. That is the whole case for it.
     //
-    // ★ AND A CLAIM THAT DID NOT SURVIVE MEASUREMENT. This was first described as "the only one
+    // * AND A CLAIM THAT DID NOT SURVIVE MEASUREMENT. This was first described as "the only one
     // that stabilises a fast-tumbling free body". It is not: on a torque-free plate spun about
-    // its intermediate axis, **rk4 dominates completely** — energy drift 0.00000 and world
-    // angular-momentum drift 0.00003, against `implicit`'s 0.272 and 0.114 — and `implicit` was
+    // its intermediate axis, **rk4 dominates completely** - energy drift 0.00000 and world
+    // angular-momentum drift 0.00003, against `implicit`'s 0.272 and 0.114 - and `implicit` was
     // WORSE than `implicitfast` at the lower spin. Implicit methods buy stiffness, not
     // accuracy, and a torque-free tumbler is not stiff.
     const gpa: Allocator = std.testing.allocator;
@@ -11903,9 +11903,9 @@ test "★ integrators: what each one is actually for, measured" {
             defer model.deinit();
             var data: Data = try Data.init(allocator, &model);
             defer data.deinit();
-            // ★ 80 rad/s, DELIBERATELY UNDER the 100 rad/s velocity bound. A first attempt used
-            // 200 and 600, where every integrator reported a "peak" of exactly 100 — the clamp,
-            // not divergence — and the comparison said nothing at all.
+            // * 80 rad/s, DELIBERATELY UNDER the 100 rad/s velocity bound. A first attempt used
+            // 200 and 600, where every integrator reported a "peak" of exactly 100 - the clamp,
+            // not divergence - and the comparison said nothing at all.
             data.vel[2] = 80.0;
             data.vel[0] = 0.4;
             data.stage = .stale;
@@ -11930,15 +11930,15 @@ test "★ integrators: what each one is actually for, measured" {
     const coarse_full: f32 = gapBetween(try settle(.implicit, 1.0 / 100.0, gpa), truth);
     const coarse_rk4: f32 = gapBetween(try settle(.rk4, 1.0 / 100.0, gpa), truth);
 
-    // ★ THE ORDERING IS THE CLAIM, not the exact figures — those are recorded above and will
+    // * THE ORDERING IS THE CLAIM, not the exact figures - those are recorded above and will
     // drift with any change to the integrators, where the ordering should not.
     try expect(coarse_full < coarse_fast * 0.5);
     try expect(coarse_rk4 < coarse_full);
 }
 
-test "★ constraints: a weld keeps its rows when contacts fill the buffer" {
-    // ★★★ A BUG FOUND BY REVIEW, NOT BY FAILURE. Capacity reserved a flat THREE rows per
-    // equality — right for a `connect` and half of what a `weld` needs, since a weld adds three
+test "* constraints: a weld keeps its rows when contacts fill the buffer" {
+    // *** A BUG FOUND BY REVIEW, NOT BY FAILURE. Capacity reserved a flat THREE rows per
+    // equality - right for a `connect` and half of what a `weld` needs, since a weld adds three
     // orientation rows to the three positional ones. `addEqualityRows` treats "no room" as a
     // silent return, so an under-reserved weld does not error: it quietly stops existing on a
     // step busy enough to use the space, and a gripped object drifts out of the hand with
@@ -11962,7 +11962,7 @@ test "★ constraints: a weld keeps its rows when contacts fill the buffer" {
             },
         },
         .equalities = &.{.{ .body_a = "held", .body_b = "post", .weld = true }},
-        // ★ A DELIBERATELY SMALL CONTACT BUDGET, so the buffer is easy to fill and the
+        // * A DELIBERATELY SMALL CONTACT BUDGET, so the buffer is easy to fill and the
         // reservation is doing visible work rather than hiding behind slack.
         .options = .{ .timestep = 1.0 / 500.0, .max_contacts = 4, .gravity = vec(0, -9.81, 0) },
     });
@@ -11971,7 +11971,7 @@ test "★ constraints: a weld keeps its rows when contacts fill the buffer" {
     var data: Data = try Data.init(gpa, &model);
     defer data.deinit();
 
-    // ★ THE WELD'S SIX ROWS FIT WITH EVERY CONTACT ROW ALSO ACCOUNTED FOR. Under the old flat
+    // * THE WELD'S SIX ROWS FIT WITH EVERY CONTACT ROW ALSO ACCOUNTED FOR. Under the old flat
     // three, this model reserved three too few and the arithmetic below was off by exactly the
     // orientation half.
     try expect(model.constraint_capacity >= 6 + 4 * rows_per_contact);
@@ -12000,31 +12000,31 @@ test "★ constraints: a weld keeps its rows when contacts fill the buffer" {
     }
     try expectEqual(@as(u32, 6), weld_rows);
 
-    // ★ AND THEY CAME FIRST, which is the ordering that makes the reservation a belt as well as
-    // braces — a shortfall anywhere drops a contact, never the mechanism.
+    // * AND THEY CAME FIRST, which is the ordering that makes the reservation a belt as well as
+    // braces - a shortfall anywhere drops a contact, never the mechanism.
     for (0..6) |row| {
         try expect(data.constraint_kind[row] == .connect);
     }
 }
 
-test "★★ actuator forces match MuJoCo, all three transmissions" {
-    // ★★★ THE SECOND HALF OF THE SOLVER AUDIT. Actuators had the same gap contacts did:
-    // verified by behaviour — robots hold their poses — and never against MuJoCo's own
+test "** actuator forces match MuJoCo, all three transmissions" {
+    // *** THE SECOND HALF OF THE SOLVER AUDIT. Actuators had the same gap contacts did:
+    // verified by behaviour - robots hold their poses - and never against MuJoCo's own
     // `qfrc_actuator`. A gear applied twice, or a `position` gain that silently reads velocity,
     // produces a robot that still moves and does the wrong thing everywhere downstream.
     //
-    // ── ★ EVERY NUMBER HERE IS DERIVABLE WITHOUT EITHER ENGINE ──
+    // -- * EVERY NUMBER HERE IS DERIVABLE WITHOUT EITHER ENGINE --
     //
     // That is what makes it an oracle rather than a comparison of two guesses. At q = 0.3,
     // v = 1.4, ctrl = 0.7:
     //
-    //     motor,    gear 2.5  ->  ctrl · gear         =  0.7 × 2.5  =   1.75
-    //     position, kp 30     ->  kp · (ctrl − q)     =  30 × 0.4   =  12.0
-    //     velocity, kv 5      ->  kv · (ctrl − v)     =  5 × (−0.7) =  −3.5
+    //     motor,    gear 2.5  ->  ctrl * gear         =  0.7 x 2.5  =   1.75
+    //     position, kp 30     ->  kp * (ctrl - q)     =  30 x 0.4   =  12.0
+    //     velocity, kv 5      ->  kv * (ctrl - v)     =  5 x (-0.7) =  -3.5
     //
-    // MuJoCo reports 1.75, 12.0 and −3.5. So does this.
+    // MuJoCo reports 1.75, 12.0 and -3.5. So does this.
     //
-    // ★ THE SIGN ON `velocity` IS THE ONE WORTH HAVING PINNED. It is negative here because the
+    // * THE SIGN ON `velocity` IS THE ONE WORTH HAVING PINNED. It is negative here because the
     // joint is moving FASTER than commanded, so the actuator brakes. A sign slip passes every
     // behavioural test that only ever accelerates from rest.
     const gpa: Allocator = std.testing.allocator;
@@ -12065,7 +12065,7 @@ test "★★ actuator forces match MuJoCo, all three transmissions" {
                 }},
             }},
             .actuators = &.{case.spec},
-            // ★ GRAVITY OFF, so the number under test is the only force in the model and a
+            // * GRAVITY OFF, so the number under test is the only force in the model and a
             // mismatch cannot be explained away as a bias term.
             .options = .{ .timestep = 1.0 / 500.0, .gravity = vec_zero },
         });
@@ -12091,20 +12091,20 @@ test "★★ actuator forces match MuJoCo, all three transmissions" {
     }
 }
 
-test "★★ a fixed tendon matches MuJoCo — length, velocity, and the force it spreads" {
-    // ★★★ THE LAST SUBSYSTEM WITHOUT AN EXTERNAL ORACLE. A tendon is a scalar constraint on a
-    // COMBINATION of joints, and its force is spread back over them by the same coefficients —
-    // `Jᵀf` in miniature. Three things can be independently wrong: the length, its rate, and
+test "** a fixed tendon matches MuJoCo - length, velocity, and the force it spreads" {
+    // *** THE LAST SUBSYSTEM WITHOUT AN EXTERNAL ORACLE. A tendon is a scalar constraint on a
+    // COMBINATION of joints, and its force is spread back over them by the same coefficients -
+    // `J^Tf` in miniature. Three things can be independently wrong: the length, its rate, and
     // the transpose. Behaviour tests see only their product.
     //
-    // ── ★ HAND-DERIVABLE, WHICH IS WHAT MAKES IT AN ORACLE ──
+    // -- * HAND-DERIVABLE, WHICH IS WHAT MAKES IT AN ORACLE --
     //
-    // Coefficients 1.0 and −0.5, at q = (0.4, −0.2) and v = (1.1, 0.6):
+    // Coefficients 1.0 and -0.5, at q = (0.4, -0.2) and v = (1.1, 0.6):
     //
-    //     length   = 1.0(0.4) + (−0.5)(−0.2)              =  0.5
-    //     velocity = 1.0(1.1) + (−0.5)(0.6)               =  0.8
-    //     force    = −k(L − L₀) − b·V  = −40(0.4) − 3(0.8) = −18.4
-    //     spread   = f × coefficient  ->  j1: −18.4,  j2: +9.2
+    //     length   = 1.0(0.4) + (-0.5)(-0.2)              =  0.5
+    //     velocity = 1.0(1.1) + (-0.5)(0.6)               =  0.8
+    //     force    = -k(L - L_0) - b*V  = -40(0.4) - 3(0.8) = -18.4
+    //     spread   = f x coefficient  ->  j1: -18.4,  j2: +9.2
     //
     // MuJoCo reports exactly that, and so does this. The SIGN FLIP on j2 is the part worth
     // pinning: a negative coefficient is how a differential is built, and dropping the sign in
@@ -12166,7 +12166,7 @@ test "★★ a fixed tendon matches MuJoCo — length, velocity, and the force i
 }
 
 // =============================================================================
-// Skeleton -> robot model (retarget_plan.md §13x)
+// Skeleton -> robot model (retarget_plan.md section 13x)
 // =============================================================================
 
 /// How to turn an animation skeleton into a physical model.
@@ -12178,10 +12178,10 @@ pub const SkeletonToModelOptions = struct {
     max_radius: f32 = 0.09,
     /// kg per cubic metre. Water is 1000; a human averages slightly less.
     density: f32 = 985.0,
-    /// Bones shorter than this get no geom and a token inertia — finger tips and end sites,
+    /// Bones shorter than this get no geom and a token inertia - finger tips and end sites,
     /// which would otherwise contribute degenerate capsules.
     min_bone_length: f32 = 0.02,
-    /// ★ Y-UP, METRES, matching the rest of zimr. The clip must already be in these units;
+    /// * Y-UP, METRES, matching the rest of zimr. The clip must already be in these units;
     /// `draw3d.scaleBvhSkeletalClip` converts a centimetre capture.
     gravity: Vec = vec(0, -9.81, 0),
 };
@@ -12189,26 +12189,26 @@ pub const SkeletonToModelOptions = struct {
 /// Build a MuJoCo-style model whose topology IS the animation skeleton's: one body per bone,
 /// one BALL joint per bone, a free joint at the root.
 ///
-/// ── ★★★ WHY THIS EXISTS (retarget_plan.md §13x) ──
+/// -- *** WHY THIS EXISTS (retarget_plan.md section 13x) --
 ///
 /// A BVH pose is exactly a root translation plus one rotation per joint. A ball joint's `qpos`
 /// is a quaternion. So a model shaped like the skeleton can play the capture by a DIRECT WRITE
-/// of each bone's local rotation — **no IK, no solver, no Jacobian**.
+/// of each bone's local rotation - **no IK, no solver, no Jacobian**.
 ///
 /// That makes it the one place a robot-side error can be attributed with certainty. It
-/// exercises the whole `qpos` path — quaternion layout, `jnt_qpos_adr`, `nq != nv`, free-joint
-/// handling, `kinematics` — with the solver removed. `humanoid.xml` cannot give that signal:
+/// exercises the whole `qpos` path - quaternion layout, `jnt_qpos_adr`, `nq != nv`, free-joint
+/// handling, `kinematics` - with the solver removed. `humanoid.xml` cannot give that signal:
 /// there, errors are EXPECTED, and a bug is indistinguishable from a knee that only has one
 /// hinge.
 ///
-/// ★ And once the IK exists, running it on THIS model must reproduce what the direct write
+/// * And once the IK exists, running it on THIS model must reproduce what the direct write
 /// already produced. Ground truth for the solver, available before facing a target where
 /// nobody knows what the right answer looks like.
 ///
 /// The result is also a ragdoll: capsules sized from bone length, inertia from the capsule.
-/// ★ PLAIN SLICES, NOT A CLIP TYPE. `robot.zig` knows nothing about animation formats and
+/// * PLAIN SLICES, NOT A CLIP TYPE. `robot.zig` knows nothing about animation formats and
 /// should not start now: a skeleton is names, parents and rest offsets. The caller unpacks
-/// whatever it has — `draw3d.BvhSkeletalClip`, an FBX skeleton, or a hand-written rig — which
+/// whatever it has - `draw3d.BvhSkeletalClip`, an FBX skeleton, or a hand-written rig - which
 /// also keeps `robot.zig` free of a dependency on `draw3d`.
 ///
 /// `parents[i] < 0` marks the root. `offsets[i]` is bone i's rest position relative to its
@@ -12241,7 +12241,7 @@ pub fn skeletonToModel(
     for (0..bone_count) |bone| {
         const parent_bone: i32 = parents[bone];
 
-        // A bone's offset from its parent IS its length — there is no separate length field in
+        // A bone's offset from its parent IS its length - there is no separate length field in
         // a skeleton, only where each joint sits relative to the one above it.
         const offset_from_parent: Vec = offsets[bone];
         const bone_length: f32 = @sqrt(
@@ -12250,7 +12250,7 @@ pub fn skeletonToModel(
                 offset_from_parent[2] * offset_from_parent[2],
         );
 
-        // ★ ONE JOINT PER BONE. The root gets a FREE joint (6 DOF: the capture's global
+        // * ONE JOINT PER BONE. The root gets a FREE joint (6 DOF: the capture's global
         // translation and rotation); every other bone gets a BALL joint, which is exactly the
         // 3 rotational DOF a BVH channel set carries.
         const bone_is_root: bool = parent_bone < 0;
@@ -12271,7 +12271,7 @@ pub fn skeletonToModel(
                 opts.max_radius,
             );
 
-            // ★ The capsule spans BACKWARD from this body's origin toward its parent, because
+            // * The capsule spans BACKWARD from this body's origin toward its parent, because
             // the offset is measured FROM the parent. Centring it forward would put every limb
             // one segment ahead of where it actually is.
             const capsule_centre: Vec = offset_from_parent * @as(Vec, @splat(-0.5));
@@ -12338,17 +12338,17 @@ test "skeletonToModel: the synthesized model reproduces the skeleton's rest pose
     var d: Data = try Data.init(gpa, &m);
     defer d.deinit();
 
-    // ★★ THE PROPERTY: at the identity configuration, forward kinematics must place every body
+    // ** THE PROPERTY: at the identity configuration, forward kinematics must place every body
     // exactly where the skeleton's rest offsets say. If it does not, the model is not the
     // skeleton and every later comparison against a capture is measuring the wrong thing.
     //
-    // ★ `nq != nv` is exercised here on purpose — the root is a FREE joint, so `qpos` carries a
+    // * `nq != nv` is exercised here on purpose - the root is a FREE joint, so `qpos` carries a
     // quaternion and is longer than the DOF count. A model built with the wrong qpos layout
     // fails this immediately rather than drifting later.
     try expectEqual(@as(u32, 3), m.nbody - 1); // + the world body
     try expect(m.nq > m.nv); // free joint => quaternion in qpos
 
-    // ★ `qpos0` IS the rest configuration — zeros except a free joint's quaternion, which
+    // * `qpos0` IS the rest configuration - zeros except a free joint's quaternion, which
     // rests at identity (robot.zig:1941). Starting anywhere else would test a pose the
     // skeleton never described.
     @memcpy(d.pos, m.qpos0);
@@ -12362,29 +12362,29 @@ test "skeletonToModel: the synthesized model reproduces the skeleton's rest pose
     try expectApproxEqAbs(@as(f32, 1.0), mid_pos[1], 1.0e-5);
     try expectApproxEqAbs(@as(f32, 2.0), tip_pos[1], 1.0e-5);
 
-    // ★ And the bones have MASS. A ragdoll of massless links is a solver singularity, and a
+    // * And the bones have MASS. A ragdoll of massless links is a solver singularity, and a
     // zero-length bone (an end site) must be tolerated rather than producing a degenerate
-    // capsule — hence `min_bone_length`.
+    // capsule - hence `min_bone_length`.
     try expect(m.body_mass[2] > 0.0);
     try expect(m.body_mass[3] > 0.0);
 }
 
-/// Write an animation pose straight into `qpos` — no IK, no solver.
+/// Write an animation pose straight into `qpos` - no IK, no solver.
 ///
-/// ── ★★★ THE POINT OF §13x ──
+/// -- *** THE POINT OF section 13x --
 ///
 /// A model built by `skeletonToModel` has exactly the skeleton's topology: a FREE joint at the
 /// root and a BALL joint per bone. A BVH pose is exactly a root translation plus one rotation
 /// per joint. So playback is a COPY, and the result is exact rather than converged.
 ///
 /// That makes this the one place a robot-side error can be attributed with certainty: it
-/// exercises the whole `qpos` path — quaternion layout, `jnt_qpos_adr`, `nq != nv`, free-joint
-/// handling — with the solver removed.
+/// exercises the whole `qpos` path - quaternion layout, `jnt_qpos_adr`, `nq != nv`, free-joint
+/// handling - with the solver removed.
 ///
-/// ★★ QUATERNIONS ARE `(x, y, z, w)` HERE, NOT MuJoCo's `(w, x, y, z)`. `robot.zig` stores zm's
+/// ** QUATERNIONS ARE `(x, y, z, w)` HERE, NOT MuJoCo's `(w, x, y, z)`. `robot.zig` stores zm's
 /// order throughout (see the note at line ~8188 where the MuJoCo fixture generator converts).
 /// Writing MuJoCo's order into `qpos` produces a rotation that looks almost plausible and is
-/// wrong — the classic silent failure this whole phase exists to rule out.
+/// wrong - the classic silent failure this whole phase exists to rule out.
 ///
 /// `rotations[i]` is bone i's LOCAL rotation; `root_translation` is the root bone's world
 /// position. Bones and joints correspond by index, in the order `skeletonToModel` received.
@@ -12404,7 +12404,7 @@ pub fn poseFromLocalRotations(
         switch (m.jnt_type[joint]) {
             .free => {
                 // A free joint carries the body's full pose: three position components, then
-                // a quaternion. This is the reason `nq != nv` — six DOF, seven qpos entries.
+                // a quaternion. This is the reason `nq != nv` - six DOF, seven qpos entries.
                 d.pos[qpos_start + 0] = root_translation[0];
                 d.pos[qpos_start + 1] = root_translation[1];
                 d.pos[qpos_start + 2] = root_translation[2];
@@ -12414,7 +12414,7 @@ pub fn poseFromLocalRotations(
                 d.pos[qpos_start + 6] = local_rotation[3];
             },
             .ball => {
-                // A ball joint's qpos IS a quaternion — the same three rotational DOF a BVH
+                // A ball joint's qpos IS a quaternion - the same three rotational DOF a BVH
                 // channel set carries, which is what makes this a copy rather than a solve.
                 d.pos[qpos_start + 0] = local_rotation[0];
                 d.pos[qpos_start + 1] = local_rotation[1];
@@ -12457,7 +12457,7 @@ test "poseFromLocalRotations: robot kinematics reproduces the animation pose exa
     poseFromLocalRotations(&m, &d, root_pos, &rots);
     kinematics(&m, &d);
 
-    // ★★★ THE REFERENCE: the same chain evaluated the way an animation system does — walk the
+    // *** THE REFERENCE: the same chain evaluated the way an animation system does - walk the
     // hierarchy composing local rotations, rotating each child's offset by its parent's
     // accumulated rotation. If the robot's `qpos` path is right, the two agree to float
     // precision. Not to a tolerance, not "close enough": this is a COPY, not a solve.
@@ -12479,9 +12479,9 @@ test "poseFromLocalRotations: robot kinematics reproduces the animation pose exa
         }
     }
 
-    // ★ AND THE ROTATIONS, not just the positions. A quaternion written in MuJoCo's
+    // * AND THE ROTATIONS, not just the positions. A quaternion written in MuJoCo's
     // (w, x, y, z) instead of zm's (x, y, z, w) can still land the ROOT in the right place
-    // while every orientation is wrong — positions alone would not catch it.
+    // while every orientation is wrong - positions alone would not catch it.
     for (0..4) |i| {
         const got: Quat = d.body_xrot[i + 1];
         const want: Quat = ref_rot[i];
@@ -12496,22 +12496,22 @@ test "poseFromLocalRotations: robot kinematics reproduces the animation pose exa
 
 /// Write a desired LOCAL rotation into whatever DOF each joint actually has.
 ///
-/// ── ★★★ WHY THIS MAY REMOVE THE NEED FOR AN IK SOLVER ──
+/// -- *** WHY THIS MAY REMOVE THE NEED FOR AN IK SOLVER --
 ///
-/// `poseFromLocalRotations` only handles joints that can carry a full rotation — free and ball.
+/// `poseFromLocalRotations` only handles joints that can carry a full rotation - free and ball.
 /// A real robot has HINGES: `humanoid.xml`'s knee is ONE axis with `range="-160 2"`, and its hip
 /// is three SEPARATE hinges rather than a ball.
 ///
 /// The plan assumed that meant iterative IK. It may not. A hinge's best angle for a desired
-/// rotation is a PROJECTION — the twist of that rotation about the hinge axis — which is
+/// rotation is a PROJECTION - the twist of that rotation about the hinge axis - which is
 /// closed-form. A chain of orthogonal hinges is an Euler decomposition, also closed-form. So
 /// the "best fit, not a match" that a robot's rotation task can achieve is available WITHOUT a
 /// solver, and this function measures how good that fit is.
 ///
-/// ★ WHAT IS GENUINELY LOST is stated by the residual, not hidden: a knee asked to twist can
+/// * WHAT IS GENUINELY LOST is stated by the residual, not hidden: a knee asked to twist can
 /// only bend, and `out_residual_error` records how much of the requested rotation each joint
 /// could not represent. That number is the honest quality measure the plan asked for, and it
-/// distinguishes a MODEL limit from a BUG — the distinction §13's adversarial review warned
+/// distinguishes a MODEL limit from a BUG - the distinction section 13's adversarial review warned
 /// would otherwise be impossible to make.
 ///
 /// Joint limits are respected, because a pose outside them is one the robot cannot hold.
@@ -12551,9 +12551,9 @@ pub fn fitLocalRotations(
                 }
             },
             .hinge => {
-                // ★ THE PROJECTION. A hinge can only express rotation ABOUT ITS AXIS, so take
-                // the component of `desired` along that axis — the swing-twist decomposition's
-                // twist term — and discard the swing.
+                // * THE PROJECTION. A hinge can only express rotation ABOUT ITS AXIS, so take
+                // the component of `desired` along that axis - the swing-twist decomposition's
+                // twist term - and discard the swing.
                 const axis: Vec = m.jnt_axis[joint];
                 const rotation_vector: Vec = .{ desired[0], desired[1], desired[2], 0 };
                 const along_axis: f32 = dot3(rotation_vector, axis);
@@ -12584,7 +12584,7 @@ pub fn fitLocalRotations(
                     angle = radFromTurns(angle_turns - @round(angle_turns));
                 }
 
-                // ★ CLAMPED TO THE JOINT'S RANGE. A pose outside it is one the robot cannot
+                // * CLAMPED TO THE JOINT'S RANGE. A pose outside it is one the robot cannot
                 // hold, and letting the kinematics show it would flatter the result.
                 if (m.jnt_range[joint]) |range| {
                     angle = clamp(angle, range[0], range[1]);
@@ -12613,7 +12613,7 @@ pub fn fitLocalRotations(
 test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     const gpa: Allocator = std.testing.allocator;
 
-    // Two bodies: a free root, then a single HINGE about X — a knee.
+    // Two bodies: a free root, then a single HINGE about X - a knee.
     const names = [_][]const u8{ "thigh", "shin" };
     const parents = [_]i32{ -1, 0 };
     const offsets = [_]Vec{ vec(0, 0, 0), vec(0, -0.4, 0) };
@@ -12629,7 +12629,7 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     defer d.deinit();
     var residual: [2]f32 = .{ 0, 0 };
 
-    // ★ A PURE BEND ABOUT THE HINGE AXIS is representable exactly, so the residual must be ~0.
+    // * A PURE BEND ABOUT THE HINGE AXIS is representable exactly, so the residual must be ~0.
     const pure_bend: Quat = quatFromAxisAngle(vec(1, 0, 0), -1.0);
     var desired: [2]Quat = .{ zm.quat_identity, pure_bend };
     @memcpy(d.pos, m.qpos0);
@@ -12637,9 +12637,9 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     try expect(residual[1] < 1.0e-3);
     try expectApproxEqAbs(@as(f32, -1.0), d.pos[m.jnt_qpos_adr[1]], 1.0e-4);
 
-    // ★★ A TWIST ABOUT AN AXIS THE HINGE DOES NOT HAVE cannot be represented at all, and the
+    // ** A TWIST ABOUT AN AXIS THE HINGE DOES NOT HAVE cannot be represented at all, and the
     // residual must SAY SO. This is the number that separates "the model cannot do this" from
-    // "the code is broken" — the distinction §13's adversarial review said would otherwise be
+    // "the code is broken" - the distinction section 13's adversarial review said would otherwise be
     // impossible to make on `humanoid.xml`.
     const pure_twist: Quat = quatFromAxisAngle(vec(0, 1, 0), 1.0);
     desired[1] = pure_twist;
@@ -12647,7 +12647,7 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     fitLocalRotations(&m, &d, vec(0, 0, 0), &desired, &residual);
     try expect(residual[1] > 0.9);
 
-    // ★ AND THE LIMIT IS RESPECTED. A knee asked to bend the wrong way stops at its range
+    // * AND THE LIMIT IS RESPECTED. A knee asked to bend the wrong way stops at its range
     // rather than producing a pose the robot could never hold.
     desired[1] = quatFromAxisAngle(vec(1, 0, 0), 1.5);
     @memcpy(d.pos, m.qpos0);
@@ -12657,7 +12657,7 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
 }
 
 // =============================================================================
-// The humanoid.xml match table (retarget_plan.md §13g)
+// The humanoid.xml match table (retarget_plan.md section 13g)
 // =============================================================================
 
 /// One row: which human joint drives which robot body.
@@ -12666,99 +12666,99 @@ pub const MatchRow = struct {
     human_joint: []const u8,
     /// Other names this row will accept, in preference order, when `human_joint` is absent.
     ///
-    /// ── ★★★ ONE TABLE, MANY CAPTURE FORMATS ──
+    /// -- *** ONE TABLE, MANY CAPTURE FORMATS --
     ///
     /// LAFAN1's top spine joint is `Spine3`; **Mixamo's is `Spine2`** and it has no `Spine3` at
-    /// all. A table naming one of them maps the robot's TORSO — its ROOT — to nothing on the
+    /// all. A table naming one of them maps the robot's TORSO - its ROOT - to nothing on the
     /// other, and everything downstream anchors on that body.
     ///
-    /// ★★ The alternative is a second table per format, which is the wrong abstraction: **if two
+    /// ** The alternative is a second table per format, which is the wrong abstraction: **if two
     /// tables are needed, the row is under-specified.** A row states which joint it wants and
     /// what it will settle for, and the resolver takes the first that exists.
     ///
-    /// ★ Preference order carries real knowledge — `Spine3` before `Spine2` before `Spine1` is a
+    /// * Preference order carries real knowledge - `Spine3` before `Spine2` before `Spine1` is a
     /// statement about which is highest up the chest, not an arbitrary list.
     alternatives: []const []const u8 = &.{},
     /// Set when this row's ROBOT body exists on some rigs and not others, so one table can
     /// serve a family of models.
     ///
-    /// ── ★★★ THE SAME ARGUMENT AS `alternatives`, ON THE OTHER SIDE ──
+    /// -- *** THE SAME ARGUMENT AS `alternatives`, ON THE OTHER SIDE --
     ///
     /// `alternatives` exists because two capture formats spell one joint differently and "a
     /// second table per format is the wrong abstraction". Two RIGS differ the same way: the
     /// stock `humanoid.xml` has no toe bone and the flexed one does. Without this the resolver
     /// hard-errors on the stock model and the whole retarget suite cannot run.
     ///
-    /// ★★ It is PER ROW and defaults to false, so a typo in any of the other rows is still
+    /// ** It is PER ROW and defaults to false, so a typo in any of the other rows is still
     /// `error.UnknownRobotBody`. The relaxation is spelled out where it applies, not applied
-    /// globally — a resolver that skipped every missing body would turn a broken table into a
+    /// globally - a resolver that skipped every missing body would turn a broken table into a
     /// silently half-mapped robot.
     ///
-    /// ★ A model without the body is not a degraded case: the foot's heel/toe/up construction
-    /// fires on LEAF bodies, so a rig with no toe takes the leaf path deliberately — see the
+    /// * A model without the body is not a degraded case: the foot's heel/toe/up construction
+    /// fires on LEAF bodies, so a rig with no toe takes the leaf path deliberately - see the
     /// leaf-orientation target in `solveRestPoseFromSource`.
     optional_body: bool = false,
     /// How hard to pull this body's POSITION onto the human's, in the IK stage. Zero means
     /// orientation only.
     ///
-    /// ── ★★★ THE ASYMMETRY IS THE RETARGETING KNOWLEDGE ──
+    /// -- *** THE ASYMMETRY IS THE RETARGETING KNOWLEDGE --
     ///
     /// GMR's own table reads the same way: pelvis and knee get position weight 0, the ankle
-    /// gets 50 — five times any rotation weight. **A robot's limb lengths differ from a human's,
+    /// gets 50 - five times any rotation weight. **A robot's limb lengths differ from a human's,
     /// so demanding every joint's position would fight the skeleton against itself.** But feet
     /// must land where the human's landed or the robot skates, and that is not something a
     /// per-joint rotation fit can deliver: orientation error compounds down the chain and
     /// nothing constrains the endpoint.
     ///
-    /// ★ So: rotation everywhere, POSITION ONLY AT THE ENDS.
+    /// * So: rotation everywhere, POSITION ONLY AT THE ENDS.
     position_weight: f32 = 0,
     /// How hard to pull this body's ORIENTATION onto the human's.
     ///
-    /// ── ★★★ NOT A BLANKET VALUE, BECAUSE THE ROBOT IS OVER-CONSTRAINED ──
+    /// -- *** NOT A BLANKET VALUE, BECAUSE THE ROBOT IS OVER-CONSTRAINED --
     ///
     /// 16 mapped bodies asking for 3 position and 3 orientation components each is 96
     /// constraints against `humanoid.xml`'s **27 degrees of freedom**. A least-squares solve of
-    /// that satisfies nothing well — which is what an `ik error` of 0.59 after 30 steps means:
+    /// that satisfies nothing well - which is what an `ik error` of 0.59 after 30 steps means:
     /// not a solver bug, but a system with no good answer.
     ///
-    /// ★★ GMR's robot (G1) has roughly twice the DOF and a real shoulder chain. Ours has ONE
+    /// ** GMR's robot (G1) has roughly twice the DOF and a real shoulder chain. Ours has ONE
     /// waist segment, no shoulders, and a single-hinge knee. **The same weights cannot
     /// transfer**, and pretending they can is why a faithful port of GMR's numbers still looked
     /// wrong.
     ///
-    /// ★ So orientation is requested only where the robot can actually deliver it, and the
-    /// bodies whose orientation is a CONSEQUENCE of their chain — shins, forearms, the pelvis
-    /// hanging under the torso — ask for none and let position drive them.
+    /// * So orientation is requested only where the robot can actually deliver it, and the
+    /// bodies whose orientation is a CONSEQUENCE of their chain - shins, forearms, the pelvis
+    /// hanging under the torso - ask for none and let position drive them.
     rotation_weight: f32 = 0,
 };
 
-/// ★★★ LAFAN1 -> `humanoid.xml`, AND THE ASYMMETRY IS THE KNOWLEDGE.
+/// *** LAFAN1 -> `humanoid.xml`, AND THE ASYMMETRY IS THE KNOWLEDGE.
 ///
 /// GMR ships this as JSON with a weight column per row. Ours needs no weights, because
 /// `robot.fitLocalRotations` gives every joint the best rotation its DOF can express and
-/// REPORTS the shortfall — where GMR's weights exist to let a solver trade one task off
+/// REPORTS the shortfall - where GMR's weights exist to let a solver trade one task off
 /// against another.
 ///
-/// ★ 16 robot bodies against LAFAN1's 96 joints. The robot has NO shoulders, NO spine chain
+/// * 16 robot bodies against LAFAN1's 96 joints. The robot has NO shoulders, NO spine chain
 /// beyond one waist segment, NO toes and NO fingers, so most of the capture simply has no
 /// counterpart. That is not a failure: an unmapped body keeps its rest orientation, and the
-/// motion that matters — limbs, torso, head — is all here.
+/// motion that matters - limbs, torso, head - is all here.
 ///
-/// ★★ **THE ROBOT'S TREE IS INVERTED RELATIVE TO THE HUMAN'S.** `humanoid.xml` roots at
+/// ** **THE ROBOT'S TREE IS INVERTED RELATIVE TO THE HUMAN'S.** `humanoid.xml` roots at
 /// `torso` with `pelvis` hanging BELOW it through `waist_lower`; a BVH roots at `Hips` and the
-/// spine goes up. The global-space retarget handles this with no special case — each body's
+/// spine goes up. The global-space retarget handles this with no special case - each body's
 /// local rotation is computed against whatever parent the ROBOT has, not the one the human has.
 /// A local-rotation copy could not have done this at all.
 pub const lafan_to_humanoid = [_]MatchRow{
-    // ★★ `Spine3`, NOT `Spine2` — chosen by MEASUREMENT, not by name. The robot's torso sits
+    // ** `Spine3`, NOT `Spine2` - chosen by MEASUREMENT, not by name. The robot's torso sits
     // high, between the shoulders, and the shoulder-offset error against each candidate is:
     //
     //     Spine 0.453   Spine1 0.375   Spine2 0.284   Spine3 0.226   Neck 0.253
     //
-    // ★★★ **AND NOTHING GETS BELOW ~0.21 m**, which is the IRREDUCIBLE error: the robot's
+    // *** **AND NOTHING GETS BELOW ~0.21 m**, which is the IRREDUCIBLE error: the robot's
     // torso-to-shoulder offset is fixed by the model and simply does not match any human
     // joint's at a single hip-height scale. **That floor is a scaling problem, not a mapping
-    // one** — GMR ships a per-body `human_scale_table` for exactly this.
+    // one** - GMR ships a per-body `human_scale_table` for exactly this.
     .{
         .robot_body = "torso",
         .human_joint = "Spine3",
@@ -12767,7 +12767,7 @@ pub const lafan_to_humanoid = [_]MatchRow{
     },
     .{ .robot_body = "head", .human_joint = "Head", .rotation_weight = 4 },
     .{ .robot_body = "waist_lower", .human_joint = "Spine" },
-    // ★ The pelvis carries the body's placement, so a modest pull keeps the robot from drifting
+    // * The pelvis carries the body's placement, so a modest pull keeps the robot from drifting
     // off the capture's path while the feet do the precise work.
     .{ .robot_body = "pelvis", .human_joint = "Hips", .position_weight = 20 },
 
@@ -12776,7 +12776,7 @@ pub const lafan_to_humanoid = [_]MatchRow{
     .{ .robot_body = "foot_left", .human_joint = "LeftFoot", .position_weight = 50, .rotation_weight = 4 },
     .{ .robot_body = "thigh_right", .human_joint = "RightUpLeg", .rotation_weight = 6 },
     .{ .robot_body = "shin_right", .human_joint = "RightLeg", .position_weight = 20 },
-    // ── ★★★ THE TOES, ADDED WITH THE TOE BONE ──
+    // -- *** THE TOES, ADDED WITH THE TOE BONE --
     //
     // Without these rows the toe bodies are UNMAPPED, and adding them silently cost the foot its
     // heel/toe/up construction: that construction fires on LEAF bodies, and the foot stopped
@@ -12810,26 +12810,26 @@ pub const lafan_to_humanoid = [_]MatchRow{
 
 /// Resolve a match table into the index map `codecs.bvh.retargetRotations` consumes.
 ///
-/// ★ An unmatched row is an ERROR, not a silent gap: a table naming a body the model does not
+/// * An unmatched row is an ERROR, not a silent gap: a table naming a body the model does not
 /// have is a typo, and letting it pass would show as a stiff limb that looks like a solver bug.
-/// A body with NO row is fine — that is a deliberate omission, and it keeps its rest pose.
+/// A body with NO row is fine - that is a deliberate omission, and it keeps its rest pose.
 /// Does `candidate` name the joint `wanted`, ignoring any exporter namespace?
 ///
-/// ── ★★★ `mixamorig:Spine2` IS `Spine2` ──
+/// -- *** `mixamorig:Spine2` IS `Spine2` --
 ///
 /// Mixamo prefixes every bone with `mixamorig:`; other exporters use `Armature|`, `Bip01 `, or a
 /// rig name. **A table naming bare joints matches none of them**, and the example's response to
-/// an unresolved table is to hide the robot — so the symptom is a robot that never moves, with
+/// an unresolved table is to hide the robot - so the symptom is a robot that never moves, with
 /// no error visible.
 ///
-/// ★★ Matching after the last separator makes the table exporter-agnostic without listing
+/// ** Matching after the last separator makes the table exporter-agnostic without listing
 /// prefixes. **Which is the point: a list of known prefixes is the same mistake as a list of
 /// known joint names**, one level up.
 fn jointNameMatches(candidate: []const u8, wanted: []const u8) bool {
     if (std.mem.eql(u8, candidate, wanted)) {
         return true;
     }
-    // ★ Compare only what follows the last namespace separator.
+    // * Compare only what follows the last namespace separator.
     var bare: []const u8 = candidate;
     for ([_]u8{ ':', '|' }) |separator| {
         if (std.mem.lastIndexOfScalar(u8, bare, separator)) |at| {
@@ -12864,7 +12864,7 @@ pub fn resolveMatchTable(
             }
             return error.UnknownRobotBody;
         }
-        // ★★★ The wanted joint, or the first ALTERNATIVE that exists. A capture that calls its
+        // *** The wanted joint, or the first ALTERNATIVE that exists. A capture that calls its
         // top spine `Spine2` instead of `Spine3` then needs no code and no second table.
         var human_joint: ?usize = null;
         for (human_joint_names, 0..) |name, index| {
@@ -12892,11 +12892,11 @@ pub fn resolveMatchTable(
 
 /// Each body's world ORIENTATION at the model's rest configuration.
 ///
-/// ★ This is `humanoid.xml`'s reference pose, and it needs no extra file: `qpos0` IS the rest
+/// * This is `humanoid.xml`'s reference pose, and it needs no extra file: `qpos0` IS the rest
 /// configuration (zeros, plus identity for a free joint's quaternion), so running kinematics on
 /// it gives every body's rest orientation directly.
 ///
-/// ★★ It is the ROBOT's half of the same pairing the character path needed — an FBX supplies
+/// ** It is the ROBOT's half of the same pairing the character path needed - an FBX supplies
 /// its reference through the skin clusters' `TransformLink`, a BVH through a T-pose file, and a
 /// MuJoCo model through `qpos0`. Three formats, three sources, one meaning: **where does this
 /// joint point when the skeleton is at rest.**
@@ -12917,18 +12917,18 @@ pub fn referenceOrientationsFromRest(
 
 /// Fit a desired per-BODY rotation across whatever joints that body actually has.
 ///
-/// ── ★★★ WHY PER-BODY AND NOT PER-JOINT ──
+/// -- *** WHY PER-BODY AND NOT PER-JOINT --
 ///
 /// `fitLocalRotations` assumes one joint carries one body's rotation. `humanoid.xml` breaks
 /// that: its hip is **three separate hinges on one body** (`hip_x`, `hip_z`, `hip_y`), and
 /// handing the same desired rotation to each would apply it three times over.
 ///
-/// ★ A chain of hinges on one body is an EULER DECOMPOSITION in those axes' order. This walks
+/// * A chain of hinges on one body is an EULER DECOMPOSITION in those axes' order. This walks
 /// the body's joints in order, and for each one takes the twist of the REMAINING rotation about
 /// that joint's axis, then removes what it took before moving on. After the last joint whatever
 /// is left is genuinely unrepresentable, and that is the residual.
 ///
-/// ★★ Three orthogonal hinges span all of SO(3), so a hip fits EXACTLY. One hinge — a knee —
+/// ** Three orthogonal hinges span all of SO(3), so a hip fits EXACTLY. One hinge - a knee -
 /// captures only its own axis, and the residual says how much was lost. The decomposition is
 /// the same code either way, which is what keeps this a single mechanism rather than a special
 /// case per joint count.
@@ -12972,7 +12972,7 @@ pub fn fitBodyRotation(
                     angle;
                 d.pos[qpos_start] = limited_angle;
 
-                // ★ REMOVE WHAT THIS JOINT TOOK, so the next hinge in the chain fits the
+                // * REMOVE WHAT THIS JOINT TOOK, so the next hinge in the chain fits the
                 // REMAINDER rather than the original. Skipping this is what makes a naive
                 // per-joint loop apply the rotation once per hinge.
                 const taken: Quat = quatFromAxisAngle(axis, limited_angle);
@@ -12987,7 +12987,7 @@ pub fn fitBodyRotation(
     return 2.0 * acosRad(clamp(leftover_alignment, -1.0, 1.0));
 }
 
-/// The angle of `rotation`'s twist about `axis` — the closed-form best a hinge can do.
+/// The angle of `rotation`'s twist about `axis` - the closed-form best a hinge can do.
 fn twistAngleAbout(rotation: Quat, axis: Vec) f32 {
     const rotation_vector: Vec = .{ rotation[0], rotation[1], rotation[2], 0 };
     const along_axis: f32 =
@@ -13001,18 +13001,18 @@ fn twistAngleAbout(rotation: Quat, axis: Vec) f32 {
 
 /// The body Jacobian at a world point: how each DOF moves that point, and how it rotates it.
 ///
-/// ── ★★★ WHY THIS IS NEEDED AFTER ALL (retarget_plan.md §13g-7) ──
+/// -- *** WHY THIS IS NEEDED AFTER ALL (retarget_plan.md section 13g-7) --
 ///
 /// `fitBodyRotation` gives every joint the best rotation its own DOF can express, which is
-/// closed-form and honest — but it orients each joint INDEPENDENTLY, so **error compounds down
+/// closed-form and honest - but it orients each joint INDEPENDENTLY, so **error compounds down
 /// the chain and nothing constrains where a hand or foot lands**. On a robot whose limb lengths
 /// differ from the human's, the ankle ends up wherever accumulated orientation error puts it.
 ///
-/// ★ GMR weights ankle POSITION at 50 against any rotation weight of 10 for exactly this
+/// * GMR weights ankle POSITION at 50 against any rotation weight of 10 for exactly this
 /// reason. A position target is not expressible as a per-joint rotation fit; it needs a
 /// Jacobian, and this is it.
 ///
-/// ── ★★ THE ASSEMBLY, AND WHY IT IS NOT NEW PHYSICS ──
+/// -- ** THE ASSEMBLY, AND WHY IT IS NOT NEW PHYSICS --
 ///
 /// `cdof[j]` is already each DOF's motion axis as a spatial vector, expressed in the
 /// subtree-COM frame (robot.zig's `comPos`). MuJoCo builds `mj_jacBody` from precisely that:
@@ -13023,11 +13023,11 @@ fn twistAngleAbout(rotation: Quat, axis: Vec) f32 {
 ///
 /// So the only work is walking the path from `body` up to the world and filling those columns.
 ///
-/// ★ REQUIRES `kinematics` AND `comPos` TO HAVE RUN. `cdof` and `subtree_com` are their output;
+/// * REQUIRES `kinematics` AND `comPos` TO HAVE RUN. `cdof` and `subtree_com` are their output;
 /// calling this on a stale `Data` silently returns a Jacobian for a pose the model is no longer
 /// in.
 ///
-/// `jacp` and `jacr` are 3 x nv, row-major, and are ZEROED first — a DOF not on the path
+/// `jacp` and `jacr` are 3 x nv, row-major, and are ZEROED first - a DOF not on the path
 /// contributes nothing, and leaving old values there would be a wrong answer rather than a
 /// missing one.
 pub fn jacBody(
@@ -13115,12 +13115,12 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
     comPos(&m, &d);
 
     const body: usize = 3; // the tip
-    // ★★ AN OFFSET POINT, NOT THE BODY ORIGIN. A body's own joint rotates ABOUT its origin
+    // ** AN OFFSET POINT, NOT THE BODY ORIGIN. A body's own joint rotates ABOUT its origin
     // without translating it, so a Jacobian taken at the origin is insensitive to that body's
-    // own DOFs — and a walk that skipped them would pass. Verified: dropping the body's own
+    // own DOFs - and a walk that skipped them would pass. Verified: dropping the body's own
     // dofs leaves an origin-point test green and fails this one.
-    // ★ Held as a LOCAL offset, so it moves WITH the body. Taking the Jacobian at an offset
-    // point but measuring the ORIGIN's motion compares two different things — and it fails even
+    // * Held as a LOCAL offset, so it moves WITH the body. Taking the Jacobian at an offset
+    // point but measuring the ORIGIN's motion compares two different things - and it fails even
     // a correct Jacobian, which is how this was caught.
     const local_offset: Vec = vec(0.07, -0.05, 0.03);
     const point: Vec = d.body_xpos[body] + zm.rotate(d.body_xrot[body], local_offset);
@@ -13129,14 +13129,14 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
     defer gpa.free(jacp);
     jacBody(&m, &d, body, point, jacp, null);
 
-    // ── ★★★ THE PROPERTY: perturb ONE DOF and the point must move by that column ──
+    // -- *** THE PROPERTY: perturb ONE DOF and the point must move by that column --
     //
     // This needs no IK, no capture and no renderer, and it catches every way the assembly can
     // be wrong: a bad frame, a reversed cross product, a DOF left off the path, or a column
-    // written at the wrong index. §13a said to write this FIRST because everything downstream
+    // written at the wrong index. section 13a said to write this FIRST because everything downstream
     // rests on it.
     //
-    // ★ The perturbation is applied through `integratePos`, NOT by adding to `qpos` — a free
+    // * The perturbation is applied through `integratePos`, NOT by adding to `qpos` - a free
     // joint's quaternion does not integrate by addition, and doing so would drift it off unit
     // length while still looking plausible.
     const epsilon: f32 = 1.0e-4;
@@ -13171,12 +13171,12 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
 
 /// One position target: a point on a body that should reach a place in the world.
 ///
-/// ★★ POSITION, not rotation, is what a rotation-fit cannot do. GMR weights an ankle's position
+/// ** POSITION, not rotation, is what a rotation-fit cannot do. GMR weights an ankle's position
 /// at 50 against any rotation weight of 10, because orientation error compounds down a chain
 /// and nothing else stops a robot's foot landing where the human's did not.
 pub const IkTask = struct {
     body: usize,
-    /// The point in the body's LOCAL frame — usually the origin, sometimes a site.
+    /// The point in the body's LOCAL frame - usually the origin, sometimes a site.
     point_local: Vec = .{ 0, 0, 0, 0 },
     /// Where that point should be, in world coordinates.
     target_world: Vec,
@@ -13184,34 +13184,34 @@ pub const IkTask = struct {
     weight: f32 = 1.0,
     /// Constrain this point RELATIVE to another point, instead of in world space.
     ///
-    /// ── ★★★ TWO POINTS CAN TRADE; A DIFFERENCE CANNOT ──
+    /// -- *** TWO POINTS CAN TRADE; A DIFFERENCE CANNOT --
     ///
     /// Two independent shoulder targets have a flat direction in the objective: **pushing the
     /// left shoulder forward and the right one back costs exactly what rotating correctly
     /// costs**, so the solver has no gradient telling the two apart and clicks between equally
     /// good answers. That is the "clicky" torso.
     ///
-    /// ★★ Constraining the DIFFERENCE removes the ambiguity entirely. The residual becomes
-    /// `(p_this − p_other) − target_delta`, whose Jacobian is `J_this − J_other` — one residual
+    /// ** Constraining the DIFFERENCE removes the ambiguity entirely. The residual becomes
+    /// `(p_this - p_other) - target_delta`, whose Jacobian is `J_this - J_other` - one residual
     /// that says "these two points must be this far apart in this direction", which is a
     /// ROTATION statement rather than two position statements that happen to imply one.
     ///
-    /// ★ `target_world` is then read as the wanted DIFFERENCE, not as a world position.
+    /// * `target_world` is then read as the wanted DIFFERENCE, not as a world position.
     relative_to: ?RelativePoint = null,
     /// Where the body should FACE, in world coordinates. Null means position only.
     ///
-    /// ── ★★★ THIS IS WHAT GMR ACTUALLY DOES, AND WHAT WE WERE NOT DOING ──
+    /// -- *** THIS IS WHAT GMR ACTUALLY DOES, AND WHAT WE WERE NOT DOING --
     ///
-    /// GMR sets a full SE3 target per robot body — position AND orientation, both in WORLD
-    /// space, taken straight from the human's corrected pose — and solves every task at once.
+    /// GMR sets a full SE3 target per robot body - position AND orientation, both in WORLD
+    /// space, taken straight from the human's corrected pose - and solves every task at once.
     /// **It never computes per-joint local rotations and never decomposes anything.**
     ///
-    /// ★★ Decomposing was the fatal flaw. `local = conj(parent_DESIRED_global) * desired_global`
-    /// assumes the parent REACHES its desired orientation — but a hinge cannot, so every child
+    /// ** Decomposing was the fatal flaw. `local = conj(parent_DESIRED_global) * desired_global`
+    /// assumes the parent REACHES its desired orientation - but a hinge cannot, so every child
     /// is computed against a parent that is wrong, and the error compounds down the chain. That
     /// is what produced 89 degrees of residual.
     ///
-    /// ★ A solver has no such problem: when a parent falls short it compensates with the child,
+    /// * A solver has no such problem: when a parent falls short it compensates with the child,
     /// because it optimises all joints against all targets together.
     target_rotation: ?Quat = null,
     /// Orientation importance. GMR uses 10 against a position weight of 50 at the ankles.
@@ -13225,66 +13225,66 @@ pub const RelativePoint = struct {
 };
 
 pub const IkOptions = struct {
-    /// Levenberg-Marquardt damping. Larger is slower and more stable near a singularity —
+    /// Levenberg-Marquardt damping. Larger is slower and more stable near a singularity -
     /// GMR uses 1.0 and so do we until measurement says otherwise.
     damping: f32 = 1.0,
     /// Fraction of the solved step actually taken. Below 1 trades speed for stability.
     step_scale: f32 = 1.0,
     /// Which DOF the solver may move. Null means all of them.
     ///
-    /// ── ★★★ WITHOUT THIS, A HAND TASK MOVES THE WHOLE ROBOT ──
+    /// -- *** WITHOUT THIS, A HAND TASK MOVES THE WHOLE ROBOT --
     ///
-    /// `jacBody` returns a column for EVERY DOF on the path from the body to the world — which
+    /// `jacBody` returns a column for EVERY DOF on the path from the body to the world - which
     /// for a hand includes the elbow, the shoulder, the torso's abdomen joints and **the free
     /// root**. The cheapest way to move a hand 10 cm is often to translate the entire robot 10
     /// cm, and the solver will do exactly that: it has no notion of which DOF you meant.
     ///
-    /// ★★ Measured: an arm task without a mask improved the hand by 0.004 m while dragging the
+    /// ** Measured: an arm task without a mask improved the hand by 0.004 m while dragging the
     /// torso that had just been made EXACT. **A task is not a scope.** Masking to the arm's own
     /// three DOF makes the solve mean "bend this arm" rather than "get the hand there somehow".
     dof_mask: ?[]const bool = null,
     /// Clamp each joint to its `jnt_range` after every step.
     ///
-    /// ── ★★★ WITHOUT THIS THE SOLVER RETURNS POSES THE ROBOT CANNOT HOLD ──
+    /// -- *** WITHOUT THIS THE SOLVER RETURNS POSES THE ROBOT CANNOT HOLD --
     ///
     /// Measured: an arm solve reported 4.6 degrees of upper-arm error with the shoulder at
     /// (-118, -107) against a range of [-85, 60]. **The good number was bought by violating the
-    /// joint limits** — a configuration the robot physically cannot adopt, reported as a
+    /// joint limits** - a configuration the robot physically cannot adopt, reported as a
     /// success.
     ///
-    /// ★★ GMR passes `mink.ConfigurationLimit` as a CONSTRAINT so no infeasible step is ever
+    /// ** GMR passes `mink.ConfigurationLimit` as a CONSTRAINT so no infeasible step is ever
     /// proposed. Clamping after each step is the cheap version: the solver may aim outside the
     /// range but never keeps it, so what it converges to is always reachable.
     ///
-    /// ★ With limits on, a residual is the MODEL's — and that is the number worth having.
+    /// * With limits on, a residual is the MODEL's - and that is the number worth having.
     respect_joint_limits: bool = false,
     /// Strength of a SOFT limit barrier, pushing away from `jnt_range` before the wall.
     ///
-    /// ── ★★★ A HARD LIMIT IS A CLIFF; A BARRIER IS A SLOPE ──
+    /// -- *** A HARD LIMIT IS A CLIFF; A BARRIER IS A SLOPE --
     ///
     /// Measured this session, both from the same cause:
     ///
     ///     stuck:  shoulder pinned at -150, err 15.5, **best possible 6.2**
     ///     pops:   140 degrees of arm motion in a single frame
     ///
-    /// Clamping the result — or zeroing the step component that pushes into a wall — **removes
+    /// Clamping the result - or zeroing the step component that pushes into a wall - **removes
     /// that direction from the solve entirely.** The configuration sticks to the wall, and the
     /// gradient that would walk it back along the surface no longer exists. A small change in
     /// target can then produce a large change in solution, because the solver is choosing
     /// between disconnected pieces of the feasible set.
     ///
-    /// ★★ A barrier adds `w·(1/(q−lo) − 1/(hi−q))` to the gradient: the solver **feels the wall
+    /// ** A barrier adds `w*(1/(q-lo) - 1/(hi-q))` to the gradient: the solver **feels the wall
     /// before reaching it, slides ALONG it, and can always back out.** The map from target to
     /// solution becomes continuous, which is what "smooth" means and what no amount of clamping
     /// can give.
     ///
-    /// ★ Zero disables it. Use INSTEAD of `respect_joint_limits`, not alongside.
+    /// * Zero disables it. Use INSTEAD of `respect_joint_limits`, not alongside.
     limit_barrier: f32 = 0,
     /// Pull toward a previous configuration, for temporal continuity.
     ///
-    /// ★★ A limb with a redundant DOF has a whole family of equally-good answers, and from a
+    /// ** A limb with a redundant DOF has a whole family of equally-good answers, and from a
     /// cold start the solver picks one arbitrarily every frame. **Continuity has to be a TERM in
-    /// the objective, not a starting point** — a warm start moves where the search begins, this
+    /// the objective, not a starting point** - a warm start moves where the search begins, this
     /// moves where it ends.
     posture_target: ?[]const f32 = null,
     posture_weight: f32 = 0,
@@ -13292,23 +13292,23 @@ pub const IkOptions = struct {
 
 /// One damped-least-squares step toward a set of weighted position targets.
 ///
-/// ── ★★★ WHY DAMPED, AND WHY IT IS NOT JUST `Jᵀ e` ──
+/// -- *** WHY DAMPED, AND WHY IT IS NOT JUST `J^T e` --
 ///
 /// A humanoid's arm has more DOF than a point has coordinates, so `J` is wide and `J dq = e`
-/// has infinitely many solutions — and near a straight limb it has none that are small. The
+/// has infinitely many solutions - and near a straight limb it has none that are small. The
 /// damped normal equations
 ///
-///     (JᵀW J + lambda I) dq = JᵀW e
+///     (J^TW J + lambda I) dq = J^TW e
 ///
 /// pick the smallest step that reduces the error, and `lambda` keeps the matrix invertible
 /// exactly where the naive pseudo-inverse blows up: a fully extended knee, which a dance
 /// capture reaches constantly.
 ///
-/// ★ Returns the error norm BEFORE the step, so a caller can iterate `while (previous - current
-/// > tolerance)` — GMR's own stopping rule, which converges in a handful of steps from a good
+/// * Returns the error norm BEFORE the step, so a caller can iterate `while (previous - current
+/// > tolerance)` - GMR's own stopping rule, which converges in a handful of steps from a good
 /// initial guess.
 ///
-/// ★★ REQUIRES `kinematics` AND `comPos` TO BE CURRENT, because `jacBody` reads their output.
+/// ** REQUIRES `kinematics` AND `comPos` TO BE CURRENT, because `jacBody` reads their output.
 /// The caller re-runs both after each step; doing it here would hide the cost of a loop.
 ///
 /// `scratch` must hold `ikScratchSize(nv)` floats. Passing it in keeps this
@@ -13321,8 +13321,8 @@ pub fn ikStep(
     scratch: []f32,
 ) f32 {
     const dof_count: usize = m.nv;
-    // ★ Checked up front with a message: the slices below would otherwise be the first thing to
-    // notice a short buffer — a bounds panic in a safe build, and nothing at all in ReleaseSmall.
+    // * Checked up front with a message: the slices below would otherwise be the first thing to
+    // notice a short buffer - a bounds panic in a safe build, and nothing at all in ReleaseSmall.
     assertf(
         scratch.len >= ikScratchSize(dof_count),
         @src(),
@@ -13335,7 +13335,7 @@ pub fn ikStep(
     const gradient: []f32 = scratch[6 * dof_count + dof_count * dof_count ..][0..dof_count];
     const joint_step: []f32 =
         scratch[6 * dof_count + dof_count * dof_count + dof_count ..][0..dof_count];
-    // ★ Room for the other end of a relative task, at the tail of the scratch.
+    // * Room for the other end of a relative task, at the tail of the scratch.
     const other_jacobian: []f32 =
         scratch[6 * dof_count + dof_count * dof_count + 2 * dof_count ..][0 .. 3 * dof_count];
     const other_rotation_jacobian: []f32 =
@@ -13351,7 +13351,7 @@ pub fn ikStep(
         const body_rotation: Quat = d.body_xrot[task.body];
         const point_world: Vec = body_position + zm.rotate(body_rotation, task.point_local);
 
-        // ★ For a RELATIVE task, `target_world` is the wanted DIFFERENCE between this point and
+        // * For a RELATIVE task, `target_world` is the wanted DIFFERENCE between this point and
         // the other, so the residual is measured on the difference too.
         const position_error: Vec = if (task.relative_to) |other| blk: {
             const other_world: Vec = d.body_xpos[other.body] +
@@ -13366,11 +13366,11 @@ pub fn ikStep(
 
         jacBody(m, d, task.body, point_world, jacobian, rotation_jacobian);
 
-        // ── ★★★ A RELATIVE TASK: subtract the other point's Jacobian and position ──
+        // -- *** A RELATIVE TASK: subtract the other point's Jacobian and position --
         //
         // The residual is a DIFFERENCE of two points, so its derivative is the difference of
-        // their derivatives. Everything downstream — the normal equations, the damping, the
-        // barrier — is unchanged, because a residual is a residual.
+        // their derivatives. Everything downstream - the normal equations, the damping, the
+        // barrier - is unchanged, because a residual is a residual.
         if (task.relative_to) |other| {
             const other_world: Vec = d.body_xpos[other.body] +
                 zm.rotate(d.body_xrot[other.body], other.point_local);
@@ -13381,7 +13381,7 @@ pub fn ikStep(
             }
         }
 
-        // ★ Zero the columns of DOF the caller has excluded, so the normal equations never see
+        // * Zero the columns of DOF the caller has excluded, so the normal equations never see
         // them and the solved step leaves them untouched.
         if (opts.dof_mask) |mask| {
             for (0..dof_count) |dof| {
@@ -13395,10 +13395,10 @@ pub fn ikStep(
             }
         }
 
-        // ── ★ THE ORIENTATION ROWS ──
+        // -- * THE ORIENTATION ROWS --
         //
         // The angular error taking the body to its target is the rotation vector of
-        // `target * conj(current)`, in WORLD space — the same frame `jacr` is expressed in.
+        // `target * conj(current)`, in WORLD space - the same frame `jacr` is expressed in.
         // For a unit quaternion that vector is twice the imaginary part, sign-corrected so the
         // solver takes the SHORT way round rather than spinning 300 degrees to reach 60.
         if (task.target_rotation) |target_rotation| {
@@ -13439,7 +13439,7 @@ pub fn ikStep(
             }
         }
 
-        // Accumulate JᵀW J into the normal matrix and JᵀW e into the gradient.
+        // Accumulate J^TW J into the normal matrix and J^TW e into the gradient.
         for (0..dof_count) |row_dof| {
             var gradient_term: f32 = 0;
             inline for (0..3) |axis| {
@@ -13462,12 +13462,12 @@ pub fn ikStep(
         }
     }
 
-    // ── ★★★ SOFT LIMITS AND TEMPORAL CONTINUITY, ADDED TO THE NORMAL EQUATIONS ──
+    // -- *** SOFT LIMITS AND TEMPORAL CONTINUITY, ADDED TO THE NORMAL EQUATIONS --
     //
     // Both are gradients on `q`, so both belong in the same solve as the task residuals rather
     // than as a repair applied afterwards.
     //
-    // ★★★ AND THEY MUST COME BEFORE THE SOLVE. This block used to sit AFTER
+    // *** AND THEY MUST COME BEFORE THE SOLVE. This block used to sit AFTER
     // `solveSymmetricPositiveDefinite`, adding its terms to a system nobody read again: the barrier
     // never held a joint in range and the posture weight never held a frame near the last. The
     // retarget's own posture sweep (robot_mjcf's WHOLE BODY test) found "0.15, 0.30 and 0.60 all
@@ -13489,19 +13489,19 @@ pub fn ikStep(
 
             if (opts.limit_barrier > 0) {
                 if (m.jnt_range[joint]) |range| {
-                    // ★ Margin-relative, so the barrier's strength does not depend on whether a
+                    // * Margin-relative, so the barrier's strength does not depend on whether a
                     // joint's range is measured in a few degrees or a few radians.
                     const span: f32 = @max(range[1] - range[0], 1.0e-4);
                     const low_gap: f32 = @max(current - range[0], 1.0e-3 * span);
                     const high_gap: f32 = @max(range[1] - current, 1.0e-3 * span);
                     const push: f32 = opts.limit_barrier * span *
                         (1.0 / (low_gap / span) - 1.0 / (high_gap / span)) * 1.0e-4;
-                    // ★ `gradient` holds the DESCENT direction (J^T r, as the tasks and the posture term
+                    // * `gradient` holds the DESCENT direction (J^T r, as the tasks and the posture term
                     // add it), so the barrier's push is ADDED: positive near the low wall, moving the
                     // joint up and away from it. It was subtracted - toward the nearest wall - which
                     // went unseen while this block ran after the solve and did nothing at all.
                     gradient[dof] += push;
-                    // ★ Curvature into the diagonal so the step stays stable near a wall.
+                    // * Curvature into the diagonal so the step stays stable near a wall.
                     normal_matrix[dof * dof_count + dof] += opts.limit_barrier *
                         (1.0 / (low_gap * low_gap) + 1.0 / (high_gap * high_gap)) * 1.0e-4;
                 }
@@ -13518,7 +13518,7 @@ pub fn ikStep(
         }
     }
 
-    // ★ The damping term is what makes this solvable at a singularity, and it goes on the
+    // * The damping term is what makes this solvable at a singularity, and it goes on the
     // diagonal AFTER the accumulation so every task shares it.
     for (0..dof_count) |dof| {
         normal_matrix[dof * dof_count + dof] += opts.damping;
@@ -13526,7 +13526,7 @@ pub fn ikStep(
 
     solveSymmetricPositiveDefinite(normal_matrix, gradient, joint_step, dof_count);
 
-    // ★★ INTEGRATED, NOT ADDED. `qpos` is longer than `nv` because a free joint carries a
+    // ** INTEGRATED, NOT ADDED. `qpos` is longer than `nv` because a free joint carries a
     // quaternion; `integratePos` composes it correctly where `pos += step` would drift it off
     // unit length while still looking plausible.
     if (opts.step_scale != 1.0) {
@@ -13534,20 +13534,20 @@ pub fn ikStep(
             component.* *= opts.step_scale;
         }
     }
-    // ── ★★★ SCALE THE STEP SO NO JOINT CROSSES ITS RANGE ──
+    // -- *** SCALE THE STEP SO NO JOINT CROSSES ITS RANGE --
     //
     // Clamping AFTER integrating lets the solver propose a large step, have it truncated on one
-    // axis, and land somewhere unrelated to where it started — **a limit becomes a cliff, and an
+    // axis, and land somewhere unrelated to where it started - **a limit becomes a cliff, and an
     // IK stepping over one moves discontinuously.** Measured: 157 degrees of arm motion in a
     // single frame, on a shoulder pinned against [-85, 60].
     //
-    // ★★ Scaling the WHOLE step by the largest admissible fraction keeps its DIRECTION intact:
+    // ** Scaling the WHOLE step by the largest admissible fraction keeps its DIRECTION intact:
     // the solve still heads where it wanted, it just stops at the wall instead of being
     // projected onto it. This is the cheap form of GMR's `ConfigurationLimit`, which forbids
     // infeasible steps rather than repairing them.
     //
-    // ★ A joint already AT its limit and pushing further contributes a zero fraction, which
-    // would freeze the whole solve — such a component is dropped instead, so the other DOF can
+    // * A joint already AT its limit and pushing further contributes a zero fraction, which
+    // would freeze the whole solve - such a component is dropped instead, so the other DOF can
     // still move.
     if (opts.respect_joint_limits) {
         var allowed: f32 = 1.0;
@@ -13584,12 +13584,12 @@ pub fn ikStep(
 
     integratePos(m, d.pos, joint_step, 1.0);
 
-    // ★ A final clamp catches float drift only; the scaling above is what keeps motion
+    // * A final clamp catches float drift only; the scaling above is what keeps motion
     // continuous.
     //
-    // ★★★ AND THE BARRIER NEEDS IT TOO: IT IS NOT A WALL ONCE A STEP HAS CROSSED IT. The barrier
+    // *** AND THE BARRIER NEEDS IT TOO: IT IS NOT A WALL ONCE A STEP HAS CROSSED IT. The barrier
     // above clamps each gap at 0.001 of the span, so a joint that one step carried PAST its limit
-    // sees a small constant push and an enormous curvature term — which damps the very step that
+    // sees a small constant push and an enormous curvature term - which damps the very step that
     // would bring it back. It stays outside: retargeting the dance, `solvePointCloud` (barrier
     // only) left humanoid_flex's right knee bent BACKWARDS by 148 deg in all 599 frames, and arm
     // hinges wound to 6-10 rad, and every tracking attempt downstream was chasing that. Projecting
@@ -13612,7 +13612,7 @@ pub fn ikStep(
 
 /// In-place Cholesky solve of a symmetric positive-definite system, `a x = b`.
 ///
-/// ★ SPD is guaranteed here by construction: `JᵀW J` is positive SEMI-definite for positive
+/// * SPD is guaranteed here by construction: `J^TW J` is positive SEMI-definite for positive
 /// weights, and the damping term makes it strictly positive. That is what lets this be a
 /// Cholesky rather than a pivoting factorisation.
 fn solveSymmetricPositiveDefinite(
@@ -13621,7 +13621,7 @@ fn solveSymmetricPositiveDefinite(
     out_x: []f32,
     n: usize,
 ) void {
-    // Factor a = L Lᵀ, writing L into a's lower triangle.
+    // Factor a = L L^T, writing L into a's lower triangle.
     for (0..n) |i| {
         for (0..i + 1) |j| {
             var sum: f32 = a[i * n + j];
@@ -13645,7 +13645,7 @@ fn solveSymmetricPositiveDefinite(
         }
         out_x[i] = sum / a[i * n + i];
     }
-    // Back substitution: Lᵀ x = y.
+    // Back substitution: L^T x = y.
     var i: usize = n;
     while (i > 0) {
         i -= 1;
@@ -13659,7 +13659,7 @@ fn solveSymmetricPositiveDefinite(
 
 /// Floats `ikStep` needs in its scratch buffer for a model with `nv` degrees of freedom.
 pub fn ikScratchSize(nv: usize) usize {
-    // ★ 6nv jacobians + nv*nv normal matrix + nv gradient + nv step + 6nv for a RELATIVE task's
+    // * 6nv jacobians + nv*nv normal matrix + nv gradient + nv step + 6nv for a RELATIVE task's
     // second Jacobian pair.
     return 6 * nv + nv * nv + 2 * nv + 6 * nv;
 }
@@ -13668,7 +13668,7 @@ test "ikStep: a single position target converges on a redundant chain" {
     const gpa: Allocator = std.testing.allocator;
 
     // Four bodies, ball joints, free root: far more DOF than a point has coordinates. That
-    // redundancy is the whole reason the solve must be DAMPED — a plain pseudo-inverse has no
+    // redundancy is the whole reason the solve must be DAMPED - a plain pseudo-inverse has no
     // unique answer here, and near a straight chain it has no small one.
     const names = [_][]const u8{ "root", "a", "b", "c" };
     const parents = [_]i32{ -1, 0, 1, 2 };
@@ -13691,7 +13691,7 @@ test "ikStep: a single position target converges on a redundant chain" {
     defer gpa.free(scratch);
     const tasks = [_]IkTask{.{ .body = tip, .target_world = target, .weight = 1.0 }};
 
-    // ★★ THE PROPERTY: the error must FALL MONOTONICALLY and end small. A step that overshoots
+    // ** THE PROPERTY: the error must FALL MONOTONICALLY and end small. A step that overshoots
     // or oscillates would still "converge" on a lucky iteration count, so the test checks the
     // trajectory rather than only the destination.
     var previous_error: f32 = 1.0e9;
@@ -13714,21 +13714,21 @@ test "ikStep: a single position target converges on a redundant chain" {
     );
     try expect(remaining_distance < 5.0e-3);
 
-    // ★ AND IT ACTUALLY MOVED — a target the chain already satisfied would pass the distance
+    // * AND IT ACTUALLY MOVED - a target the chain already satisfied would pass the distance
     // check while proving the solver does nothing.
     const travelled: Vec = reached - start;
     try expect(@sqrt(travelled[0] * travelled[0] +
         travelled[1] * travelled[1] +
         travelled[2] * travelled[2]) > 0.2);
 
-    // ── ★★★ THE SINGULAR CASE, which is what the DAMPING is actually for ──
+    // -- *** THE SINGULAR CASE, which is what the DAMPING is actually for --
     //
     // A target BEYOND REACH pulls the chain straight, and a straight chain is exactly where the
     // undamped pseudo-inverse blows up: the Jacobian loses rank along the limb's axis and the
-    // step goes to infinity. **A dance capture reaches this constantly** — every fully extended
-    // knee and elbow — so it is the normal case, not a corner.
+    // step goes to infinity. **A dance capture reaches this constantly** - every fully extended
+    // knee and elbow - so it is the normal case, not a corner.
     //
-    // ★ Verified as a real control: the convergence test above still passes with damping
+    // * Verified as a real control: the convergence test above still passes with damping
     // removed, because a bent chain is well-conditioned. THIS one does not.
     @memcpy(d.pos, m.qpos0);
     kinematics(&m, &d);
@@ -13745,9 +13745,9 @@ test "ikStep: a single position target converges on a redundant chain" {
         comPos(&m, &d);
     }
 
-    // ★ The invariant is FINITENESS, not a magnitude. A free root chasing a target 9 m away
+    // * The invariant is FINITENESS, not a magnitude. A free root chasing a target 9 m away
     // legitimately travels a long way; what must never happen is a step that is not a number.
-    // Bounding the magnitude instead was a mistake — it failed the CORRECT solver, which is how
+    // Bounding the magnitude instead was a mistake - it failed the CORRECT solver, which is how
     // it was caught.
     for (0..m.nq) |index| {
         try expect(d.pos[index] == d.pos[index]); // NaN is the only value unequal to itself
@@ -13762,23 +13762,23 @@ test "ikStep: a single position target converges on a redundant chain" {
 
 /// Each body's rest orientation taken from WHICH WAY ITS BONE POINTS, not from its body frame.
 ///
-/// ── ★★★ WHY `referenceOrientationsFromRest` IS THE WRONG TOOL FOR A RETARGET ──
+/// -- *** WHY `referenceOrientationsFromRest` IS THE WRONG TOOL FOR A RETARGET --
 ///
-/// That one reads `body_xrot` at `qpos0` — the body FRAME's orientation. For `humanoid.xml`
+/// That one reads `body_xrot` at `qpos0` - the body FRAME's orientation. For `humanoid.xml`
 /// that is **identity for every body**, because the file declares no `quat`, `euler` or
 /// `axisangle` anywhere. Its bone directions live entirely in the POSITION OFFSETS:
 ///
 ///     lower_arm_left  pos=".18 .18 -.18"    out, forward and down
 ///     thigh_left      pos="0 .1 -.04"
 ///
-/// ★★ So an alignment built from body frames compares a MEANINGLESS identity on the robot side
+/// ** So an alignment built from body frames compares a MEANINGLESS identity on the robot side
 /// against a real T-pose rotation on the human side. Both references must answer the SAME
-/// QUESTION — *which way does this bone point at rest* — or the correction between them is
+/// QUESTION - *which way does this bone point at rest* - or the correction between them is
 /// noise. That rule has now been broken three times in this arc, each in a new disguise; see
 /// claude.md.
 ///
-/// ★ This walks each body to its FIRST CHILD and builds the shortest-arc rotation taking +Y
-/// onto that direction — the identical construction `codecs.bvh.restBoneOrientations` applies
+/// * This walks each body to its FIRST CHILD and builds the shortest-arc rotation taking +Y
+/// onto that direction - the identical construction `codecs.bvh.restBoneOrientations` applies
 /// to a skeleton, so the two sides are directly comparable. A leaf inherits its parent's.
 ///
 /// `reference_axis` is the canonical direction the arc is measured from; +Y matches the
@@ -13857,7 +13857,7 @@ test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-f
     const gpa: Allocator = std.testing.allocator;
 
     // Bodies with no rotation of their own, whose bones point in different directions purely
-    // through their child offsets — the shape `humanoid.xml` actually has.
+    // through their child offsets - the shape `humanoid.xml` actually has.
     const names = [_][]const u8{ "root", "up", "sideways" };
     const parents = [_]i32{ -1, 0, 1 };
     const offsets = [_]Vec{ vec(0, 0, 0), vec(0, 0.5, 0), vec(0.5, 0, 0) };
@@ -13866,11 +13866,11 @@ test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-f
     var d: Data = try Data.init(gpa, &m);
     defer d.deinit();
 
-    // ★★ THE BODY-FRAME READ FINDS NOTHING. Every body rotation is identity here, exactly as in
+    // ** THE BODY-FRAME READ FINDS NOTHING. Every body rotation is identity here, exactly as in
     // `humanoid.xml`, so `referenceOrientationsFromRest` returns identity for all of them and
     // carries NO information about which way any bone points.
-    // ★ SIZED TO `nbody`, WHICH INCLUDES THE WORLD BODY. A 3-bone skeleton makes 4 bodies, and
-    // an array of 3 silently caps the child search — the first version of this test found no
+    // * SIZED TO `nbody`, WHICH INCLUDES THE WORLD BODY. A 3-bone skeleton makes 4 bodies, and
+    // an array of 3 silently caps the child search - the first version of this test found no
     // children at all and reported everything as identity, which looked like a code bug.
     try expectEqual(@as(u32, 4), m.nbody);
     var from_frames: [4]Quat = undefined;
@@ -13879,8 +13879,8 @@ test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-f
         try expectApproxEqAbs(@as(f32, 1.0), @abs(orientation[3]), 1.0e-4);
     }
 
-    // ★★★ THE BONE-DIRECTION READ DISTINGUISHES THEM. `root` points +Y (identity) and `up`
-    // points +X (a real rotation) — which is the information an alignment needs and the body
+    // *** THE BONE-DIRECTION READ DISTINGUISHES THEM. `root` points +Y (identity) and `up`
+    // points +X (a real rotation) - which is the information an alignment needs and the body
     // frames do not hold.
     var from_bones: [4]Quat = undefined;
     referenceOrientationsFromBoneDirections(&m, &from_bones);
@@ -13890,11 +13890,11 @@ test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-f
     // Body 2 ("up") points +X: a genuine rotation, and the information body frames lack.
     try expect(@abs(from_bones[2][3]) < 0.95);
 
-    // ★ Rotating +Y by that orientation must give the bone's ACTUAL direction — the property
+    // * Rotating +Y by that orientation must give the bone's ACTUAL direction - the property
     // that makes it comparable to the skeleton side's identical construction.
     const rotated: Vec = zm.rotate(from_bones[2], vec(0, 1, 0));
     try expectApproxEqAbs(@as(f32, 1.0), rotated[0], 1.0e-3);
-    // ★ Rotating +Y by that orientation must give the bone's actual direction — the property
+    // * Rotating +Y by that orientation must give the bone's actual direction - the property
     // that makes it comparable to the skeleton side's identical construction.
 
 }
@@ -13918,8 +13918,8 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
     const scratch: []f32 = try gpa.alloc(f32, ikScratchSize(m.nv));
     defer gpa.free(scratch);
 
-    // ★ A ball-jointed chain can express any orientation, so this must converge essentially
-    // exactly — unlike a hinge, where the shortfall is real and reported.
+    // * A ball-jointed chain can express any orientation, so this must converge essentially
+    // exactly - unlike a hinge, where the shortfall is real and reported.
     const wanted: Quat = qmul(
         quatFromAxisAngle(vec(0, 0, 1), 0.7),
         quatFromAxisAngle(vec(1, 0, 0), -0.5),
@@ -13943,21 +13943,21 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
         reached[2] * wanted[2] + reached[3] * wanted[3]);
     try expect(alignment > 0.999);
 
-    // ── ★ A TARGET PAST 180 DEGREES ──
+    // -- * A TARGET PAST 180 DEGREES --
     //
-    // ★★ HONEST LIMIT: this does NOT prove the shortest-arc sign correction is load-bearing.
+    // ** HONEST LIMIT: this does NOT prove the shortest-arc sign correction is load-bearing.
     // Removing it leaves this test green, because with damping and 80 iterations the solver
-    // converges either way — it merely takes a longer path. The correction is standard and
+    // converges either way - it merely takes a longer path. The correction is standard and
     // right (a limb should not spin through the body to reach 190 degrees), but **this test
     // covers convergence past the half turn, not the path taken to get there.**
     //
-    // ★ Saying so beats a comment that implies coverage the assertions do not deliver — the
+    // * Saying so beats a comment that implies coverage the assertions do not deliver - the
     // failure mode this session has hit twice already.
     @memcpy(d.pos, m.qpos0);
     kinematics(&m, &d);
     comPos(&m, &d);
-    // ★ PAST pi (3.14). At 3.0 rad the error quaternion keeps a positive w and the sign
-    // correction never fires — the first version of this test used 3.0 and could not catch its
+    // * PAST pi (3.14). At 3.0 rad the error quaternion keeps a positive w and the sign
+    // correction never fires - the first version of this test used 3.0 and could not catch its
     // removal. A control has to reach the branch it claims to test.
     const just_past_half_turn: Quat = quatFromAxisAngle(vec(0, 0, 1), 3.5);
     const long_way = [_]IkTask{.{
@@ -13986,20 +13986,20 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
 
 /// Aim a bone at a direction AND choose its twist so a child hinge bends in the right plane.
 ///
-/// ── ★★★ WHY A SHORTEST ARC IS NOT ENOUGH ──
+/// -- *** WHY A SHORTEST ARC IS NOT ENOUGH --
 ///
 /// Measured: aiming the upper arm by shortest arc puts it within 23 degrees of the human's
 /// (agreement 0.916) while the FOREARM comes out at -0.196. **A shortest arc adds no rotation
-/// about the bone, so the twist is arbitrary — and a child hinge's axis rides in this body's
+/// about the bone, so the twist is arbitrary - and a child hinge's axis rides in this body's
 /// frame, so an arbitrary twist bends the child in an arbitrary PLANE.**
 ///
 /// A good direction with a bad bend plane is exactly that pattern.
 ///
-/// ★★ So the twist is chosen, not left free: rotate about the aimed bone until the child's
+/// ** So the twist is chosen, not left free: rotate about the aimed bone until the child's
 /// hinge axis lines up with the normal of the human's bend plane. That normal is
-/// `cross(parent_bone, child_bone)` on the human — the axis the human's own elbow turns about.
+/// `cross(parent_bone, child_bone)` on the human - the axis the human's own elbow turns about.
 ///
-/// ★ `child_hinge_axis_local` is the hinge's axis in this body's frame. Returns the aim alone
+/// * `child_hinge_axis_local` is the hinge's axis in this body's frame. Returns the aim alone
 /// when the two bones are collinear, because a straight limb has no bend plane to match and any
 /// twist is then equally right.
 pub fn aimBoneWithTwist(
@@ -14017,7 +14017,7 @@ pub fn aimBoneWithTwist(
         human_normal_raw[1] * human_normal_raw[1] + human_normal_raw[2] * human_normal_raw[2]);
     const limb_is_straight: bool = human_normal_len < 0.05;
     if (limb_is_straight) {
-        // ★ No bend plane to match, and any twist is equally right. Forcing one here would make
+        // * No bend plane to match, and any twist is equally right. Forcing one here would make
         // a straight arm jitter as noise in the capture flips the normal.
         return swing;
     }
@@ -14084,7 +14084,7 @@ fn vecLength(v: Vec) f32 {
 
 /// The per-joint twist that makes a robot bone point where the source's does.
 ///
-/// ── ★★★ PORTED FROM `FlomoGMR/scripts/flomo_to_geno_bvh.py::compute_twist_offsets` ──
+/// -- *** PORTED FROM `FlomoGMR/scripts/flomo_to_geno_bvh.py::compute_twist_offsets` --
 ///
 /// See `src/notes/twist_port_plan.md`. This is deliberately a PORT and not a derivation: the
 /// retarget arc spent eleven candidate formulas and four device rounds failing to derive it.
@@ -14092,16 +14092,16 @@ fn vecLength(v: Vec) f32 {
 ///     d_target   = conjugate(source_joint_world_rotation) * source_bone_dir_world
 ///     R_twist    = minimumAngleRotation(robot_bone_dir_local -> d_target)
 ///
-/// ★★ **BOTH DIRECTIONS END UP IN THE JOINT'S LOCAL FRAME.** The robot's is already local (its
+/// ** **BOTH DIRECTIONS END UP IN THE JOINT'S LOCAL FRAME.** The robot's is already local (its
 /// rest orientations are identity, so world equals local); the source's is pulled into that
 /// frame by the SOURCE's own world orientation, because `R_twist` bridges FROM the source frame
 /// TO the robot's and the source side must be stated in source terms.
 ///
-/// ★ Computing these in WORLD instead — which is what this arc did for several rounds — makes
+/// * Computing these in WORLD instead - which is what this arc did for several rounds - makes
 /// the correction depend on where a joint happens to be pointing rather than on the two
 /// skeletons' shapes.
 ///
-/// ★ The defining property, which `computeTwistOffset`'s test asserts directly:
+/// * The defining property, which `computeTwistOffset`'s test asserts directly:
 ///
 ///     rotate(R_twist, robot_bone_dir_local) == d_target
 ///
@@ -14117,31 +14117,31 @@ pub fn computeTwistOffset(
 
 /// Apply the twist to one joint's local rotation, undoing the parent's first.
 ///
-/// ★★★ **THE `inv(parent)` FACTOR IS THE PIECE THIS ARC KEPT MISSING.** The reference's own
+/// *** **THE `inv(parent)` FACTOR IS THE PIECE THIS ARC KEPT MISSING.** The reference's own
 /// words: *"undoes the parent's twist so it doesn't accumulate and distort children. Without it,
 /// each joint in a chain would get the parent's twist baked in on top of its own."*
 ///
 /// That is exactly the failure observed: a correction that improved a shoulder and degraded the
 /// forearm below it.
 ///
-/// ★ Chains must be walked PARENT TO CHILD so `parent_twist` is the one computed for this
+/// * Chains must be walked PARENT TO CHILD so `parent_twist` is the one computed for this
 /// joint's actual parent, not whichever body happened to come before it in index order.
 pub fn applyTwist(source_local_rotation: Quat, parent_twist: Quat, own_twist: Quat) Quat {
     return qmul(qmul(conjugate(parent_twist), source_local_rotation), own_twist);
 }
 
-test "computeTwistOffset: the defining property holds — rotate(R_twist, d_robot) == d_target" {
-    // ── ★★★ THIS TEST NEEDS NO CAPTURE, NO FRAMES AND NO SCORECARD ──
+test "computeTwistOffset: the defining property holds - rotate(R_twist, d_robot) == d_target" {
+    // -- *** THIS TEST NEEDS NO CAPTURE, NO FRAMES AND NO SCORECARD --
     //
     // It is pure algebra over two rest directions, so it either holds or the port is wrong.
-    // §14's plan puts it first for exactly that reason: every later step rests on this and
+    // section 14's plan puts it first for exactly that reason: every later step rests on this and
     // nothing else can isolate it.
     const cases = [_]struct {
         robot_dir: Vec,
         source_dir_world: Vec,
         source_rot: Quat,
     }{
-        // A robot arm pointing UP against a source arm pointing SIDEWAYS — the ~90 degree case
+        // A robot arm pointing UP against a source arm pointing SIDEWAYS - the ~90 degree case
         // the reference's docstring names, and the one that broke this arc's arms.
         .{
             .robot_dir = vec(0, 1, 0),
@@ -14178,18 +14178,18 @@ test "computeTwistOffset: the defining property holds — rotate(R_twist, d_robo
         }
     }
 
-    // ★ And the aligned case really is identity — a twist that is merely CLOSE would accumulate
+    // * And the aligned case really is identity - a twist that is merely CLOSE would accumulate
     // through a chain, and the legs (which already match at rest) must come out untouched.
     const aligned: Quat = computeTwistOffset(vec(0, 0, 1), vec(0, 0, 1), quat_identity);
     try expectApproxEqAbs(@as(f32, 1.0), @abs(aligned[3]), 1.0e-5);
 }
 
 test "applyTwist: a chain does NOT accumulate its parent's twist" {
-    // ── ★★★ THE PROPERTY THE MISSING `inv(parent)` FACTOR PROVIDES ──
+    // -- *** THE PROPERTY THE MISSING `inv(parent)` FACTOR PROVIDES --
     //
     // Two joints in a chain, both given the same twist. With the parent factor, the child's
     // WORLD orientation gains exactly its OWN twist. Without it, the child would gain the
-    // parent's as well — which is the shoulder-improves-forearm-degrades failure this arc hit.
+    // parent's as well - which is the shoulder-improves-forearm-degrades failure this arc hit.
     const twist: Quat = quatFromAxisAngle(vec(0, 0, 1), 0.7);
     const parent_local: Quat = quatFromAxisAngle(vec(1, 0, 0), 0.3);
     const child_local: Quat = quatFromAxisAngle(vec(0, 1, 0), -0.5);
@@ -14201,7 +14201,7 @@ test "applyTwist: a chain does NOT accumulate its parent's twist" {
     const parent_world: Quat = parent_corrected;
     const child_world: Quat = qmul(parent_world, child_corrected);
 
-    // ★ The reference's stated invariant: `world_rot_robot = world_rot_src * R_twist`.
+    // * The reference's stated invariant: `world_rot_robot = world_rot_src * R_twist`.
     const src_parent_world: Quat = parent_local;
     const src_child_world: Quat = qmul(src_parent_world, child_local);
 
@@ -14213,7 +14213,7 @@ test "applyTwist: a chain does NOT accumulate its parent's twist" {
         try expectApproxEqAbs(expect_child[i], child_world[i], 1.0e-4);
     }
 
-    // ★★ AND WITHOUT THE PARENT FACTOR IT IS WRONG — asserted, so the factor cannot be quietly
+    // ** AND WITHOUT THE PARENT FACTOR IT IS WRONG - asserted, so the factor cannot be quietly
     // removed by someone simplifying the expression.
     const naive_child: Quat = qmul(child_local, twist);
     const naive_world: Quat = qmul(parent_world, naive_child);
@@ -14228,14 +14228,14 @@ test "applyTwist: a chain does NOT accumulate its parent's twist" {
 
 /// Build per-body twist offsets along named chains, from two rest poses.
 ///
-/// ── ★★★ SHARED SO THE EXAMPLE AND THE TEST CANNOT DIVERGE ──
+/// -- *** SHARED SO THE EXAMPLE AND THE TEST CANNOT DIVERGE --
 ///
-/// This lived twice — once in `examples/geno_dance` and once in the scorecard harness — and the
+/// This lived twice - once in `examples/geno_dance` and once in the scorecard harness - and the
 /// two copies drifted in FOUR ways before anyone noticed: the reference pose (T-pose vs the
 /// A-pose bind), the accumulation (rotated offsets vs raw), the solver's task set, and the IK
 /// default. **Every divergence was invisible until a screenshot contradicted a number.**
 ///
-/// ★★ A measurement harness that duplicates the code it measures is measuring a guess. One
+/// ** A measurement harness that duplicates the code it measures is measuring a guess. One
 /// implementation, called by both, is the only version of this that stays honest.
 ///
 /// `rest_positions_robot_frame` holds the SOURCE's rest world positions already converted to the
@@ -14250,38 +14250,38 @@ pub fn computeTwistChainOffsets(
     /// The source joints' rest WORLD rotations, in the robot's frame. Null treats them as
     /// identity.
     ///
-    /// ── ★★★ WHY THE SOURCE SIDE STILL NEEDS THIS ──
+    /// -- *** WHY THE SOURCE SIDE STILL NEEDS THIS --
     ///
     /// `d_robot` is already local, because `humanoid.xml` declares no body rotations and its
     /// rest local frame IS world. **The SOURCE's is not**: `Spine3` carries the accumulated
     /// rotation of four spine joints above it, so its bone direction expressed in world is not
     /// the same as expressed in its own frame.
     ///
-    /// ★ Dropping this was right when `q_local` was ALSO wrong (taken against the human's own
+    /// * Dropping this was right when `q_local` was ALSO wrong (taken against the human's own
     /// parent); the two errors partly cancelled. With `q_local` fixed, the division belongs
-    /// back — which is a prediction the scorecard can settle in one run.
+    /// back - which is a prediction the scorecard can settle in one run.
     rest_rotations_robot_frame: ?[]const Quat,
     chains: []const []const []const u8,
     /// The two shoulder bodies, when the model has them. Their axis replaces the chain bone for
     /// whichever body is their common parent.
     ///
-    /// ★★★ A CHAIN BONE PARALLEL TO THE MISSING AXIS ENCODES NOTHING. The torso's chain bone is
+    /// *** A CHAIN BONE PARALLEL TO THE MISSING AXIS ENCODES NOTHING. The torso's chain bone is
     /// `torso -> head`, which is VERTICAL, and a shortest arc between two vertical bones leaves
-    /// YAW free — the very axis the two skeletons differ about. The shoulders then swing bodily
+    /// YAW free - the very axis the two skeletons differ about. The shoulders then swing bodily
     /// off an uncorrected torso, which reads as "shoulders rotated 90 degrees".
     ///
-    /// ★ Shoulder-to-shoulder is horizontal and sees yaw exactly. It is also the right bone on
+    /// * Shoulder-to-shoulder is horizontal and sees yaw exactly. It is also the right bone on
     /// its merits: the torso's job in this rig is to carry the shoulders.
     shoulder_bodies: ?[2]usize,
     /// The robot's REST configuration. Null uses `qpos0`.
     ///
-    /// ── ★★★ `qpos0` IS NOT NECESSARILY A T-POSE ──
+    /// -- *** `qpos0` IS NOT NECESSARILY A T-POSE --
     ///
     /// `humanoid.xml`'s folds its arms up into a triangle. Building twists against it compares
-    /// two DIFFERENT PHYSICAL POSES, which is the rule this arc broke four times — and its root
+    /// two DIFFERENT PHYSICAL POSES, which is the rule this arc broke four times - and its root
     /// instance, since every other rest-pose bug sat on top of this one.
     ///
-    /// ★ Passing a configuration SOLVED onto the source's T-pose makes both references depict
+    /// * Passing a configuration SOLVED onto the source's T-pose makes both references depict
     /// the same pose by construction, rather than by hoping two rigs happen to agree.
     robot_rest_qpos: ?[]const f32,
     out_twist: []Quat,
@@ -14299,7 +14299,7 @@ pub fn computeTwistChainOffsets(
     kinematics(m, d);
 
     for (chains) |chain| {
-        // ★ A chain that does not start at a root inherits its parent BODY's twist, so chains
+        // * A chain that does not start at a root inherits its parent BODY's twist, so chains
         // must be ordered with ancestors first.
         var previous: Quat = quat_identity;
         if (findBodyByName(names, chain[0])) |first| {
@@ -14338,7 +14338,7 @@ pub fn computeTwistChainOffsets(
                 continue;
             }
 
-            // ★ `humanoid.xml` declares no body rotations, so its rest LOCAL frame IS the world
+            // * `humanoid.xml` declares no body rotations, so its rest LOCAL frame IS the world
             // frame and there is no joint rotation to divide out.
             const source_rest_rotation: Quat = if (rest_rotations_robot_frame) |rotations|
                 rotations[@intCast(human_body)]
@@ -14373,7 +14373,7 @@ pub fn computeTwistChainOffsets(
                         source_axis / @as(Vec, @splat(source_len)),
                         quat_identity,
                     );
-                    // ★ Children inherit the corrected value, or they undo a twist their parent
+                    // * Children inherit the corrected value, or they undo a twist their parent
                     // no longer has.
                     for (0..m.nbody) |body| {
                         if (m.body_parent[body] == carrier) {
@@ -14397,8 +14397,8 @@ fn findBodyByName(names: []const []const u8, wanted: []const u8) ?usize {
 
 /// Everything the pose loop needs, already in the ROBOT's frame.
 ///
-/// ★ Converting at the boundary means this function knows nothing about either skeleton's
-/// up-axis convention — and the two callers cannot disagree about where the conversion happens,
+/// * Converting at the boundary means this function knows nothing about either skeleton's
+/// up-axis convention - and the two callers cannot disagree about where the conversion happens,
 /// which is one of the four ways they previously drifted.
 pub const RetargetPose = struct {
     human_of_body: []const i32,
@@ -14410,60 +14410,60 @@ pub const RetargetPose = struct {
     twist: []const Quat,
     parent_twist: []const Quat,
     /// Bodies whose bone is aimed straight at the mapped child's position rather than oriented
-    /// by the twist — upper arms, where the child's PLACEMENT is what matters.
+    /// by the twist - upper arms, where the child's PLACEMENT is what matters.
     aim_at_child: []const bool,
     /// The two shoulder bodies, when present. The root is shifted so their midpoint lands on the
     /// source's.
     ///
-    /// ★★★ THE ROBOT'S TORSO-TO-SHOULDER OFFSET IS FIXED BY THE MODEL, so copying the source's
-    /// spine position puts the shoulders wherever the robot's proportions happen to — measured
+    /// *** THE ROBOT'S TORSO-TO-SHOULDER OFFSET IS FIXED BY THE MODEL, so copying the source's
+    /// spine position puts the shoulders wherever the robot's proportions happen to - measured
     /// 0.2 m out. Solving for the position that lands the shoulders instead is one subtraction.
     ///
-    /// ★ The MIDPOINT, because the shoulder SEPARATION is fixed too: no single root position
+    /// * The MIDPOINT, because the shoulder SEPARATION is fixed too: no single root position
     /// satisfies both, and splitting the difference beats favouring a side.
     shoulder_bodies: ?[2]usize = null,
     /// Where the root body should sit, in the robot's frame, before the shoulder correction.
     root_world_position: ?Vec = null,
-    /// ── ★★★ MECHANISM B: AIM EVERY MAPPED BONE, INSTEAD OF CONVERTING ROTATIONS ──
+    /// -- *** MECHANISM B: AIM EVERY MAPPED BONE, INSTEAD OF CONVERTING ROTATIONS --
     ///
     /// The pipeline contains two ways of deciding where a bone points:
     ///
-    ///   A  twist offsets — convert a ROTATION from the source's frame to the robot's, via a
+    ///   A  twist offsets - convert a ROTATION from the source's frame to the robot's, via a
     ///      per-bone `R_twist` derived from two rest poses
-    ///   B  aiming — compare DIRECTIONS in world space and rotate the bone onto the target
+    ///   B  aiming - compare DIRECTIONS in world space and rotate the bone onto the target
     ///
-    /// ★★★ **B NEEDS NO REST-POSE ALGEBRA, BECAUSE A DIRECTION CARRIES ITS OWN FRAME.** Every
-    /// rest-pose bug in this arc — A-pose for T-pose twice, an unrotated accumulation, a
-    /// vertical reference bone, a missing source rest rotation, `qpos0` not being a T-pose —
+    /// *** **B NEEDS NO REST-POSE ALGEBRA, BECAUSE A DIRECTION CARRIES ITS OWN FRAME.** Every
+    /// rest-pose bug in this arc - A-pose for T-pose twice, an unrotated accumulation, a
+    /// vertical reference bone, a missing source rest rotation, `qpos0` not being a T-pose -
     /// was a bug in A. **B is structurally immune to all of them.**
     ///
-    /// ★ A's one advantage is that it carries TWIST, which a direction cannot. B recovers that
+    /// * A's one advantage is that it carries TWIST, which a direction cannot. B recovers that
     /// separately from the child's bend plane, via `aimBoneWithTwist`.
     ///
-    /// ★ Set this to compare the two on the scorecard with everything else identical, which is
+    /// * Set this to compare the two on the scorecard with everything else identical, which is
     /// the only honest way to choose between them.
     aim_all: bool = false,
-    /// Bodies that head a TWO-BONE LIMB — a shoulder or a hip whose child is a hinge and whose
+    /// Bodies that head a TWO-BONE LIMB - a shoulder or a hip whose child is a hinge and whose
     /// grandchild is the end effector.
     ///
-    /// ★★★ Such a limb is EXACTLY DETERMINED: 2 DOF + 1 DOF against a 3-number target. It is
+    /// *** Such a limb is EXACTLY DETERMINED: 2 DOF + 1 DOF against a 3-number target. It is
     /// solved in closed form by `solveTwoBoneLimb` rather than aimed, bent and twisted by three
     /// separate heuristics that each leave something undetermined.
     two_bone: ?[]const bool = null,
-    /// Each 1-DOF body's bend at `qpos0`, in radians. Null treats zero as straight — which is
+    /// Each 1-DOF body's bend at `qpos0`, in radians. Null treats zero as straight - which is
     /// **wrong for `humanoid.xml`, whose elbows rest at 109.5 degrees.**
     rest_flexion: ?[]const f32 = null,
     /// Scratch for the per-body orientation solve. When supplied, bodies with two or more DOF
     /// are posed by a LIMITED IK on their bone direction rather than by `fitBodyRotation`.
     ///
-    /// ── ★★★ WHY: `fitBodyRotation` WASTES A NARROW AXIS ──
+    /// -- *** WHY: `fitBodyRotation` WASTES A NARROW AXIS --
     ///
     /// It walks a body's joints IN ORDER, giving each what it can take of the remaining
     /// rotation. `humanoid.xml`'s hip is `hip_x` (range 40 degrees), `hip_z` (95) and `hip_y`
-    /// (170) — **spend the 40-degree axis early on something a wider one could have done and it
+    /// (170) - **spend the 40-degree axis early on something a wider one could have done and it
     /// clamps for no reason.**
     ///
-    /// ★★★ MEASURED, same target, same three DOF, limits enforced on both:
+    /// *** MEASURED, same target, same three DOF, limits enforced on both:
     ///
     ///     fit  32.4 / 11.1 / 68.2 / 30.3 deg        IK  0.0 / 0.0 / 0.0 / 0.0
     ///
@@ -14471,35 +14471,35 @@ pub const RetargetPose = struct {
     /// the sequential fit could not find it. An IK has no ordering: it distributes across all
     /// three axes at once.
     ///
-    /// ★ Left optional so the caller owns the buffers and a per-frame call allocates nothing.
+    /// * Left optional so the caller owns the buffers and a per-frame call allocates nothing.
     solve_scratch: ?[]f32 = null,
     solve_tasks: ?[]IkTask = null,
     /// Start from whatever `d.pos` already holds instead of resetting to `qpos0`.
     ///
-    /// ── ★★★ THE REDUNDANT DOF IS RE-CHOSEN EVERY FRAME FROM A COLD START ──
+    /// -- *** THE REDUNDANT DOF IS RE-CHOSEN EVERY FRAME FROM A COLD START --
     ///
-    /// A leg is 4 DOF against a 3-number ankle target, so one degree of freedom — the knee's
-    /// swivel — is genuinely free. From `qpos0` the solver picks whichever branch its damping
+    /// A leg is 4 DOF against a 3-number ankle target, so one degree of freedom - the knee's
+    /// swivel - is genuinely free. From `qpos0` the solver picks whichever branch its damping
     /// favours, INDEPENDENTLY EVERY FRAME, and the leg snaps between equally-valid answers.
     /// **That is the jitter, and no static per-frame measurement can see it**: every angle can
     /// be correct while the limb flips between frames.
     ///
-    /// ★★ GMR never resets; its configuration integrates forward. Warm-starting makes the
+    /// ** GMR never resets; its configuration integrates forward. Warm-starting makes the
     /// previous frame the tie-breaker among the free solutions, which is the whole reason it
     /// resolves continuity for free.
     ///
-    /// ★ Off by default so a single-frame test stays independent of what ran before it.
+    /// * Off by default so a single-frame test stays independent of what ran before it.
     warm_start: bool = false,
     /// Bodies oriented by TWO DIRECTIONS instead of by a converted rotation.
     ///
-    /// ── ★★★ THE TORSO AND PELVIS ARE NOT LIMBS ──
+    /// -- *** THE TORSO AND PELVIS ARE NOT LIMBS --
     ///
     /// A limb has one bone; its direction leaves twist free and the rest-pose machinery exists
-    /// to recover it. A torso has TWO obvious directions — spine and shoulder axis — and two
+    /// to recover it. A torso has TWO obvious directions - spine and shoulder axis - and two
     /// directions determine an orientation completely, with nothing to recover. Measured: the
     /// spine matches EXACTLY on every frame, against 35 degrees from the twist-offset path.
     ///
-    /// ★ Directions come from the capture's positions, which have been verified correct since
+    /// * Directions come from the capture's positions, which have been verified correct since
     /// early in the project. No rest pose, no twist, no chain.
     direction_pairs: ?[]const DirectionPair = null,
 };
@@ -14517,11 +14517,11 @@ pub const DirectionPair = struct {
     robot_secondary: Vec,
     /// How many ANCESTORS to fit the target through before the body itself.
     ///
-    /// ── ★★★ A BODY'S DOF MAY LIVE UPSTREAM ──
+    /// -- *** A BODY'S DOF MAY LIVE UPSTREAM --
     ///
     /// `humanoid.xml`'s waist is 3 DOF split across two bodies: `waist_lower` owns abdomen_z
     /// and abdomen_y, `pelvis` owns abdomen_x. Fitting a pelvis target onto the pelvis alone
-    /// reaches ONE axis of three — measured 31-69 degrees off on the hip axis. With
+    /// reaches ONE axis of three - measured 31-69 degrees off on the hip axis. With
     /// `chain_depth = 1` the target is fitted onto `waist_lower` first, then the residual onto
     /// the pelvis, and all three axes take part.
     chain_depth: u8 = 0,
@@ -14529,42 +14529,42 @@ pub const DirectionPair = struct {
 
 /// Pose the whole robot for one frame. The single implementation, called by example and test.
 ///
-/// ── ★★★ WHY THIS IS ONE FUNCTION AND NOT TWO ──
+/// -- *** WHY THIS IS ONE FUNCTION AND NOT TWO --
 ///
 /// The example and the scorecard harness each had a copy, and they drifted in four ways before
 /// a screenshot caught it. **A measurement of a duplicate is a measurement of a guess.**
 ///
 /// Bodies are visited parents-first, which MuJoCo's ordering guarantees, so each child is fitted
 /// against the orientation its parent ACTUALLY achieved rather than the one it was asked for.
-/// ── ★★★ SUPERSEDED BY `solvePointCloud`. KEPT ON PURPOSE. ──
+/// -- *** SUPERSEDED BY `solvePointCloud`. KEPT ON PURPOSE. --
 ///
 /// **Nothing that ships calls this.** The example and the harness both pose through
 /// `buildPointSamples` + `solvePointCloud`, which subsumes every mechanism here: twist offsets,
 /// aim-at-child, two-bone limbs, direction pairs, rest-flexion and the hinge formula are each a
 /// special case of matching sample points.
 ///
-/// ★★ It is kept because five harness tests still measure it, and **those measurements are what
+/// ** It is kept because five harness tests still measure it, and **those measurements are what
 /// justify the replacement**: 155 degrees of worst-frame pop against 9.2, a forearm that could
 /// not get below 28 degrees, legs pinned at their limits on half the frames. Delete this and the
 /// evidence for the point cloud goes with it.
 ///
-/// ★★★ It is NOT a divergence risk in the way a duplicated implementation is: **it is not
+/// *** It is NOT a divergence risk in the way a duplicated implementation is: **it is not
 /// supposed to agree with `solvePointCloud`.** The seven divergences this project fixed were all
 /// two copies of the SAME thing drifting apart; this is one copy of a DIFFERENT thing, kept as a
-/// baseline. **Disuse is not the liability — duplication is.**
+/// baseline. **Disuse is not the liability - duplication is.**
 ///
-/// ★ New code should call `solvePointCloud`.
+/// * New code should call `solvePointCloud`.
 pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
-    // ── ★★★ A DIRECTION-PAIR BODY APPLIES NO TWIST, SO ITS CHILDREN MUST NOT UNDO ONE ──
+    // -- *** A DIRECTION-PAIR BODY APPLIES NO TWIST, SO ITS CHILDREN MUST NOT UNDO ONE --
     //
     // Mechanism A chains through `inv(parent_twist)`: every child removes its parent's twist
     // before applying its own. **A body posed by two directions never applied a twist**, so a
-    // child that still divides by one is undoing a rotation that was never there — and the error
+    // child that still divides by one is undoing a rotation that was never there - and the error
     // runs down the whole chain.
     //
     // Measured: making the torso and pelvis exact took the THIGH from 12 to 68 degrees and the
     // SHIN past 90. The legs were not broken by their own mechanism; they were broken by their
-    // parent changing mechanism underneath them. **This is §21's per-body mixing problem, met
+    // parent changing mechanism underneath them. **This is section 21's per-body mixing problem, met
     // again from the other direction.**
     var parent_twist_local: [128]Quat = undefined;
     var effective_parent_twist: []const Quat = in.parent_twist;
@@ -14581,9 +14581,9 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
         effective_parent_twist = parent_twist_local[0..count];
     }
 
-    // ★★★ A two-bone solve sets its MIDDLE joint, and the loop would then reach that body and
+    // *** A two-bone solve sets its MIDDLE joint, and the loop would then reach that body and
     // overwrite it with the per-joint heuristic. **Symptom: a hand error frozen at 0.57 m on
-    // every frame while the elbow improved** — the elbow was being placed correctly and undone.
+    // every frame while the elbow improved** - the elbow was being placed correctly and undone.
     var already_posed: [128]bool = undefined;
     @memset(already_posed[0..@min(m.nbody, already_posed.len)], false);
 
@@ -14610,7 +14610,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
         }
         const joint: usize = @intCast(human_joint);
 
-        // ── ★★★ TWO DIRECTIONS FOR A TORSO OR PELVIS ──
+        // -- *** TWO DIRECTIONS FOR A TORSO OR PELVIS --
         if (in.direction_pairs) |pairs| {
             var handled: bool = false;
             for (pairs) |pair| {
@@ -14628,15 +14628,15 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                 );
                 const is_root: bool = m.body_parent[body] == 0;
                 if (is_root and m.njnt > 0 and m.jnt_type[0] == .free) {
-                    // ★ The root is FREE: write the rotation, exactly. No fit.
+                    // * The root is FREE: write the rotation, exactly. No fit.
                     const root_qpos: usize = m.jnt_qpos_adr[0];
                     d.pos[root_qpos + 3] = world[0];
                     d.pos[root_qpos + 4] = world[1];
                     d.pos[root_qpos + 5] = world[2];
                     d.pos[root_qpos + 6] = world[3];
                 } else {
-                    // ★ Not the root: fit through the ancestors named by `chain_depth`, top
-                    // down, each against its parent's ACHIEVED orientation — then the body.
+                    // * Not the root: fit through the ancestors named by `chain_depth`, top
+                    // down, each against its parent's ACHIEVED orientation - then the body.
                     // Every fit is of the SAME world target; each ancestor takes what it can
                     // and the next sees only what remains.
                     var ancestors: [8]usize = undefined;
@@ -14670,20 +14670,20 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
             }
         }
 
-        // ── ★★★ A TWO-BONE LIMB IS SOLVED WHOLE, NOT JOINT BY JOINT ──
+        // -- *** A TWO-BONE LIMB IS SOLVED WHOLE, NOT JOINT BY JOINT --
         //
         // Measured: hand errors up to 0.50 m on an arm spanning 0.62 m, with every target well
         // inside reach. Aiming the shoulder, bending the elbow by flexion angle and choosing a
         // twist are three heuristics that each leave something free; **the closed form leaves
         // nothing free and meets a reachable target exactly.**
         //
-        // ★ The capture's own middle joint picks the bend PLANE, which is the one genuine
-        // ambiguity — and the circle it resolves is the free twist this arc chased for four
+        // * The capture's own middle joint picks the bend PLANE, which is the one genuine
+        // ambiguity - and the circle it resolves is the free twist this arc chased for four
         // experiments.
         if (in.two_bone) |two_bone_flags| {
             if (two_bone_flags[body]) {
                 if (solveLimbHere(m, d, in, body, joint)) {
-                    // ★ Claim the middle joint so the per-joint path cannot undo it.
+                    // * Claim the middle joint so the per-joint path cannot undo it.
                     if (firstChildBody(m, body)) |middle| {
                         if (middle < already_posed.len) {
                             already_posed[middle] = true;
@@ -14694,9 +14694,9 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
             }
         }
 
-        // ── The desired WORLD orientation ──
+        // -- The desired WORLD orientation --
         const world_target: Quat = blk: {
-            // ★ AIM: an upper arm's job is to place the elbow, and the bone length is fixed, so
+            // * AIM: an upper arm's job is to place the elbow, and the bone length is fixed, so
             // the only freedom is direction. A position criterion producing an orientation.
             if (in.aim_all or in.aim_at_child[body]) {
                 if (firstChildBody(m, body)) |child| {
@@ -14708,9 +14708,9 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                             const local_bone: Vec = normalize3(m.body_pos[child]);
                             const target_dir: Vec = bone / @as(Vec, @splat(len));
 
-                            // ★★ WHERE THE CHILD IS A HINGE, CHOOSE THE TWIST TOO. A shortest
+                            // ** WHERE THE CHILD IS A HINGE, CHOOSE THE TWIST TOO. A shortest
                             // arc adds no rotation about the bone, and a hinge's axis rides in
-                            // THIS body's frame — so an arbitrary twist bends the child in an
+                            // THIS body's frame - so an arbitrary twist bends the child in an
                             // arbitrary PLANE. Measured: the forearm goes from -0.196 to +0.563
                             // once the plane is chosen.
                             const child_is_hinge: bool = m.body_jnt_num[child] == 1 and
@@ -14738,8 +14738,8 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                     }
                 }
             }
-            // ★ Otherwise the ported recipe, with `q_local` taken relative to the human joint
-            // driving THIS BODY'S PARENT — which handles a skipped joint and an inverted spine
+            // * Otherwise the ported recipe, with `q_local` taken relative to the human joint
+            // driving THIS BODY'S PARENT - which handles a skipped joint and an inverted spine
             // with the same expression.
             const robot_parent: u32 = m.body_parent[body];
             const parent_human: i32 = if (robot_parent == 0) -1 else in.human_of_body[robot_parent];
@@ -14750,7 +14750,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
             break :blk applyTwist(q_local, effective_parent_twist[body], in.twist[body]);
         };
 
-        // ── ★ A ONE-HINGE BODY IS BENT, NOT ORIENTED ──
+        // -- * A ONE-HINGE BODY IS BENT, NOT ORIENTED --
         //
         // Measured: a 1-DOF elbow delivers -0.010 for an arbitrary direction. It swings in one
         // plane and takes the human's FLEXION ANGLE as a scalar; the sign comes from the joint's
@@ -14777,30 +14777,30 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                     const range: [2]f32 = m.jnt_range[hinge] orelse .{ -3.14159, 3.14159 };
                     const flexion: f32 = acosRad(cosine);
 
-                    // ── ★★★ ZERO IS NOT STRAIGHT ──
+                    // -- *** ZERO IS NOT STRAIGHT --
                     //
                     // Measured on a bare model: `bend = rest_bend + qpos`, exactly, and
-                    // `humanoid.xml`'s elbow rest bend is **109.5 degrees** — its arms fold into
+                    // `humanoid.xml`'s elbow rest bend is **109.5 degrees** - its arms fold into
                     // a triangle at `qpos0`. **Writing the wanted flexion straight into the
                     // coordinate asked for -90.9 and got 18.6**, which cost four turns of
                     // geometric explanations that were all eliminated.
                     //
-                    // ★ So subtract the rest bend. `rest_flexion` is a property of the model,
+                    // * So subtract the rest bend. `rest_flexion` is a property of the model,
                     // passed in rather than recomputed per frame.
                     //
-                    // ★★ **The reference-pose problem again, in JOINT COORDINATES this time** —
+                    // ** **The reference-pose problem again, in JOINT COORDINATES this time** -
                     // the fifth costume it has worn in this arc.
                     const rest_flexion: f32 = if (in.rest_flexion) |rest| rest[body] else 0;
 
-                    // ── ★★★ NO SIGN FLIP. THE MEASURED RELATION HAS NONE. ──
+                    // -- *** NO SIGN FLIP. THE MEASURED RELATION HAS NONE. --
                     //
-                    // On a bare model, `bend = rest_bend + qpos` — the coordinate ADDS to the
-                    // rest bend. To straighten an elbow resting at 109.5, qpos must be −109.5.
+                    // On a bare model, `bend = rest_bend + qpos` - the coordinate ADDS to the
+                    // rest bend. To straighten an elbow resting at 109.5, qpos must be -109.5.
                     // The old `bends_negative` flip turned that into +109.5, then clamped it to
-                    // +50 — and the arm bent FURTHER. Measured: a nearly straight human arm
+                    // +50 - and the arm bent FURTHER. Measured: a nearly straight human arm
                     // produced a robot forearm 127 degrees off, folded back on itself.
                     //
-                    // ★ The "which way does it bend" heuristic guessed from the range. The
+                    // * The "which way does it bend" heuristic guessed from the range. The
                     // relation was measured, and it says: subtract, and stop.
                     d.pos[m.jnt_qpos_adr[hinge]] =
                         clamp(flexion - rest_flexion, range[0], range[1]);
@@ -14810,12 +14810,12 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
             }
         }
 
-        // ── ★★★ MULTI-DOF BODIES GO THROUGH IK, NOT THE SEQUENTIAL FIT ──
+        // -- *** MULTI-DOF BODIES GO THROUGH IK, NOT THE SEQUENTIAL FIT --
         //
         // Measured above: the fit misses a REACHABLE target by 11-68 degrees on a 3-DOF hip
         // while an IK on the same target with the same limits hits it exactly.
-        // ★★ NOTE: a caller that runs a WHOLE-CHAIN solve afterwards (ankle primary, knee for
-        // swivel) supersedes this per-body pass entirely — measured thigh 4.2 / shin 9.6 against
+        // ** NOTE: a caller that runs a WHOLE-CHAIN solve afterwards (ankle primary, knee for
+        // swivel) supersedes this per-body pass entirely - measured thigh 4.2 / shin 9.6 against
         // 18.3 / 67.8 here. This remains for callers that do not.
         const child_for_aim: ?usize = firstChildBody(m, body);
         if (in.solve_scratch != null and in.solve_tasks != null and
@@ -14841,14 +14841,14 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                 tasks[0] = .{ .body = child, .target_world = knee_target, .weight = 1.0 };
                 var task_total: usize = 1;
 
-                // ── ★★ A SECOND TASK ON THE GRANDCHILD FIXES THE TWIST ──
+                // -- ** A SECOND TASK ON THE GRANDCHILD FIXES THE TWIST --
                 //
                 // One position target on the child leaves rotation ABOUT the bone free, and a
-                // child hinge's axis rides in this body's frame — so the grandchild swings out
+                // child hinge's axis rides in this body's frame - so the grandchild swings out
                 // of plane. Measured: the thigh went to 4.8 degrees while the SHIN went from 75
                 // to 106, because the knee was bending sideways.
                 //
-                // ★ The grandchild's target uses the capture's DIRECTION at the ROBOT's own bone
+                // * The grandchild's target uses the capture's DIRECTION at the ROBOT's own bone
                 // length, so it is exactly reachable and asks only for the plane.
                 if (in.solve_tasks.?.len > 1) {
                     if (firstChildBody(m, child)) |grand| {
@@ -14864,7 +14864,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
                                         .target_world = knee_target +
                                             (next / @as(Vec, @splat(next_len))) *
                                                 @as(Vec, @splat(own_len)),
-                                        // ★ LIGHT. The child's own bone direction is the primary
+                                        // * LIGHT. The child's own bone direction is the primary
                                         // thing; the grandchild only picks the plane. At 0.5 it
                                         // competed and took the thigh from 4.8 to 25.3 degrees.
                                         .weight = 0.15,
@@ -14895,7 +14895,7 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
         kinematics(m, d);
     }
 
-    // ★ Last, because it needs the posed shoulders: shift the root so their midpoint lands on
+    // * Last, because it needs the posed shoulders: shift the root so their midpoint lands on
     // the source's. A pure translation, so nothing above is disturbed.
     if (in.shoulder_bodies) |shoulders| {
         const left_human: i32 = in.human_of_body[shoulders[0]];
@@ -14935,7 +14935,7 @@ fn solveLimbHere(
     const human_middle: usize = firstChildJoint(in.human_parents, joint) orelse return false;
     const human_end: usize = firstChildJoint(in.human_parents, human_middle) orelse return false;
 
-    // ★ LENGTHS FROM THE ROBOT, positions from the capture — the rule this arc arrived at three
+    // * LENGTHS FROM THE ROBOT, positions from the capture - the rule this arc arrived at three
     // times over.
     const upper_length: f32 = vecLength(m.body_pos[middle]);
     const lower_length: f32 = vecLength(m.body_pos[end]);
@@ -14943,17 +14943,17 @@ fn solveLimbHere(
         return false;
     }
 
-    // ── ★★★ TARGETS RELATIVE TO THE SHOULDER, NOT ABSOLUTE ──
+    // -- *** TARGETS RELATIVE TO THE SHOULDER, NOT ABSOLUTE --
     //
-    // The robot's shoulder is NOT where the capture's is — the scorecard puts it 0.086 m off
+    // The robot's shoulder is NOT where the capture's is - the scorecard puts it 0.086 m off
     // before the torso's own placement error. **Aiming at the capture's absolute hand from the
     // robot's shoulder asks for a vector that includes that offset**, and the limb spends its
     // whole reach cancelling a torso error instead of making an arm shape.
     //
-    // ★★ Measured cost of getting this wrong: hand error 0.19-0.50 m became 0.43-0.74. The
-    // closed form was exact all along — it was being handed the wrong triangle.
+    // ** Measured cost of getting this wrong: hand error 0.19-0.50 m became 0.43-0.74. The
+    // closed form was exact all along - it was being handed the wrong triangle.
     //
-    // ★ The error METRIC in `ARM FOCUS` already measured relative to the shoulder, for exactly
+    // * The error METRIC in `ARM FOCUS` already measured relative to the shoulder, for exactly
     // this reason. **I applied the principle to the measurement and not to the target.**
     const shoulder: Vec = d.body_xpos[body];
     const capture_shoulder: Vec = in.positions[joint];
@@ -14965,7 +14965,7 @@ fn solveLimbHere(
         lower_length,
     );
 
-    // ── ★★★ WHY THE ANALYTIC TWO-BONE SOLVE CANNOT BE EXACT ON THIS SHOULDER ──
+    // -- *** WHY THE ANALYTIC TWO-BONE SOLVE CANNOT BE EXACT ON THIS SHOULDER --
     //
     // Isolated on a bare model, step by step:
     //
@@ -14975,11 +14975,11 @@ fn solveLimbHere(
     // The closed form assumes the arm has 2 DOF for the elbow's DIRECTION plus 1 for the bend,
     // with the bend PLANE free to choose. **A 2-DOF shoulder has no spare DOF for the plane**:
     // whatever two angles put the elbow on a direction also fix the hinge axis, so the plane is
-    // a CONSEQUENCE of the direction, not a choice. Asking for both costs the direction — the
-    // same trade measured at §13p and §21, now with the mechanism visible.
+    // a CONSEQUENCE of the direction, not a choice. Asking for both costs the direction - the
+    // same trade measured at section 13p and section 21, now with the mechanism visible.
     //
-    // ★★★ So "choose the elbow, then bend" is the WRONG DECOMPOSITION for this robot. The arm is
-    // still exactly determined — 3 DOF against a 3-number hand — but as a coupled 3x3 system,
+    // *** So "choose the elbow, then bend" is the WRONG DECOMPOSITION for this robot. The arm is
+    // still exactly determined - 3 DOF against a 3-number hand - but as a coupled 3x3 system,
     // which is what NUMERICAL IK on the hand position solves and a closed form cannot. The
     // shortest-arc aim is kept (elbow exact) and the hand is left to the solver.
     const local_bone: Vec = normalize3(m.body_pos[middle]);
@@ -14995,11 +14995,11 @@ fn solveLimbHere(
     const parent_world: Quat = d.body_xrot[m.body_parent[body]];
     _ = fitBodyRotation(m, d, body, qmul(conjugate(parent_world), world_target));
 
-    // ── ★★★ THE HINGE: SUBTRACT THE REST BEND, NO SIGN FLIP ──
+    // -- *** THE HINGE: SUBTRACT THE REST BEND, NO SIGN FLIP --
     //
     // Measured on a bare model: `bend = rest_bend + qpos`, and this elbow rests at 109.5
     // degrees. The earlier write here flipped the sign from the joint's range and wrote the
-    // flexion as an absolute — which is why two-bone was switched off as "the hand does not
+    // flexion as an absolute - which is why two-bone was switched off as "the hand does not
     // respond". It responded exactly to what it was given; what it was given was wrong.
     const hinge: usize = m.body_jnt_adr[middle];
     const range: [2]f32 = m.jnt_range[hinge] orelse .{ -3.14159, 3.14159 };
@@ -15029,19 +15029,19 @@ fn firstChildJoint(parents: []const i32, joint: usize) ?usize {
 
 /// Solve the robot into the source's rest pose, and return the configuration.
 ///
-/// ── ★★★ WHY THE ROBOT'S OWN `qpos0` IS NOT A USABLE REFERENCE ──
+/// -- *** WHY THE ROBOT'S OWN `qpos0` IS NOT A USABLE REFERENCE --
 ///
-/// `humanoid.xml`'s folds its arms up into a triangle — it is not a T-pose, and building twist
+/// `humanoid.xml`'s folds its arms up into a triangle - it is not a T-pose, and building twist
 /// offsets against it compares two DIFFERENT PHYSICAL POSES. Drawing the two settled in one
 /// glance what a scalar check ("hand at shoulder height") had confirmed wrongly, because a
 /// folded arm satisfies that too.
 ///
-/// ★★ **TARGETS USE THE SOURCE'S DIRECTIONS AND THE ROBOT'S OWN BONE LENGTHS.** Copying the
+/// ** **TARGETS USE THE SOURCE'S DIRECTIONS AND THE ROBOT'S OWN BONE LENGTHS.** Copying the
 /// source's joint POSITIONS asks the robot to match segment lengths it does not have: the elbow
 /// and hand targets then conflict and the solver bends an arm that should be straight. Every
 /// target built this way is exactly reachable.
 ///
-/// ★ `anchor_body` is the body whose target is pinned to its mapped source joint — the PELVIS,
+/// * `anchor_body` is the body whose target is pinned to its mapped source joint - the PELVIS,
 /// not the tree root. On `humanoid.xml` the root is the TORSO, and anchoring there lifts the
 /// whole figure by the height of a spine.
 ///
@@ -15092,7 +15092,7 @@ pub fn solveRestPoseFromSource(
             (source_bone / @as(Vec, @splat(source_length))) * @as(Vec, @splat(own_length));
     }
 
-    // ★ One translation so the ANCHOR body lands on its mapped joint. The shape is already
+    // * One translation so the ANCHOR body lands on its mapped joint. The shape is already
     // right by here; only the placement is wrong.
     if (anchor_body < m.nbody and human_of_body[anchor_body] >= 0) {
         const correction: Vec =
@@ -15102,18 +15102,18 @@ pub fn solveRestPoseFromSource(
         }
     }
 
-    // ── ★★ TRIED AND REVERTED: SETTING THE 1-DOF HINGES BEFORE SOLVING ──
+    // -- ** TRIED AND REVERTED: SETTING THE 1-DOF HINGES BEFORE SOLVING --
     //
     // The reasoning was sound: `lower_arm_left`'s twist offset is 91 degrees, which looked like
     // the T-pose solve's own residual, and an elbow's angle is a SCALAR the capture already
     // gives rather than something IK should search for.
     //
-    // ★★★ **MEASURED: NO HELP.** Torso 35.4 -> 36.5, worst twist 91 -> 100. So the forearm's
-    // residual is NOT the hinge being solved badly — it is the SHOULDER'S TWIST, which a
+    // *** **MEASURED: NO HELP.** Torso 35.4 -> 36.5, worst twist 91 -> 100. So the forearm's
+    // residual is NOT the hinge being solved badly - it is the SHOULDER'S TWIST, which a
     // position target on the elbow leaves completely free, and which then rotates the forearm
     // about the arm's axis.
     //
-    // ★ Reverted because it measured worse, however good the argument. **Fourth confident
+    // * Reverted because it measured worse, however good the argument. **Fourth confident
     // prediction refuted in three turns.**
 
     var task_count: usize = 0;
@@ -15125,18 +15125,18 @@ pub fn solveRestPoseFromSource(
         task_count += 1;
     }
 
-    // ── ★★★ LEAF BODIES NEED AN ORIENTATION TARGET, OR THEIR REST POSE IS ARBITRARY ──
+    // -- *** LEAF BODIES NEED AN ORIENTATION TARGET, OR THEIR REST POSE IS ARBITRARY --
     //
-    // Every task above is a body ORIGIN, so a leaf — a foot, a hand — is placed but never
+    // Every task above is a body ORIGIN, so a leaf - a foot, a hand - is placed but never
     // AIMED: nothing in this solve constrains which way it points, and the IK leaves it wherever
     // its damping happens to. **The resulting "rest orientation" is then not a reference at
     // all**, and any offset derived from it is noise.
     //
-    // ★★ Measured consequence: the robot's rest sole read 64.9 degrees from the capture's rest
-    // toe. Reading both in the same pose took it to 32.5. **The remaining 32.5 is this** — a
+    // ** Measured consequence: the robot's rest sole read 64.9 degrees from the capture's rest
+    // toe. Reading both in the same pose took it to 32.5. **The remaining 32.5 is this** - a
     // leaf that was never told where to face.
     //
-    // ★ Fixed with `point_local`: a point along the leaf's own geom, targeted at where the
+    // * Fixed with `point_local`: a point along the leaf's own geom, targeted at where the
     // capture's next joint sits relative to it, at the geom's own length. The leaf's ancestors
     // supply the DOF, exactly as they do in the animation.
     for (0..m.nbody) |body| {
@@ -15196,7 +15196,7 @@ pub fn solveRestPoseFromSource(
         previous = err;
     }
 
-    // ── ★★ TESTED AND REVERTED: CHOOSING THE TWIST WHERE A CHILD IS A HINGE ──
+    // -- ** TESTED AND REVERTED: CHOOSING THE TWIST WHERE A CHILD IS A HINGE --
     //
     //                         before   after
     //     arm DIRECTION        40.7     36.9   better
@@ -15205,16 +15205,16 @@ pub fn solveRestPoseFromSource(
     //     thigh DIRECTION      12.5     19.5   WORSE by 56%
     //     sum of angles       156.6    154.6   within noise
     //
-    // ★★★ **A TRADE, NOT A WIN.** Every ARM stage improved, which CONFIRMS the diagnosis: a
+    // *** **A TRADE, NOT A WIN.** Every ARM stage improved, which CONFIRMS the diagnosis: a
     // position target on the elbow leaves the shoulder's twist free, and choosing it helps.
-    // **But the legs — the best-performing part of the retarget — got 56% worse, for a sum gain
+    // **But the legs - the best-performing part of the retarget - got 56% worse, for a sum gain
     // inside the noise.**
     //
-    // ★ Restricting it to bodies with 2 DOF or fewer (a 3-DOF hip can already control its own
+    // * Restricting it to bodies with 2 DOF or fewer (a 3-DOF hip can already control its own
     // twist; a 2-DOF shoulder cannot) did NOT recover the legs: 19.4 against 19.5. So the
     // regression enters elsewhere in the spine/leg chain and is not yet understood.
     //
-    // ★★ Reverted because **"helps what I aimed at, hurts something better" is not a result to
+    // ** Reverted because **"helps what I aimed at, hurts something better" is not a result to
     // ship.** The hypothesis is now TESTED rather than untested, and the arm gains say it is
     // worth returning to once the leg path is understood.
     @memcpy(out_qpos, d.pos);
@@ -15232,21 +15232,21 @@ pub const TwoBoneSolution = struct {
 
 /// Solve a two-bone limb analytically: shoulder fixed, hand target given.
 ///
-/// ── ★★★ AN ARM IS EXACTLY DETERMINED, SO IT NEEDS NO SOLVER ──
+/// -- *** AN ARM IS EXACTLY DETERMINED, SO IT NEEDS NO SOLVER --
 ///
 /// Shoulder (2 DOF) + elbow (1 DOF) is THREE degrees of freedom, and a hand position is THREE
-/// numbers. **No weights, no iteration, no damping, and no free twist to argue about** — the one
+/// numbers. **No weights, no iteration, no damping, and no free twist to argue about** - the one
 /// remaining ambiguity is which PLANE the elbow bends in, and the capture answers that directly
 /// by saying where its own elbow is.
 ///
 /// Measured motivation: hand errors up to 0.50 m on an arm spanning 0.62 m, with every wanted
 /// reach comfortably inside that span. **The arm can get there and does not.**
 ///
-/// ★★ **EVERY LENGTH COMES FROM THE ROBOT, EVERY DIRECTION FROM THE CAPTURE.** That is the rule
+/// ** **EVERY LENGTH COMES FROM THE ROBOT, EVERY DIRECTION FROM THE CAPTURE.** That is the rule
 /// this arc arrived at three separate times; here it is applied to a whole limb at once.
 ///
-/// ★ `upper_length` and `lower_length` are the ROBOT's own bone lengths. `hand_target` and
-/// `elbow_hint` are the capture's, in the robot's frame — the hint only picks the plane, so its
+/// * `upper_length` and `lower_length` are the ROBOT's own bone lengths. `hand_target` and
+/// `elbow_hint` are the capture's, in the robot's frame - the hint only picks the plane, so its
 /// distance from the shoulder is irrelevant and its direction is all that is read.
 pub fn solveTwoBoneLimb(
     shoulder: Vec,
@@ -15259,7 +15259,7 @@ pub fn solveTwoBoneLimb(
     const reach: f32 = @sqrt(to_hand[0] * to_hand[0] + to_hand[1] * to_hand[1] +
         to_hand[2] * to_hand[2]);
 
-    // ★ A limb cannot be shorter than the difference of its bones nor longer than their sum.
+    // * A limb cannot be shorter than the difference of its bones nor longer than their sum.
     // Clamping INSIDE those bounds keeps the cosine in range without a special case, and the
     // caller is told when it happened rather than left to infer it.
     const minimum: f32 = @abs(upper_length - lower_length) + 1.0e-4;
@@ -15294,8 +15294,8 @@ pub fn solveTwoBoneLimb(
     );
     const swing: f32 = acosRad(swing_cosine);
 
-    // ★★ THE PLANE COMES FROM THE CAPTURE'S OWN MIDDLE JOINT. Without it the elbow could sit
-    // anywhere on a circle — which is precisely the free-twist ambiguity that has cost this arc
+    // ** THE PLANE COMES FROM THE CAPTURE'S OWN MIDDLE JOINT. Without it the elbow could sit
+    // anywhere on a circle - which is precisely the free-twist ambiguity that has cost this arc
     // four experiments. **The capture already knows the answer; it just was not being asked.**
     const to_hint: Vec = elbow_hint - shoulder;
     var normal: Vec = crossVec(to_hand, to_hint);
@@ -15320,9 +15320,9 @@ pub fn solveTwoBoneLimb(
 }
 
 test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach" {
-    // ── ★★★ THE DEFINING PROPERTY, AND IT IS AN EQUALITY ──
+    // -- *** THE DEFINING PROPERTY, AND IT IS AN EQUALITY --
     //
-    // An arm is 3 DOF and a hand position is 3 numbers, so a reachable target is met EXACTLY —
+    // An arm is 3 DOF and a hand position is 3 numbers, so a reachable target is met EXACTLY -
     // not minimised, not approached. **A least-squares solver cannot make this claim and this
     // construction can**, which is the whole reason to prefer it.
     const shoulder: Vec = vec(0.1, -0.2, 1.3);
@@ -15355,7 +15355,7 @@ test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach
         const lower_bone: Vec = target - solution.joint_position;
         try expectApproxEqAbs(lower, vecLength(lower_bone), 1.0e-3);
 
-        // ★ The flexion agrees with the bones it just placed — the angle is not an independent
+        // * The flexion agrees with the bones it just placed - the angle is not an independent
         // guess but a consequence of the same triangle.
         const measured: f32 = acosRad(clamp(
             (upper_bone[0] * lower_bone[0] + upper_bone[1] * lower_bone[1] +
@@ -15365,8 +15365,8 @@ test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach
         ));
         try expectApproxEqAbs(solution.flexion, measured, 1.0e-3);
 
-        // ★★ AND THE ELBOW IS ON THE HINT'S SIDE. Without the hint the elbow could sit anywhere
-        // on a circle about the shoulder-hand axis — the free-twist ambiguity, resolved here by
+        // ** AND THE ELBOW IS ON THE HINT'S SIDE. Without the hint the elbow could sit anywhere
+        // on a circle about the shoulder-hand axis - the free-twist ambiguity, resolved here by
         // asking the capture instead of the damping.
         const axis: Vec = normalize3(target - shoulder);
         const elbow_off_axis: Vec = removeComponentAlong(upper_bone, axis);
@@ -15380,7 +15380,7 @@ test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach
         }
     }
 
-    // ★ Out of reach: the limb extends toward the target and SAYS SO, rather than returning a
+    // * Out of reach: the limb extends toward the target and SAYS SO, rather than returning a
     // NaN from an out-of-range cosine or silently folding.
     const far: TwoBoneSolution =
         solveTwoBoneLimb(shoulder, shoulder + vec(3, 0, 0), shoulder + vec(1, 1, 0), upper, lower);
@@ -15391,22 +15391,22 @@ test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach
 
 /// The hinge coordinate that produces a given bend, for an axis not perpendicular to the bone.
 ///
-/// ── ★★★ `qpos` IS A COORDINATE, NOT AN ANGLE BETWEEN BONES ──
+/// -- *** `qpos` IS A COORDINATE, NOT AN ANGLE BETWEEN BONES --
 ///
 /// Measured on `humanoid.xml`: writing -90.9 degrees into `elbow_right` produces **18.6 degrees
-/// of actual bend.** Its axis is `(0,-1,1)` against a forearm at `(.18,-.18,-.18)` — diagonal
-/// against diagonal — and every heuristic in this arc assumed the two were the same number.
+/// of actual bend.** Its axis is `(0,-1,1)` against a forearm at `(.18,-.18,-.18)` - diagonal
+/// against diagonal - and every heuristic in this arc assumed the two were the same number.
 ///
-/// ★★ Rotating a bone about an axis it is NOT perpendicular to sweeps it around a CONE. With
+/// ** Rotating a bone about an axis it is NOT perpendicular to sweeps it around a CONE. With
 /// `gamma` the angle between axis and bone:
 ///
-///     cos(flexion) = cos²gamma + sin²gamma * cos(qpos)
+///     cos(flexion) = cos^2gamma + sin^2gamma * cos(qpos)
 ///
 /// which inverts to the expression below.
 ///
-/// ★★★ **RETURNS NULL WHEN THE BEND IS UNREACHABLE**, because `maximumFlexion` is `2*gamma` and
+/// *** **RETURNS NULL WHEN THE BEND IS UNREACHABLE**, because `maximumFlexion` is `2*gamma` and
 /// no coordinate achieves more. **A joint whose axis lies close to its own bone physically
-/// cannot fold**, whatever is written into it — and saying so beats clamping and pretending.
+/// cannot fold**, whatever is written into it - and saying so beats clamping and pretending.
 pub fn hingeAngleForFlexion(axis: Vec, bone: Vec, flexion: f32) ?f32 {
     const axis_length: f32 = vecLength(axis);
     const bone_length: f32 = vecLength(bone);
@@ -15436,8 +15436,8 @@ pub fn hingeAngleForFlexion(axis: Vec, bone: Vec, flexion: f32) ?f32 {
 
 /// The largest bend a hinge can produce, given its axis and the bone it moves.
 ///
-/// ★ `2 * gamma`, reached when the coordinate is a half turn. **This is a MODEL limit to state,
-/// not an error to chase** — the same class of fact as a 2-DOF shoulder being unable to aim and
+/// * `2 * gamma`, reached when the coordinate is a half turn. **This is a MODEL limit to state,
+/// not an error to chase** - the same class of fact as a 2-DOF shoulder being unable to aim and
 /// twist at once.
 pub fn maximumFlexion(axis: Vec, bone: Vec) f32 {
     const axis_length: f32 = vecLength(axis);
@@ -15460,7 +15460,7 @@ fn acos_cos(angle: f32) f32 {
 }
 
 test "hingeAngleForFlexion: the returned coordinate produces exactly the requested bend" {
-    // ── ★★★ THE ROUND TRIP, WHICH IS THE ONLY THING THAT MATTERS ──
+    // -- *** THE ROUND TRIP, WHICH IS THE ONLY THING THAT MATTERS --
     //
     // Rotate the bone by the returned coordinate about the axis, measure the angle it moved
     // through, and it must equal the flexion that was asked for. **This is what "qpos is not
@@ -15479,9 +15479,9 @@ test "hingeAngleForFlexion: the returned coordinate produces exactly the request
 
         var wanted: f32 = 0.15;
         while (wanted < limit - 0.05) : (wanted += 0.2) {
-            // ★ Skip rather than fail at the reachability edge: `limit` is exact and the loop
+            // * Skip rather than fail at the reachability edge: `limit` is exact and the loop
             // steps in 0.2 rad, so the last sample can land inside float noise of it. **The
-            // property under test is the ROUND TRIP, not the bound** — asserting both in one
+            // property under test is the ROUND TRIP, not the bound** - asserting both in one
             // loop conflates a real failure with an arithmetic edge, which is what the first
             // version did.
             const coordinate: f32 =
@@ -15497,7 +15497,7 @@ test "hingeAngleForFlexion: the returned coordinate produces exactly the request
             try expectApproxEqAbs(wanted, measured, 1.0e-3);
         }
 
-        // ★ Past the limit there is no coordinate — checked well clear of it, because a bend
+        // * Past the limit there is no coordinate - checked well clear of it, because a bend
         // just past a 180-degree limit wraps into the reachable range rather than exceeding it,
         // and asserting at `limit + 0.2` conflated "unreachable" with "wrapped".
         if (limit < 3.0) {
@@ -15505,29 +15505,29 @@ test "hingeAngleForFlexion: the returned coordinate produces exactly the request
         }
     }
 
-    // ★ A PERPENDICULAR axis must give back the identity mapping — the textbook case every
+    // * A PERPENDICULAR axis must give back the identity mapping - the textbook case every
     // heuristic in this arc assumed was universal.
     const straight: f32 = hingeAngleForFlexion(vec(0, 0, 1), vec(1, 0, 0), 0.7).?;
     try expectApproxEqAbs(@as(f32, 0.7), straight, 1.0e-4);
 
-    // ★ Axis along the bone bends nothing, whatever is written into it.
+    // * Axis along the bone bends nothing, whatever is written into it.
     try expect(hingeAngleForFlexion(vec(1, 0, 0), vec(1, 0, 0), 0.3) == null);
 }
 
 /// The rotation that carries one pair of directions onto another.
 ///
-/// ── ★★★ TWO DIRECTIONS FULLY DETERMINE AN ORIENTATION ──
+/// -- *** TWO DIRECTIONS FULLY DETERMINE AN ORIENTATION --
 ///
-/// A single bone direction leaves rotation ABOUT that bone free — the ambiguity that cost the
+/// A single bone direction leaves rotation ABOUT that bone free - the ambiguity that cost the
 /// retarget arc four experiments. Two non-parallel directions leave nothing free. For a torso
 /// the pair is obvious: the SPINE (up) and the SHOULDER AXIS (sideways). Match both and the
 /// torso is oriented, with no rest-pose algebra, no twist offsets and no chains.
 ///
-/// ★ Both pairs must be expressed in the SAME frame. Each is built into an orthonormal basis
+/// * Both pairs must be expressed in the SAME frame. Each is built into an orthonormal basis
 /// (`primary`, then the part of `secondary` perpendicular to it, then their cross), and the
 /// rotation is the one taking the first basis onto the second.
 ///
-/// ★ Returns identity when either pair is degenerate (parallel or zero), because a guess there
+/// * Returns identity when either pair is degenerate (parallel or zero), because a guess there
 /// would be a rotation about an axis nobody chose.
 pub fn rotationBetweenDirectionPairs(
     from_primary: Vec,
@@ -15543,9 +15543,9 @@ pub fn rotationBetweenDirectionPairs(
     const f: [3]Vec = from_basis.?;
     const t: [3]Vec = to_basis.?;
 
-    // R = T · Fᵀ, as a rotation matrix with columns; then to a quaternion.
-    // R[i][j] = Σ_k t[k][i] * f[k][j]   (T has columns t[k], Fᵀ has rows f[k])
-    // ★ Vec lanes need comptime indices, so the 3x3 is unrolled rather than looped.
+    // R = T * F^T, as a rotation matrix with columns; then to a quaternion.
+    // R[i][j] = sum_k t[k][i] * f[k][j]   (T has columns t[k], F^T has rows f[k])
+    // * Vec lanes need comptime indices, so the 3x3 is unrolled rather than looped.
     var r: [3][3]f32 = undefined;
     inline for (0..3) |i| {
         inline for (0..3) |j| {
@@ -15610,7 +15610,7 @@ fn quatFromRotationMatrix(r: [3][3]f32) Quat {
 }
 
 test "rotationBetweenDirectionPairs: carries BOTH directions onto their targets" {
-    // ── ★★★ THE PROPERTY IS AN EQUALITY ON TWO VECTORS AT ONCE ──
+    // -- *** THE PROPERTY IS AN EQUALITY ON TWO VECTORS AT ONCE --
     //
     // A single-direction alignment leaves twist free; this must fix it. So BOTH directions are
     // asserted after rotation, not just the primary.
@@ -15626,7 +15626,7 @@ test "rotationBetweenDirectionPairs: carries BOTH directions onto their targets"
         inline for (0..3) |axis| {
             try expectApproxEqAbs(want_primary[axis], got_primary[axis], 1.0e-3);
         }
-        // The secondary, projected perpendicular to the primary on both sides, must agree too —
+        // The secondary, projected perpendicular to the primary on both sides, must agree too -
         // that is the twist being fixed.
         const got_secondary: Vec = zm.rotate(q, c[1]);
         const want_side: [3]Vec = orthonormalBasis(c[2], c[3]).?;
@@ -15639,10 +15639,10 @@ test "rotationBetweenDirectionPairs: carries BOTH directions onto their targets"
 }
 
 test "resolveMatchTable: one table serves LAFAN1 and Mixamo skeletons" {
-    // ── ★★★ THE SAME TABLE, TWO NAMING CONVENTIONS ──
+    // -- *** THE SAME TABLE, TWO NAMING CONVENTIONS --
     //
     // LAFAN1's top spine joint is `Spine3`; **Mixamo's is `Spine2` and it has no `Spine3`.** A
-    // table naming one maps the robot's TORSO — its ROOT — to nothing on the other, and every
+    // table naming one maps the robot's TORSO - its ROOT - to nothing on the other, and every
     // downstream stage anchors on that body. **The failure would be total and silent-ish**: an
     // unmapped root, not a crash.
     const robot_bodies = [_][]const u8{ "world", "torso", "waist_lower", "foot_right" };
@@ -15662,18 +15662,18 @@ test "resolveMatchTable: one table serves LAFAN1 and Mixamo skeletons" {
 
     var mapped: [4]i32 = undefined;
     try resolveMatchTable(&table, &robot_bodies, &lafan, &mapped);
-    // ★ On LAFAN1 the PREFERRED name wins.
+    // * On LAFAN1 the PREFERRED name wins.
     try expect(mapped[1] == 4); // Spine3
     try expect(mapped[2] == 1); // Spine
     try expect(mapped[3] == 5); // RightFoot
 
     try resolveMatchTable(&table, &robot_bodies, &mixamo, &mapped);
-    // ★★ On Mixamo the first ALTERNATIVE wins, and nothing is left unmapped.
+    // ** On Mixamo the first ALTERNATIVE wins, and nothing is left unmapped.
     try expect(mapped[1] == 3); // Spine2, because Spine3 does not exist
     try expect(mapped[2] == 1);
     try expect(mapped[3] == 4);
 
-    // ★ Preference order is real knowledge, not an arbitrary list: `Spine3` before `Spine2`
+    // * Preference order is real knowledge, not an arbitrary list: `Spine3` before `Spine2`
     // before `Spine1` says which is highest up the chest. A skeleton with only `Spine1` still
     // resolves, one rung lower.
     const minimal = [_][]const u8{ "Hips", "Spine", "Spine1", "RightFoot" };
@@ -15682,14 +15682,14 @@ test "resolveMatchTable: one table serves LAFAN1 and Mixamo skeletons" {
 }
 
 test "lafan_to_humanoid resolves against a Mixamo skeleton, not just LAFAN1" {
-    // ── ★★★ THE REAL TABLE, NOT A TOY ONE ──
+    // -- *** THE REAL TABLE, NOT A TOY ONE --
     //
     // The previous test proved the MECHANISM with three rows. **This one proves the SHIPPED
     // table against a real Mixamo joint list**, because a mechanism that works on a toy and a
     // table that happens to name a joint Mixamo lacks would both pass the first test and fail
     // in the example.
     //
-    // ★ Mixamo's body joints, from `Drop_Kick.fbx` (fingers omitted — nothing maps to them).
+    // * Mixamo's body joints, from `Drop_Kick.fbx` (fingers omitted - nothing maps to them).
     const mixamo = [_][]const u8{
         "Hips",       "Spine",         "Spine1",       "Spine2",       "Neck",
         "Head",       "HeadTop",       "LeftShoulder", "LeftArm",      "LeftForeArm",
@@ -15715,12 +15715,12 @@ test "lafan_to_humanoid resolves against a Mixamo skeleton, not just LAFAN1" {
     }
 
     var mapped: [64]i32 = undefined;
-    // ★★★ The assertion is simply that it RESOLVES. On the shipped example a failure here sets
-    // `show_robot = false` and prints a status — **the robot would vanish rather than look
+    // *** The assertion is simply that it RESOLVES. On the shipped example a failure here sets
+    // `show_robot = false` and prints a status - **the robot would vanish rather than look
     // wrong**, which is a failure mode easy to mistake for a rendering problem.
     try resolveMatchTable(&lafan_to_humanoid, robot_names[0..robot_count], &mixamo, mapped[0..robot_count]);
 
-    // ★ And that nothing is left unmapped: an unmapped ROOT would anchor the whole figure on
+    // * And that nothing is left unmapped: an unmapped ROOT would anchor the whole figure on
     // nothing, which is exactly the near-silent failure this table's alternatives exist to stop.
     for (0..robot_count) |i| {
         try expect(mapped[i] >= 0);
@@ -15729,10 +15729,10 @@ test "lafan_to_humanoid resolves against a Mixamo skeleton, not just LAFAN1" {
 
 /// One point on a robot body, and where the capture says it should be.
 ///
-/// ── ★★★ THE WHOLE RETARGET IS "MATCH THESE POINTS" ──
+/// -- *** THE WHOLE RETARGET IS "MATCH THESE POINTS" --
 ///
 /// One point per body gives POSITION, two give DIRECTION, three give TWIST. Aiming a bone at its
-/// child, a twist offset, a two-bone limb, a bend plane — each is a special case of matching
+/// child, a twist offset, a two-bone limb, a bend plane - each is a special case of matching
 /// enough points, so the retarget matches points and nothing else.
 pub const PointSample = struct {
     body: usize,
@@ -15749,7 +15749,7 @@ pub const PointSample = struct {
     /// The ROBOT body whose retargeted position is this sample's target.
     target_body: ?usize = null,
     /// The residual is on the DIFFERENCE between this point and `relative_local` on the same
-    /// body — a rotation statement rather than two positions that imply one.
+    /// body - a rotation statement rather than two positions that imply one.
     relative_local: ?Vec = null,
     weight: f32,
 };
@@ -15759,13 +15759,13 @@ pub const PointCloudOptions = struct {
     /// The capture's joint positions and rotations for this frame, already in the robot's frame.
     positions: []const Vec,
     rotations: []const Quat,
-    /// Retargeted joint positions — the capture's DIRECTIONS at the robot's OWN bone lengths.
+    /// Retargeted joint positions - the capture's DIRECTIONS at the robot's OWN bone lengths.
     retargeted: []const Vec,
     /// Where the root body should start, before solving.
     root_world: ?Vec = null,
     /// 0 takes targets from `retargeted`, 1 from `positions`.
     ///
-    /// ★★ **The dial between SHAPE and PLACE.** 1.0 is right when the robot's proportions match
+    /// ** **The dial between SHAPE and PLACE.** 1.0 is right when the robot's proportions match
     /// the capture's; a mismatched robot cannot reach the capture's joints and wants less.
     position_pull: f32 = 1.0,
     /// Continuity: the previous frame's configuration, and how hard to hold it.
@@ -15780,13 +15780,13 @@ pub const PointCloudOptions = struct {
 
 /// Pose the robot for one frame by a single point-cloud solve.
 ///
-/// ── ★★★ ONE SOLVE ──
+/// -- *** ONE SOLVE --
 ///
 /// No masks, no sequence, no rest-pose algebra, no aim rule, no bend-plane rule, no hinge
 /// formula. Sample points, a soft limit barrier so a wall is a SLOPE rather than a cliff, and a
 /// posture term so redundant DOF stay put between frames.
 ///
-/// It lives in the library, and every caller — the retarget, the examples, the tests — runs this
+/// It lives in the library, and every caller - the retarget, the examples, the tests - runs this
 /// one function, so what is measured is what ships.
 pub fn solvePointCloud(
     m: *const Model,
@@ -15794,10 +15794,10 @@ pub fn solvePointCloud(
     samples: []const PointSample,
     opts: PointCloudOptions,
 ) void {
-    // ── ★★★ PRECONDITIONS ARE CHECKED, NEVER CLAMPED ──
+    // -- *** PRECONDITIONS ARE CHECKED, NEVER CLAMPED --
     //
-    // This used to size its work with `@min(samples.len, tasks.len)` — the silent clamp that once
-    // left two thirds of a robot without targets for a whole take — and to skip a sample whose
+    // This used to size its work with `@min(samples.len, tasks.len)` - the silent clamp that once
+    // left two thirds of a robot without targets for a whole take - and to skip a sample whose
     // capture joint was out of range with a bare `continue`. The skip was worse than a drop: it
     // left `tasks[i]` holding the PREVIOUS frame's target, which the solve still consumed. And a
     // `human_parent` bounds guard sat two lines above an unguarded dereference of the same index.
@@ -15817,7 +15817,7 @@ pub fn solvePointCloud(
     );
     @memcpy(d.pos[0..m.nq], m.qpos0[0..m.nq]);
     if (opts.root_world) |world| {
-        // ★ Three position coordinates are written at joint 0's address, which is only the root's
+        // * Three position coordinates are written at joint 0's address, which is only the root's
         // translation when joint 0 is a free joint. On a fixed-base robot they would overwrite the
         // first three hinge angles.
         const root_is_free: bool = m.jnt_type.len > 0 and m.jnt_type[0] == .free;
@@ -15833,7 +15833,7 @@ pub fn solvePointCloud(
     kinematics(m, d);
     comPos(m, d);
 
-    // ★ An EMPTY `retargeted` is a deliberate caller choice — targets then come from the capture's
+    // * An EMPTY `retargeted` is a deliberate caller choice - targets then come from the capture's
     // own joints. Only a slice that exists but stops short of a sample's body is an error.
     const retargeted_given: bool = opts.retargeted.len > 0;
     for (samples, 0..) |sample, i| {
@@ -15864,7 +15864,7 @@ pub fn solvePointCloud(
                 "solvePointCloud: sample {d} has parent joint {d} of {d}",
                 .{ i, parent_joint, opts.positions.len },
             );
-            // ★ Direction from the capture, length from the robot: exactly reachable.
+            // * Direction from the capture, length from the robot: exactly reachable.
             const bone: Vec = opts.positions[sample.human] - opts.positions[parent_joint];
             const bone_has_direction: bool = vecLength(bone) > 1.0e-5;
             if (bone_has_direction) {
@@ -15916,13 +15916,13 @@ pub const SampleBuildInputs = struct {
     /// The robot's own body orientations in the SOLVED rest pose.
     robot_rest_rotations: []const Quat,
     body_names: []const []const u8,
-    /// Bodies whose name contains this weigh double — hands, feet, head.
+    /// Bodies whose name contains this weigh double - hands, feet, head.
     ///
-    /// ★ A hand and a foot PLACE the body; a forearm's midpoint is a shape detail.
+    /// * A hand and a foot PLACE the body; a forearm's midpoint is a shape detail.
     extremity_weight: f32 = 2.0,
     /// Bodies whose name contains "arm" weigh this much more.
     ///
-    /// ★★ The arm's proportions differ most from a capture's, so its residuals stay largest and
+    /// ** The arm's proportions differ most from a capture's, so its residuals stay largest and
     /// **a sum-minimising solve spends them to buy cheaper gains elsewhere.** Weight is the only
     /// lever that says "this one matters".
     arm_weight: f32 = 2.0,
@@ -15931,23 +15931,23 @@ pub const SampleBuildInputs = struct {
     /// Drop a leaf's samples when its target misses its own point at the REST pose by more than
     /// this. Zero disables the check.
     ///
-    /// ★★ **At rest both figures depict the same pose**, so a miss there is a wrong
+    /// ** **At rest both figures depict the same pose**, so a miss there is a wrong
     /// correspondence rather than a hard one. 0.1 m separates the head (0.03) from the hands
     /// (0.40) with room on both sides.
     rest_check: f32 = 0.1,
     /// The shoulder-axis relative constraint. **Two independent shoulder targets leave a FLAT
-    /// direction in the objective** — pushing one forward and the other back costs what rotating
-    /// correctly costs — and a residual on the DIFFERENCE removes it. A nudge, not a command:
+    /// direction in the objective** - pushing one forward and the other back costs what rotating
+    /// correctly costs - and a residual on the DIFFERENCE removes it. A nudge, not a command:
     /// at 2.0 it dominated and the worst pop rose from 65 to 89.
     shoulder_axis_weight: f32 = 0.1,
 };
 
 /// Build the sample set for a robot and a capture. Returns how many were written.
 ///
-/// ── ★★★ THE SAMPLE RULE ──
+/// -- *** THE SAMPLE RULE --
 ///
 ///     a body needs THREE NON-COLLINEAR SAMPLES to be fully oriented
-///     and the DOF to use them — from its own joints OR FROM ANY ANCESTOR
+///     and the DOF to use them - from its own joints OR FROM ANY ANCESTOR
 ///
 /// With one sample a body can spin about any axis through it; with two, or with collinear ones,
 /// it can still twist about their line. And the DOF that can use a sample are not only the
@@ -15959,8 +15959,8 @@ pub fn buildPointSamples(
     out: []PointSample,
 ) usize {
     var n: usize = 0;
-    // ★★ RUNNING OUT OF ROOM IS REPORTED, NOT ABSORBED. Each capacity guard below used to be folded
-    // into a skip condition, so a short `out` silently dropped whole bodies' samples — the shape of
+    // ** RUNNING OUT OF ROOM IS REPORTED, NOT ABSORBED. Each capacity guard below used to be folded
+    // into a skip condition, so a short `out` silently dropped whole bodies' samples - the shape of
     // the bug that once left two thirds of a robot without targets. The guards still stop before
     // an out-of-bounds write; they now also say that they did, in the assert before `return`.
     var out_of_room: bool = false;
@@ -15997,7 +15997,7 @@ pub fn buildPointSamples(
             };
             n += 1;
 
-            // ★★ Off-axis points only where a twist is reachable — **through the CHAIN, not
+            // ** Off-axis points only where a twist is reachable - **through the CHAIN, not
             // only through this body's own joint.** The elbow's one hinge cannot roll the
             // forearm; the shoulder can roll the whole arm.
             var chain_dof: usize = 0;
@@ -16043,23 +16043,23 @@ pub fn buildPointSamples(
         }
     }
 
-    // ── ★★★ LEAF BODIES: HEEL, TOE AND ONE ABOVE, IN THE CAPTURE'S ANKLE FRAME ──
+    // -- *** LEAF BODIES: HEEL, TOE AND ONE ABOVE, IN THE CAPTURE'S ANKLE FRAME --
     //
     // **A joint is not a contact point.** A capture's ankle sits inside the leg, above and behind
-    // the heel, so matching it to a foot's ORIGIN is wrong — and a 24-degree pitch, an
+    // the heel, so matching it to a foot's ORIGIN is wrong - and a 24-degree pitch, an
     // always-level rule and a contact blend were all built to compensate for that before the
     // correspondence itself was fixed.
     //
-    // ★★★ The rest pose states the offsets exactly, because the figure stands FLAT there: heel
+    // *** The rest pose states the offsets exactly, because the figure stands FLAT there: heel
     // and toe are both ON the floor. Project the ankle and the toe joint down and record the
     // results in the ankle's own frame. **Constants, measured once.**
     //
-    // ★★ Per frame they ride the capture's ankle rotation, so a flat foot lands flat and a
-    // pointed one lifts its heel. **No rule, no threshold, no blend — the capture's own foot
+    // ** Per frame they ride the capture's ankle rotation, so a flat foot lands flat and a
+    // pointed one lifts its heel. **No rule, no threshold, no blend - the capture's own foot
     // does it.**
     //
-    // ★ The third point sits ABOVE the ankle. Three non-collinear points pin the full
-    // orientation including ROLL, which two cannot — and the roll is reachable through the LEG
+    // * The third point sits ABOVE the ankle. Three non-collinear points pin the full
+    // orientation including ROLL, which two cannot - and the roll is reachable through the LEG
     // even though the ankle's two DOF cannot supply it alone.
     var ground_height: f32 = 1.0e9;
     for (in.rest_positions) |p| {
@@ -16092,68 +16092,68 @@ pub fn buildPointSamples(
                 far = m.geom_pos[g] * @as(Vec, @splat(2.0));
             }
         }
-        // ── ★★ A SPHERE HAS NO DIRECTION — and an ARBITRARY axis is not a substitute ──
+        // -- ** A SPHERE HAS NO DIRECTION - and an ARBITRARY axis is not a substitute --
         //
         // The head's geom is a sphere centred on the body origin, so `geom_pos` is zero and
         // there is nothing to point with. Same for the hands. **That is why the head kept ONE
         // sample after the no-tip fix**: that fix assumed every leaf has an off-centre geom.
         //
-        // ★★★ Tried: substitute a fixed offset along local X and carry it through the rest-pose
-        // correspondence like a geom point. **Measured MUCH worse** — torso 4.3 -> 64.6, arm
-        // 10.7 -> 140.4, forearm 2.8 -> 128.2 — because at weight 1.5 an axis that means nothing
+        // *** Tried: substitute a fixed offset along local X and carry it through the rest-pose
+        // correspondence like a geom point. **Measured MUCH worse** - torso 4.3 -> 64.6, arm
+        // 10.7 -> 140.4, forearm 2.8 -> 128.2 - because at weight 1.5 an axis that means nothing
         // physically outweighs every sample that does.
         //
-        // ★★ The correspondence was not the problem; **the CHOICE of axis was.** A head's
+        // ** The correspondence was not the problem; **the CHOICE of axis was.** A head's
         // orientation is real information and the capture carries it in `rest_rotations`, but it
         // has to enter with a weight and a direction that mean something. **That is a design
         // question, not a fallback**, and it is left open rather than answered with a constant.
-        // ── ★★★ A SPHERE HAS NO DIRECTION — BUT THE BONE DOES ──
+        // -- *** A SPHERE HAS NO DIRECTION - BUT THE BONE DOES --
         //
         // The head's geom is a sphere centred on the body origin, so `geom_pos` is zero and
         // there is nothing to point with; the hands are the same. **That is why they kept ONE
         // sample**: a position, with orientation unconstrained.
         //
-        // ★★ A first attempt substituted an arbitrary axis and measured catastrophically worse
-        // (torso 4.3 -> 64.6, arm 10.7 -> 140.4) — **at a high weight, an axis that means nothing
+        // ** A first attempt substituted an arbitrary axis and measured catastrophically worse
+        // (torso 4.3 -> 64.6, arm 10.7 -> 140.4) - **at a high weight, an axis that means nothing
         // physically outweighs every sample that does.**
         //
-        // ★★ Second attempt: use `body_pos[b]`, the bone from this body's PARENT — a real
+        // ** Second attempt: use `body_pos[b]`, the bone from this body's PARENT - a real
         // direction, the same quantity the interior bodies use. **Also much worse** (torso 4.3 ->
         // 56.2, forearm 2.8 -> 118.4), even at weight 0.4.
         //
-        // ★★★ So the axis was not the whole problem. The no-tip branch places its two points at
-        // `ankle ± rotate(robot_rest_rotations[b], far)` — **a ROBOT-frame direction applied at
+        // *** So the axis was not the whole problem. The no-tip branch places its two points at
+        // `ankle +/- rotate(robot_rest_rotations[b], far)` - **a ROBOT-frame direction applied at
         // the CAPTURE's joint.** That is only a valid correspondence where the two rest
         // orientations agree, and for a head or a hand they do not: the foot case escapes it
         // because heel and toe are floor PROJECTIONS, which live in the world and need no frame
         // at all.
         //
-        // ★★★ MEASURED, and it refutes the guess for the HEAD: rest-frame disagreement is
+        // *** MEASURED, and it refutes the guess for the HEAD: rest-frame disagreement is
         //
         //     torso 0.0   head 0.0   foot 4.7   **hand 90.0**
         //
-        // The head's frames AGREE. **The hands are 90 degrees apart** — and both attempts applied
+        // The head's frames AGREE. **The hands are 90 degrees apart** - and both attempts applied
         // the construction to head and hands together, so the hands alone were enough to wreck
         // the solve.
         //
-        // ★★ So the criterion is not "does this body have a geom" but **"do the two rest frames
-        // agree?"** — a number, checkable per body, that says exactly where a frame-mixing
+        // ** So the criterion is not "does this body have a geom" but **"do the two rest frames
+        // agree?"** - a number, checkable per body, that says exactly where a frame-mixing
         // construction is sound. The head passes it; the hands do not and need their own
         // correspondence.
         //
-        // ★ Left unimplemented rather than approximated a third time, but the next attempt has a
+        // * Left unimplemented rather than approximated a third time, but the next attempt has a
         // test to gate on rather than a hypothesis.
         var leaf_weight: f32 = 1.5;
         if (far_length < 1.0e-5) {
-            // ★★★ THE CRITERION, MEASURED RATHER THAN GUESSED: this branch carries a ROBOT-frame
+            // *** THE CRITERION, MEASURED RATHER THAN GUESSED: this branch carries a ROBOT-frame
             // offset into the CAPTURE joint's frame, which is sound only where the two rest
             // orientations agree. Measured on `humanoid_flex2` against Geno:
             //
             //     torso 0.0   head 0.0   foot 4.7   **hand 90.0**
             //
             // **The head passes and the hands do not**, and both earlier attempts applied it to
-            // all three at once — the hands alone wrecked the solve while the head was innocent.
-            // ★★★ THREE ATTEMPTS, THREE FAILURES, AND THE THIRD RULES OUT THE SECOND DIAGNOSIS.
+            // all three at once - the hands alone wrecked the solve while the head was innocent.
+            // *** THREE ATTEMPTS, THREE FAILURES, AND THE THIRD RULES OUT THE SECOND DIAGNOSIS.
             //
             //     1. an arbitrary local axis           torso 4.3 -> 64.6   forearm 2.8 -> 140.4
             //     2. `body_pos`, the parent bone       torso 4.3 -> 56.2   forearm 2.8 -> 118.4
@@ -16161,42 +16161,42 @@ pub fn buildPointSamples(
             //        convention that makes every body's absolute rest orientations differ by
             //        ~90 degrees                       **identical to attempt 2, to the decimal**
             //
-            // ★★ Identical output from a changed composition is the no-op signature this project
+            // ** Identical output from a changed composition is the no-op signature this project
             // knows well: either the transform is near-identity in this configuration, or the
             // targets were never the thing going wrong. **Both attempts 2 and 3 produce the same
-            // numbers, so the frame convention is NOT the cause** — which retires the only
+            // numbers, so the frame convention is NOT the cause** - which retires the only
             // diagnosis that survived measurement.
             //
-            // ★ Held OFF. The alternative is a construction that measures 20x worse for reasons
+            // * Held OFF. The alternative is a construction that measures 20x worse for reasons
             // not yet understood, and **a known gap beats a wrong fix**: the head and hands are
             // unconstrained in orientation, printed every run by the under-sampling assertion.
-            // ★★★ With the floor branch guarded, the no-tip construction was judged on its own
-            // for the first time: **torso 56.2 -> 5.5, arm 13.5 -> 5.1** — the head is fixed and
+            // *** With the floor branch guarded, the no-tip construction was judged on its own
+            // for the first time: **torso 56.2 -> 5.5, arm 13.5 -> 5.1** - the head is fixed and
             // the regression was never about frames at all.
             //
-            // ★★ But the FOREARM goes 2.8 -> 20.7 and the arm 10.7 -> 16.9, because the same
+            // ** But the FOREARM goes 2.8 -> 20.7 and the arm 10.7 -> 16.9, because the same
             // branch now also fires for the HANDS, whose rest frames are the ones genuinely 90
-            // degrees out. **One construction, two bodies, opposite outcomes** — so it stays off
+            // degrees out. **One construction, two bodies, opposite outcomes** - so it stays off
             // until the hands have a correspondence of their own, and the head keeps its single
             // sample.
             //
-            // ★ The floor guard is kept regardless: **it is a real bug** independent of this
+            // * The floor guard is kept regardless: **it is a real bug** independent of this
             // switch, and it was projecting head targets 1.5 m into the ground for any caller
             // that enabled the branch.
             const agreement: f32 = 1.0;
             //
-            // ★★★ AND THE CRITERION USES A DIFFERENT QUANTITY THAN THE ONE MEASURED. The 0.0
+            // *** AND THE CRITERION USES A DIFFERENT QUANTITY THAN THE ONE MEASURED. The 0.0
             // degrees reported for the head came from `body_xrot` at `qpos0`; this reads
             // `robot_rest_rotations`, which is the SOLVED rest pose. **They are not the same
             // orientation**, and the head fails here while passing there.
             //
-            // ★★ Which is the same error as the diagnosis it was written to fix: *measure the
-            // thing the claim is about.* Three times in one session — the foot pitch, the
+            // ** Which is the same error as the diagnosis it was written to fix: *measure the
+            // thing the claim is about.* Three times in one session - the foot pitch, the
             // frame-disagreement guess, and now the criterion itself. **The lesson is not that
             // measurement is good; it is that a measurement of an ADJACENT quantity is worth
             // nothing.**
             //
-            // ★ Left as-is: the construction stays off for every no-tip leaf, which is the
+            // * Left as-is: the construction stays off for every no-tip leaf, which is the
             // status quo and measurably safe. **The next attempt should decide FIRST which
             // orientation the construction actually consumes, then measure that one.**
             if (agreement < 0.87) {
@@ -16213,21 +16213,21 @@ pub fn buildPointSamples(
         const ankle: Vec = in.rest_positions[hb];
         const into_ankle: Quat = conjugate(in.rest_rotations[hb]);
 
-        // ── ★★★ A LEAF WITH NO TIP JOINT STILL HAS A REST POSE ──
+        // -- *** A LEAF WITH NO TIP JOINT STILL HAS A REST POSE --
         //
         // A foot has `ToeBase` beyond it and its heel and toe can be projected to the floor. **A
-        // HEAD has nothing beyond it** — LAFAN1 ends there — so the floor construction has no
+        // HEAD has nothing beyond it** - LAFAN1 ends there - so the floor construction has no
         // second point and the head got ONE sample: a position, with its orientation
         // unconstrained. The robot's head could face anywhere the solve found convenient.
         //
-        // ★★★ But the third point never needed a tip joint: it records the ROBOT's own geom
+        // *** But the third point never needed a tip joint: it records the ROBOT's own geom
         // offset in the CAPTURE joint's frame, measured once at the rest pose. **That works for
         // any leaf.** So when there is no tip, take three geom-derived points instead of the
         // heel/toe pair, and the same rest-pose correspondence carries them.
         //
-        // ★ Same principle as everywhere else in this system: **state the correspondence once,
+        // * Same principle as everywhere else in this system: **state the correspondence once,
         // at rest, and never decide it again.**
-        // ── ★★★ THE FLOOR PROJECTION IS ONLY FOR BODIES ON THE FLOOR ──
+        // -- *** THE FLOOR PROJECTION IS ONLY FOR BODIES ON THE FLOOR --
         //
         // Printed the targets instead of arguing about frames, and the answer was immediate:
         //
@@ -16235,11 +16235,11 @@ pub fn buildPointSamples(
         //     head[70]  target z = 0.011  <- the FLOOR    miss 1.650 m
         //
         // **The head was being treated as a foot.** `firstChildJoint` finds a child for it, so it
-        // took the heel/toe branch and its two targets were projected to the ground — 1.5 m below
+        // took the heel/toe branch and its two targets were projected to the ground - 1.5 m below
         // where a head is. That is the whole 20x regression, and no amount of reasoning about
         // rest frames could have reached it.
         //
-        // ★★ The guard is physical, not structural: **a heel and a toe are on the ground because
+        // ** The guard is physical, not structural: **a heel and a toe are on the ground because
         // the BODY is on the ground.** A body resting a metre and a half up is not a foot,
         // whatever its joint topology looks like.
         const near_ground: bool = (in.rest_positions[hb][2] - ground_height) < 0.25;
@@ -16247,9 +16247,9 @@ pub fn buildPointSamples(
             const t: usize = firstChildJoint(in.human_parents, hb) orelse break :blk null;
             break :blk if (t < in.rest_positions.len) t else null;
         };
-        // ★★★ THE OFFSET CARRIED THROUGH THE **RELATIVE** TRANSFORM, not the robot's rotation
+        // *** THE OFFSET CARRIED THROUGH THE **RELATIVE** TRANSFORM, not the robot's rotation
         // applied raw in the capture's world. Geno faces +Z and the robot faces +X, so every
-        // body's absolute rest orientations differ by a constant ~90 degrees — **a CONVENTION,
+        // body's absolute rest orientations differ by a constant ~90 degrees - **a CONVENTION,
         // not a disagreement.** Two attempts placed these points with that yaw uncancelled and
         // both measured 20x worse.
         const carried: Vec = zm.rotate(
@@ -16266,7 +16266,7 @@ pub fn buildPointSamples(
             ankle - carried;
         const above: Vec = ankle + vec(0, 0, vecLength(far));
 
-        // ★ With a tip the first point is the body ORIGIN (the heel); without one it is the
+        // * With a tip the first point is the body ORIGIN (the heel); without one it is the
         // geom's far end, because there is no floor projection to anchor an origin against.
         out[n] = .{
             .body = b,
@@ -16293,23 +16293,23 @@ pub fn buildPointSamples(
         };
         n += 1;
 
-        // ── ★★★ CHECK THE CORRESPONDENCE AGAINST THE REST POSE ITSELF ──
+        // -- *** CHECK THE CORRESPONDENCE AGAINST THE REST POSE ITSELF --
         //
         // **At the rest pose both figures depict the same pose by definition.** So a sample whose
-        // target does not land on its own point THERE has a broken correspondence — not a
+        // target does not land on its own point THERE has a broken correspondence - not a
         // difficult one, a wrong one. Printed for the two leaves that differ:
         //
         //     head[69..71]      miss 0.03 m     correspondence is right
         //     hand_right[78,79] miss 0.40 m     correspondence is WRONG
         //
-        // ★★★ Which is why one construction helped the head (torso 56 -> 5.5) and wrecked the
+        // *** Which is why one construction helped the head (torso 56 -> 5.5) and wrecked the
         // hands (forearm 2.8 -> 20.7) in the same run. **The difference is measurable from the
         // rest pose alone**, so it needs no name list and no per-body table.
         //
-        // ★★ This is the system's own principle turned into a self-check: *state the
-        // correspondence once at rest* — and if it does not hold at rest, do not use it.
-        // ★ Skips itself when the caller has not supplied the robot's rest POSITIONS. **A check
-        // that traps when its input is missing is worse than no check** — the example called this
+        // ** This is the system's own principle turned into a self-check: *state the
+        // correspondence once at rest* - and if it does not hold at rest, do not use it.
+        // * Skips itself when the caller has not supplied the robot's rest POSITIONS. **A check
+        // that traps when its input is missing is worse than no check** - the example called this
         // without them and the smoke test died inside the solve rather than reporting a gap.
         if (in.rest_check > 0 and b < in.rest_positions_robot.len) {
             var k: usize = n - 3;
@@ -16319,7 +16319,7 @@ pub fn buildPointSamples(
                 const on_robot: Vec = in.rest_positions_robot[b] +
                     zm.rotate(in.robot_rest_rotations[b], out[k].local);
                 if (vecLength(target - on_robot) > in.rest_check) {
-                    // ★ Drop all three: they are one construction, and two thirds of a broken
+                    // * Drop all three: they are one construction, and two thirds of a broken
                     // correspondence is not better than none.
                     n -= 3;
                     break;
@@ -16329,9 +16329,9 @@ pub fn buildPointSamples(
         }
     }
 
-    // ── ★★★ WEIGHTS THAT MEAN SOMETHING ──
+    // -- *** WEIGHTS THAT MEAN SOMETHING --
     //
-    // ★★ NORMALISE PER BODY first: a body with four samples would otherwise pull four times as
+    // ** NORMALISE PER BODY first: a body with four samples would otherwise pull four times as
     // hard as one with a single sample, so influence would be set by an accident of CHILD COUNT.
     var per_body: [128]f32 = undefined;
     const body_limit: usize = @min(m.nbody, per_body.len);
@@ -16383,7 +16383,7 @@ pub const CaptureFrame = struct {
 
 /// The scale taking a capture's units to the robot's metres.
 ///
-/// ── ★★★ POSE-INVARIANT, UNIT-CANCELLING, ANATOMY-MATCHED ──
+/// -- *** POSE-INVARIANT, UNIT-CANCELLING, ANATOMY-MATCHED --
 ///
 /// Four wrong answers preceded this, each missing one of those three properties:
 ///
@@ -16392,11 +16392,11 @@ pub const CaptureFrame = struct {
 ///     total bone length                              65-78 capture joints against 18 bodies
 ///     **mapped pairs only**                          same anatomy on both sides
 ///
-/// ★★★ The third is the subtle one: summing every capture bone counts fingers, toe joints and a
+/// *** The third is the subtle one: summing every capture bone counts fingers, toe joints and a
 /// five-link spine the robot does not have, inflating the capture's total by 1.7x. **A ratio
 /// between two different anatomies is not a scale.**
 ///
-/// ★★ Bone lengths rather than heights because a crouch must not change the scale; measured from
+/// ** Bone lengths rather than heights because a crouch must not change the scale; measured from
 /// the very array the scale multiplies so the unit cancels; over mapped pairs only so both sides
 /// describe the same anatomy. **All three are required and each earlier attempt had some.**
 pub fn captureScale(m: *const Model, frame: CaptureFrame) f32 {

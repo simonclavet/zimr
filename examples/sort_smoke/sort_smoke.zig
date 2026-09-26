@@ -1,12 +1,12 @@
-//! sort_smoke — does the counting sort actually sort?
+//! sort_smoke - does the counting sort actually sort?
 //!
 //! `fluid_sort` renders a fluid that will not settle and whose particles lock into rows. Every
 //! kernel READS correctly, so the argument has been going in circles. This example stops
 //! arguing: it runs the same five kernels over 64 particles whose right answer can be worked
 //! out by hand, and it CHECKS each stage.
 //!
-//! It does it twice. kompute compiles one kernel source for two targets — plain Zig on `.cpu`,
-//! SPIR-V→WGSL on `.gpu` — so:
+//! It does it twice. kompute compiles one kernel source for two targets - plain Zig on `.cpu`,
+//! SPIR-V->WGSL on `.gpu` - so:
 //!
 //!   * CPU passes, GPU fails  ->  the toolchain (transpiler or driver) is wrong.
 //!   * both fail the same way ->  the ALGORITHM is wrong, and no transpiler fix will save it.
@@ -48,7 +48,7 @@ const State = struct {
     all_ok: bool = true,
 
     // The GPU half cannot be checked inside `init`: `readLatest` on the `.gpu` backend is
-    // ASYNCHRONOUS — it starts a staging copy and returns null until the map completes, a
+    // ASYNCHRONOUS - it starts a staging copy and returns null until the map completes, a
     // few frames later. (The first cut of this test called it immediately and got four
     // "NO READBACK" lines that said nothing about the kernels.) So keep the pipe, dispatch
     // once, and poll each frame until the data actually arrives.
@@ -129,7 +129,7 @@ fn checkStages(
     truth: *const Truth,
 ) bool {
     if (pipe.readLatest(.counts) == null) {
-        return false; // readback not ready yet — try again next frame
+        return false; // readback not ready yet - try again next frame
     }
 
     // ---- stage 1: countGrid must reproduce the histogram exactly.
@@ -167,7 +167,7 @@ fn checkStages(
     }
 
     // ---- stage 4: after copyback, pos MUST be ordered by cell, and each cell's particles
-    // must lie exactly within [starts[c], starts[c+1]) — the invariant every neighbour walk
+    // must lie exactly within [starts[c], starts[c+1]) - the invariant every neighbour walk
     // in the fluid depends on.
     if (pipe.readLatest(.pos)) |pos| {
         var last: u32 = 0;
@@ -194,8 +194,8 @@ fn checkStages(
     if (pipe.readLatest(.pos)) |pos_all| {
         const pos: []const Vec2 = pos_all[0..@min(pos_all.len, sm.n_particles)];
         // ---- stage 6: THE DENSITY ARITHMETIC. The neighbour SET is proven; this is the
-        // float math done over it. Nothing has tested this layer, and it is where rho —
-        // the number the whole pressure solve turns on — is actually produced.
+        // float math done over it. Nothing has tested this layer, and it is where rho -
+        // the number the whole pressure solve turns on - is actually produced.
         if (pipe.readLatest(.dens)) |dens| {
             var worst_rho: f32 = 0;
             var worst_near: f32 = 0;
@@ -290,7 +290,7 @@ fn checkStages(
                 });
 
                 // ---- stage 8: VISCOSITY. Untested until now. Its inner loop carries a
-                // `continue` gated on a COMPUTED FLOAT, three loops deep — data-dependent
+                // `continue` gated on a COMPUTED FLOAT, three loops deep - data-dependent
                 // control flow nothing else in the module has.
                 if (pipe.readLatest(.visc)) |visc| {
                     var bad_v: u32 = 0;

@@ -1,16 +1,16 @@
-//! src/tests/cpu_shadowmap_test.zig — proves the software rasteriser can run a
+//! src/tests/cpu_shadowmap_test.zig - proves the software rasteriser can run a
 //! real TWO-PASS shadow-map pipeline end to end, entirely on the CPU:
 //!
 //!   Pass 1 (light's eye): rasterise the scene depth into an rgba8 "shadow map"
 //!           (depth-in-red), via `dispatchVertexShader` + `rasterizeToImage`.
 //!   Pass 2 (camera):       rasterise the lit scene, the fragment shader
 //!           projecting into light space and SAMPLING the pass-1 image to decide
-//!           shadowed vs lit — the same structure the WebGPU backend runs across
+//!           shadowed vs lit - the same structure the WebGPU backend runs across
 //!           two render passes, and the same `proj.y = 1 - proj.y` RTT flip.
 //!
 //! The inline shader pairs mirror `src/shaders/depth_*` and `lit_shadow_*`. The
 //! test asserts the ground carries both a lit region and a distinctly darker
-//! shadow region cast by an elevated occluder — the thing that can only happen
+//! shadow region cast by an elevated occluder - the thing that can only happen
 //! if pass 2 actually read pass 1's depth. This is the CPU-verifiable core of
 //! `src/notes/cpu_shadowmap_plan.md`.
 
@@ -48,12 +48,12 @@ const indices = [_]u32{
 };
 const vertex_count: u32 = positions.len;
 
-// Direction TO the light — tilted in +x so the panel's shadow falls toward -x.
+// Direction TO the light - tilted in +x so the panel's shadow falls toward -x.
 const light_dir: Vec3 = .{ 0.35, 0.9, 0.0 };
 const base_color: Vec3 = .{ 0.75, 0.75, 0.80 };
 
 // ---------------------------------------------------------------------------
-// Pass 1 shaders — depth-in-red (mirror src/shaders/depth_vs.zig + depth_fs.zig).
+// Pass 1 shaders - depth-in-red (mirror src/shaders/depth_vs.zig + depth_fs.zig).
 // ---------------------------------------------------------------------------
 const DepthVs = struct {
     pub const Io = struct { vpos: Vec3, vp: Mat };
@@ -76,7 +76,7 @@ fn fillDepthAttrs(vid: u32, io: *DepthVs.Io) void {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 2 shaders — shadow-mapped Lambert (mirror lit_shadow_vs + lit_shadow_fs).
+// Pass 2 shaders - shadow-mapped Lambert (mirror lit_shadow_vs + lit_shadow_fs).
 // ---------------------------------------------------------------------------
 /// A CPU shadow-map handle: raw rgba8 pixels + dims, sampled nearest by red.
 /// This is the shape the generated IoT's `TextureRef` gives sampling shaders on
@@ -127,7 +127,7 @@ const LitVs = struct {
     pub fn shaderMain(io: Io) Out {
         return .{
             .position = zm.mulMatPoint(io.cam_vp, io.vpos),
-            .frag_normal = io.vnrm, // identity model → attribute normal is world
+            .frag_normal = io.vnrm, // identity model -> attribute normal is world
             .frag_lpos = zm.mulMatPoint(io.light_vp, io.vpos),
         };
     }
@@ -154,10 +154,10 @@ const LitFs = struct {
 
         const closest: f32 = io.shadow.sampleRed(proj[0], proj[1]);
         const current: f32 = proj[2];
-        // 8-bit shadow map → the depth quantum is 1/255 ≈ 0.0039, so the constant
+        // 8-bit shadow map -> the depth quantum is 1/255 ~ 0.0039, so the constant
         // bias floor MUST clear it or the ground self-shadows (acne). This large
         // floor is the precision tax of the rgba8 map; a float (r32/rgba16f)
-        // sampler — the next step in cpu_shadowmap_plan.md — lets it drop ~5×.
+        // sampler - the next step in cpu_shadowmap_plan.md - lets it drop ~5x.
         const bias: f32 = @max(0.015 * (1.0 - ndl), 0.008);
 
         var shadow: f32 = 1.0;
@@ -182,7 +182,7 @@ fn luminance(c: [4]u8) f32 {
 }
 
 /// Project a world point through `vp` to integer pixel coords using the SAME
-/// NDC→screen mapping `rasterizeToImage` uses (row 0 = top). Null if behind.
+/// NDC->screen mapping `rasterizeToImage` uses (row 0 = top). Null if behind.
 fn projectToPixel(vp: Mat, p: Vec3, comptime W: usize, comptime H: usize) ?[2]usize {
     const clip: Vec = zm.mulMatPoint(vp, p);
     if (clip[3] <= 1e-6) {
@@ -285,8 +285,8 @@ test "cpu two-pass shadow map: occluder casts a visible ground shadow" {
         .{ 12, 12, 28, 255 }, // clear = dark sky (kept out of the shadow band)
     );
 
-    // ---- Classify pixel luminances. Fully-lit ground ≈ base*(0.25+0.75*0.9) ≈
-    // 176; shadowed ground ≈ base*0.25 ≈ 48; sky ≈ 15. Count the two ground
+    // ---- Classify pixel luminances. Fully-lit ground ~ base*(0.25+0.75*0.9) ~
+    // 176; shadowed ground ~ base*0.25 ~ 48; sky ~ 15. Count the two ground
     // bands; both must be populated for a real cast shadow to exist. ----
     var shadow_px: u32 = 0;
     var lit_px: u32 = 0;
@@ -306,7 +306,7 @@ test "cpu two-pass shadow map: occluder casts a visible ground shadow" {
 
     // ---- Rigorous, targeted check: a ground point KNOWN to sit in the panel's
     // cast shadow must be markedly darker than a ground point in the open. The
-    // panel (centre x=0, y=1.2) casts along -L onto the ground near x≈-0.47, so
+    // panel (centre x=0, y=1.2) casts along -L onto the ground near x~-0.47, so
     // (-0.45,0,0) is shadowed and (1.8,0,0) is lit; the camera sees both (the
     // low panel doesn't screen-occlude either). This distinguishes a real cast
     // shadow from residual acne (which the raised bias has removed). ----
@@ -316,7 +316,7 @@ test "cpu two-pass shadow map: occluder casts a visible ground shadow" {
     const l_shadow: f32 = luminance(final_img[shadow_pt.?[1] * W + shadow_pt.?[0]]);
     const l_lit: f32 = luminance(final_img[lit_pt.?[1] * W + lit_pt.?[0]]);
     try expect(l_lit - l_shadow > 60.0); // clearly darker in shadow
-    try expect(l_shadow < 90.0); // shadow-pt really is in shadow (≈ ambient)
+    try expect(l_shadow < 90.0); // shadow-pt really is in shadow (~ ambient)
     try expect(l_lit > 140.0); // lit-pt really is lit
 
     try expect(lit_px > 100); // the scene is mostly lit ground + panel

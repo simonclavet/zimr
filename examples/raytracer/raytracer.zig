@@ -22,7 +22,7 @@
 //   - A / D         translate left / right
 //   - Q / E         translate down / up
 //   - RMB-drag      yaw / pitch
-//   - Shift         4× movement speed
+//   - Shift         4x movement speed
 //   - Mouse wheel   nudge vertical FOV (zoom)
 // All other tuning lives in the ImGui panel.
 // What's exercised on the zimr side:
@@ -142,12 +142,12 @@ const HitRecord = struct {
 
 /// Camera pose is `(lookfrom, yaw, pitch, vfov)`; the rest of the
 /// viewport math (`px00`, `pdu`, `pdv`, `u`, `v`, `w`) is recomputed
-/// each frame from these four fields.  Cheap to redo (≈30 FLOPs);
+/// each frame from these four fields.  Cheap to redo (~30 FLOPs);
 /// keeps "did the camera move?" trivially detectable.
 const Camera = struct {
     lookfrom: Vec,
     yaw: f32, // radians, around world +Y
-    pitch: f32, // radians, clamped to ±~80°
+    pitch: f32, // radians, clamped to +/-~80 deg
     vfov: f32, // degrees, vertical
 };
 
@@ -223,14 +223,14 @@ const Params = struct {
 // ============================================================================
 
 const State = struct {
-    // ── ECS ───────────────────────────
+    // -- ECS ---------------------------
     world: ecs.Registry,
 
-    // ── Camera + params ───────────────────────
+    // -- Camera + params -----------------------
     cam: Camera,
     params: Params = .{},
 
-    // ── Framebuffers ────────────────────────
+    // -- Framebuffers ------------------------
     /// Float HDR accumulator - sum of all samples drawn into each
     /// pixel since the last camera move.  Divided by `sample_count`
     /// at tonemap time to produce the displayed color.
@@ -241,16 +241,16 @@ const State = struct {
     /// Owned by `accum_image`; pointer alias kept here for clarity.
     pixels: []Color,
 
-    // ── GPU resources ────────────────────────
+    // -- GPU resources ------------------------
     fb: z.CpuFramebuffer,
 
-    // ── Input bookkeeping ──────────────────────
+    // -- Input bookkeeping ----------------------
     /// Did anything move during the last frame?  Drives stride
     /// (full-res when false, 1/4-res when true) and accum-reset
-    /// (reset when transitioning false→true).
+    /// (reset when transitioning false->true).
     moving: bool = false,
 
-    // ── UI + scratch ────────────────────────
+    // -- UI + scratch ------------------------
     rng: std.Random.DefaultPrng,
     gpa: Allocator,
 };
@@ -344,7 +344,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     @memset(pixels, .{ .r = 0, .g = 0, .b = 0, .a = 255 });
 
     // Wrap the LDR buffer in an `Image` so we can upload it through
-    // the standard `loadFromImage` → `updateTexture` pipeline.
+    // the standard `loadFromImage` -> `updateTexture` pipeline.
 
     // GPU texture world (Phase E pattern - same shape as
     // procgen_noise).  Just holds the one streaming texture.
@@ -436,7 +436,7 @@ fn handleInput(
             s.cam.pitch -= delta[1] * sensitivity;
             // Clamp pitch so the camera can't flip past straight-up
             // or straight-down (would gimbal-lock the yaw axis).
-            const pitch_cap: f32 = 1.4; // ≈80°
+            const pitch_cap: f32 = 1.4; // ~80 deg
             s.cam.pitch = clamp(s.cam.pitch, -pitch_cap, pitch_cap);
             changed = true;
         }
@@ -473,7 +473,7 @@ fn pixelRay(
 }
 
 /// Analytic ray-sphere intersection.  Solves the quadratic
-/// `|O + tD - C|² = r²` for `t`.  Returns the nearest root in
+/// `|O + tD - C|^2 = r^2` for `t`.  Returns the nearest root in
 /// `(t_min, t_max)` or null.
 fn hitSphere(
     s: Sphere,
@@ -657,8 +657,8 @@ fn skyColor(dir: Vec, preset_idx: i32) Vec {
     return ((colors[0] * splat(1.0 - a)) + (colors[1] * splat(a)));
 }
 
-/// Recursive ray color.  Hits → scatter recursively × albedo.  Miss
-/// → sky.  Depth → black (energy budget exhausted).
+/// Recursive ray color.  Hits -> scatter recursively x albedo.  Miss
+/// -> sky.  Depth -> black (energy budget exhausted).
 fn rayColor(
     rng: std.Random,
     ray: Ray,
@@ -685,7 +685,7 @@ fn clamp8(v: f32) u8 {
     return int(u8, clamp(v, 0, 0.999) * 256.0);
 }
 
-/// Linear HDR → sRGB-ish 8-bit color.  `sqrt` is the cheap stand-in
+/// Linear HDR -> sRGB-ish 8-bit color.  `sqrt` is the cheap stand-in
 /// for gamma 2.0 (the proper sRGB curve is barely different
 /// visually and costlier per pixel).
 fn tonemap(c: Vec) Color {
@@ -701,7 +701,7 @@ fn tonemap(c: Vec) Color {
 /// `move_stride`-th pixel; the other pixels keep their last-frame
 /// color.  Runs while the camera is moving - the framebuffer was
 /// just reset to zero in the caller, so the un-stride pixels read
-/// as zero (black).  To compensate, we fill an entire stride×stride
+/// as zero (black).  To compensate, we fill an entire stridexstride
 /// block from each rendered sample so the image looks coherent
 /// instead of like a polka-dot pattern.
 fn renderStride(s: *State, basis: *const CamBasis) void {
@@ -717,7 +717,7 @@ fn renderStride(s: *State, basis: *const CamBasis) void {
             const depth: u32 = @min(3, @as(u32, @intCast(s.params.max_depth)));
             const color: Vec = rayColor(rng, ray, &s.world, s.params, depth);
             const display: Color = tonemap(color);
-            // Splat this color across the move_stride × move_stride
+            // Splat this color across the move_stride x move_stride
             // pixel block.
             var dy: i32 = 0;
             while (dy < move_stride and (y + dy) < rt_h) : (dy += 1) {
@@ -763,7 +763,7 @@ fn update(f: *z.Frame, s: *State) void {
     //      `endDrawing` - there's no "render UI first" cost.
     //   2. Read input + maybe-update camera.
     //   3. Render the scene + upload pixels.
-    //   4. Issue draw calls (clear → texture → UI commands → flush).
+    //   4. Issue draw calls (clear -> texture -> UI commands -> flush).
     const ui_capture_mouse: bool = drawUiPanel(f, s);
     const cam_changed: bool = handleInput(f, s, ui_capture_mouse);
 
@@ -796,7 +796,7 @@ fn update(f: *z.Frame, s: *State) void {
 }
 
 // ============================================================================
-// Input → camera updates
+// Input -> camera updates
 // ============================================================================
 
 // ============================================================================

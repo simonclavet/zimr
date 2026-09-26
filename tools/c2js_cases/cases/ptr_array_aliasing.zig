@@ -12,7 +12,7 @@
 //       carries ptr_elem (set for any pointer element), so `arr[i]` took the slice
 //       `.ptr` LOAD path and dereferenced once too many. An inline array (f.size>4)
 //       is laid out in place: element i is at base + i*4 and the stored pointer is
-//       read by the later deref — no extra load.
+//       read by the later deref - no extra load.
 //
 // The swap below stores pointers through `*(&arr[i])` (exercises 1) and reads them
 // back through `arr[i]` (exercises 2); the final field writes must land in the

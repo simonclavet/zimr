@@ -1,14 +1,14 @@
-//! src/shaders/decal_fs.zig — shader-projected decal receiver FS body (IoT).
+//! src/shaders/decal_fs.zig - shader-projected decal receiver FS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version. For each receiver fragment:
-//! transform its world position by the decal PROJECTOR (world → decal box
-//! space), and if it lands inside the box `[-s, s]³` paint the decal texture at
+//! transform its world position by the decal PROJECTOR (world -> decal box
+//! space), and if it lands inside the box `[-s, s]^3` paint the decal texture at
 //! the planar box-space XY. Fragments outside the box (or facing away) get
 //! zero alpha, so a decal "paints" exactly the surface patch under its
-//! projector — no mesh clipping, scales to any mesh density.
+//! projector - no mesh clipping, scales to any mesh density.
 //!
 //! Sample discipline: `textureSample` needs screen-space derivatives, which
-//! WGSL/Tint forbid inside non-uniform branches — so we sample UNCONDITIONALLY
+//! WGSL/Tint forbid inside non-uniform branches - so we sample UNCONDITIONALLY
 //! at uniform control flow, then MASK the result with arithmetic (value-select)
 //! inside-box + facing terms. Nothing branches around the sample.
 //!
@@ -30,7 +30,7 @@ pub const Out = shader_externs.Out;
 
 /// The fragment-stage uniform type, re-exported so a CPU consumer (the decal
 /// side-by-side) can build the same `Ubo` the GPU pipeline's std140 block is
-/// generated from — one definition, both renderers.
+/// generated from - one definition, both renderers.
 pub const Ubo = shader_io.Ubo;
 
 /// The CPU-side texture handle the software rasterizer samples through, so a
@@ -41,7 +41,7 @@ pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
     const w: Vec3 = io_in.o_world;
-    // World → decal box space.
+    // World -> decal box space.
     const box: Vec = mulMatVec(io_in.u.projector, .{ w[0], w[1], w[2], 1.0 });
 
     // Sample UNCONDITIONALLY at uniform control flow, then mask (see header).
@@ -52,7 +52,7 @@ pub fn shaderMain(io_in: Io) Out {
     };
     const t: Vec = io_in.decal(uv);
 
-    // Box membership as a 0/1 mask (no branch): 1 inside [-half, half]³, else 0.
+    // Box membership as a 0/1 mask (no branch): 1 inside [-half, half]^3, else 0.
     const half: f32 = io_in.u.params[0];
     const inside: f32 = axisMask(box[0], half) * axisMask(box[1], half) * axisMask(box[2], half);
 
@@ -67,7 +67,7 @@ pub fn shaderMain(io_in: Io) Out {
     return out;
 }
 
-/// `1.0` when `|x| <= half`, else `0.0` — one axis of the box-membership test
+/// `1.0` when `|x| <= half`, else `0.0` - one axis of the box-membership test
 /// as an arithmetic mask (a value-select, so the sample stays at uniform
 /// control flow; nothing branches around the `textureSample`).
 fn axisMask(x: f32, half: f32) f32 {
@@ -75,7 +75,7 @@ fn axisMask(x: f32, half: f32) f32 {
 }
 
 /// `1.0` when the surface (normal `n`) faces toward the projector, else `0.0`.
-/// `fwd` is the surface normal at the hit — it points OUTWARD from the target.
+/// `fwd` is the surface normal at the hit - it points OUTWARD from the target.
 /// A fragment on the SAME (near) surface has its own outward normal pointing the
 /// same way, so `dot(n, fwd) > 0`; the far wall points the opposite way. Keep
 /// the front side, with a small negative threshold so nearly edge-on faces

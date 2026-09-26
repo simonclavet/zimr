@@ -1,12 +1,12 @@
-//! fog_rendering — raylib's `shaders_fog_rendering`, the zimr way.
+//! fog_rendering - raylib's `shaders_fog_rendering`, the zimr way.
 //!
 //! A trio of generated meshes (torus / cube / sphere) plus a long row of
-//! toruses marching off into exponential-squared distance fog — the row
+//! toruses marching off into exponential-squared distance fog - the row
 //! is the whole demo: you watch geometry dissolve into atmosphere, and
 //! the fog-density slider moves the wall of nothing closer or further.
 //!
 //! Shader-sharing flex: there is NO fog vertex shader.  The vertex stage
-//! is `gbuffer_vs` — the deferred G-buffer's — reused verbatim, because
+//! is `gbuffer_vs` - the deferred G-buffer's - reused verbatim, because
 //! "clip position + world position + world normal" is what EVERY
 //! world-space-lit forward material wants.  `fog_fs` just consumes the
 //! same varyings (`gbuffer_common_io.Interp`) and adds Lambert + Blinn +
@@ -36,7 +36,7 @@ const rotationY = zm.rotationY;
 const translation = zm.translation;
 const vec = zm.vec;
 
-const fog_vs = z.deferred_shaders.gbuffer_vs; // REUSED — see the doc comment
+const fog_vs = z.deferred_shaders.gbuffer_vs; // REUSED - see the doc comment
 const fog_fs = z.fog_shader;
 
 pub var zimr_app: z.App = .{};
@@ -62,7 +62,7 @@ const fog_clear: Color = .{
 const sun_dir: [3]f32 = .{ 0.35, 0.8, 0.45 };
 
 // ============================================================================
-// Staging — the raylib line-up: trio up front, torus row into the murk.
+// Staging - the raylib line-up: trio up front, torus row into the murk.
 // ============================================================================
 
 const torus_row_len: usize = 21; // raylib: i = -20..20 step 2
@@ -83,7 +83,7 @@ fn buildPlacements() [total_objects]Placement {
     out[0] = .{ .mesh = .torus, .center = .{ 0, 0, 0 }, .spin_rate = 0.6, .base_color = .{ 0.9, 0.55, 0.35, 1 } };
     out[1] = .{ .mesh = .cube, .center = .{ -2.6, 0, 0 }, .spin_rate = -0.4, .base_color = .{ 0.45, 0.7, 0.9, 1 } };
     out[2] = .{ .mesh = .sphere, .center = .{ 2.6, 0, 0 }, .spin_rate = 0, .base_color = .{ 0.55, 0.85, 0.55, 1 } };
-    // The fog ruler: identical toruses every 2 units — the eye reads the
+    // The fog ruler: identical toruses every 2 units - the eye reads the
     // density directly off how many survive.
     for (out[3..], 0..) |*p, i| {
         const x: f32 = float(i) * 2.0 - 20.0;
@@ -93,7 +93,7 @@ fn buildPlacements() [total_objects]Placement {
 }
 
 // ============================================================================
-// GPU plumbing — one pipeline, per-object uniform pairs.
+// GPU plumbing - one pipeline, per-object uniform pairs.
 // ============================================================================
 
 /// A generated mesh, uploaded: interleaved position+normal VBO + u32 IBO.
@@ -113,7 +113,7 @@ const MeshVertex = extern struct {
 /// Interleave a raylib-shaped `types.Mesh` (separate positions/normals,
 /// optional u16 indices) into the engine's position+normal vertex layout
 /// and upload.  Generated meshes sometimes ship WITHOUT indices (pure
-/// triangle soup) — then the index buffer is just 0..N.
+/// triangle soup) - then the index buffer is just 0..N.
 fn uploadMesh(
     gpa: Allocator,
     device: z.wgpu.DeviceHandle,
@@ -177,7 +177,7 @@ const State = struct {
     empty_bg: z.wgpu.BindGroupHandle, // group 1 hole (no samplers in this material)
     rt: z.RenderTexture,
     objs: [total_objects]Obj,
-    meshes: [3]GpuMesh, // torus, cube, sphere — shared across objs, freed once
+    meshes: [3]GpuMesh, // torus, cube, sphere - shared across objs, freed once
     ui_host: z.UiHost,
     font: z.Font,
 
@@ -337,7 +337,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
 
     // Build-only intermediates: with the pipeline + per-object bind groups built,
-    // their source layouts/modules are no longer needed — release them now. Only
+    // their source layouts/modules are no longer needed - release them now. Only
     // the runtime handles below survive into State (freed in deinit).
     z.wgpu.destroyBindGroupLayout(g0_bgl);
     z.wgpu.destroyBindGroupLayout(g2_bgl);

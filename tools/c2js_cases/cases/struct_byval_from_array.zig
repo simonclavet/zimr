@@ -2,7 +2,7 @@
 // (store back) must stride by the element struct's WHOLE size. The whole-struct
 // deref/copy path computed its pointer stride from the scalar elemSize (4)
 // instead of sizeof(elem), so a copy of pts[1] read pts[0].y into s.x and
-// pts[1].x into s.y — a silent miscompile. Self-checks (returns 0 on success).
+// pts[1].x into s.y - a silent miscompile. Self-checks (returns 0 on success).
 const Pt = struct { x: i32, y: i32 };
 
 export fn run_test() i32 {

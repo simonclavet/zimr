@@ -1,9 +1,9 @@
-//! src/shaders/lit_shadow_vs.zig — shadow-mapped Lambert vertex shader.
+//! src/shaders/lit_shadow_vs.zig - shadow-mapped Lambert vertex shader.
 //!
 //! Projects the world-space vertex through the camera MVP for the main
 //! pass, carries the world-space normal for diffuse lighting, and also
 //! projects through the LIGHT's view-projection so the FS receives the
-//! fragment's position in light-clip space (→ shadow-map lookup).
+//! fragment's position in light-clip space (-> shadow-map lookup).
 
 const zm = @import("zm");
 const Vec = zm.Vec;
@@ -29,7 +29,7 @@ pub fn shaderMain(io_in: Io) Out {
     const wn: Vec = mulMatVec(io_in.u.normal_matrix, vec4(n[0], n[1], n[2], 0.0));
     out.frag_normal = normalize(Vec3{ wn[0], wn[1], wn[2] });
 
-    // Fragment position in the LIGHT's clip space — the FS perspective-
+    // Fragment position in the LIGHT's clip space - the FS perspective-
     // divides + remaps this to sample the shadow map.
     out.frag_light_space_pos = mulMatPoint(io_in.u.light_vp, io_in.vertex_position);
 

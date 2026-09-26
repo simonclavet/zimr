@@ -34,7 +34,7 @@ const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
 
 // Local aliases for the std.Build types this file works with.  See
-// `src/shader_codegen.zig` for the rationale — rule 2 (untyped-local)
+// `src/shader_codegen.zig` for the rationale - rule 2 (untyped-local)
 // requires a type annotation on every `b.addX(...)` const, and the
 // full `*std.Build.Step.Run` etc. spellings would dwarf the actual
 // content.
@@ -70,12 +70,12 @@ const test_files = [_][]const u8{
 /// `zig-out/web/<name>/` and serves at `http://localhost:8080/<name>/`.
 /// `tools/gen_vscode.zig` (run via `zig build gen-vscode`) turns each into:
 /// a `zig build <name>` build task, a `zig build <name>-standalone` task,
-/// and a Chrome debug config — so the dev-server HMR loop rebuilds + reloads
+/// and a Chrome debug config - so the dev-server HMR loop rebuilds + reloads
 /// them exactly like the GL examples.  Add a row when you wire a new servable
-/// wgpu demo (a `b.step("wgpu-…")` with its own `.custom` install dir), then
+/// wgpu demo (a `b.step("wgpu-...")` with its own `.custom` install dir), then
 /// run `zig build gen-vscode`.  (The legacy `wgpu-bringup` scaffold installs
 /// to `zig-out/wgpu/`, not `zig-out/wgpu-bringup/`, so it's intentionally
-/// omitted — it predates the per-demo dir convention.)
+/// omitted - it predates the per-demo dir convention.)
 pub const example_steps = [_][]const u8{
     "3d-probe",                      "audio-basic",           "audio-stream-synth",            "ball-physics",
     "weight_store",                  "dance_track",           "dance_track",                   "basic",
@@ -143,10 +143,10 @@ pub const example_steps = [_][]const u8{
 /// file silently dropped a shader to legacy mode.
 ///
 /// The new table makes every shader's iface placement explicit:
-///   - `iface = null`        → iface declared inline at the top of
-///                              the shader source file (default — the
+///   - `iface = null`        -> iface declared inline at the top of
+///                              the shader source file (default - the
 ///                              common case).
-///   - `iface = "<basename>"` → iface lives in `examples/<basename>.zig`,
+///   - `iface = "<basename>"` -> iface lives in `examples/<basename>.zig`,
 ///                              shared by multiple shaders (varyings
 ///                              between VS and FS; the same iface
 ///                              imported by several CPU examples).
@@ -170,7 +170,7 @@ const EngineShader = struct {
     wgsl_name: ?[]const u8 = null,
     /// The codegen-emitted `*_externs.zig` LazyPath.  Native
     /// build targets that want to import the shader source
-    /// directly (`@import("default_shapes_vs.zig")` → which in
+    /// directly (`@import("default_shapes_vs.zig")` -> which in
     /// turn `@import`s the externs module) need this wired as
     /// `--dep <sh_name>_externs`.  Null when codegen didn't run
     /// (legacy pre-typed-shader path).  After the native-import
@@ -252,7 +252,7 @@ pub fn build(b: *std.Build) void {
     // -Dmode defaults to `debug` when omitted.  Real callers (VS Code
     // tasks, release.bat) all pass -Dmode
     // explicitly; the default is for `zig build test` and hand-typing
-    // during development.  No warning — debug is the right default for
+    // during development.  No warning - debug is the right default for
     // unconfigured invocations; production callers know to pass the
     // release modes.
     const mode: BuildMode = b.option(
@@ -270,10 +270,10 @@ pub fn build(b: *std.Build) void {
     // zglsl tool were removed. The example files remain on disk for porting to
     // wgpu; they are simply not built. wgpu is the only buildable target.
     // (GL-retirement P3: the GL `zimr` / `zimr_mod_smoke` wasm modules are
-    // gone — the docs lib was their last consumer and now documents
+    // gone - the docs lib was their last consumer and now documents
     // zimr.  src/zimr.zig itself is deleted in P5.)
 
-    // Umbrella module for the WebGPU stack — re-exports every public
+    // Umbrella module for the WebGPU stack - re-exports every public
     // type / namespace from `src/zimr.zig`.  Created here (NOT
     // down where the wgpu_bringup exe lives) so the engine-shader
     // auto-discovery loop below can attach WGSL anonymous imports to it.
@@ -291,7 +291,7 @@ pub fn build(b: *std.Build) void {
     // `shader_interface` is the typed-shader public API surface
     // (`Sampler2D`, `Attr`, `merge`, ...).  Registered as a named
     // module so iface files (`src/shaders/*_io.zig`) can
-    // `@import("shader_interface")` from anywhere — same iface
+    // `@import("shader_interface")` from anywhere - same iface
     // file works inside the wgpu module, inside the codegen bootstrap
     // exes (Phase 2 of the typed-shader plan), and inside external
     // projects building against zimr.  Without this, iface files
@@ -299,7 +299,7 @@ pub fn build(b: *std.Build) void {
     // escapes the module path when an iface file is loaded as
     // the root of its own module (codegen case).
     //
-    // No target set — the same module is imported by wasm exe
+    // No target set - the same module is imported by wasm exe
     // modules (zimr, smoke), by the host test module, and (in
     // Phase 2 wiring) by per-shader codegen bootstrap exes.  Zig
     // resolves target lazily through the consumer.
@@ -315,7 +315,7 @@ pub fn build(b: *std.Build) void {
 
     // math: the unified math.zig library.  Declared as a named module
     // here (not just down with the other shader-pipeline modules) so
-    // modules can wire it as a dep — `src/zimr.zig` does
+    // modules can wire it as a dep - `src/zimr.zig` does
     // `pub const math = @import("math")` to re-export it on the flat
     // `z.*` surface.  Same module is also imported by every example's
     // exe_mod (transitively through iface files) and by every shader's
@@ -328,7 +328,7 @@ pub fn build(b: *std.Build) void {
     // src/notes/ keep the path form because they're not compiled.
     const zimrmath_mod: *Module = b.addModule("zimrmath", .{
         .root_source_file = b.path("src/zimrmath.zig"),
-        // No `.target` — math.zig is imported by modules with various
+        // No `.target` - math.zig is imported by modules with various
         // targets (wasm32-wasi for exes, native for host tests).  When
         // the module has no target, consumers resolve it lazily through
         // their own target.  Hardcoding wasm_target here causes a Zig
@@ -336,19 +336,19 @@ pub fn build(b: *std.Build) void {
         // math in transitively.
     });
 
-    // THE ONE `kompute` MODULE. Every GPU-compute example imports THIS — it is not built per
+    // THE ONE `kompute` MODULE. Every GPU-compute example imports THIS - it is not built per
     // example, and that is the whole point.
     //
     // `wireComputeKernels` used to call `b.createModule(root = src/kompute.zig)` afresh for each
-    // example. One compute example per page, and that was invisible. Put TWO on the same page —
-    // which is exactly what the launcher is — and Zig sees two distinct modules with the same
+    // example. One compute example per page, and that was invisible. Put TWO on the same page -
+    // which is exactly what the launcher is - and Zig sees two distinct modules with the same
     // root file, renames the second to `kompute0`, and then the kernel source that imports
     // "kompute" straddles both:
     //
     //     escape_kernel.zig: error: file exists in modules 'kompute' and 'kompute0'
     //
     // It looked like a four_ways bug. It was not. The launcher happened to contain exactly ONE
-    // compute example (fluid_sort), so ANY second one would have broken it — four_ways was
+    // compute example (fluid_sort), so ANY second one would have broken it - four_ways was
     // simply the first to try. Sharing one module fixes the class, not the instance.
     const kompute_mod: *Module = b.createModule(.{
         .root_source_file = b.path("src/kompute.zig"),
@@ -357,8 +357,8 @@ pub fn build(b: *std.Build) void {
     });
     kompute_mod.addImport("zm", zimrmath_mod);
 
-    // zimrnum: the numerics / statistics / deep-learning library. Two imports and no more —
-    // see `src/notes/zimrnum_plan.md` §3 for why that constraint is load-bearing rather than
+    // zimrnum: the numerics / statistics / deep-learning library. Two imports and no more -
+    // see `src/notes/zimrnum_plan.md` section 3 for why that constraint is load-bearing rather than
     // tidy: it is what keeps the library in the fast test tier and lets a `zm`-only module
     // adopt it without acquiring a GPU dependency.
     const zimrnum_mod: *Module = b.addModule("zn", .{
@@ -366,7 +366,7 @@ pub fn build(b: *std.Build) void {
     });
     zimrnum_mod.addImport("zm", zimrmath_mod);
     zimrnum_mod.addImport("kompute", kompute_mod);
-    // shader_builtins.zig — the SPIR-V shader DSL (decorators, texture/sampler
+    // shader_builtins.zig - the SPIR-V shader DSL (decorators, texture/sampler
     // types, sampling + storage intrinsics), split out of zimrmath so editing a
     // shader intrinsic no longer invalidates the whole host cache. Like zm it
     // has no fixed target (resolved lazily by each consumer); it imports zm for
@@ -385,7 +385,7 @@ pub fn build(b: *std.Build) void {
     // Now that zimrmath_mod exists, give shader_interface the zm alias (see the
     // note at its declaration above). Every context that pulls shader_interface
     // already has zm wired alongside it, so this introduces no new graph edges
-    // for consumers — it just lets shader_interface use Vec/Vec2/Vec3.
+    // for consumers - it just lets shader_interface use Vec/Vec2/Vec3.
     shader_interface_mod.addImport("zm", zimrmath_mod);
 
     // ---- Public build-time API for downstream projects.
@@ -414,7 +414,7 @@ pub fn build(b: *std.Build) void {
     // `profile_enabled`: the integrated profiler (src/profiler.zig) is
     // compiled in and always-recording for every non-shipping mode, and
     // stripped to nothing in `ship`.  Same derive-from-mode pattern as
-    // assert_log — profiler gating is `mode != .ship`.
+    // assert_log - profiler gating is `mode != .ship`.
     const profile_enabled: bool = switch (mode) {
         .debug, .release => true,
         .ship => false,
@@ -435,9 +435,19 @@ pub fn build(b: *std.Build) void {
     const slow_tests: bool = b.option(
         bool,
         "slow-tests",
-        "Also run the slow diagnostic tests that are skipped by default (retarget)",
+        "Also run the slow tests skipped by default (long simulations, sweeps, learning curves)",
     ) orelse false;
     build_opts.addOption(bool, "slow_tests", slow_tests);
+    // `-Dtest-report`: print the tables the robot tests measure (drift per gain, time to failure per
+    // setting). Off, a passing test binary writes nothing - which matters because this build runner
+    // prints any test binary's stderr even when every test passed, labelled `failed command:`, so the
+    // tables made a green `zig build test` read as red. See `src/test_report.zig`.
+    const test_report: bool = b.option(
+        bool,
+        "test-report",
+        "Print the robot tests' measurement tables (otherwise a passing run is silent)",
+    ) orelse false;
+    build_opts.addOption(bool, "test_report", test_report);
     // `-Dtrain-chunk`: run the TRAINING tests - a few minutes of learning that resume from a
     // checkpoint on disk and save one when they finish. Never part of the slow suite: a test suite
     // that takes a different amount of time depending on what is lying in `train/` is not a test
@@ -460,13 +470,13 @@ pub fn build(b: *std.Build) void {
     // host (CPU) branch. `@import("build_options")` inside zimrmath.zig
     // resolves within THIS module, so adding it here makes it available to
     // every host consumer of `zm` at once (mesh_bake, the 3D examples,
-    // kompute, ...) — no per-consumer addOptions needed. The SPIR-V compile
+    // kompute, ...) - no per-consumer addOptions needed. The SPIR-V compile
     // uses a separate `-Mzm=` module instance with no build_options, but its
     // CPU branch is comptime-dead (is_gpu), so it never references it.
     // zm gets its OWN options instance (a distinct generated file) so it never
     // collides with an importing module's build_options. When zm is pulled into a
     // module that already has a "build_options" (e.g. the GL test_mod, which also
-    // uses build_opts), Zig dedup-renames zm's import to "build_options0" — and
+    // uses build_opts), Zig dedup-renames zm's import to "build_options0" - and
     // that is only an error when both names root the SAME file. A dedicated file
     // sidesteps it (same situation the wgpu builds are already fine with, since
     // there zm's file differs from build_opts_wgpu). zm reads only `assert_log`.
@@ -502,7 +512,7 @@ pub fn build(b: *std.Build) void {
     // WebGPU smoke install: each live wgpu example installs a copy of its
     // wasm into zig-out/wgpu-smoke/web/, gated by -Dfocus (see
     // addWgpuSmoke).  `smoke-test` runs webtests/wgpu_smoke.ts over that
-    // dir.  This is the live successor to the GL `smoke-install` above —
+    // dir.  This is the live successor to the GL `smoke-install` above -
     // the GL example smoke was retired with the WebGL backend.
     const wgpu_smoke_install: *Step = b.step(
         "smoke-install",
@@ -538,7 +548,7 @@ pub fn build(b: *std.Build) void {
 
     // Selects the CFG walker `spv2wgsl` uses to reconstruct control
     // flow when emitting WGSL: "ir" (the structured-IR path, now the
-    // default — proven on the corpus + in-browser, naga-clean on the
+    // default - proven on the corpus + in-browser, naga-clean on the
     // typed-harness shaders) or "legacy" (the original recursive walker,
     // kept one cycle as an escape hatch, scheduled for deletion in F5).
     // Threaded into the shader pipeline's spv2wgsl invocation as the
@@ -559,30 +569,43 @@ pub fn build(b: *std.Build) void {
     // to be a separate `zig build check` step.  The actual host-test
     // wiring (the `addTest` + `addRunArtifact` loop) lives further
     // down where it has access to the test file list.
-    const test_step: *Step = b.step("test", "Host unit tests + build-check tier-A examples");
+    //
+    // -- ** ONE COMMAND FOR EVERY TEST THAT IS QUICK --
+    //
+    // `test` runs `test-fast` too (wired below), so it is the engine half (`src/tests.zig`) AND the
+    // shader-free half (zimrnum, zimrmath, the robot family) - each binary once, in parallel. What
+    // it leaves out is the long end: `-Dslow-tests` adds the tests that simulate for seconds or
+    // learn for minutes, and `test-all-examples` builds every wasm instead of the tier-A eight.
+    const test_step: *Step = b.step(
+        "test",
+        "Every quick test: engine + shader-free suites + tier-A examples (-Dslow-tests for the long ones)",
+    );
 
-    // ★ Run only tests whose name contains this substring. Passed straight to Zig's own test
-    // runner, which has always supported it — nothing was plumbing it through.
+    // * Run only tests whose name contains this substring. Passed straight to Zig's own test
+    // runner, which has always supported it - nothing was plumbing it through.
     const test_filter: ?[]const u8 = b.option(
         []const u8,
         "test-filter",
         "Run only tests whose name contains this substring",
     );
 
-    // ── ★★★ `zig build test-fast` — the modules that need NO SHADERS ──
+    // -- *** `zig build test-fast` - the modules that need NO SHADERS --
     //
     // `src/tests.zig` is ONE root that imports everything, so a change to `robot.zig` rebuilds
     // a binary linked against ~50 compiled shaders. Measured: `robot.zig` alone tests in 33 s
     // (118 tests) while the full suite is minutes, and robot.zig's only dependencies are `zm`
     // and `build_options`.
     //
-    // ★ This step exists because the physics/robotics half of the engine has NOTHING to do with
+    // * This step exists because the physics/robotics half of the engine has NOTHING to do with
     // the render half, and paying the render half's build cost to test a Jacobian is the reason
     // the suite stopped being run at all.
     const test_fast_step: *Step = b.step(
         "test-fast",
         "Unit tests for the shader-free modules: zimrnum, zimrmath, robot, physics, codecs",
     );
+    // `test` is the superset. `src/tests.zig` leaves the robot family to `src/robot_tests.zig`, which
+    // runs here, so without this edge `zig build test` would not run a single robot test.
+    test_step.dependOn(test_fast_step);
     // (Was a custom makeFn that printed "all tests passed".  The
     // configurer/maker split removed user makeFn closures; the maker's
     // Build Summary already prints per-step success, so the printer is
@@ -603,32 +626,32 @@ pub fn build(b: *std.Build) void {
     // ---- Shader pipeline.  Declared early because the examples loop below
     // uses `shader_pipeline.addShaderImport` for examples that have a
     // `<name>_fs.zig` sibling. The pipeline is now pure Zig (zspv + spv2wgsl
-    // artifacts, built above) — the old `tools/build.zig` sub-build that built
+    // artifacts, built above) - the old `tools/build.zig` sub-build that built
     // the C++ SPIR-V tools (spirv-opt/val/cross) is gone, along with the GLSL
     // path that used them. WGSL is the only target and never touches C++.
     // Walk src/, examples/, tests/ for shader source files.  Picks
     // up new ones automatically as the codebase grows.  Filter is
-    // strict — only `_vs.zig` and `_fs.zig` basenames, so false
+    // strict - only `_vs.zig` and `_fs.zig` basenames, so false
     // positives are near-zero.  ZLS shadow modules so the editor can
-    // resolve `@import("zm")` inside any shader source — build
+    // resolve `@import("zm")` inside any shader source - build
     // behaviour is unchanged (these shadows aren't depended on by any
     // exe).  Stage 10 of math-unification deleted the old
     // `shadermath` module; `zm` (the unified math.zig) is the only
     // math import shader sources ever need now.
     // ---- Pure-Zig shader tools, built by the MAIN build as artifacts.
     // Invoking these via `addArtifactArg` (see ShaderPipeline) makes
-    // each a real dependency edge: edit the tool's source → it
-    // rebuilds → its emitted-binary hash changes → every downstream
-    // shader Run re-fires → WGSL/GLSL re-translates automatically.
+    // each a real dependency edge: edit the tool's source -> it
+    // rebuilds -> its emitted-binary hash changes -> every downstream
+    // shader Run re-fires -> WGSL/GLSL re-translates automatically.
     // This closes the stale-output hole that the nested `tools/
-    // build.zig` + `addFileInput(path)` shape left open — a nested
+    // build.zig` + `addFileInput(path)` shape left open - a nested
     // `zig build` is a cache boundary the outer build can't see
     // across, so the path could be hashed before the sub-build
     // rewrote it.  (The C++ SPIR-V tools stay in tools/ behind the
     // path + tools_subbuild shape; they're genuinely external.)
     const host_target: ResolvedTarget = b.graph.host;
 
-    // ── `zig build measure`, then `measure <label> <command...>` ──
+    // -- `zig build measure`, then `measure <label> <command...>` --
     //
     // Replaces `scripts/measure.sh`. Records wall time, peak RSS, cache delta and free-disk
     // delta to /tmp/measure.log, which is where every timing quoted in claude.md and the plans
@@ -706,7 +729,7 @@ pub fn build(b: *std.Build) void {
     );
     native_plot_png_step.dependOn(&native_plot_png_run.step);
 
-    // robot-bench: the §4g speed acceptance measurement, and the source of the
+    // robot-bench: the section 4g speed acceptance measurement, and the source of the
     // numbers README.md quotes.  It has to be a build step, not a file with a
     // `main` nobody can reach: a benchmark that takes a hand-rolled `build-exe`
     // with a stubbed build_options to run is a number nobody can check, and
@@ -756,7 +779,7 @@ pub fn build(b: *std.Build) void {
     // (the compile-time-budget gate); running it re-renders the same function
     // at runtime, byte-compares the two, sanity-checks the images, and dumps
     // corner_lit.png + corner_shadowmap.png for eyeball verification.  The
-    // bunny proxy comes from mesh_bake's OBJ path (grid 10 ≈ 693 tris).
+    // bunny proxy comes from mesh_bake's OBJ path (grid 10 ~ 693 tris).
     const smsw_proxy_bake: *Run = b.addRunArtifact(mesh_bake_exe);
     smsw_proxy_bake.addFileArg(b.path("examples/shadowmap/bunny.obj"));
     const smsw_proxy_zig: LazyPath = smsw_proxy_bake.addOutputFileArg("bunny_proxy.zig");
@@ -769,10 +792,10 @@ pub fn build(b: *std.Build) void {
             .target = host_target,
             .optimize = .ReleaseFast,
         }),
-        // NOTE (resolved): Zig 0.17.0-dev.956–early-1245 had an LLVM-backend
+        // NOTE (resolved): Zig 0.17.0-dev.956-early-1245 had an LLVM-backend
         // SEGV (rc=139, no Zig panic) compiling this native exe in any optimized
         // mode; the workaround forced the self-hosted x86 backend. As of the
-        // current 0.17.0-dev.1245 toolchain the regression is gone — BOTH
+        // current 0.17.0-dev.1245 toolchain the regression is gone - BOTH
         // backends compile this module cleanly in ReleaseFast and the exe
         // verifies byte-identically (comptime bake vs runtime render, 0-byte
         // diff). So we drop the backend override and use the compiler default.
@@ -794,7 +817,7 @@ pub fn build(b: *std.Build) void {
     const cel_proxy_bake: *Run = b.addRunArtifact(mesh_bake_exe);
     cel_proxy_bake.addFileArg(b.path("examples/shadowmap/bunny.obj"));
     const cel_proxy_zig: LazyPath = cel_proxy_bake.addOutputFileArg("bunny_proxy.zig");
-    cel_proxy_bake.addArg("14"); // finer than the shadow corner — bands need surface
+    cel_proxy_bake.addArg("14"); // finer than the shadow corner - bands need surface
     cel_proxy_bake.addArg("2");
     const cel_verify_exe: *Compile = b.addExecutable(.{
         .name = "cel_shading_verify",
@@ -904,25 +927,25 @@ pub fn build(b: *std.Build) void {
     // under `src/shaders/` gets compiled through the SPIR-V pipeline
     // and exposed as an `@embedFile`-able import named
     // `<basename>.glsl` on the host-test modules (the GL files compiled
-    // there still embed them — placeholders; dies in P5).  The engine source
+    // there still embed them - placeholders; dies in P5).  The engine source
     // (`src/rlgl.zig`, `src/render.zig`) does `@embedFile("<name>.glsl")`
     // in place of inline-GLSL string constants.  Examples are free
-    // to reuse the engine shaders via the same `@embedFile` form —
+    // to reuse the engine shaders via the same `@embedFile` form -
     // an example that wants the default VS just writes
     // `@embedFile("default_vs.glsl")`.  Unused imports cost nothing
     // (the bytes only enter the wasm via an explicit `@embedFile`).
     var engine_shaders: ArrayList(EngineShader) = .empty;
     // Old-style 3D-pipeline shaders that haven't migrated to the
     // IoT pattern yet.  They access `shader_externs.X` at module
-    // scope and call `shader_externs.setup()` — both broken by
+    // scope and call `shader_externs.setup()` - both broken by
     // the native-import codegen surgery (externs moved into
     // `_Spirv` namespace).  Skipped from the build until migrated;
     // none are on the wgpu critical path (Renderer2D uses only
     // default_shapes_vs/fs which already use IoT).  Re-enable
     // by migrating to IoT or by prefixing extern accesses with
     // `shader_externs._Spirv.`.  Tracked: turn 4 of the gpu-foundations plan.
-    // (GL-retirement P5: the old WebGL 3D shader sources — default/
-    // shadow/skybox/unlit — are deleted; nothing embeds their .glsl
+    // (GL-retirement P5: the old WebGL 3D shader sources - default/
+    // shadow/skybox/unlit - are deleted; nothing embeds their .glsl
     // names anymore.  The gravestone below survives only because LIVE
     // shader entries still carry a `<name>.glsl` placeholder name that
     // consumer loops wire unconditionally; collapsing engine_shaders to
@@ -945,7 +968,7 @@ pub fn build(b: *std.Build) void {
         // `*_extern.zig` and wires it into the spirv compile as
         // `--dep io`.  Shader bodies then `@import("io")` for their
         // extern decls instead of hand-writing them.  Missing iface
-        // file → addShader skips Stage 0 entirely; pre-typed-shader
+        // file -> addShader skips Stage 0 entirely; pre-typed-shader
         // shaders keep working unchanged.
         const shader_io_rel_path: []const u8 = b.fmt("src/shaders/{s}_io.zig", .{sh_name});
         const shader_io_opt: ?std.Build.LazyPath = blk: {
@@ -959,7 +982,7 @@ pub fn build(b: *std.Build) void {
         // through the corpus regression so dirty translations are
         // caught at build time.  `wgsl_strict = true` below means
         // any `// ERROR:` marker (e.g. unhandled SPIR-V construct)
-        // fails the build — opt-out per-shader via `wgsl_strict =
+        // fails the build - opt-out per-shader via `wgsl_strict =
         // false` if a particular shader needs exploration time.
         const emit_wgsl: bool = true;
 
@@ -980,7 +1003,7 @@ pub fn build(b: *std.Build) void {
             // Wire the same shader's .wgsl as a second anonymous
             // import; consumers `@embedFile("<name>.wgsl")` to bake
             // the WGSL into the wasm for the wgpu backend.  See
-            // `src/notes/webgpu-migration-plan.md` §3 Phase C.
+            // `src/notes/webgpu-migration-plan.md` section 3 Phase C.
             //
             // zimr_mod consumes these via
             // `@embedFile("default_shapes_vs.wgsl")` (Renderer2D).
@@ -993,8 +1016,8 @@ pub fn build(b: *std.Build) void {
         // zimr module (re-exported as `z.pbr_shaders.vs` / `.fs`
         // and `z.default_shapes.vs` / `.fs`) so the software half of
         // side-by-sides runs the same `shaderMain` the GPU pipeline
-        // compiled to WGSL above.  Their named-module dep — the
-        // generated `<name>_externs` (IoT/Out/installSpirvEntry) — gets
+        // compiled to WGSL above.  Their named-module dep - the
+        // generated `<name>_externs` (IoT/Out/installSpirvEntry) - gets
         // wired here.  Lazy analysis means examples that never touch
         // those re-exports pay nothing.  No `.target` on the externs
         // module: like shader_interface it resolves through the consumer
@@ -1044,10 +1067,10 @@ pub fn build(b: *std.Build) void {
     }
 
     // ========================================================================
-    // PHASE SPLIT — everything above is what a CONSUMER needs: the exposed
+    // PHASE SPLIT - everything above is what a CONSUMER needs: the exposed
     // modules (zimr/zimrmath/shader_interface/shader_codegen), the pure-Zig tool
     // artifacts, the shader pipeline, and the engine-shader WGSL embedded into
-    // `zimr_mod`. Everything BELOW is dev/demo machinery — the 137-example
+    // `zimr_mod`. Everything BELOW is dev/demo machinery - the 137-example
     // gallery, bridge demos, smoke tests, the c2js corpus/diff gates, the
     // cheatsheet, dist, and serve. A project depending on zimr must not pay to
     // construct (or risk root-relative path failures from) any of it, so bail
@@ -1058,7 +1081,7 @@ pub fn build(b: *std.Build) void {
         return;
     }
 
-    // Build a map: example-name → list of shader file paths owned
+    // Build a map: example-name -> list of shader file paths owned
     // by that example.  Done in one pass so longest-prefix-wins
     // disambiguates examples whose names share a prefix (e.g.
     // `shader` is a prefix of `shader_uniforms`; without this,
@@ -1074,7 +1097,7 @@ pub fn build(b: *std.Build) void {
     //
     // The `<purpose>` segment lets one example carry multiple
     // typed shader programs (e.g. a model FS + a skybox FS) without
-    // editing this build.zig — each compiled artifact is importable
+    // editing this build.zig - each compiled artifact is importable
     // from the example's CPU side as `@embedFile("<basename>.glsl")`.
     //
     // Sibling `<basename>_io.zig` files alongside the shader file
@@ -1084,7 +1107,7 @@ pub fn build(b: *std.Build) void {
 
     // Copy static site content into zig-out/web.  (GL-retirement P5:
     // the GL gallery picker index.html + per-example host.html + the
-    // WebGL runtime bundle are gone — the wgpu examples each carry
+    // WebGL runtime bundle are gone - the wgpu examples each carry
     // their own page, and standalones bake src/bridge.zig.)
     const docfmt_exe: *Compile = tools.docfmt;
     const readme_step: *Step = b.step("readme", "Generate zig-out/web/readme.html (shared style + highlighting)");
@@ -1174,7 +1197,7 @@ pub fn build(b: *std.Build) void {
     // served example page references via <script src="../zimr.js"> (--external-js
     // in bridgePage), so the ~500KB runtime is fetched + cached ONCE instead of
     // inlined into every page. Built exactly like bridgePage but WITHOUT --html
-    // — bare JS to stdout. The standalone twin still inlines (file://-portable).
+    // - bare JS to stdout. The standalone twin still inlines (file://-portable).
     {
         const to_c: *Run = b.addSystemCommand(&.{
             b.graph.zig_exe,       "build-obj",
@@ -1206,7 +1229,7 @@ pub fn build(b: *std.Build) void {
     cheatsheet_step.dependOn(&cheatsheet_run.step);
 
     // ---- WebGPU demo (Phase 1 of the wgpu migration; see notes/MIGRATION_PROGRESS.md).
-    // Standalone target — does NOT touch the existing GL example flow
+    // Standalone target - does NOT touch the existing GL example flow
     // (per migration decision D8, side-by-side).  Builds the wgpu_bringup
     // wasm, bundles src/bridge.zig to wgpu_bringup.js, and installs an
     // index.html that loads them both.  Triggered ONLY by `zig build
@@ -1236,7 +1259,7 @@ pub fn build(b: *std.Build) void {
     // Wire ENGINE WGSL imports onto wgpu_bringup_mod so the demo can
     // `@embedFile("default_shapes_vs.wgsl")` and feed it as the VS
     // half of a `loadShader` call.  Same pattern as `zimr_mod`'s
-    // wiring (line ~660 above), but late-bound — the engine-emission
+    // wiring (line ~660 above), but late-bound - the engine-emission
     // loop ran much earlier and recorded paths on `engine_shaders`.
     for (engine_shaders.items) |s| {
         if (s.wgsl_path) |wgsl_path| {
@@ -1252,7 +1275,7 @@ pub fn build(b: *std.Build) void {
     {
         // mandelbrot_fs is @embedFile'd by the demo and must compile even under
         // -Dgl=false (compiled_shaders is gated with the GL examples), so build
-        // it explicitly here — same approach as wgpu-mandelbrot-split below.
+        // it explicitly here - same approach as wgpu-mandelbrot-split below.
         const mandel_out: shader_codegen.ShaderPipeline.ShaderOutput = shader_pipeline.addShaderEx(
             b.path("examples/mandelbrot_fs.zig"),
             .{
@@ -1269,7 +1292,7 @@ pub fn build(b: *std.Build) void {
 
         // The three fractal io schemas the demo @imports by filename (for
         // loadShader's comptime VS-Outputs == FS-Inputs check). Plain Zig
-        // schema files — wired as modules, not compiled as shaders.
+        // schema files - wired as modules, not compiled as shaders.
         const fractal_io = [_][]const u8{
             "mandelbrot_fs_io",
             "julia_fs_io",
@@ -1317,7 +1340,7 @@ pub fn build(b: *std.Build) void {
                     .shader_io = b.path(pair.io_path),
                     .shader_basename = pair.sh_name,
                     .emit_wgsl = true,
-                    .wgsl_strict = true, // these are bedrock — no // ERROR: tolerated
+                    .wgsl_strict = true, // these are bedrock - no // ERROR: tolerated
                 });
             // Wire the .wgsl as @embedFile-able from wgpu_bringup.zig.
             const wgsl_import_name: []const u8 = b.fmt("{s}.wgsl", .{pair.sh_name});
@@ -1354,8 +1377,8 @@ pub fn build(b: *std.Build) void {
     wgpu_bringup_step.dependOn(&wgpu_bringup_install.step);
     wgpu_bringup_step.dependOn(&wgpu_index_install.step);
 
-    // ---- bridge-hello: ZIG_BRIDGE_PLAN Phase 1 — the bridge monolith ----
-    // src/bridge.zig → C (wasm32-freestanding) → tools c2js → one HTML page.
+    // ---- bridge-hello: ZIG_BRIDGE_PLAN Phase 1 - the bridge monolith ----
+    // src/bridge.zig -> C (wasm32-freestanding) -> tools c2js -> one HTML page.
     // No wasm module, no hand-written JS/HTML anywhere in this chain.
     {
         const to_c: *Run = b.addSystemCommand(&.{
@@ -1374,7 +1397,7 @@ pub fn build(b: *std.Build) void {
         step.dependOn(&inst.step);
     }
 
-    // ---- bridge-slice: Phase 2 — the app owns the page (D9–D11) ----
+    // ---- bridge-slice: Phase 2 - the app owns the page (D9-D11) ----
     {
         const app_wasm: *Run = b.addSystemCommand(&.{
             b.graph.zig_exe,           "build-exe",
@@ -1406,7 +1429,7 @@ pub fn build(b: *std.Build) void {
         step.dependOn(&inst.step);
     }
 
-    // ---- bridge-classic-probe: Phase 3a — the classic zimr contract ----
+    // ---- bridge-classic-probe: Phase 3a - the classic zimr contract ----
     {
         const app_wasm: *Run = b.addSystemCommand(&.{
             b.graph.zig_exe,        "build-exe",
@@ -1441,7 +1464,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // ---- wgpu-standalone: the 2D demo as a single self-contained HTML ----
-    // Same one-call helper as the cube — a second consumer proving the
+    // Same one-call helper as the cube - a second consumer proving the
     // standalone generalizes across wgpu demos (any future demo is one call).
     _ = addWgpuStandalone(
         b,
@@ -1456,18 +1479,18 @@ pub fn build(b: *std.Build) void {
 
     // ---- wgpu-shapes: the first 2D drawing demo on WebGPU (N5a gate) ----
     // Drives the WgpuGl adapter (f.gl) via z.beginDrawing/drawRectangle/
-    // drawCircle — the same free-function shape as a GL example. Proves WgpuGl
+    // drawCircle - the same free-function shape as a GL example. Proves WgpuGl
     // renders real 2D geometry on-screen (retires N4's "visual pending").
     // ---- wgpu example apps: one table, one builder ----------------------
     // Every servable wgpu demo is a row in `wgpu_apps`. `ctx.addApp` unifies
     // the old addWgpuApp / addWgpuShaderApp split: an empty `.shaders` is just
     // a no-op loop. Bespoke examples that need build-time wiring (asset baking,
     // engine-shader embeds) set a `.configure` hook instead of growing this
-    // struct — see configureHelmetSw. Examples that own their GPU frame (cube,
+    // struct - see configureHelmetSw. Examples that own their GPU frame (cube,
     // lambert, pbr, gltf) don't fit the runner contract and stay manual above.
     // Pre-filter the engine shaders that emitted WGSL into (name, path) pairs so
     // the `wireEngineWgsl` configure helper can embed them. (engine_shaders is
-    // fully populated by here — the own-frame demos above already read it.)
+    // fully populated by here - the own-frame demos above already read it.)
     var engine_wgsl_list: ArrayList(EngineWgsl) = .empty;
     for (engine_shaders.items) |s| {
         if (s.wgsl_path) |wgsl_path| {
@@ -1710,8 +1733,8 @@ pub fn build(b: *std.Build) void {
             .job_kernels = true,
         },
         // THE FLAGSHIP. One 7-line Zig function on four machines: comptime, CPU main
-        // thread, CPU worker, GPU. It is the only example that wants BOTH opt-ins at once —
-        // `compute_kernels` gives it .cpu and .gpu, `job_kernels` gives it .worker — and
+        // thread, CPU worker, GPU. It is the only example that wants BOTH opt-ins at once -
+        // `compute_kernels` gives it .cpu and .gpu, `job_kernels` gives it .worker - and
         // that is the point: the same module, `escape_kernel.zig`, feeds all three.
         // The first thing that uses the pool's PARALLELISM. `pump()` has always fed every
         // free worker off the queue; until `jobs.Group` there was no ergonomic way to hand it
@@ -2069,7 +2092,7 @@ pub fn build(b: *std.Build) void {
             .configure = wireEngineWgsl,
         },
         // Compute apps: regular examples that opt into GPU compute via
-        // `.compute_kernels`. No separate list or builder — adding compute to any
+        // `.compute_kernels`. No separate list or builder - adding compute to any
         // example above is just adding this one field.
         .{
             // PPO learning a cartpole hold with its update on the GPU (zn_mlp), beside MPC
@@ -2383,7 +2406,7 @@ pub fn build(b: *std.Build) void {
                     .source_path = "src/gpu/zn_binary.zig",
                     // `cartpole_step` calls `zn.cartpoleStep` rather than restating it.
                     .wants_zimrnum = true,
-                    // ★ One entry per line: `zig fmt` column-aligns a list whose items share a line, and
+                    // * One entry per line: `zig fmt` column-aligns a list whose items share a line, and
                     // that realignment broke an append anchor repeatedly during the port. The
                     // kernel files' own `kernels` lists are formatted the same way for the same
                     // reason.
@@ -2626,12 +2649,12 @@ pub fn build(b: *std.Build) void {
         // `four_ways` IS on this page now, and the reason it could not be is worth keeping.
         //
         // It is the only example with BOTH `compute_kernels` and `job_kernels`, so it was easy
-        // to blame the jobs wiring — and I did, twice. The real cause had nothing to do with
+        // to blame the jobs wiring - and I did, twice. The real cause had nothing to do with
         // jobs: `wireComputeKernels` minted a FRESH `kompute` module per example. With one
         // compute example per page that is invisible. A launcher is BY DEFINITION many examples
         // on one page, so Zig saw two distinct modules rooted at the same `src/kompute.zig`,
         // renamed the second `kompute0`, and rejected the file for belonging to both. Its error
-        // named `escape_kernel.zig` — the import that tripped over the clash, not the cause.
+        // named `escape_kernel.zig` - the import that tripped over the clash, not the cause.
         //
         // The cap was silent, and it was ONE COMPUTE EXAMPLE PER PAGE. `AppContext` already
         // held a shared `kompute_mod`; the wiring simply never reached for it.
@@ -2703,7 +2726,7 @@ pub fn build(b: *std.Build) void {
     // stub WebGPU + WASI imports, runs `_initialize` + 60 frames of
     // `update`, verifies no traps and no missing imports.  Catches
     // function signature mismatches between Zig externs and the JS
-    // bridge — the kind of bug that would otherwise only surface in
+    // bridge - the kind of bug that would otherwise only surface in
     // the browser, with a confusing "missing import" error.
     const wgpu_smoke_step: *Step = b.step(
         "smoke",
@@ -2714,11 +2737,11 @@ pub fn build(b: *std.Build) void {
     // WebAssembly.instantiate + a host import shim; everything else they use
     // is node:fs/crypto/path. Node 22 provides all of it and strips TS types
     // inline, so Bun is not a test dependency. (A pure-Zig wasm runner would
-    // mean embedding an interpreter — disproportionate; Node is the simplest
+    // mean embedding an interpreter - disproportionate; Node is the simplest
     // ubiquitous thing that runs wasm with JS host functions.)
     // DOGFOODED (Phase 5b): the smoke test LOGIC is webtests/wgpu_smoke.zig,
     // compiled to wasm32 and transpiled to JS by our OWN c2js, then run under
-    // Node via webtests/runner.mjs (the only hand-written JS in the path —
+    // Node via webtests/runner.mjs (the only hand-written JS in the path -
     // it does nothing but WebAssembly.instantiate + fs). Byte-identical
     // output to the old .ts, which is now deleted.
     const smoke_logic_to_c: *Run = b.addSystemCommand(&.{
@@ -2810,7 +2833,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     // URDF import: read a robot description, write a checked-in Zig model. The output is
-    // committed rather than generated on the fly — see tools/urdf_import.zig for why.
+    // committed rather than generated on the fly - see tools/urdf_import.zig for why.
     const urdf_module: *std.Build.Module = b.createModule(.{
         .root_source_file = b.path("src/urdf.zig"),
         .target = b.graph.host,
@@ -2838,13 +2861,13 @@ pub fn build(b: *std.Build) void {
         "@import(\"../../../robot.zig\")",
     });
 
-    // ★ THE SAME MODEL, EMITTED AGAIN FOR THE EXAMPLE — because an example cannot import
+    // * THE SAME MODEL, EMITTED AGAIN FOR THE EXAMPLE - because an example cannot import
     // across a module boundary, and a hand-copied model GOES STALE SILENTLY.
     //
     // It already did: `robot_3d` carried a copy made before the importer learned to emit
     // collision hulls, so the example simulated a robot with `ngeom = 0`. The bridge created
     // no proxies, the arm did not exist to the collision detector, and it swept through a
-    // crate tower reporting zero contacts — with every other part of the seam correct.
+    // crate tower reporting zero contacts - with every other part of the seam correct.
     // Nothing warns about a stale copy; it compiles and runs and is simply an older robot.
     //
     // Regenerating both from one source means they cannot disagree. The import path differs
@@ -2915,7 +2938,7 @@ pub fn build(b: *std.Build) void {
     canary_run.addFileArg(canary_js);
     canary_step.dependOn(&canary_run.step);
 
-    // SPIR-V → WGSL transpiler wasm exposed for the corpus test.
+    // SPIR-V -> WGSL transpiler wasm exposed for the corpus test.
     // Standalone wasm that JS can call repeatedly with different
     // SPIR-V inputs.  Used by `webtests/transpiler_corpus.zig` to
     // run the transpiler against every .rewritten.spv in the build cache
@@ -2940,13 +2963,13 @@ pub fn build(b: *std.Build) void {
     // The corpus test step: build the transpiler wasm, then run the test
     // LOGIC against every .rewritten.spv in .zig-cache/. Default mode: check
     // against the locked fixture at `tests/fixtures/wgsl_corpus.json` and
-    // fail on any drift. See `src/notes/webgpu-migration-plan.md` §3
+    // fail on any drift. See `src/notes/webgpu-migration-plan.md` section 3
     // Phase A3 for the regression-corpus design.
     //
     // DOGFOODED (Phase 5c): the test logic is webtests/transpiler_corpus.zig,
     // compiled to wasm32 and transpiled to JS by our OWN c2js, run under Node
     // via webtests/runner.mjs (the only hand-written JS in the path; it does
-    // WebAssembly.instantiate + fs + the host primitives the logic drives —
+    // WebAssembly.instantiate + fs + the host primitives the logic drives -
     // listFiles/md5File/fileSize/sutMemWrite/sutMemRead/sutCallPacked/writeFile).
     // The Zig logic does the MD5 of the WGSL itself (std.crypto.hash.Md5) and
     // the placeholder scan; output is byte-identical to the old .ts, now deleted.
@@ -2982,7 +3005,7 @@ pub fn build(b: *std.Build) void {
     // the JS result equals the native result AND that no /*TODO|/*?
     // unhandled-lowering marker reached the output. This is what proves
     // c2js transpiles ARBITRARY Zig correctly, not just zimr's linted
-    // subset — which is exactly why these case files are NOT linted
+    // subset - which is exactly why these case files are NOT linted
     // (they live under intake/, outside the lint walk roots, and many
     // deliberately use non-house-style constructs to exercise lowerings).
     // The .zig differential script is Node-based on the JS side already;
@@ -3014,7 +3037,7 @@ pub fn build(b: *std.Build) void {
     });
     c2js_diff_cmd.setEnvironmentVariable("ZIG", b.graph.zig_exe);
     c2js_diff_cmd.setEnvironmentVariable("ALLOW_SKIP", "interop");
-    // KNOWN_FAIL: empty — all four cases that failed on the current Zig's C-backend
+    // KNOWN_FAIL: empty - all four cases that failed on the current Zig's C-backend
     // output (packed_bitcast, packed_struct_wide, arrays_of_structs,
     // odd_width_aggregate) have been fixed in c2js and now pass. The gate is a clean
     // regression gate: ANY failure is a real regression. If a future Zig C-backend
@@ -3038,7 +3061,7 @@ pub fn build(b: *std.Build) void {
     transpiler_corpus_refresh_cmd.step.dependOn(&transpiler_wasm_install.step);
     transpiler_corpus_refresh_step.dependOn(&transpiler_corpus_refresh_cmd.step);
 
-    // native_target — used by both wgpu-diff (below) and the
+    // native_target - used by both wgpu-diff (below) and the
     // per-file test loop later.  Declared here at first use; the
     // later for-loop reuses the same value.
     const native_target: ResolvedTarget = b.standardTargetOptions(.{});
@@ -3053,7 +3076,7 @@ pub fn build(b: *std.Build) void {
     //     `__unresolved_N__`, `// ERROR:` markers)
     //   - tallies and asserts against the recorded baseline
     //
-    // No JS, no Node, no npm.  Pure Zig — aligned with the "pure
+    // No JS, no Node, no npm.  Pure Zig - aligned with the "pure
     // Zig destination" arc of the project.
     //
     //   zig build wgpu-diff
@@ -3075,13 +3098,13 @@ pub fn build(b: *std.Build) void {
             .pic = true,
         });
         // Same wiring as the main test_step uses. This module reaches the
-        // same host-test graph (tests.zig → render stack), so it needs the
+        // same host-test graph (tests.zig -> render stack), so it needs the
         // identical shader wiring: .glsl placeholders (the real .glsl would
         // run the gated-off spirv-opt path), the .wgsl twins that
         // renderer_2d @embedFiles, the shapes externs modules, AND
         // build_options (ui.zig and the wgpu stack @import it). Previously
         // diff_mod wired only the .glsl names + zm + shader_interface and
-        // so failed to compile (missing build_options + .wgsl embeds) —
+        // so failed to compile (missing build_options + .wgsl embeds) -
         // wgpu-diff was silently broken. Mirror test_mod exactly.
         for (engine_shaders.items) |s| {
             const is_glsl: bool = endsWith(u8, s.name, ".glsl");
@@ -3114,6 +3137,7 @@ pub fn build(b: *std.Build) void {
             }
         }
         diff_mod.addImport("zm", zimrmath_mod);
+        diff_mod.addImport("zn", zimrnum_mod);
         diff_mod.addAnonymousImport("atomic_buildgrid_spv", .{
             .root_source_file = b.path("tests/fixtures/atomics/atomic_buildgrid.spv"),
         });
@@ -3122,17 +3146,17 @@ pub fn build(b: *std.Build) void {
         const t: *Compile = b.addTest(.{
             .root_module = diff_mod,
             .filters = &.{
-                // Phase 0 — corpus runner + WGSL structural validator
+                // Phase 0 - corpus runner + WGSL structural validator
                 "spv2wgsl corpus",   "wgsl_check",     "scanBugs",
-                // Phase 1.1 — module split scaffolds (types.zig has
+                // Phase 1.1 - module split scaffolds (types.zig has
                 // real tests; block_table/walker/selection/loop/switch
                 // are scaffolds whose `scaffold compiles` smoke runs
                 // through these filters).
                 "Op enum",           "StorageClass",   "BuiltIn",
                 "scaffold compiles",
-                // Phase 1.3 — BlockTable construction tests.
+                // Phase 1.3 - BlockTable construction tests.
                 "registerBlocks",
-                // Phase 2 — walker scaffold + StopSet.
+                // Phase 2 - walker scaffold + StopSet.
                 "emitStopExit",
                 "StopSet",           "emitBlock",      "emitBranch",
             },
@@ -3143,11 +3167,11 @@ pub fn build(b: *std.Build) void {
     }
 
     // ---- Smoke test: load each live wgpu example wasm in Bun and check
-    // it boots + ticks frames without trapping (no real GPU needed — the
+    // it boots + ticks frames without trapping (no real GPU needed - the
     // wgpu/dom/wasi imports are stubbed).  By default smoke-test runs the
     // whole wgpu gallery; -Dfocus=<names|prefix*> (or the `tier-a` magic
     // value) narrows it.  The old GL `smoke.ts` gallery was retired with
-    // the WebGL backend — this is its wgpu successor.
+    // the WebGL backend - this is its wgpu successor.
     // DOGFOODED (Phase 5b): same Zig logic + runner.mjs as wgpu-smoke, in
     // directory mode over the wgpu gallery. Reuses the smoke_logic_js
     // LazyPath transpiled above (c2js output of webtests/wgpu_smoke.zig).
@@ -3163,7 +3187,7 @@ pub fn build(b: *std.Build) void {
         // wgpu_smoke.ts doesn't know the `tier-a` magic value (only
         // matchesFocus does), so expand it to the literal wgpu example
         // basenames before passing.  Keep this list in sync with the
-        // `tier_a_names` table in matchesFocus — both sides must agree so
+        // `tier_a_names` table in matchesFocus - both sides must agree so
         // the build-side install gate and the harness filter select the
         // same wasms.
         const expanded: []const u8 = if (eql(u8, smoke_focus, "tier-a"))
@@ -3180,7 +3204,7 @@ pub fn build(b: *std.Build) void {
     // (a Proxy), so it CANNOT catch a bridge gap that would LinkError in the
     // browser at WebAssembly.instantiate (`js_set_mouse_cursor` / `js_open_url`
     // shipped exactly this way).  This reads each installed wasm's import section
-    // and diffs it against bridge.zig — pure Zig, no Node, no wasm execution.
+    // and diffs it against bridge.zig - pure Zig, no Node, no wasm execution.
     // Sits between install and smoke_cmd so a bridge gap fails the smoke.
     const verify_imports_exe: *Compile = b.addExecutable(.{
         .name = "verify_imports",
@@ -3210,10 +3234,10 @@ pub fn build(b: *std.Build) void {
     // showcase (2D shape primitives), ui_color_picker (a UI widget).
     // Three ways to use it:
     //
-    //   zig build test -Dfocus=tier-a       — typecheck only (~2s)
-    //   zig build smoke-test -Dfocus=tier-a — Bun smoke for tier-a
+    //   zig build test -Dfocus=tier-a       - typecheck only (~2s)
+    //   zig build smoke-test -Dfocus=tier-a - Bun smoke for tier-a
     //                                          examples (~15s warm)
-    //   zig build tier-a-check              — the combined audit
+    //   zig build tier-a-check              - the combined audit
     //                                          (test + smoke + wgpu)
     //
     // `tier-a` is a magic focus value (see matchesFocus) expanding to
@@ -3291,10 +3315,10 @@ pub fn build(b: *std.Build) void {
     //
     // Includes:
     //   - The host-side fixture WGSL check (compiles tests/fixture_fs.zig
-    //     through Zig→SPIR-V→spv2wgsl, validates non-empty + clean) —
+    //     through Zig->SPIR-V->spv2wgsl, validates non-empty + clean) -
     //     same FixtureWgslCheck wired into `zig build test`, bundled
     //     here for convenience.  Wired further below where the fixture
-    //     step itself is constructed (declaration ordering — both
+    //     step itself is constructed (declaration ordering - both
     //     sides of the dependency can't be near each other).
     //   - The corpus regression check (51 shaders).
     //   - The wgpu_bringup build + Bun smoke (no real GPU needed).
@@ -3308,7 +3332,7 @@ pub fn build(b: *std.Build) void {
     wgpu_check.dependOn(&transpiler_corpus_cmd.step);
     wgpu_check.dependOn(&wgpu_smoke_cmd.step);
 
-    // ── zm's GPU branch, actually verified rather than asserted ──
+    // -- zm's GPU branch, actually verified rather than asserted --
     //
     // zimrmath is the one module allowed to touch std.math, on the deal that each wrapper carries
     // a hand-rolled GPU branch "verified to compile for a shader". Nothing enforced that clause: a
@@ -3386,12 +3410,12 @@ pub fn build(b: *std.Build) void {
     // Doc style tripwire: every published page keeps one shared stylesheet, no
     // <script>, no webfont fetch. Cheap (four greps over eleven files), and it
     // is the only thing standing between the uniform docs and the five palettes
-    // they came from — see `src/notes/docs_style_plan.md`.
+    // they came from - see `src/notes/docs_style_plan.md`.
     wgpu_check.dependOn(&doc_gate_run.step);
     // Binding/structural WGSL tripwire: run the validator over every shader in
     // the corpus. Depends on wgpu_smoke_cmd so the shaders are compiled into
     // .zig-cache first (the tool walks the cache, like transpiler_corpus does).
-    // Fails the build on any duplicate @group@binding — the collision Dawn
+    // Fails the build on any duplicate @group@binding - the collision Dawn
     // rejects on-device that the mock smoke test can't see.
     const spv_bind_check_run: *Run = b.addRunArtifact(spv2wgsl_check_exe);
     spv_bind_check_run.addArg("our-corpus");
@@ -3446,17 +3470,17 @@ pub fn build(b: *std.Build) void {
         const test_mod: *Module = b.createModule(.{
             .root_source_file = b.path(tf),
             .target = native_target,
-            // ── ★★ ReleaseSafe, NOT Debug ──
+            // -- ** ReleaseSafe, NOT Debug --
             //
-            // Both keep every safety check — bounds, overflow, undefined reads — which is what
+            // Both keep every safety check - bounds, overflow, undefined reads - which is what
             // matters: the `deriv_cdof_dot` overflow that a ReleaseFast probe wrote straight
             // past was caught here on the first run.
             //
-            // ★ AND IT IS MEASURABLY FASTER, which is not a luxury. Debug did not finish inside
+            // * AND IT IS MEASURABLY FASTER, which is not a luxury. Debug did not finish inside
             // a 285 s budget; ReleaseSafe completes in 235. A suite that times out gets re-run
             // rather than read, and a re-run costs more attention than the compile time saved.
             //
-            // ★ IT ALSO REPORTS THINGS DEBUG NEVER REACHED. The first ReleaseSafe run surfaced
+            // * IT ALSO REPORTS THINGS DEBUG NEVER REACHED. The first ReleaseSafe run surfaced
             // a leak the timing-out Debug run had never got far enough to print.
             .optimize = .ReleaseSafe,
             .pic = true,
@@ -3468,7 +3492,7 @@ pub fn build(b: *std.Build) void {
         for (engine_shaders.items) |s| {
             // The GLSL path is dead. render.zig only needs these @embedFile-able to
             // COMPILE (host tests don't run GL), so wire a placeholder for the .glsl
-            // imports — otherwise the host test demands the real .glsl, which runs the
+            // imports - otherwise the host test demands the real .glsl, which runs the
             // gated-off spirv-opt/cross/zglsl pipeline and fails the gate.
             const is_glsl: bool = endsWith(u8, s.name, ".glsl");
             const src: std.Build.LazyPath = if (is_glsl)
@@ -3477,7 +3501,7 @@ pub fn build(b: *std.Build) void {
                 s.path;
             test_mod.addAnonymousImport(s.name, .{ .root_source_file = src });
             // The WGSL twin too: the host-test graph reaches the wgpu render
-            // stack now (leak_test → draw3d → renderer_2d, GL-retirement P5
+            // stack now (leak_test -> draw3d -> renderer_2d, GL-retirement P5
             // + the refAllDecls policy), and renderer_2d @embedFiles
             // "default_shapes_vs.wgsl" & co.
             if (s.wgsl_path) |wp| {
@@ -3512,46 +3536,50 @@ pub fn build(b: *std.Build) void {
         // (and any iface file reached through it) resolves
         // `@import("shader_interface")`.
         test_mod.addImport("shader_interface", shader_interface_mod);
-        // Same for `zm` — the unified math module.  src/*.zig files
+        // Same for `zm` - the unified math module.  src/*.zig files
         // do `const zm = @import("zm");` since Stage 5 of math-
         // unification migrated path imports of math.zig to module
         // imports.  Without this wire, every src/ test that reaches
         // a math-using file fails to compile.
         test_mod.addImport("zm", zimrmath_mod);
+        // `zn` because `tests.zig` reaches `zimr.zig` as a FILE (refAllDecls), not through
+        // `zimr_mod`, so it needs every import `zimr_mod` has - and `zimr.zig` re-exports
+        // `robot_gym`, which imports `zn`. A module import runs none of zimrnum's own tests.
+        test_mod.addImport("zn", zimrnum_mod);
         test_mod.addAnonymousImport("atomic_buildgrid_spv", .{
             .root_source_file = b.path("tests/fixtures/atomics/atomic_buildgrid.spv"),
         });
         test_mod.addOptions("build_options", build_opts);
-        // ── ★★ `-Dtest-filter=<substring>` ──
+        // -- ** `-Dtest-filter=<substring>` --
         //
         // Zig's test runner already supports a name filter; nothing was passing one through,
         // so the only way to run ONE test was to run all of them. Measured: the whole suite is
         // minutes, `robot_mpc` alone is 117 s (36 tests, several of them finite-difference
         // sweeps), and a single filtered test is seconds.
         //
-        // ★ This does NOT shorten the COMPILE — the test binary still links every shader
+        // * This does NOT shorten the COMPILE - the test binary still links every shader
         // module `src/tests.zig` transitively needs. It shortens the RUN. `-Dtest-fast` below
         // is the one that shortens the compile.
-        // ── ★★★ THE FAST TIER ──
+        // -- *** THE FAST TIER --
         //
         // One test artifact per shader-free module, each depending only on `zm` and
         // `build_options`. `robot.zig` measured 33 s this way against minutes for the full
         // root, because it links no shaders at all.
         //
-        // ★ Kept as a LIST rather than folded into the big root, so adding a module here is a
-        // one-line decision that says "this has no render dependency" — and the compiler
+        // * Kept as a LIST rather than folded into the big root, so adding a module here is a
+        // one-line decision that says "this has no render dependency" - and the compiler
         // enforces it: a module that grows one stops building in this tier.
         const fast_test_roots = [_][]const u8{
-            // ★★★ `zimrmath.zig` FIRST, BECAUSE IT HAD NO GATE AT ALL. Every module and every
+            // *** `zimrmath.zig` FIRST, BECAUSE IT HAD NO GATE AT ALL. Every module and every
             // shader depends on it, its dedicated `math-test` step below is commented out, and
-            // `refAllDecls` never reaches a test block — so THREE of its own tests stopped
+            // `refAllDecls` never reaches a test block - so THREE of its own tests stopped
             // compiling on the 1980 bump and nothing said a word. It costs one artifact.
             "src/zimrmath.zig",
-            // ★★★ `zimrnum.zig` — the numerics / stats / DL / RL library. It belongs in THIS tier
+            // *** `zimrnum.zig` - the numerics / stats / DL / RL library. It belongs in THIS tier
             // by construction: its whole closure is `zm` + `kompute` + `std`, all shader-free.
             // Everything that touches a queue lives in `zimrnum_gpu.zig` instead, and that split
             // is what keeps a thousand numerical tests running in seconds. See
-            // `src/notes/zimrnum_plan.md` §3 — do not collapse the two files.
+            // `src/notes/zimrnum_plan.md` section 3 - do not collapse the two files.
             "src/zimrnum.zig",
             "src/robot.zig",
             "src/robot_physics.zig",
@@ -3562,7 +3590,7 @@ pub fn build(b: *std.Build) void {
             "src/mjcf.zig",
             "src/robot_urdf.zig",
             "src/robot_mjcf.zig",
-            // ★★ THE TWO NUMERICS MODULES. Both are shader-free by construction - `zimrmath`
+            // ** THE TWO NUMERICS MODULES. Both are shader-free by construction - `zimrmath`
             // imports only `std`, and `zimrnum` imports `zm` and `kompute` and nothing else,
             // which is the constraint that keeps it in this tier.
             //
@@ -3572,8 +3600,8 @@ pub fn build(b: *std.Build) void {
             // (These two were listed TWICE - once here and once at the top of this list - so
             // `test-fast` built and ran both of them twice over. Removed; the per-root steps
             // below would not even configure with a duplicate, which is how it surfaced.)
-            // ★ The retarget integration test: real BVH -> real ragdoll. It belongs here
-            // because `codecs.zig` needs only `zm` too — the whole animation-to-robot path is
+            // * The retarget integration test: real BVH -> real ragdoll. It belongs here
+            // because `codecs.zig` needs only `zm` too - the whole animation-to-robot path is
             // shader-free, which is what makes it testable in seconds.
             "src/tests/ragdoll_bvh_test.zig",
             // The GPU sweep's CPU reference and the table that judges it. Its closure is
@@ -3582,7 +3610,7 @@ pub fn build(b: *std.Build) void {
             // checkable with no device at all, and every one of them would make the device
             // comparison meaningless before it ever ran.
             "src/gpu/zn_conformance.zig",
-            // ★★ The robot family's tests, compiled once and run once: it imports every robot
+            // ** The robot family's tests, compiled once and run once: it imports every robot
             // root above, and `test-fast` runs it INSTEAD of them (they keep their `zn-` steps).
             // Its import list is read back by `robotTestsMembers`, so it is the one list.
             "src/robot_tests.zig",
@@ -3610,9 +3638,9 @@ pub fn build(b: *std.Build) void {
         };
         const robot_tests_members: []const []const u8 = robotTestsMembers(b);
         for (fast_test_roots) |root| {
-            // ★ The module ROOT is the file itself, so a test under `src/tests/` reaching a
+            // * The module ROOT is the file itself, so a test under `src/tests/` reaching a
             // sibling with `@import("../x.zig")` would escape the module path. Those tests
-            // import through `src/` instead — see `ragdoll_bvh_test.zig`.
+            // import through `src/` instead - see `ragdoll_bvh_test.zig`.
             // Tests run ReleaseSafe: optimised, with every bounds and overflow check still armed,
             // which is what a test is for. A TRAINING chunk is different - it is the same code,
             // already proven by those tests, run for hours - so under `-Dtrain-chunk` it builds
@@ -3673,14 +3701,14 @@ pub fn build(b: *std.Build) void {
                 test_fast_step.dependOn(&fast_run.step);
             }
 
-            // ── A STEP PER ROOT, because `test-fast` rebuilds all six ──
+            // -- A STEP PER ROOT, because `test-fast` rebuilds all six --
             //
             // Working on zimrnum means recompiling zimrmath, robot, codecs and physics
             // alongside it for no reason: 71-212 s against 43 s for the one module that
             // changed, 7 s with `-Dtest-filter`. The step name is the file stem, so
             // `src/zimrnum.zig` gives `zig build zn-zimrnum`.
             //
-            // ★ These are for ITERATION. `zig build test-fast` is what the gate runs, and it
+            // * These are for ITERATION. `zig build test-fast` is what the gate runs, and it
             // is what catches a break in a module you did not think you had touched - which
             // has happened more than once this arc.
             const stem: []const u8 = std.fs.path.stem(root);
@@ -3698,7 +3726,7 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run.step);
     }
 
-    // Native/host examples: software renderer, PNG output — zimr without
+    // Native/host examples: software renderer, PNG output - zimr without
     // the web/GPU/c2js stack. Grouped in their own function (leaf steps).
     buildNativeExamples(b, native_target, zimrmath_mod, shader_interface_mod, build_opts, engine_shaders);
 
@@ -3871,10 +3899,10 @@ pub fn build(b: *std.Build) void {
     // Host-built tool path. Zig names executables `<name>.exe` on Windows, so
     // without the host exe suffix `zig build lint` / `lint-check` fails there
     // with "FileNotFound". (The lint binary is produced by the tools/ subbuild,
-    // not a main-build Compile, so it can't be run via addRunArtifact — which
-    // would handle the suffix for us — hence this explicit, suffix-aware path.)
+    // not a main-build Compile, so it can't be run via addRunArtifact - which
+    // would handle the suffix for us - hence this explicit, suffix-aware path.)
     const lint_run: *Run = b.addRunArtifact(zimrlint_exe);
-    // ── THE LINT RATCHET ──
+    // -- THE LINT RATCHET --
     //
     // `childNodes` returned no children for `.assign` and `.while_cont`, so every rule in
     // zimrlint silently skipped assignment right-hand sides and `while (i < n) : (i += 1)`
@@ -3892,7 +3920,7 @@ pub fn build(b: *std.Build) void {
     // Install-path twin of `lint_run`.  Default `zig build` lints via
     // THIS Run so the lint can be gated behind a green compile (wired at
     // the end of build()) without forcing the standalone `lint` /
-    // `lint-check` steps — which share `lint_run` — to build the whole
+    // `lint-check` steps - which share `lint_run` - to build the whole
     // project first.  Same file set; only the dependencies differ.
     const lint_run_install: *Run = b.addRunArtifact(zimrlint_exe);
     lint_run_install.addArg("--baseline");
@@ -3912,20 +3940,20 @@ pub fn build(b: *std.Build) void {
     // build pipeline trips this gate.
     //
     // Implementation note: pure-Zig step (no `sh -c`).  The previous
-    // version called `sh -c "head -1 … | grep -q …"` which works in
+    // version called `sh -c "head -1 ... | grep -q ..."` which works in
     // git-bash / WSL but blows up in a plain Windows cmd.exe with
     // "failed to spawn sh: FileNotFound".  Same problem `distCopyMake`
-    // above solves for the dist copy — we follow that pattern here.
-    // (GLSL fixture-header check removed — the GLSL path is retiring; the WGSL
+    // above solves for the dist copy - we follow that pattern here.
+    // (GLSL fixture-header check removed - the GLSL path is retiring; the WGSL
     // fixture check below is the live regression gate for the shader pipeline.)
 
     // Parallel WGSL fixture check.  Validates that the new
     // `addShaderWgsl` build step runs end-to-end (spv2wgsl tool
     // exists, accepts the opt'd SPIR-V, produces non-empty WGSL).
     // The fixture is the same `tests/fixture_fs.zig` as the GLSL
-    // check — so we know one Zig source compiles to BOTH .glsl
+    // check - so we know one Zig source compiles to BOTH .glsl
     // (via spirv-cross) and .wgsl (via spv2wgsl).  See
-    // `src/notes/webgpu-migration-plan.md` §3 Phase B.
+    // `src/notes/webgpu-migration-plan.md` section 3 Phase B.
     const fixture_wgsl: LazyPath = shader_pipeline.addShaderWgsl(
         b.path("tests/fixture_fs.zig"),
         .{},
@@ -3939,10 +3967,10 @@ pub fn build(b: *std.Build) void {
     // because the step exists above and the check is constructed here.
     wgpu_check.dependOn(&fixture_wgsl_check.step);
 
-    // (GLSL math-pipeline check removed — the GLSL path is retiring. zm is verified
+    // (GLSL math-pipeline check removed - the GLSL path is retiring. zm is verified
     // through the WGSL/compute path (turn ~979) and host math tests instead.)
     // Default scan: every src/*.zig file.  To lint a specific subset,
-    // pass `-Dlint-files=a.zig,b.zig` (a build option — observable by
+    // pass `-Dlint-files=a.zig,b.zig` (a build option - observable by
     // the configurer).  The old `-- foo.zig` positional override is
     // gone: the configurer/maker split made passthru args unobservable
     // to build.zig, so file targeting moved to an option while flags
@@ -3965,24 +3993,24 @@ pub fn build(b: *std.Build) void {
     ) orelse false;
     // `-Dgate` (default true): whether the lint/fmt gate precedes every wasm compile at all.
     //
-    // ── ★★★ WHY THIS EXISTS, AND WHY THE DEFAULT STAYS AGGRESSIVE ──
+    // -- *** WHY THIS EXISTS, AND WHY THE DEFAULT STAYS AGGRESSIVE --
     //
     // The gate is right for a normal build: it catches style drift at the moment it is written,
     // when the fix is obvious and free. It is WRONG in the middle of an iteration loop, where a
     // half-finished edit fails on a line-length rule before the compiler has said whether the
-    // change even makes sense — and the linter's message is then the only thing on screen, hiding
+    // change even makes sense - and the linter's message is then the only thing on screen, hiding
     // the type error that actually matters.
     //
-    // ★★ SO THE DEFAULT IS UNCHANGED. `-Dgate=false` is a deliberate thing to type, per command,
+    // ** SO THE DEFAULT IS UNCHANGED. `-Dgate=false` is a deliberate thing to type, per command,
     // and it prints a warning every time it is used so it cannot be forgotten silently. The
     // discipline it buys is: iterate with the gate off, then run `zig build check` with NO flag
-    // before ending a turn — `check` reaches lint and `zig fmt --check` through its wasm compiles,
+    // before ending a turn - `check` reaches lint and `zig fmt --check` through its wasm compiles,
     // so one command still covers everything.
     //
-    // ★ It does NOT disable the `lint` or `fmt` STEPS. `zig build lint` and `zig fmt` are always
+    // * It does NOT disable the `lint` or `fmt` STEPS. `zig build lint` and `zig fmt` are always
     // available and always run; this only removes the implicit dependency edge.
     //
-    // ── ★★★ CHANGED (Simon, Sep 25): BUILDING IS NOT GATED; ARTIFACTS AND THE END OF A TURN ARE ──
+    // -- *** CHANGED (Simon, Sep 25): BUILDING IS NOT GATED; ARTIFACTS AND THE END OF A TURN ARE --
     //
     // A gate on every compile - worse, an autofixing one that rewrote files mid-iteration - cost more
     // than it caught: a page build reformatted a file between reading it and the next exact-text edit.
@@ -4001,17 +4029,17 @@ pub fn build(b: *std.Build) void {
     const has_file_arg: bool = lint_files_opt != null;
     // Dependency-safe: this scan walks zimr's own tree via cwd-relative paths,
     // which only resolve when zimr is the ROOT project. When zimr is consumed as
-    // a package (b.pkg_hash non-empty), cwd is the consumer's root, so skip it —
+    // a package (b.pkg_hash non-empty), cwd is the consumer's root, so skip it -
     // a consumer never lints zimr's sources, and the lint steps just stay empty.
     if (!has_file_arg and b.pkg_hash.len == 0) {
         const io: std.Io = b.graph.io;
         const cwd: std.Io.Dir = std.Io.Dir.cwd();
         // Scan RECURSIVELY: every *.zig under src/, examples/,
         // tools/, and webtests/, plus build.zig.  The walk descends into
-        // subdirectories — this is deliberate.  An earlier
+        // subdirectories - this is deliberate.  An earlier
         // non-recursive `dir.iterate()` only saw top-level src/*.zig
         // and SILENTLY skipped subdir files (src/spv2wgsl/*.zig,
-        // src/shaders/*.zig, …), letting hundreds of lint violations
+        // src/shaders/*.zig, ...), letting hundreds of lint violations
         // accumulate there unseen.  Recursion closes that hole.
         //
         // tools/ was a SECOND blind spot: it holds first-class authored
@@ -4024,23 +4052,23 @@ pub fn build(b: *std.Build) void {
         // Excluded subtrees (path-prefix match on the walk-relative
         // path): `notes/staging/` (vendored upstream code) and
         // `c2js_cases/` under tools/ (matched via `firstSegmentIs`, which
-        // is separator-agnostic so it also holds on Windows) — the c2js
+        // is separator-agnostic so it also holds on Windows) - the c2js
         // transpiler corpus is ARBITRARY Zig by design (not zimr's linted
         // subset), exactly
         // like the top-level `tests/` shader fixtures (which are already
         // excluded simply by not being a scan root). NOTE: `src/tests/`
-        // IS now linted — the host unit-test suite is first-class zimr
-        // code — so only the deliberately-foreign test CORPORA stay
+        // IS now linted - the host unit-test suite is first-class zimr
+        // code - so only the deliberately-foreign test CORPORA stay
         // ungated.
         //
         // Under tools/ specifically we must NOT descend into the
-        // bundled toolchains / caches / prebuilt binaries — those are
+        // bundled toolchains / caches / prebuilt binaries - those are
         // thousands of third-party stdlib .zig files that are not ours
         // to style-gate (see `tools_skip_prefix` below).
         //
         // Finally, `deletion_skip` lists individual authored files that
         // are SCHEDULED FOR DELETION and therefore not worth linting or
-        // "fixing" — per the fix-on-notice exception in claude.md, a
+        // "fixing" - per the fix-on-notice exception in claude.md, a
         // doomed subsystem should be deleted/migrated, not polished.
         // Currently: `tools/zglsl.zig`, the GLSL post-process tool of
         // the dying WebGL/GLSL path being replaced by the wgpu/WGSL
@@ -4060,7 +4088,7 @@ pub fn build(b: *std.Build) void {
             "src/canvas_render_test.zig",
         };
         // Runtime `for` (not `inline for`) so an absent root can `continue`
-        // out of the error switch below — `continue` targeting an inline loop
+        // out of the error switch below - `continue` targeting an inline loop
         // from inside a runtime switch is a comptime-control-flow error. `root`
         // is only ever used at runtime here (eql / b.fmt), so nothing needs the
         // unroll.
@@ -4069,7 +4097,7 @@ pub fn build(b: *std.Build) void {
             var dir: std.Io.Dir = cwd.openDir(io, root, .{ .iterate = true }) catch |err| switch (err) {
                 // A scan root that isn't present in this checkout (e.g.
                 // `scripts/`, whose Python helpers were ported to `tools/`)
-                // simply has nothing to lint — skip it rather than aborting
+                // simply has nothing to lint - skip it rather than aborting
                 // the whole configure.
                 error.FileNotFound => continue,
                 else => @panic("cannot open scan dir"),
@@ -4085,7 +4113,7 @@ pub fn build(b: *std.Build) void {
                     continue;
                 }
                 // entry.path is relative to `root` (e.g. "spv2wgsl/ir.zig").
-                // (src/tests/ is intentionally NOT skipped — see the policy
+                // (src/tests/ is intentionally NOT skipped - see the policy
                 // note above; the top-level tests/ corpus is excluded by not
                 // being a scan root.)
                 if (std.mem.indexOf(u8, entry.path, "notes/staging/") != null) {
@@ -4093,7 +4121,7 @@ pub fn build(b: *std.Build) void {
                 }
                 // Skip the bundled toolchains / caches under tools/.
                 if (eql(u8, root, "tools")) {
-                    // c2js transpiler corpus — arbitrary Zig by design, not
+                    // c2js transpiler corpus - arbitrary Zig by design, not
                     // zimr's linted subset. Checked separator-agnostically
                     // because `entry.path` uses `\` on Windows (see
                     // `firstSegmentIs`), where a `"c2js_cases/"` prefix misses.
@@ -4130,7 +4158,7 @@ pub fn build(b: *std.Build) void {
         }
         // Top-level build.zig is included.  It uses build-helper
         // aliases (Step, Module, etc.) at the top of the file to
-        // keep the type annotations short — see the alias block
+        // keep the type annotations short - see the alias block
         // near the top of build.zig and src/shader_codegen.zig.
         lint_run.addFileArg(b.path("build.zig"));
         lint_run_install.addFileArg(b.path("build.zig"));
@@ -4179,7 +4207,7 @@ pub fn build(b: *std.Build) void {
     //
     // If you want to check ONLY formatting (no lint), use the zig CLI
     // directly: `zig fmt --check src/ examples/ build.zig tools/`.
-    // Not exposed as a build step — `lint-check` is the canonical gate
+    // Not exposed as a build step - `lint-check` is the canonical gate
     // and a one-purpose `fmt-check` step was redundant with it.
     //
     // Rationale (turn 342): putting fmt+lint on the install path made
@@ -4193,9 +4221,9 @@ pub fn build(b: *std.Build) void {
     // pointless work per check.  Discovered turn 382.
     // NOTE(zig-0.17): run `zig fmt` via addSystemCommand instead of b.addFmt.
     // The dev.639 configurer segfaults while serializing a Fmt step's LazyPath
-    // `paths` (minimal repro confirmed — file upstream for 0.17.1).  A system
+    // `paths` (minimal repro confirmed - file upstream for 0.17.1).  A system
     // command takes plain string args, sidestepping the broken path; the readme
-    // already documents `zig fmt …` from the CLI as equivalent.  See
+    // already documents `zig fmt ...` from the CLI as equivalent.  See
     // src/notes/zig17_migration.md B8.
     const fmt_apply: *Run = b.addSystemCommand(&.{
         b.graph.zig_exe,
@@ -4223,7 +4251,7 @@ pub fn build(b: *std.Build) void {
     lint_check_step.dependOn(&fmt_check.step);
     lint_check_step.dependOn(&lint_run.step);
 
-    // ── ★★★ `zig build gate` — EVERYTHING, so nobody has to remember the list ─────────
+    // -- *** `zig build gate` - EVERYTHING, so nobody has to remember the list ---------
     //
     // Every turn of the zimrnum port ran the same six things by hand: `lint`, `check`,
     // `fmt --check`, the zimrnum tests, the zimrmath tests, and two smokes. The two test
@@ -4275,10 +4303,10 @@ pub fn build(b: *std.Build) void {
     });
 
     // Gate-only fmt Run (distinct from the `zig build fmt` step's `fmt_apply`)
-    // so wiring the lint→fmt ordering here doesn't change what `zig build fmt`
+    // so wiring the lint->fmt ordering here doesn't change what `zig build fmt`
     // does. Under `-Dautofix` it depends on `lint_run_install` (the `--fix`
-    // Run), serialising the two mutating steps — lint-fix first, then fmt tidies
-    // the blank line a deletion can leave — ahead of every compile so they never
+    // Run), serialising the two mutating steps - lint-fix first, then fmt tidies
+    // the blank line a deletion can leave - ahead of every compile so they never
     // race on the same files.
     const fmt_apply_gate: *Run = b.addSystemCommand(&.{
         b.graph.zig_exe,
@@ -4295,12 +4323,12 @@ pub fn build(b: *std.Build) void {
     // LINT-FIRST GATE.  Every Zig compile in the build depends on the style
     // checks, so `lint` + `zig fmt --check` must pass BEFORE anything is
     // compiled: a semantic compile error never surfaces until the tree is
-    // lint-clean.  (Parse/AST errors DO still surface — from the linter and
+    // lint-clean.  (Parse/AST errors DO still surface - from the linter and
     // fmt themselves, which need a parseable AST; that's intended and fine.)
     //
     // Cycle-free: the lint binary is produced by `tools_subbuild` (a Run /
     // nested build), NOT an in-graph Compile, so no Compile is upstream of
-    // the lint Runs — gating Compiles behind them cannot form a loop.
+    // the lint Runs - gating Compiles behind them cannot form a loop.
     //
     // We walk every top-level step's transitive deps and gate each Compile
     // (`step.id == .compile`).  This covers bare `zig build` AND every
@@ -4325,16 +4353,16 @@ pub fn build(b: *std.Build) void {
             }
             // The lint tool is now an in-graph Compile (was a sub-build). Its
             // own compile is upstream of the lint Runs, so gating it behind them
-            // would form a cycle — exclude it. Every other Compile is downstream
+            // would form a cycle - exclude it. Every other Compile is downstream
             // of lint and gates normally. Only gate when zimr is the ROOT project
-            // — a consumer depending on zimr must not be forced through zimr's
+            // - a consumer depending on zimr must not be forced through zimr's
             // dev-only lint/fmt checks (they scan root-relative paths like
             // `examples/` that don't exist in the dependency).
             if (b.pkg_hash.len == 0 and s.tag == .compile and s != &zimrlint_exe.step) {
                 // Gate ONLY the wasm app compiles (examples + runtime), NOT the
-                // native build tools (spv2wgsl, zspv, c2js, gen_shader_externs…).
-                // Gating the tools bought no correctness — lint scans every file
-                // and fails the build regardless of order — but it made every
+                // native build tools (spv2wgsl, zspv, c2js, gen_shader_externs...).
+                // Gating the tools bought no correctness - lint scans every file
+                // and fails the build regardless of order - but it made every
                 // tool compile, and the entire shader fan-out that runs through
                 // them (dozens of spv2wgsl/zspv Runs per example), transitively
                 // depend on lint. One lint failure then detonated into ~100
@@ -4342,11 +4370,11 @@ pub fn build(b: *std.Build) void {
                 // whole reason `tools/zbuild.zig` had to exist). Left ungated,
                 // the tools and shader translations still succeed, so a lint (or
                 // app compile) failure surfaces only the small app-compile
-                // subtree — the actual error is right there.
+                // subtree - the actual error is right there.
                 const comp: *Compile = s.cast(Compile).?;
                 if (gate and comp.rootModuleTarget().cpu.arch == .wasm32) {
                     if (autofix) {
-                        // lint --fix → fmt → compile. `fmt_apply_gate` is ordered
+                        // lint --fix -> fmt -> compile. `fmt_apply_gate` is ordered
                         // after the `--fix` Run, so the two mutating steps run in
                         // sequence (never racing) before this compile.
                         s.dependOn(&fmt_apply_gate.step);
@@ -4356,7 +4384,7 @@ pub fn build(b: *std.Build) void {
                     }
                 }
             }
-            // `all-examples` must build the WHOLE gallery (its stated job —
+            // `all-examples` must build the WHOLE gallery (its stated job -
             // serve / dist / a full-tree compile check all hang off it).
             // Nothing wired the per-example installs into it, so it silently
             // built only the runtime.  Pick up every wasm example's install
@@ -4375,7 +4403,7 @@ pub fn build(b: *std.Build) void {
             }
             // The per-example served PAGES (web/<name>/index.html) are
             // install_file steps, not install_artifact, so the wasm-only pickup
-            // above misses them — the gallery's clickable pages would never
+            // above misses them - the gallery's clickable pages would never
             // build. Grab every install_file under web/<name>/ so `all-examples`
             // (and thus serve / dist) assembles the full clickable tree.
             if (s.tag == .install_file) {
@@ -4403,7 +4431,7 @@ pub fn build(b: *std.Build) void {
     test_all_examples_step.dependOn(all_examples_step);
 
     // Bare `zig build` (install) is mostly a JS bundle + static files with no
-    // Compile of its own, so depend on the gates directly too — otherwise a
+    // Compile of its own, so depend on the gates directly too - otherwise a
     // compile-less install would skip the style check entirely.
     if (gate) {
         b.getInstallStep().dependOn(&fmt_check_install.step);
@@ -4471,7 +4499,7 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         }),
     });
     spv2wgsl_tool_exe.root_module.addImport("spv2wgsl", spv2wgsl_lib_mod);
-    // The binding/structural WGSL validator — same spv2wgsl lib, run over the
+    // The binding/structural WGSL validator - same spv2wgsl lib, run over the
     // corpus by `check` as a build-time tripwire (duplicate @group@binding etc.).
     const spv2wgsl_check_exe: *Compile = b.addExecutable(.{
         .name = "spv2wgsl_check",
@@ -4493,7 +4521,7 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
     // The remaining tools, built DIRECTLY by the main build (pure Zig, like
     // spv2wgsl/zspv above) instead of the old `tools/build.zig` sub-build. That
     // sub-build was cwd-relative and wrote into a (read-only-as-a-dependency)
-    // cache — incompatible with zimr being consumed as a package. Installed as
+    // cache - incompatible with zimr being consumed as a package. Installed as
     // named artifacts so an external consumer can `dep.artifact("c2js")` etc.
     const zimrlint_exe: *Compile = b.addExecutable(.{
         .name = "zimrlint",
@@ -4553,7 +4581,7 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
     });
 
     // mesh_bake: bake a DECIMATED glTF proxy (+ small base-color block) into
-    // a generated `.zig` const — the comptime-corner geometry source for the
+    // a generated `.zig` const - the comptime-corner geometry source for the
     // helmet side-by-side.  The compiler can't parse a GLB (allocator-based,
     // and 15k tris is far past any comptime budget), so this build step
     // pre-chews it: vertex-cluster decimation + box-filtered texture, emitted
@@ -4713,7 +4741,7 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
 }
 
 /// Native/host examples: built for the host as ordinary executables that
-/// render via the pure-Zig software renderer (raster) and write PNG files — no
+/// render via the pure-Zig software renderer (raster) and write PNG files - no
 /// WebGPU, no web, no c2js. The clean demonstration of zimr's CPU path. These
 /// are leaf steps (nothing downstream depends on them), so they live together
 /// here instead of interleaved with the wgpu build.
@@ -4818,7 +4846,7 @@ fn buildNativeExamples(
     // ---- pair runs natively.  Renders 3 triangles through
     // ---- default_shapes_vs + default_shapes_fs on the CPU, outputs
     // ---- sw_engine_shader.png.  THE proof that one Zig source IS
-    // ---- the shader on both backends — the codegen-emitted
+    // ---- the shader on both backends - the codegen-emitted
     // ---- `_Spirv` wrap (turn 4) makes the externs file compile on
     // ---- native targets while staying valid on SPIR-V.
     //
@@ -4829,7 +4857,7 @@ fn buildNativeExamples(
     );
     {
         // The example's own module.  Does NOT depend on the full
-        // `zimr` umbrella — see comment in the example source for
+        // `zimr` umbrella - see comment in the example source for
         // why.  We wire only the leaf submodules it actually uses.
         const eng_mod: *Module = b.createModule(.{
             .root_source_file = b.path("examples/sw_engine_shader.zig"),
@@ -4857,7 +4885,7 @@ fn buildNativeExamples(
         // (GL-retirement P2): sw_runtime's graph grew renderer_2d.zig
         // via shader_runtime_wgpu, so a separate default_shapes_bundle
         // module would double-own that file.  Only the codegen externs
-        // modules still need wiring — onto sw_runtime itself.
+        // modules still need wiring - onto sw_runtime itself.
         for (engine_shaders.items) |s| {
             if (s.sh_name == null) {
                 continue;
@@ -4893,7 +4921,7 @@ fn buildNativeExamples(
     // ---- examples/julia_gallery.zig: four Julia sets in a 2x2 grid
     // ---- showing how tiny changes to `c` produce wildly different
     // ---- shapes (dragon / fern / starfish / spiral).  Single-PNG
-    // ---- output.  Each cell is independent — trivially parallelizable.
+    // ---- output.  Each cell is independent - trivially parallelizable.
     //
     // Run on any host:  `zig build julia-gallery`
     const julia_gallery_step: *Step = b.step(
@@ -4934,7 +4962,7 @@ fn buildNativeExamples(
     }
 
     // ---- CPU Julia set, writes a colored PNG.  Direct per-pixel
-    // ---- compute (no rasterizer) — the simpler architecture for
+    // ---- compute (no rasterizer) - the simpler architecture for
     // ---- single-pixel-per-output workflows.
     //
     // Run on any host:  `zig build sw-julia`
@@ -4978,7 +5006,7 @@ fn buildNativeExamples(
     }
 
     // ---- Same compile-time evaluation pattern, different fractal
-    // ---- (Julia set: z₀ is per-pixel, c is a fixed constant).
+    // ---- (Julia set: z_0 is per-pixel, c is a fixed constant).
     // ---- Demonstrates the comptime pattern generalizes beyond one
     // ---- specific kernel.  No zimr dependency.
     //
@@ -5014,13 +5042,13 @@ fn buildNativeExamples(
 /// `-Dfocus=` invocation filters both the build artifacts AND the
 /// smoke-test runs identically.
 /// Examples:
-///   matchesFocus("ui_log_viewer", "")                         → true
-///   matchesFocus("ui_log_viewer", "ui_log_viewer")            → true
-///   matchesFocus("ui_log_viewer", "ui_log_viewer,zimrphysics_*")  → true
-///   matchesFocus("zimrphysics_demo", "ui_log_viewer,zimrphysics_*")   → true
-///   matchesFocus("audio_basic", "ui_log_viewer,zimrphysics_*")    → false
-///   matchesFocus("mandelbrot", "tier-a")                      → true
-///   matchesFocus("audio_basic", "tier-a")                     → false
+///   matchesFocus("ui_log_viewer", "")                         -> true
+///   matchesFocus("ui_log_viewer", "ui_log_viewer")            -> true
+///   matchesFocus("ui_log_viewer", "ui_log_viewer,zimrphysics_*")  -> true
+///   matchesFocus("zimrphysics_demo", "ui_log_viewer,zimrphysics_*")   -> true
+///   matchesFocus("audio_basic", "ui_log_viewer,zimrphysics_*")    -> false
+///   matchesFocus("mandelbrot", "tier-a")                      -> true
+///   matchesFocus("audio_basic", "tier-a")                     -> false
 ///
 /// `tier-a` is a magic name expanding to a 10-example set chosen for
 /// broad, varied feature coverage (2D/UI, 3D mesh+camera, GPU compute,
@@ -5033,7 +5061,7 @@ fn buildNativeExamples(
 /// True when `path`'s first directory segment equals `dir`, treating BOTH
 /// `/` and `\` as separators. The dir Walker builds `entry.path` with the
 /// platform separator (`\` on Windows), so a hard-coded `"dir/"` prefix
-/// silently fails to match there — which let the c2js_cases lint corpus slip
+/// silently fails to match there - which let the c2js_cases lint corpus slip
 /// back into the scan on Windows. This normalizes that one comparison.
 fn firstSegmentIs(path: []const u8, dir: []const u8) bool {
     if (!startsWith(u8, path, dir)) {
@@ -5074,7 +5102,7 @@ fn matchesFocus(example_name: []const u8, focus_list: []const u8) bool {
                 "launcher", // multi-app compose + lazy child init in frame 0
                 // (the queue-timeline clobber class: two pbr3d model draws
                 // sharing a UBO, and a lazily-init'd child seeding a UBO it
-                // also writes in frame 0 — neither shows in a single-app smoke)
+                // also writes in frame 0 - neither shows in a single-app smoke)
             };
             for (tier_a_names) |t| {
                 if (eql(u8, example_name, t)) {
@@ -5147,7 +5175,7 @@ fn addWgpuSmoke(
         b.addInstallFile(page, b.fmt("bridge-pages/{s}.html", .{under}));
     wgpu_smoke_install.dependOn(&page_inst.step);
 }
-// addWgpuStandalone — register a `zig build <step_name>` that assembles a
+// addWgpuStandalone - register a `zig build <step_name>` that assembles a
 // single self-contained HTML for a wgpu demo via the buildaux CLI (the old
 // custom-step `WgpuStandalone` is gone with the 0.17 configurer/maker split).
 // Derives the bundled-JS path and output HTML path from out_dir/out_basename,
@@ -5190,7 +5218,7 @@ fn finishWgpuApp(
     const dash: []const u8 = dash_name;
     // Served pages live UNDER the serve root (zig-out/web/<name>/) so the gallery
     // (zig-out/web/index.html) links to "<name>/" and the dev server serves them.
-    // The `dash` step name (wgpu-<name>) is unchanged — only the output dir moved.
+    // The `dash` step name (wgpu-<name>) is unchanged - only the output dir moved.
     const install_dir: std.Build.InstallDir = .{ .custom = b.fmt("web/{s}", .{name}) };
 
     // Own-frame demos ARE the exe (their own main owns the GPU frame); ticked
@@ -5225,7 +5253,7 @@ fn finishWgpuApp(
     // the HMR client (injected into every .html response) all keep
     // working with zero server.ts changes. The old per-example bun
     // bundle of src/bridge.zig and the examples/<name>/index.html copy
-    // are gone — the runtime is born as Zig now.
+    // are gone - the runtime is born as Zig now.
     const page: LazyPath = bridgePage(b, c2js_exe, exe, title, true, kernel_wasm); // streaming
     const index_install: *InstallFile = b.addInstallFileWithDir(
         page,
@@ -5254,28 +5282,28 @@ fn finishWgpuApp(
 ///
 /// Three things worth knowing:
 ///
-///   * THE ROOT IS GENERATED. The example author never writes it — exactly as the
+///   * THE ROOT IS GENERATED. The example author never writes it - exactly as the
 ///     gen_externs bootstrap is generated. All it does is ask the registry to emit its
 ///     exports, which keeps `exportWorkerEntry` (and the worker's buffers) OUT of the
 ///     app's wasm, where they would be dead weight.
 ///
 ///   * IT IS A DIFFERENT TARGET. The app is wasm32-wasi; a worker's kernel is
-///     wasm32-freestanding, so it needs its OWN module instances — a Module carries its
+///     wasm32-freestanding, so it needs its OWN module instances - a Module carries its
 ///     target, and these cannot be shared with the app's.
 ///
 ///   * IT MUST IMPORT NOTHING. `kernels.zig` imports `zimr` like any example, but Zig's
-///     lazy analysis only compiles what the kernel actually REACHES — so a pure kernel
+///     lazy analysis only compiles what the kernel actually REACHES - so a pure kernel
 ///     drags in no DOM, no WebGPU, no WASI, and the import section comes out empty. That
 ///     is what lets a worker instantiate it with `{}`. c2js ASSERTS the section is empty
 ///     when it inlines the wasm, so a kernel that reaches for `zimr.drawText` is a build
-///     error naming the offending import — not a worker that dies in a thread nobody is
+///     error naming the offending import - not a worker that dies in a thread nobody is
 ///     watching.
-/// THE WEB WORKER'S PROGRAM — Zig, compiled to JavaScript.
+/// THE WEB WORKER'S PROGRAM - Zig, compiled to JavaScript.
 ///
 ///     src/jobs_worker.zig --(build-obj -ofmt=c)--> .c --(c2js)--> .js
 ///
 /// The browser will only start a worker from a JavaScript program, so this file cannot be
-/// eliminated — but it does not have to be WRITTEN. It used to be ~40 lines of hand-written JS
+/// eliminated - but it does not have to be WRITTEN. It used to be ~40 lines of hand-written JS
 /// living in a Zig string in bridge.zig: the only hand-written JS in the engine, and the
 /// source of our two worst bugs (an ABI spelled twice with nothing checking it, and an `async`
 /// handler whose `await` let a job re-enter before the kernel wasm had instantiated).
@@ -5302,7 +5330,7 @@ fn buildJobKernels(
     ///
     /// The launcher needs this: a page carries ONE kernel wasm, but the launcher bundles many
     /// examples, so its `kernels.zig` merges their tables into a single registry. That works
-    /// because the wasm exports are keyed by NAME rather than an index or a hash — a merged
+    /// because the wasm exports are keyed by NAME rather than an index or a hash - a merged
     /// wasm exports a superset of the names, so every example's `submit` finds its kernel and
     /// nobody renumbers anything.
     deps: []const []const u8,
@@ -5338,8 +5366,8 @@ fn buildJobKernels(
     engine_mod.addImport("shader_interface", iface_mod);
     engine_mod.addOptions("build_options", build_opts_wgpu);
 
-    // A kompute MODULE can be a job kernel — `komputeRegistry(M)` derives the whole worker
-    // backend from one — so the kernel wasm's graph has to carry `kompute` too.
+    // A kompute MODULE can be a job kernel - `komputeRegistry(M)` derives the whole worker
+    // backend from one - so the kernel wasm's graph has to carry `kompute` too.
     const kompute_mod: *Module = b.createModule(.{
         .root_source_file = b.path("src/kompute.zig"),
         .target = target,
@@ -5348,7 +5376,7 @@ fn buildJobKernels(
     kompute_mod.addImport("zm", zm_mod);
 
     // One module per example's kernels.zig. They all share the SAME engine/kompute/zm module
-    // instances — creating a second `kompute` module would put src/kompute.zig in two modules
+    // instances - creating a second `kompute` module would put src/kompute.zig in two modules
     // at once, which Zig rejects ("file exists in modules 'kompute' and 'kompute0'").
     const makeKernelsMod = struct {
         fn f(
@@ -5422,7 +5450,7 @@ fn bridgePage(
     title: []const u8,
     streaming: bool,
     /// The example's job kernels, if it has any (see `App.job_kernels`). Inlined into
-    /// the page as `window.ZIMR_KERNEL_WASM` — c2js refuses to inline it if its import
+    /// the page as `window.ZIMR_KERNEL_WASM` - c2js refuses to inline it if its import
     /// section is non-empty, which is how kernel purity is enforced.
     kernel_wasm: ?LazyPath,
 ) LazyPath {
@@ -5448,15 +5476,15 @@ fn bridgePage(
         to_html.addArg("--wasm-embed");
         to_html.addFileArg(exe.getEmittedBin());
     }
-    // The kernel wasm rides along on BOTH paths — inlined even on the streamed page,
+    // The kernel wasm rides along on BOTH paths - inlined even on the streamed page,
     // because at ~20 KB it is not worth a second request.
     if (kernel_wasm) |kw| {
         to_html.addArg("--kernel-wasm-embed");
         to_html.addFileArg(kw);
     }
 
-    // The worker's program, on EVERY page. `jobs.parallel()` is a runtime question — an app
-    // with no kernels never spawns a worker and never reads this — but a page that CAN spawn
+    // The worker's program, on EVERY page. `jobs.parallel()` is a runtime question - an app
+    // with no kernels never spawns a worker and never reads this - but a page that CAN spawn
     // one must already be carrying the program, because `new Worker(url)` cannot go and fetch
     // it later from a blob: origin.
     to_html.addArg("--worker-js-embed");
@@ -5479,7 +5507,7 @@ fn bridgePage(
 /// exe + served page + standalone HTML. `shaders` (basenames like "julia_fs")
 /// wires each compiled WGSL + its IO module into the example; an empty list
 /// means a plain app. This is the unified form of the old addWgpuApp /
-/// addWgpuShaderApp split — the shader loop is simply a no-op when empty.
+/// addWgpuShaderApp split - the shader loop is simply a no-op when empty.
 /// One engine shader's compiled WGSL, exposed by name so an example whose
 /// `configure` hook calls `wireEngineWgsl` can `@embedFile` it. A pre-filtered
 /// view of the build's `engine_shaders` list (only entries that emitted WGSL).
@@ -5492,7 +5520,7 @@ pub const EngineWgsl = struct {
 /// exe + served page + standalone HTML. `shaders` (basenames like "julia_fs")
 /// wires each compiled WGSL + its IO module into the example; an empty list
 /// means a plain app. This is the unified form of the old addWgpuApp /
-/// addWgpuShaderApp split — the shader loop is simply a no-op when empty.
+/// addWgpuShaderApp split - the shader loop is simply a no-op when empty.
 ///
 /// `root_source_file` is null for zimr's own examples (the path is derived from
 /// `name` via the examples/wgpu_<name>/ convention) and set explicitly by an
@@ -5501,7 +5529,7 @@ pub const EngineWgsl = struct {
 /// `configure` is the escape hatch for anything the common fields don't cover
 /// (build-time asset baking, extra named embeds): a small named function that
 /// runs after the standard wiring, before the exe is finished. It keeps the
-/// struct from growing a field per special case — the variation lives in
+/// struct from growing a field per special case - the variation lives in
 /// composable functions (see `configureHelmetSw`), not in this type. null for
 /// the common case. The same hook is what an external program supplies for its
 /// own app's build needs.
@@ -5513,16 +5541,16 @@ pub const App = struct {
     /// When true, the example IS the exe root and owns its GPU frame (its own
     /// main loop calls beginFrame/endFrame) instead of being ticked by the
     /// shared `wgpu_runner`. Low-level 3D demos use this. They still get the
-    /// same build glue (module, shaders, page, standalone, step) — only the exe
+    /// same build glue (module, shaders, page, standalone, step) - only the exe
     /// root differs. Own-frame examples are not smoke-tested.
     own_frame: bool = false,
     /// Opt-in GPU compute. When non-empty, the example also imports `kompute`
-    /// and each kernel is compiled (Zig -> SPIR-V -> WGSL) and wired in — the
+    /// and each kernel is compiled (Zig -> SPIR-V -> WGSL) and wired in - the
     /// only thing that used to require a separate `addWgpuComputeApp`. Set this
     /// field to add compute to an example; nothing else moves.
     compute_kernels: []const ComputeKernel = &.{},
     /// Opt-in off-main-thread jobs (`zimr.jobs`). When true, `examples/<name>/kernels.zig`
-    /// is ALSO compiled — separately, for wasm32-freestanding — into a small, ZERO-IMPORT
+    /// is ALSO compiled - separately, for wasm32-freestanding - into a small, ZERO-IMPORT
     /// wasm that the Web Workers instantiate, and that wasm is base64-inlined into the
     /// page beside the app's own.
     ///
@@ -5573,7 +5601,7 @@ pub const AppContext = struct {
     /// The build-time mesh baker; consumed by the `bakeMesh` helper.
     mesh_bake_exe: *Compile,
     /// Shared modules so common source files (common.zig, fonts, shaders) are
-    /// each in exactly ONE module across the whole build — required so a launcher
+    /// each in exactly ONE module across the whole build - required so a launcher
     /// that imports many example modules into one binary does not duplicate them.
     common_mod: *Module,
     roboto_mod: *Module,
@@ -5582,7 +5610,7 @@ pub const AppContext = struct {
     wav_mod: *Module,
     shader_cache: *std.StringHashMap(ShaderDep),
     /// Needed to build an example's job-kernel wasm: it is a DIFFERENT target
-    /// (wasm32-freestanding, not wasi), so it needs its own module instances — and those
+    /// (wasm32-freestanding, not wasi), so it needs its own module instances - and those
     /// need their own `build_options`.
     build_opts_wgpu: *Options,
     build_opts_zm: *Options,
@@ -5698,7 +5726,7 @@ pub const AppContext = struct {
     ) void {
         const b: *std.Build = ctx.b;
 
-        // THE SHARED MODULE — not a fresh one. Minting one here per example is what produced
+        // THE SHARED MODULE - not a fresh one. Minting one here per example is what produced
         // `kompute0` and made two compute examples unable to share a page. See its creation site.
         user_mod.addImport("kompute", ctx.kompute_mod);
 
@@ -5817,7 +5845,7 @@ pub fn bakeMesh(
 }
 
 /// geno_dance: the skinned-character viewer. Embeds the engine WGSL so its shadow and
-/// G-buffer passes (mocap_plan.md §12) can build their own pipelines from `depth_vs/fs` and
+/// G-buffer passes (mocap_plan.md section 12) can build their own pipelines from `depth_vs/fs` and
 /// `lit_shadow_vs/fs` rather than duplicating those shaders.
 fn configureGenoDance(ctx: AppContext, mod: *Module) void {
     wireEngineWgsl(ctx, mod);
@@ -5858,7 +5886,7 @@ fn configurePbr(ctx: AppContext, mod: *Module) void {
 }
 
 fn configureAnimBlend(ctx: AppContext, mod: *Module) void {
-    // CC0 rigged character (models by @iP) — walk + attack clips.
+    // CC0 rigged character (models by @iP) - walk + attack clips.
     mod.addAnonymousImport("greenman.glb", .{
         .root_source_file = ctx.b.path("examples/assets/gltf/greenman.glb"),
     });
@@ -5901,7 +5929,7 @@ fn configureGltfTextured(ctx: AppContext, mod: *Module) void {
 ///
 /// Produces and installs the wasm reactor exe (the artifact the consumer runs).
 /// Scope note: the served bridge page and single-file standalone are NOT wired
-/// here yet — they depend on zimr's prebuilt `c2js`/buildaux tools, which aren't
+/// here yet - they depend on zimr's prebuilt `c2js`/buildaux tools, which aren't
 /// exposed across the package boundary. Exposing those is the remaining step to
 /// reach full parity with the internal `addApp`; until then a consumer bundles
 /// the wasm with their own page (or zimr ships the tools as artifacts).
@@ -6008,7 +6036,7 @@ fn addWgpuStandalone(
     step_desc: []const u8,
     kernel_wasm: ?LazyPath,
 ) *std.Build.Step {
-    // ZIG_BRIDGE Phase 4a: the standalone IS the bridge page now — the
+    // ZIG_BRIDGE Phase 4a: the standalone IS the bridge page now - the
     // wasm embedded into a single-file HTML whose entire runtime was born
     // as Zig (src/bridge.zig -> C -> c2js). The TS bundle path (buildaux
     // wgpu-standalone + bun-bundled bridge JS) is superseded; its
@@ -6050,14 +6078,14 @@ fn addWgpuStandalone(
 /// files get picked up automatically without editing build.zig.
 fn collectShaderFiles(b: *std.Build) ![][]const u8 {
     // This function observes the *contents* of src/, examples/, and tests/ at
-    // configure time — exactly the kind of untracked observation that the
+    // configure time - exactly the kind of untracked observation that the
     // Zig 0.17 configure cache cannot key on (the same reason std.Build's
     // `findProgram` poisons the cache: it walks PATH directories). Without
     // this, adding a new `*_vs.zig`/`*_fs.zig` is invisible until build.zig's
     // own content changes, because the cached configuration is reused and this
     // walk never re-runs. Poisoning forces the configurer to re-run every
     // build so discovery is always fresh. The cost is re-running the (already
-    // compiled) configure phase, not recompiling build.zig — measured in
+    // compiled) configure phase, not recompiling build.zig - measured in
     // single-digit milliseconds for this graph; the maker still caches all
     // compilation independently.
     b.graph.poisonCache();
@@ -6130,7 +6158,7 @@ fn robotTestsMembers(b: *std.Build) []const []const u8 {
 }
 
 /// `@floatFromInt` to f64. The lint prefers `zm.float64`, but build.zig is the
-/// build SCRIPT — it has no `zm` module in scope and pulling zimrmath into the
+/// build SCRIPT - it has no `zm` module in scope and pulling zimrmath into the
 /// build graph to convert four integers would be a silly dependency.
 /// lint:off float-from-int: build.zig has no zm module (it builds the one that has it)
 fn f64of(x: u64) f64 {
@@ -6157,19 +6185,19 @@ fn diskSpace() ?DiskSpace {
 /// mid-link, which surfaces as a cryptic "No space left on device" with no other
 /// warning.
 ///
-/// This used to guard on `.zig-cache` SIZE (6 GB on Linux) — but cache size is a
+/// This used to guard on `.zig-cache` SIZE (6 GB on Linux) - but cache size is a
 /// PROXY, and a bad one. A 6 GB cache on a disk with 100 GB free is harmless; a
 /// 2 GB cache with 200 MB free is fatal. The proxy fired constantly on healthy
-/// disks and its remedy — `rm -rf .zig-cache` — costs a ~16-minute cold rebuild.
+/// disks and its remedy - `rm -rf .zig-cache` - costs a ~16-minute cold rebuild.
 /// We were paying full rebuilds to avoid a problem we did not have.
 ///
-/// So: measure the hazard. Fail only when the filesystem is ≥ 97% full, which is
-/// a single O(1) syscall — cheap enough to run on EVERY build, so the periodic
+/// So: measure the hazard. Fail only when the filesystem is >= 97% full, which is
+/// a single O(1) syscall - cheap enough to run on EVERY build, so the periodic
 /// walk (and its counter file) is gone too.
 ///
 /// 97 (not 90): keeping the dev `serve` (Debug) and the `dist` (ReleaseSmall)
 /// artifacts warm side-by-side ~doubles the example cache, which alone pushed a
-/// healthy disk past a 90% gate and forced a `rm -rf .zig-cache` cold rebuild —
+/// healthy disk past a 90% gate and forced a `rm -rf .zig-cache` cold rebuild -
 /// the very cost this guard exists to avoid. 97% still leaves room before an
 /// actual mid-link "No space left on device".
 fn checkDiskSpace(b: *std.Build) void {
@@ -6180,7 +6208,7 @@ fn checkDiskSpace(b: *std.Build) void {
         return;
     }
 
-    // Only now is it worth walking the cache — to tell the developer where the
+    // Only now is it worth walking the cache - to tell the developer where the
     // space actually went. This is the rare path.
     const io: std.Io = b.graph.io;
     var cache_bytes: u64 = 0;
@@ -6221,7 +6249,7 @@ fn checkDiskSpace(b: *std.Build) void {
 }
 
 // ============================================================================
-// Zig-shader pipeline helpers — Phase 3 surface.
+// Zig-shader pipeline helpers - Phase 3 surface.
 // ============================================================================
 // ShaderPipeline + ShaderOpts now live in `src/shader_codegen.zig` so they
 // can be re-exposed as a public `shader_codegen` module for downstream

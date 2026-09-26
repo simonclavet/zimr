@@ -6,7 +6,7 @@
 //      at the light, black at its outer radius) minus the SHADOW VOLUMES cast by
 //      every box between the light and the world.
 //   2. Additively ACCUMULATE those masks into one lightmap. Additive is what
-//      makes two lights brighten each other instead of overwriting — and it's why
+//      makes two lights brighten each other instead of overwriting - and it's why
 //      each light needs its own mask pass: a shadow belongs to ONE light, so it
 //      must be cut before that light joins the sum.
 //   3. Draw the scene, then MULTIPLY it by the lightmap. Lit -> unchanged;
@@ -17,8 +17,8 @@
 // four cheap comparisons (e.g. the top edge casts only when the light is below
 // it), which is the whole trick that keeps this O(boxes) instead of a raycast.
 //
-// Engine surface exercised: `beginTextureMode(gl, rt, null)` — the null clear is
-// a LOAD, which is what lets the accumulator survive across per-light passes —
+// Engine surface exercised: `beginTextureMode(gl, rt, null)` - the null clear is
+// a LOAD, which is what lets the accumulator survive across per-light passes -
 // plus `beginBlendMode(.additive/.multiply)`, `gl.circleGradient`, and
 // `gl.triangleFan`.
 //
@@ -41,7 +41,7 @@ const bufPrint = std.fmt.bufPrint;
 
 const max_boxes: usize = 6;
 const max_lights: usize = 3;
-/// 4 edges per box, and a box can only ever have 2 facing away — but bound for
+/// 4 edges per box, and a box can only ever have 2 facing away - but bound for
 /// the worst case so the buffer can never overflow.
 const max_shadows: usize = max_boxes * 4;
 
@@ -140,7 +140,7 @@ fn boxShadows(
     const y1: f32 = b.y + b.height;
 
     // A light INSIDE the box would make every edge face away and flood the
-    // screen with shadow — skip it, as raylib does.
+    // screen with shadow - skip it, as raylib does.
     if (light[0] > x0 and light[0] < x1 and light[1] > y0 and light[1] < y1) {
         return;
     }

@@ -1,13 +1,13 @@
-//! depth_cue — a quick depth-visualisation preview on the way to
+//! depth_cue - a quick depth-visualisation preview on the way to
 //! `shaders_depth_rendering`. A field of cubes over a ground grid, each shaded
 //! grayscale by its distance from the camera (near = bright, far = dark), with a
 //! slowly orbiting camera so the gradient sweeps across the field.
 //!
 //! This is the per-OBJECT depth cue: the CPU computes each cube's camera distance
 //! and picks a gray tint. The faithful per-PIXEL depth-as-color port (rendering
-//! linear depth into a colour target and displaying it — the same "depth-in-red"
+//! linear depth into a colour target and displaying it - the same "depth-in-red"
 //! technique the PBR shadow path already uses) is the next step. Built on the
-//! immediate-mode 3D API (beginMode3D / drawCube / drawGrid) — no custom pipeline.
+//! immediate-mode 3D API (beginMode3D / drawCube / drawGrid) - no custom pipeline.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -41,7 +41,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 /// Grayscale colour for a world point, dark with distance from `cam`.
-/// near_d → white (1.0), far_d → near-black (0.0), linear between.
+/// near_d -> white (1.0), far_d -> near-black (0.0), linear between.
 fn grayByDistance(px: f32, py: f32, pz: f32, cam: Camera3D) Color {
     const dx: f32 = px - cam.position[0];
     const dy: f32 = py - cam.position[1];
@@ -52,7 +52,7 @@ fn grayByDistance(px: f32, py: f32, pz: f32, cam: Camera3D) Color {
     t = clamp(t, 0.0, 1.0);
     const bright: f32 = 1.0 - t; // near = bright
 
-    // 12 → floor keeps the far end visible rather than pure black.
+    // 12 -> floor keeps the far end visible rather than pure black.
     const g_i: i32 = @round(12.0 + bright * 243.0);
     const g: u8 = @intCast(g_i);
     return .{ .r = g, .g = g, .b = g, .a = 255 };

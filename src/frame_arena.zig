@@ -1,15 +1,15 @@
-//! FrameArena — an `ArenaAllocator` that enforces its own per-frame reset.
+//! FrameArena - an `ArenaAllocator` that enforces its own per-frame reset.
 //!
 //! A plain arena used as a per-frame scratch has an unwritten contract: reset
 //! it every frame or it grows without bound. On wasm32 that contract failing is
-//! lethal and silent — linear memory only ever grows, so a forgotten reset
+//! lethal and silent - linear memory only ever grows, so a forgotten reset
 //! climbs straight into the ~2GB trap (this is exactly how the UI `frame_arena`
 //! leak hid for so long). FrameArena turns that silent climb into a located
 //! panic: the reset contract becomes part of the type instead of a comment.
 //!
 //! How it works: every `alloc` adds to a `live_bytes` tally; `reset` zeroes it.
-//! If the tally crosses `ceiling` — set generously above one honest frame's
-//! needs and far below the wall — `alloc` trips `assertf`. The check lives in
+//! If the tally crosses `ceiling` - set generously above one honest frame's
+//! needs and far below the wall - `alloc` trips `assertf`. The check lives in
 //! `alloc` (which always runs) rather than `reset` (which a forgotten reset
 //! never calls), so "never reset" is caught within the first few frames. The
 //! panic names the arena via `label` (the only localisation: an `@src()` here
@@ -27,7 +27,7 @@ const Allocator = std.mem.Allocator;
 pub const FrameArena = struct {
     arena: std.heap.ArenaAllocator,
     /// Bytes requested since the last reset. A forgotten per-frame reset makes
-    /// this climb without bound — the tripwire below watches it.
+    /// this climb without bound - the tripwire below watches it.
     live_bytes: usize = 0,
     /// Panic ceiling. Pick it well above one legitimate frame and far below the
     /// wasm32 ~2GB wall, so it only ever fires on genuine runaway growth.

@@ -1,12 +1,12 @@
-//! shadow_sidebyside — the rayshadow_fs hard-shadow scene on THREE execution
+//! shadow_sidebyside - the rayshadow_fs hard-shadow scene on THREE execution
 //! targets, side by side from ONE Zig shader:
 //!   - LEFT  : `rayshadow_fs.shaderMain` dispatched per pixel on the CPU (raster).
 //!   - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen
 //!             GPU pass.
 //!   - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime) and
-//!             baked into the binary as a const image — read-only, can't move.
+//!             baked into the binary as a const image - read-only, can't move.
 //! A vertical splitter follows the mouse X. Two boxes cast HARD SHADOWS on a
-//! platform via a shadow ray (not a shadow map — a shadow map needs a depth
+//! platform via a shadow ray (not a shadow map - a shadow map needs a depth
 //! texture the comptime/CPU targets can't produce; a shadow ray is a plain
 //! second ray-scene intersection, so it runs identically on all three). The
 //! camera orbits (live CPU + GPU); the comptime corner is frozen at build time.
@@ -34,7 +34,7 @@ const trivial_vs_wgsl = @embedFile("trivial_vs.wgsl");
 const width: u32 = 800;
 const height: u32 = 450;
 
-// CPU side res — a handful of ray-primitive tests per pixel, so 1/3 is fine.
+// CPU side res - a handful of ray-primitive tests per pixel, so 1/3 is fine.
 const sw_w: u32 = width / 3;
 const sw_h: u32 = height / 3;
 const cpu_pixel_budget: f32 = float(sw_w * sw_h);
@@ -49,7 +49,7 @@ const cam_target: Vec = vec(0, 0.45, 0);
 const cam_dist: f32 = 5.6; // fixed orbit radius
 
 /// Build the scene UBO. Orbit the camera around the (fixed) scene in spherical
-/// coords — eye = target + (yaw, pitch, dist). The CPU dispatch, the GPU pass,
+/// coords - eye = target + (yaw, pitch, dist). The CPU dispatch, the GPU pass,
 /// and the comptime bake all read this same camera basis.
 fn buildUbo(
     yaw: f32,
@@ -260,7 +260,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
     const divider_x: f32 = s.divider_frac * vw;
 
-    // Shared UBO — both live halves read it, so they render the same view.
+    // Shared UBO - both live halves read it, so they render the same view.
     const ubo: shader_io.Ubo = buildUbo(s.cam_yaw, s.cam_pitch, s.cam_dist, vw, vh);
 
     // ---- CPU side: dispatch the SAME shaderMain per pixel into raster ----

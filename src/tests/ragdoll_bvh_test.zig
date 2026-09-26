@@ -1,36 +1,36 @@
-//! src/tests/ragdoll_bvh_test.zig — the real-data half of retarget_plan.md §13x.
+//! src/tests/ragdoll_bvh_test.zig - the real-data half of retarget_plan.md section 13x.
 //!
-//! §13x-2's unit test proves the qpos path on a synthetic four-bone chain. This proves it on
+//! section 13x-2's unit test proves the qpos path on a synthetic four-bone chain. This proves it on
 //! the ACTUAL Geno skeleton driven by the ACTUAL dance capture: 96 bones, real offsets, a real
 //! travelling root.
 //!
-//! ── ★★★ WHY BOTH, AND WHY THIS ONE MATTERS MORE ──
+//! -- *** WHY BOTH, AND WHY THIS ONE MATTERS MORE --
 //!
 //! A four-bone chain cannot exercise: a deep hierarchy where a parent error compounds, zero
 //! length end-site bones, a root that translates, or 96 distinct quaternions. It CAN be wrong
 //! in a way that a hand-built chain happens not to reach.
 //!
-//! ★ And the property is EXACTNESS, not tolerance. The robot's `kinematics` and the animation's
+//! * And the property is EXACTNESS, not tolerance. The robot's `kinematics` and the animation's
 //! forward kinematics are two independent implementations of the same recursion. Driving one
 //! with the other's data must agree to float precision, because it is a COPY. Anything else
 //! means the qpos path is lying.
 //!
-//! ── ★★ WHAT THIS TEST CANNOT CATCH, STATED SO NOBODY TRUSTS IT TOO FAR ──
+//! -- ** WHAT THIS TEST CANNOT CATCH, STATED SO NOBODY TRUSTS IT TOO FAR --
 //!
 //! Both sides share `quatFromChannels`, so a WRONG EULER DECODE cancels out: feed the
-//! reference and the robot the same bad rotations and they still agree. Verified — corrupting
+//! reference and the robot the same bad rotations and they still agree. Verified - corrupting
 //! the channel order leaves this test green.
 //!
-//! ★ That is the correct scope, not a hole to plug here: this test is about the **qpos path**,
-//! and the decode belongs to whatever produced the rotations. Confirmed the other way too —
+//! * That is the correct scope, not a hole to plug here: this test is about the **qpos path**,
+//! and the decode belongs to whatever produced the rotations. Confirmed the other way too -
 //! writing the quaternion in MuJoCo's (w,x,y,z) instead of zm's (x,y,z,w) FAILS it across all
 //! 96 bones.
 //!
-//! ★ A 0.0001 perturbation of one quaternion component also passes, because the joint
+//! * A 0.0001 perturbation of one quaternion component also passes, because the joint
 //! normalises: a control has to change the ROTATION, not just the numbers.
 //!
-//! ★ Lives in the FAST TIER (`zig build test-fast`) because `codecs.zig` and `robot.zig` both
-//! depend on nothing but `zm` — no shaders, no renderer. See claude.md.
+//! * Lives in the FAST TIER (`zig build test-fast`) because `codecs.zig` and `robot.zig` both
+//! depend on nothing but `zm` - no shaders, no renderer. See claude.md.
 
 const std = @import("std");
 const zm = @import("zm");
@@ -48,9 +48,9 @@ const expect = std.testing.expect;
 
 /// Euler angles to a quaternion in the BVH channel order the file declares.
 ///
-/// ★ BVH rotation channels are applied in the ORDER THE HEADER LISTS THEM, which for
+/// * BVH rotation channels are applied in the ORDER THE HEADER LISTS THEM, which for
 /// `dance1_subject2` is ZYX. Assuming XYZ produces a skeleton that is subtly and consistently
-/// wrong — every joint bent about the wrong axis first.
+/// wrong - every joint bent about the wrong axis first.
 fn quatFromChannels(chans: []const codecs.bvh.Channel, values: []const f32) Quat {
     var q: Quat = zm.quat_identity;
     for (chans, 0..) |c, i| {
@@ -98,8 +98,8 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
     defer gpa.free(parents);
     const offsets: []Vec = try gpa.alloc(Vec, n);
     defer gpa.free(offsets);
-    // ★ METRES. The capture is centimetres and `robot.zig` speaks metres, so the conversion
-    // happens here at load — the same rule the render path follows (claude.md).
+    // * METRES. The capture is centimetres and `robot.zig` speaks metres, so the conversion
+    // happens here at load - the same rule the render path follows (claude.md).
     const cm_to_m: f32 = 0.01;
     for (data.joints, 0..) |j, i| {
         names[i] = j.name;
@@ -160,8 +160,8 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
         }
     }
 
-    // ★★ EXACT, ACROSS ALL 96 BONES. A tolerance of 1e-4 m is a tenth of a millimetre on a
-    // 1.7 m figure — this is float noise, not agreement-within-reason.
+    // ** EXACT, ACROSS ALL 96 BONES. A tolerance of 1e-4 m is a tenth of a millimetre on a
+    // 1.7 m figure - this is float noise, not agreement-within-reason.
     var worst: f32 = 0;
     for (0..n) |i| {
         const got: Vec = d.body_xpos[i + 1]; // body 0 is the world
@@ -172,7 +172,7 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
     }
     try expect(worst < 1.0e-4);
 
-    // ★ And the root actually MOVED — a frame where everything sat at the origin would make
+    // * And the root actually MOVED - a frame where everything sat at the origin would make
     // the comparison above pass while proving nothing.
     const travel: f32 = @abs(root_translation[0]) + @abs(root_translation[2]);
     try expect(travel > 0.1);
@@ -206,9 +206,9 @@ test "retarget: a skeleton onto ITSELF reproduces the source pose exactly" {
         parents[i] = j.parent;
     }
 
-    // ★★★ THE DEGENERATE CASE, AND IT IS NOT VACUOUS. Retargeting a skeleton onto itself must
-    // return the pose unchanged — but unlike a bind-pose identity (which holds for ANY bind,
-    // as §11 learned the hard way), this exercises the ENTIRE path: the name map, the
+    // *** THE DEGENERATE CASE, AND IT IS NOT VACUOUS. Retargeting a skeleton onto itself must
+    // return the pose unchanged - but unlike a bind-pose identity (which holds for ANY bind,
+    // as section 11 learned the hard way), this exercises the ENTIRE path: the name map, the
     // global-to-local conversion, and the parent walk. A sign error, a conjugate the wrong way
     // round, or a parent visited out of order all break it.
     const map: []i32 = try codecs.bvh.mapJointsByName(gpa, names, names, .{});
@@ -263,8 +263,8 @@ test "retarget: a skeleton onto ITSELF reproduces the source pose exactly" {
 test "retarget: the mixamorig: prefix is stripped, and an unmapped rig is visibly empty" {
     const gpa: Allocator = std.testing.allocator;
 
-    // ★ THE REAL MISMATCH, from the files: Mixamo prefixes every joint. Without stripping, a
-    // LAFAN1 table matches NOTHING — and the failure mode is a rest pose, not an error, which
+    // * THE REAL MISMATCH, from the files: Mixamo prefixes every joint. Without stripping, a
+    // LAFAN1 table matches NOTHING - and the failure mode is a rest pose, not an error, which
     // is why `mappedCount` exists and why callers must check it.
     const lafan = [_][]const u8{ "Hips", "Spine", "LeftArm", "Head" };
     const mixamo = [_][]const u8{
@@ -278,12 +278,12 @@ test "retarget: the mixamorig: prefix is stripped, and an unmapped rig is visibl
     defer gpa.free(stripped);
     try expect(codecs.bvh.mappedCount(stripped) == 4);
 
-    // With stripping disabled, nothing matches — the silent-failure case, made loud.
+    // With stripping disabled, nothing matches - the silent-failure case, made loud.
     const raw: []i32 = try codecs.bvh.mapJointsByName(gpa, &mixamo, &lafan, .{ .strip_prefix_at = "" });
     defer gpa.free(raw);
     try expect(codecs.bvh.mappedCount(raw) == 0);
 
-    // ★ And a genuinely absent joint stays absent rather than matching something close.
+    // * And a genuinely absent joint stays absent rather than matching something close.
     const partial = [_][]const u8{ "Hips", "Spine", "Tail" };
     const p: []i32 = try codecs.bvh.mapJointsByName(gpa, &lafan, &partial, .{});
     defer gpa.free(p);
@@ -356,19 +356,19 @@ test "retarget: LAFAN1 dance onto the Mixamo skeleton keeps bone DIRECTIONS, not
         target_offsets[index] = vec(joint.offset[0], joint.offset[1], joint.offset[2]);
     }
 
-    // ★★ THE REAL CROSS-RIG MAP: LAFAN1 names against `mixamorig:`-prefixed ones. If the
-    // prefix strip regressed, this drops to zero and the assertion below says so loudly —
+    // ** THE REAL CROSS-RIG MAP: LAFAN1 names against `mixamorig:`-prefixed ones. If the
+    // prefix strip regressed, this drops to zero and the assertion below says so loudly -
     // which is the whole reason `mappedCount` is public.
     const source_of_target: []i32 =
         try codecs.bvh.mapJointsByName(gpa, source_names, target_names, .{});
     defer gpa.free(source_of_target);
     const matched: usize = codecs.bvh.mappedCount(source_of_target);
-    // ★ MEASURED: 72 of 78 Mixamo joints find a LAFAN1 source (the capture has 96). The six
-    // that do not are the rigs genuinely disagreeing — Mixamo's `HeadTop_End` vs LAFAN1's
+    // * MEASURED: 72 of 78 Mixamo joints find a LAFAN1 source (the capture has 96). The six
+    // that do not are the rigs genuinely disagreeing - Mixamo's `HeadTop_End` vs LAFAN1's
     // `HeadEnd`, and end sites the two name differently. They keep their rest orientation,
     // which is the correct degradation: a stiff fingertip, not a scrambled skeleton.
     //
-    // ★ The threshold is deliberately far below 72. It is here to catch a REGRESSION in the
+    // * The threshold is deliberately far below 72. It is here to catch a REGRESSION in the
     // prefix strip (which would give 0), not to pin an exact count that a fixture change
     // would break for no reason.
     try expect(matched > 30);
@@ -401,7 +401,7 @@ test "retarget: LAFAN1 dance onto the Mixamo skeleton keeps bone DIRECTIONS, not
     defer gpa.free(target_local_rotations);
     const target_global_rotations: []Quat = try gpa.alloc(Quat, target_joint_count);
     defer gpa.free(target_global_rotations);
-    // ★ Rest alignment, DERIVED from the two skeletons rather than hand-authored.
+    // * Rest alignment, DERIVED from the two skeletons rather than hand-authored.
     const source_rest: []Quat = try gpa.alloc(Quat, source_joint_count);
     defer gpa.free(source_rest);
     const source_parents: []i32 = try gpa.alloc(i32, source_joint_count);
@@ -431,9 +431,9 @@ test "retarget: LAFAN1 dance onto the Mixamo skeleton keeps bone DIRECTIONS, not
         target_global_rotations,
     );
 
-    // ★★★ THE PROPERTY THAT MAKES THIS A RETARGET AND NOT A COPY.
+    // *** THE PROPERTY THAT MAKES THIS A RETARGET AND NOT A COPY.
     //
-    // A mapped target joint must end up ORIENTED like its source — that is what carries the
+    // A mapped target joint must end up ORIENTED like its source - that is what carries the
     // motion across. But its bone LENGTHS stay its own, which is what makes it the Mixamo
     // character performing the dance rather than Geno wearing a Mixamo name.
     //
@@ -463,7 +463,7 @@ test "retarget: LAFAN1 dance onto the Mixamo skeleton keeps bone DIRECTIONS, not
     try expect(checked_joints > 30);
     try expect(worst_orientation_error < 1.0e-5);
 
-    // ★ And the target keeps its OWN proportions: at least one mapped bone must differ in
+    // * And the target keeps its OWN proportions: at least one mapped bone must differ in
     // length from its source counterpart, or the two rigs are secretly the same size and this
     // test proves less than it appears to.
     var found_a_different_bone_length: bool = false;
@@ -504,14 +504,14 @@ test "retarget: rest alignment puts a target's REST bone where its own rest poin
         (try loadFbxSkeletonFixture(gpa, io, "assets/Drop_Kick.fbx")) orelse return;
     defer target.deinit();
 
-    // ★★★ THE BUG THIS EXISTS FOR, MEASURED FROM THE FILES:
+    // *** THE BUG THIS EXISTS FOR, MEASURED FROM THE FILES:
     //
     //     LeftLeg    LAFAN1 (0,-1,0)   Mixamo (0,+1,0)   dot = -1.000
     //     LeftFoot   LAFAN1 (0,-1,0)   Mixamo (0,+1,0)   dot = -1.000
     //     LeftArm    LAFAN1 (0, 1,0)   Mixamo (0, 1,0)   dot = +1.000
     //
     // The leg bones point OPPOSITE at rest while the arms agree, so a plain global-orientation
-    // copy bent the legs backwards — visible on device, and invisible in every test that only
+    // copy bent the legs backwards - visible on device, and invisible in every test that only
     // compared a skeleton against itself.
     const source_joint_count: usize = source.joints.len;
     const target_joint_count: usize = target.joints.len;
@@ -555,8 +555,8 @@ test "retarget: rest alignment puts a target's REST bone where its own rest poin
     defer gpa.free(rest_alignment);
     codecs.bvh.restAlignmentOffsets(source_of_target, source_rest, target_rest, rest_alignment);
 
-    // ★★ THE PROPERTY: feed the retarget the SOURCE'S OWN REST orientations, and every target
-    // joint must come out at ITS OWN rest orientation. Rest maps to rest — which is exactly
+    // ** THE PROPERTY: feed the retarget the SOURCE'S OWN REST orientations, and every target
+    // joint must come out at ITS OWN rest orientation. Rest maps to rest - which is exactly
     // what "align the T-poses" means, and it is derived from the files rather than authored.
     const out_local: []Quat = try gpa.alloc(Quat, target_joint_count);
     defer gpa.free(out_local);
@@ -590,7 +590,7 @@ test "retarget: rest alignment puts a target's REST bone where its own rest poin
     try expect(checked > 30);
     try expect(worst_rest_error < 1.0e-4);
 
-    // ★ And the alignment is NOT all identity — if it were, this test would pass while
+    // * And the alignment is NOT all identity - if it were, this test would pass while
     // changing nothing, which is how a correction quietly becomes a no-op.
     var found_a_real_correction: bool = false;
     for (0..target_joint_count) |target_joint| {
@@ -618,10 +618,10 @@ test "retarget: an FBX's bind orientations describe a real pose, unlike its bare
 
     const joint_count: usize = target.joints.len;
 
-    // ★★★ THE MEASUREMENT THAT CONDEMNS THE DERIVED APPROACH.
+    // *** THE MEASUREMENT THAT CONDEMNS THE DERIVED APPROACH.
     //
-    // FK-ing Mixamo's offsets with IDENTITY rotations — which is what deriving an orientation
-    // from bone directions assumes — puts every bone along +Y:
+    // FK-ing Mixamo's offsets with IDENTITY rotations - which is what deriving an orientation
+    // from bone directions assumes - puts every bone along +Y:
     //
     //     LeftHand (4.6, 212.0, 0.7)   straight up above the shoulder
     //     LeftFoot (8.2, 186.4, 0.0)   also up
@@ -657,7 +657,7 @@ test "retarget: an FBX's bind orientations describe a real pose, unlike its bare
         }
     }
 
-    // A real skeleton puts the FOOT below the hips. This one does not — proving the identity
+    // A real skeleton puts the FOOT below the hips. This one does not - proving the identity
     // assumption is false for this rig, which is the whole reason a T-pose is needed.
     try expect(hips_height > 50.0);
     try expect(foot_height > hips_height);

@@ -1,12 +1,12 @@
-//! src/shaders/cube3d_vs_io.zig — typed interface for the immediate-mode 3D
+//! src/shaders/cube3d_vs_io.zig - typed interface for the immediate-mode 3D
 //! batch vertex shader. Companion to `cube3d_vs.zig`.
 //!
-//! Immediate-batch model: every 3D primitive (cube, grid line, …) is
+//! Immediate-batch model: every 3D primitive (cube, grid line, ...) is
 //! transformed to WORLD space on the CPU and appended to one vertex stream,
 //! drawn in a single call. So the only uniform is the camera's view-projection
 //! (set once per beginMode3D), and the per-primitive colour rides on the
 //! vertices. This sidesteps the single-UBO hazard of per-draw rendering (N
-//! draws all reading the last-written transform) — there is no per-primitive
+//! draws all reading the last-written transform) - there is no per-primitive
 //! uniform at all. The `Ubo`-struct form (`io_in.u.<field>`) emits one
 //! combined binding matching a single-UBO `Resources` host.
 
@@ -29,5 +29,5 @@ pub const Ubo = struct {
     view_projection: [4]@Vector(4, f32),
 };
 
-/// Varying outputs to the fragment shader — aliases the shared `Interp`.
+/// Varying outputs to the fragment shader - aliases the shared `Interp`.
 pub const Outputs = common.Interp;

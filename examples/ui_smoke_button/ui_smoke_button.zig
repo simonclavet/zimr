@@ -1,6 +1,6 @@
-//! ui_smoke_button — port of the GL `ui_smoke_button` onto the WebGPU UI
+//! ui_smoke_button - port of the GL `ui_smoke_button` onto the WebGPU UI
 //! host. One window, one text line, one button: the minimal UI text+button path.
-//! Harness swap only (UiContext+shapes_texture+font_cache → z.UiHost); the widget
+//! Harness swap only (UiContext+shapes_texture+font_cache -> z.UiHost); the widget
 //! body is the same real ui.zig.
 const std = @import("std");
 const Allocator = std.mem.Allocator;

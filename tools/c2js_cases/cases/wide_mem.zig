@@ -1,5 +1,5 @@
-//! 64-bit integers living IN MEMORY — struct fields, array elements, and values
-//! reached through a pointer — round-trip correctly within 2^53. Previously a
+//! 64-bit integers living IN MEMORY - struct fields, array elements, and values
+//! reached through a pointer - round-trip correctly within 2^53. Previously a
 //! 64-bit heap load/store touched only the low 32-bit word, so the high bits
 //! were silently lost; the centralized __ld/st64 path (two little-endian words,
 //! with sign handling) plus a true 8-byte element stride fixed it. run_test()

@@ -1,26 +1,26 @@
-//! skinned_mesh — port of the GL `skinned_mesh`: a skinned glTF rig,
-//! animated and deformed every frame. (The bone-socket technique — parenting
-//! an object to a bone — now lives in its own `bone_socket` example on a real
+//! skinned_mesh - port of the GL `skinned_mesh`: a skinned glTF rig,
+//! animated and deformed every frame. (The bone-socket technique - parenting
+//! an object to a bone - now lives in its own `bone_socket` example on a real
 //! rigged character, so this stays a focused pure-skinning demo.)
 //!
 //! The 2KB embedded GLB (same `skinned_mesh_data` the GL demo generated):
 //! a 6-vertex quad, 2 bones, JOINTS_0/WEIGHTS_0, inverseBindMatrices, and a
-//! "wave" animation rotating bone 1 ±45° around Z over 1.5s — so the right
+//! "wave" animation rotating bone 1 +/-45 deg around Z over 1.5s - so the right
 //! edge of the quad waves while the left edge stays anchored.
 //!
 //! Port shape: the GL original ran a GPU skinning shader (bone VBOs in
 //! slots 7/8 + a boneMatrices uniform).  The wgpu typed-shader path has no
 //! skinned pipeline variant yet, so this is the honest CPU-SKINNED v1:
 //!   parse (codecs.gltf already does skins + animations + JOINTS/WEIGHTS)
-//!   → sample keyframes (nlerp quats) → per-joint world = v·R·T
-//!   → skin matrix = v·inverseBind·world → vertices deformed on the CPU
-//!   → `updateMeshBuffer` (the dynamic-mesh path) → `drawModel`.
+//!   -> sample keyframes (nlerp quats) -> per-joint world = v*R*T
+//!   -> skin matrix = v*inverseBind*world -> vertices deformed on the CPU
+//!   -> `updateMeshBuffer` (the dynamic-mesh path) -> `drawModel`.
 //! Bone gizmos (spheres + a line) draw the live skeleton over the mesh.
 //! When the typed-3D-shader arc grows a skinned variant, the pose math
-//! here moves behind it unchanged — the matrices are the same either way.
+//! here moves behind it unchanged - the matrices are the same either way.
 //!
 //! Matrix conventions, derived from zm's source: zm is row-vector /
-//! row-major (`mulMatVec(m, v) = v·m`, translation lives in row 3), which
+//! row-major (`mulMatVec(m, v) = v*m`, translation lives in row 3), which
 //! makes glTF's COLUMN-major mat4 floats map DIRECTLY onto zm.Mat rows,
 //! and "rotate then translate" compose as `mulMat(R, T)`.
 const std = @import("std");
@@ -53,7 +53,7 @@ const max_joints: usize = 8;
 const State = struct {
     font: z.Font,
     model: z.Model,
-    /// Bind-pose positions (the skin source — never mutated).
+    /// Bind-pose positions (the skin source - never mutated).
     base_positions: []f32,
     /// Per-frame skinned positions, memcpy'd into the mesh via
     /// `updateMeshBuffer`.
@@ -112,7 +112,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const skinned: []f32 = try gpa.alloc(f32, vertex_count * 3);
     @memcpy(skinned, base);
 
-    // ---- skin: joints + inverse binds (glTF column-major → zm rows) ----
+    // ---- skin: joints + inverse binds (glTF column-major -> zm rows) ----
     if (document.skins.len == 0) {
         return error.NotASkinnedMesh;
     }
@@ -198,7 +198,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
-/// Normalized lerp between two quaternions — plenty for ±45° keyframes.
+/// Normalized lerp between two quaternions - plenty for +/-45 deg keyframes.
 fn nlerp(a: Vec, b: Vec, alpha: f32) Vec {
     const va: Vec = a * splat(1.0 - alpha) + b * splat(alpha);
     const len: f32 = @sqrt(va[0] * va[0] + va[1] * va[1] + va[2] * va[2] + va[3] * va[3]);
@@ -239,11 +239,11 @@ fn update(f: *z.Frame, s: *State) void {
         // Rotate then translate (this rig's joints are unparented; a
         // hierarchy would multiply the parent's world here too).
         world[j] = mulMat(rot_m, translationV(s.node_translation[j]));
-        // Bind space → joint local → world:  v · invBind · world.
+        // Bind space -> joint local -> world:  v * invBind * world.
         skin_mat[j] = mulMat(s.inverse_bind[j], world[j]);
     }
 
-    // ---- CPU skinning: v' = Σ_k w_k · (v · skin[joint_k]) ----
+    // ---- CPU skinning: v' = sum_k w_k * (v * skin[joint_k]) ----
     var vi: usize = 0;
     while (vi < s.vertex_count) : (vi += 1) {
         const p: Vec = f32x4(
@@ -323,7 +323,7 @@ pub const app: z.AppSpec(State) = .{
             .scale_mode = .responsive,
             .depth_format = .depth24_plus,
             // Clear via the pass loadOp (the runner does this in beginDrawing),
-            // NOT a fullscreen clearViewport quad — that quad overwrites the 3D
+            // NOT a fullscreen clearViewport quad - that quad overwrites the 3D
             // pass on tile GPUs and the whole 3D block disappears.
             .clear = .{ .r = 10.0 / 255.0, .g = 12.0 / 255.0, .b = 18.0 / 255.0, .a = 1.0 },
         },

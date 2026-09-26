@@ -1,4 +1,4 @@
-//! lightmap_fs_io.zig — IO schema for the lightmap fragment shader: two
+//! lightmap_fs_io.zig - IO schema for the lightmap fragment shader: two
 //! samplers (the base texture, sampled with uv, and the baked lightmap, sampled
 //! with uv2) whose product is the lit surface colour.
 const zm = @import("zm");

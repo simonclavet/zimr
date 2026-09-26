@@ -1,5 +1,5 @@
 //! lint:alias profiler_ui
-//! profiler_ui.zig — app-callable views for the integrated profiler.
+//! profiler_ui.zig - app-callable views for the integrated profiler.
 //!
 //! The profiler is APP-DRIVEN: it does not grab input or impose a hotkey. The
 //! app wires its own button, decides when to pause its simulation, calls
@@ -221,7 +221,7 @@ pub fn frameStrip(u: Ui) void {
     dl.addLine(.{ origin[0], by }, .{ origin[0] + w, by }, budget_line, 1);
 }
 
-/// Per-zone statistics across the rolling window, ranked by total time — the
+/// Per-zone statistics across the rolling window, ranked by total time - the
 /// "what to optimise" report. Steadier than one frame, and it surfaces phases
 /// too thin to read in the flamegraph at coarse timer resolution.
 pub fn statsTable(u: Ui) void {

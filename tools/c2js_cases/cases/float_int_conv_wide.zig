@@ -1,7 +1,7 @@
 // @floatFromInt / @intFromFloat across the 64-bit boundary. i64/u64 are BigInt
 // in the JS model; pre-fix the int->float cast was identity (leaving a BigInt
 // where a float was expected) and the float->int cast produced a Number into a
-// BigInt context — both threw "Cannot mix/convert BigInt" in the emitted JS.
+// BigInt context - both threw "Cannot mix/convert BigInt" in the emitted JS.
 var su: u64 = 0;
 fn ru(x: u64) u64 {
     su +%= x;

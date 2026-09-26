@@ -1,6 +1,6 @@
-// Runtime-initialized [N]u8 arrays — Zig's C backend emits them as C string
-// literals with octal/control escapes. Was an xfail (escapes undecoded → marker
-// → wrong); now decoded byte-for-byte. Includes control-char bytes.
+// Runtime-initialized [N]u8 arrays - Zig's C backend emits them as C string
+// literals with octal/control escapes. Was an xfail (escapes undecoded -> marker
+// -> wrong); now decoded byte-for-byte. Includes control-char bytes.
 export fn run_test() i32 {
     var d = [_]u8{ 5, 6, 7, 8 };
     d[0] +%= 1;

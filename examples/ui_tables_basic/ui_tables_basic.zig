@@ -1,7 +1,7 @@
-//! ui_tables_basic — port of the GL `ui_tables_basic` onto the WebGPU UI
+//! ui_tables_basic - port of the GL `ui_tables_basic` onto the WebGPU UI
 //! host. A 4-column sortable scoreboard (click a header to sort, shift-click to
 //! add a tie-breaker). Harness swap only; the table widget body is unchanged
-//! (same real ui.zig table API: beginTable/tableSetupColumn/tableGetSortSpecs/…).
+//! (same real ui.zig table API: beginTable/tableSetupColumn/tableGetSortSpecs/...).
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");

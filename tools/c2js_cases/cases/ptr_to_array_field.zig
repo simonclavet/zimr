@@ -1,11 +1,11 @@
-//! Indexing a POINTER-typed struct field — `self.buf[i]` where the field is
+//! Indexing a POINTER-typed struct field - `self.buf[i]` where the field is
 //! `*[N]T` (pointer to a fixed array) or `[*]T` (many-pointer). In the Zig
 //! C-backend this lowers via a pointer-to-pointer temp:
 //!     t3 = &self->buf;    // address of the field    (arr_N_T **)
 //!     t4 = *t3;           // LOAD the stored pointer  (the field's value)
 //!     t5 = &t4->array[i]; // stride into the pointee
-//! The transpiler used to collapse `*t3` to identity — because a `struct X **`
-//! was classified as a struct pointer, whose deref is the offset itself — and
+//! The transpiler used to collapse `*t3` to identity - because a `struct X **`
+//! was classified as a struct pointer, whose deref is the offset itself - and
 //! so strode from the field's ADDRESS instead of the loaded pointer: a silent
 //! wrong result with no marker. The fix loads the pointer for a double-star
 //! struct pointer that holds a heap address, while the `&local` round-trip
@@ -66,19 +66,19 @@ export fn run_test() i32 {
     i = 0;
     while (i < 4) : (i += 1) mbacking[i] = @intCast(i + 40); // 40,41,42,43
 
-    // *[N]u8 — read through the pointer-to-array field.
+    // *[N]u8 - read through the pointer-to-array field.
     const b = Box{ .buf = rtBacking() };
     if (b.at(0) != 0) return 1;
     if (b.at(3) != 6) return 2;
     if (b.at(15) != 30) return 3;
 
-    // *[8]u32 — stride 4 through the field.
+    // *[8]u32 - stride 4 through the field.
     const wb = WBox{ .w = rtWBacking() };
     if (wb.at(0) != 7) return 4;
     if (wb.at(5) != 507) return 5;
     if (wb.at(7) != 707) return 6;
 
-    // [*]u8 — many-pointer field (already worked; kept as a control).
+    // [*]u8 - many-pointer field (already worked; kept as a control).
     const mb = MBox{ .p = rtMBacking() };
     if (mb.at(0) != 40) return 7;
     if (mb.at(3) != 43) return 8;

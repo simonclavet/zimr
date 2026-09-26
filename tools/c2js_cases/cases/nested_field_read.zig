@@ -1,8 +1,8 @@
-// Reading a NESTED struct field — `s.inner.field` (two-plus levels) — must
+// Reading a NESTED struct field - `s.inner.field` (two-plus levels) - must
 // heap-LOAD at the folded byte address. The C backend emits the read as
 // `*(&(&S->inner)->a)`; the `*(&X)` read shortcut parsed the inner lvalue with the
 // tag-losing postfix parser, computed the address of `inner`, then emitted `->a`
-// as a JS PROPERTY access (`(addr).a` -> undefined -> 0) — a silent read
+// as a JS PROPERTY access (`(addr).a` -> undefined -> 0) - a silent read
 // miscompile. Stores were already correct (they used the tag-tracking lvalue
 // walker), so the field looked written but read back as 0. Self-checks (0 = pass).
 const A = struct { p: i32, q: i32 };

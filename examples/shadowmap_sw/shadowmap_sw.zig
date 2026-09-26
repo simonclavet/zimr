@@ -1,24 +1,24 @@
-//! shadowmap_sw — ONE shadow-map shader source, THREE renderers, live.
+//! shadowmap_sw - ONE shadow-map shader source, THREE renderers, live.
 //!
 //!   - LEFT  (CPU): the software rasterizer runs `depth_vs/fs` +
-//!     `lit_shadow_vs/fs` — the actual engine shader FILES — as plain Zig,
+//!     `lit_shadow_vs/fs` - the actual engine shader FILES - as plain Zig,
 //!     two passes per frame (light-view depth into an rgba8 map, then the
 //!     lit pass sampling it through a nearest `TextureRef`).
-//!   - RIGHT (GPU): the SAME four files, compiled shadermath → SPIR-V →
+//!   - RIGHT (GPU): the SAME four files, compiled shadermath -> SPIR-V ->
 //!     WGSL at build time, run as two WebGPU passes (rgba16_float shadow
 //!     RTT + the lit pipeline sampling it).
 //!   - CORNER (COMPTIME): the Zig COMPILER evaluates the same two passes
 //!     over a build-baked decimated bunny proxy (`scene.bakeCorner`) and the
-//!     result ships in the binary as a const — a shadow-mapped still no
+//!     result ships in the binary as a const - a shadow-mapped still no
 //!     runtime ever rendered.
 //!
-//! Everything the renderers agree on — geometry, staging, the orbiting
-//! light, spin animation, uniform-block builders, the software passes —
+//! Everything the renderers agree on - geometry, staging, the orbiting
+//! light, spin animation, uniform-block builders, the software passes -
 //! lives in `scene.zig`.  This file is only the plumbing each backend
 //! needs: GPU pipelines/buffers/bind groups on one side, two
 //! `raster.Context`s on the other, and the helmet-style split-screen
 //! composite (drag the divider; drag empty space to orbit; pinch/wheel to
-//! zoom).  The scene animates — objects spin, the light circles — so every
+//! zoom).  The scene animates - objects spin, the light circles - so every
 //! varying and uniform is exercised live on both halves, while the corner
 //! stays frozen at `scene.corner_time`.
 
@@ -72,7 +72,7 @@ const corner: scene.CornerBake(corner_sm, corner_w, corner_h) = blk: {
 
 // One drawable object on the GPU: geometry buffers + a private set of the
 // three uniform blocks (depth / lit-VS / lit-FS) and their bind groups.  The
-// two cubes share buffers but carry their own uniforms — same on the CPU,
+// two cubes share buffers but carry their own uniforms - same on the CPU,
 // where the "uniforms" are just the Io structs passed per draw.
 const Obj = struct {
     vbo: z.wgpu.BufferHandle,
@@ -113,7 +113,7 @@ const State = struct {
     bunny_frame: scene.BunnyFrame,
     depth_outs: []shadow.depth_vs.Out,
     lit_outs: []shadow.lit_vs.Out,
-    sm_ctx: z.raster.Context, // pass 1 target (cpu_shadow_res²)
+    sm_ctx: z.raster.Context, // pass 1 target (cpu_shadow_res^2)
     sw: z.raster.Context, // pass 2 target (canvas-shaped)
     sw_fb: z.CpuFramebuffer,
 
@@ -580,7 +580,7 @@ fn handleInput(f: *z.Frame, s: *State) void {
     }
 }
 
-/// GPU per-object uniforms — built by the SAME `scene` Ubo builders the
+/// GPU per-object uniforms - built by the SAME `scene` Ubo builders the
 /// software targets pass into `shaderMain`, uploaded verbatim.
 fn writeObjUniforms(
     f: *z.Frame,
@@ -597,7 +597,7 @@ fn writeObjUniforms(
         const lit_vs_io: shadow.lit_vs.Io = scene.litVsUbo(model, cam_vp, rig.vp, scene.normalMatrix(o, t));
         const lit_vs_bytes: [z.shader.wireSizeOf(LitVsUbo)]u8 = z.shader.wireOf(LitVsUbo, &lit_vs_io.u);
         z.wgpu.queueWriteBuffer(f.gpu.queue, obj.lit_vs_ubo, 0, &lit_vs_bytes);
-        // GPU map is rgba16_float → the Ubo's default (fine) bias.
+        // GPU map is rgba16_float -> the Ubo's default (fine) bias.
         const lit_fs_io: shadow.lit_fs.Io = scene.litFsUbo(o, rig.to_light, .{ 0.0025, 0.0008, 0, 0 });
         const lit_fs_bytes: [z.shader.wireSizeOf(LitFsUbo)]u8 = z.shader.wireOf(LitFsUbo, &lit_fs_io.u);
         z.wgpu.queueWriteBuffer(f.gpu.queue, obj.lit_fs_ubo, 0, &lit_fs_bytes);
@@ -651,7 +651,7 @@ fn renderCpu(s: *State, t: f32, cam_vp: Mat, rig: scene.LightRig) void {
             .pixels = s.sm_ctx.colorBufferBytes(),
             .width = cpu_shadow_res,
             .height = cpu_shadow_res,
-            .linear = false, // nearest — depth comparisons must not blend texels
+            .linear = false, // nearest - depth comparisons must not blend texels
         };
         scene.drawLit(&s.sw, g.verts, g.indices, vs_io, fs_io, s.lit_outs);
     }
@@ -697,7 +697,7 @@ fn update(f: *z.Frame, s: *State) void {
     writeObjUniforms(f, s, t, cam_vp, rig);
     const Backend: type = z.WgpuBackend;
 
-    // PASS 1: shadow map (light's eye → rgba16_float RTT). Raw pass: our own
+    // PASS 1: shadow map (light's eye -> rgba16_float RTT). Raw pass: our own
     // pipeline, so beginTextureMode must not bind the rgba8 2D pipeline here.
     z.beginTextureModeRaw(f.gl, s.shadow_rt, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
     const p1: *z.PassState = f.gl.pass;
@@ -708,7 +708,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
     z.endTextureModeRaw(f.gl);
 
-    // PASS 2: lit scene (camera → canvas-sized rgba8 RTT), sampling pass 1.
+    // PASS 2: lit scene (camera -> canvas-sized rgba8 RTT), sampling pass 1.
     z.beginTextureModeRaw(f.gl, s.rt, .{ .r = 12, .g = 12, .b = 28, .a = 255 });
     const p2: *z.PassState = f.gl.pass;
     Backend.setPipeline(p2, z.shader.RenderPipeline(void, void){ .gpu_handle = s.lit_pipeline });
@@ -772,7 +772,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 16, .color = .{ .r = 235, .g = 235, .b = 245, .a = 255 }, .font = &s.font },
     );
 
-    // NB: no explicit endDrawing — the runner closes the frame (idempotent),
+    // NB: no explicit endDrawing - the runner closes the frame (idempotent),
     // which lets the launcher overlay its switch pill on this app's frame.
 
     z.endDrawing(f.gl);

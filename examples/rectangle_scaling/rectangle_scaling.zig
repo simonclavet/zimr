@@ -1,5 +1,5 @@
-//! rectangle_scaling — drag the bottom-right handle to live-resize a rectangle. Three
-//! states: idle, ready (pointer over the handle → outline + corner marker appear), and
+//! rectangle_scaling - drag the bottom-right handle to live-resize a rectangle. Three
+//! states: idle, ready (pointer over the handle -> outline + corner marker appear), and
 //! dragging (the corner tracks the pointer until release). Ported from raylib
 //! shapes_rectangle_scaling; touch-draggable on mobile. Themed with the shared scaffold.
 const std = @import("std");

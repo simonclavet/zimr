@@ -1,4 +1,4 @@
-//! src/shaders/decal_vs.zig — shader-projected decal receiver VS body (IoT).
+//! src/shaders/decal_vs.zig - shader-projected decal receiver VS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version. Projects the world-space
 //! receiver position through the camera view-projection and forwards the world
@@ -21,7 +21,7 @@ pub fn shaderMain(io_in: Io) Out {
     // No depth bias: the decal re-draws the SAME mesh that was drawn as the
     // receiver body, so decal fragment depth is bit-identical to the surface
     // depth. `less_equal` passes for the near surface (shows the decal) and
-    // FAILS for the far surface / back side (depth-occluded — no see-through).
+    // FAILS for the far surface / back side (depth-occluded - no see-through).
     out.position = mulMatVec(io_in.u.vp, .{ p[0], p[1], p[2], 1.0 });
     out.o_world = p;
     out.o_normal = io_in.n;

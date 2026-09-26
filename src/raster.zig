@@ -17,7 +17,7 @@
 //!     owned by the user.  Donor's `static sw_context_t RLSW` is gone.
 //!   - Generic comptime dispatch where the donor uses `#include __FILE__`
 //!     templates.  The 32 hand-instantiated rasterizers in C become 4
-//!     generic functions × 8 comptime invocations, monomorphized into
+//!     generic functions x 8 comptime invocations, monomorphized into
 //!     the same eight specializations the donor produces - but readable.
 //!   - `gpa: Allocator` per call site, no global allocator hooks.
 //!   - Typed locals, brace discipline, casual prose comments - same
@@ -53,7 +53,7 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
 
-/// ── LANE BATCHES, NOT GEOMETRIC VECTORS ──
+/// -- LANE BATCHES, NOT GEOMETRIC VECTORS --
 ///
 /// Four PIXELS' worth of one scalar. The software rasteriser walks a scanline four pixels at a
 /// time, so `Lane4f` holds one edge-function value per pixel, `Lane4b` one inside/outside bit,
@@ -127,10 +127,10 @@ pub fn Handle(comptime T: type) type {
 // raster shares its general-purpose math with the rest of zimr through
 // `zimrmath`.  The shared helpers - `saturate`, `fract`, `rcp`,
 // `luminance`, `floatToHalf` / `halfToFloat`, the bit-expansion /
-// compression helpers, the RGBA8 ↔ RGBA32F converters - all live there.
+// compression helpers, the RGBA8 <-> RGBA32F converters - all live there.
 // Rasterizer-specific math (Vertex, the lerp/grad family) lives in
 // Section 2 of this file.
-// `types` gives us `Matrix` (column-major 4×4, bit-identical to
+// `types` gives us `Matrix` (column-major 4x4, bit-identical to
 // donor's `sw_matrix_t = float[16]`), used for the matrix stacks.
 
 // ============================================================================
@@ -163,12 +163,12 @@ pub const fb_color_fmt: pixel.PixelFormat = .color_r8g8b8a8;
 pub const fb_depth_fmt: pixel.PixelFormat = .depth_d32;
 
 /// Per-kernel rasterizer configuration.  Every flag is a comptime
-/// axis: each (depth_test × texture × blend × cull_back) combination
+/// axis: each (depth_test x texture x blend x cull_back) combination
 /// gets its own monomorphised kernel function via `inline switch`
 /// dispatch.  Each kernel contains only the work its cfg requires
 /// `if (cfg.depth_test)` etc. resolves at compile time, so the
 /// inner pixel loop has zero runtime cfg branches.
-/// 4 axes → 16 combinations.  Not all 16 may be in active use; the
+/// 4 axes -> 16 combinations.  Not all 16 may be in active use; the
 /// dispatcher routes based on runtime state and Zig generates only
 /// the kernel bodies that are actually called.
 pub const RasterCfg = struct {
@@ -239,7 +239,7 @@ fn cfgFromIndex(comptime idx: u4) RasterCfg {
 // The enums below mirror raylib's `SW*` enums one-for-one, with two
 // translations:
 //   - C-style `SCREAMING_CASE` names become Zig snake_case members
-//     (e.g. `SW_TRIANGLES` → `.triangles`).
+//     (e.g. `SW_TRIANGLES` -> `.triangles`).
 //   - `SW`-prefix on type names is dropped - once you're inside the
 //     `raster` namespace, the prefix is just noise.  `SWdraw` becomes
 //     `DrawMode`, `SWfactor` becomes `BlendFactor`, etc.
@@ -297,9 +297,9 @@ pub const ClearMask = struct {
 /// `loadIdentity`, `translate`, `rotate`, `scale`, `multMatrix`,
 /// `frustum`, `ortho`) operate on.  Set with `matrixMode`.
 pub const MatrixMode = enum {
-    /// World-space → camera-space transform.  Stack depth: 8.
+    /// World-space -> camera-space transform.  Stack depth: 8.
     modelview,
-    /// Camera-space → clip-space transform (perspective or ortho).
+    /// Camera-space -> clip-space transform (perspective or ortho).
     /// Stack depth: 2.
     projection,
     /// Per-texture coordinate transform.  Rarely used.  Stack
@@ -546,7 +546,7 @@ pub const PixelFormat = pixel.PixelFormat;
 /// `null` for combinations we don't support (the caller maps null to
 /// `err_code = .invalid_enum`).  Donor: `sw_pixel_get_format` (lines
 /// 1720-1796), but rewritten as a Zig switch tree for compile-time
-/// exhaustiveness - every `Format` × `DataType` combination is
+/// exhaustiveness - every `Format` x `DataType` combination is
 /// reached or explicitly mapped to `null`.
 pub fn pixelFormatFromFormatAndType(
     format: Format,
@@ -744,7 +744,7 @@ pub const Vertex = struct {
     texcoord: [2]f32,
 };
 
-/// Linearly interpolate between `a` and `b` at parameter `t ∈ [0, 1]`.
+/// Linearly interpolate between `a` and `b` at parameter `t in [0, 1]`.
 /// `t = 0` returns `a`; `t = 1` returns `b`.  Used by the Sutherland-
 /// Hodgman clipper when an edge crosses a clip plane - the new vertex
 /// at the crossing point gets correctly-interpolated position, color,
@@ -891,7 +891,7 @@ pub fn addVertexGradScaledPC(
 // the `Context` struct that holds everything the renderer remembers
 // between calls.
 // The donor's `sw_context_t` (line 1024 of staging) is one big flat
-// struct.  We keep that shape - readers can diff donor↔port section by
+// struct.  We keep that shape - readers can diff donor<->port section by
 // section - but group fields under named anonymous structs (`primitive`,
 // `array`) where the donor itself groups them.
 // The `init` / `deinit` / `resize` methods live at the bottom of the
@@ -1057,13 +1057,13 @@ pub const Context = struct {
         has_color_alpha: bool,
     },
 
-    /// Optional fixed-function rasterization hook (Phase 2 — one
+    /// Optional fixed-function rasterization hook (Phase 2 - one
     /// rasteriser).  When non-null, immediate-mode triangles/quads route
     /// through this instead of the built-in `triangleKernel`: the higher
     /// SW layer points it at `raster_shader.rasterizeTriangles` +
     /// `default_shapes_fs`, so fixed-function and programmable drawing
     /// share a single rasteriser.  `null` (the default) keeps the
-    /// built-in kernel — zero behaviour change until a caller opts in.
+    /// built-in kernel - zero behaviour change until a caller opts in.
     /// `ctx` is `*anyopaque` (the live `*Context`), mirroring
     /// `SwPipelineDispatch` and dodging a struct self-reference.
     ff_triangle: ?*const fn (ctx: *anyopaque, v0: *const Vertex, v1: *const Vertex, v2: *const Vertex) void = null,
@@ -1106,7 +1106,7 @@ pub const Context = struct {
     stack_modelview_counter: u32,
     stack_texture_counter: u32,
     current_matrix_mode: MatrixMode,
-    /// Cached modelview × projection product, recomputed on demand
+    /// Cached modelview x projection product, recomputed on demand
     /// when `is_dirty_mvp` is true.  Used in vertex transform
     /// recomputing on every vertex would burn cycles.
     mat_mvp: Matrix,
@@ -1155,7 +1155,7 @@ pub const Context = struct {
     // init / deinit / resize
     // ========================================================================
 
-    /// Initialize a Context backed by a `width × height` RGBA8 color
+    /// Initialize a Context backed by a `width x height` RGBA8 color
     /// buffer + D32 depth buffer.  Donor: `swInit`.
     /// The defaults match the donor: depth-test off, blend off,
     /// scissor off, cull-face off, clear color (0, 0, 0, 0), clear
@@ -1581,7 +1581,7 @@ pub const Context = struct {
     /// would be UB.
     ///
     /// Caller owns the responsibility for not stepping on the
-    /// rasterizer's toes — typical use is OUTSIDE of `begin`/`end`
+    /// rasterizer's toes - typical use is OUTSIDE of `begin`/`end`
     /// blocks, with no draw calls in flight.  The
     /// software-shader dispatch path bypasses the rasterizer entirely
     /// (it writes pixels per-fragment from a user-supplied kernel),
@@ -1616,7 +1616,7 @@ pub const Context = struct {
 
     /// Borrow the active depth attachment's raw bytes (mutable) plus
     /// its format, for callers that read/write depth through the
-    /// `raster_pixel.read_depth_table` / `write_depth_table` codecs —
+    /// `raster_pixel.read_depth_table` / `write_depth_table` codecs -
     /// the programmable rasterizer's depth test does exactly that.
     /// Same ownership contract as `colorBufferBytesMut`: valid until
     /// the next `resize`, no rasterizer draws in flight.
@@ -1724,7 +1724,7 @@ pub const Context = struct {
         self.user_state.remove(cap);
     }
 
-    /// Whether alpha blending is in effect for the next draw — the same
+    /// Whether alpha blending is in effect for the next draw - the same
     /// `raster_state.contains(.blend)` test `currentCfg` feeds the
     /// built-in kernel.  Lets a `ff_triangle` bridge pick the matching
     /// `raster_shader.RasterizeOpts.blend` so the one-rasteriser path
@@ -2249,7 +2249,7 @@ pub const Context = struct {
     /// non-zero IDs as "unbind the current texture" - subsequent
     /// sampling reads white and vertex_color stays unmodulated.
     /// This means UI rendering on raster (where rlgl glyph atlas IDs
-    /// get passed through) sees no texture → glyph quads come out as
+    /// get passed through) sees no texture -> glyph quads come out as
     /// solid colored rects, which is the desired placeholder
     /// behaviour.  Real raster texture binding stays via
     /// `bindTexture(handle)` for callers with native Handle access.
@@ -2582,7 +2582,7 @@ pub const Context = struct {
         }
         const v: *Vertex = &self.primitive.buffer[idx];
 
-        // MVP × position with raylib's row-vector convention:
+        // MVP x position with raylib's row-vector convention:
         // `result[j] = sum_i pos[i] * M[i, j]`.  See the
         // multiplication-direction note in the matrix-stack section.
         const m: *const Matrix = &self.mat_mvp;
@@ -2617,7 +2617,7 @@ pub const Context = struct {
                     );
                 },
                 .quads => if (self.ff_triangle) |ff| {
-                    // Quad → two triangles (0,1,2) + (0,2,3), each routed
+                    // Quad -> two triangles (0,1,2) + (0,2,3), each routed
                     // through the same fixed-function hook.
                     ff(self, &self.primitive.buffer[0], &self.primitive.buffer[1], &self.primitive.buffer[2]);
                     ff(self, &self.primitive.buffer[0], &self.primitive.buffer[2], &self.primitive.buffer[3]);
@@ -2678,7 +2678,7 @@ pub const Context = struct {
 
     /// Project a clip-space `Vertex` to screen space.  Returns null
     /// if the vertex is outside the clip volume (any
-    /// `position[i]` outside `[-w, +w]` for i ∈ {0, 1, 2}).  W = 1
+    /// `position[i]` outside `[-w, +w]` for i in {0, 1, 2}).  W = 1
     /// short-circuits the perspective divide (raylib's 2D path
     /// produces W=1 vertices; saves three rcp's per vertex).
     /// Donor: `sw_point_clip_and_project` minus the bounding-square
@@ -3060,7 +3060,7 @@ pub const Context = struct {
         const use_simd_path: bool = comptime !cfg.depth_test and !cfg.texture and !cfg.blend;
 
         // SIMD edge-function constants.  Each edge function
-        // `e_k(fx, fy) = (p_{k+1} - p_k) × ((fx, fy) - p_k)` is
+        // `e_k(fx, fy) = (p_{k+1} - p_k) x ((fx, fy) - p_k)` is
         // linear in `(fx, fy)`, which means within a row (fy
         // fixed) it advances by a constant `de_k_dx` per X step.
         // The SIMD inner loop processes four lanes at offsets
@@ -3128,8 +3128,8 @@ pub const Context = struct {
                         @as(Lane4f, @splat(e2_row)) + de2_dx_v * lane_offsets;
 
                     // Inside mask.  Three vector compares
-                    // ANDed lane-wise.  CCW: all edges ≥ 0;
-                    // CW: all edges ≤ 0.  The result is a
+                    // ANDed lane-wise.  CCW: all edges >= 0;
+                    // CW: all edges <= 0.  The result is a
                     // `Lane4b` we use to gate
                     // per-lane writes.
                     const inside: Lane4b = if (ccw)
@@ -3263,7 +3263,7 @@ pub const Context = struct {
                     // Alpha-over (`SRC_ALPHA, ONE_MINUS_SRC_ALPHA`)
                     // inlined as the only blend recipe.  Donor
                     // dispatches through `RLSW.blendFunc` for any
-                    // of 64 (src × dst) combinations; we beat the
+                    // of 64 (src x dst) combinations; we beat the
                     // donor on this axis by inlining the common
                     // case.  Other blend modes can land later as
                     // a runtime fallback when blend_func != null
@@ -3300,7 +3300,7 @@ pub const Context = struct {
     // linear gradients in (x, y).  Cost per pixel: one add per
     // interpolated channel.  Cost per pixel in the triangle path: six
     // multiplies plus three adds (edge functions) plus a barycentric
-    // division per triangle.  The fast-path is roughly 3× cheaper for
+    // division per triangle.  The fast-path is roughly 3x cheaper for
     // typical sprites.
     // Non-axis-aligned quads (rotated rectangles, perspective-distorted
     // billboards in 3D) fall back to fan triangulation: `triangleKernel`
@@ -3501,7 +3501,7 @@ pub const Context = struct {
             const area_x2: f32 = (tr_proj.x - tl_proj.x) * (br_proj.y - tl_proj.y) -
                 (tr_proj.y - tl_proj.y) * (br_proj.x - tl_proj.x);
             // For our axis-aligned test, area_x2 is always positive
-            // (TL→TR→BR walks CCW in pixel-Y-down).  So this is a
+            // (TL->TR->BR walks CCW in pixel-Y-down).  So this is a
             // no-op for axis-aligned quads - front-face by
             // construction.  Cull-back of an axis-aligned quad never
             // rejects.  We keep the check for parity with the
@@ -3868,7 +3868,7 @@ test "era I: Context.init + deinit round-trip with no leaks" {
     try expectEqual(Vec2i{ 64, 48 }, ctx.framebuffer.color.size);
     try expectEqual(PixelFormat.color_r8g8b8a8, ctx.framebuffer.color.format);
     try expectEqual(PixelFormat.depth_d32, ctx.framebuffer.depth.format);
-    // RGBA8 = 4 bytes/pixel, 64 × 48 × 4 = 12288.
+    // RGBA8 = 4 bytes/pixel, 64 x 48 x 4 = 12288.
     try expectEqual(@as(usize, 12288), ctx.framebuffer.color.pixels.len);
     // D32 = 4 bytes/pixel, same dimensions = same size.
     try expectEqual(@as(usize, 12288), ctx.framebuffer.depth.pixels.len);
@@ -4213,7 +4213,7 @@ test "era I: currentMatrix returns the active stack's top" {
         ctx.currentMatrix(),
     );
 
-    // Switch mode → currentMatrix retargets to the new stack.  We
+    // Switch mode -> currentMatrix retargets to the new stack.  We
     // bypass the public API (it'd be matrixMode(.projection), future public-API work)
     // and set the field directly to verify the helper's switch
     // covers all three arms.
@@ -4473,7 +4473,7 @@ test "era II: scissor sets pixel rect AND clip-space projection" {
     try expectEqual(Vec2i{ 25, 25 }, ctx.sc_min);
     try expectEqual(Vec2i{ 75, 75 }, ctx.sc_max);
 
-    // Clip-space mapping: x maps linearly (0 → -1, vp_w → +1); y is
+    // Clip-space mapping: x maps linearly (0 -> -1, vp_w -> +1); y is
     // flipped (sc_min.y in pixel space is the TOP, so it becomes
     // `+1` in clip-space which has +Y up).
     //   clip.x = 2*sc.x/vp.w - 1
@@ -4534,9 +4534,9 @@ test "era II: pointSize stores floor(size/2) matching donor" {
 
     ctx.pointSize(8.0);
     try expectEqual(@as(f32, 4.0), ctx.point_radius);
-    ctx.pointSize(7.5); // 7.5/2 = 3.75 → floor = 3
+    ctx.pointSize(7.5); // 7.5/2 = 3.75 -> floor = 3
     try expectEqual(@as(f32, 3.0), ctx.point_radius);
-    ctx.pointSize(1.0); // 0.5 → floor = 0
+    ctx.pointSize(1.0); // 0.5 -> floor = 0
     try expectEqual(@as(f32, 0.0), ctx.point_radius);
 }
 
@@ -4618,7 +4618,7 @@ test "era II: cleanRasterState strips texture_2d when bound texture is depth-for
     var tex_pixels: [4 * 4 * 4]u8 = @splat(0);
     var tex = Texture{
         .pixels = &tex_pixels,
-        .format = .depth_d32, // ← depth, not color
+        .format = .depth_d32, // <- depth, not color
         .alpha = .none,
         .size = Vec2i{ 4, 4 },
         .size_minus_one = Vec2i{ 3, 3 },
@@ -4746,7 +4746,7 @@ test "era II: pushMatrix past max records stack_overflow, doesn't advance counte
     ctx.matrixMode(.projection); // projection stack max is 2 (smaller than modelview)
     try expectEqual(@as(u32, 1), ctx.stack_projection_counter);
 
-    ctx.pushMatrix(); // 1 → 2 - fills the stack
+    ctx.pushMatrix(); // 1 -> 2 - fills the stack
     try expectEqual(@as(u32, 2), ctx.stack_projection_counter);
 
     ctx.pushMatrix(); // overflow: should record error, not advance
@@ -4831,7 +4831,7 @@ test "era II: rotate by a quarter turn around Z yields a Z rotation" {
 
     // Rodrigues with axis (0,0,1) and a QUARTER TURN: cos=0, sin=1, t=1.
     // Result: m0 = z*z*t + cos = 0 (with axis Z, x=y=0); etc.  The
-    // rotation now goes through `zm.matFromAxisAngle` - a 90° Z
+    // rotation now goes through `zm.matFromAxisAngle` - a 90 deg Z
     // rotation turns the X axis into +Y and Y into -X.
     try expectApproxEqAbs(@as(f32, 0.0), cur[0][0], 1e-6);
     try expectApproxEqAbs(@as(f32, 1.0), cur[0][1], 1e-6);
@@ -5060,7 +5060,7 @@ test "era II: texImage2D with null data zero-fills allocated storage" {
     for (tex.pixels) |b| {
         try expectEqual(@as(u8, 0), b);
     }
-    // Null data → alpha defaults to .none (the donor's
+    // Null data -> alpha defaults to .none (the donor's
     // "alphaFound = !data" inverted gate from sw_texture_alloc; we
     // simplified to always-`.none` for null data, which is what
     // a zero buffer represents anyway).
@@ -5076,7 +5076,7 @@ test "era II: texImage2D with data copies bytes and detects alpha" {
     defer ctx.deleteTextures(std.testing.allocator, &handles);
     ctx.bindTexture(handles[0]);
 
-    // 2×2 RGBA, all opaque except the last pixel (alpha 128).
+    // 2x2 RGBA, all opaque except the last pixel (alpha 128).
     const src = [_]u8{
         255, 0, 0, 255, // red
         0, 255, 0, 255, // green
@@ -5141,7 +5141,7 @@ test "era II: texImage2D with too-short data records invalid_value" {
     defer ctx.deleteTextures(std.testing.allocator, &handles);
     ctx.bindTexture(handles[0]);
 
-    // 2×2 RGBA wants 16 bytes; we provide 4.
+    // 2x2 RGBA wants 16 bytes; we provide 4.
     const short_data = [_]u8{ 1, 2, 3, 4 };
     try ctx.texImage2D(std.testing.allocator, 2, 2, .rgba, .unsigned_byte, &short_data);
     try expectEqual(ErrorCode.invalid_value, ctx.err_code);
@@ -5160,12 +5160,12 @@ test "era II: texImage2D reuses storage on same-size resize, reallocates on diff
     const ptr_a: [*]u8 = ctx.bound_texture.?.pixels.ptr;
     const len_a: usize = ctx.bound_texture.?.pixels.len;
 
-    // Same dimensions + format → no realloc; pointer should match.
+    // Same dimensions + format -> no realloc; pointer should match.
     try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, null);
     try expectEqual(ptr_a, ctx.bound_texture.?.pixels.ptr);
     try expectEqual(len_a, ctx.bound_texture.?.pixels.len);
 
-    // Different dimensions → realloc (length must change).
+    // Different dimensions -> realloc (length must change).
     try ctx.texImage2D(std.testing.allocator, 8, 8, .rgba, .unsigned_byte, null);
     try expect(ctx.bound_texture.?.pixels.len != len_a);
 }
@@ -5274,7 +5274,7 @@ test "era II: begin recomputes mat_mvp from dirty bit + clears the bit" {
     defer ctx.deinit(std.testing.allocator);
 
     // Dirty the modelview by translating, then begin should fold
-    // modelview × projection into mat_mvp.
+    // modelview x projection into mat_mvp.
     ctx.translate(5, 7, 11);
     try expect(ctx.is_dirty_mvp);
 
@@ -5546,8 +5546,8 @@ test "era III: point at clip-space origin lands at framebuffer center" {
     ctx.vertex2f(0, 0);
     ctx.end();
 
-    // Default vp_center = (4, 4), vp_half = (4, 4); NDC (0, 0) →
-    // 4 + 0*4 + 0.5 = 4.5 → floor = 4 (point_radius defaults to 0,
+    // Default vp_center = (4, 4), vp_half = (4, 4); NDC (0, 0) ->
+    // 4 + 0*4 + 0.5 = 4.5 -> floor = 4 (point_radius defaults to 0,
     // so a single pixel).
     const px: [4]u8 = pixelAtRgba8(&ctx, 4, 4);
     try expectEqual(@as(u8, 255), px[0]);
@@ -5566,7 +5566,7 @@ test "era III: two points at different NDC positions land at different pixels" {
 
     ctx.begin(.points);
     ctx.color4ub(200, 0, 0, 255);
-    ctx.vertex2f(-0.5, 0); // NDC X = -0.5 → pixel X = 4 + (-0.5)*4 + 0.5 = 2.5 → 2
+    ctx.vertex2f(-0.5, 0); // NDC X = -0.5 -> pixel X = 4 + (-0.5)*4 + 0.5 = 2.5 -> 2
     ctx.color4ub(0, 200, 0, 255);
     ctx.vertex2f(0.5, 0); // pixel X = 6
     ctx.end();
@@ -5584,13 +5584,13 @@ test "era III: point with non-zero radius fills a square" {
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
 
-    ctx.pointSize(3.0); // donor: floors `size*0.5` → radius=1 → 3×3 square
+    ctx.pointSize(3.0); // donor: floors `size*0.5` -> radius=1 -> 3x3 square
     ctx.begin(.points);
     ctx.color4ub(123, 200, 50, 255);
     ctx.vertex2f(0, 0); // centred at (8, 8)
     ctx.end();
 
-    // Expect a 3×3 fill of (7..9, 7..9).
+    // Expect a 3x3 fill of (7..9, 7..9).
     var dy: i32 = -1;
     while (dy <= 1) : (dy += 1) {
         var dx: i32 = -1;
@@ -5616,7 +5616,7 @@ test "era III: point outside clip volume (x > w) is rejected" {
     // Simplest path: skip and use a vertex outside the [-1, +1] NDC
     // box but with W=1.  Donor's clip is gated on `w != 1` so this
     // path doesn't reject - but the bounding-square early-out does
-    // (point at NDC (3, 0) → pixel X = 4 + 3*4 + 0.5 = 16.5 → 16,
+    // (point at NDC (3, 0) -> pixel X = 4 + 3*4 + 0.5 = 16.5 -> 16,
     // outside the 8-wide framebuffer).
     ctx.begin(.points);
     ctx.color4ub(255, 0, 0, 255);
@@ -5643,8 +5643,8 @@ test "era III: depth-test path passes when depth empty (zero), writes new depth"
     // Default depth buffer is all-zero (init's `@memset(depth_pixels, 0)`).
     // A point at NDC z = -0.5 maps to vertex.position[2] = -0.5
     // (no projection matrix to remap).  The donor's depth comparison
-    // is `if (z > stored) return` - so submitted z must be ≤ stored
-    // to pass.  -0.5 ≤ 0 - passes.  Pixel gets written, depth gets
+    // is `if (z > stored) return` - so submitted z must be <= stored
+    // to pass.  -0.5 <= 0 - passes.  Pixel gets written, depth gets
     // updated to -0.5.
     ctx.enable(.depth_test);
     ctx.begin(.points);
@@ -5685,13 +5685,13 @@ test "era III: scissor rectangle clips a point's square" {
     // Scissor restricts writes to (8..16, 0..16) - the right half.
     ctx.scissor(8, 0, 8, 16);
     ctx.enable(.scissor_test);
-    ctx.pointSize(7.0); // radius = 3 → 7×7 square at (8, 8)
+    ctx.pointSize(7.0); // radius = 3 -> 7x7 square at (8, 8)
     ctx.begin(.points);
     ctx.color4ub(255, 255, 255, 255);
     ctx.vertex2f(0, 0); // pixel (8, 8)
     ctx.end();
 
-    // Pixel (5, 8) is inside the point's square (8±3) but OUTSIDE
+    // Pixel (5, 8) is inside the point's square (8+/-3) but OUTSIDE
     // the scissor rect - should be untouched.
     const left_of_scissor: [4]u8 = pixelAtRgba8(&ctx, 5, 8);
     try expectEqual(@as(u8, 0), left_of_scissor[0]);
@@ -5717,8 +5717,8 @@ test "era III: multiple points in one begin/end pair all land" {
     defer ctx.deinit(std.testing.allocator);
 
     // Submit 3 points; each should auto-flush at primitive size 1.
-    // GL Y-up convention: NDC y=-0.5 → pixel y=6, NDC y=+0.5 → pixel y=2.
-    // X mapping unchanged: NDC x=-0.5 → pixel x=2, NDC x=+0.5 → pixel x=6.
+    // GL Y-up convention: NDC y=-0.5 -> pixel y=6, NDC y=+0.5 -> pixel y=2.
+    // X mapping unchanged: NDC x=-0.5 -> pixel x=2, NDC x=+0.5 -> pixel x=6.
     ctx.begin(.points);
     ctx.color4ub(255, 0, 0, 255);
     ctx.vertex2f(-0.5, -0.5); // pixel (2, 6)
@@ -5749,8 +5749,8 @@ test "era III: line from NDC (-0.5, 0) to (+0.5, 0) draws horizontal pixel row" 
     var ctx = try Context.init(std.testing.allocator, 8, 8);
     defer ctx.deinit(std.testing.allocator);
 
-    // NDC -0.5 → pixel 4 + (-0.5)*4 + 0.5 = 2.5 → 2
-    // NDC +0.5 → pixel 4 + ( 0.5)*4 + 0.5 = 6.5 → 6
+    // NDC -0.5 -> pixel 4 + (-0.5)*4 + 0.5 = 2.5 -> 2
+    // NDC +0.5 -> pixel 4 + ( 0.5)*4 + 0.5 = 6.5 -> 6
     // Y center: pixel 4
     ctx.begin(.lines);
     ctx.color4ub(255, 0, 0, 255);
@@ -5804,10 +5804,10 @@ test "era III: diagonal line from (-0.5, -0.5) to (+0.5, +0.5) hits both endpoin
     ctx.vertex2f(0.5, 0.5);
     ctx.end();
 
-    // GL Y-up convention: NDC y=-0.5 → pixel y=6, NDC y=+0.5 → pixel y=2.
+    // GL Y-up convention: NDC y=-0.5 -> pixel y=6, NDC y=+0.5 -> pixel y=2.
     // Endpoints land at (2, 6) and (6, 2).  Both should be painted;
     // so should the diagonal pixels in between (now running
-    // top-right ↔ bottom-left in memory).
+    // top-right <-> bottom-left in memory).
     const start: [4]u8 = pixelAtRgba8(&ctx, 2, 6);
     try expectEqual(@as(u8, 50), start[0]);
     try expectEqual(@as(u8, 100), start[1]);
@@ -5830,8 +5830,8 @@ test "era III: line color interpolation paints endpoints with respective colors"
     ctx.vertex2f(0.75, 0);
     ctx.end();
 
-    // Left endpoint: NDC -0.75 → 8 + (-0.75)*8 + 0.5 = 2.5 → 2
-    // Right endpoint: NDC +0.75 → 8 + 0.75*8 + 0.5 = 14.5 → 14
+    // Left endpoint: NDC -0.75 -> 8 + (-0.75)*8 + 0.5 = 2.5 -> 2
+    // Right endpoint: NDC +0.75 -> 8 + 0.75*8 + 0.5 = 14.5 -> 14
     const left: [4]u8 = pixelAtRgba8(&ctx, 2, 4);
     try expectEqual(@as(u8, 255), left[0]);
     try expectEqual(@as(u8, 0), left[2]);
@@ -5868,7 +5868,7 @@ test "era III: line outside framebuffer is silently dropped" {
     var ctx = try Context.init(std.testing.allocator, 8, 8);
     defer ctx.deinit(std.testing.allocator);
 
-    // Both endpoints at NDC X = 3 → pixel 16, way off-screen.
+    // Both endpoints at NDC X = 3 -> pixel 16, way off-screen.
     ctx.begin(.lines);
     ctx.color4ub(255, 255, 255, 255);
     ctx.vertex2f(3, 0);
@@ -5892,7 +5892,7 @@ test "era III: multi-line begin/end paints each segment independently" {
     defer ctx.deinit(std.testing.allocator);
 
     // Two horizontal lines on different rows.  GL Y-up: NDC y=-0.5
-    // → pixel y=6, NDC y=+0.5 → pixel y=2.
+    // -> pixel y=6, NDC y=+0.5 -> pixel y=2.
     ctx.begin(.lines);
     ctx.color4ub(255, 0, 0, 255);
     ctx.vertex2f(-0.5, -0.5); // pixel (2, 6)
@@ -5975,7 +5975,7 @@ test "era III: triangle paints pixels with barycentric color interp" {
     ctx.vertex2f(0, 0.5);
     ctx.end();
 
-    // Centroid: at NDC (0, -1/6) → pixel approximately (8, 9).
+    // Centroid: at NDC (0, -1/6) -> pixel approximately (8, 9).
     const center: [4]u8 = pixelAtRgba8(&ctx, 8, 9);
     // Each channel should be non-zero (the centroid is fed by all
     // three vertex colors).  Won't be exactly 85 due to sub-pixel
@@ -5989,7 +5989,7 @@ test "era III: degenerate triangle (collinear vertices) paints nothing" {
     var ctx = try Context.init(std.testing.allocator, 8, 8);
     defer ctx.deinit(std.testing.allocator);
 
-    // Three collinear points → zero area.
+    // Three collinear points -> zero area.
     ctx.begin(.triangles);
     ctx.color4ub(255, 255, 255, 255);
     ctx.vertex2f(-0.5, 0);
@@ -6051,7 +6051,7 @@ test "era III: scissor clips triangle bounding box" {
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
 
-    // Scissor restricts to the right half (x ∈ [8, 16)).
+    // Scissor restricts to the right half (x in [8, 16)).
     ctx.enable(.scissor_test);
     ctx.scissor(8, 0, 8, 16);
 
@@ -6067,8 +6067,8 @@ test "era III: scissor clips triangle bounding box" {
     const left: [4]u8 = pixelAtRgba8(&ctx, 4, 8);
     try expectEqual(@as(u8, 0), left[0]);
 
-    // Pixel (10, 8) - inside both the scissor (x ≥ 8) and the
-    // triangle (which at y=8 spans roughly x ∈ [4.5, 11.5]).
+    // Pixel (10, 8) - inside both the scissor (x >= 8) and the
+    // triangle (which at y=8 spans roughly x in [4.5, 11.5]).
     const right: [4]u8 = pixelAtRgba8(&ctx, 10, 8);
     try expectEqual(@as(u8, 150), right[0]);
 }
@@ -6116,7 +6116,7 @@ test "era III: multi-triangle begin/end paints each independently" {
 
 // ---- triangle DEPTH + TEX tests
 // Tests for the depth_test and texture cfg axes added to drawTriangle.
-// Each kernel is monomorphised against (cfg × fb_color_fmt × fb_depth_fmt)
+// Each kernel is monomorphised against (cfg x fb_color_fmt x fb_depth_fmt)
 // at compile time, so these tests exercise the fully-specialised
 // inner loop with depth read/write and texture sampling.
 
@@ -6149,7 +6149,7 @@ test "era III: textured triangle samples bound texture color" {
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
 
-    // Upload a 4×4 solid-color RGBA8 texture (every texel = blue).
+    // Upload a 4x4 solid-color RGBA8 texture (every texel = blue).
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
     defer ctx.deleteTextures(std.testing.allocator, &handles);
@@ -6169,7 +6169,7 @@ test "era III: textured triangle samples bound texture color" {
 
     ctx.enable(.texture_2d);
     ctx.begin(.triangles);
-    // Vertex color: white.  Modulated × blue texture = blue output.
+    // Vertex color: white.  Modulated x blue texture = blue output.
     ctx.color4ub(255, 255, 255, 255);
     ctx.texCoord2f(0, 0);
     ctx.vertex2f(-0.5, -0.5);
@@ -6204,7 +6204,7 @@ test "era III: textured triangle modulates vertex color with texture" {
 
     ctx.enable(.texture_2d);
     ctx.begin(.triangles);
-    // Vertex color: red.  Modulated × white texture = red output.
+    // Vertex color: red.  Modulated x white texture = red output.
     ctx.color4ub(255, 0, 0, 255);
     ctx.texCoord2f(0, 0);
     ctx.vertex2f(-0.5, -0.5);
@@ -6263,7 +6263,7 @@ test "era III: textured + depth-test triangle combines both axes" {
     ctx.vertex3f(0, 0.5, 0.5);
     ctx.end();
 
-    // Center should hold green (closer triangle's white × green
+    // Center should hold green (closer triangle's white x green
     // texture); the farther triangle's red is rejected by depth.
     const px: [4]u8 = pixelAtRgba8(&ctx, 8, 6);
     try expectEqual(@as(u8, 0), px[0]);
@@ -6298,8 +6298,8 @@ test "era III: blend alpha-over composites src over dst" {
     ctx.end();
 
     // Result at center should mix: roughly half red, half green.
-    // 128/255 ≈ 0.502; out_r = 0 * 0.502 + 255 * 0.498 ≈ 127.
-    // out_g = 255 * 0.502 + 0 * 0.498 ≈ 128.
+    // 128/255 ~ 0.502; out_r = 0 * 0.502 + 255 * 0.498 ~ 127.
+    // out_g = 255 * 0.502 + 0 * 0.498 ~ 128.
     const after: [4]u8 = pixelAtRgba8(&ctx, 8, 6);
     try expect(after[0] > 100 and after[0] < 160);
     try expect(after[1] > 100 and after[1] < 160);
@@ -6313,7 +6313,7 @@ test "era III: blend with full alpha is identity (matches no-blend output)" {
     ctx.enable(.blend);
     ctx.blendFunc(.src_alpha, .one_minus_src_alpha);
     ctx.begin(.triangles);
-    // alpha = 255 → src_alpha = 1, inv = 0, so dst contribution = 0.
+    // alpha = 255 -> src_alpha = 1, inv = 0, so dst contribution = 0.
     // Output is just the source color.
     ctx.color4ub(50, 100, 200, 255);
     ctx.vertex2f(-0.5, -0.5);
@@ -6336,11 +6336,11 @@ test "era III: cull_back rejects back-facing triangles (NDC-CCW post-Y-flip), ke
 
     // raster computes signed area in pixel space, where Y is flipped
     // vs NDC.  That inverts winding-order classification:
-    //   - NDC CCW  →  pixel CW   →  back-facing → CULLED by cullFace(.back)
-    //   - NDC CW   →  pixel CCW  →  front-facing → KEEPS painting
+    //   - NDC CCW  ->  pixel CW   ->  back-facing -> CULLED by cullFace(.back)
+    //   - NDC CW   ->  pixel CCW  ->  front-facing -> KEEPS painting
     // Test the first half: an NDC-CCW triangle.  Center vertex at
     // (0, 0.9) renders ABOVE the bottom edge in NDC (positive Y).
-    // After Y-flip the pixel order is (1, 14) → (15, 14) → (8, 0).
+    // After Y-flip the pixel order is (1, 14) -> (15, 14) -> (8, 0).
     // Visiting those three pixels in that order traces a CW loop
     // in memory space, so this should be culled.
     ctx.begin(.triangles);
@@ -6360,7 +6360,7 @@ test "era III: cull_back rejects back-facing triangles (NDC-CCW post-Y-flip), ke
         }
     }
 
-    // NDC-CW triangle: pixel order traces CCW post-flip → front-facing → paints.
+    // NDC-CW triangle: pixel order traces CCW post-flip -> front-facing -> paints.
     ctx.begin(.triangles);
     ctx.color4ub(0, 200, 0, 255);
     ctx.vertex2f(-0.9, -0.9);
@@ -6404,7 +6404,7 @@ test "era III: blend + textured triangle composites textured src over dst" {
     ctx.vertex2f(0, 0.9);
     ctx.end();
 
-    // Blend half-alpha textured (white × blue tex = blue, alpha 128).
+    // Blend half-alpha textured (white x blue tex = blue, alpha 128).
     ctx.enable(.blend);
     ctx.blendFunc(.src_alpha, .one_minus_src_alpha);
     ctx.enable(.texture_2d);
@@ -6437,9 +6437,9 @@ test "era III: axis-aligned quad fills its rectangle" {
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
 
-    // Submit a screen-axis-aligned quad in canonical TL→TR→BR→BL
+    // Submit a screen-axis-aligned quad in canonical TL->TR->BR->BL
     // order.  See the corner-interpolation test below for the NDC
-    // ↔ pixel orientation reminder.  Pixel rect roughly (4, 4) →
+    // <-> pixel orientation reminder.  Pixel rect roughly (4, 4) ->
     // (12, 12).
     ctx.begin(.quads);
     ctx.color4ub(255, 200, 100, 255);
@@ -6469,12 +6469,12 @@ test "era III: axis-aligned quad interpolates corner colors linearly" {
     // ignoring the BR corner color.  Submit vertices so the
     // pixel-space "TL" gets red, "TR" green, "BL" blue, and the
     // ignored "BR" gets the sentinel color.
-    // GL Y-up: NDC y=+0.5 → pixel y=4 (top half of memory), NDC
-    // y=-0.5 → pixel y=12.  So:
-    //   pixel TL (4, 4)   ← NDC (-0.5, +0.5)
-    //   pixel TR (12, 4)  ← NDC (+0.5, +0.5)
-    //   pixel BR (12, 12) ← NDC (+0.5, -0.5)   (ignored)
-    //   pixel BL (4, 12)  ← NDC (-0.5, -0.5)
+    // GL Y-up: NDC y=+0.5 -> pixel y=4 (top half of memory), NDC
+    // y=-0.5 -> pixel y=12.  So:
+    //   pixel TL (4, 4)   <- NDC (-0.5, +0.5)
+    //   pixel TR (12, 4)  <- NDC (+0.5, +0.5)
+    //   pixel BR (12, 12) <- NDC (+0.5, -0.5)   (ignored)
+    //   pixel BL (4, 12)  <- NDC (-0.5, -0.5)
     ctx.begin(.quads);
     ctx.color4ub(0, 0, 255, 255); // pixel-BL (NDC -0.5, -0.5): blue
     ctx.vertex2f(-0.5, -0.5);
@@ -6503,7 +6503,7 @@ test "era III: rotated quad falls back to fan triangulation" {
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
 
-    // Rotated 45° quad - a diamond shape.  Edges run diagonally,
+    // Rotated 45 deg quad - a diamond shape.  Edges run diagonally,
     // so isAxisAlignedQuad returns false and the dispatcher splits
     // into two triangles via the fan path.
     ctx.begin(.quads);
@@ -6514,12 +6514,12 @@ test "era III: rotated quad falls back to fan triangulation" {
     ctx.vertex2f(0.6, 0);
     ctx.end();
 
-    // Center pixel is inside both triangles → painted.
+    // Center pixel is inside both triangles -> painted.
     const center: [4]u8 = pixelAtRgba8(&ctx, 8, 8);
     try expectEqual(@as(u8, 120), center[0]);
     try expectEqual(@as(u8, 220), center[1]);
 
-    // Far corner (1, 1) is outside the diamond → untouched.
+    // Far corner (1, 1) is outside the diamond -> untouched.
     const corner: [4]u8 = pixelAtRgba8(&ctx, 1, 1);
     try expectEqual(@as(u8, 0), corner[1]);
 }
@@ -6589,7 +6589,7 @@ test "era III: blended quad over opaque background composites correctly" {
     ctx.vertex2f(-0.5, 0.5); // BL
     ctx.end();
 
-    // Center inside both quads → 50/50 mix of red and green.
+    // Center inside both quads -> 50/50 mix of red and green.
     const px: [4]u8 = pixelAtRgba8(&ctx, 8, 8);
     try expect(px[0] > 100 and px[0] < 160);
     try expect(px[1] > 100 and px[1] < 160);
@@ -6628,7 +6628,7 @@ test "era III: corner classification handles arbitrary submit order" {
     defer ctx.deinit(std.testing.allocator);
 
     // Submit starting from the BR corner - a rotated submit order
-    // vs the canonical TL→TR→BR→BL.  quadKernel's sum/diff
+    // vs the canonical TL->TR->BR->BL.  quadKernel's sum/diff
     // classification should still find each corner correctly
     // regardless of which slot it lands in.
     ctx.begin(.quads);
@@ -6660,7 +6660,7 @@ test "era III: corner classification handles arbitrary submit order" {
 // don't require SIMD to pass).
 
 test "era III: SIMD quad fills full row width across multiple lanes" {
-    // 16-wide quad covers 12 painted pixels per row → exactly
+    // 16-wide quad covers 12 painted pixels per row -> exactly
     // three SIMD iterations, no tail.  Confirms the SIMD body
     // paints contiguous pixels with no gaps.
     var ctx = try Context.init(std.testing.allocator, 16, 16);
@@ -6668,10 +6668,10 @@ test "era III: SIMD quad fills full row width across multiple lanes" {
 
     ctx.begin(.quads);
     ctx.color4ub(180, 60, 30, 255);
-    ctx.vertex2f(-0.75, -0.75); // TL ≈ pixel (2, 2)
-    ctx.vertex2f(0.75, -0.75); // TR ≈ pixel (14, 2)
-    ctx.vertex2f(0.75, 0.75); // BR ≈ pixel (14, 14)
-    ctx.vertex2f(-0.75, 0.75); // BL ≈ pixel (2, 14)
+    ctx.vertex2f(-0.75, -0.75); // TL ~ pixel (2, 2)
+    ctx.vertex2f(0.75, -0.75); // TR ~ pixel (14, 2)
+    ctx.vertex2f(0.75, 0.75); // BR ~ pixel (14, 14)
+    ctx.vertex2f(-0.75, 0.75); // BL ~ pixel (2, 14)
     ctx.end();
 
     // Walk a row inside the quad, every pixel should be painted.
@@ -6685,28 +6685,28 @@ test "era III: SIMD quad fills full row width across multiple lanes" {
 test "era III: SIMD quad scalar tail handles non-multiple-of-4 widths" {
     // Construct a quad whose painted width is exactly 7 pixels:
     // one SIMD iteration (4 lanes) plus a 3-pixel scalar tail.
-    // 16-wide framebuffer with a quad sized to land at x ∈
+    // 16-wide framebuffer with a quad sized to land at x in
     // [4, 11) gives 7 painted pixels per row.
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
 
     // Tune the NDC range so the projected x range is [4, 11].
     // vp_center.x = 8, vp_half.x = 8.  Pixel = 8 + ndc*8 + 0.5.
-    // For pixel 4: ndc ≈ -0.5; for pixel 11: ndc ≈ +0.3125.
+    // For pixel 4: ndc ~ -0.5; for pixel 11: ndc ~ +0.3125.
     ctx.begin(.quads);
     ctx.color4ub(120, 220, 70, 255);
-    ctx.vertex2f(-0.5, -0.5); // TL ≈ pixel (4, 4)
-    ctx.vertex2f(0.3125, -0.5); // TR ≈ pixel (11, 4)
-    ctx.vertex2f(0.3125, 0.5); // BR ≈ pixel (11, 12)
-    ctx.vertex2f(-0.5, 0.5); // BL ≈ pixel (4, 12)
+    ctx.vertex2f(-0.5, -0.5); // TL ~ pixel (4, 4)
+    ctx.vertex2f(0.3125, -0.5); // TR ~ pixel (11, 4)
+    ctx.vertex2f(0.3125, 0.5); // BR ~ pixel (11, 12)
+    ctx.vertex2f(-0.5, 0.5); // BL ~ pixel (4, 12)
     ctx.end();
 
-    // Pixel inside the SIMD body (px ≈ 6).
+    // Pixel inside the SIMD body (px ~ 6).
     const simd_body: [4]u8 = pixelAtRgba8(&ctx, 6, 8);
     try expectEqual(@as(u8, 120), simd_body[0]);
     try expectEqual(@as(u8, 220), simd_body[1]);
 
-    // Pixel inside the scalar tail (px ≈ 10, beyond the first
+    // Pixel inside the scalar tail (px ~ 10, beyond the first
     // 4-lane batch).
     const scalar_tail: [4]u8 = pixelAtRgba8(&ctx, 10, 8);
     try expectEqual(@as(u8, 120), scalar_tail[0]);
@@ -6725,8 +6725,8 @@ test "era III: SIMD quad with sub-4 width runs only the scalar tail" {
     ctx.begin(.quads);
     ctx.color4ub(255, 100, 200, 255);
     // Width chosen so painted pixel range is roughly [7, 10) - 3 pixels wide.
-    ctx.vertex2f(-0.125, -0.5); // TL ≈ pixel (7, 4)
-    ctx.vertex2f(0.25, -0.5); // TR ≈ pixel (10, 4)
+    ctx.vertex2f(-0.125, -0.5); // TL ~ pixel (7, 4)
+    ctx.vertex2f(0.25, -0.5); // TR ~ pixel (10, 4)
     ctx.vertex2f(0.25, 0.5); // BR
     ctx.vertex2f(-0.125, 0.5); // BL
     ctx.end();
@@ -6753,7 +6753,7 @@ test "era III: SIMD quad gradient produces same colors as scalar reference" {
     // Compare to the actual rendered output.
     // GL Y-up: pixel-TL is NDC (-0.5, +0.5), pixel-BL is NDC
     // (-0.5, -0.5).  Submit so the pixel-space gradient runs
-    // black (TL) → red (TR) horizontally and black (TL) → green
+    // black (TL) -> red (TR) horizontally and black (TL) -> green
     // (BL) vertically.
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
@@ -6771,7 +6771,7 @@ test "era III: SIMD quad gradient produces same colors as scalar reference" {
 
     // Sample several lane positions and check the gradient is
     // smooth across SIMD iteration boundaries.  Red increases
-    // left→right; green increases top→bottom (pixel y).
+    // left->right; green increases top->bottom (pixel y).
     const left_top: [4]u8 = pixelAtRgba8(&ctx, 5, 5);
     const right_top: [4]u8 = pixelAtRgba8(&ctx, 11, 5);
     try expect(right_top[0] > left_top[0]); // more red
@@ -6839,7 +6839,7 @@ test "era III: perspective-correct UV - W=1 input matches affine result" {
     // (W=1 throughout) and verifies the texture appears at the
     // same pixel as it would under the old affine code path.
     // Combined with the existing 2D textured triangle tests
-    // (which still pass), this confirms the W=1 → affine
+    // (which still pass), this confirms the W=1 -> affine
     // collapse holds.
     var ctx = try Context.init(std.testing.allocator, 16, 16);
     defer ctx.deinit(std.testing.allocator);
@@ -6873,7 +6873,7 @@ test "era III: perspective-correct UV - W=1 input matches affine result" {
     ctx.end();
 
     // Center of the triangle should sample roughly the average
-    // of the three corner UVs ≈ (0.5, ~0.4) → upper row of the
+    // of the three corner UVs ~ (0.5, ~0.4) -> upper row of the
     // texture.  Color is some mix of red and green; both
     // channels above zero, blue near zero.
     const center: [4]u8 = pixelAtRgba8(&ctx, 8, 6);
@@ -6935,7 +6935,7 @@ test "era III: perspective-correct UV - non-W=1 vertices interp correctly" {
 
     // The triangle paints an irregularly-shaped region.  Walk
     // a horizontal line and find where the U=0.5 boundary
-    // (red→blue transition) lands.  Under perspective-correct
+    // (red->blue transition) lands.  Under perspective-correct
     // interp, the boundary shifts toward the closer (left)
     // vertex - pixels that "should" be at U=0.5 in screen
     // space actually correspond to higher U in texture space.
@@ -7041,13 +7041,13 @@ test "era I: deleteTextures clears bound aliases" {
     ctx.color_buffer = tex1;
     ctx.depth_buffer = tex2;
 
-    // Delete only handle 0 → only bound_texture cleared.
+    // Delete only handle 0 -> only bound_texture cleared.
     ctx.deleteTextures(std.testing.allocator, handles[0..1]);
     try expectEqual(@as(?*Texture, null), ctx.bound_texture);
     try expectEqual(tex1, ctx.color_buffer);
     try expectEqual(tex2, ctx.depth_buffer);
 
-    // Delete the rest → all aliases cleared.
+    // Delete the rest -> all aliases cleared.
     ctx.deleteTextures(std.testing.allocator, handles[1..]);
     try expectEqual(@as(?*Texture, null), ctx.color_buffer);
     try expectEqual(@as(?*Texture, null), ctx.depth_buffer);
@@ -7255,7 +7255,7 @@ test "era IV: readPixels - out-of-bounds rect clips silently" {
     ctx.clear(.{ .color = true });
 
     // Request a 6x6 rect starting at (-1, -1).  Available overlap
-    // is x ∈ [0, 4), y ∈ [0, 4) - 16 pixels of real data, and the
+    // is x in [0, 4), y in [0, 4) - 16 pixels of real data, and the
     // dst buffer is sized as if all 36 pixels were available.  The
     // returned `written` count reflects the copied bytes; pixels
     // outside the overlap stay zero (the dst buffer's initial

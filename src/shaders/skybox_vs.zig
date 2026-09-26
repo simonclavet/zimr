@@ -1,4 +1,4 @@
-//! src/shaders/skybox_vs.zig — gradient-skybox VS body (IoT).
+//! src/shaders/skybox_vs.zig - gradient-skybox VS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version. Emits a fullscreen triangle,
 //! unprojects each NDC corner at z=1 through `inv_view_proj` to a world-space

@@ -1,18 +1,18 @@
-//! decals — raylib's `models_decals`, done the real-engine way.
+//! decals - raylib's `models_decals`, done the real-engine way.
 //!
 //! Click a surface (the sphere or the bunny) to splat a textured DECAL onto
 //! it. Each decal is SHADER-PROJECTED: the receiver mesh is re-drawn through a
 //! decal pipeline whose fragment shader transforms each fragment's world
-//! position by a projector matrix (world → decal-box space), discards anything
+//! position by a projector matrix (world -> decal-box space), discards anything
 //! outside the box, and samples the decal texture at the planar box UV where it
-//! lands. So a decal "paints" exactly the surface patch under its projector —
+//! lands. So a decal "paints" exactly the surface patch under its projector -
 //! it wraps around curvature and follows the geometry with no mesh clipping,
 //! and scales to any mesh density (the 69k-tri bunny is no problem). This is
 //! how engines do bullet holes and scorch marks.
 //!
-//! An earlier version clipped the target mesh per-triangle (Sutherland–Hodgman
+//! An earlier version clipped the target mesh per-triangle (Sutherland-Hodgman
 //! against the box) and re-uploaded the clipped geometry. That works on coarse
-//! meshes but shatters on dense ones — thousands of tiny triangles fall in one
+//! meshes but shatters on dense ones - thousands of tiny triangles fall in one
 //! box and a fixed output cap captures a scattered subset. The shader path
 //! replaces it entirely.
 //!
@@ -61,7 +61,7 @@ const sphere_radius: f32 = 2.0;
 const decal_size: f32 = 1.1; // world extent of a decal box
 const max_decals: usize = 64;
 
-/// A recorded decal: the world→box projector, its tint, and which receiver
+/// A recorded decal: the world->box projector, its tint, and which receiver
 /// (sphere or bunny) it paints onto. The GPU does the projection each frame.
 const Decal = struct {
     projector: Mat,
@@ -89,7 +89,7 @@ const State = struct {
 
 fn deinit(gpa: Allocator, s: *State) void {
     // sphere_model/bunny_model COPY the mesh struct (shared vboId + CPU array
-    // pointers), so unloadModel is the single owner of those buffers+arrays —
+    // pointers), so unloadModel is the single owner of those buffers+arrays -
     // freeing s.mesh/s.bunny too would double-free (they're the same handles).
     z.unloadFont(gpa, s.font);
     z.unloadModel(gpa, s.sphere_model);
@@ -119,7 +119,7 @@ fn loadBunny(gpa: Allocator) !z.Mesh {
         verts[i * 3 + 0] = (om.positions[i * 3 + 0] - bunny_center[0]) * bunny_scale + bunny_offset[0];
         verts[i * 3 + 1] = (om.positions[i * 3 + 1] - bunny_center[1]) * bunny_scale + bunny_offset[1];
         verts[i * 3 + 2] = (om.positions[i * 3 + 2] - bunny_center[2]) * bunny_scale + bunny_offset[2];
-        // `toMesh` always populates normals — it synthesizes smooth per-vertex
+        // `toMesh` always populates normals - it synthesizes smooth per-vertex
         // normals when the OBJ has no `vn` (bunny.obj has none). So use them
         // directly; the decal facing test depends on real normals.
         norms[i * 3 + 0] = om.normals[i * 3 + 0];
@@ -202,7 +202,7 @@ fn update(f: *z.Frame, s: *State) void {
         receiver = s.bunny_recv;
     }
     // `getRayCollisionTriangle` derives the normal from cross(edge1, edge2),
-    // whose sign depends on triangle WINDING — genMeshSphereLegacy is CW-wound, so its
+    // whose sign depends on triangle WINDING - genMeshSphereLegacy is CW-wound, so its
     // hit normal points INWARD (opposite the surface's outward vertex normals),
     // while the OBJ bunny is CCW so its points outward. That inconsistency made
     // the decal facing test reject the whole sphere. Fix winding-independently:
@@ -231,7 +231,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.beginMode3D(f.gl, cam);
     z.drawGrid(f.gl, 12, 1.0);
     if (s.show_target) {
-        // Both targets drawn the SAME way — as models from the exact meshes used
+        // Both targets drawn the SAME way - as models from the exact meshes used
         // as decal receivers, so drawn surface == decal surface for both.
         z.drawModel(f.gl, s.sphere_model, pointVec(0, 0, 0), 1.0, .{ .r = 120, .g = 130, .b = 150, .a = 255 });
         z.drawModel(f.gl, s.bunny_model, pointVec(0, 0, 0), 1.0, .{ .r = 150, .g = 140, .b = 130, .a = 255 });
@@ -279,7 +279,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.ui_host.render(f);
 }
 
-/// Record a decal at the hit: build the world→box projector and store it with
+/// Record a decal at the hit: build the world->box projector and store it with
 /// the receiver handle. The GPU projects + paints it each frame (no clipping).
 fn placeDecal(s: *State, hit: RayCollision, receiver: u32) void {
     if (s.decal_count >= max_decals) {
@@ -294,7 +294,7 @@ fn placeDecal(s: *State, hit: RayCollision, receiver: u32) void {
     );
     const look: Mat = lookAtRh(hit.point, eye, vec(0, 1, 0));
     const spin_deg: f32 = float(@as(i32, @intCast(xorshift(&s.rng) % 360)) - 180);
-    // Apply the world→box `look`, then spin in-plane (spin acting in box space).
+    // Apply the world->box `look`, then spin in-plane (spin acting in box space).
     // `compose(first, then)` reads in application order.
     const projector: Mat = compose(look, rotationZ(spin_deg * rad_per_deg));
 
@@ -310,7 +310,7 @@ fn placeDecal(s: *State, hit: RayCollision, receiver: u32) void {
 fn drawPreview(f: *z.Frame, hit: RayCollision) void {
     // Show the ACTUAL oriented decal box at the hit: the 8 corners of the
     // [-s, s]^3 box transformed by the inverse projection into world space,
-    // drawn as edges. This is the ground-truth cursor — if a decal doesn't
+    // drawn as edges. This is the ground-truth cursor - if a decal doesn't
     // land inside this box, the projection is wrong.
     const eye: Vec = vec(
         hit.point[0] + hit.normal[0],
@@ -371,8 +371,8 @@ fn makeDecalImage(gpa: Allocator) !z.Image {
             const r: f32 = @sqrt(dx * dx + dy * dy) / c;
             var a: u8 = 0;
             var col: [3]u8 = .{ 255, 220, 60 };
-            // Fade the ring fully to transparent by r≈0.72 — well inside the
-            // decal box's edges — so the box side-plane clip only ever cuts
+            // Fade the ring fully to transparent by r~0.72 - well inside the
+            // decal box's edges - so the box side-plane clip only ever cuts
             // already-transparent texels and never leaves a hard straight edge.
             if (r < 0.72) {
                 a = 255;

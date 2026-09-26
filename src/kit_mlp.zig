@@ -31,6 +31,7 @@
 //! are trying to find out why.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const compute_host = @import("compute_host.zig");
 const expectEqual = std.testing.expectEqual;
@@ -391,7 +392,7 @@ pub fn KitMlp(comptime M: type) type {
     };
 }
 
-// ── The checks. A trainer is only worth building on if it computes what it claims. ──
+// -- The checks. A trainer is only worth building on if it computes what it claims. --
 
 const zn_mlp = @import("gpu/zn_mlp.zig");
 const Host = compute_host.Compute(zn_mlp);
@@ -516,8 +517,7 @@ test "kit_mlp: one training step moves every weight the way Adam says" {
             worst_direction += 1;
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  kit_mlp: loss {d:.4}, {d} of {d} parameters checked against finite " ++
+    report.print("\n  kit_mlp: loss {d:.4}, {d} of {d} parameters checked against finite " ++
         "differences, {d} wrong\n", .{
         loss,
         checked,
@@ -582,8 +582,7 @@ test "kit_mlp: a residual network starts by doing nothing" {
     for (out) |y| {
         loud_worst = @max(loud_worst, @abs(y));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  kit_mlp: largest first action {d:.4} at output scale 0.01, {d:.4} left alone\n", .{
+    report.print("  kit_mlp: largest first action {d:.4} at output scale 0.01, {d:.4} left alone\n", .{
         quiet_worst,
         loud_worst,
     });
@@ -626,8 +625,7 @@ test "kit_mlp: it learns something a network should find easy" {
         }
         last = loss;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  kit_mlp: sin(3x)*y over 400 steps, loss {d:.4} -> {d:.4}\n", .{ first, last });
+    report.print("  kit_mlp: sin(3x)*y over 400 steps, loss {d:.4} -> {d:.4}\n", .{ first, last });
     try expect(last < 0.1 * first);
 }
 

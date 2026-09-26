@@ -1,4 +1,4 @@
-//! Indexing a MUTABLE global array-of-pointers at a runtime index — `tbl[i].*`
+//! Indexing a MUTABLE global array-of-pointers at a runtime index - `tbl[i].*`
 //! where `var tbl = [_]*u32{ &a, &b, &c }`. The element-address lowering used to
 //! emit a spurious load (`__HEAPU32[tbl_base] + i*4` instead of `tbl_base + i*4`),
 //! reading garbage: silent, 0 markers. parseArrTag didn't recognize a pointer

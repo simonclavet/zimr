@@ -1,7 +1,7 @@
-//! bridge_slice — ZIG_BRIDGE_PLAN Phase-2 slice (doctrine D9–D11).
-//! THE APP OWNS THE PAGE: this wasm module builds the entire document —
+//! bridge_slice - ZIG_BRIDGE_PLAN Phase-2 slice (doctrine D9-D11).
+//! THE APP OWNS THE PAGE: this wasm module builds the entire document -
 //! css, heading, prose, a link, an embedded YouTube iframe, and TWO
-//! dynamically created WebGPU canvases on the shared device — through the
+//! dynamically created WebGPU canvases on the shared device - through the
 //! bridge's generic "dom" verbs, then animates per-canvas clears and
 //! reacts to clicks on canvas 1. No HTML or JS was written for this page.
 
@@ -49,7 +49,7 @@ fn attr(
 }
 
 /// Page-lifetime app state. Freestanding wasm has no State plumbing, so this
-/// lives at module scope — but as ONE object, the app's only global.
+/// lives at module scope - but as ONE object, the app's only global.
 const PageState = struct {
     top_canvas: u32 = 0,
     bottom_canvas: u32 = 0,

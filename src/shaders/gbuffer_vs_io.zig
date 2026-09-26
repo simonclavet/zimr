@@ -1,10 +1,10 @@
-//! src/shaders/gbuffer_vs_io.zig — typed interface for the G-buffer
+//! src/shaders/gbuffer_vs_io.zig - typed interface for the G-buffer
 //! vertex shader.  Companion to `gbuffer_vs.zig`.
 //!
 //! One uniform block, three matrices: the full `mvp` for the clip
 //! position, the bare `model` so the FS can get honest WORLD-space
 //! fragment positions (raylib calls this matModel), and the model's
-//! `normal_matrix` (inverse-transpose of model — for our rotate+uniform-
+//! `normal_matrix` (inverse-transpose of model - for our rotate+uniform-
 //! scale objects that's just the rotation, but the slot keeps the math
 //! correct if a scene ever shears).
 
@@ -21,14 +21,14 @@ pub const Attributes = struct {
 /// Single uniform block (group 0, binding 0), std140-friendly: three
 /// column-major mat4s back to back, no padding games.
 pub const Ubo = struct {
-    /// projection * view * model — the one-hop route to clip space.
+    /// projection * view * model - the one-hop route to clip space.
     mvp: [4]@Vector(4, f32),
-    /// model alone — vertex → WORLD space, the space lighting lives in.
+    /// model alone - vertex -> WORLD space, the space lighting lives in.
     model: [4]@Vector(4, f32),
     /// inverse-transpose(model) for normals; rotation-only scenes can
     /// pass the rotation itself.
     normal_matrix: [4]@Vector(4, f32),
 };
 
-/// Varying outputs — aliases the shared `Interp`.
+/// Varying outputs - aliases the shared `Interp`.
 pub const Outputs = common.Interp;

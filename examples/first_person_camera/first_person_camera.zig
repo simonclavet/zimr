@@ -1,15 +1,15 @@
-//! first_person_camera — port of the GL `first_person_camera`:
+//! first_person_camera - port of the GL `first_person_camera`:
 //! WASD + drag-look across procedurally generated terrain.
 //!
 //! What it demonstrates on the wgpu path:
-//!   - `genImageChecked` → `genMeshHeightmap` (ported to `draw3d` for this
-//!     example — CPU arrays, no GL upload tail) → `loadModelFromMesh` →
+//!   - `genImageChecked` -> `genMeshHeightmap` (ported to `draw3d` for this
+//!     example - CPU arrays, no GL upload tail) -> `loadModelFromMesh` ->
 //!     `drawModel` with per-draw tint.
 //!   - `updateCamera(.first_person)`: WASD walks, left-drag looks, wheel
 //!     scales speed.
 //! The GL original gated controls behind pointer-lock (`disableCursor`);
 //! the wgpu bridge has no pointer-lock wiring and the demos are
-//! phone-first, so drag-look is always live here instead — same controls,
+//! phone-first, so drag-look is always live here instead - same controls,
 //! no capture dance.  The checked image gives the terrain its blocky
 //! two-tone height steps, exactly like the original.
 const std = @import("std");
@@ -46,7 +46,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    // Checked image as the heightmap: alternating tiles → blocky
+    // Checked image as the heightmap: alternating tiles -> blocky
     // two-height terrain (the original's look).
     const heightmap: z.Image = try z.genImageChecked(
         gpa,
@@ -68,7 +68,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    // WASD walks, left-drag looks, wheel scales speed — all inside
+    // WASD walks, left-drag looks, wheel scales speed - all inside
     // updateCamera(.first_person).
     z.updateCamera(f.gl, &s.camera, .first_person);
 

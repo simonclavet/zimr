@@ -1,15 +1,15 @@
-//! mpc_quadruped — watching a quadruped's trunk planner think.
+//! mpc_quadruped - watching a quadruped's trunk planner think.
 //!
-//! ── ★ HONEST STATUS, BECAUSE THE DEMO SHOWS BOTH ──
+//! -- * HONEST STATUS, BECAUSE THE DEMO SHOWS BOTH --
 //!
-//! **NOTHING HOLDS YET, INCLUDING THE STAND.** The force allocation is right — four feet find
-//! 29.4 N each against a quarter-weight of 29.4, which nobody told it — but the closed loop
+//! **NOTHING HOLDS YET, INCLUDING THE STAND.** The force allocation is right - four feet find
+//! 29.4 N each against a quarter-weight of 29.4, which nobody told it - but the closed loop
 //! diverges within a second or two. See the banner in `robot_mpc.zig` for what has been ruled
 //! out. The demo is here to be looked at, not to impress.
 //!
-//! ── ★★ WHAT IS BEING PLANNED, AND WHAT IS NOT ──
+//! -- ** WHAT IS BEING PLANNED, AND WHAT IS NOT --
 //!
-//! This draws the SINGLE RIGID BODY model — the trunk, and four contact points. It is not the
+//! This draws the SINGLE RIGID BODY model - the trunk, and four contact points. It is not the
 //! articulated Go1: there are no legs here, because the whole-body mapping that turns these
 //! forces into joint torques is a separate layer and this one has to be right first.
 //!
@@ -17,7 +17,7 @@
 //! and the arrows are real planned ground reaction forces. The legs you cannot see are the
 //! part that comes next.
 //!
-//! ── ★ THE MODEL IS Z-UP AND THE RENDERER IS Y-UP ──
+//! -- * THE MODEL IS Z-UP AND THE RENDERER IS Y-UP --
 //!
 //! MJCF is Z-up and this model matches it, so nothing has to be converted where the physics
 //! is. The swizzle happens once, at the boundary, in `toRender`. Doing it anywhere else means
@@ -102,10 +102,10 @@ fn gaitAt(index: i32) mpc.Gait {
     };
 }
 
-// ── The cost weights, in state order [x y z | roll pitch yaw | vx vy vz | wx wy wz] ──
+// -- The cost weights, in state order [x y z | roll pitch yaw | vx vy vz | wx wy wz] --
 //
-// ★ HEIGHT AND ATTITUDE ARE WEIGHTED FAR ABOVE POSITION, and that is not arbitrary. Where the
-// robot IS barely matters — it is walking, it is meant to move. How HIGH it is and which way
+// * HEIGHT AND ATTITUDE ARE WEIGHTED FAR ABOVE POSITION, and that is not arbitrary. Where the
+// robot IS barely matters - it is walking, it is meant to move. How HIGH it is and which way
 // up it is matter enormously, because those are the two ways it falls over.
 const state_weight = [_]f32{ 20, 20, 400, 400, 400, 200, 2, 2, 20, 20, 20, 10 };
 const control_weight: [mpc.trunk_control_dim]f32 = @splat(0.0005);
@@ -176,26 +176,26 @@ fn resetRobot(s: *State) void {
 
 /// One control tick: decide where the feet are, plan the forces, apply the first knot.
 ///
-/// ── ★★★ THIS FUNCTION IS THE PART THAT IS WRONG, AND IT IS WORTH KNOWING WHY ──
+/// -- *** THIS FUNCTION IS THE PART THAT IS WRONG, AND IT IS WORTH KNOWING WHY --
 ///
 /// Standing, it is exact. The moment a foot lifts it stops being exact, because of how the
 /// contact points are told to the planner over the horizon:
 ///
-///   * a foot in stance NOW keeps ONE planted position for every knot — including knots after
+///   * a foot in stance NOW keeps ONE planted position for every knot - including knots after
 ///     the schedule says it lifts and lands again;
 ///   * a foot in swing NOW uses ONE target for every knot, likewise across two touchdowns.
 ///
 /// Over a 0.4 s horizon of a 2 Hz trot that is a whole cycle of wrong moment arms, and the
 /// symptom is a robot that sags and drifts BACKWARD on a forward command. A backward drift is
-/// a sign error somewhere in `r × f`, not a bad gain — gains scale a response, they do not
+/// a sign error somewhere in `r x f`, not a bad gain - gains scale a response, they do not
 /// reverse it.
 fn controlTick(s: *State) void {
-    // ── ★★★ YOU CANNOT TRANSLATE WITHOUT STEPPING, AND STAND HAS TO SAY SO ──
+    // -- *** YOU CANNOT TRANSLATE WITHOUT STEPPING, AND STAND HAS TO SAY SO --
     //
     // With `stand`, no foot ever lifts, so no foot is ever re-planted. Commanding a velocity
     // anyway moves the REFERENCE while the contact points stay nailed to the ground, and the
-    // trunk walks out from over its own feet. The moment arm `r = foot − centre` then grows
-    // without bound and the planner cannot push up without tipping — so it correctly gives up
+    // trunk walks out from over its own feet. The moment arm `r = foot - centre` then grows
+    // without bound and the planner cannot push up without tipping - so it correctly gives up
     // vertical force and sags.
     //
     // Measured in the demo before this guard: commanded 0.21 m/s sideways, the trunk drifted
@@ -240,7 +240,7 @@ fn controlTick(s: *State) void {
         s.foot_was_down[leg_index] = down_now;
     }
 
-    // The contact set across the horizon. `offset` is the moment arm `r` in `r × f`, so it is
+    // The contact set across the horizon. `offset` is the moment arm `r` in `r x f`, so it is
     // measured from where the trunk will BE at that knot, not from where it is now.
     for (0..horizon_knots) |knot| {
         const phase_at_knot: f32 = s.gait_phase + s.gait.frequency * sim_timestep * float(knot);
@@ -317,7 +317,7 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
         s.trunk_state[mpc.pos_offset + 2],
     );
 
-    // ★ THE PLANNED PATH, which is the point of drawing any of this: where the optimiser
+    // * THE PLANNED PATH, which is the point of drawing any of this: where the optimiser
     // thinks the trunk is about to go, one faint segment per knot.
     var knot: usize = 1;
     while (knot <= horizon_knots) : (knot += 1) {
@@ -359,9 +359,9 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
             if (down) stance_foot_colour else swing_foot_colour,
         );
 
-        // ★ THE FORCE ARROW IS THE INTERESTING PART. Standing, all four are equal and vertical;
+        // * THE FORCE ARROW IS THE INTERESTING PART. Standing, all four are equal and vertical;
         // lean the command and you can watch the load move onto the feet that can act on it.
-        // 0.004 m per newton puts a 29 N hold at about 12 cm — readable without swamping the
+        // 0.004 m per newton puts a 29 N hold at about 12 cm - readable without swamping the
         // robot.
         if (down) {
             const force: Vec = vec(
@@ -420,7 +420,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.text("vertical force {d:>7.2} N", .{total_vertical});
         u.text("weight         {d:>7.2} N", .{s.trunk.mass * 9.81});
 
-        // ★ HOW FAR THE TRUNK HAS WANDERED OFF ITS OWN FEET. This is the number that explains
+        // * HOW FAR THE TRUNK HAS WANDERED OFF ITS OWN FEET. This is the number that explains
         // a sagging robot: once the centre leaves the polygon the feet make, no set of upward
         // forces can hold it level, and the planner trades height for not tipping. Watching
         // vertical force sag without this is watching a symptom.

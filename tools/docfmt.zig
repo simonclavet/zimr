@@ -1,21 +1,21 @@
-//! docfmt — build-time formatter for every published zimr doc page.
+//! docfmt - build-time formatter for every published zimr doc page.
 //!
 //! A plain stdin -> stdout filter, run from build.zig over each page in the web
 //! install list.  It does exactly two things:
 //!
-//!   1. Replaces the `<!--docfmt:style-->` marker with THE shared stylesheet —
+//!   1. Replaces the `<!--docfmt:style-->` marker with THE shared stylesheet -
 //!      the single `style` constant below.  There is no doc.css: the pages live
 //!      in three directories in the repo and land flat in zig-out/web, so one
 //!      relative href cannot be correct in both places, and an external sheet
-//!      would end the property that matters most on a phone — a page you can
+//!      would end the property that matters most on a phone - a page you can
 //!      open by itself.  One constant, eleven pages, no copies to drift.
 //!
 //!   2. Highlights every `<code class="zig">`, `<code class="language-zig">` and
-//!      `<code class="wgsl">` block.  Zig goes through std.zig.Tokenizer — Zig's
+//!      `<code class="wgsl">` block.  Zig goes through std.zig.Tokenizer - Zig's
 //!      own lexer, so a keyword inside a comment or a string can never be
 //!      mis-tagged.  WGSL gets the small tokenizer at the bottom of this file.
-//!      Everything else — prose, shell blocks, MJCF, the ASCII pipeline diagrams
-//!      in bare `<pre><code>` — passes through byte-for-byte.
+//!      Everything else - prose, shell blocks, MJCF, the ASCII pipeline diagrams
+//!      in bare `<pre><code>` - passes through byte-for-byte.
 //!
 //! On brand: the highlighting happens at BUILD time, so every served page is
 //! pure HTML+CSS with zero runtime JS and zero network fetches.  This replaces
@@ -40,7 +40,7 @@ const style_marker = "<!--docfmt:style-->";
 /// pure black, which is punishing on a 3000-line page like robots.html.
 ///
 /// Two surfaces, and only two: `--bg` is the page, `--panel` is anything set
-/// apart from it — a code block, a callout, the GPU side of a CPU/GPU split.
+/// apart from it - a code block, a callout, the GPU side of a CPU/GPU split.
 /// The split in gpu-compute-tutorial stays; it is a teaching device. It just
 /// uses these two values now instead of a light-paper/dark-slate palette of
 /// its own.
@@ -269,8 +269,8 @@ pub fn main(init: std.process.Init) !void {
     try File.stdout().writeStreamingAll(io, aw.written());
 }
 
-/// Which highlighter a `<code class="…">` value selects.  An unrecognised class
-/// means "not code we know", and the block passes through untouched — that is
+/// Which highlighter a `<code class="...">` value selects.  An unrecognised class
+/// means "not code we know", and the block passes through untouched - that is
 /// what keeps shell blocks and ASCII diagrams from coming out speckled.
 const Lang = enum { zig, wgsl };
 
@@ -327,7 +327,7 @@ fn transform(gpa: Allocator, w: *Writer, src: []const u8) !void {
         const body_start: usize = gt_at + 1;
         const lang: ?Lang = langOf(class);
         if (lang == null) {
-            // Not a language we highlight — emit the opener and carry on from
+            // Not a language we highlight - emit the opener and carry on from
             // just past it, so a nested classed block is still found.
             try w.writeAll(src[next..body_start]);
             i = body_start;
@@ -370,7 +370,7 @@ fn highlightZig(gpa: Allocator, w: *Writer, decoded: []const u8) !void {
             break;
         }
         const text: []const u8 = decoded[t.loc.start..t.loc.end];
-        // An identifier immediately followed by `(` is a call — the one piece of
+        // An identifier immediately followed by `(` is a call - the one piece of
         // context std.zig.Token does not carry, and the one that makes a code
         // block readable at a glance.
         const is_call: bool = t.tag == .identifier and
@@ -394,7 +394,7 @@ fn classOfZig(tag: Tag) ?[]const u8 {
 // ---------------------------------------------------------------- WGSL
 
 // WGSL's lexical shape is C-like and its keyword set is small, so a single
-// left-to-right pass is enough — and being one pass is what stops a keyword
+// left-to-right pass is enough - and being one pass is what stops a keyword
 // inside a comment or a string from ever being tagged.
 const wgsl_kw = [_][]const u8{
     "fn",      "let",      "var",   "const",  "struct",   "return", "if",    "else",
@@ -438,7 +438,7 @@ fn highlightWgsl(w: *Writer, src: []const u8) !void {
             i = stop;
             continue;
         }
-        // attribute: @group, @binding, @workgroup_size…
+        // attribute: @group, @binding, @workgroup_size...
         if (c == '@' and i + 1 < src.len and isIdentStart(src[i + 1])) {
             var j: usize = i + 1;
             while (j < src.len and isIdentPart(src[j])) : (j += 1) {}
@@ -555,7 +555,7 @@ fn escapeInto(w: *Writer, s: []const u8) !void {
 
 // Decode the handful of entities the pages actually use, and normalize line
 // endings.  A bare `&` (Zig address-of, e.g. `&sw`) that isn't a known entity is
-// kept literal — the pages write those unescaped.
+// kept literal - the pages write those unescaped.
 fn htmlDecode(gpa: Allocator, s: []const u8) ![]u8 {
     var out: ArrayList(u8) = .empty;
     var j: usize = 0;

@@ -1,13 +1,13 @@
-//! src/shaders/default_shapes_fs.zig — Zig source for the wgpu
+//! src/shaders/default_shapes_fs.zig - Zig source for the wgpu
 //! engine's default 2D fragment shader.  Replaces the hand-written
-//! the engine-emitted `default_shapes_fs.wgsl` —
-//! same effect (sample texture × per-vertex color), now compiled
-//! through the typed shader pipeline → SPIR-V → spv2wgsl → embedded
-//! `.wgsl`.  See `src/notes/webgpu-migration-plan.md` §3 Phase C
+//! the engine-emitted `default_shapes_fs.wgsl` -
+//! same effect (sample texture x per-vertex color), now compiled
+//! through the typed shader pipeline -> SPIR-V -> spv2wgsl -> embedded
+//! `.wgsl`.  See `src/notes/webgpu-migration-plan.md` section 3 Phase C
 //! for context.
 //!
 //! Single shader serves both UN-textured AND textured drawing.
-//! Untextured draws bind the engine's 1×1 white texture (see
+//! Untextured draws bind the engine's 1x1 white texture (see
 //! `src/wgpu_texture.zig::createWhite1x1`); sampling white is
 //! essentially identity, so the per-vertex color survives unchanged.
 //! Saves a shader swap when toggling textures on/off.
@@ -16,7 +16,7 @@ const zm = @import("zm");
 const Vec = zm.Vec;
 const shader_externs = @import("default_shapes_fs_externs");
 
-/// Fragment shader has no UBO — its only per-frame inputs are the
+/// Fragment shader has no UBO - its only per-frame inputs are the
 /// interpolated varyings (uv, color) and the bound texture sampler.
 /// `IoT(void)` produces an Io with no `.u` field; codegen recognises
 /// the empty case.
@@ -38,7 +38,7 @@ pub const TextureRef = shader_externs.TextureRef;
 /// `zspv --rewrite-samplers` pass turns the texture0 accessor into
 /// a proper combined texture+sampler load.  On wgpu via spv2wgsl
 /// the same SPIR-V translates to `textureSample(t_albedo, s_albedo, uv)`
-/// — handled by spv2wgsl's `emitImageSample`.  On CPU via
+/// - handled by spv2wgsl's `emitImageSample`.  On CPU via
 /// `raster_shader.dispatchFragmentShader` this calls
 /// `io_in.texture0(uv)` which the raster pixel pipeline implements
 /// via nearest-neighbour sampling of the bound texture's bytes.

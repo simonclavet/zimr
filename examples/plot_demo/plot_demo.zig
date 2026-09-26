@@ -1,4 +1,4 @@
-// examples/plot_demo/plot_demo.zig — the growing zimr plot showcase,
+// examples/plot_demo/plot_demo.zig - the growing zimr plot showcase,
 // in the spirit of ImPlot's implot_demo. One tab per feature so it stays
 // reviewable on a phone; add a tab as each parity item lands. Fully
 // interactive (pan / zoom / pinch / double-tap-fit / value readout).

@@ -123,8 +123,8 @@ pub const pixel_format_alpha: std.enums.EnumArray(PixelFormat, PixelAlpha) = blk
 // Read / write codecs (formerly `pub const pixel = struct { ... }`)
 // ============================================================================
 // Each color `PixelFormat` knows how to:
-//   - read a pixel at offset N → 4 bytes RGBA  (read_color8)
-//   - read a pixel at offset N → 4 floats RGBA (read_color, normalized 0..1)
+//   - read a pixel at offset N -> 4 bytes RGBA  (read_color8)
+//   - read a pixel at offset N -> 4 floats RGBA (read_color, normalized 0..1)
 //   - write a pixel at offset N from 4 bytes   (write_color8)
 //   - write a pixel at offset N from 4 floats  (write_color, expects 0..1)
 // Each depth `PixelFormat` has analogous (read_depth, write_depth) f32-typed
@@ -167,7 +167,7 @@ pub const WriteDepthFn = *const fn (dst: []u8, depth: f32, index: u32) void;
 /// conversions.  Donor: `SW_INV_255`.
 pub const inv_255: f32 = 1.0 / 255.0;
 
-/// RGB → 8-bit luminance, BT.601 weights in integer form
+/// RGB -> 8-bit luminance, BT.601 weights in integer form
 /// (77, 150, 29 / 256).  Donor: `sw_luminance8`.  Renamed from
 /// `luminance8` earlier - the new name says what the input
 /// is, not what it isn't.
@@ -176,7 +176,7 @@ pub fn luminanceFromBytes(color: *const [4]u8) u8 {
     return @intCast(sum >> 8);
 }
 
-/// RGB → 0..1 luminance, BT.601 weights.  Donor: `sw_luminance`.
+/// RGB -> 0..1 luminance, BT.601 weights.  Donor: `sw_luminance`.
 /// Renamed from `luminance`.
 pub fn luminanceFromFloats(color: *const [4]f32) f32 {
     return color[0] * 0.299 + color[1] * 0.587 + color[2] * 0.114;
@@ -204,7 +204,7 @@ pub fn floatColorToBytes(out: *[4]u8, src: *const [4]f32) void {
 }
 
 // ---- Channel bit-width expand / compress
-// Bit-replicate expansion: an N-bit integer in `[0, 2^N − 1]`
+// Bit-replicate expansion: an N-bit integer in `[0, 2^N - 1]`
 // maps linearly onto `[0, 255]` without rounding.  The 1/2/4 cases
 // use the closed forms (multiply, shift-or) that are cheaper than
 // the general `(v << (8 - N)) | (v >> (2N - 8))` recipe; the 3/5/6
@@ -242,17 +242,17 @@ pub fn compressByteTo(comptime n: u3, v: u8) u8 {
     };
 }
 
-// ---- IEEE 754 half-float (binary16) ↔ float (binary32)
+// ---- IEEE 754 half-float (binary16) <-> float (binary32)
 // Donor: `sw_float_to_half_ui` / `sw_half_to_float_ui` (lines
 // 1412-1462).  We do the bit-fiddling entirely in `u32` - the
 // donor uses signed `int32_t` for one intermediate but the
 // magnitude bounds are tight enough that unsigned arithmetic
-// works without overflow (and avoids the `@bitCast(i32 ↔ u32)`
+// works without overflow (and avoids the `@bitCast(i32 <-> u32)`
 // dance Zig would otherwise force).
 // Behavior matches the donor exactly:
 //   - Subnormals (and inputs whose magnitude is too small to
 //     represent normalized) flush to zero.
-//   - Overflow saturates to ±infinity.
+//   - Overflow saturates to +/-infinity.
 //   - Any NaN input becomes a quiet NaN (0x7e00).
 
 pub fn floatToHalfBits(ui: u32) u16 {
@@ -260,20 +260,20 @@ pub fn floatToHalfBits(ui: u32) u16 {
     const em: u32 = ui & 0x7fffffff;
 
     const h: u32 = blk: {
-        // NaN → qNaN.  Checked first: the overflow branch would
+        // NaN -> qNaN.  Checked first: the overflow branch would
         // also fire (em >= 143<<23), so the NaN check overrides.
         if (em > (255 << 23)) {
             break :blk 0x7e00;
         }
-        // Overflow → ±infinity.
+        // Overflow -> +/-infinity.
         if (em >= (143 << 23)) {
             break :blk 0x7c00;
         }
-        // Underflow / subnormal → zero.
+        // Underflow / subnormal -> zero.
         if (em < (113 << 23)) {
             break :blk 0;
         }
-        // Normal: bias exponent (127 → 15, so subtract 112) and
+        // Normal: bias exponent (127 -> 15, so subtract 112) and
         // round-to-nearest by adding 1 << 12 before the >> 13.
         break :blk (em - (112 << 23) + (1 << 12)) >> 13;
     };
@@ -287,7 +287,7 @@ pub fn halfToFloatBits(h: u16) u32 {
 
     // Bias exponent back to f32 range and pad mantissa with zeros.
     var r: u32 = (em + (112 << 10)) << 13;
-    // Subnormal half-float → flush to zero.
+    // Subnormal half-float -> flush to zero.
     if (em < (1 << 10)) {
         r = 0;
     }
@@ -873,7 +873,7 @@ pub const write_depth_table: std.enums.EnumArray(PixelFormat, ?WriteDepthFn) = b
 // ---- pixel format read/write tests
 // Each format gets a tight round-trip test.  For lossless formats
 // (R8G8B8A8) the round-trip is exact; for lossy ones (GRAYSCALE
-// reduces RGB → luminance) we either pre-condition the input to be
+// reduces RGB -> luminance) we either pre-condition the input to be
 // lossless (gray-only RGB) or verify the lossy mapping directly.
 
 test "era I: helpers - luminance8 and luminance" {
@@ -1074,7 +1074,7 @@ test "era I: D32 round-trip is exact" {
 }
 
 test "era I: D16 endianness is native (donor matches)" {
-    // Write 0xAABB pattern via depth ≈ 0xAABB / 65535.
+    // Write 0xAABB pattern via depth ~ 0xAABB / 65535.
     var buf: [2]u8 = @splat(0);
     writeDepth(.depth_d16, &buf, @as(f32, 0xAABB) / 65535.0, 0);
     // On little-endian (every supported target), the low byte (BB)
@@ -1157,7 +1157,7 @@ test "era I: dispatched call via table matches direct call" {
 // ---- helper tests
 test "era I: expand_NtoB maps full N-bit range to 0..255 monotonically" {
     // For each width N, the smallest input (0) must map to 0 and the
-    // largest (2^N − 1) must map to 255.  All values monotonic.
+    // largest (2^N - 1) must map to 255.  All values monotonic.
     try expectEqual(@as(u8, 0), expandToByte(1, 0));
     try expectEqual(@as(u8, 255), expandToByte(1, 1));
 
@@ -1267,19 +1267,19 @@ test "era I: half-float approximate identity for fractional values" {
 }
 
 test "era I: half-float overflow / underflow / NaN" {
-    // Overflow → +inf encoding (0x7c00).
+    // Overflow -> +inf encoding (0x7c00).
     try expectEqual(@as(u16, 0x7c00), floatToHalf(1.0e30));
     try expectEqual(@as(u16, 0xfc00), floatToHalf(-1.0e30));
 
-    // Underflow (subnormal half) → flush to zero.  Donor matches.
+    // Underflow (subnormal half) -> flush to zero.  Donor matches.
     try expectEqual(@as(u16, 0), floatToHalf(1.0e-30));
 
-    // NaN → qNaN encoding (0x7e00).
+    // NaN -> qNaN encoding (0x7e00).
     const nan_f32: f32 = nan(f32);
     try expectEqual(@as(u16, 0x7e00), floatToHalf(nan_f32));
 }
 
-test "era I: colorToColor8 truncates float×255" {
+test "era I: colorToColor8 truncates float x 255" {
     var out: [4]u8 = undefined;
     floatColorToBytes(&out, &.{ 0.0, 1.0, 0.5, 0.25 });
     try expectEqual([4]u8{ 0, 255, 127, 63 }, out);
@@ -1288,7 +1288,7 @@ test "era I: colorToColor8 truncates float×255" {
 // ---- packed-bitfield format round-trips
 test "era I: R3G3B2 round-trip with quantization" {
     // R/G are 3-bit (max 7 distinct values), B is 2-bit (max 3 distinct).
-    // Pick inputs at the bit-width quantization grid so write→read is exact.
+    // Pick inputs at the bit-width quantization grid so write->read is exact.
     var buf: [4]u8 = @splat(0);
 
     // Exact-grid color: r5_grid = expand3to8(5) = 0xB6, g2_grid = expand3to8(2) = 0x49,
@@ -1313,8 +1313,8 @@ test "era I: R5G6B5 round-trip with quantization" {
     var c_out: [4]u8 = undefined;
     c_out = readColor8(.color_r5g6b5, &buf, 0);
 
-    // Quantization: r 0xFF → 5-bit 31 → expand → 0xFF.  g 0x80 → 6-bit 32
-    // → expand6to8(32) = (32<<2)|(32>>4) = 0x80 | 0x02 = 0x82.  b 0 → 0.
+    // Quantization: r 0xFF -> 5-bit 31 -> expand -> 0xFF.  g 0x80 -> 6-bit 32
+    // -> expand6to8(32) = (32<<2)|(32>>4) = 0x80 | 0x02 = 0x82.  b 0 -> 0.
     try expectEqual(@as(u8, 0xFF), c_out[0]);
     try expectEqual(@as(u8, 0x82), c_out[1]);
     try expectEqual(@as(u8, 0x00), c_out[2]);
@@ -1333,7 +1333,7 @@ test "era I: R5G5B5A1 round-trip with quantization" {
     try expectEqual(@as(u8, 0xFF), c_out[0]);
     try expectEqual(@as(u8, 0x00), c_out[1]);
     try expectEqual(@as(u8, 0xFF), c_out[2]);
-    try expectEqual(@as(u8, 255), c_out[3]); // alpha 200 ≥ 128 → 1 → 255
+    try expectEqual(@as(u8, 255), c_out[3]); // alpha 200 >= 128 -> 1 -> 255
 
     // Sub-threshold alpha rounds down to 0.
     const c_low_a = [4]u8{ 0xFF, 0x00, 0xFF, 100 };
@@ -1345,7 +1345,7 @@ test "era I: R5G5B5A1 round-trip with quantization" {
 test "era I: R4G4B4A4 round-trip with quantization" {
     var buf: [4]u8 = @splat(0);
     // 4-bit channels: top nibble survives, bottom bits truncated.
-    // expand4to8(v) = v<<4 | v.  Round-trip: input 0xAB → compress 0xA → expand 0xAA.
+    // expand4to8(v) = v<<4 | v.  Round-trip: input 0xAB -> compress 0xA -> expand 0xAA.
     const c_in = [4]u8{ 0xAB, 0xCD, 0xEF, 0x12 };
     writeColor8(.color_r4g4b4a4, &buf, &c_in, 0);
 
@@ -1420,7 +1420,7 @@ test "era I: R16 (half-float, single channel) round-trip via byte path" {
     var c_out: [4]u8 = undefined;
     c_out = readColor8(.color_r16, &buf, 0);
 
-    // Half-float quantization at this value; allow ±2 LSB tolerance.
+    // Half-float quantization at this value; allow +/-2 LSB tolerance.
     const tol: i16 = 2;
     const got: i16 = @intCast(c_out[0]);
     const want: i16 = 128;

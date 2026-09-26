@@ -9,7 +9,7 @@
 //   - reference doc for "how do I query input?" (`u.isKeyDown`,
 //     `u.isKeyPressed`, `u.isKeyReleased`, `u.isShiftDown`, etc.)
 //   - smoke test for the Q1 input migration (every key in the
-//     `KeyCode` enum gets a live readout — if a key never lights
+//     `KeyCode` enum gets a live readout - if a key never lights
 //     up under a key press, the snapshot population path is wrong)
 //
 // Phone-friendly: large readable font, single-screen scrollable

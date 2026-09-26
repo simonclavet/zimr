@@ -1,26 +1,27 @@
-//! robot_dance.zig — a mocap clip retargeted onto a robot, as one target pose per frame.
+//! robot_dance.zig - a mocap clip retargeted onto a robot, as one target pose per frame.
 //!
 //! This is `dance_track`'s startup pipeline, moved into the library so that it can be measured
 //! headlessly: the capture's forward kinematics, the point samples, the retargeted skeleton, and
 //! the point-cloud IK that turns them into the robot's joint coordinates, frame after frame, each
 //! solve warm-started from the last. What comes out is exactly what a controller is asked to
-//! follow — so the question "can the robot follow a pose that came from a retargeted animation"
+//! follow - so the question "can the robot follow a pose that came from a retargeted animation"
 //! splits into two that can each be answered alone:
 //!
-//!   * are the TARGETS any good — does the IK reach them, are they smooth, are they inside the
+//!   * are the TARGETS any good - does the IK reach them, are they smooth, are they inside the
 //!     joint limits (drecon2.md 0as asked all three and never measured them); and
 //!   * can the robot TRACK them (the tests at the bottom, both engines, fixed base).
 //!
-//! ── UNITS AND AXES ──
+//! -- UNITS AND AXES --
 //!
 //! BVH is centimetres and Y-up; the robot is metres and Z-up. Positions are converted as
-//! (x, z, y) * 0.01 — the swizzle `dance_track` uses. The root's HORIZONTAL motion is taken
+//! (x, z, y) * 0.01 - the swizzle `dance_track` uses. The root's HORIZONTAL motion is taken
 //! relative to the clip's first frame and its height absolute, so the dance starts over the
 //! origin. Capture ROTATIONS stay in the BVH frame on purpose: the samples' offsets are built
 //! against the T-pose in that same frame, so the two cancel (drecon2.md 0ad, "the frames were
 //! mixed", is what happens when only one side is converted).
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
 const rbt = @import("robot.zig");
@@ -63,8 +64,8 @@ const max_samples: usize = 256;
 /// broken, because a mirrored dance is still a perfectly good dance. `.rotate` is the real conversion
 /// (a quarter turn about X); `.swizzle` is kept around so you can see the difference for yourself.
 pub const FrameConvert = enum {
-    /// Positions (x, y, z) -> (x, z, y), rotations left in the BVH frame — `dance_track`'s.
-    /// ★★★ Swapping two axes is a REFLECTION (determinant -1), not a rotation: it mirrors the
+    /// Positions (x, y, z) -> (x, z, y), rotations left in the BVH frame - `dance_track`'s.
+    /// *** Swapping two axes is a REFLECTION (determinant -1), not a rotation: it mirrors the
     /// capture left-for-right while the match table still sends its left leg to the robot's.
     swizzle,
     /// A proper rotation, +90 degrees about X: positions (x, y, z) -> (x, -z, y), and every
@@ -110,7 +111,7 @@ pub const Clip = struct {
     /// Seconds per frame, from the capture.
     frame_time: f32,
     nq: usize,
-    /// `frame_count * nq` — frame f's pose is `targets[f * nq ..][0..nq]`.
+    /// `frame_count * nq` - frame f's pose is `targets[f * nq ..][0..nq]`.
     targets: []f32,
     /// Per frame: the worst distance, over matched bodies, between where the IK put a body and
     /// where the retargeted skeleton asked for it.
@@ -456,7 +457,7 @@ pub fn retargetClip(
     const to_robot: Quat = quatFromAxisAngle(vec(1, 0, 0), 0.5 * pi);
     const human_joints: usize = capture.joints.len;
 
-    // ── The robot at rest, and which capture joint drives which body. ──
+    // -- The robot at rest, and which capture joint drives which body. --
     var rest: rbt.Data = try rbt.Data.init(gpa, m);
     defer rest.deinit();
     @memcpy(rest.pos, m.qpos0);
@@ -485,7 +486,7 @@ pub fn retargetClip(
         .{ tpose.joints.len, capture.joints.len },
     );
 
-    // ── The capture at rest: the T-pose's first frame, in metres, Z-up. ──
+    // -- The capture at rest: the T-pose's first frame, in metres, Z-up. --
     const local: []Quat = try gpa.alloc(Quat, human_joints);
     defer gpa.free(local);
     const human_rest_rot: []Quat = try gpa.alloc(Quat, human_joints);
@@ -502,7 +503,7 @@ pub fn retargetClip(
         human_rest_rot[i] = rotationToRobot(convert, to_robot, human_rest_rot[i]);
     }
 
-    // ── The samples, once: they depend only on the two rest poses. ──
+    // -- The samples, once: they depend only on the two rest poses. --
     const samples: []rbt.PointSample = try gpa.alloc(rbt.PointSample, max_samples);
     defer gpa.free(samples);
     const sample_count: usize = rbt.buildPointSamples(m, .{
@@ -515,7 +516,7 @@ pub fn retargetClip(
         .rest_positions_robot = rest.body_xpos,
     }, samples);
 
-    // ── Every frame: capture FK, the retargeted skeleton, the IK. ──
+    // -- Every frame: capture FK, the retargeted skeleton, the IK. --
     const wanted: usize = @trunc(seconds / capture.frame_time);
     const frame_count: usize = @min(capture.frame_count, wanted);
     const nq: usize = m.nq;
@@ -568,8 +569,8 @@ pub fn retargetClip(
         });
         rbt.forward(m, &kin);
         @memcpy(targets[frame * nq ..][0..nq], kin.pos[0..nq]);
-        // ★★ FRAME 0 HAS NO PREVIOUS SOLUTION TO START FROM, so its solve begins at qpos0 and can
-        // stop short, in whichever branch the rest pose leads to — and the clip then snaps to the
+        // ** FRAME 0 HAS NO PREVIOUS SOLUTION TO START FROM, so its solve begins at qpos0 and can
+        // stop short, in whichever branch the rest pose leads to - and the clip then snaps to the
         // better branch a few frames in (humanoid_flex2's right arm, 1.5 rad at frame 5). Solving
         // frame 0 again from its own answer, a few times, lets it finish converging first.
         if (frame == 0) {
@@ -779,7 +780,7 @@ pub fn bvhPoints(
     }
 }
 
-/// The robot's own bone lengths laid along the capture's bone directions — what the IK is asked
+/// The robot's own bone lengths laid along the capture's bone directions - what the IK is asked
 /// to reach. A body whose capture joint (or its parent's) is unmatched keeps its rest offset.
 fn retargetedSkeleton(
     m: *const rbt.Model,
@@ -858,7 +859,7 @@ pub const Tracker = struct {
         rbt.differentiatePos(m, self.err, d.pos, now, 1.0);
         rbt.differentiatePos(m, self.v_ref, now, next, dt);
         rbt.differentiatePos(m, self.v_prev, prev, now, dt);
-        // ── ★ The velocity error is measured against v_prev, not v_ref ──
+        // -- * The velocity error is measured against v_prev, not v_ref --
         //
         // This one's subtle, and it's what makes fast motion work. robot.zig steps with
         // semi-implicit Euler: first v += dt a, then q += dt v using the NEW velocity. So to land
@@ -1026,7 +1027,7 @@ pub fn contactTorques(
                 }
             }
             a[i][n] = rhs;
-            // ★★ Regularisation strong enough to prefer MODERATE forces: at 1e-4 the solve put
+            // ** Regularisation strong enough to prefer MODERATE forces: at 1e-4 the solve put
             // 12x body weight through one contact, cancelling its moment with tangential forces,
             // and the friction clamp then broke that balance - a residual larger than the demand.
             a[i][i] += contact_regularisation;
@@ -1446,8 +1447,7 @@ fn measureTargets(
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  dance targets on {s}, {d} frames at {d:.0} fps: IK residual mean {d:.3} m, worst {d:.3} m; " ++
+    report.print("\n  dance targets on {s}, {d} frames at {d:.0} fps: IK residual mean {d:.3} m, worst {d:.3} m; " ++
         "{d} hinge-frames out of range\n", .{
         label, clip.frame_count, 1.0 / clip.frame_time, mean_residual, worst_residual, total_out,
     });
@@ -1457,8 +1457,7 @@ fn measureTargets(
             continue;
         }
         const range: [2]f32 = m.jnt_range[j] orelse .{ 0, 0 };
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    {s:<5} joint {d:>2} on {s:<16} range [{d:>6.2}, {d:>5.2}]  " ++
+        report.print("    {s:<5} joint {d:>2} on {s:<16} range [{d:>6.2}, {d:>5.2}]  " ++
             "worst excess {d:>6.3} (at {d:>7.3})  " ++
             "{d:>4} frames out   worst jump {d:.3} rad at frame {d}\n", .{
             @tagName(m.jnt_type[j]),     j,                   names[m.jnt_body[j]],
@@ -1472,7 +1471,7 @@ fn measureTargets(
 const flex2_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid_flex2.xml");
 
 test "robot_dance: the retargeted dance's TARGETS - does the IK reach them, are they smooth, are they in range" {
-    // ★★★ DRECON2 0as's THREE QUESTIONS, ANSWERED FOR THE FIRST TIME. Every tracking failure in
+    // *** DRECON2 0as's THREE QUESTIONS, ANSWERED FOR THE FIRST TIME. Every tracking failure in
     // that log was measured against these targets without anyone knowing whether they were
     // reachable, smooth or legal. Ten seconds of the dance, on `humanoid_flex` (what `dance_track`
     // uses) and `humanoid_flex2` (what the retarget's WHOLE BODY test validated). Printed per
@@ -1520,7 +1519,7 @@ test "robot_dance: the retargeted dance's TARGETS - does the IK reach them, are 
 }
 
 test "robot_dance: following the retargeted dance LOCALLY - fixed base, both engines, 60 Hz (B0-B2)" {
-    // ★★★ THE STEP THIS PROJECT STALLED ON: follow, joint by joint, a pose that came out of the
+    // *** THE STEP THIS PROJECT STALLED ON: follow, joint by joint, a pose that came out of the
     // retarget. Torso welded to the world, so balance is not in it; the targets are the proper-
     // rotation, in-range, continuity-weighted ones measured above. B1: reach dance frame 0 from
     // rest in one second. B2: follow all ten seconds. Reduced: `Tracker` - implicit computed
@@ -1614,7 +1613,7 @@ test "robot_dance: following the retargeted dance LOCALLY - fixed base, both eng
             }
         }.at;
 
-        // ── B1: reach dance frame 0 from rest, one second, holding it (all three targets equal). ──
+        // -- B1: reach dance frame 0 from rest, one second, holding it (all three targets equal). --
         const first: []const f32 = pose(&clip, 0, nq);
         setTarget(&target, m, first);
         if (maybe_ragdoll) |*r| {
@@ -1640,7 +1639,7 @@ test "robot_dance: following the retargeted dance LOCALLY - fixed base, both eng
             b1_maximal = worstBodyErrorDeg(m, rots, target.body_xrot);
         }
 
-        // ── B2: follow the clip from frame 0's pose. ──
+        // -- B2: follow the clip from frame 0's pose. --
         var worst: [2]f32 = .{ 0, 0 };
         var worst_frame: [2]usize = .{ 0, 0 };
         var sum: [2]f32 = .{ 0, 0 };
@@ -1684,8 +1683,7 @@ test "robot_dance: following the retargeted dance LOCALLY - fixed base, both eng
             }
         }
         const frames: f32 = float(clip.frame_count - 1);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print(
+        report.print(
             "\n  following the dance locally, {s}, fixed base, 60 Hz, {d:.0} Hz springs:\n" ++
                 "    B1 reach frame 0 in 1 s:  reduced {d:.2} deg   maximal {d:.2} deg (-1: not built)\n" ++
                 "    B2 worst body per frame:  reduced mean {d:.2}, worst {d:.2} at frame {d}, " ++
@@ -1706,7 +1704,7 @@ test "robot_dance: following the retargeted dance LOCALLY - fixed base, both eng
 }
 
 /// What the floor must supply for the reference motion to happen EXACTLY: the root's rows of
-/// the reference's own inverse dynamics, frame by frame — no controller, no tracking error.
+/// the reference's own inverse dynamics, frame by frame - no controller, no tracking error.
 const Demand = struct {
     min_vertical: f32 = 1.0e9,
     max_vertical: f32 = 0,
@@ -1719,9 +1717,9 @@ const Demand = struct {
     frames: u32 = 0,
 };
 
-/// ★★★ THE BALANCE DEMAND OF A CLIP, WITH NOTHING ELSE IN IT. Measuring the carrying stick while a
+/// *** THE BALANCE DEMAND OF A CLIP, WITH NOTHING ELSE IN IT. Measuring the carrying stick while a
 /// controller ran mixed in the controller's own corrections: a few degrees of error times a
-/// 20 Hz spring's w^2 is hundreds of rad/s^2 at a joint, and it all reacts through the root —
+/// 20 Hz spring's w^2 is hundreds of rad/s^2 at a joint, and it all reacts through the root -
 /// the horizontal demand stayed at 5x body weight whatever the filter. Here each frame's
 /// inverse dynamics is taken at the REFERENCE's pose and velocity, for the reference's
 /// acceleration: the wrench the environment must supply for the dance itself.
@@ -1839,7 +1837,7 @@ fn runPuppet(
         tracker.accelerations(m, d, .{ before, now, next }, frequency, dt, a_des);
         rbt.biasForce(m, d);
         rbt.inverseDynamics(m, d, a_des, torque);
-        // ★★ THE STICK PUSHES, IT DOES NOT JUST TELEPORT: all rows are applied, the root's being
+        // ** THE STICK PUSHES, IT DOES NOT JUST TELEPORT: all rows are applied, the root's being
         // the stick's wrench. Joint rows alone left the body free-falling within each step while
         // the torques assumed a held root: 171 degrees from the first frames.
         @memcpy(d.applied_force, torque);
@@ -1885,7 +1883,7 @@ fn runPuppet(
 }
 
 test "robot_dance: B3 the PUPPET - and how much of the balance demand filtering removes" {
-    // ★★ B2 WITH THE TORSO MOVING AS THE DANCER'S DOES, and the stick that carries it as the
+    // ** B2 WITH THE TORSO MOVING AS THE DANCER'S DOES, and the stick that carries it as the
     // measuring instrument for balance: its wrench is what the feet must supply once there is a
     // floor. Unfiltered it asked for 5x body weight sideways and -1,470 N vertically - mostly
     // capture jitter. Swept here over the reference's low-pass cutoff, with how far each filter
@@ -1913,8 +1911,7 @@ test "robot_dance: B3 the PUPPET - and how much of the balance demand filtering 
         for (m.body_mass) |mass| {
             total_mass += mass;
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  B3 the puppet, {s}, 60 Hz, 20 Hz springs (weight {d:.0} N; floor-impossible frames " ++
+        report.print("\n  B3 the puppet, {s}, 60 Hz, 20 Hz springs (weight {d:.0} N; floor-impossible frames " ++
             "of {d}: pulling / beyond friction 0.7):\n", .{ label, total_mass * 9.81, clip.frame_count - 1 });
         var original: rbt.Data = try rbt.Data.init(gpa, m);
         defer original.deinit();
@@ -1936,16 +1933,14 @@ test "robot_dance: B3 the PUPPET - and how much of the balance demand filtering 
             }
             const stats: PuppetStats = try runPuppet(gpa, m, &model.data, &smooth, 20.0);
             const demand: Demand = try referenceDemand(gpa, m, &model.data, &smooth);
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    cutoff {d:>3.0} Hz REFERENCE DEMAND: vertical {d:>6.0}..{d:>5.0} N, horizontal <= " ++
+            report.print("    cutoff {d:>3.0} Hz REFERENCE DEMAND: vertical {d:>6.0}..{d:>5.0} N, horizontal <= " ++
                 "{d:>5.0} N, torque mean {d:>4.0} max {d:>5.0} Nm | floor-impossible {d} pulling, {d} slipping " ++
                 "of {d}\n", .{
                 cutoff,             demand.min_vertical, demand.max_vertical, demand.max_horizontal,
                 demand.mean_torque, demand.max_torque,   demand.pulling,      demand.slipping,
                 demand.frames,
             });
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    cutoff {d:>3.0} Hz (0 = none)  bent <= {d:>5.1} deg | " ++
+            report.print("    cutoff {d:>3.0} Hz (0 = none)  bent <= {d:>5.1} deg | " ++
                 "tracking mean {d:>5.2} worst {d:>6.2} deg | " ++
                 "root accel mean {d:>5.1} max {d:>5.1} | vertical {d:>6.0}..{d:>5.0} N, horizontal <= {d:>5.0} N, " ++
                 "torque mean {d:>4.0} max {d:>5.0} Nm | floor-impossible {d} / {d}\n", .{
@@ -1963,7 +1958,7 @@ test "robot_dance: B3 the PUPPET - and how much of the balance demand filtering 
 }
 
 test "robot_dance: are the reference's FEET on the floor?" {
-    // ★★ A FLOOR PUSHES ONLY ON WHAT TOUCHES IT. The reference's balance demand is feasible in
+    // ** A FLOOR PUSHES ONLY ON WHAT TOUCHES IT. The reference's balance demand is feasible in
     // magnitude after light filtering (0 pulling frames at 5 Hz), but the feet must also BE on the
     // floor when the push is needed - not floating above it, not sunk into it. Per frame: the
     // lowest point of either foot, z = 0 the floor; without and with `RetargetOptions.ground`.
@@ -2004,8 +1999,7 @@ test "robot_dance: are the reference's FEET on the floor?" {
                     grounded += 1;
                 }
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("\n  lowest foot point, {s}, grounded {}: deepest {d:.3} m, highest {d:.3} m | " ++
+            report.print("\n  lowest foot point, {s}, grounded {}: deepest {d:.3} m, highest {d:.3} m | " ++
                 "on the floor (-2..+5 cm) {d}, floating {d}, sunk {d} of {d}\n", .{
                 label, ground, deepest, highest, grounded, floating, sunk, clip.frame_count,
             });
@@ -2090,7 +2084,7 @@ fn runOnFloor(
     const dense: []f32 = try gpa.alloc(f32, @as(usize, m.nv) * m.nv);
     defer gpa.free(dense);
 
-    // ★ Start at frame 1, moving as the clip moves there: at frame 0 "before" is "now", so the
+    // * Start at frame 1, moving as the clip moves there: at frame 0 "before" is "now", so the
     // reference acceleration came out as v_ref / dt - a ~30 m/s^2 shove that was never in the dance.
     @memcpy(d.pos, clip.pose(1));
     rbt.differentiatePos(m, d.vel, clip.pose(0), clip.pose(1), dt);
@@ -2165,7 +2159,7 @@ fn modeLabel(mode: FloorMode) []const u8 {
 }
 
 test "robot_dance: R0 - the free root on a FLOOR, assisted, the assist scaled toward zero" {
-    // ★★★ THE FIRST FREE-ROOT RUNG. humanoid_flex2, its reference filtered at 5 Hz and grounded,
+    // *** THE FIRST FREE-ROOT RUNG. humanoid_flex2, its reference filtered at 5 Hz and grounded,
     // a real floor through the physics bridge, 60 Hz. The joints get the inverse-dynamics torques
     // for the reference motion; the root an ASSIST - alpha times the residual root rows, the
     // wrench a stick would push with. alpha = 0 is no help at all: DReCon's "open-loop playback".
@@ -2197,13 +2191,11 @@ test "robot_dance: R0 - the free root on a FLOOR, assisted, the assist scaled to
         .{ .mode = .consistent, .root_weight = 1.0e2 },
         .{ .mode = .consistent, .root_weight = 1.0e3 },
     };
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  R0, humanoid_flex2 on a floor, 60 Hz, reference " ++
+    report.print("\n  R0, humanoid_flex2 on a floor, 60 Hz, reference " ++
         "filtered 5 Hz and grounded (weight {d:.0} N):\n", .{weight});
     for (runs) |run| {
         const stats: FloorStats = try runOnFloor(gpa, m, &model.data, &clip, run);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    {s:<14} assist {d:>4.2}: followed {d:>5.2} s | " ++
+        report.print("    {s:<14} assist {d:>4.2}: followed {d:>5.2} s | " ++
             "joints mean {d:>5.2} worst {d:>6.2} deg | " ++
             "assist mean {d:>5.0} N ({d:.2} of weight)\n", .{
             modeLabel(run.mode), run.alpha,               stats.survived,                   stats.mean_error,
@@ -2213,10 +2205,10 @@ test "robot_dance: R0 - the free root on a FLOOR, assisted, the assist scaled to
 }
 
 test "robot_dance: S0-S1 - standing on the floor with the consistent controller, shoved" {
-    // ★★ BALANCE BEFORE DANCE. The consistent controller already feeds the torso's error back:
+    // ** BALANCE BEFORE DANCE. The consistent controller already feeds the torso's error back:
     // `Tracker`'s spring on the root asks for a correcting acceleration, and the feet are asked
     // for the force to make it. The held standing pose fell over in 1.4 s as a statue (floating-
-    // base torques, no floor in the split - servo_ladder §8.2). Here: humanoid_flex2's own
+    // base torques, no floor in the split - servo_ladder section 8.2). Here: humanoid_flex2's own
     // standing pose, grounded, as a ten-second "clip" that never moves; shoved 0 / 0.5 / 1 m/s.
     const gpa: Allocator = std.testing.allocator;
     const dt: f32 = 1.0 / 60.0;
@@ -2247,9 +2239,8 @@ test "robot_dance: S0-S1 - standing on the floor with the consistent controller,
         .residual_body = try gpa.alloc(u32, 0),
     };
     defer clip.deinit();
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  S0/S1, humanoid_flex2 standing on the floor, 60 Hz, no assist:\n", .{});
-    // ★★ The torso's corrective wish competes with eps |f|^2 on the TOTAL force: holding the body up
+    report.print("\n  S0/S1, humanoid_flex2 standing on the floor, 60 Hz, no assist:\n", .{});
+    // ** The torso's corrective wish competes with eps |f|^2 on the TOTAL force: holding the body up
     // already costs ~400 N a foot, so 40 N more of correction costs ~320 against root_weight x 1 for
     // abandoning 1 m/s^2 of it. At 100 the solve dropped the correction and stood 1.47 s - a statue.
     for ([_]f32{ 1.0e2, 1.0e4, 1.0e5, 1.0e6 }) |root_weight| {
@@ -2259,8 +2250,7 @@ test "robot_dance: S0-S1 - standing on the floor with the consistent controller,
                 .root_weight = root_weight,
                 .shove = shove,
             });
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    consistent, root_weight {e:>7.1}, shove {d:.1} m/s: stood {d:>5.2} s | " ++
+            report.print("    consistent, root_weight {e:>7.1}, shove {d:.1} m/s: stood {d:>5.2} s | " ++
                 "joints mean {d:>5.2} worst {d:>6.2} deg\n", .{
                 root_weight, shove, stats.survived, stats.mean_error, stats.worst_error,
             });
@@ -2269,11 +2259,11 @@ test "robot_dance: S0-S1 - standing on the floor with the consistent controller,
 }
 
 // ============================================================================
-// W1 (rl_track_journal.md §10): SuperTrack on the dance - verified before anything learns.
+// W1 (rl_track_journal.md section 10): SuperTrack on the dance - verified before anything learns.
 // ============================================================================
 
 test "robot_dance: W1.1a - the body-velocity conventions, MEASURED by finite differences" {
-    // ★★★ THE CONVENTIONS A SUPERTRACK INTEGRATOR STANDS ON, measured rather than read. The world
+    // *** THE CONVENTIONS A SUPERTRACK INTEGRATOR STANDS ON, measured rather than read. The world
     // model predicts each body's accelerations and integrates them (the paper's eqs. 8-12); if its
     // angular velocity is in the wrong frame, or its linear velocity is taken about the wrong
     // point, it still trains - on a subtly wrong target, which is how the last dance attempt
@@ -2356,16 +2346,13 @@ test "robot_dance: W1.1a - the body-velocity conventions, MEASURED by finite dif
             top_v = @max(top_v, length3(com_fd));
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  W1.1a conventions (flex2, 5 random states, h = 1e-3; " ++
+    report.print("\n  W1.1a conventions (flex2, 5 random states, h = 1e-3; " ++
         "largest |w| {d:.2} rad/s, |v| {d:.2} m/s):\n", .{ top_w, top_v });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    angular: cvel.ang vs WORLD-frame fd {d:.4}, vs BODY-frame fd {d:.4} rad/s\n", .{
+    report.print("    angular: cvel.ang vs WORLD-frame fd {d:.4}, vs BODY-frame fd {d:.4} rad/s\n", .{
         err_world,
         err_body,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    linear:  COM fd vs cvel.lin SHIFTED {d:.4}, UNSHIFTED {d:.4}; " ++
+    report.print("    linear:  COM fd vs cvel.lin SHIFTED {d:.4}, UNSHIFTED {d:.4}; " ++
         "body origin, shifted {d:.4} m/s\n", .{
         err_shifted,
         err_raw,
@@ -2380,7 +2367,7 @@ test "robot_dance: W1.1a - the body-velocity conventions, MEASURED by finite dif
 }
 
 test "robot_dance: W1.0 - the dance reference, audited before anything learns from it" {
-    // ★★★ THE REFERENCE, AUDITED. What the learner will track: the 10 s dance retargeted onto
+    // *** THE REFERENCE, AUDITED. What the learner will track: the 10 s dance retargeted onto
     // humanoid_flex2, filtered at 5 Hz - the servo ladder's validated reference (servo_ladder.md
     // 8.8). Reported, per joint: the joint types (the model's own facts), range excess and the
     // worst single-frame jump (`measureTargets`), quaternion SIGN FLIPS between consecutive
@@ -2410,14 +2397,12 @@ test "robot_dance: W1.0 - the dance reference, audited before anything learns fr
     // `measureTargets` does - indexing them by joint index mislabels and overruns (24 joints,
     // 19 bodies), which this audit's first run did.
     const names: []const []const u8 = model.imported.names;
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  W1.0 the dance reference on humanoid_flex2 ({d} frames at {d:.1} Hz):\n", .{
+    report.print("\n  W1.0 the dance reference on humanoid_flex2 ({d} frames at {d:.1} Hz):\n", .{
         clip.frame_count,
         1.0 / clip.frame_time,
     });
     for (0..m.njnt) |j| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    joint {d:>2} on {s:<16} {t}\n", .{ j, names[m.jnt_body[j]], m.jnt_type[j] });
+        report.print("    joint {d:>2} on {s:<16} {t}\n", .{ j, names[m.jnt_body[j]], m.jnt_type[j] });
     }
     try measureTargets(gpa, m, &clip, names, "W1.0 filtered 5 Hz");
     // Sign flips: consecutive frames whose quaternions have a negative dot product.
@@ -2438,8 +2423,7 @@ test "robot_dance: W1.0 - the dance reference, audited before anything learns fr
         }
         flips_total += flips;
         if (flips > 0) {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    SIGN FLIPS joint {d} on {s}: {d}\n", .{ j, names[m.jnt_body[j]], flips });
+            report.print("    SIGN FLIPS joint {d} on {s}: {d}\n", .{ j, names[m.jnt_body[j]], flips });
         }
     }
     // The velocities the tracker would demand, frame to frame.
@@ -2458,8 +2442,7 @@ test "robot_dance: W1.0 - the dance reference, audited before anything learns fr
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    sign flips in total: {d}; fastest DOF {d}: {d:.2} (rad or m)/s at frame {d}\n", .{
+    report.print("    sign flips in total: {d}; fastest DOF {d}: {d:.2} (rad or m)/s at frame {d}\n", .{
         flips_total,
         worst_dof,
         worst_speed,
@@ -2468,7 +2451,7 @@ test "robot_dance: W1.0 - the dance reference, audited before anything learns fr
 }
 
 // ============================================================================
-// The confidence ladder (rl_track_journal.md §11): small rungs, each with a KNOWN right answer.
+// The confidence ladder (rl_track_journal.md section 11): small rungs, each with a KNOWN right answer.
 // T = retarget, J = joint servo (distinct from servo_ladder.md's B/R/S rungs).
 // ============================================================================
 
@@ -2574,7 +2557,7 @@ const ChiralBodies = struct {
 };
 
 test "robot_dance: T1a - the conversion keeps the capture's handedness in every frame; the old swizzle flips it" {
-    // ★★★ THE MIRROR BUG'S TEST, proven on the bug itself. Per frame, the capture's own RAW
+    // *** THE MIRROR BUG'S TEST, proven on the bug itself. Per frame, the capture's own RAW
     // handedness (the triple product on its Y-up joints, before any conversion) against the
     // same after conversion: `.rotate` (a proper rotation) must keep its sign in EVERY frame,
     // `.swizzle` (dance_track's old mirror) must flip it in every frame. No anatomical
@@ -2624,8 +2607,7 @@ test "robot_dance: T1a - the conversion keeps the capture's handedness in every 
         }
     }
     const judged: usize = capture.frame_count - degenerate;
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  T1a over {d} frames: .rotate keeps the raw handedness in {d}, .swizzle in {d}\n", .{
+    report.print("\n  T1a over {d} frames: .rotate keeps the raw handedness in {d}, .swizzle in {d}\n", .{
         judged,
         kept[0],
         kept[1],
@@ -2719,8 +2701,7 @@ test "robot_dance: T1b - the retarget through the old mirror cannot fit; through
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  T1b IK residual, mean over the clip: through the rotation " ++
+    report.print("\n  T1b IK residual, mean over the clip: through the rotation " ++
         "{d:.3} m, through the old mirror {d:.3} m\n" ++
         "      (handedness proxy, not asserted: robot agrees with capture in " ++
         "{d} of {d} frames through the rotation, " ++
@@ -2732,7 +2713,7 @@ test "robot_dance: T1b - the retarget through the old mirror cannot fit; through
         agree[1],
         judged[1],
     });
-    // ★ MEASURED: 0.065 m through the rotation, 0.153 m through the mirror - 2.4x, where the old
+    // * MEASURED: 0.065 m through the rotation, 0.153 m through the mirror - 2.4x, where the old
     // model (humanoid_flex) showed 35.7 cm. flex2's ball knees and ankles fit a mirrored cloud
     // surprisingly well, so THE RESIDUAL IS A WEAK MIRROR DETECTOR on this robot: a future mirror
     // bug could hide under it. T1a (the conversion's handedness, exact: 600 of 600 and 0) is the
@@ -2792,8 +2773,7 @@ test "robot_dance: T0 - the capture's rest pose, retargeted, points every limb w
         .{ "thigh_right", "shin_right" },          .{ "shin_right", "foot_right" },
     };
     var worst: f32 = 0.0;
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  T0 the capture's rest pose on flex2 (IK residual {d:.3} " ++
+    report.print("\n  T0 the capture's rest pose on flex2 (IK residual {d:.3} " ++
         "m), segment direction errors:\n", .{clip.residual[0]});
     for (segments) |seg| {
         const a: usize = bodyNamed(names, seg[0]) orelse return error.MissingBody;
@@ -2807,12 +2787,10 @@ test "robot_dance: T0 - the capture's rest pose, retargeted, points every limb w
         const capture_dir: Vec = normalize3(points[@intCast(hb)] - points[@intCast(ha)]);
         const angle: f32 = acosRad(clamp(dot3(robot_dir, capture_dir), -1.0, 1.0)) * 180.0 / pi;
         worst = @max(worst, angle);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    {s:>15} -> {s:<15} {d:>6.2} deg\n", .{ seg[0], seg[1], angle });
+        report.print("    {s:>15} -> {s:<15} {d:>6.2} deg\n", .{ seg[0], seg[1], angle });
     }
     const chiral: ChiralBodies = try .resolve(gpa, names, tpose);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    handedness: robot {d:.4}, capture {d:.4}\n", .{
+    report.print("    handedness: robot {d:.4}, capture {d:.4}\n", .{
         chiral.ofRobot(&kin),
         chiral.ofCapture(points),
     });
@@ -2920,8 +2898,7 @@ test "robot_dance: J0 - a hinge servos critically damped: no overshoot, settled 
             settled_at = float(i + 1) * m.opt.timestep;
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  J0 hinge, 1 rad at {d} Hz: overshoot {d:.4} rad; within 5% at {d:.3} s " ++
+    report.print("\n  J0 hinge, 1 rad at {d} Hz: overshoot {d:.4} rad; within 5% at {d:.3} s " ++
         "(analytic {d:.3} s); final error {d:.5} rad\n", .{
         frequency,
         overshoot,
@@ -2934,7 +2911,7 @@ test "robot_dance: J0 - a hinge servos critically damped: no overshoot, settled 
 }
 
 test "robot_dance: J1 - a ball joint servos along the geodesic, from a rotated start" {
-    // ★★★ THE BALL JOINT'S FRAME, TESTED WHERE IT CAN BE WRONG. From a ROTATED start (from
+    // *** THE BALL JOINT'S FRAME, TESTED WHERE IT CAN BE WRONG. From a ROTATED start (from
     // identity the child's frame and the world's coincide, and a frame mistake is invisible), a
     // correct servo moves along the GEODESIC: the rotation relative to the start stays about ONE
     // fixed axis, the world axis of R1 R0^-1. An error taken in the wrong frame bends the path by
@@ -2998,8 +2975,7 @@ test "robot_dance: J1 - a ball joint servos along the geodesic, from a rotated s
         const final: f32 = worstBodyErrorDeg(m, d.body_xrot, goal.body_xrot);
         worst_deviation = @max(worst_deviation, deviation);
         worst_final = @max(worst_final, final);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  J1 ball, start ({d:.2}, {d:.2}, {d:.2}) -> ({d:.2}, {d:.2}, {d:.2}): path " ++
+        report.print("  J1 ball, start ({d:.2}, {d:.2}, {d:.2}) -> ({d:.2}, {d:.2}, {d:.2}): path " ++
             "off the geodesic {d:.3} deg, final {d:.4} deg\n", .{
             case[0][0], case[0][1], case[0][2], case[1][0], case[1][1], case[1][2], deviation, final,
         });
@@ -3099,8 +3075,7 @@ test "robot_dance: T2 - the IK recovers flex2's own poses from known configurati
         }
         worst_rot = @max(worst_rot, rot);
         worst_pos = @max(worst_pos, pos);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  T2 trial {d}: worst body rotation {d:.4} deg, worst body position {d:.5} m\n", .{
+        report.print("  T2 trial {d}: worst body rotation {d:.4} deg, worst body position {d:.5} m\n", .{
             trial,
             rot,
             pos,
@@ -3182,8 +3157,7 @@ test "robot_dance: J2 - a fixed-base limb tracks a smooth trajectory in its own 
             mean /= float(frames - 1);
             worst_all[variant][si] = worst;
             mean_all[variant][si] = mean;
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("  J2 {s} model, right arm at {d:.1} Hz for {d:.1} s: " ++
+            report.print("  J2 {s} model, right arm at {d:.1} Hz for {d:.1} s: " ++
                 "worst body {d:.4} deg, mean {d:.4} deg\n", .{
                 if (variant == 0) "STOCK" else "LIMP ",
                 hz,
@@ -3285,8 +3259,7 @@ test "robot_dance: J3a - the maximal ragdoll's hinge motor: J0's step, through z
             settled_at = float(i + 1) * dt;
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  J3a ragdoll hinge, 1 rad at 2 Hz: overshoot {d:.4} rad; " ++
+    report.print("\n  J3a ragdoll hinge, 1 rad at 2 Hz: overshoot {d:.4} rad; " ++
         "within 5% at {d:.3} s (J0: 0.417 s); " ++
         "final error {d:.5} rad\n", .{ overshoot, settled_at orelse -1.0, @abs(1.0 - angle) });
     try expect(settled_at != null);
@@ -3294,7 +3267,7 @@ test "robot_dance: J3a - the maximal ragdoll's hinge motor: J0's step, through z
 }
 
 test "robot_dance: J3b - the maximal ragdoll has NO ball joints: it refuses them, and so refuses flex2" {
-    // ★★ A LIMITATION, ASSERTED SO IT CANNOT CHANGE SILENTLY. `robot_maximal.build` supports
+    // ** A LIMITATION, ASSERTED SO IT CANNOT CHANGE SILENTLY. `robot_maximal.build` supports
     // hinges and the free root only (`error.UnsupportedJoint` for anything else). So the ball
     // probe is refused - and so is humanoid_flex2, with its 6 ball joints: the flex2 dance has only
     // ever run on the reduced model, and B2's "maximal 22.6 deg" is humanoid_flex (all hinges).
@@ -3325,8 +3298,7 @@ test "robot_dance: J3b - the maximal ragdoll has NO ball joints: it refuses them
             try expectEqual(error.UnsupportedJoint, err);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  J3b the ragdoll refuses ball joints (UnsupportedJoint): " ++
+    report.print("\n  J3b the ragdoll refuses ball joints (UnsupportedJoint): " ++
         "the ball probe and humanoid_flex2\n", .{});
 }
 
@@ -3379,7 +3351,7 @@ fn armReference(
 }
 
 test "robot_dance: J3c - the ragdoll's arm against the SAME servo law on the reduced model" {
-    // ★★★ SAME LAW, SAME TARGETS, TWO ENGINES. humanoid_flex (all hinges: the ragdoll exists),
+    // *** SAME LAW, SAME TARGETS, TWO ENGINES. humanoid_flex (all hinges: the ragdoll exists),
     // fixed base, limp as the B rungs make it; the right arm - a 3-hinge shoulder, which the
     // ragdoll turns into ONE swing-twist joint, and a hinge elbow - follows J2's smooth
     // trajectory. Three servos, errors after a 0.5 s transient:
@@ -3489,20 +3461,18 @@ test "robot_dance: J3c - the ragdoll's arm against the SAME servo law on the red
         if (hz == 0.5) {
             ratio_slow = mean[0] / @max(mean[1], 1.0e-6);
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  J3c humanoid_flex right arm at {d:.1} Hz (mean / worst body deg, after 0.5 s):\n" ++
+        report.print("\n  J3c humanoid_flex right arm at {d:.1} Hz (mean / worst body deg, after 0.5 s):\n" ++
             "    ragdoll (motors, no feedforward)       {d:>7.3} / {d:>7.3}\n" ++
             "    reduced, the SAME law (no feedforward) {d:>7.3} / {d:>7.3}\n" ++
             "    reduced, the full Tracker              {d:>7.3} / {d:>7.3}\n", .{
             hz, mean[0], worst[0], mean[1], worst[1], mean[2], worst[2],
         });
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  J3c ragdoll / same-law mean error: {d:.2}x at 0.5 Hz, worst over speeds {d:.2}x\n", .{
+    report.print("  J3c ragdoll / same-law mean error: {d:.2}x at 0.5 Hz, worst over speeds {d:.2}x\n", .{
         ratio_slow,
         ratio_worst,
     });
-    // ★ MEASURED, before the fix in `rmx.build`: 83.5 deg mean at BOTH speeds - the elbow driven 84
+    // * MEASURED, before the fix in `rmx.build`: 83.5 deg mean at BOTH speeds - the elbow driven 84
     // deg off (a ragdoll built away from the rest pose). After: 3.3 deg at 0.5 Hz, 1.5x the same
     // law (the motors' J3a overshoot); 24.7 at 2 Hz, 3x - the soft motor effectively softer than
     // its nominal 20 Hz in a 60 Hz world, a dynamics question for the next rung, not joint math.
@@ -3579,8 +3549,7 @@ test "robot_dance: D1 - the right elbow, ranged hinge against ball, on the dance
                 worst[s] = @max(worst[s], deg);
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  D1 right elbow as a {s}: residual mean {d:.3} m, worst {d:.3} m; range excess {d} " ++
+        report.print("\n  D1 right elbow as a {s}: residual mean {d:.3} m, worst {d:.3} m; range excess {d} " ++
             "frames; sign flips {d}; worst jump {d:.3} rad ({s}, frame {d})\n" ++
             "     upper arm direction mean {d:.2} deg, worst {d:.2}; forearm mean {d:.2} deg, worst {d:.2}\n", .{
             if (variant == 0) "HINGE" else "BALL ",
@@ -3654,8 +3623,7 @@ test "robot_dance: the reference set - four clips retargeted onto flex2 and audi
             rbt.kinematics(m, &d);
             deepest = @min(deepest, lowestBodyPoint(m, &d));
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  {s}: {d} frames; residual mean {d:.3} m, worst {d:.3}; range excess {d}; " ++
+        report.print("\n  {s}: {d} frames; residual mean {d:.3} m, worst {d:.3}; range excess {d}; " ++
             "sign flips {d}; worst jump {d:.3} rad ({s}); deepest below the floor {d:.3} m\n", .{
             std.fs.path.basename(path),
             audit.frames,
@@ -3763,8 +3731,7 @@ test "robot_dance: the get-up reference on the robot - are its feet flat when th
             tilt_worst = @max(tilt_worst, tilt);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  get-up reference, {d} frames: feet down on {d} of {d} foot-frames; " ++
+    report.print("\n  get-up reference, {d} frames: feet down on {d} of {d} foot-frames; " ++
         "tilt when down {d:.1} deg on average, {d:.1} worst; lowest foot {d:.3} m, highest low {d:.3} m\n", .{
         clip.frame_count,
         down_frames,
@@ -3774,8 +3741,7 @@ test "robot_dance: the get-up reference on the robot - are its feet flat when th
         lowest_seen,
         highest_low,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  the feet are the deepest part on {d} of {d} frames; on average they sit " ++
+    report.print("  the feet are the deepest part on {d} of {d} frames; on average they sit " ++
         "{d:.3} m above whatever is deepest\n", .{
         feet_deepest,
         clip.frame_count,

@@ -1,12 +1,12 @@
 //! lint:alias plot
-//! plot.zig — a native-Zig plotting library for zimr, in the spirit of
+//! plot.zig - a native-Zig plotting library for zimr, in the spirit of
 //! Dear ImGui's ImPlot but redesigned to be idiomatic Zig.
 //!
 //! Layering (the key departure from ImPlot, which welds rendering to a
 //! single `ImDrawList`):
 //!
 //!   1. **Rendering plot_core** (this file, the `Plot` type + `Axis`/`Ticker`).
-//!      Depends only on `zm`.  Emits primitives to a *duck-typed sink* —
+//!      Depends only on `zm`.  Emits primitives to a *duck-typed sink* -
 //!      anything exposing `fillRect / line / polyline / circleFilled /
 //!      triangleFilled / text`.  Pure, allocation-light, host-testable,
 //!      and renderable off-screen.
@@ -274,7 +274,7 @@ fn finite2(x: f64, y: f64) bool {
 }
 
 /// X coordinate of sample `i`: explicit `xs[i]`, or the index `i` itself when
-/// `xs` is empty — implicit-x, ImPlot's `PlotLine(ys)` convenience (no alloc).
+/// `xs` is empty - implicit-x, ImPlot's `PlotLine(ys)` convenience (no alloc).
 fn xCoord(xs: []const f64, i: usize) f64 {
     return if (xs.len == 0) @floatFromInt(i) else xs[i];
 }
@@ -294,7 +294,7 @@ const legend_bg = Color{ .r = 18, .g = 18, .b = 24, .a = 220 };
 
 /// Theming for a plot's chrome. Defaults reproduce the built-in dark theme;
 /// override fields (via `plot_ui.Options.style`) for a light theme or accent
-/// recoloring. Series colors are separate — set them per-series on each spec,
+/// recoloring. Series colors are separate - set them per-series on each spec,
 /// or fall back to the qualitative `autoColor` palette.
 pub const Style = struct {
     /// Plot-area fill, drawn behind the grid and series.
@@ -302,7 +302,7 @@ pub const Style = struct {
     /// Optional fill for the WHOLE plot frame (gutters included), drawn behind
     /// everything. Set this for a light theme so the axis labels/title (which
     /// live in the gutters) sit on the theme background, not the window's.
-    /// Null (default) leaves the gutters transparent — the built-in dark look.
+    /// Null (default) leaves the gutters transparent - the built-in dark look.
     panel_bg: ?Color = null,
     /// Major gridline color.
     grid: Color = grid_color,
@@ -319,7 +319,7 @@ pub const Style = struct {
 };
 
 // ============================================================================
-// [SECTION] Colormaps — ImPlot's 16 built-ins + sampling
+// [SECTION] Colormaps - ImPlot's 16 built-ins + sampling
 //
 // The enum, the key tables, and the sampling math are shared with plot3d via
 // plot_core.zig (defined exactly once). plot3d's ctx-bound sampleColormap goes
@@ -504,7 +504,7 @@ pub const DigitalSpec = struct {
 };
 
 // ============================================================================
-// [SECTION] Histogram binning — pure (caller owns buffers); render the result
+// [SECTION] Histogram binning - pure (caller owns buffers); render the result
 // with plotBars (1D) or plotHeatmap (2D). Keeps the plot_core allocation-free.
 // ============================================================================
 
@@ -575,7 +575,7 @@ pub fn histogramBins2D(
 }
 
 // ============================================================================
-// [SECTION] Axis transform — direction lives in the pixel endpoints
+// [SECTION] Axis transform - direction lives in the pixel endpoints
 // ============================================================================
 
 pub const Scale = enum { linear, log10, time, symlog, custom };
@@ -587,7 +587,7 @@ pub const AxisMap = struct {
     inverse: *const fn (f64) f64,
 };
 
-/// Symmetric-log forward map: linear within ±`lt`, one unit per decade beyond.
+/// Symmetric-log forward map: linear within +/-`lt`, one unit per decade beyond.
 fn symForward(v: f64, lt: f64) f64 {
     const a: f64 = @abs(v);
     if (a <= lt) {
@@ -768,7 +768,7 @@ pub const Axis = struct {
 };
 
 // ============================================================================
-// [SECTION] Ticks — port of ImPlot's Locator_Default (Heckbert nice nums)
+// [SECTION] Ticks - port of ImPlot's Locator_Default (Heckbert nice nums)
 // ============================================================================
 
 pub const Tick = struct {
@@ -1035,7 +1035,7 @@ pub const Ticker = struct {
         return self.ticks[0..self.count];
     }
 
-    /// Symlog ticks: zero, ±linthresh, and ±linthresh·10^k within range.
+    /// Symlog ticks: zero, +/-linthresh, and +/-linthresh*10^k within range.
     fn generateSymlog(self: *Ticker, axis: Axis) void {
         const range: DataRange = axis.range;
         const lt: f64 = axis.linthresh;
@@ -1091,7 +1091,7 @@ pub const Ticker = struct {
 };
 
 // ============================================================================
-// [SECTION] Plot — the rendering plot_core
+// [SECTION] Plot - the rendering plot_core
 // ============================================================================
 
 fn padRange(r: DataRange) DataRange {
@@ -1313,7 +1313,7 @@ pub const Plot = struct {
             sink.text(.{ self.area.x + (self.area.w - tw) * 0.5, ty }, ttl, .{ .size = 14, .color = tc });
         }
         // Axis labels: x centered below its tick labels, y at the top-left
-        // of the axis (horizontal — the draw list has no rotated text).
+        // of the axis (horizontal - the draw list has no rotated text).
         if (self.x.label) |xl| {
             const tw: f32 = textWidth(xl, 12);
             sink.text(
@@ -1547,7 +1547,7 @@ pub const Plot = struct {
         }
     }
 
-    /// Filled area between `ys` and the `spec.y_ref` baseline — two triangles
+    /// Filled area between `ys` and the `spec.y_ref` baseline - two triangles
     /// per segment. ImPlot's PlotShaded (baseline variant).
     pub fn plotShaded(
         self: *Plot,
@@ -2221,7 +2221,7 @@ pub const Plot = struct {
 };
 
 // ============================================================================
-// [SECTION] SvgSink — host snapshot/render target
+// [SECTION] SvgSink - host snapshot/render target
 // ============================================================================
 
 pub const SvgSink = struct {
@@ -2361,7 +2361,7 @@ pub const SvgSink = struct {
 };
 
 // ============================================================================
-// [SECTION] Demo — builds a representative plot and renders it to SVG
+// [SECTION] Demo - builds a representative plot and renders it to SVG
 // ============================================================================
 
 /// Render a self-contained demo plot to an SVG byte string (caller frees).
@@ -2459,7 +2459,7 @@ pub fn renderLogDemoSvg(gpa: Allocator) ![]u8 {
     return sink.toOwned();
 }
 
-/// Every marker type as its own scatter row — host snapshot for verifying
+/// Every marker type as its own scatter row - host snapshot for verifying
 /// marker geometry without the GPU path.
 pub fn renderMarkersDemoSvg(gpa: Allocator) ![]u8 {
     const ms = [_]Marker{

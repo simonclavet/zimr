@@ -1,8 +1,8 @@
-//! png_demo — port of the GL `png_demo`: decode an embedded PNG at
-//! runtime, upload it to a GPU texture, and draw it four times (2×2 grid, 4×
+//! png_demo - port of the GL `png_demo`: decode an embedded PNG at
+//! runtime, upload it to a GPU texture, and draw it four times (2x2 grid, 4x
 //! zoom) with different tints. The GL version routed through the retained
 //! `gpu.GpuTexture` system; on wgpu the path is the engine's
-//! `loadImageFromMemory` → `loadTextureFromImage` → `drawTexture` (tinted
+//! `loadImageFromMemory` -> `loadTextureFromImage` -> `drawTexture` (tinted
 //! quad). The decoded CPU pixels are freed right after upload (the texture
 //! lives on the GPU).
 const std = @import("std");
@@ -34,7 +34,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
-    // Decode → upload → free the CPU pixels (RGBA8, w*h*4); the texture is GPU-resident.
+    // Decode -> upload -> free the CPU pixels (RGBA8, w*h*4); the texture is GPU-resident.
     const img: z.Image = try z.loadImageFromMemory(gpa, smiley_png);
     const tex: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);
     if (img.data) |d| {

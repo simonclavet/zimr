@@ -1,17 +1,17 @@
-//! hybrid_render — raylib's `shaders_hybrid_rendering`, the zimr way
+//! hybrid_render - raylib's `shaders_hybrid_rendering`, the zimr way
 //! (and, with the cubes toggled off, `shaders_raymarching_rendering`).
 //!
 //! Two rendering methods share one depth buffer inside one pass:
 //!
 //!   1. A fullscreen quad whose fragment shader sphere-traces an SDF
 //!      scene (three orbiting metaballs over a checkerboard floor) and
-//!      writes each hit's TRUE depth through the FragDepth builtin —
+//!      writes each hit's TRUE depth through the FragDepth builtin -
 //!      projected via the same view-projection the raster pass uses.
 //!   2. Ordinary rasterized cubes (the honest `fog_fs` material at
 //!      density 0) drawn afterwards with a normal depth test.
 //!
 //!   The cubes orbit THROUGH the metaball cluster, so every frame shows
-//!   raster geometry slicing in front of and behind marched geometry —
+//!   raster geometry slicing in front of and behind marched geometry -
 //!   occlusion across two rendering methods, with zero depth-encoding
 //!   coordination (raylib teaches both shaders a custom near/far
 //!   linearization instead; ours agree by construction).
@@ -62,7 +62,7 @@ const bg_clear: Color = .{ .r = 28, .g = 32, .b = 48, .a = 255 };
 
 const cube_count: usize = 3;
 
-/// The cubes orbit through the metaball cluster at staggered phases —
+/// The cubes orbit through the metaball cluster at staggered phases -
 /// the interpenetration is the demo.
 fn cubeCenter(i: usize, t: f32) [3]f32 {
     const phase: f32 = float(i) * 2.0943951;
@@ -357,7 +357,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     const march_bg = try uniformBindGroup(gpa, device, march_bgl, march_ubo, @sizeOf(MarchUbo), "hy_march_bg");
 
-    // Build-only intermediates consumed above — release them (pipelines are direct/uncached → owned).
+    // Build-only intermediates consumed above - release them (pipelines are direct/uncached -> owned).
     z.wgpu.destroyBindGroupLayout(march_bgl);
     z.wgpu.destroyBindGroupLayout(g0_bgl);
     z.wgpu.destroyBindGroupLayout(cube_bgl);
@@ -456,7 +456,7 @@ fn update(f: *z.Frame, s: *State) void {
     const cam_vp: Mat = mulMat(cam_proj, cam_view);
 
     // The marcher's ray basis, from the same eye/target the VP uses.
-    // (zm.cross is Vec4-wide, zmath heritage — ride w = 0 through it.)
+    // (zm.cross is Vec4-wide, zmath heritage - ride w = 0 through it.)
     const fwd3: Vec = normalize(cam_target - cam_eye);
     const right3: Vec = normalize(cross(fwd3, vec(0, 1, 0)));
     const up3: Vec = normalize(cross(right3, fwd3));

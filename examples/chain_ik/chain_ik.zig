@@ -1,33 +1,33 @@
-//! chain_ik — ten joints for a two-joint job.
+//! chain_ik - ten joints for a two-joint job.
 //!
 //! A ten-link chain, base pinned, tip chasing a target. The task needs two numbers; the chain
 //! has ten. **The eight left over are the null space**, and what a solver does with them is
-//! usually invisible — in a six-DOF arm a badly conditioned step looks like a small twitch. In a
+//! usually invisible - in a six-DOF arm a badly conditioned step looks like a small twitch. In a
 //! ten-link chain it looks like the whole thing being flung.
 //!
-//! ── ★★ DRAG THE DAMPING SLIDER, ESPECIALLY NEAR FULL STRETCH ──
+//! -- ** DRAG THE DAMPING SLIDER, ESPECIALLY NEAR FULL STRETCH --
 //!
-//! Damped least squares solves `Δq = Jᵀ(J·Jᵀ + λ²I)⁻¹·e`. Near a singularity — the chain
-//! straight out, or folded back — `J·Jᵀ` is ill-conditioned, and a small `λ` asks for enormous
+//! Damped least squares solves `dq = J^T(J*J^T + lambda^2I)^-1*e`. Near a singularity - the chain
+//! straight out, or folded back - `J*J^T` is ill-conditioned, and a small `lambda` asks for enormous
 //! joint motion to buy a tiny tip motion. Measured across a sweep that crosses the reachable
 //! boundary twice:
 //!
-//!     damping   worst tip error   peak |Δq| in one solve
+//!     damping   worst tip error   peak |dq| in one solve
 //!       0.001          0.98 mm            100.07 rad
 //!       0.010          0.89 mm             38.83 rad
 //!       0.050          0.93 mm             11.57 rad
 //!       0.300          1.00 mm              0.75 rad
 //!
-//! ★★★ **THE ACCURACY IS THE SAME AND THE MOTION SPANS 133x.** A hundred radians in one solve is
+//! *** **THE ACCURACY IS THE SAME AND THE MOTION SPANS 133x.** A hundred radians in one solve is
 //! sixteen full revolutions of a joint to move a tip by a millimetre. That is the trade damping
 //! makes, and inside the workspace it costs nothing at all.
 //!
-//! ── ★ AND ZERO DAMPING IS NOT THE NAIVE SOLVER, IT IS NO SOLVER ──
+//! -- * AND ZERO DAMPING IS NOT THE NAIVE SOLVER, IT IS NO SOLVER --
 //!
-//! At `λ = 0` this chain does not move: peak `|Δq|` measured **0.000**. `ctl.Ik` declines a
+//! At `lambda = 0` this chain does not move: peak `|dq|` measured **0.000**. `ctl.Ik` declines a
 //! singular solve rather than diverging, which is the right call and means the textbook
 //! "undamped versus damped" comparison is not available here. The honest one is between a
-//! damping too small to condition the problem and one that does — which is the table above.
+//! damping too small to condition the problem and one that does - which is the table above.
 
 const std = @import("std");
 const common = @import("example_common");
@@ -162,7 +162,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     const model: *const rbt.Model = &s.imported.model;
     if (s.auto_sweep) {
-        // ★ THE SWEEP CROSSES THE REACHABLE BOUNDARY AND COMES BACK, because the boundary is
+        // * THE SWEEP CROSSES THE REACHABLE BOUNDARY AND COMES BACK, because the boundary is
         // where the conditioning shows. A path that stays comfortably inside proves nothing.
         s.sweep_phase += f.time.delta_time * 0.25;
         s.target_radius = 1.0 + 2.4 * @abs(@sin(s.sweep_phase));
@@ -173,7 +173,7 @@ fn update(f: *z.Frame, s: *State) void {
     const result: ctl.Ik.Result = (ctl.Ik{
         .max_iterations = 12,
         .damping = s.damping,
-        // ★ DELIBERATELY LOOSE. A tight `max_step` clamps away the very divergence this example
+        // * DELIBERATELY LOOSE. A tight `max_step` clamps away the very divergence this example
         // exists to show, and the comparison would prove nothing.
         .max_step = 100.0,
     }).solve(
@@ -201,7 +201,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.endMode3D(gl);
 }
 
-/// The chain lives in the model's x–z plane; the renderer is Y-up, so z maps to depth.
+/// The chain lives in the model's x-z plane; the renderer is Y-up, so z maps to depth.
 fn toRender(at: Vec) Vec {
     return vec(at[0], at[2], 0);
 }
@@ -241,12 +241,12 @@ fn drawChain(s: *State, gl: *z.WgpuGl) void {
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
-    // ★ THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
+    // * THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
     // know how tall the viewport is. Kept in the signature because every example shares it.
     _ = viewport_h;
     const captured: bool = u.wantCaptureMouse();
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
-    // ★ AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
+    // * AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
     // which on a phone left the thing the demo is ABOUT as a sliver at the bottom. Letting the
     // window size to its content keeps it as small as it can be, and capping the width stops it
     // spanning the screen.
@@ -261,7 +261,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
             s.tip_error,
             if (s.reached) "reached" else "OUT OF REACH",
         });
-        // ★ THE JOINT STEP IS THE MEASUREMENT. Tracking accuracy barely moves with damping;
+        // * THE JOINT STEP IS THE MEASUREMENT. Tracking accuracy barely moves with damping;
         // this spans a factor of 133.
         u.text("joint step {d:>8.3} rad  (peak {d:>7.2})", .{ s.last_step, s.peak_step });
         if (u.button("clear peak", .{})) {

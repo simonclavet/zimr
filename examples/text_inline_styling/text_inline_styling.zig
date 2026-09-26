@@ -25,7 +25,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-// Atkinson Hyperlegible Mono — the Braille Institute's legibility font.
+// Atkinson Hyperlegible Mono - the Braille Institute's legibility font.
 // Distinct letterforms (slashed zero, unambiguous I/l/1), and a deliberate
 // break from raylib's look. Latin-only content, so its cmap is plenty:
 // ASCII + Latin-1 accented in full. (It has NO Cyrillic and almost no Greek,
@@ -46,7 +46,7 @@ const State = struct {
     rng: std.Random.DefaultPrng,
     rand_col: Color = .{ .r = 230, .g = 41, .b = 55, .a = 255 },
     line_buf: [96]u8 = undefined,
-    fade: f32 = 255.0, // base alpha — proves tag colors inherit it
+    fade: f32 = 255.0, // base alpha - proves tag colors inherit it
 };
 
 /// Parse 8 hex digits (RRGGBBAA). Returns null on anything malformed, so a typo
@@ -121,7 +121,7 @@ fn walkStyled(
         const close: usize = std.mem.indexOfScalarPos(u8, text, i, ']') orelse break;
         const tag: []const u8 = text[i + 1 .. close];
 
-        // A malformed tag is not a tag — leave it in the text as literal chars.
+        // A malformed tag is not a tag - leave it in the text as literal chars.
         var consumed: bool = false;
         if (tag.len == 1 and tag[0] == 'r') {
             if (emit) {
@@ -219,7 +219,7 @@ fn update(f: *z.Frame, s: *State) void {
     const u: z.ui_real.Ui = s.ui_host.begin(f);
 
     // Window is sized generously ON PURPOSE. `buttonImpl` bails via `itemAdd`
-    // when a widget lands FULLY outside the window rect — a too-short window
+    // when a widget lands FULLY outside the window rect - a too-short window
     // silently produces a button that renders but never returns true. Long help
     // text WRAPS on a narrow phone, which is what pushes widgets out.
     u.setNextWindowPos(.{ 8, 8 }, .{});
@@ -234,7 +234,7 @@ fn update(f: *z.Frame, s: *State) void {
         // Readout of the live state: if these numbers don't change when the
         // button is tapped, the button isn't firing (not the color pipeline).
         u.text("color: {d}, {d}, {d}", .{ s.rand_col.r, s.rand_col.g, s.rand_col.b });
-        // Base alpha fades the WHOLE string — tag colors inherit it.
+        // Base alpha fades the WHOLE string - tag colors inherit it.
         _ = u.slider("base alpha", &s.fade, .{ .min = 40, .max = 255 });
     }
 
@@ -280,7 +280,7 @@ fn update(f: *z.Frame, s: *State) void {
     );
     y += 44;
 
-    // Colors can be built at runtime — the tag is just text.
+    // Colors can be built at runtime - the tag is just text.
     const line: []const u8 = bufPrint(
         &s.line_buf,
         "Let's be [c{X:0>2}{X:0>2}{X:0>2}FF]CREATIVE[r] !!!",

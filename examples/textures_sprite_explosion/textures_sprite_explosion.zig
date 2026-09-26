@@ -1,4 +1,4 @@
-//! textures_sprite_explosion — port of raylib [textures] example.
+//! textures_sprite_explosion - port of raylib [textures] example.
 //! A 5x5 explosion sprite sheet, auto-looping. drawTextureRec over
 //! normalized-UV sub-rects.
 const std = @import("std");

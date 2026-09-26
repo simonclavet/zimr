@@ -1,4 +1,4 @@
-//! tic_tac_toe — two players share the screen and tap a cell to claim it. X is drawn
+//! tic_tac_toe - two players share the screen and tap a cell to claim it. X is drawn
 //! as two crossing bars, O as a ring (a filled disc with a background-coloured disc
 //! punched out of it), the board as four bars. Nothing here but 2D shapes: no
 //! textures, no font work beyond the caption, no AI. Tap anywhere once somebody has

@@ -1,10 +1,10 @@
-//! src/shaders/terrain_fs.zig — height-banded terrain material.
+//! src/shaders/terrain_fs.zig - height-banded terrain material.
 //!
 //! Lambert (0.25 ambient floor) times a color read from a four-stop
 //! height ramp: normalize the fragment's world Y into [0,1] across the
-//! terrain's height range, then blend low→mid→hi→top across the three
+//! terrain's height range, then blend low->mid->hi->top across the three
 //! segments.  Classic water/grass/rock/snow banding, entirely from
-//! geometry — the point of the heightmap example is that the shape
+//! geometry - the point of the heightmap example is that the shape
 //! carries the read with no texture at all.
 
 const zm = @import("zm");

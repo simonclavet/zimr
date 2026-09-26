@@ -1,11 +1,11 @@
-//! cel_shading — raylib's `shaders_cel_shading`, the zimr way.
+//! cel_shading - raylib's `shaders_cel_shading`, the zimr way.
 //!
 //! Two draws of the same bunny:
 //!
 //!   1. THE HULL: the mesh inflated along its normals (`outline_hull_vs`)
-//!      with FRONT faces culled — only the shell's silhouette survives
+//!      with FRONT faces culled - only the shell's silhouette survives
 //!      the depth test, painted flat ink by `depth_fs` (reused).
-//!   2. THE TOON: `cel_fs` on `gbuffer_vs` (both reused patterns — the
+//!   2. THE TOON: `cel_fs` on `gbuffer_vs` (both reused patterns - the
 //!      forward-material vertex stage and the color-passthrough FS),
 //!      Lambert snapped to N flat bands.
 //!
@@ -39,7 +39,7 @@ const vec = zm.vec;
 const toon_vs = z.deferred_shaders.gbuffer_vs; // the forward-material VS
 const toon_fs = z.toon_shaders.cel_fs;
 const hull_vs = z.toon_shaders.outline_hull_vs;
-// (the hull's FS is depth_fs — only its WGSL artifact is needed here)
+// (the hull's FS is depth_fs - only its WGSL artifact is needed here)
 
 pub var zimr_app: z.App = .{};
 
@@ -66,7 +66,7 @@ const MeshVertex = extern struct {
 const State = struct {
     gpa: Allocator,
     toon_pipeline: z.wgpu.RenderPipelineHandle, // cull back
-    hull_pipeline: z.wgpu.RenderPipelineHandle, // cull FRONT — the trick
+    hull_pipeline: z.wgpu.RenderPipelineHandle, // cull FRONT - the trick
 
     vbo: z.wgpu.BufferHandle,
     ibo: z.wgpu.BufferHandle,
@@ -310,7 +310,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const toon_g2_bg = try uniformBindGroup(gpa, device, toon_g2_bgl, toon_fs_ubo, @sizeOf(ToonFsUbo), "cel_g2_bg");
     const hull_g0_bg = try uniformBindGroup(gpa, device, hull_g0_bgl, hull_ubo, @sizeOf(HullUbo), "hull_g0_bg");
 
-    // Build-only intermediates consumed above — release them. createRenderPipeline is
+    // Build-only intermediates consumed above - release them. createRenderPipeline is
     // direct/uncached, so the PIPELINES are example-owned and freed in deinit instead.
     z.wgpu.destroyBindGroupLayout(toon_g0_bgl);
     z.wgpu.destroyBindGroupLayout(toon_g2_bgl);

@@ -1,47 +1,47 @@
 //! lint:alias leakwatch
-//! LeakWatch — an allocator wrapper that says WHERE a leak came from.
+//! LeakWatch - an allocator wrapper that says WHERE a leak came from.
 //!
-//! ── ★ THE GAP THIS FILLS ──
+//! -- * THE GAP THIS FILLS --
 //!
 //! `std.heap.SafeAllocator` (the testing allocator) already detects leaks and reports the size.
 //! In a Debug build it also captures a stack trace, and that is usually enough. In ReleaseSafe
-//! it does not — traces are stripped — so a leak reports as
+//! it does not - traces are stripped - so a leak reports as
 //!
-//!     leaked [addr: 0x…, len: 3324 align: 8] allocated at: (empty stack trace)
+//!     leaked [addr: 0x..., len: 3324 align: 8] allocated at: (empty stack trace)
 //!
 //! which tells you a leak exists and nothing about it. `memwatch.zig` has the same shape of
 //! limitation by design: it converts "silent death in 20s" into "something leaks", and says so
 //! in its own header.
 //!
-//! ★ AND THE PROBLEM IS WORSE THAN A MISSING TRACE. A test suite's leak is attributed to
-//! whichever test was running when the check fired, which need not be the test that leaked —
+//! * AND THE PROBLEM IS WORSE THAN A MISSING TRACE. A test suite's leak is attributed to
+//! whichever test was running when the check fired, which need not be the test that leaked -
 //! so the first thing to establish is not "where was it allocated" but "is this test even
 //! responsible". That took most of a session to establish by hand, by truncating a test and
 //! watching the leak survive.
 //!
-//! ── ★★ WHAT THIS DOES INSTEAD ──
+//! -- ** WHAT THIS DOES INSTEAD --
 //!
 //! Wraps any allocator and records, per live allocation, a caller-supplied LABEL. Labels are
-//! scoped: `watch.push("mjcf.readRobot")` … `watch.pop()`, so every allocation made inside
+//! scoped: `watch.push("mjcf.readRobot")` ... `watch.pop()`, so every allocation made inside
 //! carries the enclosing scope without any call site being edited. On `report`, what survived
 //! is printed by label and size.
 //!
-//! ★ A LABEL BEATS A STACK TRACE FOR THIS PURPOSE, and not only because it survives
-//! optimisation. A trace tells you the innermost frame — usually `ArrayList.ensureCapacity`,
+//! * A LABEL BEATS A STACK TRACE FOR THIS PURPOSE, and not only because it survives
+//! optimisation. A trace tells you the innermost frame - usually `ArrayList.ensureCapacity`,
 //! which is true and useless. A label tells you the SUBSYSTEM, which is the level at which
 //! ownership is actually decided.
 //!
-//! ★★ WHAT IT CANNOT TELL YOU: where a buffer was originally created. A growing `ArrayList`
-//! allocates a new block, copies, and frees the old one — three unrelated vtable calls — so the
+//! ** WHAT IT CANNOT TELL YOU: where a buffer was originally created. A growing `ArrayList`
+//! allocates a new block, copies, and frees the old one - three unrelated vtable calls - so the
 //! label names where the LIVE allocation was made, which for a grown buffer is where it last
 //! grew. Still the right answer for "who is holding this memory now"; not an answer to "where
 //! did this come from". See the growth test at the bottom of this file.
 //!
-//! ── ★ COST, AND WHY IT IS OFF THE HOT PATH ──
+//! -- * COST, AND WHY IT IS OFF THE HOT PATH --
 //!
 //! One hash-map entry per live allocation, and a slice copy of the label pointer (labels are
 //! `[]const u8` literals, not copied). Intended for tests and for a debug session, not for a
-//! shipping frame loop — `memwatch` is the one that is cheap enough to leave on.
+//! shipping frame loop - `memwatch` is the one that is cheap enough to leave on.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -52,7 +52,7 @@ const expectEqualStrings = std.testing.expectEqualStrings;
 const Entry = struct {
     len: usize,
     label: []const u8,
-    /// Monotonic counter, so a report can be read in allocation order — which usually
+    /// Monotonic counter, so a report can be read in allocation order - which usually
     /// reconstructs the call sequence better than sorting by address.
     ordinal: u64,
 };
@@ -63,14 +63,14 @@ pub const LeakWatch = struct {
     scopes: std.ArrayListUnmanaged([]const u8),
     bookkeeping: Allocator,
     next_ordinal: u64,
-    /// Set to a byte count to trace every allocation of exactly that size — the fastest way to
+    /// Set to a byte count to trace every allocation of exactly that size - the fastest way to
     /// go from "3324 bytes leaked" to "this call made it". Zero disables.
     watch_size: usize = 0,
     watch_hits: u32 = 0,
 
     /// `bookkeeping` holds the tracking tables.
     ///
-    /// ★★ IT MAY BE THE SAME ALLOCATOR AS `child` — they are different LAYERS, not different
+    /// ** IT MAY BE THE SAME ALLOCATOR AS `child` - they are different LAYERS, not different
     /// pools. `child` is what this wrapper forwards to; `bookkeeping` is used directly, without
     /// passing through the wrapper, so the tables never appear in their own report. Handing the
     /// WRAPPED allocator here would be the mistake, and it is not expressible: `allocator()`
@@ -94,7 +94,7 @@ pub const LeakWatch = struct {
 
     /// Everything allocated until the matching `pop` is attributed to `label`.
     ///
-    /// ★ NESTING IS THE POINT. `push("import")` around a whole subsystem and `push("sensors")`
+    /// * NESTING IS THE POINT. `push("import")` around a whole subsystem and `push("sensors")`
     /// inside it gives `import/sensors`, so a report reads as a path rather than a leaf.
     pub fn push(self: *LeakWatch, label: []const u8) void {
         // A tracker that fails to record a scope must not take down the program it is
@@ -185,7 +185,7 @@ pub const LeakWatch = struct {
                 if (self.currentLabel().len == 0) "(none)" else self.currentLabel(),
             });
         }
-        // lint:off catch-suppression: as above — losing one record beats aborting
+        // lint:off catch-suppression: as above - losing one record beats aborting
         self.live.put(self.bookkeeping, @intFromPtr(out), .{
             .len = len,
             .label = self.currentLabel(),
@@ -207,7 +207,7 @@ pub const LeakWatch = struct {
         if (!self.child.rawResize(buf, alignment, new_len, ra)) {
             return false;
         }
-        // ★ THE POINTER DOES NOT MOVE ON A RESIZE — that is what distinguishes it from a remap —
+        // * THE POINTER DOES NOT MOVE ON A RESIZE - that is what distinguishes it from a remap -
         // so only the recorded length changes. Removing and re-adding here would lose the
         // ordinal and the label for no reason.
         if (self.live.getPtr(@intFromPtr(buf.ptr))) |entry| {
@@ -225,16 +225,16 @@ pub const LeakWatch = struct {
     ) ?[*]u8 {
         const self: *LeakWatch = @ptrCast(@alignCast(ctx));
         const out: [*]u8 = self.child.rawRemap(buf, alignment, new_len, ra) orelse return null;
-        // ★ A REMAP IS A FREE AND AN ALLOC AT ONCE, and forgetting the free half makes the
+        // * A REMAP IS A FREE AND AN ALLOC AT ONCE, and forgetting the free half makes the
         // tracker report a leak for memory that merely moved. The label is carried across here
-        // because this call CAN see both halves — unlike a grow that goes through separate
+        // because this call CAN see both halves - unlike a grow that goes through separate
         // `alloc`/`free` calls, where nothing links them. See the growth test.
         const carried: Entry = if (self.live.fetchRemove(@intFromPtr(buf.ptr))) |kv| kv.value else .{
             .len = new_len,
             .label = self.currentLabel(),
             .ordinal = self.next_ordinal,
         };
-        // lint:off catch-suppression: as above — losing one record beats aborting
+        // lint:off catch-suppression: as above - losing one record beats aborting
         self.live.put(self.bookkeeping, @intFromPtr(out), .{
             .len = new_len,
             .label = carried.label,
@@ -272,7 +272,7 @@ test "leakwatch: names the scope that leaked" {
     const kept: []u8 = try a.alloc(u8, 128);
     watch.pop();
 
-    // ★ ONLY THE SURVIVOR IS LIVE, and it carries the scope that made it — which is the whole
+    // * ONLY THE SURVIVOR IS LIVE, and it carries the scope that made it - which is the whole
     // point: the size alone was never the hard part.
     try expectEqual(@as(usize, 1), watch.live.count());
     try expectEqual(@as(usize, 128), watch.liveBytes());
@@ -284,19 +284,19 @@ test "leakwatch: names the scope that leaked" {
 }
 
 test "leakwatch: a grown buffer is attributed to where it GREW, and why" {
-    // ★★★ THE LIMIT OF WHAT AN ALLOCATOR WRAPPER CAN KNOW, and it is worth stating precisely
+    // *** THE LIMIT OF WHAT AN ALLOCATOR WRAPPER CAN KNOW, and it is worth stating precisely
     // because the obvious guess is wrong.
     //
     // The first version of this test asserted that a buffer keeps the label of the scope that
     // CREATED it, on the reasoning that `remap` is a free and an alloc at once and the label
     // could be carried across. Measured: it is not carried, because `ArrayList` does not grow
-    // by `remap` here. It allocates a new buffer, copies, and frees the old one — **three
+    // by `remap` here. It allocates a new buffer, copies, and frees the old one - **three
     // separate vtable calls with nothing linking them.** A wrapper sees an unrelated `alloc`
     // and an unrelated `free`, and no amount of care recovers the connection.
     //
-    // ★ SO THE LABEL NAMES WHERE THE LIVE ALLOCATION WAS MADE, which for a grown buffer is
-    // where it last grew. That is still the useful answer for leak-hunting — it says which
-    // subsystem is holding the memory now — but it is not "where was this born", and a tool
+    // * SO THE LABEL NAMES WHERE THE LIVE ALLOCATION WAS MADE, which for a grown buffer is
+    // where it last grew. That is still the useful answer for leak-hunting - it says which
+    // subsystem is holding the memory now - but it is not "where was this born", and a tool
     // that claimed to answer that would mislead exactly when it mattered.
     //
     // (`remap` IS handled and does carry the label, for the allocators and sizes where it
@@ -308,8 +308,8 @@ test "leakwatch: a grown buffer is attributed to where it GREW, and why" {
 
     watch.push("born here");
     var list: std.ArrayListUnmanaged(u32) = .empty;
-    // ★ `defer` BEFORE THE ASSERTIONS. A failed expectation would otherwise skip the cleanup
-    // and report a LEAK on top of the mismatch — two failures for one cause, the second
+    // * `defer` BEFORE THE ASSERTIONS. A failed expectation would otherwise skip the cleanup
+    // and report a LEAK on top of the mismatch - two failures for one cause, the second
     // pointing somewhere else entirely. The first version of this test did exactly that, and it
     // cost a round of blaming the tracker.
     defer list.deinit(a);

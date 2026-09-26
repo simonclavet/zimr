@@ -1,6 +1,6 @@
 // examples/easings_testbed.zig - interactive testbed for trying
 // every easing curve on a 2D ball trajectory.
-// Port of raylib's `examples/shapes/shapes_easings_testbed.c` (★3,
+// Port of raylib's `examples/shapes/shapes_easings_testbed.c` (*3,
 // ~247 LOC).  Pick an easing for X, pick another for Y, hit ENTER,
 // watch a ball traverse the screen with the chosen curves.
 // raylib's original used a typedef'd function table with the
@@ -12,8 +12,8 @@
 // that are all the identity function.  We collapse them to one
 // `Linear`; the testbed simply has one fewer entry.
 // Controls:
-//   ←  →    cycle the X-axis easing (wraps; "None" is the last entry)
-//   ↑  ↓    cycle the Y-axis easing (wraps)
+//   <-  ->    cycle the X-axis easing (wraps; "None" is the last entry)
+//   ^  v    cycle the Y-axis easing (wraps)
 //   ENTER   play/pause the ball's motion
 //   SPACE   restart from frame 0 (also fires automatically when
 //           you change a setting)
@@ -110,7 +110,7 @@ const easing_names: [easings_table.len][]const u8 = blk: {
 const State = struct {
     font: z.Font,
     ui_host: z.UiHost,
-    /// Owned shapes-texture state. id=1 → rlgl's internal 1x1 white pixel.
+    /// Owned shapes-texture state. id=1 -> rlgl's internal 1x1 white pixel.
     /// Owned default-font cache. Populated by `loadFontFromTtfBytes` below.
     frame_count: usize = 0,
     /// Current animation time in frames (matches raylib's `t`).
@@ -124,7 +124,7 @@ const State = struct {
     /// user sees the start state before motion begins.
     paused: bool = false,
     /// Indices into `easings_table` for the X-axis and Y-axis curves.
-    ease_x: usize = 0, // Linear (was None — gives an immediately visible demo)
+    ease_x: usize = 0, // Linear (was None - gives an immediately visible demo)
     ease_y: usize = 23, // ElasticOut
     /// Current ball position (lerped per frame).
     ball: Vec2 = ball_start,

@@ -1,10 +1,10 @@
-//! robot_gym.zig — the classic humanoid locomotion task, as an environment for `zimrnum`'s RL.
+//! robot_gym.zig - the classic humanoid locomotion task, as an environment for `zimrnum`'s RL.
 //!
 //! MuJoCo's humanoid (`humanoid.xml`, 21 hinges and a free torso) on a real floor through the
 //! physics bridge, stepped headlessly. The shape is Gymnasium's Humanoid: reward forward speed,
 //! pay for effort, end the episode at a fall. The ACTION is not a torque:
 //!
-//! ★★★ THE POSE-OFFSET TRICK (DReCon, SuperTrack). The policy outputs one OFFSET per joint, added
+//! *** THE POSE-OFFSET TRICK (DReCon, SuperTrack). The policy outputs one OFFSET per joint, added
 //! to a base pose (standing, here) to make a target, and a stable low-level controller tracks that
 //! target: `robot_dance.Tracker`'s implicit spring, turned into torques by floating-base inverse
 //! dynamics. The policy therefore starts from "hold a pose" rather than "invent every torque",
@@ -13,16 +13,17 @@
 //! With a reference motion the base pose becomes the reference's frame, and the policy's offsets
 //! are exactly DReCon's corrections.
 //!
-//! ── TIMING ──
+//! -- TIMING --
 //! Physics at 60 Hz (`robot.zig`'s refsafe keeps contacts stable there), the policy at 30 Hz:
 //! each action is held for two physics steps.
 //!
-//! ── OBSERVATION (heading-invariant) ──
+//! -- OBSERVATION (heading-invariant) --
 //!   torso height (1), gravity in the torso's frame (3), torso linear velocity in its heading frame
 //!   (3), torso angular velocity in its own frame (3), then per hinge: angle, speed, and the
 //!   previous action (3 x 21).
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
 const rbt = @import("robot.zig");
@@ -229,7 +230,7 @@ pub const HumanoidEnv = struct {
 
     /// Start an episode: the base pose, feet on the floor, a little noise on the joints.
     ///
-    /// ★★ A RESET MUST FORGET EVERYTHING, OR NO TWO LEARNING CURVES CAN BE COMPARED. The first
+    /// ** A RESET MUST FORGET EVERYTHING, OR NO TWO LEARNING CURVES CAN BE COMPARED. The first
     /// version kept the physics world and the solver between episodes, and the same seed did not
     /// replay the same episode: contact caches and the solver's warm start carried the previous
     /// episode's forces into this one's first steps. The world and bridge are rebuilt and the
@@ -404,8 +405,8 @@ fn episode(
 }
 
 test "robot_gym: the humanoid environment - baselines before any learner" {
-    // ★★ WHAT A POLICY HAS TO BEAT, measured before one exists. ZERO actions hold the standing
-    // pose - a statue, which falls (servo_ladder §8.2: ~1.4 s); RANDOM actions flail. Both are the
+    // ** WHAT A POLICY HAS TO BEAT, measured before one exists. ZERO actions hold the standing
+    // pose - a statue, which falls (servo_ladder section 8.2: ~1.4 s); RANDOM actions flail. Both are the
     // floors a learning curve must rise from. Also: the sizes, and determinism under a seed -
     // two resets with the same seed must give the same episode to the bit, or no learning curve
     // can be compared with another.
@@ -428,8 +429,7 @@ test "robot_gym: the humanoid environment - baselines before any learner" {
             returns += result.total;
         }
         total_steps += lengths;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  HumanoidEnv, {s} actions, 5 episodes: mean length {d:.1} steps ({d:.2} s), " ++
+        report.print("\n  HumanoidEnv, {s} actions, 5 episodes: mean length {d:.1} steps ({d:.2} s), " ++
             "mean return {d:.1}\n", .{
             @tagName(rule), float(lengths) / 5.0, float(lengths) / 5.0 / 30.0, returns / 5.0,
         });
@@ -438,8 +438,7 @@ test "robot_gym: the humanoid environment - baselines before any learner" {
     const first: EpisodeResult = try episode(env, 7, .random, obs, act);
     const second: EpisodeResult = try episode(env, 7, .random, obs, act);
     try expect(first.steps == second.steps and first.total == second.total);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  sizes: observation {d}, action {d}; {d} policy steps run; the same seed repeats to the bit\n", .{
+    report.print("  sizes: observation {d}, action {d}; {d} policy steps run; the same seed repeats to the bit\n", .{
         env.observationSize(), env.actionSize(), total_steps + first.steps + second.steps,
     });
 }
@@ -538,7 +537,7 @@ pub const TrainerOptions = struct {
     horizon: usize = 2048,
     minibatch: usize = 256,
     epochs: usize = 5,
-    /// ★★ ADAM's rate. `ppoUpdate` steps plain SGD; the trainer runs the minibatch itself and
+    /// ** ADAM's rate. `ppoUpdate` steps plain SGD; the trainer runs the minibatch itself and
     /// steps Adam (`updateSlice`), because no single SGD rate suits every parameter of the
     /// policy: a small one does not move it, and a large one drives its mean into the action clamp
     /// within a few iterations - a star pose, every joint at its offset limit.
@@ -547,7 +546,7 @@ pub const TrainerOptions = struct {
     /// unit size: 5 per step alive makes returns of ~130, and plain SGD on a squared error that
     /// large diverges. The printed returns are unscaled.
     reward_scale: f32 = 0.05,
-    /// ★ Start NEAR THE STATUE: sigma = e^-1.5 = 0.22, times the 0.5 rad action scale. A wider
+    /// * Start NEAR THE STATUE: sigma = e^-1.5 = 0.22, times the 0.5 rad action scale. A wider
     /// start flails every joint by tenths of a radian, falls sooner than holding the reference pose
     /// would, and PPO does not climb back from there.
     initial_log_std: f32 = -1.5,
@@ -683,7 +682,7 @@ pub const PpoTrainer = struct {
         t.log_std = try zn.Tensor(f32).alloc(arena, &.{ 1, n_act });
         @memset(t.log_std.data, options.initial_log_std);
 
-        // ── The update's graph, built once at minibatch size. ──
+        // -- The update's graph, built once at minibatch size. --
         t.graph = .init(arena);
         // The graph lives as long as the trainer and runs thousands of passes: its backward
         // temporaries need an allocator that can free (zimrnum's `Graph.scratch`).
@@ -747,7 +746,7 @@ pub const PpoTrainer = struct {
             .parameters = parameters,
         };
 
-        // ── Collection buffers. ──
+        // -- Collection buffers. --
         t.norm = .{ .mean = try arena.alloc(f64, n_obs), .m2 = try arena.alloc(f64, n_obs) };
         @memset(t.norm.mean, 0.0);
         @memset(t.norm.m2, 0.0);
@@ -884,7 +883,7 @@ pub const PpoTrainer = struct {
         }
         const size: usize = t.options.minibatch;
         const at: usize = t.minibatch_index * size;
-        // ★★ The minibatch by hand, so it can step ADAM (`ppoUpdate` steps plain SGD): the
+        // ** The minibatch by hand, so it can step ADAM (`ppoUpdate` steps plain SGD): the
         // chunk's rows into the graph's leaves (contiguous after the shuffle), the clip node's
         // copies refreshed, the loss and gradients recomputed, then one Adam step per tensor.
         const n_obs: usize = t.raw.len;
@@ -950,7 +949,7 @@ pub const PpoTrainer = struct {
 };
 
 test "robot_gym: P1 - PPO learns to stay up and move on HumanoidEnv" {
-    // ★★★ P1 OF rl_track_journal.md: does zimrnum's PPO learn on OUR physics? The number: mean
+    // *** P1 OF rl_track_journal.md: does zimrnum's PPO learn on OUR physics? The number: mean
     // episode length per iteration, against the statue's 37.6 steps (zero actions) and random's
     // 15. `PpoTrainer` with its defaults: the policy starts near the statue.
     const gpa: Allocator = std.testing.allocator;
@@ -958,15 +957,14 @@ test "robot_gym: P1 - PPO learns to stay up and move on HumanoidEnv" {
     defer env.deinit();
     const trainer: *PpoTrainer = try .init(gpa, env, .{});
     defer trainer.deinit();
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  P1 PPO on HumanoidEnv (statue 37.6 steps, random 15), starting near the statue:\n", .{});
+    report.print("\n  P1 PPO on HumanoidEnv (statue 37.6 steps, random 15), starting near the statue:\n", .{});
     var capacity_after_warmup: usize = 0;
     for (0..12) |iteration| {
         while (!trainer.rolloutFull()) {
             _ = try trainer.collect(4096);
         }
         while (!try trainer.updateEpoch()) {}
-        // ★★ Memory must stop growing once warm: the graph's backward temporaries leaked ~60 MiB
+        // ** Memory must stop growing once warm: the graph's backward temporaries leaked ~60 MiB
         // an iteration in the browser before they moved to a per-pass scratch arena.
         if (iteration == 3) {
             capacity_after_warmup = trainer.arena_state.queryCapacity();
@@ -976,29 +974,26 @@ test "robot_gym: P1 - PPO learns to stay up and move on HumanoidEnv" {
             // temporaries, now in `Graph.scratch`). A residual of ~0.75 MiB an iteration is
             // still open (rl_track_journal.md); the bound catches the big class returning.
             const grown: usize = trainer.arena_state.queryCapacity() - capacity_after_warmup;
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    trainer memory grew {d} KiB over iterations 5-12\n", .{grown / 1024});
+            report.print("    trainer memory grew {d} KiB over iterations 5-12\n", .{grown / 1024});
             try expect(grown < 8 * 1024 * 1024);
         }
         const st: TrainerStats = trainer.last;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    iteration {d:>2} ({d:>6} samples): {d:>3} episodes, mean length {d:>6.1}, " ++
+        report.print("    iteration {d:>2} ({d:>6} samples): {d:>3} episodes, mean length {d:>6.1}, " ++
             "mean return {d:>7.1}\n", .{ st.iteration, st.samples, st.episodes, st.mean_length, st.mean_return });
     }
     try expect(zm.isFinite(trainer.last.mean_length));
 }
 
 test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands, by physics rate" {
-    // ★★ ON A PHONE THE FEET LOOKED "VERY SLIDY, ALWAYS SLIPPING BACKWARD". A pose held still
+    // ** ON A PHONE THE FEET LOOKED "VERY SLIDY, ALWAYS SLIPPING BACKWARD". A pose held still
     // should not move its feet at all while it stays up, so any foot travel in the first half
     // second of the statue (zero actions) is slip. Measured at 60, 120 and 240 Hz physics under the
-    // same 30 Hz policy: robot.zig's contacts are soft, and refsafe (§8.9 of servo_ladder) clamps
+    // same 30 Hz policy: robot.zig's contacts are soft, and refsafe (section 8.9 of servo_ladder) clamps
     // their time constant to two timesteps - 33 ms at 60 Hz - so a friction constraint may CREEP.
     const gpa: Allocator = std.testing.allocator;
     const Rate = struct { hz: f32, substeps: u32 };
     const rates = [_]Rate{ .{ .hz = 60, .substeps = 2 }, .{ .hz = 120, .substeps = 4 }, .{ .hz = 240, .substeps = 8 } };
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  foot slip, the statue (zero actions), first 0.5 s:\n", .{});
+    report.print("\n  foot slip, the statue (zero actions), first 0.5 s:\n", .{});
     for (rates) |rate| {
         const env: *HumanoidEnv = try .init(gpa, humanoid_xml, .{ .physics_hz = rate.hz, .substeps = rate.substeps });
         defer env.deinit();
@@ -1039,8 +1034,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
                 break;
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    {d:>3.0} Hz physics ({d} substeps): feet slid up to " ++
+        report.print("    {d:>3.0} Hz physics ({d} substeps): feet slid up to " ++
             "{d:>6.1} mm in 0.5 s; the statue fell at step {d}\n", .{
             rate.hz, rate.substeps, worst_slide * 1000.0, fell_at,
         });
@@ -1050,7 +1044,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
 const build_options = @import("build_options");
 
 test "robot_gym: P1 LONG - does PPO learn to stand past the statue, given 300k samples?" {
-    // ★★ THE PHONE RAN ~30k SAMPLES, FLAT AT ~30 STEPS; humanoid PPO usually needs hundreds of
+    // ** THE PHONE RAN ~30k SAMPLES, FLAT AT ~30 STEPS; humanoid PPO usually needs hundreds of
     // thousands. This runs 150 iterations (307k samples) natively and prints the curve every ten.
     // Gated on `-Dslow-tests` (several minutes): zig build zn-robot_gym -Dslow-tests
     // -Dtest-filter="P1 LONG".
@@ -1063,8 +1057,7 @@ test "robot_gym: P1 LONG - does PPO learn to stand past the statue, given 300k s
     defer env.deinit();
     const trainer: *PpoTrainer = try .init(gpa, env, .{});
     defer trainer.deinit();
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  P1 LONG (statue 37.6 steps):\n", .{});
+    report.print("\n  P1 LONG (statue 37.6 steps):\n", .{});
     var best: f32 = 0.0;
     for (0..150) |_| {
         while (!trainer.rolloutFull()) {
@@ -1074,8 +1067,7 @@ test "robot_gym: P1 LONG - does PPO learn to stand past the statue, given 300k s
         const st: TrainerStats = trainer.last;
         best = @max(best, st.mean_length);
         if (st.iteration % 10 == 0) {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    iteration {d:>3} ({d:>7} samples): mean length " ++
+            report.print("    iteration {d:>3} ({d:>7} samples): mean length " ++
                 "{d:>6.1}, return {d:>7.1}, best so far {d:.1}\n", .{
                 st.iteration, st.samples, st.mean_length, st.mean_return, best,
             });
@@ -1084,7 +1076,7 @@ test "robot_gym: P1 LONG - does PPO learn to stand past the statue, given 300k s
 }
 
 // ============================================================================
-// S1 (rl_track_journal.md §7): SAC, assembled from zimrnum's parts, stepping Adam.
+// S1 (rl_track_journal.md section 7): SAC, assembled from zimrnum's parts, stepping Adam.
 // ============================================================================
 
 pub const SacOptions = struct {
@@ -1195,7 +1187,7 @@ pub const AdamSet = struct {
 /// Gaussian actor (`squashedReparameterize`), twin critics on `concat(s, a)` with polyak targets,
 /// the target y = r + gamma (1 - done)(min Q' - alpha log pi), and a tuned temperature
 /// (`zn.Temperature`). Every network steps ADAM: zimrnum's `offPolicyUpdate` steps plain SGD,
-/// the trap `ppoUpdate` already sprang (rl_track_journal.md §6). Env-agnostic: flat observations
+/// the trap `ppoUpdate` already sprang (rl_track_journal.md section 6). Env-agnostic: flat observations
 /// and actions in [-1, 1].
 pub const SacAgent = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -1324,7 +1316,7 @@ pub const SacAgent = struct {
         for (a.target2.tensors(), a.q2.tensors()) |t, o| {
             @memcpy(t.data, o.data);
         }
-        // ★★★ -1 PER DIMENSION, the SAC heuristic (target entropy = per_dim x action_dim). This
+        // *** -1 PER DIMENSION, the SAC heuristic (target entropy = per_dim x action_dim). This
         // passed +1.0 at first: a target entropy of +1, which a tanh-squashed 1-D action cannot
         // reach (its maximum is the uniform's, log 2 ~ 0.69) - so alpha rose from the first update
         // and ran away, doubling every 2k steps, and the cartpole policy collapsed after 8k.
@@ -1335,7 +1327,7 @@ pub const SacAgent = struct {
         const mean_row_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ 1, b });
         @memset(mean_row_t.data, 1.0 / float(b));
 
-        // ── The critic graph: both critics against one target column. ──
+        // -- The critic graph: both critics against one target column. --
         a.critic_graph = .init(arena);
         a.critic_graph.useScratchAllocator(gpa);
         const cg: *zn.Graph(f32) = &a.critic_graph;
@@ -1349,7 +1341,7 @@ pub const SacAgent = struct {
         a.critic_loss = try cg.add(try cg.mseLoss(v1, a.critic_y), try cg.mseLoss(v2, a.critic_y));
         a.critic_vars = concatVars(a.q1.vars(), a.q2.vars());
 
-        // ── The actor graph: a reparameterised draw through the (shared) critics. ──
+        // -- The actor graph: a reparameterised draw through the (shared) critics. --
         a.actor_graph = .init(arena);
         a.actor_graph.useScratchAllocator(gpa);
         const ag: *zn.Graph(f32) = &a.actor_graph;
@@ -1596,7 +1588,7 @@ pub const SacAgent = struct {
 };
 
 test "robot_gym: S1 gate 1 - SAC balances the continuous cartpole" {
-    // ★★ THE FIRST SAC GATE: zimrnum's continuous cartpole, task `.hold`, a force of +-10 N
+    // ** THE FIRST SAC GATE: zimrnum's continuous cartpole, task `.hold`, a force of +-10 N
     // (the discrete cartpole is this at +-10), episodes capped at 500 steps. SAC should hold the
     // pole to the cap within ~10-20k steps; the number printed is the mean episode length per
     // 2,000 steps, and the last episodes played with the policy's MEAN action.
@@ -1617,8 +1609,7 @@ test "robot_gym: S1 gate 1 - SAC balances the continuous cartpole" {
     var episode_steps: u32 = 0;
     var lengths: u64 = 0;
     var episodes: u32 = 0;
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  S1 gate 1, SAC on the continuous cartpole (cap 500):\n", .{});
+    report.print("\n  S1 gate 1, SAC on the continuous cartpole (cap 500):\n", .{});
     for (1..16001) |t| {
         agent.act(&obs, &action, false);
         const stepped = zn.cartpoleTaskStep(f32, state, 10.0 * action[0], .hold);
@@ -1638,8 +1629,7 @@ test "robot_gym: S1 gate 1 - SAC balances the continuous cartpole" {
             try zn.cartpoleObserve(f32, state, &obs);
         }
         if (t % 2000 == 0) {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    step {d:>5}: {d:>3} episodes, mean length {d:>6.1}, alpha {d:.3}\n", .{
+            report.print("    step {d:>5}: {d:>3} episodes, mean length {d:>6.1}, alpha {d:.3}\n", .{
                 t, episodes, if (episodes > 0) float(lengths) / float(episodes) else 0.0, agent.temperature.alpha(),
             });
             lengths = 0;
@@ -1649,7 +1639,7 @@ test "robot_gym: S1 gate 1 - SAC balances the continuous cartpole" {
 }
 
 // ============================================================================
-// G1 (rl_track_journal.md §7): the GPU layer kit, proven against zimrnum on its CPU twin.
+// G1 (rl_track_journal.md section 7): the GPU layer kit, proven against zimrnum on its CPU twin.
 // ============================================================================
 
 const compute_host = @import("compute_host.zig");
@@ -1900,7 +1890,7 @@ pub fn GpuPpoOn(comptime M: type) type {
             const tanh_act: u32 = @backingInt(M.Act.tanh);
             const lin: u32 = @backingInt(M.Act.linear);
             p.pipe.upload(.acts, p.staging);
-            // ONE submission for the whole minibatch (compute_host's recording, §8 E1).
+            // ONE submission for the whole minibatch (compute_host's recording, section 8 E1).
             p.pipe.beginRecording();
             p.policyForward();
             // The PPO head.
@@ -2136,7 +2126,7 @@ pub fn GpuPpoOn(comptime M: type) type {
 }
 
 // ============================================================================
-// S2 (rl_track_journal.md §7): SAC's update on the zn_mlp kit.
+// S2 (rl_track_journal.md section 7): SAC's update on the zn_mlp kit.
 // ============================================================================
 
 /// One dense layer on the CPU in the kit's layout (W [in, out] row-major, then b [out]).
@@ -2595,12 +2585,12 @@ pub fn GpuSacOn(comptime M: type) type {
             @memcpy(st[p.eps_next..][0 .. b * na], next_noise[0 .. b * na]);
             @memcpy(st[p.eps_pi..][0 .. b * na], actor_noise[0 .. b * na]);
             p.pipe.upload(.acts, st);
-            // ONE submission for the whole update, ~60 dispatches (compute_host's recording, §8 E1).
+            // ONE submission for the whole update, ~60 dispatches (compute_host's recording, section 8 E1).
             p.pipe.beginRecording();
             p.adam_step += 1;
             const entropy: f32 = -float(p.n_act);
 
-            // ── The target: a' ~ pi(s') written into s2a's action slot, the target critics. ──
+            // -- The target: a' ~ pi(s') written into s2a's action slot, the target critics. --
             p.mlpFwd(p.actor, p.s2a, p.width, p.n_obs, p.n_act, p.nh1, p.nh2, p.nmu);
             const next_squash: M.Params = .{
                 .rows = p.rows,
@@ -2629,7 +2619,7 @@ pub fn GpuSacOn(comptime M: type) type {
                 .gamma = p.options.gamma,
             }, p.rows);
 
-            // ── The critics: both against y, one Adam over both. ──
+            // -- The critics: both against y, one Adam over both. --
             p.mlpFwd(p.q1, p.sa, 0, p.width, 1, p.c1h1, p.c1h2, p.cq1);
             p.mlpFwd(p.q2, p.sa, 0, p.width, 1, p.c2h1, p.c2h2, p.cq2);
             p.run("mse_bwd", .{ .rows = p.rows, .out_dim = 1, .y_off = p.cq1, .t_off = p.y, .dy_off = p.dq1 }, p.rows);
@@ -2638,7 +2628,7 @@ pub fn GpuSacOn(comptime M: type) type {
             p.criticWeights(p.q2, p.sa, p.c2h1, p.c2h2, p.dq2, p.d2h2, p.d2h1);
             p.adam(p.q1[0], p.critic_count);
 
-            // ── The actor: a reparameterised draw, through the UPDATED critics. ──
+            // -- The actor: a reparameterised draw, through the UPDATED critics. --
             p.mlpFwd(p.actor, p.spi, p.width, p.n_obs, p.n_act, p.ah1, p.ah2, p.amu);
             const squash: M.Params = .{
                 .rows = p.rows,

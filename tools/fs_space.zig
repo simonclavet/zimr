@@ -1,4 +1,4 @@
-//! fs_space — free disk space, on whatever platform this is.
+//! fs_space - free disk space, on whatever platform this is.
 //!
 //! Extracted from `build.zig`, which had the only correct copy. `tools/measure.zig` grew a
 //! SECOND one that was Linux-only and returned 0 on failure - a number that reads as "no space
@@ -9,7 +9,7 @@
 //! `GetDiskFreeSpaceEx` binding. Every platform is declared here by hand, so every platform is
 //! a place to be wrong - which is the argument for having exactly one of them.
 //!
-//! ── WHAT IS VERIFIED, AND WHAT IS NOT ──
+//! -- WHAT IS VERIFIED, AND WHAT IS NOT --
 //!
 //! The Linux path is checked against `df -m /` and agrees to the megabyte. The Windows path is
 //! the documented `GetDiskFreeSpaceExA` contract and has NOT been run - there is no Windows

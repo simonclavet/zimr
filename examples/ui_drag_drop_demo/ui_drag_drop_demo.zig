@@ -5,10 +5,10 @@
 // to move it.  Builds the full picture of imgui-style drag-drop
 // in zimr.
 // What to look at:
-// - Click + drag any chip → preview tooltip follows cursor.
-// - Hover another lane → outline ring lights up on the lane.
-// - Release over a lane → build moves there.
-// - Release outside any lane → no move, drag is cancelled.
+// - Click + drag any chip -> preview tooltip follows cursor.
+// - Hover another lane -> outline ring lights up on the lane.
+// - Release over a lane -> build moves there.
+// - Release outside any lane -> no move, drag is cancelled.
 // - Status counts at the bottom update live.
 
 const std = @import("std");

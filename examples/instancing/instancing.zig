@@ -1,7 +1,7 @@
-//! instancing — port of the GL `instancing`: 1000 cubes (a 10×10×10 grid)
+//! instancing - port of the GL `instancing`: 1000 cubes (a 10x10x10 grid)
 //! drawn in ONE instanced GPU draw. The GL version split a per-instance mat4
 //! into four vec4 vertex attributes through a custom GLSL shader; on wgpu the
-//! engine owns that — `drawMeshInstanced` keeps the cube mesh GPU-resident and
+//! engine owns that - `drawMeshInstanced` keeps the cube mesh GPU-resident and
 //! streams a per-instance buffer (model matrix + colour, instance step-mode),
 //! and the instanced cube3d shader reconstructs the matrix on the GPU. Each cube
 //! spins on its own Y axis at a phase from its grid position, so the motion is
@@ -55,7 +55,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const transforms: []Mat = try gpa.alloc(Mat, instance_count);
     errdefer gpa.free(transforms);
 
-    // Grid×grid×grid centred on the origin, `spacing` units apart.
+    // Gridxgridxgrid centred on the origin, `spacing` units apart.
     const half: f32 = float(grid - 1) * 0.5;
     var idx: usize = 0;
     var zi: usize = 0;
@@ -84,7 +84,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    s.angle += f.time.delta_time * 12.0; // 12°/sec orbit
+    s.angle += f.time.delta_time * 12.0; // 12 deg/sec orbit
     const t: f32 = f.time.time;
 
     // Rebuild per-instance transforms: each cube rotates around its own Y axis

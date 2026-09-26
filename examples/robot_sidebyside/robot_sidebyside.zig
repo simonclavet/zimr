@@ -1,11 +1,11 @@
-//! robot_sidebyside — the same double pendulum, simulated two ways.
+//! robot_sidebyside - the same double pendulum, simulated two ways.
 //!
-//! ★ THIS IS THE ARGUMENT FOR THE WHOLE PORT, ON ONE SCREEN.
+//! * THIS IS THE ARGUMENT FOR THE WHOLE PORT, ON ONE SCREEN.
 //!
 //! LEFT: zimrphysics. Two rigid bodies, each carrying a full pose in world space, held
 //! together by revolute constraints that a solver enforces every step.
 //!
-//! RIGHT: robot.zig. Two numbers. The joints are not enforced — they are the coordinates,
+//! RIGHT: robot.zig. Two numbers. The joints are not enforced - they are the coordinates,
 //! so there is nothing to violate.
 //!
 //! Both start from the same state, with the same masses, at the same timestep. The readout
@@ -14,12 +14,12 @@
 //! and no amount of speed or stiffness changes that. On the left it is a small number that
 //! wanders, and grows when you make the problem harder.
 //!
-//! ── BE FAIR TO THE LEFT ──
+//! -- BE FAIR TO THE LEFT --
 //!
 //! zimrphysics is not losing. It is doing something different, and doing it well: for a
 //! thousand loose crates, maximal coordinates are the right model, they parallelise, and a
 //! millimetre of joint error is invisible. What this demo shows is a SPECIFIC TRADE, not a
-//! verdict — and the trade only matters when error accumulates down a chain, which is
+//! verdict - and the trade only matters when error accumulates down a chain, which is
 //! exactly what a robot arm is. A millimetre at the shoulder is centimetres at the hand.
 //!
 //! Standard wgpu example contract: a `pub const app: z.AppSpec(State)`.
@@ -177,7 +177,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .position = vec(0, -upper_half, 0),
         .motion_type = .dynamic,
         .density = density,
-        // The links must not collide with each other — they overlap at the joint by
+        // The links must not collide with each other - they overlap at the joint by
         // construction, and a contact there would be an artefact of the discretisation
         // rather than physics. A shared group is how zimrphysics says "same assembly".
         .group_id = 1,
@@ -191,7 +191,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     // An immovable anchor for the shoulder. zimrphysics has no implicit world body, so the
-    // pivot has to be a real static body — which is itself a small illustration of the
+    // pivot has to be a real static body - which is itself a small illustration of the
     // difference: on the generalized side the world is body 0 and needs no representation.
     const anchor_shape: zp.ShapeId = try s.world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.01 } });
     const anchor: zp.BodyHandle = try s.world.createBody(.{
@@ -223,7 +223,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 /// The same measurement on the generalized side.
 ///
-/// Reads the elbow twice — once as the parent's far end, once as the child's origin — and
+/// Reads the elbow twice - once as the parent's far end, once as the child's origin - and
 /// returns the distance between them, exactly as the maximal version does. The answer is
 /// structurally zero, because `kinematics` computes the child's origin FROM the parent's
 /// pose, so the two expressions are the same number by construction.
@@ -242,7 +242,7 @@ fn generalizedJointError(s: *const State) f32 {
 ///
 /// For the maximal side this is a real measurement: each body carries an independent pose,
 /// and the constraint holds them together only to the solver's tolerance. For the
-/// generalized side it is a formality — the shared point is computed once from the parent
+/// generalized side it is a formality - the shared point is computed once from the parent
 /// and inherited by the child, so it cannot differ from itself. Measuring both the same way
 /// is the point: the number on the right is zero because of what it IS, not because it was
 /// specially handled.
@@ -257,14 +257,14 @@ fn maximalJointError(s: *const State) f32 {
 
 /// How much to scale text and spacing for this viewport.
 ///
-/// ★ NOT A COSMETIC KNOB. A standalone build renders into a canvas at DEVICE resolution: a
+/// * NOT A COSMETIC KNOB. A standalone build renders into a canvas at DEVICE resolution: a
 /// phone whose CSS width is 400 gives a canvas around 1080 pixels wide, so a font asked for
 /// at 13 "pixels" arrives about four CSS pixels tall and is genuinely unreadable. The in-app
 /// viewer hides this by rendering smaller; open the same file in a browser full-screen and
 /// the labels vanish.
 ///
-/// Scaling against the viewport's SMALLER dimension is resolution-independent — it makes a
-/// glyph a fixed fraction of the screen rather than a fixed count of pixels — and gives sane
+/// Scaling against the viewport's SMALLER dimension is resolution-independent - it makes a
+/// glyph a fixed fraction of the screen rather than a fixed count of pixels - and gives sane
 /// results on a desktop window and a phone alike, without needing the device pixel ratio,
 /// which is not exposed here.
 fn uiScale(w: f32, h: f32) f32 {
@@ -275,7 +275,7 @@ fn uiScale(w: f32, h: f32) f32 {
 ///
 /// Side by side when the window is wide, STACKED when it is tall. A phone in portrait is
 /// roughly 1:2, and forcing two panels across it leaves each one narrower than the pendulum
-/// is long — so the arms overrun the divider and the two readouts collide. Choosing the
+/// is long - so the arms overrun the divider and the two readouts collide. Choosing the
 /// axis from the aspect ratio costs one branch and is the difference between a demo that
 /// reads on the device it is looked at on and one that does not.
 const Layout = struct {
@@ -363,7 +363,7 @@ fn update(f: *z.Frame, s: *State) void {
         const elbow_b: Vec = lower.com_pos + rotate(lower.rot, vec(0, lower_half, 0));
         const tip: Vec = lower.com_pos + rotate(lower.rot, vec(0, -lower_half, 0));
         // Drawn as TWO separate links from each body's own pose, deliberately. Where they
-        // fail to meet is the joint error, visible as a kink at the elbow — the readout's
+        // fail to meet is the joint error, visible as a kink at the elbow - the readout's
         // number, made geometric.
         gl.line(
             layout.toScreen(0, vec2(pivot[0], pivot[1])),
@@ -408,9 +408,9 @@ fn update(f: *z.Frame, s: *State) void {
         "compare the JOINT ERROR, not the pose",
         .{ .size = 13 * ui, .color = text_col, .font = &s.font },
     );
-    // ★ Said outright, because without it the demo looks like it is failing. A double
-    // pendulum is CHAOTIC: any difference between two simulations — and there will always be
-    // one, since the two engines discretise differently — is amplified exponentially, so
+    // * Said outright, because without it the demo looks like it is failing. A double
+    // pendulum is CHAOTIC: any difference between two simulations - and there will always be
+    // one, since the two engines discretise differently - is amplified exponentially, so
     // within seconds the arms are in visibly different poses. That is correct rather than a
     // discrepancy to fix. The claim this demo makes is about how far each engine's own
     // joints have come apart, which is a property of the METHOD and not of the trajectory.

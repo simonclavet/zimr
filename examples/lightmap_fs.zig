@@ -1,4 +1,4 @@
-//! lightmap_fs.zig — the whole point: base(uv) × lightmap(uv2). The base is
+//! lightmap_fs.zig - the whole point: base(uv) x lightmap(uv2). The base is
 //! sampled with the (possibly tiled) primary uv; the lightmap with the second
 //! uv set, so precomputed lighting modulates the surface independently of how
 //! the base texture repeats.

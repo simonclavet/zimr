@@ -5,13 +5,13 @@
 // `arr_4_vec_4_f32`, `arr_4_aos_Pt`). The transpiler used to claim only
 // primitive arrays (`arr_4_i32`) via its dedicated path and reject every other
 // `arr_*` tag as "handled elsewhere", so struct-element arrays fell through to
-// neither path — `&g.array[i]` emitted `g.array[i]` against a numeric offset
+// neither path - `&g.array[i]` emitted `g.array[i]` against a numeric offset
 // (markers=0, but wrong at runtime). The element stride was also taken as a
 // scalar width instead of the element struct's size.
 
 // Spelled out rather than imported: this corpus is standalone Zig fed straight
 // to the C backend, with no zimr modules in scope. (A `prefer-vec` autofix pass
-// once rewrote this line to `const Vec = Vec;` — the rule exempts zimrmath's
+// once rewrote this line to `const Vec = Vec;` - the rule exempts zimrmath's
 // canonical binding by PATH, and this file is not that path. tools/c2js_cases/
 // is carved out of the lint scan now, so the definition is safe here.)
 const Vec = @Vector(4, f32);

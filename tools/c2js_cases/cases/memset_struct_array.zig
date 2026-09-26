@@ -2,7 +2,7 @@
 // where T is a struct (here carrying a u64 field). structTagOf does NOT divert
 // struct-element wrappers, but the per-element struct-copy store still fell
 // through and was dropped (the address was computed, the copy of the struct
-// literal was missing) — so every element kept its uninitialized fill.
+// literal was missing) - so every element kept its uninitialized fill.
 const P = struct { a: u64, b: u32, c: i64 };
 var arr: [3]P = undefined;
 var arr2: [3]P = undefined;

@@ -1,9 +1,9 @@
-//! src/shaders/effect_cubes_fs.zig — panning, snap-rotating cubes.
+//! src/shaders/effect_cubes_fs.zig - panning, snap-rotating cubes.
 //! Ports raylib's `shaders_texture_rendering` (its `cubes_panning.fs`).
 //!
 //! Purely procedural: every pixel comes from the UV and the clock, nothing is
-//! sampled. raylib draws a BLANK texture through this shader — the texture is
-//! only a canvas to rasterise over — which is exactly what "render a texture with
+//! sampled. raylib draws a BLANK texture through this shader - the texture is
+//! only a canvas to rasterise over - which is exactly what "render a texture with
 //! a shader" means there.
 //!
 //! Two ideas stacked:
@@ -58,7 +58,7 @@ fn snapAngle(t: f32) f32 {
     return a;
 }
 
-/// Rotate a cell-local_turns coordinate about the cell's CENTRE (0.5, 0.5) — rotating
+/// Rotate a cell-local_turns coordinate about the cell's CENTRE (0.5, 0.5) - rotating
 /// about the origin would swing the square out of its own cell.
 fn rotateAboutCentre(v: Vec2, angle: f32) Vec2 {
     const c: f32 = @cos(angle);
@@ -68,7 +68,7 @@ fn rotateAboutCentre(v: Vec2, angle: f32) Vec2 {
     return r + vec2(0.5, 0.5);
 }
 
-/// An axis-aligned square inside the unit cell, as a product of four steps — the
+/// An axis-aligned square inside the unit cell, as a product of four steps - the
 /// classic branch-free rectangle.
 fn square(st: Vec2, size: f32) f32 {
     const edge: f32 = 0.5 - size / 2.0;
@@ -94,7 +94,7 @@ pub fn shaderMain(io_in: Io) Out {
     inner = rotateAboutCentre(inner, snapAngle(t * 0.2));
     const alpha: f32 = square(inner, fill);
 
-    // A checker tint off the CELL index, so the panning is readable — raylib's is
+    // A checker tint off the CELL index, so the panning is readable - raylib's is
     // flat grey, which makes the drift hard to see on a phone.
     const checker: f32 = fract((cell[0] + cell[1]) * 0.5) * 2.0; // 0 or 1
     const warm: f32 = 0.35 + 0.25 * checker;

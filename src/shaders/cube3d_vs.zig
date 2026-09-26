@@ -1,13 +1,13 @@
-//! src/shaders/cube3d_vs.zig — immediate-mode 3D batch vertex shader body.
+//! src/shaders/cube3d_vs.zig - immediate-mode 3D batch vertex shader body.
 //!
 //! Vertices arrive already in world space (the per-primitive model transform
 //! was applied on the CPU during batching), so this stage only projects them
 //! through the camera view-projection and evaluates a single fixed directional
-//! light with a 0.35 ambient floor — folding the result into the colour the
+//! light with a 0.35 ambient floor - folding the result into the colour the
 //! fragment stage emits. Since cube faces carry constant per-face normals, the
 //! per-vertex evaluation is exactly flat shading.
 //!
-//! Same source compiles for SPIR-V (→ WGSL/GLSL → GPU) and wasm32 (→ CPU
+//! Same source compiles for SPIR-V (-> WGSL/GLSL -> GPU) and wasm32 (-> CPU
 //! dispatch). Schema lives in `cube3d_vs_io.zig`.
 
 const zm = @import("zm");

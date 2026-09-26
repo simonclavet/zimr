@@ -2,8 +2,8 @@
 //
 // The first 2D drawing demo on WebGPU, in the standard zimr AppBridge form.
 // This is N5a's gate (wgpu_new_beginnings.md): it drives the `WgpuGl` adapter
-// (f.gl) through z.beginDrawing / z.drawRectangle / z.drawCircle — the SAME
-// free-function shape as a GL example — proving WgpuGl renders real 2D geometry
+// (f.gl) through z.beginDrawing / z.drawRectangle / z.drawCircle - the SAME
+// free-function shape as a GL example - proving WgpuGl renders real 2D geometry
 // on-screen (which retires N4's "visual pending"). No 3D, no pbr3d.
 //
 // Build:      zig build wgpu-shapes
@@ -53,7 +53,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 /// Clamp a float color expression to a valid u8 (avoids the @intFromFloat trap
-/// on a possibly-negative or >255 expression — the wart the blog flagged).
+/// on a possibly-negative or >255 expression - the wart the blog flagged).
 fn clampColor(v: f32) u8 {
     return int(u8, clamp(v, 0.0, 255.0));
 }

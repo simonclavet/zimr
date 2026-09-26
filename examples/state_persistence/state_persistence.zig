@@ -1,8 +1,8 @@
-//! state_persistence — save an example's state to the browser and get it back
+//! state_persistence - save an example's state to the browser and get it back
 //! after a page reload. It serializes a plain struct with `z.serialize` (the
 //! versioned protobuf-style serializer) and stashes the bytes in localStorage
 //! through zimr's persistence API. Tweak the colour and sliders, hit "Save to
-//! browser", then refresh the page — your tweaks (and how many times you've
+//! browser", then refresh the page - your tweaks (and how many times you've
 //! saved) come right back. That whole round-trip is the point: a plain Zig
 //! struct -> bytes -> localStorage -> bytes -> struct.
 const std = @import("std");
@@ -17,7 +17,7 @@ const pointVec = zm.pointVec;
 // where our bytes live in localStorage (zimr adds its own "zimr_" prefix)
 const storage_key = "state_persistence_demo";
 
-// The state we persist — a plain struct the serializer walks field by field.
+// The state we persist - a plain struct the serializer walks field by field.
 // Field numbers are assigned in declaration order, so you could add a field
 // here later and old saves would still load (missing field keeps its default).
 const SavedState = struct {

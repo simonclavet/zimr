@@ -1,12 +1,12 @@
 // examples/cube_demo/cube_demo.zig
 //
-// The unlit cube (§4.A / §4(a) of the architecture doc): a SINGLE-UBO
+// The unlit cube (section 4.A / section 4(a) of the architecture doc): a SINGLE-UBO
 // 3D demo using the Resources(Schema) path.  WebGPU architecture is
-// documented centrally in src/zimr.zig — read that first.
+// documented centrally in src/zimr.zig - read that first.
 //
 // The first 3D-on-wgpu demo: a textured spinning cube, depth-tested,
-// drawn through the WebGPU backend (not GL).  This is §4.A of
-// `src/notes/finishing_webgpu.md` — the linchpin that proves the
+// drawn through the WebGPU backend (not GL).  This is section 4.A of
+// `src/notes/finishing_webgpu.md` - the linchpin that proves the
 // 3D draw path renders end-to-end before lambert/PBR/the helmet.
 //
 // What's new vs the 2D wgpu_bringup:
@@ -15,12 +15,12 @@
 //   - a 3D vertex-buffer layout (interleaved position+uv) passed via
 //     ShaderDesc.vertex_buffer_layouts (the override added this arc);
 //   - an MVP matrix pushed to the VS UBO each frame
-//     (perspective × view × model-rotation).
+//     (perspective x view x model-rotation).
 //
 // Reuses the cube_split VS+FS shader pair (already typed +
 // naga-valid): cube_split_vs_io declares `Ubo.mvp`, cube_split_fs
-// samples texture0.  Same source the GL+CPU cube_split demo uses —
-// here it runs through spv2wgsl → WGSL → wgpu.
+// samples texture0.  Same source the GL+CPU cube_split demo uses -
+// here it runs through spv2wgsl -> WGSL -> wgpu.
 //
 // Build:    zig build wgpu-cube-demo
 // Serve:    bun run webtests/server.ts --web-dir=zig-out/wgpu-cube
@@ -49,7 +49,7 @@ const si = @import("shader_interface");
 // ============================================================================
 //
 // 24 vertices (4 per face) so each face gets clean UVs; 36 indices.
-// Interleaved position(vec3) + tex_coord(vec2) → ONE vertex buffer,
+// Interleaved position(vec3) + tex_coord(vec2) -> ONE vertex buffer,
 // stride 20 bytes (3*4 + 2*4).  CCW winding from outside.
 
 const CubeVertex = extern struct {
@@ -102,11 +102,11 @@ const cube_indices = [_]u32{
 };
 
 // ============================================================================
-// Combined cube schema (Ubo + Samplers → two bind groups)
+// Combined cube schema (Ubo + Samplers -> two bind groups)
 // ============================================================================
 //
 // cube_split's VS UBO (mvp) lands at @group(0) and its FS texture0 at
-// @group(1) (the shader was built so the sampler sits in group 1 —
+// @group(1) (the shader was built so the sampler sits in group 1 -
 // confirmed in its WGSL).  loadShader's single-schema path only wires
 // ONE bind group, so it can't drive this two-group layout.  Instead we
 // use `Resources(CubeSchema)` + an explicit pipeline, exactly like
@@ -114,7 +114,7 @@ const cube_indices = [_]u32{
 // builds a bind-group-layout per group (bg_layouts[0]=UBO,
 // bg_layouts[1]=sampler), and we chain both into the pipeline layout.
 const CubeSchema = struct {
-    /// VS UBO — the MVP matrix (group 0, binding 0).  Same shape as
+    /// VS UBO - the MVP matrix (group 0, binding 0).  Same shape as
     /// cube_split_vs_io.Ubo (mat4 = [4]@Vector(4,f32)).
     pub const Ubo = struct {
         mvp: [4]Vec = .{
@@ -124,7 +124,7 @@ const CubeSchema = struct {
             .{ 0, 0, 0, 1 },
         },
     };
-    /// FS texture (group 1) — the cube's albedo map.
+    /// FS texture (group 1) - the cube's albedo map.
     pub const Samplers = struct {
         texture0: si.Sampler2D(.albedo, .{}),
     };
@@ -271,7 +271,7 @@ fn initState(
 fn update(f: *z.Frame, s: *State) void {
     const Backend: type = z.WgpuBackend;
 
-    // ---- MVP: perspective × view × model(rotate over time) ----
+    // ---- MVP: perspective x view x model(rotate over time) ----
     const t: f32 = f.time.time;
     const aspect: f32 = f.window.aspect();
 
@@ -285,7 +285,7 @@ fn update(f: *z.Frame, s: *State) void {
         vec(0, 1, 0), // up
     );
     const proj: Mat = perspectiveFovRh(
-        0.9, // fovy radians (~52°)
+        0.9, // fovy radians (~52 deg)
         aspect,
         0.1, // near
         100.0, // far

@@ -3,7 +3,7 @@
 // Policy: this file is the home for snippet-sized facilities that
 // (a) only depend on `std` and (b) don't have a natural home in any
 // other module.  Putting them together keeps the project's top-level
-// module count low — zimr's directive is to consolidate into a small
+// module count low - zimr's directive is to consolidate into a small
 // number of big files rather than fan out into many small ones.
 //
 // What lives here:
@@ -11,12 +11,12 @@
 //     reinstated for our use after it moved out of 0.16 std)
 //
 // What does NOT live here:
-//   - Anything that imports zimr modules (codecs, ui, types, etc.) —
+//   - Anything that imports zimr modules (codecs, ui, types, etc.) -
 //     that's not utility code, that's module-spanning glue.  (The
 //     one exception is `zm`, for the shared assert family.)  Errors
 //     belong in `errors.zig`; math constants belong in `math.zig`;
 //     etc.
-//   - Anything bigger than ~500 LOC — at that size it earns its own
+//   - Anything bigger than ~500 LOC - at that size it earns its own
 //     file.
 
 const std = @import("std");
@@ -32,7 +32,7 @@ const Alignment = std.mem.Alignment;
 // SECTION 1 - Assertions: see zimrmath.zig
 // ============================================================================
 // The assert family now lives in zimrmath (`zm.assert`, `zm.assertf`) so the
-// whole codebase — host and shader — shares one implementation. Bring them in
+// whole codebase - host and shader - shares one implementation. Bring them in
 // with `const assert = zm.assert;` / `const assertf = zm.assertf;` and call the
 // bare alias. `zm.allow_assert` gates expensive precondition checks.
 
@@ -40,7 +40,7 @@ const Alignment = std.mem.Alignment;
 // SECTION 1B - warnOnce (advisory lint warnings)
 // ============================================================================
 // `warnOnce` is for ADVISORY warnings that we want to surface
-// exactly once per (file, line) for the process lifetime — not
+// exactly once per (file, line) for the process lifetime - not
 // per frame, not per occurrence.  Use it for "you probably did
 // not mean this" diagnostics that would otherwise spam the
 // console every frame.
@@ -53,11 +53,11 @@ const Alignment = std.mem.Alignment;
 // `struct { var fired: bool = false; }` is the body's local
 // declaration; each inlined copy creates a fresh anonymous type with
 // its own `fired` global.  Reading `.fired` therefore inspects a
-// per-call-site static — exactly the imgui "DEPRECATED_xxx_logged"
+// per-call-site static - exactly the imgui "DEPRECATED_xxx_logged"
 // pattern.
 //
-// NOT for assertions — those still go through `assertf`.
-// NOT for fatal errors — those still go through `std.log.err`.
+// NOT for assertions - those still go through `assertf`.
+// NOT for fatal errors - those still go through `std.log.err`.
 // `warnOnce` sits between the two: helpful, persistent, but
 // non-fatal advice.
 //
@@ -70,8 +70,8 @@ pub inline fn warnOnce(
     args: anytype,
 ) void {
     // Stay silent under `zig build test`.  Lint warnings here flag
-    // app-author mistakes (window too small, content >3× viewport,
-    // drag range inverted, etc.) — useful while running an example,
+    // app-author mistakes (window too small, content >3x viewport,
+    // drag range inverted, etc.) - useful while running an example,
     // noise inside a unit test that intentionally pokes the edge of
     // the API.  `builtin.is_test` is comptime, so non-test builds
     // pay nothing and the rest of the function stays unchanged.
@@ -101,7 +101,7 @@ pub inline fn warnOnce(
 // `if (z.features.implot) { ... }` so the file compiles even
 // before the pillar lands.
 //
-// This is NOT runtime feature detection — that would be a `var`
+// This is NOT runtime feature detection - that would be a `var`
 // field on a context.  It's comptime metadata: "did this feature
 // ship in this build of zimr?"
 
@@ -111,7 +111,7 @@ pub const features = struct {
     /// .{ .persist = true })`.
     pub const persistence_to_disk: bool = true;
 
-    /// `u.beginCanvas` / `endCanvas` + transform stack — a clipped
+    /// `u.beginCanvas` / `endCanvas` + transform stack - a clipped
     /// sub-region of a window with its own drawlist and authoring-
     /// space coordinates.
     pub const canvas: bool = true;
@@ -142,7 +142,7 @@ pub const features = struct {
 // Usage:
 //     pub fn fancyFeature() void {
 //         utils.todo(@src(), "fancyFeature: needs spec finalized");
-//         // … fall-through behaviour for now …
+//         // ... fall-through behaviour for now ...
 //     }
 //
 // Why not just `warnOnce`?  Same plumbing, but todo()s have
@@ -535,7 +535,7 @@ pub fn BoundedArray(comptime T: type, comptime buffer_capacity: usize) type {
 
 test "features: comptime flag struct exists and has expected names" {
     // Smoke check that the public flag set exists with the
-    // documented field names.  Compile-time access — a missing
+    // documented field names.  Compile-time access - a missing
     // or renamed field makes this test fail to compile, which
     // is the point (the plan refers to these names, so renaming
     // any is a plan-breaking change that should surface here).
@@ -557,7 +557,7 @@ test "features: comptime flag struct exists and has expected names" {
 
 // test "todo: callable + no panic + no return value" {
 //     // The whole point of todo() is to be a non-fatal, grep-able
-//     // marker — call it, confirm the call completes, move on.
+//     // marker - call it, confirm the call completes, move on.
 //     // Verifying the log fires is impractical from inside a test
 //     // because std.log routes per-target; instead, verify the
 //     // shape: takes (@src, str), returns void, doesn't trap.
@@ -568,7 +568,7 @@ test "features: comptime flag struct exists and has expected names" {
 // test "todo: dedup per call site (second call from same site is a no-op)" {
 //     // Hard to assert log-output count without intercepting std.log,
 //     // but we CAN assert the function returns normally on repeated
-//     // calls — which proves the dedup gate doesn't error out and
+//     // calls - which proves the dedup gate doesn't error out and
 //     // the call-site state machine works.  A test that exercises
 //     // the dedup *fully* would need a log-capturing harness; that's
 //     // out of scope for this turn.  This test is the structural

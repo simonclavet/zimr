@@ -3,7 +3,7 @@
 // deliberately diverts such wrappers, so pre-fix BOTH the element store AND the
 // whole-array value load were miscompiled: the store became an orphaned __ldu64
 // (the value never reached memory) and `*(arr_N_T*)&g` dereferenced arr[0]'s low
-// word as a copy SOURCE address — so @memset, @memcpy, and a direct `arr[i]=v`
+// word as a copy SOURCE address - so @memset, @memcpy, and a direct `arr[i]=v`
 // loop all read back as zero. Reference values are computed independently.
 var dst: [4]u64 = undefined;
 var src: [4]u64 = undefined;

@@ -1,4 +1,4 @@
-//! examples/pipeline_settings_vs.zig — pipeline_settings vertex shader body.
+//! examples/pipeline_settings_vs.zig - pipeline_settings vertex shader body.
 //!
 //! Applies the UBO's per-axis scale and x-offset, then passes the RGBA colour
 //! through (its alpha drives whichever blend mode the pipeline was built with).

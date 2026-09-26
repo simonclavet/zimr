@@ -1,4 +1,4 @@
-//! net_cursors — the payoff demo: a shared 2D canvas where everyone in the room
+//! net_cursors - the payoff demo: a shared 2D canvas where everyone in the room
 //! sees everyone else's mouse cursor moving in real time, and clicks send a
 //! ripple that all peers see. This is the "invite friends to a local game"
 //! goal in its simplest form.
@@ -12,8 +12,8 @@
 //!
 //! Wire format is deliberately tiny: a cursor or click is two f32s (normalized
 //! [0,1] so it maps correctly regardless of each peer's window size), 8 bytes.
-//! Cursors go on channel 0 (unreliable — a dropped position is instantly
-//! replaced by the next); clicks go on channel 1 (reliable — never dropped).
+//! Cursors go on channel 0 (unreliable - a dropped position is instantly
+//! replaced by the next); clicks go on channel 1 (reliable - never dropped).
 //!
 //! Native builds render the UI but do no networking (ws/rtc are wasm-only), so
 //! the headless smoke test exercises the whole thing harmlessly.
@@ -151,7 +151,7 @@ fn spawnRipple(s: *State, nx: f32, ny: f32, color: Color) void {
             oldest = i;
         }
     }
-    // All slots busy — recycle the oldest.
+    // All slots busy - recycle the oldest.
     s.ripples[oldest] = .{ .nx = nx, .ny = ny, .age = 0.0, .color = color, .active = true };
 }
 

@@ -1,4 +1,4 @@
-//! textures_sprite_button — port of raylib [textures] example.
+//! textures_sprite_button - port of raylib [textures] example.
 //! A 3-frame button sheet (normal / hover / pressed) selected by mouse state.
 const std = @import("std");
 const Allocator = std.mem.Allocator;

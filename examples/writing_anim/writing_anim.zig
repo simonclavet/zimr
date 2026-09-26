@@ -1,4 +1,4 @@
-//! writing_anim — a typewriter effect: a line of text is revealed one character at a
+//! writing_anim - a typewriter effect: a line of text is revealed one character at a
 //! time with a blinking cursor, then it pauses and restarts. The reveal is just slicing the
 //! message to its first N chars (N grows with time), no allocation; measureText places the
 //! cursor exactly at the end of the revealed text. Ported from raylib text_writing_anim.

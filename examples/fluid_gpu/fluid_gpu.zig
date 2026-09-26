@@ -1,15 +1,15 @@
-//! fluid_gpu — 20,000-particle Clavet fluid, ENTIRELY on the GPU.
+//! fluid_gpu - 20,000-particle Clavet fluid, ENTIRELY on the GPU.
 //!
 //! The arc closes: examples/sph_fluid_2d ported the algorithm to a CPU
 //! loop because the GL backend had no compute. This is the same paper running
-//! where it belongs — seven kompute kernels (fluid_kernels.zig), each
+//! where it belongs - seven kompute kernels (fluid_kernels.zig), each
 //! translated once to its own WGSL module (spv2wgsl --entry, the t1178
 //! multi-kernel path), dispatched through ONE `z.Compute` pipe, rendered
 //! zero-copy by `z.FluidDiscs` straight from the compute storage buffer.
 //! Positions never visit the CPU.
 //!
-//! Per frame: 1 substep × 7 dispatches (gravityMouse → buildGrid →
-//! viscosity → predict → buildGrid → density → force → applyAndFinalize),
+//! Per frame: 1 substep x 7 dispatches (gravityMouse -> buildGrid ->
+//! viscosity -> predict -> buildGrid -> density -> force -> applyAndFinalize),
 //! then one instanced draw of N SDF discs coloured by density.
 //!
 //! Controls: drag = push, shift+drag (or the toggle) = pull; sliders for the
@@ -43,7 +43,7 @@ const substeps: u32 = 1;
 const mouse_radius: f32 = 90.0;
 
 /// t1178 HANDROLLED: the working hand-written JS demo's exact WebGPU shape,
-/// reproduced through zimr's bridge — hand WGSL, SEPARATE runtime-sized
+/// reproduced through zimr's bridge - hand WGSL, SEPARATE runtime-sized
 /// buffers per array, separate bindings. Same device, same submit pattern;
 /// only the binding/struct shape differs from kompute's megastruct. If this
 /// is stable at 20000 where the megastruct explodes at ~1000, the megastruct
@@ -169,7 +169,7 @@ const Handrolled = struct {
     }
 
     /// Free the three buffers, the compute pipeline, and the bind group this
-    /// owns. The example calls this from its `deinit` — managed memory means
+    /// owns. The example calls this from its `deinit` - managed memory means
     /// every handle has a named owner that releases it.
     fn deinit(h: *Handrolled) void {
         z.wgpu.destroyComputePipeline(h.pipeline);
@@ -199,12 +199,12 @@ const State = struct {
     discs: z.FluidDiscs,
     ui_host: z.UiHost,
     /// Persistent spawn/reset scratch (reset re-seeds through the same
-    /// upload path; 20k × 8B is cheap to keep).
+    /// upload path; 20k x 8B is cheap to keep).
     scratch: []Vec2,
     // The paper's knobs (uploaded into Params each frame).
     k_far: f32 = 0.009,
     k_near: f32 = 0.028,
-    // ρ0, the rest/desired density: pressure is k_far·(ρ − ρ0). Higher = the
+    // rho 0, the rest/desired density: pressure is k_far*(rho - rho 0). Higher = the
     // fluid wants to pack denser (more cohesive); lower = it expands.
     rest_density: f32 = 15.39,
     gravity_y: f32 = 0.097,
@@ -213,10 +213,10 @@ const State = struct {
     attract_toggle: bool = false,
     // ---- diagnostics (t1178 GPU-divergence hunt) ----
     paused: bool = false,
-    /// Single compute pass per frame vs one submit per dispatch — the live
+    /// Single compute pass per frame vs one submit per dispatch - the live
     /// A/B for device-side inter-submit coherency (t1178).
     batch_mode: bool = true,
-    /// SIMPLE MODE (default): only the fallBounce kernel — gravity +
+    /// SIMPLE MODE (default): only the fallBounce kernel - gravity +
     /// bounce, zero interaction. The ground-up rebuild step.
     simple_mode: bool = false,
     /// THE DUALITY (t1178): run the SAME kernel fns as plain Zig loops in
@@ -226,13 +226,13 @@ const State = struct {
     cpu_kernels: bool = false,
     /// t1178 SWEEP: dispatched particle count, runtime-adjustable. Arrays
     /// (and the GPU buffer) stay at the full 20000 so buffer size is held
-    /// CONSTANT while the dispatch width sweeps — dragging this finds the
+    /// CONSTANT while the dispatch width sweeps - dragging this finds the
     /// exact cliff where corruption begins on the device.
     sim_count_f: f32 = 20000,
     /// t1178 DECOUPLED RENDER: discs read a SECOND buffer fed by the
-    /// frame-delayed readback mirror — the render pass never touches the
+    /// frame-delayed readback mirror - the render pass never touches the
     /// live compute storage buffer. If high-count explosions vanish in
-    /// this mode, the compute↔render overlap is convicted.
+    /// this mode, the compute<->render overlap is convicted.
     decoupled: bool = false,
     /// t1178: drive the hand-rolled (JS-shaped) compute instead of kompute.
     handrolled_mode: bool = false,
@@ -248,7 +248,7 @@ const State = struct {
     en_density: bool = true,
     // Stage 2b A/B: route the density pass through the shared-memory tiled
     // kernel (one workgroup per cell) instead of the per-particle `density`.
-    // OFF by default — the per-particle path is the proven 9.4ms baseline.
+    // OFF by default - the per-particle path is the proven 9.4ms baseline.
     tiled_density: bool = false,
     // Stage 2c A/B: route density+force through the pos-in-grid variants
     // (neighbour positions read from grid_data_pos, contiguous per cell, instead
@@ -260,14 +260,14 @@ const State = struct {
     stat_min: Vec2 = .{ 0, 0 },
     stat_max: Vec2 = .{ 0, 0 },
     stat_rho: f32 = 0,
-    /// Mean rho_near — the ALWAYS-REPULSIVE half of Clavet's double density. Printed beside
+    /// Mean rho_near - the ALWAYS-REPULSIVE half of Clavet's double density. Printed beside
     /// the far term so the two demos can be compared on the quantity that actually decides
     /// whether a fluid settles, rather than on how they look.
     stat_rho_near: f32 = 0,
     stat_frozen_pct: f32 = 0,
     // Grid occupancy (from grid_counts readback, diagnostics only): the
     // fullest cell, the mean over non-empty cells, and how many cells hit the
-    // max_per_cell cap (neighbours dropped → density error). These drive the
+    // max_per_cell cap (neighbours dropped -> density error). These drive the
     // cell-size + particle-count tuning.
     stat_cell_max: u32 = 0,
     stat_cell_avg: f32 = 0,
@@ -296,10 +296,10 @@ const State = struct {
     bench_mult: u32 = 3,
     ms_frame: f32 = 0,
 
-    // Collapsing-section open state (closed by default — clean main view).
+    // Collapsing-section open state (closed by default - clean main view).
     show_advanced: bool = false,
     show_diag: bool = false,
-    // The whole control panel is collapsed by default: just a small ☰ toggle
+    // The whole control panel is collapsed by default: just a small menu toggle
     // floats in the corner so the fluid is unobstructed until you want a knob.
     panel_open: bool = false,
 };
@@ -319,7 +319,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 /// Dam-break: a dense block in the left third, jittered so columns don't
-/// lock. Velocities start at zero — gravity does the rest.
+/// lock. Velocities start at zero - gravity does the rest.
 fn spawnDamBreak(
     pipe: *z.Compute(fk),
     scratch: []Vec2,
@@ -357,7 +357,7 @@ fn spawnDamBreak(
     pipe.upload(.delta, scratch[0..fk.num_particles]);
     // Lean kernel never writes density: fill it bright ONCE here so the
     // colour reach-in renders visibly (and any 12345 seen later in pos is
-    // unambiguous corruption, not this fill — this writes density only).
+    // unambiguous corruption, not this fill - this writes density only).
     for (scratch[0..fk.num_particles]) |*v| {
         v.* = .{ 600.0, 1.0 };
     }
@@ -480,7 +480,7 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    // ---- Input → mouse force (logical px → sim px via the renderer's fit) ----
+    // ---- Input -> mouse force (logical px -> sim px via the renderer's fit) ----
     const lw: f32 = f.window.widthf();
     const lh: f32 = f.window.heightf();
     const mraw: Vec2 = z.getMousePosition(f.input);
@@ -580,10 +580,10 @@ fn update(f: *z.Frame, s: *State) void {
     // push the GPU past the vsync cap and read a real ms/substep number.
     const bench_n: u32 = clamp(s.bench_mult, @as(u32, 1), @as(u32, 5));
     while (!s.paused and !s.simple_mode and step < substeps * bench_n) : (step += 1) {
-        // Clavet ordering (t1178): gravity+mouse → viscosity → predict, as THREE
+        // Clavet ordering (t1178): gravity+mouse -> viscosity -> predict, as THREE
         // dispatches. Viscosity runs on the STALE grid still in the buffer from
         // last frame's build (a damping term tolerates the drift), BEFORE predict
-        // and BEFORE the rebuild — so the grid is still built only ONCE per frame
+        // and BEFORE the rebuild - so the grid is still built only ONCE per frame
         // (below, on the predicted positions density+force need). Splitting
         // viscosity out of `force` and applying it pre-predict is more stable,
         // which lets dt grow.
@@ -599,7 +599,7 @@ fn update(f: *z.Frame, s: *State) void {
         if (s.en_grid) {
             // clearGrid zeroes the per-cell counts (per cell); buildGrid then
             // claims slots per PARTICLE via atomicAdd (O(N), the parallel
-            // build that replaced the O(cells×N) single-writer scan).
+            // build that replaced the O(cellsxN) single-writer scan).
             s.pipe.run("clearGrid", fk.grid_cells);
             s.pipe.run("buildGrid", fk.num_particles);
         }
@@ -607,7 +607,7 @@ fn update(f: *z.Frame, s: *State) void {
             if (s.tiled_density) {
                 // One workgroup per cell: dispatch grid_cells * wg threads, so
                 // each workgroup (wg lanes) owns exactly one cell. (No count to
-                // restore now — each run states its own width.)
+                // restore now - each run states its own width.)
                 s.pipe.run("densityTiled", fk.grid_cells * fk.config.workgroup);
             } else if (s.pos_in_grid) {
                 s.pipe.run("densityPig", fk.num_particles);
@@ -630,11 +630,11 @@ fn update(f: *z.Frame, s: *State) void {
         s.pipe.endBatch();
     }
 
-    // ---- Diagnostics readback (centroid/bbox/rho/frozen) — GATED + THROTTLED.
+    // ---- Diagnostics readback (centroid/bbox/rho/frozen) - GATED + THROTTLED.
     // readLatest() copies EVERY GPU buffer to staging + submits + maps (a
     // blocking GPU sync), and the CPU scans 20k elements. Doing all THREE
     // readbacks every frame (for stats only visible in the `diagnostics` panel)
-    // pinned the GPU and — critically — added ~3 GPU stalls/frame that inflate
+    // pinned the GPU and - critically - added ~3 GPU stalls/frame that inflate
     // ms_frame and distort the per-particle-vs-tiled A/B (the stalls hit the two
     // dispatch patterns differently). So only pay for it when the panel is open
     // AND only once every `diag_every` frames; the stat_* fields persist between
@@ -702,13 +702,13 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- Pre-discs marker kept minimal: the FPS/ms readout now lives in the
     // pinned control panel (always visible), so the old top-left headline was
-    // both redundant and occluded by the panel — removed. ----
+    // both redundant and occluded by the panel - removed. ----
 
     // ---- Render: clear + N discs (BACKGROUND) + reference geometry + UI ----
     z.clearViewport(f, .{ .r = 1, .g = 3, .b = 8, .a = 255 });
 
     // Discs FIRST so the 2D overlays + UI compose ON TOP of the fluid. The
-    // DrawPoints pass discipline (flushBatch → disc draw → renderer.bindForPass)
+    // DrawPoints pass discipline (flushBatch -> disc draw -> renderer.bindForPass)
     // restores the 2D pipeline + bind group, so subsequent 2D draws are valid.
     if (s.handrolled_mode) {
         const enc: z.wgpu.CommandEncoderHandle = z.wgpu.createCommandEncoder(f.gpu.device);
@@ -730,7 +730,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
     // Reopen a fresh 2D pass after the discs' custom pass so the border and UI
     // compose ON TOP (the disc pass leaves pipeline/pass state the 2D
-    // batch can't recover from on the Adreno — the source of the old
+    // batch can't recover from on the Adreno - the source of the old
     // "discs must be drawn last" workaround).
     z.reopenOverlayPass(f.gl);
 
@@ -754,12 +754,12 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- Controls ----
     const u: z.ui_real.Ui = s.ui_host.begin(f);
-    // Phone strategy: a SMALL always-visible bar (fps + a ☰ toggle) floats at
-    // the top-left so the fluid is unobstructed. Tapping ☰ opens the full
-    // control panel; tapping ✕ collapses it. Font is sized to the logical
+    // Phone strategy: a SMALL always-visible bar (fps + a menu toggle) floats at
+    // the top-left so the fluid is unobstructed. Tapping menu opens the full
+    // control panel; tapping x collapses it. Font is sized to the logical
     // width so nothing clips on a narrow canvas. lw/lh = logical CSS px.
     const ui_w: f32 = lw * 0.5;
-    // 30% smaller than the previous sizing: cap 34→24, and the divisor tracks
+    // 30% smaller than the previous sizing: cap 34->24, and the divisor tracks
     // the (now half-width) panel so text still fits.
     const fsz: f32 = clamp(ui_w / 16.0, 12.0, 24.0);
     u.style().font_size = fsz;
@@ -768,7 +768,7 @@ fn update(f: *z.Frame, s: *State) void {
     u.style().window_padding = .{ fsz * 0.5, fsz * 0.5 };
     u.style().title_bar_height = fsz * 1.6;
 
-    // The compact toggle bar — always visible, minimal footprint.
+    // The compact toggle bar - always visible, minimal footprint.
     u.setNextWindowPos(.{ 0, 0 }, .{});
     u.setNextWindowSize(.{ ui_w, fsz * 2.6 }, .{});
     if (u.window("hud", .{ .flags = .{ .no_move = true, .no_resize = true, .no_title_bar = true } })) |w| {
@@ -786,15 +786,15 @@ fn update(f: *z.Frame, s: *State) void {
         });
     }
 
-    // The full control panel — only when opened.
+    // The full control panel - only when opened.
     if (s.panel_open) {
         u.setNextWindowPos(.{ 0, fsz * 2.8 }, .{});
         u.setNextWindowSize(.{ ui_w, lh - fsz * 2.8 }, .{});
         if (u.window("fluid", .{ .flags = .{ .no_move = true, .no_resize = true } })) |w| {
             defer w.close();
 
-            // ---- Benchmark stepper (−  N  +), 1..5. Big square buttons: no
-            // keyboard, big targets, whole range in ≤4 taps. ----
+            // ---- Benchmark stepper (-  N  +), 1..5. Big square buttons: no
+            // keyboard, big targets, whole range in <=4 taps. ----
             u.text("substeps:", .{});
             const bw: f32 = fsz * 2.0;
             if (u.button("-", .{ .size = .{ bw, bw } })) {
@@ -863,7 +863,7 @@ fn update(f: *z.Frame, s: *State) void {
 
 pub const app: z.AppSpec(State) = .{
     // Transient GPU compute demo: pipeline/shader setup handles aren't retained
-    // in State, so a leak-tight deinit isn't practical — opt out of the gate.
+    // in State, so a leak-tight deinit isn't practical - opt out of the gate.
     .memory = .managed,
     .config = .{
         .window = .{
@@ -874,8 +874,8 @@ pub const app: z.AppSpec(State) = .{
         },
     },
     .init = initState,
-    // .memory left default (arena): the t1178 diagnostic teardown — the
-    // no-deinit `Handrolled` compute path plus the mirror discs/buffer — is a
+    // .memory left default (arena): the t1178 diagnostic teardown - the
+    // no-deinit `Handrolled` compute path plus the mirror discs/buffer - is a
     // deep, conditional free deferred while that coherency hunt is live. The
     // deinit already frees the primary pipe/discs/ui_host.
     .deinit = deinit,

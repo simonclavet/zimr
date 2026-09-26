@@ -1,14 +1,14 @@
-//! examples/rt_fs.zig — a ray-tracing FRAGMENT SHADER.
+//! examples/rt_fs.zig - a ray-tracing FRAGMENT SHADER.
 //!
 //! One `shaderMain(io) Out` that path-traces the Ubo's sphere scene for the
 //! pixel at `frag_tex_coord`. Compiles three ways (the zimr shader contract):
-//! to WGSL (GPU), to native Zig (raster software dispatcher), and to SPIR-V — so
+//! to WGSL (GPU), to native Zig (raster software dispatcher), and to SPIR-V - so
 //! the SAME shader can drive both halves of a CPU|GPU side-by-side demo.
 //!
 //! Constraints that shape the code (SPIR-V / WGSL safe):
-//!   - NO recursion → the bounce trace is an explicit bounded loop with an
+//!   - NO recursion -> the bounce trace is an explicit bounded loop with an
 //!     accumulated attenuation + a running ray.
-//!   - NO dynamic allocation, no pointers into the scene → spheres come from
+//!   - NO dynamic allocation, no pointers into the scene -> spheres come from
 //!     the Ubo's fixed array; the hit search is a bounded loop.
 //!   - A cheap per-pixel PRNG (PCG-ish hash) seeded from pixel coord +
 //!     u.frame_seed gives the diffuse scatter / metal fuzz / dielectric jitter.
@@ -38,7 +38,7 @@ const max_spheres: u32 = shader_io.max_spheres;
 // ---- tiny PRNG: pure functions threading a u32 state by VALUE ---------------
 // No `*Rng` methods / pointer params: the SPIR-V->WGSL translator can't lower
 // calls that pass a pointer to a by-value param (out-params are lost). So the
-// RNG is functional — each call takes the state and returns the next state;
+// RNG is functional - each call takes the state and returns the next state;
 // `randF` also returns a float. Keeps the shader translatable AND identical on
 // the CPU dispatcher.
 fn hashU32(x_in: u32) u32 {
@@ -161,7 +161,7 @@ pub fn shaderMain(io_in: Io) Out {
         }
 
         if (hit_i == NO_HIT) {
-            // Miss → sky, modulated by attenuation so far.
+            // Miss -> sky, modulated by attenuation so far.
             color = color + attenuation * skyColor(rd);
             break;
         }

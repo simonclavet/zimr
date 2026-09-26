@@ -1,4 +1,4 @@
-//! ui_pomodoro_phone — a 25-minute pomodoro timer with an animated progress
+//! ui_pomodoro_phone - a 25-minute pomodoro timer with an animated progress
 //! ring, ported to WebGPU. Phone-shaped (420x760), big touch targets. Shows off
 //! the shared `ui.zig` on the wgpu UiHost: a `beginCanvas` ring drawn with the
 //! draw-list (addCircle track + addArc sweep + centred addText), `u.animated`
@@ -53,7 +53,7 @@ fn init(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{ .font = font, .ui_host = z.UiHost.init(gpa, font) };
 }
 
-/// Linearly interpolate two RGBA colour structs — drives the ring colour
+/// Linearly interpolate two RGBA colour structs - drives the ring colour
 /// transition from the easing-curve output.
 fn lerpColor(
     a: Color,
@@ -107,7 +107,7 @@ fn update(f: *z.Frame, s: *State) void {
     else
         0;
 
-    // Fullscreen window, no chrome — phone-style.
+    // Fullscreen window, no chrome - phone-style.
     const fw: f32 = f.window.widthf();
     const fh: f32 = f.window.heightf();
     u.setNextWindowPos(.{ 0, 0 }, .{});
@@ -138,11 +138,11 @@ fn update(f: *z.Frame, s: *State) void {
             // Track (background ring).
             c.drawList().addCircle(.{ cx, cy }, r_outer, Color.fromWire(0xFF2A2D38), thickness);
 
-            // Active arc — sweep from 12-o'clock proportional to progress.
+            // Active arc - sweep from 12-o'clock proportional to progress.
             // addArc uses standard math angles (CCW positive, 0 = +X), so start
             // at -pi/2 (top) and grow in +angle. Clamp to ~10 deg so even a few
             // seconds of a 25-min session gives immediate visual feedback
-            // (cosmetic only — the numeric readout is always exact).
+            // (cosmetic only - the numeric readout is always exact).
             const tau: f32 = zm.tau;
             const min_visible_sweep: f32 = tau / 36.0; // 10 deg
             const sweep: f32 = if (progress > 0)

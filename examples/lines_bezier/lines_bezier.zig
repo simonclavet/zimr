@@ -1,4 +1,4 @@
-//! lines_bezier — a cubic Bézier curve ported to WebGPU. Four control points drift
+//! lines_bezier - a cubic Bezier curve ported to WebGPU. Four control points drift
 //! along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn
 //! via `drawSplineLinear`, with the control polygon as a dashed line and the control
 //! points as dots. The GL original let you drag the endpoints; this animates itself.

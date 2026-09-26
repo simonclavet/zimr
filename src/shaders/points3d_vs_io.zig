@@ -1,4 +1,4 @@
-//! src/shaders/points3d_vs_io.zig — typed interface for the unlit 3D
+//! src/shaders/points3d_vs_io.zig - typed interface for the unlit 3D
 //! point-cloud vertex shader.  Companion to `points3d_vs.zig`.
 //!
 //! Same single-UBO shape as `cube3d_vs` (one camera view-projection,
@@ -7,7 +7,7 @@
 //! them full-bright, so there is nothing to light.  Outputs alias the
 //! cube3d `Interp`, which is what lets this stage pair with the
 //! existing `cube3d_fs` passthrough with varying compatibility by
-//! construction — a point-cloud pipeline costs one vertex shader and
+//! construction - a point-cloud pipeline costs one vertex shader and
 //! zero new fragment shaders.
 
 const shader = @import("shader_interface");
@@ -27,6 +27,6 @@ pub const Ubo = struct {
     view_projection: [4]@Vector(4, f32),
 };
 
-/// Varying outputs — aliases the cube3d `Interp` (one colour), so
+/// Varying outputs - aliases the cube3d `Interp` (one colour), so
 /// `cube3d_fs` is the matching fragment stage.
 pub const Outputs = common.Interp;

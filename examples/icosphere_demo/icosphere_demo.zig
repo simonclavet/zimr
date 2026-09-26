@@ -1,9 +1,9 @@
-//! icosphere_demo — shows the icosphere refining from its icosahedron seed into
+//! icosphere_demo - shows the icosphere refining from its icosahedron seed into
 //! a smooth ball. Four copies sit in a row at subdivision levels 0, 1, 2, 3:
 //! the leftmost is just the 20-face icosahedron; each step to the right splits
 //! every triangle into four and pushes the new points onto the sphere, so the
-//! silhouette rounds out and the surface smooths. This is the geodesic sphere —
-//! uniform triangles, no pinched poles — the better base for displacement work.
+//! silhouette rounds out and the surface smooths. This is the geodesic sphere -
+//! uniform triangles, no pinched poles - the better base for displacement work.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");

@@ -1,4 +1,4 @@
-//! tools/zspv_rewrite.zig — Phase 2 of the SPIR-V binary tooling.
+//! tools/zspv_rewrite.zig - Phase 2 of the SPIR-V binary tooling.
 //!
 //! Replaces the comptime `shader_post.rewriteSamplers` GLSL surgery
 //! with semantic SPIR-V transformations.  Input: a Module from
@@ -66,7 +66,7 @@ const zspv = @import("zspv.zig");
 
 // ---- SPIR-V opcode constants ----------------------------------------
 // Only the ones this rewriter actually inspects or emits.  Numerical
-// codes are from the SPIR-V spec (Universal Binary Format, §3.42).
+// codes are from the SPIR-V spec (Universal Binary Format, section 3.42).
 
 pub const Op = struct {
     pub const op_name: u16 = 5;
@@ -90,25 +90,25 @@ pub const Op = struct {
     pub const op_decorate: u16 = 71;
 };
 
-/// SPIR-V decoration kinds (§3.20).  Only the ones we read or emit.
+/// SPIR-V decoration kinds (section 3.20).  Only the ones we read or emit.
 pub const Decoration = struct {
     pub const binding: u32 = 33;
     pub const descriptor_set: u32 = 34;
 };
 
-/// SPIR-V storage class constants (§3.7).
+/// SPIR-V storage class constants (section 3.7).
 pub const StorageClass = struct {
     pub const uniform_constant: u32 = 0;
 };
 
-/// SPIR-V "dim" constants for OpTypeImage (§3.8).
+/// SPIR-V "dim" constants for OpTypeImage (section 3.8).
 pub const Dim = struct {
     pub const dim_2d: u32 = 1;
 };
 
-/// SPIR-V image-format constants (§3.11).  `Unknown` means the
+/// SPIR-V image-format constants (section 3.11).  `Unknown` means the
 /// shader doesn't know the storage format ahead of time, which is
-/// fine for sampled images we read via texture() — the actual
+/// fine for sampled images we read via texture() - the actual
 /// format is set on the GL side via the texture object.
 pub const ImageFormat = struct {
     pub const unknown: u32 = 0;
@@ -134,7 +134,7 @@ pub const SamplerEntry = struct {
     /// Existing OpDecorate DescriptorSet value for this sampler, if
     /// the SPIR-V binary already carries one.  Today the Zig SPIR-V
     /// backend emits these when codegen calls `zm.binding(...)` on
-    /// the sampler — see `tools/gen_shader_externs.zig`.  When
+    /// the sampler - see `tools/gen_shader_externs.zig`.  When
     /// present, `rewriteSamplersWgsl` honors it instead of assigning
     /// from `sampler_group`.  When null, the rewriter falls back to
     /// the `sampler_group` parameter for backwards compat.
@@ -146,7 +146,7 @@ pub const SamplerEntry = struct {
     existing_binding: ?u32 = null,
 };
 
-/// Discovery report — what the analyzer found in a module.  If
+/// Discovery report - what the analyzer found in a module.  If
 /// `samplers.len == 0` and `zsample2d_func_id == 0`, this module
 /// has no S1.4.5b convention usage and the rewriter can short-circuit.
 pub const Discovery = struct {
@@ -205,18 +205,18 @@ fn unpackString(
 /// the `_sampler2d` suffix per S1.4.5b convention) and the zsample2d
 /// helper function.
 pub fn discover(alloc: Allocator, mod: zspv.Module) !Discovery {
-    // First pass: build name → id map and find zsample2d's function ID.
+    // First pass: build name -> id map and find zsample2d's function ID.
     // OpName's operand layout is [target_id, name_word1, name_word2, ...].
     // We're looking for two name shapes:
     //   - Variable names ending in "_sampler2d"
     //   - The function name ending in "zsample2d" (spirv-cross prepends
     //     the source-file stem, so the full name is e.g.
-    //     "shadermath.zsample2d" — we match on the suffix).
+    //     "shadermath.zsample2d" - we match on the suffix).
 
     var samplers: ArrayList(SamplerEntry) = .empty;
     defer samplers.deinit(alloc);
 
-    // Provisional: map var_id → its declaration index, so when we
+    // Provisional: map var_id -> its declaration index, so when we
     // find the OpVariable later (or earlier) in the stream we can
     // confirm the type and capture the variable's instruction index.
     var var_idx_by_id: std.AutoHashMap(u32, usize) = .init(alloc);
@@ -258,7 +258,7 @@ pub fn discover(alloc: Allocator, mod: zspv.Module) !Discovery {
             zsample2d_level_func_id = target_id;
         } else if (endsWith(u8, name, "zsample2d")) {
             zsample2d_func_id = target_id;
-            // Don't free `name` — we don't keep it, but the arena will.
+            // Don't free `name` - we don't keep it, but the arena will.
         } else {
             // Free names we won't keep (only matters if alloc isn't
             // an arena; for the arena case this is a no-op).
@@ -292,7 +292,7 @@ pub fn discover(alloc: Allocator, mod: zspv.Module) !Discovery {
     // Pass 2b: capture existing DescriptorSet + Binding decorations
     // for the samplers we just identified.  When codegen emits
     // `zm_binding(&texture0_sampler2d, 1, 0)` the resulting SPIR-V
-    // has matching OpDecorate calls already — we want the rewriter
+    // has matching OpDecorate calls already - we want the rewriter
     // to HONOR them, not strip and replace.  This pass populates
     // `existing_set` / `existing_binding` on each SamplerEntry; the
     // rewrite phase prefers them when present, falls back to its
@@ -311,7 +311,7 @@ pub fn discover(alloc: Allocator, mod: zspv.Module) !Discovery {
         const decoration: u32 = instr.operands[1];
         const value: u32 = instr.operands[2];
 
-        // Linear search — sampler count per shader is small (1-4),
+        // Linear search - sampler count per shader is small (1-4),
         // not worth a hash map.
         for (samplers.items) |*s| {
             if (s.var_id != target_id) {
@@ -403,7 +403,7 @@ pub const SamplerTypes = struct {
     /// %ptr_uc_sampled_image = OpTypePointer UniformConstant %sampled_image
     ptr_sampled_image_id: u32,
     /// Instructions to insert into the module (in order).  Only the
-    /// ones not already present — if %float existed, we reuse its
+    /// ones not already present - if %float existed, we reuse its
     /// ID and don't emit a new OpTypeFloat.  All four other
     /// instructions are always new (they're sampler-specific).
     new_instructions: []zspv.Instruction,
@@ -451,7 +451,7 @@ pub fn synthesizeTypes(
     var new_instrs: ArrayList(zspv.Instruction) = .empty;
     defer new_instrs.deinit(alloc);
 
-    // Try to reuse an existing OpTypeFloat 32 — only if its
+    // Try to reuse an existing OpTypeFloat 32 - only if its
     // declaration precedes our insertion point (just before the
     // first sampler OpVariable).  If the existing float comes later,
     // we'd violate the forward-reference rule; allocate a fresh
@@ -540,7 +540,7 @@ pub fn synthesizeTypes(
 ///
 /// `alloc` is used for all new instruction/operand allocations.
 /// The original instructions' operand slices are NOT freed (caller
-/// is responsible — typically with an arena that gets reset).
+/// is responsible - typically with an arena that gets reset).
 pub fn rewriteSamplers(alloc: Allocator, mod: *zspv.Module) !void {
     const disc: Discovery = try discover(alloc, mod.*);
     if (disc.samplers.len == 0 and disc.zsample2d_func_id == 0 and disc.zsample2d_level_func_id == 0) {
@@ -551,7 +551,7 @@ pub fn rewriteSamplers(alloc: Allocator, mod: *zspv.Module) !void {
     // First find the earliest sampler OpVariable so synthesizeTypes
     // knows whether it can safely reuse an existing OpTypeFloat
     // (only safe if the float's declaration precedes our insertion
-    // point — see synthesizeTypes' doc).
+    // point - see synthesizeTypes' doc).
     var first_sampler_idx: usize = mod.instructions.len;
     for (disc.samplers) |s| {
         if (s.var_instr_idx < first_sampler_idx) {
@@ -648,7 +648,7 @@ pub fn rewriteSamplers(alloc: Allocator, mod: *zspv.Module) !void {
         // This puts the new type chain in section 6 (the mixed
         // type/constant/global-variable section), at a point where
         // every existing instruction we depend on has been declared
-        // (none — we always allocate fresh) and every sampler
+        // (none - we always allocate fresh) and every sampler
         // OpVariable we'll rewrite hasn't been emitted yet.
         if (!types_inserted and i == first_sampler_idx) {
             try new_instrs.appendSlice(alloc, types.new_instructions);
@@ -667,7 +667,7 @@ pub fn rewriteSamplers(alloc: Allocator, mod: *zspv.Module) !void {
             new_operands[1] = instr.operands[1];
             new_operands[2] = instr.operands[2];
             // Storage class stays UniformConstant; any extra operands
-            // (rare — initializer) we copy through.
+            // (rare - initializer) we copy through.
             var k: usize = 3;
             while (k < instr.operands.len) : (k += 1) {
                 new_operands[k] = instr.operands[k];
@@ -836,7 +836,7 @@ pub fn rewriteSamplers(alloc: Allocator, mod: *zspv.Module) !void {
 //
 // Bindings: the texture keeps the placeholder's original Binding N;
 // the synthesized sampler gets Binding N+1 in the same descriptor set.
-// (Engine-side bind-group layout must match — see
+// (Engine-side bind-group layout must match - see
 // `src/renderer_2d.zig` for the convention.)
 
 /// IDs of synthesized sampler-related types for the WGSL path.
@@ -866,7 +866,7 @@ pub fn synthesizeTypesWgsl(
     var new_instrs: ArrayList(zspv.Instruction) = .empty;
     defer new_instrs.deinit(alloc);
 
-    // Reuse-or-allocate float32 — same logic as the GLSL path.
+    // Reuse-or-allocate float32 - same logic as the GLSL path.
     const existing: Float32Ref = findExistingFloat32(mod);
     var float_id: u32 = 0;
     if (existing.id != 0 and existing.idx < first_sampler_idx) {
@@ -883,7 +883,7 @@ pub fn synthesizeTypesWgsl(
         });
     }
 
-    // OpTypeImage — texture half (no sampler attached).
+    // OpTypeImage - texture half (no sampler attached).
     const image_2d_id: u32 = next_id.*;
     next_id.* += 1;
     {
@@ -902,7 +902,7 @@ pub fn synthesizeTypesWgsl(
         });
     }
 
-    // OpTypeSampler — the standalone sampler type.  Single operand:
+    // OpTypeSampler - the standalone sampler type.  Single operand:
     // result_id.  WGSL maps this directly to `sampler` (or
     // `sampler_comparison` for the future shadow-map case).
     const sampler_id: u32 = next_id.*;
@@ -916,7 +916,7 @@ pub fn synthesizeTypesWgsl(
         });
     }
 
-    // OpTypeSampledImage — still needed as the result type of the
+    // OpTypeSampledImage - still needed as the result type of the
     // OpSampledImage instruction that combines image+sampler at each
     // sample site.  Not used as a variable type in the WGSL path.
     const sampled_image_id: u32 = next_id.*;
@@ -1021,7 +1021,7 @@ const WgslPair = struct {
 /// callers; pass 1 (or higher) when the resulting WGSL is to be
 /// linked into a pipeline alongside a VS UBO at group 0 binding 0,
 /// since WebGPU rejects a bind-group entry that has different types
-/// for different stages at the same (group, binding) — the engine
+/// for different stages at the same (group, binding) - the engine
 /// shapes shader is the canonical example.
 pub fn rewriteSamplersWgsl(
     alloc: Allocator,
@@ -1047,7 +1047,7 @@ pub fn rewriteSamplersWgsl(
     // id per discovered placeholder, plus binding assignment.
     //
     // Zig's SPIR-V backend doesn't emit explicit `OpDecorate Binding`
-    // for placeholder samplers — bindings get auto-assigned downstream
+    // for placeholder samplers - bindings get auto-assigned downstream
     // (by spirv-cross for the GL path, or default to 0 in our spv2wgsl).
     // For the WGSL path we need DISTINCT bindings for each texture and
     // its paired sampler, so we ALWAYS emit explicit Binding decorations
@@ -1062,7 +1062,7 @@ pub fn rewriteSamplersWgsl(
     //
     // For zimr's engine the typical shader has 1-2 textures and 1
     // sampler per texture, so we'll end up with e.g. texture0@binding(0),
-    // sampler0@binding(1) — exactly the layout `src/renderer_2d.zig`
+    // sampler0@binding(1) - exactly the layout `src/renderer_2d.zig`
     // expects on the host side.
     // The two paths can be mixed within a single shader (some samplers
     // declared, some not), since the per-pair `resolved_set` lives on
@@ -1091,16 +1091,16 @@ pub fn rewriteSamplersWgsl(
         };
         // Sampler binding.  ROBUSTNESS / single source of truth: when the
         // texture binding came from the schema (codegen emitted `zm.binding`),
-        // place the sampler at `texture_binding + 1` — the SAME convention the
+        // place the sampler at `texture_binding + 1` - the SAME convention the
         // host uses when it expands a `.sampler_2d` ResolvedField into a
         // texture at @binding(N) + a sampler at @binding(N+1)
         // (`shader_runtime.zig`). Both sides now derive the sampler slot
         // from the one texture binding, so the emitted WGSL and the host
         // bind-group layout can never disagree. (The schema's binding solver
-        // already spaces pinned textures 2 apart — e.g. scene@1, bloom@3 — so
+        // already spaces pinned textures 2 apart - e.g. scene@1, bloom@3 - so
         // scene_samp@2 and bloom_samp@4 don't collide.)
         //
-        // The fallback branch (no existing binding — the legacy GLSL→SPIR-V
+        // The fallback branch (no existing binding - the legacy GLSL->SPIR-V
         // path with implicit bindings) keeps the old "after all textures"
         // counter, since there is no host schema to agree with there.
         const samp_binding: u32 = blk: {
@@ -1122,7 +1122,7 @@ pub fn rewriteSamplersWgsl(
         });
     }
 
-    // Map from "this image-OpLoad result-id" → "the sampler-OpLoad
+    // Map from "this image-OpLoad result-id" -> "the sampler-OpLoad
     // result-id we synthesized right after it".  Used so each
     // OpFunctionCall zsample2d(h, uv) can find the matching sampler
     // load for its OpSampledImage combine.
@@ -1187,7 +1187,7 @@ pub fn rewriteSamplersWgsl(
         //
         // The decorations conceptually belong in SPIR-V's section 6
         // (annotations) and the types in section 7, but spirv-opt
-        // happily reorganizes both — and we'll run spirv-opt with
+        // happily reorganizes both - and we'll run spirv-opt with
         // --skip-validation right after this anyway.  Placing them
         // here keeps the rewriter's transformation localized and
         // avoids a second pass over the instruction list.
@@ -1195,7 +1195,7 @@ pub fn rewriteSamplersWgsl(
             // Emit explicit OpDecorate Binding AND DescriptorSet for
             // each pair.  The texture's decorations are skipped when
             // the SPIR-V binary already carried them (codegen emitted
-            // `zm.binding` for this sampler) — we mustn't emit
+            // `zm.binding` for this sampler) - we mustn't emit
             // duplicates.  The synthesized sampler half is ALWAYS new
             // (the rewriter created its variable id this run), so its
             // decorations always come from us.
@@ -1209,7 +1209,7 @@ pub fn rewriteSamplersWgsl(
                 // computed `pair`, and the copy loop below STRIPS any existing
                 // Binding/DescriptorSet the source carried on this var (see the
                 // `pairs.get(...)` skip there). Previously we tried to "leave
-                // existing texture decorations alone" — but downstream passes
+                // existing texture decorations alone" - but downstream passes
                 // (spirv-opt) could drop the original Binding, leaving the
                 // texture with only a DescriptorSet and no Binding, so
                 // spv2wgsl auto-assigned binding 0 and collided with a UBO at
@@ -1293,7 +1293,7 @@ pub fn rewriteSamplersWgsl(
 
         // OpLoad reading from a placeholder sampler variable: rewrite
         // to load image_t (was uint), AND emit a paired OpLoad of the
-        // sampler variable right after.  Record the (image_load_id →
+        // sampler variable right after.  Record the (image_load_id ->
         // sampler_load_id) pair so the sample-site rewrite can find
         // them.
         if (instr.opcode == Op.op_load and
@@ -1302,7 +1302,7 @@ pub fn rewriteSamplersWgsl(
         {
             const pair: WgslPair = pairs.get(instr.operands[2]).?;
 
-            // Image load — original result_id, retyped to image_t.
+            // Image load - original result_id, retyped to image_t.
             const img_load_operands: []u32 = try alloc.alloc(u32, instr.operands.len);
             img_load_operands[0] = types.image_2d_id;
             var k: usize = 1;
@@ -1315,7 +1315,7 @@ pub fn rewriteSamplersWgsl(
             });
             const image_load_result_id: u32 = instr.operands[1];
 
-            // Sampler load — fresh id, ptr_sampler → sampler_t.
+            // Sampler load - fresh id, ptr_sampler -> sampler_t.
             const sampler_load_result_id: u32 = next_id;
             next_id += 1;
             const samp_load_operands: []u32 = try alloc.alloc(u32, 3);
@@ -1381,7 +1381,7 @@ pub fn rewriteSamplersWgsl(
 
         // OpFunctionCall to zsample2d_level: same texture+sampler pairing and
         // OpSampledImage combine, but emit OpImageSampleExplicitLod with the Lod
-        // operand (mask 0x2) — derivative-free, so legal in a vertex shader.
+        // operand (mask 0x2) - derivative-free, so legal in a vertex shader.
         // Original ops: [result_type, result_id, func_id, handle, uv, lod]
         if (instr.opcode == Op.op_function_call and
             instr.operands.len >= 6 and
@@ -1421,8 +1421,8 @@ pub fn rewriteSamplersWgsl(
         }
 
         // OpName for a placeholder sampler variable: rename to the
-        // stripped form (X_sampler2d → X) AND emit a paired OpName
-        // for the new sampler variable (X → X_sampler).
+        // stripped form (X_sampler2d -> X) AND emit a paired OpName
+        // for the new sampler variable (X -> X_sampler).
         if (instr.opcode == Op.op_name and
             instr.operands.len >= 1 and
             pairs.get(instr.operands[0]) != null)
@@ -1460,7 +1460,7 @@ pub fn rewriteSamplersWgsl(
             continue;
         }
 
-        // Drop existing OpDecorate Binding for placeholder textures —
+        // Drop existing OpDecorate Binding for placeholder textures -
         // we emitted explicit ones unconditionally above with the
         // canonical (texture 0..N, samplers N..2N) layout.  Keeping
         // the original would create a duplicate decoration (spirv-opt
@@ -1481,30 +1481,30 @@ pub fn rewriteSamplersWgsl(
         // `zm.binding(...)`, captured into `SamplerEntry.existing_set`;
         // those calls are ALREADY in the instruction stream.  When we
         // reach them in this rewrite pass, we want to keep them
-        // verbatim — they're the canonical value.
+        // verbatim - they're the canonical value.
         //
         // The legacy fallback path (no codegen-emitted decoration)
         // generates fresh OpDecorate calls in the types-injection
         // block above and would conflict with stale Zig-emitted ones.
         // But since Zig's SPIR-V backend doesn't emit DescriptorSet
         // for placeholder samplers in the legacy path, this branch
-        // is effectively a no-op for those — keep the instruction.
+        // is effectively a no-op for those - keep the instruction.
         //
         // Net effect: keep all OpDecorate DescriptorSet for samplers
         // we saw; the rewriter never injects a duplicate (the emission
         // block above skips emission when `has_existing_texture_decs`
         // is true).
         //
-        // The same applies to OpDecorate Binding — keep it if it
+        // The same applies to OpDecorate Binding - keep it if it
         // was already in the source; the emission block above skips
         // re-emission for explicitly-bound textures.
 
         // ROBUSTNESS: strip any Binding/DescriptorSet the source carried on a
-        // paired texture var — the emission block above now re-emits BOTH
+        // paired texture var - the emission block above now re-emits BOTH
         // fresh from the pair, so keeping the originals would duplicate (and,
         // worse, a downstream pass could drop the original Binding while
         // keeping DescriptorSet, leaving spv2wgsl to auto-assign binding 0 and
-        // collide with a UBO — the bloom post-pass bug). One authority for
+        // collide with a UBO - the bloom post-pass bug). One authority for
         // these decorations: the pair.
         if (instr.opcode == Op.op_decorate and
             instr.operands.len >= 2 and
@@ -1527,7 +1527,7 @@ pub fn rewriteSamplersWgsl(
     // variable (UniformConstant, Input, Output) to be listed in
     // OpEntryPoint's interface IDs.  We just added new sampler
     // variables that the entry point's body references (via the
-    // new sampler OpLoads) — they need to appear in the interface
+    // new sampler OpLoads) - they need to appear in the interface
     // list or spirv-val rejects with "interface variable not listed."
     //
     // OpEntryPoint operand layout:
@@ -1537,7 +1537,7 @@ pub fn rewriteSamplersWgsl(
     //   [k..] interface variable ids (zero or more)
     //
     // We don't know k a priori (string length varies), so we append
-    // the new ids to the END of the operand list — which is the
+    // the new ids to the END of the operand list - which is the
     // interface section, regardless of where the string ends.  Order
     // among interface ids doesn't matter to the validator.
     var collected_new_var_ids: ArrayList(u32) = .empty;

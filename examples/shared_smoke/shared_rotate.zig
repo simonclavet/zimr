@@ -1,4 +1,4 @@
-//! shared_rotate.zig — workgroup shared-memory + barrier DIAGNOSTIC.
+//! shared_rotate.zig - workgroup shared-memory + barrier DIAGNOSTIC.
 //!
 //! One dispatch writes THREE separate result buffers so a single device run
 //! pinpoints exactly which primitive works:

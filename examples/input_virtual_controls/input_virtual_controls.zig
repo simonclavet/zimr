@@ -2,7 +2,7 @@
 // drives a player ball.  Works with touch on mobile, with mouse
 // hold-and-drag on desktop.
 // Port of raylib's `examples/core/core_input_virtual_controls.c`
-// (★2, ~171 LOC).  Four buttons (UP/LEFT/RIGHT/DOWN) laid out in
+// (*2, ~171 LOC).  Four buttons (UP/LEFT/RIGHT/DOWN) laid out in
 // a cross.  Each frame:
 //   - Sample the input position: prefer touch[0], fall back to
 //     mouse position.
@@ -39,7 +39,7 @@ const pad_center: Vec2 = .{ 100, 350 };
 const c = Color;
 
 // D-pad button layout: 4 buttons arranged in a plus around the
-// pad centre.  Distance from centre to each button = 1.5×
+// pad centre.  Distance from centre to each button = 1.5x
 // button_radius, so adjacent buttons just barely don't touch.
 const PadButton = enum(u8) {
     up = 0,

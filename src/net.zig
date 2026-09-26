@@ -246,8 +246,8 @@ const net_core = @import("net_core.zig");
 /// Friends-only scale. One connection per peer; this caps the mesh size.
 pub const max_peers = net_core.max_peers;
 
-/// The transport-agnostic session generator. Games don't need this — use
-/// `Session` — but it's exposed so a custom transport (e.g. the mock used by
+/// The transport-agnostic session generator. Games don't need this - use
+/// `Session` - but it's exposed so a custom transport (e.g. the mock used by
 /// the mesh test) can bind the same logic to something other than the browser.
 pub const Net = net_core.Net;
 

@@ -37,7 +37,7 @@ const vec = zm.vec;
 /// The render-side types (`Mesh`, `Color`, ...) the loaders hand back.
 /// Re-exported so out-of-module consumers (e.g. the `mesh_bake` build
 /// tool, which imports codecs as a named module) can NAME the types
-/// `gltf.meshesFromGltf` returns — they were previously reachable only
+/// `gltf.meshesFromGltf` returns - they were previously reachable only
 /// from inside this module.
 pub const types = @import("types.zig");
 
@@ -312,7 +312,7 @@ pub const png = struct {
         const n: usize = @as(usize, width) * @as(usize, height);
         var i: usize = 0;
         switch (color_type) {
-            0 => { // Grayscale → RGBA
+            0 => { // Grayscale -> RGBA
                 while (i < n) : (i += 1) {
                     // One grey byte fills R, G and B; alpha is opaque.
                     const g: u8 = raw[i];
@@ -322,7 +322,7 @@ pub const png = struct {
                     rgba[i * 4 + 3] = 255;
                 }
             },
-            2 => { // RGB → RGBA
+            2 => { // RGB -> RGBA
                 while (i < n) : (i += 1) {
                     rgba[i * 4 + 0] = raw[i * 3 + 0];
                     rgba[i * 4 + 1] = raw[i * 3 + 1];
@@ -330,7 +330,7 @@ pub const png = struct {
                     rgba[i * 4 + 3] = 255;
                 }
             },
-            3 => { // Palette (indexed) → RGBA via PLTE (RGB) + tRNS (alpha)
+            3 => { // Palette (indexed) -> RGBA via PLTE (RGB) + tRNS (alpha)
                 while (i < n) : (i += 1) {
                     const idx: usize = raw[i];
                     const p3: usize = idx * 3;
@@ -340,7 +340,7 @@ pub const png = struct {
                     rgba[i * 4 + 3] = if (idx < trns.len) trns[idx] else 255;
                 }
             },
-            4 => { // Grayscale + Alpha → RGBA
+            4 => { // Grayscale + Alpha -> RGBA
                 while (i < n) : (i += 1) {
                     // Grey + alpha: two bytes in, four out. The grey level fills R, G and B.
                     const g: u8 = raw[i * 2 + 0];
@@ -350,7 +350,7 @@ pub const png = struct {
                     rgba[i * 4 + 3] = raw[i * 2 + 1];
                 }
             },
-            6 => { // RGBA → RGBA (memcpy)
+            6 => { // RGBA -> RGBA (memcpy)
                 @memcpy(rgba, raw[0 .. n * 4]);
             },
             else => unreachable, // already validated
@@ -588,9 +588,9 @@ pub const png = struct {
         return result;
     }
 
-    test "encode/decode roundtrip 4×4 RGBA" {
+    test "encode/decode roundtrip 4x4 RGBA" {
         const allocator: Allocator = std.testing.allocator;
-        // 4×4 image = 64 bytes RGBA.  Mix of fully-opaque + semi-transparent
+        // 4x4 image = 64 bytes RGBA.  Mix of fully-opaque + semi-transparent
         // + fully-transparent pixels so we cover every alpha edge.
         var pixels: [64]u8 = undefined;
         var i: usize = 0;
@@ -627,7 +627,7 @@ pub const png = struct {
 
     test "encode produces valid IHDR for non-square image" {
         const allocator: Allocator = std.testing.allocator;
-        // 7 wide × 3 tall = 21 px = 84 bytes
+        // 7 wide x 3 tall = 21 px = 84 bytes
         var pixels: [84]u8 = @splat(0xff);
         const png_bytes: []u8 = try encode(allocator, &pixels, 7, 3);
         defer allocator.free(png_bytes);
@@ -647,7 +647,7 @@ pub const png = struct {
     // PIL dependency).  Each PNG is small enough (<100 bytes) that the
     // test binary stays trivial in size.
 
-    // 4×4 RGBA PNG: 2×2 cells (red TL, green TR, blue BL, white BR).
+    // 4x4 RGBA PNG: 2x2 cells (red TL, green TR, blue BL, white BR).
     // Color type 6, 8 bit, no interlace, single IDAT, filter 0.
     const png_4x4_rgba = [_]u8{
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -657,7 +657,7 @@ pub const png = struct {
         0xe0, 0x08, 0x96, 0xdd, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     };
 
-    // 2×2 grayscale PNG: black, white, white, black.  Color type 0.
+    // 2x2 grayscale PNG: black, white, white, black.  Color type 0.
     const png_2x2_gray = [_]u8{
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
         0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x00, 0x00, 0x00, 0x00, 0x57, 0xdd, 0x52,
@@ -666,7 +666,7 @@ pub const png = struct {
         0x44, 0xae, 0x42, 0x60, 0x82,
     };
 
-    // 2×2 RGB PNG: red, green, blue, yellow.  Color type 2.
+    // 2x2 RGB PNG: red, green, blue, yellow.  Color type 2.
     const png_2x2_rgb = [_]u8{
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
         0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x02, 0x00, 0x00, 0x00, 0xfd, 0xd4, 0x9a,
@@ -704,7 +704,7 @@ pub const png = struct {
     test "decode: 4x4 RGBA - top-right pixel is green" {
         const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
         defer img.deinit(std.testing.allocator);
-        // Pixel (3, 0): row 0, col 3 → byte index (0*4 + 3) * 4 = 12
+        // Pixel (3, 0): row 0, col 3 -> byte index (0*4 + 3) * 4 = 12
         try std.testing.expectEqual(@as(u8, 0), img.pixels[12]);
         try std.testing.expectEqual(@as(u8, 255), img.pixels[13]);
         try std.testing.expectEqual(@as(u8, 0), img.pixels[14]);
@@ -714,7 +714,7 @@ pub const png = struct {
     test "decode: 4x4 RGBA - bottom-left pixel is blue" {
         const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
         defer img.deinit(std.testing.allocator);
-        // Pixel (0, 3): row 3, col 0 → byte (3*4 + 0) * 4 = 48
+        // Pixel (0, 3): row 3, col 0 -> byte (3*4 + 0) * 4 = 48
         try std.testing.expectEqual(@as(u8, 0), img.pixels[48]);
         try std.testing.expectEqual(@as(u8, 0), img.pixels[49]);
         try std.testing.expectEqual(@as(u8, 255), img.pixels[50]);
@@ -723,7 +723,7 @@ pub const png = struct {
     test "decode: 4x4 RGBA - bottom-right pixel is white" {
         const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
         defer img.deinit(std.testing.allocator);
-        // Pixel (3, 3) → byte (3*4 + 3) * 4 = 60
+        // Pixel (3, 3) -> byte (3*4 + 3) * 4 = 60
         try std.testing.expectEqual(@as(u8, 255), img.pixels[60]);
         try std.testing.expectEqual(@as(u8, 255), img.pixels[61]);
         try std.testing.expectEqual(@as(u8, 255), img.pixels[62]);
@@ -736,7 +736,7 @@ pub const png = struct {
         try std.testing.expectEqual(@as(u32, 2), img.width);
         try std.testing.expectEqual(@as(u32, 2), img.height);
         try std.testing.expectEqual(@as(usize, 16), img.pixels.len); // 2*2*4
-        // Pixel (0,0) is black → R=G=B=0, A=255
+        // Pixel (0,0) is black -> R=G=B=0, A=255
         try std.testing.expectEqual(@as(u8, 0), img.pixels[0]);
         try std.testing.expectEqual(@as(u8, 0), img.pixels[1]);
         try std.testing.expectEqual(@as(u8, 0), img.pixels[2]);
@@ -778,7 +778,7 @@ pub const png = struct {
 // Decodes an animated (or single-frame) GIF into a stack of fully-COMPOSITED
 // RGBA8 canvases, one per frame, plus each frame's display delay. GIF stores
 // each frame as a palette-indexed sub-rectangle layered over a persistent
-// canvas under a per-frame DISPOSAL rule, with an optional transparent index —
+// canvas under a per-frame DISPOSAL rule, with an optional transparent index -
 // so "decode each sub-image on its own" is wrong for anything but the simplest
 // file (a later frame that only patches a small rect would otherwise come back
 // mostly blank). We composite here, exactly as a player would, so a caller
@@ -932,7 +932,7 @@ pub const gif = struct {
             while (bits_in < code_width) {
                 if (byte_idx >= data.len) {
                     // Stream exhausted; a valid GIF ends via the end code, but
-                    // some encoders omit it — stop cleanly on what we have.
+                    // some encoders omit it - stop cleanly on what we have.
                     return;
                 }
                 bit_buffer |= @as(u32, data[byte_idx]) << @as(u5, @intCast(bits_in));
@@ -1269,29 +1269,29 @@ pub const gif = struct {
 //
 // What this decodes: baseline JPEG (SOF0), 8-bit precision, Huffman entropy
 // coding.  Grayscale (1 component) or YCbCr (3 components) with chroma
-// sampling factors up to 2x2 on luma — covers 4:4:4, 4:4:0, 4:2:2, 4:2:0
+// sampling factors up to 2x2 on luma - covers 4:4:4, 4:4:0, 4:2:2, 4:2:0
 // which is ~every consumer JPEG.  Output is always RGBA8 to match png.Image
 // so callers don't notice which codec ran.
 //
 // What this does NOT do: progressive JPEG (SOF2), arithmetic coding (SOF9+),
 // 12-bit precision (SOF1), lossless modes (SOF3, SOF7), hierarchical (SOF5,
 // SOF6), CMYK, EXIF/ICC handling.  Hitting any of these returns a specific
-// Error.Unsupported* — callers fall back to "warn + leave untextured" rather
+// Error.Unsupported* - callers fall back to "warn + leave untextured" rather
 // than aborting whole loads.  We surfaced that fallback path while debugging
 // DamagedHelmet's JPEG textures; this section's job is to remove the need
 // for the fallback in the common case.
 //
 // Pipeline, top to bottom:
-//   1. marker scan      — walk FF-prefixed markers, dispatch on type
-//   2. segment parse    — DQT (quant), DHT (Huffman), SOF0 (frame), SOS (scan)
-//   3. entropy decode   — Huffman + run-length-zero + inline dequantize, per
+//   1. marker scan      - walk FF-prefixed markers, dispatch on type
+//   2. segment parse    - DQT (quant), DHT (Huffman), SOF0 (frame), SOS (scan)
+//   3. entropy decode   - Huffman + run-length-zero + inline dequantize, per
 //                         MCU block
-//   4. inverse DCT      — Loeffler-style fixed-point, 8x8 frequency -> spatial
-//   5. chroma upsample  — nearest-neighbor Cb/Cr to Y resolution
-//   6. YCbCr → RGB      — fixed-point 16.16 matrix; clamp; alpha=255
+//   4. inverse DCT      - Loeffler-style fixed-point, 8x8 frequency -> spatial
+//   5. chroma upsample  - nearest-neighbor Cb/Cr to Y resolution
+//   6. YCbCr -> RGB      - fixed-point 16.16 matrix; clamp; alpha=255
 //
 // References studied (not copied):
-//   - stb_image.h JPEG decoder (raylib's external/, lines 1914-4080) — single
+//   - stb_image.h JPEG decoder (raylib's external/, lines 1914-4080) - single
 //     fat struct + manual SIMD.  Borrowed the 9-bit fast Huffman lookup idea.
 //     Skipped its SIMD kernels (LLVM auto-vec is fine for our use).
 //   - zigimg src/formats/jpeg/ (modular Zig port, ~1400 lines).  Borrowed the
@@ -1337,7 +1337,7 @@ pub const jpeg = struct {
 
     // JPEG zig-zag scan order.  Coefficients in the bitstream arrive in this
     // sequence because low-frequency (visually-important) coefficients
-    // cluster near linear index 0 after zig-zagging — which means the
+    // cluster near linear index 0 after zig-zagging - which means the
     // run-length encoding gets long trails of zeros to crunch at the end.
     // We index INTO this from k=0..63 during entropy decode to find where in
     // the natural-order 8x8 block each coefficient actually goes.
@@ -1356,12 +1356,12 @@ pub const jpeg = struct {
     // in JPEG are <= 9 bits, so a single 9-bit peek tells us both the symbol
     // and how many bits to consume.  Codes longer than 9 bits leave their
     // slots with fast_len = 0 (sentinel) and we fall back to a per-bit walk.
-    // 9 bits is the sweet spot per stb_image — 512 entries (small) but covers
+    // 9 bits is the sweet spot per stb_image - 512 entries (small) but covers
     // ~99% of real-world codes (big speedup).
     const fast_bits: u5 = 9;
     const fast_size: usize = 1 << fast_bits;
 
-    // One Huffman table per (class, table_id) — JPEG allows up to 4 DC + 4 AC
+    // One Huffman table per (class, table_id) - JPEG allows up to 4 DC + 4 AC
     // for baseline (per spec, only 2 of each in practice, but we provision 4).
     const HuffmanTable = struct {
         // Fast path: 9-bit prefix -> (symbol, code length).
@@ -1373,7 +1373,7 @@ pub const jpeg = struct {
         // maxcode[L] is the largest, valptr[L] is the index in `symbols`
         // where L-bit codes begin.  Symbols are stored flat in canonical order.
         // maxcode is i64 (not u32) specifically so we can use -1 as the
-        // "no codes at this length" sentinel — with a u32 sentinel of
+        // "no codes at this length" sentinel - with a u32 sentinel of
         // 0xFFFFFFFF, the slow-path `code <= maxcode[length]` check would
         // trivially match any incoming code, which would let a length-1
         // walk swallow the entropy stream and return a garbage symbol.
@@ -1388,7 +1388,7 @@ pub const jpeg = struct {
     // Component info from SOF0.  Up to 4 are allowed by spec; we accept 1
     // (grayscale) or 3 (YCbCr).  CMYK (4 components) returns Unsupported.
     const Component = struct {
-        id: u8, // glyph id from SOF0 — usually 1=Y, 2=Cb, 3=Cr but not always
+        id: u8, // glyph id from SOF0 - usually 1=Y, 2=Cb, 3=Cr but not always
         h: u8, // horizontal sampling factor (1..4 per spec; we only do 1..2)
         v: u8, // vertical sampling factor (same)
         quant_id: u8, // which quant table index to dequantize with
@@ -1398,13 +1398,13 @@ pub const jpeg = struct {
         // (image_w / max_h * h, rounded up to 8x8 blocks).  Owned by the
         // decoder, freed at the end.
         pixels: []u8 = &.{},
-        stride: usize = 0, // row stride in pixels — may exceed actual width
+        stride: usize = 0, // row stride in pixels - may exceed actual width
         blocks_w: usize = 0, // number of 8x8 blocks horizontally
         blocks_h: usize = 0, // number of 8x8 blocks vertically
     };
 
     // Sniff a JPEG magic by SOI marker. Used as a defense-in-depth check when
-    // mime_type isn't set — see drawing.zig materialsFromGltf.
+    // mime_type isn't set - see drawing.zig materialsFromGltf.
     pub fn isJpeg(bytes: []const u8) bool {
         // The SOI marker is FF D8; real JPEGs immediately follow with FF
         // (the start of the next marker), so a 3-byte check is more robust
@@ -1448,7 +1448,7 @@ pub const jpeg = struct {
         // Progressive JPEGs redefine Huffman tables between scans via
         // DHT markers, overwriting the SAME `out` table struct.  Without
         // this clear, fast_len entries for 9-bit prefixes that the new
-        // table doesn't use retain stale values from the previous table —
+        // table doesn't use retain stale values from the previous table -
         // huffDecode's fast-path hits them and returns the wrong symbol
         // and length, over-reading bits across the scan and eventually
         // running into the next marker mid-block.  Caught on the
@@ -1472,7 +1472,7 @@ pub const jpeg = struct {
             out.mincode[length] = code;
             out.valptr[length] = sym_idx;
             if (count == 0) {
-                // Leave maxcode at the default -1 — the "no codes at this
+                // Leave maxcode at the default -1 - the "no codes at this
                 // length" sentinel.  Slow-path comparisons against -1
                 // (signed) never match a real positive code value.
                 out.maxcode[length] = -1;
@@ -1503,7 +1503,7 @@ pub const jpeg = struct {
             // Huffman construction)
             code <<= 1;
         }
-        // mincode/maxcode for length 17 is the sentinel — we initialize
+        // mincode/maxcode for length 17 is the sentinel - we initialize
         // maxcode to 0xFFFFFFFF in the default value and never read past
         // length 16, so no extra work needed.
     }
@@ -1516,7 +1516,7 @@ pub const jpeg = struct {
     //   1. Byte-stuffing: any literal 0xFF byte in the entropy stream is
     //      followed by a 0x00 stuffing byte (which we silently drop).  This
     //      lets the decoder distinguish data from markers.
-    //   2. Markers: a 0xFF followed by NON-zero is a marker — usually
+    //   2. Markers: a 0xFF followed by NON-zero is a marker - usually
     //      restart (0xD0..0xD7) or EOI (0xD9).  We stash the marker byte
     //      and stop refilling so the caller can decide what to do.
     //
@@ -1553,12 +1553,12 @@ pub const jpeg = struct {
                     const next: u8 = self.bytes[self.cursor];
                     self.cursor += 1;
                     if (next == 0x00) {
-                        // Stuffing byte — the real data is just 0xFF.
+                        // Stuffing byte - the real data is just 0xFF.
                         // Push 0xFF onto the accumulator and continue.
                         self.acc |= @as(u32, 0xFF) << @intCast(24 - self.bits);
                         self.bits += 8;
                     } else {
-                        // It's a marker — stop refilling.  Common ones are
+                        // It's a marker - stop refilling.  Common ones are
                         // EOI (0xD9), restart markers (0xD0..0xD7).
                         self.marker = next;
                         return;
@@ -1597,7 +1597,7 @@ pub const jpeg = struct {
             return v;
         }
 
-        // JPEG "extend" — convert an N-bit unsigned magnitude into a signed
+        // JPEG "extend" - convert an N-bit unsigned magnitude into a signed
         // value using the convention that the high bit indicates sign.
         // If the high bit is 0, the value is negative: extend = bits - (2^N - 1).
         // If the high bit is 1, the value is positive: extend = bits.
@@ -1610,7 +1610,7 @@ pub const jpeg = struct {
             const v: u32 = try self.readBits(s);
             const threshold: u32 = @as(u32, 1) << @intCast(s - 1);
             if (v < threshold) {
-                // Negative branch — extend with leading 1s and the +1 offset
+                // Negative branch - extend with leading 1s and the +1 offset
                 const offset: i32 = (@as(i32, -1) << @intCast(s)) + 1;
                 return @as(i32, @intCast(v)) + offset;
             }
@@ -1631,7 +1631,7 @@ pub const jpeg = struct {
             // when maxcode[length] is -1 (no codes here), code (cast to
             // i64) can't be <= -1, so we correctly fall through.
             if (@as(i64, code) <= t.maxcode[len]) {
-                // Found it — symbol index is valptr[length] + (code - mincode[length])
+                // Found it - symbol index is valptr[length] + (code - mincode[length])
                 const idx: usize = t.valptr[len] + @as(usize, @intCast(code - t.mincode[len]));
                 return t.symbols[idx];
             }
@@ -1642,7 +1642,7 @@ pub const jpeg = struct {
     fn huffDecode(br: *BitReader, t: *const HuffmanTable) Error!u8 {
         br.refill();
         // Try the 9-bit fast lookup first.  If we have fewer than 9 bits
-        // (near EOF), the lookup might still hit a short code — peek a partial
+        // (near EOF), the lookup might still hit a short code - peek a partial
         // count.  But the simplest robust thing is: if we have >= 9 bits, fast
         // path; else, slow path which reads one at a time.
         if (br.bits >= fast_bits) {
@@ -1658,7 +1658,7 @@ pub const jpeg = struct {
 
     // ------------------------------------------------------------------------
     // Block decode: read one 8x8 block of dequantized coefficients in natural
-    // (not zig-zag) order.  Updates prev_dc in place — DC coefficients are
+    // (not zig-zag) order.  Updates prev_dc in place - DC coefficients are
     // differentially coded across blocks of the same component.
     // ------------------------------------------------------------------------
     fn decodeBlock(
@@ -1749,7 +1749,7 @@ pub const jpeg = struct {
         succ_high: u4,
     ) Error!void {
         if (succ_high == 0) {
-            // First DC scan for this block — read the DC differential and
+            // First DC scan for this block - read the DC differential and
             // shift up by succ_low (so future refinement scans can add
             // lower-order bits).
             const dc_size: u8 = try huffDecode(br, dc_table);
@@ -1758,11 +1758,11 @@ pub const jpeg = struct {
             }
             const dc_diff: i32 = try br.receiveExtend(@intCast(dc_size));
             prev_dc.* += dc_diff;
-            // Shift left, store as i16.  i32 → i16 with sufficient headroom
-            // for 8-bit-precision JPEG (DC fits in ±2048 * 2^succ_low ≤ i16).
+            // Shift left, store as i16.  i32 -> i16 with sufficient headroom
+            // for 8-bit-precision JPEG (DC fits in +/-2048 * 2^succ_low <= i16).
             block[0] = @intCast(prev_dc.* << succ_low);
         } else {
-            // Refinement scan — read one bit and OR it into the existing DC
+            // Refinement scan - read one bit and OR it into the existing DC
             // at bit position succ_low.
             const bit: u32 = try br.readBits(1);
             if (bit != 0) {
@@ -1825,12 +1825,12 @@ pub const jpeg = struct {
                 k += 1;
             }
         } else {
-            // AC refinement scan — for each existing non-zero coefficient,
+            // AC refinement scan - for each existing non-zero coefficient,
             // read one bit to refine it.  For new (previously-zero)
             // coefficients, the entropy stream encodes (run_of_zeros, sign):
             // a run-length skip past run zeros, then a new coefficient of
-            // value ±(1 << succ_low) with sign read as one bit.  EOBn here
-            // doesn't end the block — it ends after applying refinement
+            // value +/-(1 << succ_low) with sign read as one bit.  EOBn here
+            // doesn't end the block - it ends after applying refinement
             // bits to existing non-zero coefficients in the remaining range.
             const bit: i16 = @as(i16, 1) << succ_low;
             var k: usize = spec_start;
@@ -1874,7 +1874,7 @@ pub const jpeg = struct {
                     if (s != 1) {
                         return Error.InvalidEntropyData;
                     }
-                    // New coefficient — sign bit determines ±(1 << succ_low)
+                    // New coefficient - sign bit determines +/-(1 << succ_low)
                     const sign_bit: u32 = try br.readBits(1);
                     s = if (sign_bit != 0) bit else -bit;
                 }
@@ -1914,7 +1914,7 @@ pub const jpeg = struct {
     // The Loeffler 8-point IDCT decomposes the 8x8 DCT into a small graph of
     // multiplications and rotations.  The constants below come from the
     // standard form (12 fractional bits of precision).  We use a 1-D function
-    // and call it twice — once per column, once per row — like the textbook.
+    // and call it twice - once per column, once per row - like the textbook.
     // After the first pass we have an intermediate scaled by 2^10 (the 1024
     // bias absorbs the rounding).  After the second pass we scale by 2^17
     // (output bits) and round to integer samples.
@@ -1922,7 +1922,7 @@ pub const jpeg = struct {
     // I wrote the constants and operations out by hand from the Loeffler '89
     // paper rather than copying from zigimg or stb_image to make sure I
     // understand them.  Cross-checked the numeric output on a few sample
-    // blocks against zigimg's IDCT — agreement to within 1 LSB which is the
+    // blocks against zigimg's IDCT - agreement to within 1 LSB which is the
     // expected rounding-equivalence ceiling.
     // ------------------------------------------------------------------------
     // Decode one progressive scan into block-coefficient storage.  Handles
@@ -1931,7 +1931,7 @@ pub const jpeg = struct {
     //
     // Per JPEG spec: for non-interleaved scans an "MCU" collapses to a
     // single 8x8 block, so the same restart-interval logic applies in
-    // both modes — we just compute the block coordinates differently.
+    // both modes - we just compute the block coordinates differently.
     // ------------------------------------------------------------------------
     fn decodeProgressiveScan(
         br: *BitReader,
@@ -2060,7 +2060,7 @@ pub const jpeg = struct {
             }
             mcu_count += 1;
 
-            // Restart marker handling — identical structure to baseline.
+            // Restart marker handling - identical structure to baseline.
             if (restart_interval != 0 and
                 mcu_count % restart_interval == 0 and
                 mcu_count != total_mcus)
@@ -2068,7 +2068,7 @@ pub const jpeg = struct {
                 br.bits = 0;
                 br.acc = 0;
                 if (br.marker) |m| {
-                    _ = m; // lenient — accept any marker as restart
+                    _ = m; // lenient - accept any marker as restart
                     br.marker = null;
                 } else {
                     while (br.cursor + 1 < bytes.len) {
@@ -2130,7 +2130,7 @@ pub const jpeg = struct {
     }
 
     // ------------------------------------------------------------------------
-    // IDCT — Loeffler-style fixed-point inverse DCT.  Operates in place on a
+    // IDCT - Loeffler-style fixed-point inverse DCT.  Operates in place on a
     // [64]i32 block.  Two passes: columns first, then rows.  Output is signed
     // i32 samples; caller adds 128 and clamps for u8 output.
     // ------------------------------------------------------------------------
@@ -2138,7 +2138,7 @@ pub const jpeg = struct {
     // The Loeffler 8-point IDCT decomposes the 8x8 DCT into a small graph of
     // multiplications and rotations.  The constants below come from the
     // standard form (12 fractional bits of precision).  We use a 1-D function
-    // and call it twice — once per column, once per row — like the textbook.
+    // and call it twice - once per column, once per row - like the textbook.
     // After the first pass we have an intermediate scaled by 2^10 (the 1024
     // bias absorbs the rounding).  After the second pass we scale by 2^17
     // (output bits) and round to integer samples.
@@ -2146,10 +2146,10 @@ pub const jpeg = struct {
     // I wrote the constants and operations out by hand from the Loeffler '89
     // paper rather than copying from zigimg or stb_image to make sure I
     // understand them.  Cross-checked the numeric output on a few sample
-    // blocks against zigimg's IDCT — agreement to within 1 LSB which is the
+    // blocks against zigimg's IDCT - agreement to within 1 LSB which is the
     // expected rounding-equivalence ceiling.
     fn f2f(comptime x: f32) i32 {
-        // round(x * 4096) — 12 fractional bits
+        // round(x * 4096) - 12 fractional bits
         return @round(x * 4096.0);
     }
 
@@ -2284,7 +2284,7 @@ pub const jpeg = struct {
     // Main entry: decode a JPEG byte stream into an RGBA8 Image.
     // ------------------------------------------------------------------------
     //
-    // This function is intentionally LONG — Carmack-style flat code with
+    // This function is intentionally LONG - Carmack-style flat code with
     // local state instead of struct fields, and inline switch on markers.
     // Easier to follow as one read-through than spread across many tiny
     // methods.  Allocations are tracked with errdefer/defer so failure paths
@@ -2299,7 +2299,7 @@ pub const jpeg = struct {
             return Error.InvalidSignature;
         }
 
-        // Per-decoder state, all local — no struct fields, no globals.
+        // Per-decoder state, all local - no struct fields, no globals.
         var quant_tables: [4][64]u16 = @splat(@splat(0));
         var quant_defined: [4]bool = @splat(false);
         var dc_huff: [4]HuffmanTable = @splat(.{});
@@ -2348,7 +2348,7 @@ pub const jpeg = struct {
         }
 
         // Walk markers starting at byte 2 (just past SOI).  We stop when we
-        // hit SOS — at that point the entropy stream begins and we switch to
+        // hit SOS - at that point the entropy stream begins and we switch to
         // bit-level reading.  Progressive JPEGs have MULTIPLE SOS markers
         // (one per scan); the marker loop continues past each progressive
         // SOS to find the next.  Baseline has exactly one SOS and we exit
@@ -2361,7 +2361,7 @@ pub const jpeg = struct {
 
         scan: while (cursor + 1 < bytes.len) {
             // Every segment starts with FF + marker_byte.  Some encoders
-            // emit padding FFs (FF FF FF...) — skip them.
+            // emit padding FFs (FF FF FF...) - skip them.
             while (cursor < bytes.len and bytes[cursor] == 0xFF) {
                 cursor += 1;
             }
@@ -2375,12 +2375,12 @@ pub const jpeg = struct {
             // Markers without a following segment payload: SOI (already past),
             // EOI, restart markers (RST0..RST7 = D0..D7), TEM (01).
             if (marker == 0xD9) {
-                // EOI — end of image, we're done (this happens after SOS
+                // EOI - end of image, we're done (this happens after SOS
                 // entropy decode is over, but defensively handle it here too)
                 break :scan;
             }
             if (marker >= 0xD0 and marker <= 0xD7) {
-                // Stray restart marker outside a scan — shouldn't happen but
+                // Stray restart marker outside a scan - shouldn't happen but
                 // we'll just skip it
                 continue :scan;
             }
@@ -2401,7 +2401,7 @@ pub const jpeg = struct {
             cursor += seg_len;
 
             switch (marker) {
-                // SOF0 — baseline DCT.  SOF2 — progressive DCT.  Both use
+                // SOF0 - baseline DCT.  SOF2 - progressive DCT.  Both use
                 // 8-bit precision + Huffman coding; only the entropy stream
                 // structure differs (baseline = one scan with all coeffs,
                 // progressive = multiple scans refining DC/AC and bit levels
@@ -2498,7 +2498,7 @@ pub const jpeg = struct {
                     }
                 },
 
-                // SOF1, SOF3, SOF5-7, SOF9-15 — remaining unsupported modes
+                // SOF1, SOF3, SOF5-7, SOF9-15 - remaining unsupported modes
                 // after we added SOF0+SOF2 above.  These add arithmetic
                 // coding (SOF9+), 12-bit precision (SOF1), lossless modes
                 // (SOF3, SOF7), or hierarchical (SOF5, SOF6).
@@ -2506,7 +2506,7 @@ pub const jpeg = struct {
                     return Error.UnsupportedMode;
                 },
 
-                // DQT — Define Quantization Tables.  Can pack multiple tables
+                // DQT - Define Quantization Tables.  Can pack multiple tables
                 // into one segment.  Each table is preceded by a precision+id
                 // byte (high nibble = precision, low nibble = table id).
                 0xDB => {
@@ -2528,7 +2528,7 @@ pub const jpeg = struct {
                             if (p + 64 > payload.len) {
                                 return Error.InvalidQuantTable;
                             }
-                            // Stored in zig-zag order — un-zigzag while reading
+                            // Stored in zig-zag order - un-zigzag while reading
                             // so quant_tables[i] is in natural order, ready
                             // to use directly inside decodeBlock.
                             for (0..64) |k| {
@@ -2552,7 +2552,7 @@ pub const jpeg = struct {
                     }
                 },
 
-                // DHT — Define Huffman Tables.  Same pack-multiple convention.
+                // DHT - Define Huffman Tables.  Same pack-multiple convention.
                 0xC4 => {
                     var p: usize = 0;
                     while (p < payload.len) {
@@ -2587,7 +2587,7 @@ pub const jpeg = struct {
                     }
                 },
 
-                // DRI — Define Restart Interval.  After this many MCUs, the
+                // DRI - Define Restart Interval.  After this many MCUs, the
                 // entropy stream is reset (DC predictors zeroed) and a restart
                 // marker is inserted.  Most JPEGs don't use restart; in those
                 // it stays 0.
@@ -2598,7 +2598,7 @@ pub const jpeg = struct {
                     restart_interval = (@as(u32, payload[0]) << 8) | payload[1];
                 },
 
-                // SOS — Start Of Scan.  The entropy stream starts immediately
+                // SOS - Start Of Scan.  The entropy stream starts immediately
                 // after the SOS segment header.  Progressive JPEGs have
                 // multiple SOS markers (one per scan); baseline has exactly
                 // one.  For baseline we process the entire scan here and
@@ -2614,8 +2614,8 @@ pub const jpeg = struct {
                     }
                     const ns: usize = payload[0];
                     // Baseline requires ns == num_components (interleaved
-                    // single scan).  Progressive allows ns ∈ {1, num_components}
-                    // — non-interleaved scans operate on one component.
+                    // single scan).  Progressive allows ns in {1, num_components}
+                    // - non-interleaved scans operate on one component.
                     if (!progressive and ns != num_components) {
                         return Error.UnsupportedMode;
                     }
@@ -2681,7 +2681,7 @@ pub const jpeg = struct {
 
                     if (progressive) {
                         // Decode this scan's coefficients into block storage.
-                        // No pixels written yet — that happens in finalize
+                        // No pixels written yet - that happens in finalize
                         // after EOI.
                         try decodeProgressiveScan(
                             &br,
@@ -2705,7 +2705,7 @@ pub const jpeg = struct {
                         // Position cursor at the next marker's FF byte so
                         // the outer marker loop picks it up.  br.marker
                         // means we already consumed the FF+marker_byte
-                        // pair during refill — back-step by 2.
+                        // pair during refill - back-step by 2.
                         if (br.marker != null) {
                             cursor = br.cursor - 2;
                             br.marker = null;
@@ -2778,7 +2778,7 @@ pub const jpeg = struct {
                                 if (br.marker) |m| {
                                     if (m != rst_expected) {
                                         // Out-of-order or missing restart
-                                        // marker — be lenient and just clear
+                                        // marker - be lenient and just clear
                                         // the marker, reset DCs and continue
                                     }
                                     br.marker = null;
@@ -2806,12 +2806,12 @@ pub const jpeg = struct {
                     // consumed by the refill; we just need to look for the
                     // FF prefix on the next iteration.  Move cursor back so
                     // the FF is re-read.  Actually the simplest thing: stop
-                    // here — JPEGs after baseline SOS are almost always just
+                    // here - JPEGs after baseline SOS are almost always just
                     // EOI.  Break out of the scan loop and finalize.
                     break :scan;
                 },
 
-                // Application markers (APP0..APP15), comment (COM), DNL — skip
+                // Application markers (APP0..APP15), comment (COM), DNL - skip
                 0xE0,
                 0xE1,
                 0xE2,
@@ -2835,7 +2835,7 @@ pub const jpeg = struct {
                 },
 
                 else => {
-                    // Unknown marker — be lenient and skip it.  Real-world
+                    // Unknown marker - be lenient and skip it.  Real-world
                     // encoders occasionally emit private/reserved markers.
                 },
             }
@@ -2851,7 +2851,7 @@ pub const jpeg = struct {
         // For progressive JPEGs, all scans have populated the per-component
         // block-coefficient storage by this point.  Dequantize + IDCT into
         // the component pixel buffers in one pass.  After this, both
-        // baseline and progressive paths are unified: the YCbCr→RGBA8
+        // baseline and progressive paths are unified: the YCbCr->RGBA8
         // upsample/convert step below reads from comp.pixels identically.
         if (progressive) {
             finalizeProgressive(
@@ -2896,7 +2896,7 @@ pub const jpeg = struct {
                 }
             }
         } else {
-            // YCbCr -> RGB.  Chroma channels may be subsampled — we replicate
+            // YCbCr -> RGB.  Chroma channels may be subsampled - we replicate
             // (nearest-neighbor upsample) by scaling the source index by the
             // ratio of max to component sampling factor.  Bilinear upsample
             // would be slightly nicer but nearest is what stb_image uses by
@@ -2943,7 +2943,7 @@ pub const jpeg = struct {
             }
         }
 
-        // Components' pixel buffers can be freed now — output is built.
+        // Components' pixel buffers can be freed now - output is built.
         // (errdefer was tracking these; we explicitly free + clear so the
         // errdefer no-ops on success.)
         for (&allocated) |*buf| {
@@ -2982,8 +2982,8 @@ pub const jpeg = struct {
     }
 
     test "jpeg: decodes 16x16 progressive (SOF2)" {
-        // 16×16 RGB progressive JPEG generated by PIL with diagonal red/blue
-        // stripes — exercises SOF2 marker, multi-scan DC+AC, and the
+        // 16x16 RGB progressive JPEG generated by PIL with diagonal red/blue
+        // stripes - exercises SOF2 marker, multi-scan DC+AC, and the
         // dequant+IDCT finalize pass.  Expected pixel values come from
         // decoding the same bytes with PIL, allowing some lossy-JPEG
         // tolerance.
@@ -3046,9 +3046,9 @@ pub const jpeg = struct {
         try std.testing.expectEqual(@as(u32, 16), img.height);
         try std.testing.expectEqual(@as(usize, 16 * 16 * 4), img.pixels.len);
         // PIL decodes pixel (0,0) as roughly (159, 60, 115) and pixel (1,0)
-        // as (148, 65, 133); we tolerate ±8 since JPEG IDCTs can disagree
+        // as (148, 65, 133); we tolerate +/-8 since JPEG IDCTs can disagree
         // by a few LSBs at the same quality settings.  The key thing is
-        // we get something CLOSE — if the decoder is broken (e.g. wrong
+        // we get something CLOSE - if the decoder is broken (e.g. wrong
         // dequant, missing AC coefficients) the values are wildly off.
         const tolerance: i32 = 16;
         const p0_r: i32 = @intCast(img.pixels[0]);
@@ -3058,7 +3058,7 @@ pub const jpeg = struct {
         try std.testing.expect(@abs(p0_g - 60) <= tolerance);
         try std.testing.expect(@abs(p0_b - 115) <= tolerance);
         // Sanity: average R should be > average B (more red than blue
-        // overall in this stripe pattern — slight, but consistent).
+        // overall in this stripe pattern - slight, but consistent).
         var sum_r: u64 = 0;
         var sum_b: u64 = 0;
         var i: usize = 0;
@@ -6076,7 +6076,7 @@ pub const rectpack = struct {
         };
         const result: Result = pack(&rects, 100, 0);
         // 2 rects fit on shelf 1 (width 60+60 = 120 > 100, so only 1 fits)
-        // Three rects → three shelves of height 20 = 60.
+        // Three rects -> three shelves of height 20 = 60.
         try std.testing.expect(result.height == 60);
         try std.testing.expect(result.overflow == 0);
     }
@@ -6101,7 +6101,7 @@ pub const rectpack = struct {
         };
         const result: Result = pack(&rects, 32, 0);
         // 4 rects per row; with tallest-first, all three fit on one
-        // shelf at heights 32, 16, 8 → shelf height = 32.
+        // shelf at heights 32, 16, 8 -> shelf height = 32.
         try std.testing.expect(result.height == 32);
         // The original .id=2 rect (the tallest) lives on shelf 0 at y=0.
         var found_tallest: bool = false;
@@ -6142,8 +6142,8 @@ pub const rectpack = struct {
             r.* = .{ .w = 16, .h = 16, .id = @intCast(i) };
         }
         const result: Result = pack(&rects, 128, 0);
-        // 8 rects per row × 13 rows = 104 slots needed for 100 rects.
-        // 13 rows × 16 = 208 height.
+        // 8 rects per row x 13 rows = 104 slots needed for 100 rects.
+        // 13 rows x 16 = 208 height.
         try std.testing.expect(result.height == 13 * 16);
     }
 
@@ -6163,7 +6163,7 @@ pub const rectpack = struct {
         const w: u32 = suggestAtlasWidth(&rects);
         // Total area = 1024.  ideal_side = ~32.  Rounded up to 32 (already
         // power-of-two).  Padded by 5/4: 1280, sqrt = 35.7, round up = 64.
-        // Either way w should be a power-of-two ≥ 32.
+        // Either way w should be a power-of-two >= 32.
         try std.testing.expect(w == 32 or w == 64);
         try std.testing.expect(w >= 16); // must accommodate widest rect
     }
@@ -6395,7 +6395,7 @@ pub const code_point = struct {
     // to use a more familiar decision graph based on switches, but modern
     // hosted environments can well afford the space, and may appreciate a
     // speed increase in exchange.
-    // Credit for the algorithm goes to Björn Höhrmann, who wrote it up at
+    // Credit for the algorithm goes to Bjorn Hohrmann, who wrote it up at
     // https://bjoern.hoehrmann.de/utf-8/decoder/dfa/.  The license to the
     // original code may be found in the ./credits folder.
 
@@ -6846,10 +6846,10 @@ pub const audio = struct {
             /// Bytes don't start with "RIFF...WAVE".
             InvalidSignature,
             /// `fmt ` chunk's format tag isn't 1 (PCM int) or 3
-            /// (IEEE float).  ADPCM, μ-law, A-law, etc. unsupported.
+            /// (IEEE float).  ADPCM, mu-law, A-law, etc. unsupported.
             UnsupportedFormatTag,
-            /// PCM int with bits ≠ {8, 16, 32}, or IEEE float with
-            /// bits ≠ 32.
+            /// PCM int with bits != {8, 16, 32}, or IEEE float with
+            /// bits != 32.
             UnsupportedBitDepth,
             /// channels = 0 or > 8.
             UnsupportedChannelCount,
@@ -6995,7 +6995,7 @@ pub const audio = struct {
             try std_mod.testing.expectEqual(@as(u32, 22050), cw.sample_rate);
             try std_mod.testing.expectEqual(@as(u16, 16), cw.sample_size);
             try std_mod.testing.expectEqual(@as(u16, 1), cw.channels);
-            // 22050 Hz × 0.5 sec × 1 channel × 2 bytes = 22050 bytes
+            // 22050 Hz x 0.5 sec x 1 channel x 2 bytes = 22050 bytes
             try std_mod.testing.expectEqual(@as(usize, 22050), cw.samples.len);
             try std_mod.testing.expectEqual(@as(u32, 11025), cw.frameCount());
         }
@@ -7019,7 +7019,7 @@ pub const audio = struct {
             );
         }
 
-        test "decode: WAVE header but no chunks → data missing" {
+        test "decode: WAVE header but no chunks -> data missing" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
             const just_header: []const u8 = "RIFF\x04\x00\x00\x00WAVE";
             var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(just_header);
@@ -7032,7 +7032,7 @@ pub const audio = struct {
         test "decode: minimal hand-built 16-bit mono PCM" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
             // Build the smallest legal WAV: header + fmt(16) + data(4 bytes).
-            // 2 frames × 1 channel × 2 bytes/sample = 4 bytes.
+            // 2 frames x 1 channel x 2 bytes/sample = 4 bytes.
             const wav_bytes: []const u8 =
                 "RIFF" ++ "\x28\x00\x00\x00" ++ "WAVE" ++
                 "fmt " ++ "\x10\x00\x00\x00" ++
@@ -7048,16 +7048,16 @@ pub const audio = struct {
             try std_mod.testing.expectEqual(@as(u16, 1), cw.channels);
             try std_mod.testing.expectEqual(@as(usize, 4), cw.samples.len);
             try std_mod.testing.expectEqual(@as(u32, 2), cw.frameCount());
-            // Sample 0 = 0x0000 → silence; sample 1 = 0x7fff → max amplitude.
+            // Sample 0 = 0x0000 -> silence; sample 1 = 0x7fff -> max amplitude.
             try std_mod.testing.expectEqual(@as(u8, 0x00), cw.samples[0]);
             try std_mod.testing.expectEqual(@as(u8, 0x00), cw.samples[1]);
             try std_mod.testing.expectEqual(@as(u8, 0xff), cw.samples[2]);
             try std_mod.testing.expectEqual(@as(u8, 0x7f), cw.samples[3]);
         }
 
-        test "decode: unsupported format tag (μ-law)" {
+        test "decode: unsupported format tag (mu-law)" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-            // format_tag = 7 (μ-law) - not in our PCM(1)/float(3) set.
+            // format_tag = 7 (mu-law) - not in our PCM(1)/float(3) set.
             const wav_bytes: []const u8 =
                 "RIFF" ++ "\x24\x00\x00\x00" ++ "WAVE" ++
                 "fmt " ++ "\x10\x00\x00\x00" ++
@@ -7144,7 +7144,7 @@ pub const audio = struct {
         /// data bytes are written verbatim.
         /// Currently supports only the trivial verbatim path: input
         /// CanonicalWave's format MUST match `options`.  Conversion
-        /// happens upstream via `toFloat32Stereo` → caller-rebuilds
+        /// happens upstream via `toFloat32Stereo` -> caller-rebuilds
         /// CanonicalWave at desired format.  Step 6 keeps the encoder
         /// minimal and pushes format choice to the toCanonical
         /// pipeline.
@@ -7213,9 +7213,9 @@ pub const audio = struct {
         ///   - 32-bit PCM int:                       `s / 2_147_483_648.0`
         ///   - 32-bit IEEE float:                    passthrough (with bit cast)
         /// Channel mapping:
-        ///   - mono → stereo: duplicate L=R
-        ///   - stereo → stereo: passthrough
-        ///   - 3+ channels → stereo: take channels 0+1, drop the rest
+        ///   - mono -> stereo: duplicate L=R
+        ///   - stereo -> stereo: passthrough
+        ///   - 3+ channels -> stereo: take channels 0+1, drop the rest
         pub fn toFloat32Stereo(
             gpa: std_mod.mem.Allocator,
             wave: CanonicalWave,
@@ -7278,7 +7278,7 @@ pub const audio = struct {
         /// Output length = `input_frame_count * sr_out / sr_in`.
         /// When `sr_in == sr_out`, returns a copy without
         /// interpolation (faster, also avoids tiny rounding drift).
-        /// Linear is good enough for game SFX at the 44.1k → 48k
+        /// Linear is good enough for game SFX at the 44.1k -> 48k
         /// kind of conversion.  For high-quality music a windowed-sinc
         /// kernel would be the upgrade - tracked, not blocking.
         pub fn resampleLinear(
@@ -7298,7 +7298,7 @@ pub const audio = struct {
             }
             const in_frames: usize = samples.len / channels;
             // Use u64 for the multiplication so we don't overflow u32
-            // at large input lengths (e.g. 5-min audio at 48k → ~14M frames).
+            // at large input lengths (e.g. 5-min audio at 48k -> ~14M frames).
             const out_frames_u64: u64 = @as(u64, in_frames) * sr_out / sr_in;
             const out_frames: usize = @intCast(out_frames_u64);
             const out = try gpa.alloc(f32, out_frames * channels);
@@ -7366,7 +7366,7 @@ pub const audio = struct {
             );
         }
 
-        test "toFloat32Stereo: 16-bit mono → stereo f32" {
+        test "toFloat32Stereo: 16-bit mono -> stereo f32" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
             // 3 mono frames at half-amplitude, full-amplitude, half-negative.
             // Values: 16384 = 0.5; 32767 = 0.99997; -16384 = -0.5
@@ -7388,7 +7388,7 @@ pub const audio = struct {
             defer ta.free(f32_stereo);
 
             try std_mod.testing.expectEqual(@as(usize, 6), f32_stereo.len);
-            // Mono → stereo: L=R for each frame.
+            // Mono -> stereo: L=R for each frame.
             try std_mod.testing.expectApproxEqAbs(@as(f32, 0.5), f32_stereo[0], 0.001);
             try std_mod.testing.expectApproxEqAbs(@as(f32, 0.5), f32_stereo[1], 0.001);
             try std_mod.testing.expectApproxEqAbs(@as(f32, 0.99997), f32_stereo[2], 0.001);
@@ -7397,7 +7397,7 @@ pub const audio = struct {
             try std_mod.testing.expectApproxEqAbs(@as(f32, -0.5), f32_stereo[5], 0.001);
         }
 
-        test "toFloat32Stereo: 8-bit unsigned → stereo f32 (with bias 128)" {
+        test "toFloat32Stereo: 8-bit unsigned -> stereo f32 (with bias 128)" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
             const samples = try ta.alloc(u8, 3);
             defer ta.free(samples);
@@ -7475,7 +7475,7 @@ pub const audio = struct {
 
         test "resampleLinear: 2x upsample doubles output length" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-            // Mono input: 4 frames at sr=22050 → 8 frames at sr=44100
+            // Mono input: 4 frames at sr=22050 -> 8 frames at sr=44100
             const in: []const f32 = &.{ 0.0, 1.0, 0.0, 1.0 };
             const out: []f32 = try resampleLinear(ta, in, 1, 22050, 44100);
             defer ta.free(out);
@@ -7488,7 +7488,7 @@ pub const audio = struct {
 
         test "resampleLinear: 0.5x downsample halves output length" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-            // Mono input: 8 frames at sr=44100 → 4 frames at sr=22050
+            // Mono input: 8 frames at sr=44100 -> 4 frames at sr=22050
             const in: []const f32 = &.{ 0.0, 0.25, 0.5, 0.75, 1.0, 0.75, 0.5, 0.25 };
             const out: []f32 = try resampleLinear(ta, in, 1, 44100, 22050);
             defer ta.free(out);
@@ -7640,7 +7640,7 @@ pub const audio = struct {
         // ---- Tests
         pub const sample_ogg: []const u8 = @embedFile("./assets/sample.ogg");
 
-        test "sniff: real Ogg Vorbis file (sample.ogg) → metadata" {
+        test "sniff: real Ogg Vorbis file (sample.ogg) -> metadata" {
             const meta: Metadata = sniff(sample_ogg) orelse {
                 try std_mod.testing.expect(false); // Should sniff successfully.
                 return;
@@ -7648,7 +7648,7 @@ pub const audio = struct {
             // sample.ogg: stereo, 44100 Hz, ~96 seconds (4.2M samples).
             try std_mod.testing.expectEqual(@as(u32, 44100), meta.sample_rate);
             try std_mod.testing.expectEqual(@as(u8, 2), meta.channels);
-            // ±10% acceptance to absorb encoder-specific granule
+            // +/-10% acceptance to absorb encoder-specific granule
             // accounting drift.
             try std_mod.testing.expect(meta.total_samples > 3_800_000);
             try std_mod.testing.expect(meta.total_samples < 4_700_000);
@@ -7677,7 +7677,7 @@ pub const audio = struct {
     /// interleaved-stereo `f32`, resample to `target_rate`.  Returns
     /// the resampled f32 buffer; caller frees via `gpa.free`.
     /// This is the path used by `loadAudioBuffer` when
-    /// loading a sound: decode → canonical f32 stereo → upload to
+    /// loading a sound: decode -> canonical f32 stereo -> upload to
     /// AudioContext at the device sample rate.
     /// `target_rate` is typically `web.audio.getSampleRate(ctx_id)`
     /// - the AudioContext's native rate (so Web Audio doesn't need
@@ -7786,11 +7786,11 @@ pub const audio = struct {
     }
 
     // ---- Step 7 tests
-    test "toCanonical: WAV bytes → f32 stereo at requested rate" {
+    test "toCanonical: WAV bytes -> f32 stereo at requested rate" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
         var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav.test_sine_wav);
         // Source: 11025 frames at 22050 Hz mono.  Request 44100 Hz
-        // stereo → 2× upsample → 22050 frames × 2 channels = 44100.
+        // stereo -> 2x upsample -> 22050 frames x 2 channels = 44100.
         const out: []f32 = try toCanonical(ta, &reader, 44100);
         defer ta.free(out);
         try std_mod.testing.expectEqual(@as(usize, 44100), out.len);
@@ -7802,10 +7802,10 @@ pub const audio = struct {
     test "toCanonical: same-rate skips resample (cheap path)" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
         var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav.test_sine_wav);
-        // Source rate matches requested rate → no resample.
+        // Source rate matches requested rate -> no resample.
         const out: []f32 = try toCanonical(ta, &reader, 22050);
         defer ta.free(out);
-        // 11025 frames × 2 channels = 22050 samples.
+        // 11025 frames x 2 channels = 22050 samples.
         try std_mod.testing.expectEqual(@as(usize, 22050), out.len);
     }
 
@@ -7890,7 +7890,7 @@ pub const audio = struct {
 
     test "CanonicalWave.frameCount: 16-bit stereo" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        const samples = try ta.alloc(u8, 16); // 4 frames × 2 ch × 2 bytes = 16
+        const samples = try ta.alloc(u8, 16); // 4 frames x 2 ch x 2 bytes = 16
         defer ta.free(samples);
         const cw: CanonicalWave = .{
             .samples = samples,
@@ -8040,7 +8040,7 @@ pub const gltf = struct {
 
     pub const Material = struct {
         name: ?[]const u8 = null,
-        /// `pbrMetallicRoughness.baseColorFactor` — RGBA tint applied
+        /// `pbrMetallicRoughness.baseColorFactor` - RGBA tint applied
         /// to the base-color texture (or used directly if no texture).
         /// Defaults to white (multiplicative identity).
         base_color_factor: Vec = f32x4(1, 1, 1, 1),
@@ -8053,22 +8053,22 @@ pub const gltf = struct {
         /// `pbrMetallicRoughness.roughnessFactor` (default 1.0 per glTF spec).
         /// Multiplied with the G channel of `metallic_roughness_texture`.
         roughness_factor: f32 = 1.0,
-        /// `pbrMetallicRoughness.metallicRoughnessTexture` — single
+        /// `pbrMetallicRoughness.metallicRoughnessTexture` - single
         /// texture encoding metalness in B, roughness in G.  Per glTF
         /// spec; spirv-cross emits as `vec3 mr = texture(...).bgr`
         /// followed by `metallic = mr.r * factor`, `roughness = mr.g * factor`.
         metallic_roughness_texture: ?u32 = null,
-        /// `normalTexture.index` — tangent-space normal map (RGB in [0,1]
+        /// `normalTexture.index` - tangent-space normal map (RGB in [0,1]
         /// representing XYZ in [-1,1]).  Requires per-vertex tangents +
         /// a TBN matrix in the fragment shader to transform into world space.
         normal_texture: ?u32 = null,
-        /// `occlusionTexture.index` — single-channel (R) ambient occlusion.
+        /// `occlusionTexture.index` - single-channel (R) ambient occlusion.
         /// Multiplied with the ambient term to darken crevices.
         occlusion_texture: ?u32 = null,
-        /// `emissiveTexture.index` — additive emissive color, applied
+        /// `emissiveTexture.index` - additive emissive color, applied
         /// after lighting but before tone-mapping.
         emissive_texture: ?u32 = null,
-        /// `emissiveFactor` — RGB scalar applied to emissive_texture
+        /// `emissiveFactor` - RGB scalar applied to emissive_texture
         /// (or used directly if no texture).  Default is black (no
         /// emission); zimr stores this as Vec3 packed into a Vec for
         /// SIMD-friendly uploads.
@@ -8101,9 +8101,9 @@ pub const gltf = struct {
 
     /// Top-level parsed glTF document.  Owns all slices via `arena`.
     pub const Data = struct {
-        /// ★★★ A POINTER, NOT A VALUE. `ArenaAllocator` stores the address of its own struct
+        /// *** A POINTER, NOT A VALUE. `ArenaAllocator` stores the address of its own struct
         /// inside the `Allocator` it hands out, so a `Data` holding one BY VALUE registers its
-        /// allocations against a copy that is about to move — and `deinit` on the moved copy
+        /// allocations against a copy that is about to move - and `deinit` on the moved copy
         /// frees only what existed at the moment of the move. It compiled, it ran, and it leaked
         /// 8 398 bytes on a 60-byte document. Same rule and same shape as `mjcf.zig`'s
         /// `Robot.arena`: a struct that hands out pointers to itself cannot be moved.
@@ -8180,7 +8180,7 @@ pub const gltf = struct {
             .{},
         ) catch |json_err| {
             // Preserve the underlying std.json error in the console
-            // before collapsing to our own Error.MalformedJson — without
+            // before collapsing to our own Error.MalformedJson - without
             // this the caller can't distinguish "real JSON bug" from
             // "we ran out of memory growing the arena".
             const dom = @import("web.zig").dom;
@@ -8657,7 +8657,7 @@ pub const gltf = struct {
         // ---- nodes[] (name + local TRS + children; the skeleton hierarchy) ---
         // Without this the node array is empty and any hierarchical skeletal
         // animation collapses to the origin (joints have no local transform).
-        // Matches cgltf/raylib: local TRS per node, world = local·parentWorld
+        // Matches cgltf/raylib: local TRS per node, world = local*parentWorld
         // is accumulated by the caller from `children`. (Node "matrix" form is
         // not yet handled; glTF exporters that animate use TRS, as greenman does.)
         if (root_obj.get("nodes")) |n_val| {
@@ -8942,7 +8942,7 @@ pub const gltf = struct {
 
     test "gltf.readAccessor: f32 vec3 positions, tight packing" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        // 2 vertices × vec3 of f32 = 24 bytes.
+        // 2 vertices x vec3 of f32 = 24 bytes.
         var src_buf: [24]u8 = undefined;
         const positions = [_]f32{ 1, 2, 3, 4, 5, 6 };
         @memcpy(&src_buf, std_mod.mem.sliceAsBytes(positions[0..]));
@@ -8955,7 +8955,7 @@ pub const gltf = struct {
         const bvs = try aalloc.alloc(BufferView, 1);
         bvs[0] = .{ .buffer = 0, .byte_offset = 0, .byte_length = 24 };
 
-        // ★ A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
+        // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
         var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
         const data: Data = .{
@@ -8982,7 +8982,7 @@ pub const gltf = struct {
 
     test "gltf.readAccessor: u16 indices" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        // 6 indices × u16 = 12 bytes.
+        // 6 indices x u16 = 12 bytes.
         var src_buf: [12]u8 = undefined;
         const indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
         @memcpy(&src_buf, std_mod.mem.sliceAsBytes(indices[0..]));
@@ -8995,7 +8995,7 @@ pub const gltf = struct {
         const bvs = try aalloc.alloc(BufferView, 1);
         bvs[0] = .{ .buffer = 0, .byte_offset = 0, .byte_length = 12 };
 
-        // ★ A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
+        // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
         var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
         var d: Data = .{
@@ -9029,7 +9029,7 @@ pub const gltf = struct {
         const bvs = try aalloc.alloc(BufferView, 1);
         bvs[0] = .{ .buffer = 0, .byte_length = 24 };
 
-        // ★ A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
+        // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
         var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
         var d: Data = .{
@@ -9333,7 +9333,7 @@ pub const gltf = struct {
             }
         }
 
-        // TANGENT - optional; vec4 (xyz = tangent, w = handedness ±1).
+        // TANGENT - optional; vec4 (xyz = tangent, w = handedness +/-1).
         // Required for tangent-space normal mapping in the PBR shader.
         // If the glTF authoring tool (Blender, Substance, etc.) ran
         // mikktspace at export time, these are the right tangents to
@@ -9449,7 +9449,7 @@ pub const gltf = struct {
 
     test "gltf.meshFromPrimitive: minimal triangle from position+indices" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        // 3 vertices × vec3 of f32 = 36 bytes.
+        // 3 vertices x vec3 of f32 = 36 bytes.
         // 3 u16 indices = 6 bytes.
         // Total buffer = 36 + 6 = 42 bytes (rounded up to 4 = 44).
         var src_buf: [44]u8 = @splat(0);
@@ -9471,7 +9471,7 @@ pub const gltf = struct {
         accs[0] = .{ .buffer_view = 0, .component_type = .f32, .count = 3, .type_kind = .vec3 };
         accs[1] = .{ .buffer_view = 1, .component_type = .u16, .count = 3, .type_kind = .scalar };
 
-        // ★ A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
+        // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
         var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
         var d: Data = .{
@@ -9547,13 +9547,13 @@ comptime {
 /// STL meshes, binary and ASCII.
 ///
 /// The format robot models use for collision geometry. A URDF names `.obj` for what a link
-/// LOOKS like and `.stl` for what it COLLIDES as — usually a cruder shape, which is the
-/// point — so importing a robot that can touch things needs this.
+/// LOOKS like and `.stl` for what it COLLIDES as - usually a cruder shape, which is the
+/// point - so importing a robot that can touch things needs this.
 ///
-/// ── ★ THE FORMAT DETECTION IS THE WHOLE PROBLEM ──
+/// -- * THE FORMAT DETECTION IS THE WHOLE PROBLEM --
 ///
-/// STL has two encodings and no version field, so a reader has to guess. The usual guess —
-/// "does the file start with `solid`?" — is what most readers do, including the widely used
+/// STL has two encodings and no version field, so a reader has to guess. The usual guess -
+/// "does the file start with `solid`?" - is what most readers do, including the widely used
 /// `stl_reader`, whose own documentation admits it "may fail, of course".
 ///
 /// **It fails often.** The binary format opens with an 80-byte free-text header, and plenty
@@ -9561,12 +9561,12 @@ comptime {
 /// nothing, and the failure looks like an empty mesh rather than a misdetection.
 ///
 /// So detection here is ARITHMETIC, not a prefix match: a binary STL is exactly
-/// `84 + 50·n` bytes, where `n` is the triangle count stored at offset 80. If the length
-/// matches that, it is binary — a coincidence needs a file whose size accidentally satisfies
+/// `84 + 50*n` bytes, where `n` is the triangle count stored at offset 80. If the length
+/// matches that, it is binary - a coincidence needs a file whose size accidentally satisfies
 /// an equation determined by its own contents. The prefix is used only to break the
 /// remaining ties.
 ///
-/// ── WHAT STL DOES NOT HAVE ──
+/// -- WHAT STL DOES NOT HAVE --
 ///
 /// Indices. Every triangle carries three full vertex positions, so a shared corner appears
 /// once per adjoining face. This reader does not weld them: the consumers here are convex
@@ -9585,7 +9585,7 @@ pub const stl = struct {
 
     pub const Mesh = struct {
         /// Three floats per vertex, three vertices per triangle, in file order. Not
-        /// welded — see the note above.
+        /// welded - see the note above.
         positions: []f32,
         /// Three floats per TRIANGLE (not per vertex): the facet normal STL stores.
         normals: []f32,
@@ -9631,7 +9631,7 @@ pub const stl = struct {
 
         // 50 bytes per triangle: a normal, three vertices, and a 2-byte attribute word
         // that almost nothing writes meaningfully. Read little-endian explicitly rather
-        // than casting the buffer — the format is defined as little-endian regardless of
+        // than casting the buffer - the format is defined as little-endian regardless of
         // the host, and an unaligned cast is undefined besides.
         for (0..count) |t| {
             const base: usize = 84 + t * 50;
@@ -9697,16 +9697,16 @@ pub const stl = struct {
 
 /// A small, STRICT XML reader, sized for robot description files (URDF today, MJCF next).
 ///
-/// ── WHY STRICT, AND WHY NOT A GENERAL PARSER ──
+/// -- WHY STRICT, AND WHY NOT A GENERAL PARSER --
 ///
-/// A conformant XML parser is a real undertaking — DTDs, parameter entities, notations,
-/// namespace resolution — and `zig-xml` does all of it in about 1900 lines. This is not
+/// A conformant XML parser is a real undertaking - DTDs, parameter entities, notations,
+/// namespace resolution - and `zig-xml` does all of it in about 1900 lines. This is not
 /// that, on purpose.
 ///
 /// The instructive thing about urdfdom, the ROS reference implementation, is not its
 /// parser: it delegates to tinyxml2. It is that most of urdfdom's two thousand lines are
 /// then spent CHECKING that what tinyxml2 found means what it hoped. That is the price of a
-/// permissive reader, and the failure it guards against is the one that matters here — a
+/// permissive reader, and the failure it guards against is the one that matters here - a
 /// robot file that parses "successfully" into subtly the wrong shape.
 ///
 /// So everything this reader cannot understand is an error carrying a LINE AND COLUMN, and
@@ -9714,12 +9714,12 @@ pub const stl = struct {
 /// namespace resolution. A URDF needing those has not been through xacro yet, and saying so
 /// is more useful than guessing.
 ///
-/// ── SHAPE, AND WHY IT IS FAST ──
+/// -- SHAPE, AND WHY IT IS FAST --
 ///
 /// One pass, one arena, no per-node allocation. Elements and attributes live in flat arrays
 /// and children are a contiguous SPAN, so walking a tree is a slice iteration rather than a
-/// pointer chase. Names and un-escaped values are slices INTO THE SOURCE — nothing is
-/// copied — so the caller keeps the source alive alongside the document.
+/// pointer chase. Names and un-escaped values are slices INTO THE SOURCE - nothing is
+/// copied - so the caller keeps the source alive alongside the document.
 ///
 /// `zig-xml` interns strings into a byte pool with a hash map, which makes name comparison
 /// an integer compare and pays for itself on documents with deep repetition. Not done here:
@@ -9871,8 +9871,8 @@ pub const xml = struct {
 
         /// Scratch for one element's children while its subtree is being read.
         ///
-        /// ★ THE ONE STRUCTURAL SUBTLETY. Children must end up CONTIGUOUS in `elements`, but a
-        /// child's own subtree is parsed before the next sibling is known — so appending
+        /// * THE ONE STRUCTURAL SUBTLETY. Children must end up CONTIGUOUS in `elements`, but a
+        /// child's own subtree is parsed before the next sibling is known - so appending
         /// directly would interleave grandchildren between siblings. Instead each level collects
         /// its finished children on a stack and copies them into `elements` in one block when
         /// the element closes. The copy is what buys the flat, cache-friendly layout; without it
@@ -10082,7 +10082,7 @@ pub const xml = struct {
         /// a robot file is far more likely to be a typo or an unresolved xacro than a construct
         /// meant literally, and passing it through would put a stray ampersand into a name.
         ///
-        /// The common case — no `&` at all — returns the source slice untouched and allocates
+        /// The common case - no `&` at all - returns the source slice untouched and allocates
         /// nothing, which is why this is cheap enough to run on every attribute.
         fn expandEntities(
             self: *Parser,
@@ -10151,8 +10151,8 @@ pub const xml = struct {
         }
 
         /// A name is everything up to whitespace or one of the delimiters. Deliberately
-        /// permissive about the characters inside — colons for namespaces, dots and dashes all
-        /// appear in real robot files — because rejecting them buys nothing here.
+        /// permissive about the characters inside - colons for namespaces, dots and dashes all
+        /// appear in real robot files - because rejecting them buys nothing here.
         fn readName(self: *Parser) []const u8 {
             const start: usize = self.pos;
             while (self.pos < self.source.len) {
@@ -10330,7 +10330,7 @@ pub const obj = struct {
         }
     };
 
-    /// Accumulate per-triangle face normals into each vertex, then normalize —
+    /// Accumulate per-triangle face normals into each vertex, then normalize -
     /// smooth shading. Used only when the OBJ omits `vn`.
     fn synthesizeNormals(
         positions: []const f32,
@@ -10577,7 +10577,7 @@ test "xml: a URDF-shaped document parses into the expected tree" {
 }
 
 test "xml: children are contiguous even with nested grandchildren" {
-    // ★ The structural property the pending-stack exists for. `a` has three children and
+    // * The structural property the pending-stack exists for. `a` has three children and
     // each has its own subtree; if subtrees were appended as they were parsed, `a`'s
     // children would be scattered and `childrenOf` would return grandchildren.
     const source: []const u8 =
@@ -10649,7 +10649,7 @@ test "xml: an attribute without entities is not copied" {
 }
 
 test "xml: the real KUKA iiwa URDF parses, with its topology intact" {
-    // ★ A REAL FILE, checked in. Hand-written test inputs share the author's assumptions;
+    // * A REAL FILE, checked in. Hand-written test inputs share the author's assumptions;
     // this one was written by someone else for a different toolchain, and it is the actual
     // robot the importer is aimed at. It exercises what synthetic cases do not: a full
     // declaration, comments between elements, 168 elements of real nesting, and attribute
@@ -10726,9 +10726,9 @@ const stl_expectError = std.testing.expectError;
 const stl_expectApproxEqAbs = std.testing.expectApproxEqAbs;
 
 test "stl: a real KUKA collision mesh parses" {
-    // ★ THE ACTUAL FILE the URDF names for `lbr_iiwa_link_0`'s collision geometry, checked
+    // * THE ACTUAL FILE the URDF names for `lbr_iiwa_link_0`'s collision geometry, checked
     // in. 151984 bytes = 84 + 50x3038, and 3038 is exactly the triangle count the matching
-    // `.obj` has — the two describe the same shape in two encodings, which is a decent
+    // `.obj` has - the two describe the same shape in two encodings, which is a decent
     // independent check that this reader agrees with the OBJ one.
     const bytes: []const u8 = @embedFile("tests/fixtures/robot/meshes/link_0.stl");
     try stl_expect(stl.isBinary(bytes));
@@ -10758,12 +10758,12 @@ test "stl: a real KUKA collision mesh parses" {
 }
 
 test "stl: a BINARY file whose header starts with 'solid' is still detected as binary" {
-    // ★★ THE TRAP EVERY NAIVE READER FALLS INTO, and the reason detection here is
+    // ** THE TRAP EVERY NAIVE READER FALLS INTO, and the reason detection here is
     // arithmetic rather than a prefix match.
     //
     // The binary format opens with 80 bytes of free text, and plenty of exporters write
-    // `solid <name>` into it. A reader that decides by the leading keyword — which is what
-    // `stl_reader` does, and its own docs admit "may fail, of course" — then parses a binary
+    // `solid <name>` into it. A reader that decides by the leading keyword - which is what
+    // `stl_reader` does, and its own docs admit "may fail, of course" - then parses a binary
     // file as ASCII, finds no `vertex` tokens, and produces an EMPTY MESH. The failure looks
     // like a corrupt file rather than a misdetection, which is the worst place for it to
     // surface.
@@ -10808,7 +10808,7 @@ test "stl: ASCII parses, and is not mistaken for binary" {
     defer mesh.deinit(std.testing.allocator);
     try stl_expectEqual(@as(usize, 2), mesh.triangleCount());
     try stl_expectApproxEqAbs(@as(f32, 1), mesh.positions[3], 1.0e-6); // second vertex x
-    // Second facet normal is `0 1 0`, so the 1 is at index 4 — the y component of the
+    // Second facet normal is `0 1 0`, so the 1 is at index 4 - the y component of the
     // second triangle. Getting this index wrong is how a normals array silently shifts.
     try stl_expectApproxEqAbs(@as(f32, 1), mesh.normals[4], 1.0e-6);
 }
@@ -10817,7 +10817,7 @@ test "stl: malformed input is refused rather than silently truncated" {
     const gpa: Allocator = std.testing.allocator;
     // Text with no triangles at all.
     try stl_expectError(stl.Error.BadAscii, stl.parse(gpa, "solid empty\nendsolid empty"));
-    // A vertex line missing a coordinate — would otherwise shift every following number.
+    // A vertex line missing a coordinate - would otherwise shift every following number.
     try stl_expectError(
         stl.Error.BadAscii,
         stl.parse(gpa, "facet normal 0 0 1 outer loop vertex 0 0 endloop endfacet"),
@@ -10830,13 +10830,13 @@ test "stl: malformed input is refused rather than silently truncated" {
     try stl_expect(!stl.isBinary(&truncated));
 }
 
-/// FBX — Autodesk's interchange format, read far enough to get mocap out of it.
+/// FBX - Autodesk's interchange format, read far enough to get mocap out of it.
 ///
 /// Four layers, not one parser: a binary container, an object graph resolved through an untyped
-/// edge list, a transform composition model, and a curve evaluator — which only together produce
+/// edge list, a transform composition model, and a curve evaluator - which only together produce
 /// a pose. Each is separately testable, which is the reason they are named.
 ///
-/// ── ★ WHAT PORTING FLOMO ACTUALLY MEANS ──
+/// -- * WHAT PORTING FLOMO ACTUALLY MEANS --
 ///
 /// flomo's `fbx_loader.h` is 435 lines, which badly understates the job: it is a thin ADAPTER
 /// over **ufbx**, which is 33,096 lines of C. Reading flomo alone would produce a file that
@@ -10853,7 +10853,7 @@ test "stl: malformed input is refused rather than silently truncated" {
 /// the result. The layout below is taken from `ufbxi_binary_parse_node` (ufbx.c:8958), which
 /// in turn cites Blender's 2013 write-up of the format.
 ///
-/// ── LAYERING ──
+/// -- LAYERING --
 ///
 /// Each layer is separately testable, which is the whole reason to name them:
 ///
@@ -10863,16 +10863,16 @@ test "stl: malformed input is refused rather than silently truncated" {
 ///     4. Animation                      curves   -> a value at time t
 ///     5. Adapter                        all that -> `codecs.bvh.Data`
 ///
-/// ★ Layer 5 is the shape flomo proved: **FBX is normalized INTO BVH**, not into a parallel
-/// representation. Everything downstream — the sampler, forward kinematics, the viewer, the
-/// `ModelAnimation` conversion — then works on FBX for free, and FBX support costs one file
+/// * Layer 5 is the shape flomo proved: **FBX is normalized INTO BVH**, not into a parallel
+/// representation. Everything downstream - the sampler, forward kinematics, the viewer, the
+/// `ModelAnimation` conversion - then works on FBX for free, and FBX support costs one file
 /// instead of a second pipeline.
 pub const fbx = struct {
     pub const Error = error{
         /// Not an FBX file at all: the 23-byte binary magic did not match and the head does
         /// not look like an ASCII FBX either.
         BadMagic,
-        /// An ASCII FBX. A real format, but a completely different parser — say so rather than
+        /// An ASCII FBX. A real format, but a completely different parser - say so rather than
         /// reporting "not an FBX", which sends the user looking for a corrupt file.
         AsciiUnsupported,
         /// Binary, but a version this reader does not model. Below 7000 the object graph uses
@@ -10890,17 +10890,17 @@ pub const fbx = struct {
         UnknownProperty,
         /// An array said it was deflate-compressed and the stream did not decode.
         BadCompression,
-        /// Nesting deeper than `max_depth` — a malformed or hostile file.
+        /// Nesting deeper than `max_depth` - a malformed or hostile file.
         TooDeep,
         OutOfMemory,
     };
 
-    /// `"Kaydara FBX Binary  \x00\x1a\x00"` — 23 bytes, then a u32 version.
+    /// `"Kaydara FBX Binary  \x00\x1a\x00"` - 23 bytes, then a u32 version.
     /// From `ufbxi_binary_magic` (ufbx.c:9396); note the two trailing bytes after the NUL.
     pub const magic: []const u8 = "Kaydara FBX Binary  \x00\x1a\x00";
 
     /// ufbx caps at `UFBXI_MAX_NODE_DEPTH`; real files nest perhaps ten deep. The cap exists so a
-    /// hostile file cannot drive unbounded recursion — which is also why the parser below uses an
+    /// hostile file cannot drive unbounded recursion - which is also why the parser below uses an
     /// explicit stack instead of recursing.
     pub const max_depth: u32 = 64;
 
@@ -10966,7 +10966,7 @@ pub const fbx = struct {
     /// One record in the document tree.
     ///
     /// Children are a SPAN into `Document.nodes` rather than a pointer list, the same shape
-    /// `codecs.xml` uses for elements — flat, contiguous, and one allocation instead of one per
+    /// `codecs.xml` uses for elements - flat, contiguous, and one allocation instead of one per
     /// node. An FBX has tens of thousands of nodes, so the difference is not academic.
     pub const Node = struct {
         name: []const u8,
@@ -11035,7 +11035,7 @@ pub const fbx = struct {
         return bytes.len >= magic.len and std.mem.eql(u8, bytes[0..magic.len], magic);
     }
 
-    /// True when the head looks like an ASCII FBX — they open with a `;` comment naming the
+    /// True when the head looks like an ASCII FBX - they open with a `;` comment naming the
     /// format. Used only to turn "not an FBX" into the more useful "ASCII FBX".
     pub fn looksAscii(bytes: []const u8) bool {
         const head: []const u8 = bytes[0..@min(bytes.len, 256)];
@@ -11070,7 +11070,7 @@ pub const fbx = struct {
         arena.* = .init(gpa);
         errdefer arena.deinit();
 
-        // ★ ONE window buffer for the whole parse, not an empty slice per array.
+        // * ONE window buffer for the whole parse, not an empty slice per array.
         //
         // `Decompress.init(.., &.{})` forces the inflater down an indirect path that re-derives
         // its history on every read. Measured on `dance1_subject2.fbx` (152 deflated curve arrays,
@@ -11080,7 +11080,7 @@ pub const fbx = struct {
         const window: []u8 = arena.allocator().alloc(u8, std.compress.flate.max_window_len) catch
             return Error.OutOfMemory;
 
-        // ★ THE GROWING LISTS USE `gpa`, NOT THE ARENA — this is worth 20x on a real file.
+        // * THE GROWING LISTS USE `gpa`, NOT THE ARENA - this is worth 20x on a real file.
         //
         // An ArenaAllocator can only extend its LAST allocation. A record parse interleaves
         // `nodes.append` / `values.append` with big `alloc` calls for the deflated arrays, so every
@@ -11159,8 +11159,8 @@ pub const fbx = struct {
             return std.mem.readInt(u64, b[0..8], .little);
         }
 
-        /// ★ The header widens at version 7500: three 64-bit fields instead of three 32-bit ones,
-        /// so 25 bytes instead of 13. Reading the wrong width does not fail — it yields a plausible
+        /// * The header widens at version 7500: three 64-bit fields instead of three 32-bit ones,
+        /// so 25 bytes instead of 13. Reading the wrong width does not fail - it yields a plausible
         /// but wrong end offset and the parse wanders off into the middle of a record. From
         /// `ufbxi_binary_parse_node` (ufbx.c:8969).
         const RecordHeader = struct { end: u64, count: u64, len: u64, name_len: u8 };
@@ -11188,8 +11188,8 @@ pub const fbx = struct {
 
             while (true) {
                 const h: RecordHeader = try self.recordHeader();
-                // ★ A record whose end offset AND name length are both zero is the SENTINEL that
-                // terminates a list — not a record. It is 13 or 25 zero bytes, which is easy to
+                // * A record whose end offset AND name length are both zero is the SENTINEL that
+                // terminates a list - not a record. It is 13 or 25 zero bytes, which is easy to
                 // mistake for padding.
                 if (h.end == 0 and h.name_len == 0) {
                     break;
@@ -11197,7 +11197,7 @@ pub const fbx = struct {
                 const name: []const u8 = try self.take(h.name_len);
 
                 const value_start: u32 = @intCast(self.values.items.len);
-                // ★ `h.count` is u64 STRAIGHT FROM THE FILE, and `usize` is 32-bit on wasm —
+                // * `h.count` is u64 STRAIGHT FROM THE FILE, and `usize` is 32-bit on wasm -
                 // so `0..h.count` does not compile there, and a cast without a bound check
                 // would truncate a hostile count into a small, plausible loop. Bound it against
                 // the bytes remaining: every value costs at least one byte, so a count larger
@@ -11226,8 +11226,8 @@ pub const fbx = struct {
                 // Trust the declared end over our own arithmetic: some exporters leave padding
                 // between a record's last child and its end offset.
                 //
-                // ★ BUT ONLY FORWARDS. A file whose end offset points BACKWARDS would make
-                // this loop re-read the same records forever — a hang, not an error, and the
+                // * BUT ONLY FORWARDS. A file whose end offset points BACKWARDS would make
+                // this loop re-read the same records forever - a hang, not an error, and the
                 // worst possible failure for a viewer handed an arbitrary file. Corrupt or
                 // hostile input must terminate.
                 if (h.end != 0) {
@@ -11285,8 +11285,8 @@ pub const fbx = struct {
         /// Array header: `u32 length, u32 encoding, u32 compressed_length`, then the payload.
         /// From ufbx.c:9067.
         ///
-        /// ★ `encoding == 1` means the payload is ZLIB-FRAMED DEFLATE, and large arrays in real
-        /// files nearly always are — so an FBX reader cannot avoid a decompressor. zimr already
+        /// * `encoding == 1` means the payload is ZLIB-FRAMED DEFLATE, and large arrays in real
+        /// files nearly always are - so an FBX reader cannot avoid a decompressor. zimr already
         /// pays for one: `codecs.png` decodes IDAT with `std.compress.flate` the same way.
         fn parseArray(self: *Parser, comptime T: type) Error![]const T {
             const len: u32 = try self.u32_();
@@ -11326,24 +11326,24 @@ pub const fbx = struct {
     };
 
     // ===========================================================================
-    // Layer 2 — objects and connections
+    // Layer 2 - objects and connections
     // ===========================================================================
     //
     // The container yields records; it does not say what they mean. FBX's semantics live in two
     // places, and neither is a tree:
     //
     //   `Objects`      a flat list of records, each identified by an i64 in its first value
-    //   `Connections`  an UNTYPED edge list — `C, "OO"|"OP", src_id, dst_id [, property]`
+    //   `Connections`  an UNTYPED edge list - `C, "OO"|"OP", src_id, dst_id [, property]`
     //
     // So the node hierarchy, the binding of animation curves to properties, and the skin weights
     // are all the same kind of edge, distinguished only by what the two endpoints happen to be.
     // Resolving that once, here, is what lets layers 3-5 ask direct questions.
     //
-    // ── ★ EDGE DIRECTION IS src -> dst, AND dst IS THE PARENT ──
+    // -- * EDGE DIRECTION IS src -> dst, AND dst IS THE PARENT --
     //
     // `C "OO" 862738297 0` reads "object 862738297 is a child of object 0", where **0 is the scene
     // root**. Getting this backwards produces a hierarchy that is merely inverted, which still
-    // walks and still draws — the worst kind of wrong.
+    // walks and still draws - the worst kind of wrong.
     //
     // Measured on `dance1_subject2.fbx` (646 connections), the topology is:
     //
@@ -11394,7 +11394,7 @@ pub const fbx = struct {
     };
 
     /// One entry from a `Properties70` block: `P` records hold
-    /// `[name, type, subtype, flags, values...]` — four strings, then the payload.
+    /// `[name, type, subtype, flags, values...]` - four strings, then the payload.
     pub const Property = struct {
         name: []const u8,
         /// "Lcl Translation", "Vector3D", "enum", "KString"...
@@ -11433,10 +11433,10 @@ pub const fbx = struct {
         /// index, so the id->index map is not an optimisation but the only way to follow an edge.
         id: i64,
         kind: ObjectKind,
-        /// ★ Split at the `\x00\x01` separator: the raw field is literally `"Hips\x00\x01Model"`.
+        /// * Split at the `\x00\x01` separator: the raw field is literally `"Hips\x00\x01Model"`.
         /// A reader that takes it whole gets joint names no lookup will ever match.
         name: []const u8,
-        /// The part after the separator — "Model", "AnimNode", "Geometry".
+        /// The part after the separator - "Model", "AnimNode", "Geometry".
         class: []const u8,
         /// The record's third value: "LimbNode", "Mesh", "Skin", "T"/"R"/"S"...
         sub_class: []const u8,
@@ -11451,7 +11451,7 @@ pub const fbx = struct {
         property: []const u8,
     };
 
-    /// Sentinel for a connection endpoint that is not an object — in practice id 0, the scene
+    /// Sentinel for a connection endpoint that is not an object - in practice id 0, the scene
     /// root. Spelled as the bit pattern rather than via `std.math`, which is banned outside
     /// zimrmath.
     pub const no_object: u32 = ~@as(u32, 0);
@@ -11614,33 +11614,33 @@ pub const fbx = struct {
     }
 
     // ===========================================================================
-    // Layer 3 — the node transform
+    // Layer 3 - the node transform
     // ===========================================================================
     //
     // An FBX node's local transform is NOT a TRS triple. It is an eleven-term chain, and the terms
     // that make it eleven are the ones that produce an ALMOST-right skeleton when dropped.
     // Transcribed from `ufbxi_get_transform` (ufbx.c:22693), whose own comment gives the formula:
     //
-    //     World = ParentWorld * T * Roff * Rp * Rpre * R * Rpost * Rp⁻¹ * Soff * Sp * S * Sp⁻¹
+    //     World = ParentWorld * T * Roff * Rp * Rpre * R * Rpost * Rp^-1 * Soff * Sp * S * Sp^-1
     //
-    // ★ THREE THINGS THE FORMULA ALONE DOES NOT TELL YOU, all from ufbx's implementation:
+    // * THREE THINGS THE FORMULA ALONE DOES NOT TELL YOU, all from ufbx's implementation:
     //
     //   1. **Rpost is INVERTED.** ufbx calls `ufbxi_mul_inv_rotate` for it and flags the surprise
-    //      in a comment — "NOTE: Rpost is inverted (!)". The formula's `Rpost` means the inverse
+    //      in a comment - "NOTE: Rpost is inverted (!)". The formula's `Rpost` means the inverse
     //      of the rotation built from the PostRotation Euler angles.
     //   2. **Rpre and Rpost ALWAYS use XYZ order**, never the node's `RotationOrder`. Only `R`
     //      (Lcl Rotation) honours it. Applying the node's order to PreRotation is a silent
     //      mis-pose on exactly the joints that have one.
     //   3. **Lcl Scaling defaults to (1,1,1)**, while every other term defaults to zero. A missing
-    //      scaling property is identity, not collapse — 11 of this capture's 76 models omit it.
+    //      scaling property is identity, not collapse - 11 of this capture's 76 models omit it.
     //
     // Measured on `dance1_subject2.fbx`: PostRotation, RotationOffset, ScalingOffset and the
     // geometric transform are all absent, PreRotation appears on 10 models, the pivots on 1 each,
-    // and `RotationOrder` on only 6 — so **70 models rely on the default**, and the default being
+    // and `RotationOrder` on only 6 - so **70 models rely on the default**, and the default being
     // wrong would be a whole-skeleton error rather than a local one.
 
-    /// FBX rotation orders. ★ The NAME is the order Euler angles are APPLIED in, not the matrix
-    /// multiplication order — ufbx.h:339 spells this out: `XYZ` composes as `Z*Y*X`.
+    /// FBX rotation orders. * The NAME is the order Euler angles are APPLIED in, not the matrix
+    /// multiplication order - ufbx.h:339 spells this out: `XYZ` composes as `Z*Y*X`.
     ///
     /// The enum's numeric values are the file's own encoding, so `@fromBackingInt` on the
     /// `RotationOrder` property is meaningful.
@@ -11655,19 +11655,19 @@ pub const fbx = struct {
         spheric = 6,
     };
 
-    /// ★ The default when a node omits `RotationOrder` — which 70 of 76 models in the real capture
+    /// * The default when a node omits `RotationOrder` - which 70 of 76 models in the real capture
     /// do. `eEulerXYZ` is 0 in the FBX SDK, so an absent property means XYZ.
     pub const default_rotation_order: RotationOrder = .xyz;
 
     /// A node's local transform as translation / rotation / scale.
     ///
     /// Named `NodeTransform`, not `Transform`: it is f64 with an (x,y,z,w) quaternion, matching
-    /// ufbx so the composition can be diffed against it term by term — whereas `zm.Transform` is
+    /// ufbx so the composition can be diffed against it term by term - whereas `zm.Transform` is
     /// f32 with zm's own conventions. Conversion happens at the adapter boundary, deliberately in
     /// one place.
     pub const NodeTransform = struct {
         translation: [3]f64 = .{ 0, 0, 0 },
-        /// `(x, y, z, w)` — ufbx's layout, kept so the composition below can be compared term by
+        /// `(x, y, z, w)` - ufbx's layout, kept so the composition below can be compared term by
         /// term against `ufbxi_get_transform`.
         rotation: [4]f64 = .{ 0, 0, 0, 1 },
         scale: [3]f64 = .{ 1, 1, 1 },
@@ -11676,7 +11676,7 @@ pub const fbx = struct {
     /// Euler angles in DEGREES to a quaternion, in the given order.
     ///
     /// Transcribed from `ufbx_euler_to_quat`; the per-order sign patterns are generated code in
-    /// ufbx and are not worth deriving by hand — getting one sign wrong yields a rotation that is
+    /// ufbx and are not worth deriving by hand - getting one sign wrong yields a rotation that is
     /// correct at zero and wrong everywhere else.
     pub fn eulerToQuat(v: [3]f64, order: RotationOrder) [4]f64 {
         // zm.pi rather than pi: std.math is banned outside zimrmath.
@@ -11758,12 +11758,12 @@ pub const fbx = struct {
     }
 
     /// The inputs to the chain. Split out from `Object` so an ANIMATED transform can reuse the
-    /// composition by substituting sampled values for the static ones — layer 4 needs exactly that,
+    /// composition by substituting sampled values for the static ones - layer 4 needs exactly that,
     /// and duplicating the chain there is how the two would drift apart.
     pub const TransformProps = struct {
         translation: [3]f64 = .{ 0, 0, 0 },
         rotation: [3]f64 = .{ 0, 0, 0 },
-        /// ★ Defaults to ONE, unlike every other term.
+        /// * Defaults to ONE, unlike every other term.
         scale: [3]f64 = .{ 1, 1, 1 },
         pre_rotation: [3]f64 = .{ 0, 0, 0 },
         post_rotation: [3]f64 = .{ 0, 0, 0 },
@@ -11816,13 +11816,13 @@ pub const fbx = struct {
 
     /// Compose the eleven-term chain into a single TRS.
     ///
-    /// Built inside-out, term by term, in the SAME sequence as `ufbxi_get_transform` — deliberately
+    /// Built inside-out, term by term, in the SAME sequence as `ufbxi_get_transform` - deliberately
     /// mirroring it statement for statement so the two can be diffed by eye. Reordering these to
     /// look tidier is how a transcription bug gets introduced.
     pub fn composeTransform(p: TransformProps) NodeTransform {
         var t: NodeTransform = .{};
 
-        // Sp⁻¹ · S · Sp
+        // Sp^-1 * S * Sp
         subTranslate(&t, p.scaling_pivot);
         mulScale(&t, p.scale);
         addTranslate(&t, p.scaling_pivot);
@@ -11830,11 +11830,11 @@ pub const fbx = struct {
         // Soff
         addTranslate(&t, p.scaling_offset);
 
-        // Rp⁻¹ · Rpost⁻¹ · R · Rpre · Rp
+        // Rp^-1 * Rpost^-1 * R * Rpre * Rp
         subTranslate(&t, p.rotation_pivot);
-        mulRotateInv(&t, p.post_rotation, .xyz); // ★ inverted, and ALWAYS XYZ
+        mulRotateInv(&t, p.post_rotation, .xyz); // * inverted, and ALWAYS XYZ
         mulRotate(&t, p.rotation, p.order); // the only term using the node's order
-        mulRotate(&t, p.pre_rotation, .xyz); // ★ ALWAYS XYZ
+        mulRotate(&t, p.pre_rotation, .xyz); // * ALWAYS XYZ
         addTranslate(&t, p.rotation_pivot);
 
         // Roff, then T
@@ -11887,7 +11887,7 @@ pub const fbx = struct {
     }
 
     // ===========================================================================
-    // Layer 4 — animation curves
+    // Layer 4 - animation curves
     // ===========================================================================
     //
     // An `AnimationCurve` is a keyframe list; an `AnimationCurveNode` groups up to three of them
@@ -11895,13 +11895,13 @@ pub const fbx = struct {
     // So evaluating a node at time t means: for each of its bound curve nodes, sample three curves,
     // and substitute the result for that property in `TransformProps` before composing.
     //
-    // ★ Substituting into `TransformProps` and reusing `composeTransform` is the whole point of
+    // * Substituting into `TransformProps` and reusing `composeTransform` is the whole point of
     // splitting that struct out in layer 3. An animated path that recomputed the eleven-term chain
     // itself would drift from the static one, and the drift would look like a subtly wrong pose.
 
     /// FBX stores key times as integer "ktime". The constant is derivable from the file rather
     /// than folklore: successive keys in `dance1_subject2.fbx` differ by 769769300, and
-    /// 769769300 × 60 == 46186158000 exactly, which also confirms the capture is 60 fps.
+    /// 769769300 x 60 == 46186158000 exactly, which also confirms the capture is 60 fps.
     pub const ktime_per_second: i64 = 46186158000;
 
     pub fn secondsFromKtime(t: i64) f64 {
@@ -11916,7 +11916,7 @@ pub const fbx = struct {
         cubic,
     };
 
-    /// `KeyAttrFlags` bits. `0x108` — the value this capture uses — is CUBIC | TANGENT_AUTO.
+    /// `KeyAttrFlags` bits. `0x108` - the value this capture uses - is CUBIC | TANGENT_AUTO.
     const flag_constant: i32 = 0x2;
     const flag_linear: i32 = 0x4;
     const flag_cubic: i32 = 0x8;
@@ -11925,16 +11925,16 @@ pub const fbx = struct {
     pub const Curve = struct {
         /// Key times in ktime, ascending.
         ///
-        /// ★ EXPORTERS DISAGREE ABOUT WIDTH, and the wrong assumption fails SILENTLY. The FBX
+        /// * EXPORTERS DISAGREE ABOUT WIDTH, and the wrong assumption fails SILENTLY. The FBX
         /// SDK writes `KeyTime` as i64 and `KeyValueFloat` as f32, but other writers emit i32
         /// times or f64 values. An earlier version returned null from `curveOf` on anything
-        /// unexpected, which made the curve vanish — the joint then held its rest pose with no
+        /// unexpected, which made the curve vanish - the joint then held its rest pose with no
         /// error anywhere. Both widths are accepted, and `timeAt`/`valueAt` hide the choice.
         times: []const i64 = &.{},
         times_i32: []const i32 = &.{},
         values: []const f32 = &.{},
         values_f64: []const f64 = &.{},
-        /// One entry per ATTRIBUTE GROUP, not per key — see `interpolationAt`.
+        /// One entry per ATTRIBUTE GROUP, not per key - see `interpolationAt`.
         attr_flags: []const i32 = &.{},
         /// Four floats per attribute group: right.dx, right.dy, next_left.dx, next_left.dy.
         attr_data: []const f32 = &.{},
@@ -12000,14 +12000,14 @@ pub const fbx = struct {
 
         /// Sample at `time` (seconds). Mirrors `ufbx_evaluate_curve` (ufbx.c:30718).
         ///
-        /// ★ SCOPE, STATED PLAINLY. Exact-key, constant and linear are exact. CUBIC is evaluated
-        /// with the AUTO-tangent slope ufbx derives when a key carries no explicit tangents — the
-        /// time-independent slope blended with the one-sided slopes — but WITHOUT ufbx's auto-bias,
+        /// * SCOPE, STATED PLAINLY. Exact-key, constant and linear are exact. CUBIC is evaluated
+        /// with the AUTO-tangent slope ufbx derives when a key carries no explicit tangents - the
+        /// time-independent slope blended with the one-sided slopes - but WITHOUT ufbx's auto-bias,
         /// progressive clamping, weighted or velocity refinements. Those matter only for
         /// hand-authored curves sampled BETWEEN keys.
         ///
-        /// For mocap this is not a compromise: real captures are DENSELY BAKED — this one has 7888
-        /// keys for 7889 frames — so every sample lands exactly on a key, where all four modes
+        /// For mocap this is not a compromise: real captures are DENSELY BAKED - this one has 7888
+        /// keys for 7889 frames - so every sample lands exactly on a key, where all four modes
         /// agree and return the key's value.
         pub fn evaluate(self: Curve, time: f64, default_value: f64) f64 {
             const count: usize = self.keyCount();
@@ -12043,7 +12043,7 @@ pub const fbx = struct {
             const y0: f64 = self.valueAt(i);
             const y1: f64 = self.valueAt(lo);
             if (t_k == t0) {
-                return y0; // exact key — the only path a baked capture ever takes
+                return y0; // exact key - the only path a baked capture ever takes
             }
             const span: f64 = t1 - t0;
             if (span <= 0) {
@@ -12183,7 +12183,7 @@ pub const fbx = struct {
         model_index: u32,
         time: f64,
         /// Which take's curves to honour. `null` means "every curve bound to this node",
-        /// which is right for a single-take file and WRONG for a multi-take one — see `Take`.
+        /// which is right for a single-take file and WRONG for a multi-take one - see `Take`.
         take_stack: ?u32,
     ) TransformProps {
         var p: TransformProps = transformProps(scene, object);
@@ -12238,24 +12238,24 @@ pub const fbx = struct {
     }
 
     // ===========================================================================
-    // Geometry — polygons to a GPU-shaped triangle mesh
+    // Geometry - polygons to a GPU-shaped triangle mesh
     // ===========================================================================
     //
     // FBX geometry is not what a GPU wants, in three separate ways, and each one silently
     // produces a plausible-looking wrong mesh if mishandled.
     //
-    // ★ 1. POLYGONS ARE NOT TRIANGLES. `Geno.fbx` is 9330 quads; `Drop_Kick.fbx` mixes 14050
-    //      quads with 172 triangles. The corner list has no per-polygon size — instead THE
+    // * 1. POLYGONS ARE NOT TRIANGLES. `Geno.fbx` is 9330 quads; `Drop_Kick.fbx` mixes 14050
+    //      quads with 172 triangles. The corner list has no per-polygon size - instead THE
     //      LAST CORNER OF EACH POLYGON IS STORED NEGATIVE, bit-flipped as `~i`. Reading the
     //      indices without decoding that gives garbage vertices at negative offsets.
     //
-    // ★ 2. NORMALS AND UVs ARE PER-CORNER, NOT PER-VERTEX. Both fixtures map them
+    // * 2. NORMALS AND UVs ARE PER-CORNER, NOT PER-VERTEX. Both fixtures map them
     //      `ByPolygonVertex`, so one control point carries a different normal in each polygon
-    //      that touches it — which is the whole point at a hard edge or a UV seam. A GPU
+    //      that touches it - which is the whole point at a hard edge or a UV seam. A GPU
     //      vertex holds exactly one of each, so corners must be SPLIT into distinct vertices
     //      and then welded back where they genuinely agree.
     //
-    // ★ 3. THE `IndexToDirect` INDIRECTION. `Geno.fbx` stores 10329 unique UVs plus a 37320
+    // * 3. THE `IndexToDirect` INDIRECTION. `Geno.fbx` stores 10329 unique UVs plus a 37320
     //      entry index; the normals are `Direct` with no index. Both spellings appear in the
     //      same file, so a reader must handle the mapping and reference types as a pair rather
     //      than assuming one shape.
@@ -12292,7 +12292,7 @@ pub const fbx = struct {
         index: []const i32 = &.{},
         mapping: MappingMode = .unsupported,
         indexed: bool = false,
-        /// Values per entry — 3 for normals, 2 for UVs.
+        /// Values per entry - 3 for normals, 2 for UVs.
         stride: usize = 0,
 
         fn count(self: LayerElement) usize {
@@ -12397,11 +12397,11 @@ pub const fbx = struct {
         /// 2 per vertex; all zero when it carried no UVs.
         uvs: []const f32,
         indices: []const u32,
-        /// ★ For each emitted vertex, the ORIGINAL control-point index it came from.
+        /// * For each emitted vertex, the ORIGINAL control-point index it came from.
         ///
         /// This is what makes skinning possible. A Cluster lists the control points it
         /// influences, but welding splits one control point into several vertices at seams and
-        /// hard edges — so weights must be copied to every vertex sharing a control point.
+        /// hard edges - so weights must be copied to every vertex sharing a control point.
         /// Without this map the skin phase would have to re-derive the split and would get it
         /// subtly wrong.
         source_vertex: []const u32,
@@ -12425,9 +12425,9 @@ pub const fbx = struct {
     /// Key for welding: a corner is a distinct vertex unless its control point AND its
     /// attributes all match an existing one.
     ///
-    /// ★ THE ATTRIBUTES ARE HELD AS BIT PATTERNS, NOT FLOATS. Zig's `AutoHashMap` refuses to
+    /// * THE ATTRIBUTES ARE HELD AS BIT PATTERNS, NOT FLOATS. Zig's `AutoHashMap` refuses to
     /// hash an `f32`, and it is right to: NaN != NaN and +0 == -0 make float equality a poor
-    /// hash predicate. Bitwise equality is also the CORRECT weld rule here — two corners of
+    /// hash predicate. Bitwise equality is also the CORRECT weld rule here - two corners of
     /// the same control point either came from the same value in the file, and match exactly,
     /// or represent a genuine seam that must stay split. An epsilon compare would need a
     /// spatial structure and would merge seams that the artist meant to keep.
@@ -12500,7 +12500,7 @@ pub const fbx = struct {
         defer polygon.deinit(gpa);
 
         for (corners, 0..) |raw, corner| {
-            // ★ The negative terminator: the last corner of each polygon is stored as ~i.
+            // * The negative terminator: the last corner of each polygon is stored as ~i.
             const last: bool = raw < 0;
             const vertex_i: i32 = if (last) ~raw else raw;
             if (vertex_i < 0) {
@@ -12564,7 +12564,7 @@ pub const fbx = struct {
     }
 
     // ===========================================================================
-    // Skinning — Cluster influences to per-vertex bone indices and weights
+    // Skinning - Cluster influences to per-vertex bone indices and weights
     // ===========================================================================
     //
     // FBX stores skinning as the TRANSPOSE of what a GPU wants. A `Skin` deformer owns one
@@ -12573,12 +12573,12 @@ pub const fbx = struct {
     //     Cluster "Hips"  Indexes [i32]  Weights [f64]  Transform[16]  TransformLink[16]
     //
     // A GPU vertex instead wants four (bone, weight) pairs of its own. So the mapping has to be
-    // inverted, and then reduced — measured on `Geno.fbx`, 357 of its 9332 control points have
+    // inverted, and then reduced - measured on `Geno.fbx`, 357 of its 9332 control points have
     // MORE than four influences, up to six.
     //
-    // ★ THE REDUCTION MUST KEEP THE FOUR STRONGEST AND RENORMALISE. Taking the first four
+    // * THE REDUCTION MUST KEEP THE FOUR STRONGEST AND RENORMALISE. Taking the first four
     // encountered drops whichever influences happen to come late in cluster order, and skipping
-    // the renormalise leaves a vertex whose weights sum to less than one — which shrinks it
+    // the renormalise leaves a vertex whose weights sum to less than one - which shrinks it
     // toward the origin as the skeleton moves. `export_geno.py:143-151` does exactly this
     // (`argsort`, take 4, divide by the sum); it is not an optimisation, it is correctness.
 
@@ -12587,11 +12587,11 @@ pub const fbx = struct {
 
     pub const SkinData = struct {
         arena: *std.heap.ArenaAllocator,
-        /// `max_influences` per vertex, indexing the JOINT array — not FBX objects.
+        /// `max_influences` per vertex, indexing the JOINT array - not FBX objects.
         bone_indices: []const u8,
         /// `max_influences` per vertex, summing to 1 for any influenced vertex.
         bone_weights: []const f32,
-        /// ★ THE BIND POSE, READ FROM THE FILE RATHER THAN DERIVED — one 4x4 per joint,
+        /// * THE BIND POSE, READ FROM THE FILE RATHER THAN DERIVED - one 4x4 per joint,
         /// row-major with the translation in the last row (which is also zm's layout, so
         /// these load straight into a `zm.Mat`). Identity for joints no cluster binds.
         ///
@@ -12599,18 +12599,18 @@ pub const fbx = struct {
         /// SKIN WAS BOUND, and `Transform`, the mesh's. The inverse-bind a skinning shader
         /// wants is `inverse(TransformLink) * Transform`.
         ///
-        /// ★ THAT IS NOT THE SAME AS THE NODE'S REST TRANSFORM, and assuming it is produced a
+        /// * THAT IS NOT THE SAME AS THE NODE'S REST TRANSFORM, and assuming it is produced a
         /// character whose torso was correct while its limbs stretched into tentacles.
         /// Measured on `Geno.fbx`, `LeftHand`'s TransformLink puts it at (49.4, 102.6, -4.9)
-        /// — out to the side, arm down — while walking the rest hierarchy lands 200 units
+        /// - out to the side, arm down - while walking the rest hierarchy lands 200 units
         /// straight up. The skin was bound in a pose the file's current `Lcl` values no longer
         /// describe, so the bind must be READ, not reconstructed.
         ///
-        /// ★ And the reason a passing test did not catch it: `inverse(X) * X == identity` for
+        /// * And the reason a passing test did not catch it: `inverse(X) * X == identity` for
         /// ANY X, so the bind-pose identity check validates the inverse and the multiply
-        /// order — never the CHOICE of X.
+        /// order - never the CHOICE of X.
         inverse_bind: []const [16]f32,
-        /// The bind matrices themselves — `TransformLink` per joint, identity where unbound.
+        /// The bind matrices themselves - `TransformLink` per joint, identity where unbound.
         bind: []const [16]f32,
 
         pub fn deinit(self: *SkinData) void {
@@ -12630,7 +12630,7 @@ pub const fbx = struct {
 
     /// Build per-vertex bone indices and weights for `mesh`.
     ///
-    /// `joint_of_object` comes from `bvh.fromFbxWithMap` and MUST be that map — see its doc for
+    /// `joint_of_object` comes from `bvh.fromFbxWithMap` and MUST be that map - see its doc for
     /// why an independently derived one silently mis-binds the mesh.
     pub fn skinOf(
         gpa: Allocator,
@@ -12678,7 +12678,7 @@ pub const fbx = struct {
                 if (joint < 0 or joint > 255) {
                     continue; // a Cluster on a node that is not a joint, or past the u8 limit
                 }
-                // The bind matrix is read even from a cluster that influences nothing — the
+                // The bind matrix is read even from a cluster that influences nothing - the
                 // bone still needs a bind pose for any vertex a SIBLING cluster binds to it.
                 if (clusterInverseBind(scene, cluster)) |matrix| {
                     var raw: [16]f32 = identity4x4;
@@ -12694,7 +12694,7 @@ pub const fbx = struct {
                     }) catch return Error.OutOfMemory;
                 }
 
-                // ★ 21 of Geno's 75 clusters carry NO `Indexes` node at all — a bone that
+                // * 21 of Geno's 75 clusters carry NO `Indexes` node at all - a bone that
                 // influences nothing. Absent, not empty, so this must be a lookup that can
                 // fail rather than an assumed child.
                 const idx_node: Node = scene.doc.child(cluster.node, "Indexes") orelse continue;
@@ -12761,7 +12761,7 @@ pub const fbx = struct {
         @memset(bone_indices, 0);
         @memset(bone_weights, 0);
 
-        // Group influences by control point with a counting sort — linear, and the same span
+        // Group influences by control point with a counting sort - linear, and the same span
         // layout used everywhere else here.
         var control_points: usize = 0;
         for (influences.items) |inf| {
@@ -12794,7 +12794,7 @@ pub const fbx = struct {
             const span: []const Influence =
                 grouped[starts[control_point]..starts[control_point + 1]];
 
-            // Selection sort for the top `max_influences` — the spans are 1..6 entries, so a
+            // Selection sort for the top `max_influences` - the spans are 1..6 entries, so a
             // full sort would cost more in setup than this does in comparisons.
             var best: [max_influences]Influence = @splat(.{ .control_point = 0, .joint = 0, .weight = 0 });
             for (span) |candidate| {
@@ -12841,17 +12841,17 @@ pub const fbx = struct {
         joint: usize,
         /// `inverse(TransformLink)`.
         matrix: [16]f32,
-        /// `TransformLink` itself — the bone's global transform when the skin was bound.
+        /// `TransformLink` itself - the bone's global transform when the skin was bound.
         bind: [16]f32,
     };
 
     /// Read a cluster's `TransformLink` and `Transform` and produce `inverse(TransformLink) *
-    /// Transform` — the matrix that takes a bind-pose vertex into the bone's local space.
+    /// Transform` - the matrix that takes a bind-pose vertex into the bone's local space.
     /// A cluster's inverse-bind matrix: the inverse of `TransformLink`, the bone's global
     /// transform at the moment the skin was bound.
     ///
-    /// ★ THE BIND POSE IS NOT THE FILE'S ANIMATION FRAME 0. On `Geno.fbx` the two are a T-pose
-    /// and an A-pose respectively — measured by taking each joint's vertex centroid and
+    /// * THE BIND POSE IS NOT THE FILE'S ANIMATION FRAME 0. On `Geno.fbx` the two are a T-pose
+    /// and an A-pose respectively - measured by taking each joint's vertex centroid and
     /// comparing: frame 0 is 35 units off on average, `TransformLink` only 5. Skinning an
     /// A-posed mesh with a T-posed bind tears the limbs off.
     ///
@@ -12905,7 +12905,7 @@ pub const fbx = struct {
     }
 
     /// Inverse of a rotation-plus-translation matrix stored row-major with the translation in
-    /// the last row. Rigid, not general — bind matrices carry no scale in any fixture here, and
+    /// the last row. Rigid, not general - bind matrices carry no scale in any fixture here, and
     /// a rigid inverse is exact rather than merely close.
     fn rigidInverse4x4(m: [16]f64) [16]f64 {
         var out: [16]f64 = identity4x4d;
@@ -12967,9 +12967,9 @@ pub const fbx = struct {
         return null;
     }
 
-    /// One `AnimationStack` — what the FBX UI calls a "take".
+    /// One `AnimationStack` - what the FBX UI calls a "take".
     ///
-    /// ★ A FILE MAY HOLD SEVERAL, AND SAMPLING THEM ALL AT ONCE SILENTLY BLENDS THEM. Before
+    /// * A FILE MAY HOLD SEVERAL, AND SAMPLING THEM ALL AT ONCE SILENTLY BLENDS THEM. Before
     /// takes were modelled, every curve bound to a node was evaluated regardless of which
     /// stack owned it, so a two-take file produced a pose that belonged to neither. The
     /// binding is three hops, all `OO`:
@@ -12982,15 +12982,15 @@ pub const fbx = struct {
         stack: u32,
         name: []const u8,
         /// Clip bounds in seconds, from the stack's `LocalStart` / `LocalStop` properties.
-        /// Both zero when the stack does not carry them — fall back to the curves' own span.
+        /// Both zero when the stack does not carry them - fall back to the curves' own span.
         start: f64,
         stop: f64,
         /// How many `AnimationCurveNode`s reach this stack through its layers.
         ///
-        /// ★ ZERO IS COMMON AND IT MATTERS. Mixamo's `Drop_Kick.fbx` declares two takes:
+        /// * ZERO IS COMMON AND IT MATTERS. Mixamo's `Drop_Kick.fbx` declares two takes:
         /// `Take 001` with 3.333 s of declared bounds and NO curves at all, and `mixamo.com`
         /// with 2.9 s and all 53 curve nodes. An empty stack still carries `LocalStop`, so
-        /// duration alone cannot tell them apart — only the curve count can.
+        /// duration alone cannot tell them apart - only the curve count can.
         curve_node_count: usize,
 
         pub fn duration(self: Take) f64 {
@@ -13059,7 +13059,7 @@ pub const fbx = struct {
 
     /// The first take that actually carries animation, else the first take, else null.
     ///
-    /// ★ THIS IS THE RIGHT DEFAULT, AND "TAKE 0" IS NOT. A Mixamo export leads with an empty
+    /// * THIS IS THE RIGHT DEFAULT, AND "TAKE 0" IS NOT. A Mixamo export leads with an empty
     /// `Take 001` and puts the motion in a second stack named after the site; picking index 0
     /// yields a clip that loads, reports a plausible duration, and never moves. Choosing by
     /// CONTENT rather than position is one scan and removes a whole class of silent failure.
@@ -13137,10 +13137,10 @@ pub const fbx = struct {
     /// A node's transform composed all the way to the scene root, as a row-major 4x4 with the
     /// translation in the last row.
     ///
-    /// ★ A GEOMETRY'S CONTROL POINTS ARE IN ITS NODE'S LOCAL SPACE, NOT WORLD SPACE, and
+    /// * A GEOMETRY'S CONTROL POINTS ARE IN ITS NODE'S LOCAL SPACE, NOT WORLD SPACE, and
     /// forgetting that is invisible until something else is in world space to compare against.
     /// `Geno.fbx`'s mesh node carries `Lcl Translation (0, 139.99, -0.11)` and a 1.032 scale:
-    /// its vertices run from Y -138 to +28 — origin around the shoulders — while its skeleton
+    /// its vertices run from Y -138 to +28 - origin around the shoulders - while its skeleton
     /// stands from Y 1 to 171. Skinning them together without this put the character 139 units
     /// underground, at the right size and shape.
     pub fn globalTransform(scene: *const Scene, model_index: u32) [16]f64 {
@@ -13209,7 +13209,7 @@ pub const fbx = struct {
         };
     }
 
-    /// Apply only the rotation/scale part — for normals and other directions.
+    /// Apply only the rotation/scale part - for normals and other directions.
     pub fn transformDirection(m: [16]f64, p: [3]f32) [3]f32 {
         const x: f64 = p[0];
         const y: f64 = p[1];
@@ -13236,7 +13236,7 @@ pub const fbx = struct {
     // Synthetic documents, for tests
     // ===========================================================================
     //
-    // There is NO real .fbx fixture in the tree — flomo's `data/` was never uploaded — so without
+    // There is NO real .fbx fixture in the tree - flomo's `data/` was never uploaded - so without
     // this the container layer could not be tested at all. It is also the only way to exercise
     // paths a captured file would not reach on demand: version 7400's 13-byte headers against
     // 7500's 25-byte ones, an uncompressed array against a deflated one, nesting depth.
@@ -13349,7 +13349,7 @@ pub const fbx = struct {
             try self.u32_(@intCast(vs.len * @sizeOf(f64)));
             try self.buf.appendSlice(self.gpa, std.mem.sliceAsBytes(vs));
         }
-        /// A ZLIB-DEFLATED i64 array (encoding 1) — the shape real files use for key times.
+        /// A ZLIB-DEFLATED i64 array (encoding 1) - the shape real files use for key times.
         pub fn valueI64ArrayDeflated(self: *Writer, vs: []const i64) !void {
             // Same shape as `codecs.png`'s `deflateZlib`: Compress.init asserts the output
             // buffer is longer than 8 bytes, so the Allocating writer cannot start empty, and the
@@ -13380,13 +13380,13 @@ pub const fbx = struct {
     };
 };
 
-/// BVH — the Biovision hierarchy/motion format that mocap ships in.
+/// BVH - the Biovision hierarchy/motion format that mocap ships in.
 ///
 /// A skeleton of nested joints, each with an OFFSET from its parent and a list of animated
 /// CHANNELS, followed by a dense matrix of floats: one row per frame, one column per channel
 /// across the whole skeleton.
 ///
-/// ── ★ THERE IS NO FIXED ROTATION ORDER, AND NO FIXED CHANNEL LAYOUT ──
+/// -- * THERE IS NO FIXED ROTATION ORDER, AND NO FIXED CHANNEL LAYOUT --
 ///
 /// Both are per-joint properties written in the file, and real files disagree. Measured across
 /// the two BVH fixtures in `assets/` plus the reference implementation this was ported from:
@@ -13396,18 +13396,18 @@ pub const fbx = struct {
 ///     0005_2FeetJump001.bvh              XYZ,  6 on the root, 3 on the other 24
 ///
 /// A reader that hardcodes either property is wrong on most files, and the failure mode is a
-/// plausible-looking WRONG POSE rather than an error — which is why it survives review. So
+/// plausible-looking WRONG POSE rather than an error - which is why it survives review. So
 /// rotation composition walks `Joint.channels` in file order, and nothing anywhere assumes that
 /// only the root translates.
 ///
-/// ── WHAT THE CHANNELS MEAN ──
+/// -- WHAT THE CHANNELS MEAN --
 ///
 /// Position channels OVERWRITE the corresponding component of the joint's OFFSET; rotation
 /// channels COMPOSE onto an accumulator. So on a file like dance1, where every joint has
-/// position channels, the OFFSETs are dead weight at sample time — but they are still what the
+/// position channels, the OFFSETs are dead weight at sample time - but they are still what the
 /// up-axis heuristic reads, so they cannot be discarded at parse time.
 ///
-/// ── END SITES ──
+/// -- END SITES --
 ///
 /// An `End Site` is a real entry in the joint array with an offset and ZERO channels. It exists
 /// so the bone out to a fingertip or toe can be drawn. It never consumes motion data, which is
@@ -13420,7 +13420,7 @@ pub const bvh = struct {
         BadChannels,
         /// `Frames:` or `Frame Time:` missing, or a motion matrix that ends early.
         BadMotion,
-        /// `fromFbx` found no skeleton joints — e.g. a static-mesh export, whose only Model is
+        /// `fromFbx` found no skeleton joints - e.g. a static-mesh export, whose only Model is
         /// the geometry. Distinct from a malformed file: nothing is WRONG with it, it simply
         /// has no animation to convert, and a caller should say so rather than show one bone.
         NoSkeleton,
@@ -13486,7 +13486,7 @@ pub const bvh = struct {
         }
     };
 
-    /// A parsed document. Everything inside is arena-owned, so `deinit` is one call — the same
+    /// A parsed document. Everything inside is arena-owned, so `deinit` is one call - the same
     /// shape as `xml.Document`, and for the same reason: a document is freed all at once or not
     /// at all, and per-field frees are a source of leaks nobody notices.
     pub const Data = struct {
@@ -13507,7 +13507,7 @@ pub const bvh = struct {
         }
 
         /// Clip length in seconds. Not derivable by a caller without also knowing that
-        /// `frame_time` is per-frame rather than a rate — 60 fps and 120 fps files both occur,
+        /// `frame_time` is per-frame rather than a rate - 60 fps and 120 fps files both occur,
         /// and inverting the wrong one is a silent 4x error in a timeline.
         pub fn duration(self: Data) f32 {
             return float(self.frame_count) * self.frame_time;
@@ -13561,7 +13561,7 @@ pub const bvh = struct {
         diagnostic: ?*Diagnostic,
 
         joints: std.ArrayListUnmanaged(Joint) = .empty,
-        /// The joint an OFFSET or CHANNELS applies to — the most recently opened one.
+        /// The joint an OFFSET or CHANNELS applies to - the most recently opened one.
         current: i32 = -1,
         /// Parents of the open braces, so `}` can restore the right one.
         open: std.ArrayListUnmanaged(i32) = .empty,
@@ -13574,7 +13574,7 @@ pub const bvh = struct {
         ///
         /// The line is counted from the start of the source ON DEMAND rather than tracked
         /// while scanning. Failures are rare and files are large, so paying O(n) once on the
-        /// error path is strictly better than a branch per token in the hot loop — and it
+        /// error path is strictly better than a branch per token in the hot loop - and it
         /// removes the `line_start` bookkeeping that is easy to get subtly wrong.
         fn fail(self: *Parser, err: Error, context: []const u8) Error {
             if (self.diagnostic) |d| {
@@ -13675,8 +13675,8 @@ pub const bvh = struct {
             self.current = @intCast(self.joints.items.len - 1);
         }
 
-        /// ★ `}` RETURNS TO THE PARENT OF THE JOINT THAT OPENED THE BRACE, not simply to the
-        /// previous joint. Getting this wrong attaches the next sibling one level too deep —
+        /// * `}` RETURNS TO THE PARENT OF THE JOINT THAT OPENED THE BRACE, not simply to the
+        /// previous joint. Getting this wrong attaches the next sibling one level too deep -
         /// and forward kinematics still produces a plausible pose from it, so the bug survives
         /// a visual check. The branching test in this file exists for exactly this line.
         fn closeBrace(self: *Parser) Error!void {
@@ -13747,18 +13747,18 @@ pub const bvh = struct {
 
     /// Write `data` back out as a BVH document. Caller owns the returned bytes.
     ///
-    /// ── WHY A WRITER EARNS ITS PLACE IN A VIEWER ──
+    /// -- WHY A WRITER EARNS ITS PLACE IN A VIEWER --
     ///
     /// It is the cheapest correctness net available: parse -> encode -> parse must reproduce the
     /// hierarchy, the per-joint channel lists and every motion value. That round trip catches
-    /// the whole class of bugs where the parser is self-consistently wrong — a mis-assigned
-    /// parent, a channel list read in the wrong order — because the second parse disagrees with
+    /// the whole class of bugs where the parser is self-consistently wrong - a mis-assigned
+    /// parent, a channel list read in the wrong order - because the second parse disagrees with
     /// the first. It is also how trimmed fixtures get made.
     ///
     /// Emits `\n`, not the `\r\n` both real fixtures use; the parser treats `\r` as an ordinary
     /// delimiter, and the round trip proves it.
     ///
-    /// ★ Floats use `{d}` — shortest round-trippable — NOT a fixed number of decimals. dance1
+    /// * Floats use `{d}` - shortest round-trippable - NOT a fixed number of decimals. dance1
     /// stores values like `1.81973137e-05`; `{d:.6}` flattens those to `0.000000`, and the
     /// round-trip test would then fail for a formatting reason unrelated to parsing.
     pub fn encode(gpa: Allocator, data: Data) Error![]u8 {
@@ -13842,10 +13842,10 @@ pub const bvh = struct {
 
     // ---- FBX -> BVH -------------------------------------------------------
     //
-    // ★ FBX IS NORMALIZED INTO BVH RATHER THAN INTO A PARALLEL REPRESENTATION. This is the
+    // * FBX IS NORMALIZED INTO BVH RATHER THAN INTO A PARALLEL REPRESENTATION. This is the
     // single decision flomo's loader proved worth copying: its `fbx_loader.h` does not produce
-    // an FBX-shaped structure, it resamples into `BVHData`, and everything downstream —
-    // sampling, forward kinematics, rendering, the viewer — then sees only BVH. FBX support
+    // an FBX-shaped structure, it resamples into `BVHData`, and everything downstream -
+    // sampling, forward kinematics, rendering, the viewer - then sees only BVH. FBX support
     // costs one adapter instead of a second pipeline.
     //
     // It lives in the `bvh` namespace, not `fbx`, deliberately: this is BVH's constructor from
@@ -13858,7 +13858,7 @@ pub const bvh = struct {
     pub const FromFbxOptions = struct {
         /// Frames per second to resample at. FBX curves are sparse and per-channel with
         /// independent key times; BVH is a dense matrix, so resampling is the only honest
-        /// bridge. Defaults to 60 — measured `frameTimeHint` is the better source when the
+        /// bridge. Defaults to 60 - measured `frameTimeHint` is the better source when the
         /// capture is baked.
         fps: f32 = 60.0,
         /// Bone length given to synthesised End Sites, in file units. BVH needs an End Site to
@@ -13866,7 +13866,7 @@ pub const bvh = struct {
         end_site_length: f32 = 5.0,
         /// Which take (`AnimationStack`) to convert, by index in file order.
         ///
-        /// ★ `null` means "the first take that actually has curves" — NOT take 0. Mixamo
+        /// * `null` means "the first take that actually has curves" - NOT take 0. Mixamo
         /// exports lead with an empty `Take 001` and put the motion in a second stack, so
         /// index 0 gives a clip that loads, reports a plausible duration, and never moves.
         /// See `fbx.defaultTake`. Set an index explicitly to convert a specific take;
@@ -13876,7 +13876,7 @@ pub const bvh = struct {
 
     /// Best-guess frame time for a capture, read from the first animation curve's key spacing.
     ///
-    /// ★ Worth doing rather than assuming 30 or 60: `dance1_subject2.fbx` is 60 fps and
+    /// * Worth doing rather than assuming 30 or 60: `dance1_subject2.fbx` is 60 fps and
     /// `0005_2FeetJump001.bvh` is 120, and flomo hardcodes 30. Resampling a 120 fps capture at
     /// 30 throws away three quarters of it.
     pub fn fbxFrameTimeHint(scene: *const fbx.Scene) ?f32 {
@@ -13902,8 +13902,8 @@ pub const bvh = struct {
         /// FBX object index -> joint index in `data.joints`, or -1 for objects that are not
         /// joints. Arena-owned by `data`, so it lives exactly as long.
         ///
-        /// ★ THIS IS THE INDEX-SPACE CONTRACT. Joints are numbered by DEPTH-FIRST WALK ORDER,
-        /// which no FBX record knows about — a skin Cluster names its bone by object id. Any
+        /// * THIS IS THE INDEX-SPACE CONTRACT. Joints are numbered by DEPTH-FIRST WALK ORDER,
+        /// which no FBX record knows about - a skin Cluster names its bone by object id. Any
         /// consumer that resolves cluster -> bone independently will build a second, different
         /// numbering, and the mesh will bind to the wrong bones: a skeleton that animates
         /// correctly wearing a mesh that deforms wrongly, which reads as "skinning is broken"
@@ -13914,7 +13914,7 @@ pub const bvh = struct {
     /// Convert a parsed FBX scene into BVH data, and hand back the object -> joint map.
 
     // =========================================================================
-    // Retargeting, skeleton to skeleton (retarget_plan.md §13f)
+    // Retargeting, skeleton to skeleton (retarget_plan.md section 13f)
     // =========================================================================
 
     const assert = zm.assert;
@@ -13929,8 +13929,8 @@ pub const bvh = struct {
     pub const JointMapOptions = struct {
         /// Strip everything up to and including the last of these before comparing.
         ///
-        /// ★ MIXAMO PREFIXES EVERY JOINT WITH `mixamorig:`. Without stripping it, a name map
-        /// against LAFAN1 matches NOTHING and the retarget silently produces a rest pose —
+        /// * MIXAMO PREFIXES EVERY JOINT WITH `mixamorig:`. Without stripping it, a name map
+        /// against LAFAN1 matches NOTHING and the retarget silently produces a rest pose -
         /// which is why an empty mapping is an ERROR below rather than a quiet identity.
         strip_prefix_at: []const u8 = ":",
         /// Compare without regard to case. Rigs disagree about `LeftArm` vs `leftarm`.
@@ -13996,14 +13996,14 @@ pub const bvh = struct {
 
     /// Retarget one frame of rotations from a source skeleton onto a target skeleton.
     ///
-    /// ── ★★★ WHY THIS WORKS IN GLOBAL SPACE ──
+    /// -- *** WHY THIS WORKS IN GLOBAL SPACE --
     ///
-    /// The obvious approach — copy each joint's LOCAL rotation across — breaks the moment the
+    /// The obvious approach - copy each joint's LOCAL rotation across - breaks the moment the
     /// two skeletons disagree about chain length, and they do: LAFAN1 has Spine/1/2/3 and
     /// Neck/Neck1, Mixamo has Spine/1/2 and one Neck. A dropped joint's bend is simply lost,
     /// and the torso comes out straighter than the capture.
     ///
-    /// ★ Working in GLOBAL rotations fixes it for free. For each target joint the desired
+    /// * Working in GLOBAL rotations fixes it for free. For each target joint the desired
     /// GLOBAL orientation is its source's global orientation; the local rotation is then that,
     /// relative to whatever the parent already resolved to:
     ///
@@ -14011,17 +14011,17 @@ pub const bvh = struct {
     ///
     /// A source joint with no target contributes anyway, because its rotation is already baked
     /// into the global orientation of the next joint DOWN the chain that does have one.
-    /// **Nothing needs to be explicitly composed into a parent** — the plan proposed doing that
+    /// **Nothing needs to be explicitly composed into a parent** - the plan proposed doing that
     /// by hand, and this is strictly better.
     ///
-    /// ★ Targets are visited in index order, which requires PARENTS BEFORE CHILDREN — the
+    /// * Targets are visited in index order, which requires PARENTS BEFORE CHILDREN - the
     /// ordering every BVH and FBX skeleton in this codebase already has. Asserted, not assumed.
     ///
     /// An unmapped target keeps its rest orientation, so a partially-mapped rig degrades to a
     /// stiff limb rather than a scrambled one.
     /// Each joint's REST orientation, derived from where its bone points at rest.
     ///
-    /// ── ★★★ WHY THIS IS NEEDED, MEASURED ──
+    /// -- *** WHY THIS IS NEEDED, MEASURED --
     ///
     /// Copying global orientations across assumes both skeletons AGREE ABOUT REST. They do not.
     /// Comparing `dance1`'s LAFAN1 rig against Mixamo's, bone by bone:
@@ -14031,15 +14031,15 @@ pub const bvh = struct {
     ///     LeftArm    LAFAN1 (0, 1,0)   Mixamo (0, 1,0)   dot = +1.000
     ///
     /// **The leg bones point in exactly OPPOSITE directions at rest while the arms agree.**
-    /// Hand a Mixamo leg a LAFAN1 leg's orientation and it bends backwards — which is precisely
+    /// Hand a Mixamo leg a LAFAN1 leg's orientation and it bends backwards - which is precisely
     /// what the device showed.
     ///
-    /// ★ A BVH or FBX skeleton stores rest ROTATIONS as identity: all the shape lives in the
+    /// * A BVH or FBX skeleton stores rest ROTATIONS as identity: all the shape lives in the
     /// OFFSETS. So a joint's rest orientation has to be RECOVERED from where its bone points,
-    /// which is what this does — the shortest-arc rotation taking +Y onto the bone's world
+    /// which is what this does - the shortest-arc rotation taking +Y onto the bone's world
     /// direction at rest.
     ///
-    /// ★★ THE TWIST IS UNCONSTRAINED by a direction alone, and shortest-arc picks one
+    /// ** THE TWIST IS UNCONSTRAINED by a direction alone, and shortest-arc picks one
     /// deterministically. That is sound here because BOTH skeletons go through the SAME
     /// construction, so the arbitrary part cancels in `restAlignmentOffsets` below.
     ///
@@ -14112,8 +14112,8 @@ pub const bvh = struct {
 
         const points_exactly_backward: bool = alignment < -0.99999;
         if (points_exactly_backward) {
-            // ★ A 180-degree flip has no unique axis, so pick one perpendicular to +Y. This is
-            // the LEG case measured above — LAFAN1 down, Mixamo up — so it is the branch that
+            // * A 180-degree flip has no unique axis, so pick one perpendicular to +Y. This is
+            // the LEG case measured above - LAFAN1 down, Mixamo up - so it is the branch that
             // actually matters, not a corner case.
             return zm.quatFromAxisAngle(vec(0, 0, 1), 3.14159265);
         }
@@ -14129,26 +14129,26 @@ pub const bvh = struct {
 
     /// A skeleton's reference orientations, taken from an explicit POSE rather than inferred.
     ///
-    /// ── ★★★ WHY AN EXPLICIT POSE BEATS DERIVING ONE ──
+    /// -- *** WHY AN EXPLICIT POSE BEATS DERIVING ONE --
     ///
     /// `restBoneOrientations` recovers a joint's orientation from where its bone POINTS, which
     /// needs two things to be true: rest rotations are identity, and every bone points somewhere
     /// meaningful. Both fail in practice.
     ///
     ///   * **Mixamo's rest rotations are NOT identity.** FK-ing its offsets with identity gives
-    ///     `LeftHand (4.6, 212.0, 0.7)` and `LeftFoot (8.2, 186.4, 0.0)` — every bone straight
+    ///     `LeftHand (4.6, 212.0, 0.7)` and `LeftFoot (8.2, 186.4, 0.0)` - every bone straight
     ///     up. The offsets live in ROTATED local joint frames, so a direction derived from them
     ///     describes nothing.
     ///   * **A hand's bone direction is its THUMB and a foot's is its TOE.** Measured across the
     ///     two rigs: dot = 0.296 and 0.000. Near-arbitrary axes the rigs disagree about, which
     ///     is why limbs survived the derived version and extremities did not.
     ///
-    /// ★ A T-POSE fixes both, because it states every joint's orientation outright — including
+    /// * A T-POSE fixes both, because it states every joint's orientation outright - including
     /// hands and feet, which is exactly where derivation is weakest. GenoView ships one
     /// (`Geno_stance.bvh`) alongside the bind pose (`Geno_bind.bvh`), and their world poses
     /// differ precisely as expected: hand at shoulder height versus hand at the hip.
     ///
-    /// ★★ For an FBX the T-pose needs no extra file: the skin clusters' `TransformLink` IS each
+    /// ** For an FBX the T-pose needs no extra file: the skin clusters' `TransformLink` IS each
     /// joint's true global orientation at bind, rotations included. `draw3d.FbxModel.bind`
     /// already carries it.
     ///
@@ -14166,9 +14166,9 @@ pub const bvh = struct {
 
     /// The fixed per-joint correction that makes "source at rest" produce "target at rest".
     ///
-    /// ★ This is GMR's hand-authored `rot_offset` column, DERIVED instead of typed. GMR ships a
-    /// quaternion per row of its match table; when both skeletons carry a rest pose — and every
-    /// BVH and FBX one does — that quaternion is exactly
+    /// * This is GMR's hand-authored `rot_offset` column, DERIVED instead of typed. GMR ships a
+    /// quaternion per row of its match table; when both skeletons carry a rest pose - and every
+    /// BVH and FBX one does - that quaternion is exactly
     ///
     ///     conjugate(source_rest[s]) * target_rest[t]
     ///
@@ -14229,7 +14229,7 @@ pub const bvh = struct {
             // Where this joint should point in WORLD space: where its counterpart points on
             // the source skeleton, CORRECTED for the two rigs disagreeing about rest.
             //
-            // ★ Without the correction a Mixamo leg receives a LAFAN1 leg's orientation and
+            // * Without the correction a Mixamo leg receives a LAFAN1 leg's orientation and
             // bends backwards, because their rest bones point in opposite directions
             // (measured: dot = -1.000). See `restAlignmentOffsets`.
             const source_global_rotation: zm.Quat =
@@ -14251,7 +14251,7 @@ pub const bvh = struct {
 
     /// Scale a source root position for a target of a different size.
     ///
-    /// ★ THE RATIO IS HIP HEIGHT, NOT TOTAL HEIGHT. What must match is how far the root
+    /// * THE RATIO IS HIP HEIGHT, NOT TOTAL HEIGHT. What must match is how far the root
     /// travels relative to leg length: a character with the same standing height but longer
     /// legs takes different strides. GMR's `human_scale_table` is the same idea with a
     /// per-joint table; this is the one number that matters for the root.
@@ -14265,7 +14265,7 @@ pub const bvh = struct {
             return source_root_position;
         }
         const height_ratio: f32 = target_hip_height / source_hip_height;
-        // ★ Y scales like X and Z: the root's HEIGHT above the floor is as much a function of
+        // * Y scales like X and Z: the root's HEIGHT above the floor is as much a function of
         // leg length as its horizontal travel is.
         return source_root_position * @as(Vec, @splat(height_ratio));
     }
@@ -14336,7 +14336,7 @@ pub const bvh = struct {
         }
 
         // Channel layout: 6 on the root (position + rotation), 3 on every other real joint,
-        // 0 on End Sites — the textbook shape, matching `0005_2FeetJump001.bvh`. Rotation
+        // 0 on End Sites - the textbook shape, matching `0005_2FeetJump001.bvh`. Rotation
         // order is ZYX because that is what the sampler will compose back into a quaternion,
         // and the values written below are produced in that same order.
         var channel_count: usize = 0;
@@ -14397,10 +14397,10 @@ pub const bvh = struct {
                     motion[cursor + 2] = @floatCast(tr.translation[2]);
                     cursor += 3;
                 }
-                // ★ The composed quaternion is decomposed back to ZYX Euler because BVH stores
+                // * The composed quaternion is decomposed back to ZYX Euler because BVH stores
                 // angles, not quaternions. Going through the quaternion rather than copying
                 // `props.rotation` straight across is what makes PreRotation and the pivots
-                // survive the conversion — they exist only in the composed result.
+                // survive the conversion - they exist only in the composed result.
                 const e: [3]f32 = eulerZyxFromQuat(tr.rotation);
                 motion[cursor + 0] = e[2]; // Z
                 motion[cursor + 1] = e[1]; // Y
@@ -14489,28 +14489,28 @@ pub const bvh = struct {
         const JointRule = enum {
             /// The scene names its joints (`LimbNode` / `Limb` / `Root`). Exact.
             by_subtype,
-            /// No named joints, but skin Clusters point at Models — those Models are the
+            /// No named joints, but skin Clusters point at Models - those Models are the
             /// bones, because a Cluster exists to bind vertices to one.
             by_skin_cluster,
             /// Neither signal. There is no skeleton here.
             none,
         };
 
-        /// ── ★ THREE FIXTURES, THREE ANSWERS, AND A BLACKLIST GOT TWO OF THEM WRONG ──
+        /// -- * THREE FIXTURES, THREE ANSWERS, AND A BLACKLIST GOT TWO OF THEM WRONG --
         ///
         ///     Geno.fbx / dance1_subject2.fbx   LimbNode x75          -> by_subtype
         ///     subject2.fbx                     OpticalMarker x61     -> none (raw capture)
         ///     metahuman.fbx                    Null x4 + Mesh        -> none (blend shapes)
         ///
         /// An exclusion-only rule admitted 63 optical markers from the second file and 4
-        /// ORGANISATIONAL GROUP NODES — `rig`, `body_grp`, `geometry_grp`, `body_lod0_grp` —
+        /// ORGANISATIONAL GROUP NODES - `rig`, `body_grp`, `geometry_grp`, `body_lod0_grp` -
         /// from the third, producing a confident, meaningless skeleton each time. Every
         /// blacklist is one unfamiliar subtype away from that.
         ///
         /// So both tiers are POSITIVE. `by_subtype` is exact where the file names its joints.
         /// Where it does not, a skin `Cluster` is the giveaway: a Cluster exists solely to bind
         /// vertices to a bone, so anything one points at IS a bone. Measured, that separates
-        /// the cases cleanly — Geno has 75 Cluster-referenced Models, the MetaHuman has zero.
+        /// the cases cleanly - Geno has 75 Cluster-referenced Models, the MetaHuman has zero.
         ///
         /// A rig that uses bare `Null` transforms as bones therefore still loads, provided it
         /// is skinned. An unskinned one reports `NoSkeleton`, which is the honest answer: with
@@ -14529,7 +14529,7 @@ pub const bvh = struct {
             return .none;
         }
 
-        /// True when some skin Cluster references `model_index`, in either edge direction —
+        /// True when some skin Cluster references `model_index`, in either edge direction -
         /// exporters disagree about which end of a Cluster/Model connection is the source.
         fn boundBySkinCluster(self: *FbxBuilder, model_index: u32) bool {
             for (self.scene.connections) |c| {
@@ -14568,12 +14568,12 @@ pub const bvh = struct {
         }
 
         fn build(self: *FbxBuilder) Error!void {
-            // ── ★ WHY THE CONTAINER RULE IS "IS IT A JOINT?", NOT "DOES IT MOVE?" ──
+            // -- * WHY THE CONTAINER RULE IS "IS IT A JOINT?", NOT "DOES IT MOVE?" --
             //
             // flomo detects the container node Mixamo puts above the hips as "has no
             // translation animation but has children", and dives one level past it. That
             // misfires on an UNANIMATED rig: `Geno.fbx` is a bind-pose export whose take is
-            // 0.017s, so its Hips has no translation animation either — and the rule skipped
+            // 0.017s, so its Hips has no translation animation either - and the rule skipped
             // Hips itself, yielding 74 joints where the same skeleton in
             // `dance1_subject2.fbx` yields 75. One missing root joint, silently.
             //
@@ -14603,9 +14603,9 @@ pub const bvh = struct {
         }
 
         /// Depth-first, appending each joint before its children so parents always precede
-        /// them — the invariant BVH forward kinematics relies on.
+        /// them - the invariant BVH forward kinematics relies on.
         ///
-        /// ★ BOUNDED, because `Connections` is an untyped edge list and nothing in the FORMAT
+        /// * BOUNDED, because `Connections` is an untyped edge list and nothing in the FORMAT
         /// forbids a cycle. An unbounded walk over `A is a child of B is a child of A` recurses
         /// until the stack dies, and a viewer that opens arbitrary files must not be one
         /// malformed export away from a crash. `visited` catches a true cycle; `depth` catches
@@ -14721,7 +14721,7 @@ fn bvh_qrot(q: [4]f32, v: [3]f32) [3]f32 {
     };
 }
 
-/// Sample one frame then run forward kinematics — the reference semantics, written here so
+/// Sample one frame then run forward kinematics - the reference semantics, written here so
 /// the test does not depend on engine code that does not exist yet.
 fn bvh_fk(gpa: std.mem.Allocator, d: bvh.Data, frame: usize) ![]const [3]f32 {
     const n: usize = d.joints.len;
@@ -14768,7 +14768,7 @@ fn bvh_fk(gpa: std.mem.Allocator, d: bvh.Data, frame: usize) ![]const [3]f32 {
 
 /// Read a fixture, or skip the test when it is absent.
 ///
-/// Every fixture reached by an ENABLED test is TRACKED, in `assets/` — a fresh clone runs
+/// Every fixture reached by an ENABLED test is TRACKED, in `assets/` - a fresh clone runs
 /// them with nothing to download. That was not always true: the capture bundle used to sit in
 /// an untracked `intake/`, so a clone had the tests but not the data and most quietly skipped.
 ///
@@ -14777,11 +14777,11 @@ fn bvh_fk(gpa: std.mem.Allocator, d: bvh.Data, frame: usize) ![]const [3]f32 {
 ///
 ///   `dance1_subject2.bvh`  43 MB, read by NO test. `dance1_subject2.fbx` carries the same
 ///                          motion; `dance1_subject2_300.bvh` is the same take at 300 frames.
-///   `subject2.fbx`         15.7 MB for 2 tests — the raw optical capture.
-///   `metahuman.fbx`        10.7 MB for 3 tests — the blend-shape rig.
+///   `subject2.fbx`         15.7 MB for 2 tests - the raw optical capture.
+///   `metahuman.fbx`        10.7 MB for 3 tests - the blend-shape rig.
 ///
 /// The tests that read the latter two are DISABLED with `error.SkipZigTest` rather than left
-/// to skip through this function, because the silent path below RETURNS NORMALLY — a test
+/// to skip through this function, because the silent path below RETURNS NORMALLY - a test
 /// whose fixture is absent reports GREEN having asserted nothing. That is the failure mode
 /// worth knowing about if you add a fixture-backed test: guard it explicitly.
 fn bvh_readFixture(gpa: std.mem.Allocator, path: []const u8) !?[]u8 {
@@ -14812,7 +14812,7 @@ fn bvh_findJoint(d: bvh.Data, name: []const u8) usize {
     unreachable;
 }
 
-test "bvh: dance1 — 6 channels on every joint, ZYX order" {
+test "bvh: dance1 - 6 channels on every joint, ZYX order" {
     const gpa: Allocator = std.testing.allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/dance1_subject2_300.bvh");
     if (maybe == null) {
@@ -14827,7 +14827,7 @@ test "bvh: dance1 — 6 channels on every joint, ZYX order" {
     try bvh_expectEqual(@as(usize, 450), d.channel_count);
     try bvh_expectEqual(@as(usize, 300), d.frame_count);
     try bvh_expectApproxEqAbs(@as(f32, 0.016667), d.frame_time, 1e-6);
-    // Every joint with channels has 6 of them — the shape that breaks "only root translates".
+    // Every joint with channels has 6 of them - the shape that breaks "only root translates".
     try bvh_expectEqual(@as(usize, 6), d.joints[0].channels.len);
     try bvh_expectEqual(bvh.Channel.z_rotation, d.joints[0].channels[3]);
     try bvh_expectEqual(bvh.Channel.y_rotation, d.joints[0].channels[4]);
@@ -14848,7 +14848,7 @@ test "bvh: dance1 — 6 channels on every joint, ZYX order" {
     try bvh_expectApproxEqAbs(@as(f32, 7.3789), foot[1], 1e-2);
 }
 
-test "bvh: 2FeetJump — 6/3 layout, XYZ order, 120fps" {
+test "bvh: 2FeetJump - 6/3 layout, XYZ order, 120fps" {
     const gpa: Allocator = std.testing.allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/0005_2FeetJump001.bvh");
     if (maybe == null) {
@@ -14864,7 +14864,7 @@ test "bvh: 2FeetJump — 6/3 layout, XYZ order, 120fps" {
     try bvh_expectEqual(@as(usize, 2575), d.frame_count);
     try bvh_expectApproxEqAbs(@as(f32, 0.008333), d.frame_time, 1e-6);
     try bvh_expectEqual(@as(usize, 6), d.joints[0].channels.len);
-    // XYZ here, against dance1's ZYX — the whole reason composition is data-driven.
+    // XYZ here, against dance1's ZYX - the whole reason composition is data-driven.
     try bvh_expectEqual(bvh.Channel.x_rotation, d.joints[0].channels[3]);
     try bvh_expectEqual(bvh.Channel.z_rotation, d.joints[0].channels[5]);
     try bvh_expectEqual(@as(usize, 3), d.joints[1].channels.len);
@@ -14890,7 +14890,7 @@ test "bvh: 2FeetJump — 6/3 layout, XYZ order, 120fps" {
     try bvh_expectApproxEqAbs(@as(f32, 1.9723), lf[1], 1e-2);
 }
 
-test "bvh: synthetic — a rest-pose chain has a closed-form FK answer" {
+test "bvh: synthetic - a rest-pose chain has a closed-form FK answer" {
     const gpa: Allocator = std.testing.allocator;
     const src: []u8 = try bvh_synth.generate(gpa, .{ .joint_count = 3, .frame_count = 2, .bone_length = 10.0 });
     defer gpa.free(src);
@@ -14909,7 +14909,7 @@ test "bvh: synthetic — a rest-pose chain has a closed-form FK answer" {
     try bvh_expectApproxEqAbs(@as(f32, 30.0), gp[3][1], 1e-4);
 }
 
-test "bvh: synthetic — Z-up puts the chain on Z, the path no real fixture reaches" {
+test "bvh: synthetic - Z-up puts the chain on Z, the path no real fixture reaches" {
     const gpa: Allocator = std.testing.allocator;
     const src: []u8 = try bvh_synth.generate(gpa, .{
         .joint_count = 3,
@@ -14926,7 +14926,7 @@ test "bvh: synthetic — Z-up puts the chain on Z, the path no real fixture reac
     try bvh_expectApproxEqAbs(@as(f32, 0.0), gp[2][1], 1e-4);
 }
 
-test "bvh: rotation order changes the pose — proof the composition is data-driven" {
+test "bvh: rotation order changes the pose - proof the composition is data-driven" {
     const gpa: Allocator = std.testing.allocator;
     // Same 45 deg on the first rotation channel, different declared orders. The first
     // channel differs (Z vs X), so an implementation that ignored `channels` would give
@@ -14973,7 +14973,7 @@ test "bvh: malformed input is refused, and the diagnostic says where" {
         bvh.parse(gpa, "HIERARCHY\nROOT a\n{\n", &diag),
     );
     // An unknown channel name: reported as BadChannels, naming the offending token, on its
-    // own line — the whole point of carrying a diagnostic through a million-number file.
+    // own line - the whole point of carrying a diagnostic through a million-number file.
     try bvh_expectError(bvh.Error.BadChannels, bvh.parse(
         gpa,
         "HIERARCHY\nROOT a\n{\nOFFSET 0 0 0\nCHANNELS 3 Xrotation Bogus Zrotation\n}\nMOTION\n",
@@ -14982,7 +14982,7 @@ test "bvh: malformed input is refused, and the diagnostic says where" {
     try bvh_expectEqual(@as(u32, 5), diag.line);
     try bvh_expectEqualSlices(u8, "Bogus", diag.context);
 
-    // Header fine, motion matrix ends early — must not read past the end.
+    // Header fine, motion matrix ends early - must not read past the end.
     try bvh_expectError(bvh.Error.BadMotion, bvh.parse(
         gpa,
         "HIERARCHY\nROOT a\n{\nOFFSET 0 0 0\nCHANNELS 3 Xrotation Yrotation Zrotation\n}\n" ++
@@ -15077,7 +15077,7 @@ test "bvh: round trip survives a real capture, tiny values and all" {
 test "bvh: the encoder rebuilds nesting from parents, not from a depth counter" {
     const gpa: Allocator = std.testing.allocator;
     // A branching skeleton: root -> (a -> a_end) and root -> b. The generator only makes
-    // chains, so this one is written out by hand — closing the right number of braces when a
+    // chains, so this one is written out by hand - closing the right number of braces when a
     // branch ends is exactly what a chain cannot exercise.
     const src: []const u8 =
         "HIERARCHY\nROOT r\n{\nOFFSET 0 0 0\nCHANNELS 3 Xrotation Yrotation Zrotation\n" ++
@@ -15088,7 +15088,7 @@ test "bvh: the encoder rebuilds nesting from parents, not from a depth counter" 
     var first: bvh.Data = try bvh.parse(gpa, src, null);
     defer first.deinit();
     try bvh_expectEqual(@as(usize, 4), first.joints.len);
-    // `b` is a child of the ROOT, not of `a` — the case a wrong `}` handler gets wrong while
+    // `b` is a child of the ROOT, not of `a` - the case a wrong `}` handler gets wrong while
     // still producing a plausible pose.
     try bvh_expectEqual(@as(i32, 0), first.joints[3].parent);
     try bvh_expectEqualSlices(u8, "b", first.joints[3].name);
@@ -15136,9 +15136,9 @@ fn fbx_buildSample(gpa: Allocator, version: u32) ![]u8 {
 
 test "fbx: container round-trips through both header widths (7400 and 7500)" {
     const gpa: Allocator = std.testing.allocator;
-    // ★ The header widens from 13 to 25 bytes at 7500. Reading the wrong width does not fail
-    // loudly — it yields a plausible end offset and the parse walks into the middle of a
-    // record — so both must be exercised.
+    // * The header widens from 13 to 25 bytes at 7500. Reading the wrong width does not fail
+    // loudly - it yields a plausible end offset and the parse walks into the middle of a
+    // record - so both must be exercised.
     for ([_]u32{ 7400, 7500 }) |version| {
         const bytes: []u8 = try fbx_buildSample(gpa, version);
         defer gpa.free(bytes);
@@ -15179,7 +15179,7 @@ test "fbx: arrays survive both encodings, including zlib-deflated" {
     try fbx_expectEqual(@as(usize, 3), values.len);
     try fbx_expectApproxEqAbs(@as(f64, -2.25), values[1], 0.0);
 
-    // Deflated i64s — real files store key times this way, so a reader without a
+    // Deflated i64s - real files store key times this way, so a reader without a
     // decompressor reads nothing useful from any capture.
     const times: []const i64 = cv[1].i64_array;
     try fbx_expectEqualSlices(i64, &.{ 0, 1539538600, 3079077200 }, times);
@@ -15194,7 +15194,7 @@ test "fbx: children are a contiguous span, with no phantom holder levels" {
 
     // The parser builds each level through a synthetic holder node and then drops it. If one
     // ever survived, it would appear as an unnamed child and every path lookup would be one
-    // level off — which is exactly the kind of bug that still "parses".
+    // level off - which is exactly the kind of bug that still "parses".
     for (doc.nodes) |n| {
         if (n.child_count > 0) {
             try fbx_expect(n.name.len > 0 or n.child_start == doc.nodes[doc.root].child_start);
@@ -15308,7 +15308,7 @@ test "fbx scene: static Lcl Translation matches the BVH's golden offsets" {
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ CROSS-VALIDATION ACROSS TWO INDEPENDENT PARSERS. This FBX is the same capture as
+    // * CROSS-VALIDATION ACROSS TWO INDEPENDENT PARSERS. This FBX is the same capture as
     // `dance1_subject2.bvh`, and the BVH test asserts Hips at frame 0 =
     // (179.2447, 82.7627, 332.4578). The FBX carries the same numbers as a STATIC property.
     // If either reader drifts, this disagrees.
@@ -15364,7 +15364,7 @@ test "fbx scene: connections resolve the three-hop animation path" {
     }
     try fbx_expectEqual(@as(usize, 152), curve_to_node);
     try fbx_expectEqual(@as(usize, 48), node_to_model_rot);
-    // ★ Only NINE models have translation animation. flomo's "find the real root by looking
+    // * Only NINE models have translation animation. flomo's "find the real root by looking
     // for translation animation" heuristic depends on exactly this being rare.
     try fbx_expectEqual(@as(usize, 9), node_to_model_trans);
     // 74 parented models + 2 at the scene root = 76.
@@ -15403,7 +15403,7 @@ test "fbx scene: a static mesh export resolves with no animation, rather than fa
 test "fbx transform: euler order is honoured, and Pre/Post ignore it" {
     // A 90 deg rotation about each axis in turn: XYZ and ZYX disagree unless the order is
     // actually used. This is the FBX twin of the BVH rotation-order test, and the same class
-    // of bug — a plausible pose that is silently wrong.
+    // of bug - a plausible pose that is silently wrong.
     const v: [3]f64 = .{ 90, 90, 0 };
     const a: [4]f64 = fbx.eulerToQuat(v, .xyz);
     const b: [4]f64 = fbx.eulerToQuat(v, .zyx);
@@ -15421,7 +15421,7 @@ test "fbx transform: euler order is honoured, and Pre/Post ignore it" {
 }
 
 test "fbx transform: pivots cancel, and scaling defaults to one" {
-    // A pivot with no rotation or scale must leave the transform untouched: Sp⁻¹ then Sp.
+    // A pivot with no rotation or scale must leave the transform untouched: Sp^-1 then Sp.
     const p: fbx.TransformProps = .{
         .translation = .{ 1, 2, 3 },
         .rotation_pivot = .{ 10, -5, 7 },
@@ -15431,7 +15431,7 @@ test "fbx transform: pivots cancel, and scaling defaults to one" {
     try fbx_expectApproxEqAbs(@as(f64, 1), t.translation[0], 1.0e-9);
     try fbx_expectApproxEqAbs(@as(f64, 2), t.translation[1], 1.0e-9);
     try fbx_expectApproxEqAbs(@as(f64, 3), t.translation[2], 1.0e-9);
-    // ★ An omitted Lcl Scaling is IDENTITY, not zero — 11 of the capture's models omit it.
+    // * An omitted Lcl Scaling is IDENTITY, not zero - 11 of the capture's models omit it.
     try fbx_expectApproxEqAbs(@as(f64, 1), t.scale[0], 1.0e-12);
 }
 
@@ -15468,9 +15468,9 @@ test "fbx transform: FK over the real capture reproduces the BVH, where rest == 
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ THE ACCEPTANCE TEST FOR LAYERS 1-3, and it needs its scope stated precisely.
+    // * THE ACCEPTANCE TEST FOR LAYERS 1-3, and it needs its scope stated precisely.
     //
-    // This composes each node's STATIC properties — the rest pose. The BVH golden values are
+    // This composes each node's STATIC properties - the rest pose. The BVH golden values are
     // its ANIMATED frame 0. Those two agree only for a joint whose static `Lcl Rotation`
     // equals its curve's first key, and measurement says that holds for some joints and not
     // others in this very file:
@@ -15482,7 +15482,7 @@ test "fbx transform: FK over the real capture reproduces the BVH, where rest == 
     //                first  (0.5446, -1.0404, -0.0113)                  DIFFERS
     //     Neck1      static Y -1.5801 vs first key -1.5766              DIFFERS
     //
-    // So RightFoot — whose whole ancestor chain is Hips/RightUpLeg/RightLeg — must land
+    // So RightFoot - whose whole ancestor chain is Hips/RightUpLeg/RightLeg - must land
     // EXACTLY on the BVH value, and it does. Head, whose chain runs through Spine and Neck1,
     // is off by 0.03 in X for that reason alone and NOT because the chain is wrong.
     // Head is layer 4's acceptance test, once curves are sampled.
@@ -15491,7 +15491,7 @@ test "fbx transform: FK over the real capture reproduces the BVH, where rest == 
     try fbx_expectApproxEqAbs(@as(f64, 7.3789), foot[1], 1.0e-3);
     try fbx_expectApproxEqAbs(@as(f64, 330.5580), foot[2], 1.0e-3);
 
-    // Head lands close, but deliberately NOT to the same tolerance — asserting 1e-3 here would
+    // Head lands close, but deliberately NOT to the same tolerance - asserting 1e-3 here would
     // be asserting that two different poses are the same pose.
     const head: [3]f64 = fbx_restPositionOf(&scene, "Head").?;
     try fbx_expectApproxEqAbs(@as(f64, 178.7699), head[0], 0.05);
@@ -15580,7 +15580,7 @@ test "fbx curve: exact keys, ends, and the interpolation modes" {
         .attr_data = &.{},
         .attr_ref_count = &.{3},
     };
-    // ★ At a key, every mode agrees — which is why a densely baked capture needs no
+    // * At a key, every mode agrees - which is why a densely baked capture needs no
     // interpolation at all to be reproduced exactly.
     try fbx_expectApproxEqAbs(@as(f64, 10), lin.evaluate(0.0, 0), 1.0e-9);
     try fbx_expectApproxEqAbs(@as(f64, 20), lin.evaluate(1.0, 0), 1.0e-9);
@@ -15640,9 +15640,9 @@ test "fbx anim: sampling frame 0 tightens Head to the BVH golden value" {
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ LAYER 4's ACCEPTANCE TEST, and it is the sharp one. Layer 3 could only put Head within
+    // * LAYER 4's ACCEPTANCE TEST, and it is the sharp one. Layer 3 could only put Head within
     // 0.05 of the BVH because it composed the REST pose, while the BVH golden is ANIMATED
-    // frame 0 — Spine and Neck1 have static rotations that differ from their curves' first
+    // frame 0 - Spine and Neck1 have static rotations that differ from their curves' first
     // keys. Sampling the curves must close that gap to RightFoot's tolerance.
     const head: [3]f64 = fbx_animPositionOf(&scene, "Head", 0.0).?;
     try fbx_expectApproxEqAbs(@as(f64, 178.7699), head[0], 1.0e-2);
@@ -15681,7 +15681,7 @@ test "bvh fromFbx: the FBX of the same capture yields the BVH's own skeleton and
     var data: bvh.Data = try bvh.fromFbx(gpa, &scene, .{ .fps = 60.0 });
     defer data.deinit();
 
-    // ★ 75 real joints — the container Model above the hips is skipped — plus one End Site per
+    // * 75 real joints - the container Model above the hips is skipped - plus one End Site per
     // leaf. The source BVH has 75 joints and 21 end sites; the leaf count must match because
     // it is a property of the same skeleton.
     var reals: usize = 0;
@@ -15700,12 +15700,12 @@ test "bvh fromFbx: the FBX of the same capture yields the BVH's own skeleton and
     try bvh_expectEqualSlices(u8, "Hips", data.joints[0].name);
     try bvh_expectEqual(@as(i32, -1), data.joints[0].parent);
 
-    // Parents precede children — the invariant forward kinematics depends on.
+    // Parents precede children - the invariant forward kinematics depends on.
     for (data.joints, 0..) |j, i| {
         try bvh_expect(j.parent < @as(i32, @intCast(i)));
     }
 
-    // ★ THE WHOLE POINT: sampling the CONVERTED data with the BVH sampler must land on the
+    // * THE WHOLE POINT: sampling the CONVERTED data with the BVH sampler must land on the
     // same golden values the native .bvh does. Same capture, two formats, four FBX layers, one
     // adapter, and the BVH pipeline downstream of all of it.
     const gp: []const [3]f32 = try bvh_fk(gpa, data, 0);
@@ -15737,7 +15737,7 @@ test "bvh fromFbx: the converted clip round-trips through encode, like any other
     var data: bvh.Data = try bvh.fromFbx(gpa, &scene, .{ .fps = 2.0 });
     defer data.deinit();
 
-    // Converted data is ordinary BVH data — which is the payoff of normalising into it rather
+    // Converted data is ordinary BVH data - which is the payoff of normalising into it rather
     // than into a parallel representation. It writes, re-parses and compares like any other.
     const text: []u8 = try bvh.encode(gpa, data);
     defer gpa.free(text);
@@ -15757,12 +15757,12 @@ test "bvh fromFbx: a static-mesh FBX reports NoSkeleton rather than inventing on
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // No curves at all, so no frame time can be inferred — the caller must supply one rather
+    // No curves at all, so no frame time can be inferred - the caller must supply one rather
     // than the loader inventing a plausible-looking clip.
     try bvh_expect(bvh.fbxFrameTimeHint(&scene) == null);
 
-    // ★ Its ONLY Model is the mesh itself, so there is no skeleton to convert. Reporting
-    // `NoSkeleton` is the honest answer — a one-bone skeleton built from the geometry node
+    // * Its ONLY Model is the mesh itself, so there is no skeleton to convert. Reporting
+    // `NoSkeleton` is the honest answer - a one-bone skeleton built from the geometry node
     // would look like a successful load of a broken file.
     try bvh_expectError(bvh.Error.NoSkeleton, bvh.fromFbx(gpa, &scene, .{ .fps = 30.0 }));
 }
@@ -15770,10 +15770,10 @@ test "bvh fromFbx: a static-mesh FBX reports NoSkeleton rather than inventing on
 test "fbx: hostile and unsupported inputs are refused, never hang" {
     const gpa: Allocator = std.testing.allocator;
 
-    // ★ A BACKWARDS END OFFSET USED TO HANG THE PARSER FOREVER. The record loop trusts the
+    // * A BACKWARDS END OFFSET USED TO HANG THE PARSER FOREVER. The record loop trusts the
     // declared end and jumps to it; without a forward-only check it re-read the same records
     // for eternity. For a viewer handed an arbitrary dropped file that is the worst possible
-    // failure — worse than a wrong answer, because there is no error to report.
+    // failure - worse than a wrong answer, because there is no error to report.
     {
         var w: fbx.Writer = .init(gpa, 7500);
         defer w.deinit();
@@ -15787,7 +15787,7 @@ test "fbx: hostile and unsupported inputs are refused, never hang" {
         try fbx_expectError(fbx.Error.Truncated, fbx.parse(gpa, bytes));
     }
 
-    // An ASCII FBX is a real format and a different parser — saying "not an FBX" would send
+    // An ASCII FBX is a real format and a different parser - saying "not an FBX" would send
     // someone looking for a corrupt file.
     const ascii: []const u8 = "; FBX 7.3.0 project file\n; ----------------------\n";
     try fbx_expectError(fbx.Error.AsciiUnsupported, fbx.parse(gpa, ascii));
@@ -15806,8 +15806,8 @@ test "fbx: hostile and unsupported inputs are refused, never hang" {
 }
 
 test "fbx: a curve stored at the other width still evaluates" {
-    // ★ The silent-failure case. An exporter writing i32 times and f64 values used to make
-    // `curveOf` return null, which lost the animation with no error — the joint just sat in
+    // * The silent-failure case. An exporter writing i32 times and f64 values used to make
+    // `curveOf` return null, which lost the animation with no error - the joint just sat in
     // its rest pose. Both widths must land on the same numbers.
     const times_i32 = [_]i32{ 0, 1000, 2000 };
     const values_f64 = [_]f64{ 5.0, 15.0, 25.0 };
@@ -15877,8 +15877,8 @@ test "fbx: filtering by take gives the same pose when there is only one" {
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ The take filter must be a NO-OP on a single-take file. If it were not, every capture
-    // seen so far would change pose the moment takes were modelled — which is exactly the kind
+    // * The take filter must be a NO-OP on a single-take file. If it were not, every capture
+    // seen so far would change pose the moment takes were modelled - which is exactly the kind
     // of regression a "harmless" filter introduces.
     const take: fbx.Take = fbx.takeAt(&scene, 0).?;
     for (scene.objects, 0..) |o, i| {
@@ -15900,7 +15900,7 @@ test "fbx: filtering by take gives the same pose when there is only one" {
 
 test "fbx: an optical marker capture is not mistaken for a skeleton" {
     // DISABLED: `subject2.fbx` is 15.7 MB, the single largest fixture, and this is one of only
-    // two tests that read it — the worst size-to-coverage ratio in `assets/`, so it was dropped
+    // two tests that read it - the worst size-to-coverage ratio in `assets/`, so it was dropped
     // rather than vendored. Restore the file from the capture bundle and delete this line.
     //
     // WHAT STOPS BEING CHECKED, because the comment below is not idle: an exclusion-only
@@ -15920,8 +15920,8 @@ test "fbx: an optical marker capture is not mistaken for a skeleton" {
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ THE FILE THAT KILLED THE BLACKLIST. `subject2.fbx` is the RAW OPTICAL CAPTURE behind
-    // `dance1_subject2` — 61 OpticalMarkers and 7 Cameras, no LimbNode anywhere, no
+    // * THE FILE THAT KILLED THE BLACKLIST. `subject2.fbx` is the RAW OPTICAL CAPTURE behind
+    // `dance1_subject2` - 61 OpticalMarkers and 7 Cameras, no LimbNode anywhere, no
     // AnimationCurve at all. An exclusion-only `isJoint` admitted 63 markers as "joints" and
     // produced a confident, meaningless skeleton.
     var markers: usize = 0;
@@ -15967,7 +15967,7 @@ test "bvh fromFbx: a bind-pose rig keeps its root joint" {
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ `Geno.fbx` IS THE CHARACTER RIG FOR `dance1_subject2.fbx` — same 75 joints, same names.
+    // * `Geno.fbx` IS THE CHARACTER RIG FOR `dance1_subject2.fbx` - same 75 joints, same names.
     // It is a bind-pose export (its take is 0.017 s), so its Hips has no translation
     // animation, and flomo's "no translation animation but has children" container rule
     // dived straight past it: 74 joints where the identical skeleton in the dance file gave
@@ -15985,7 +15985,7 @@ test "bvh fromFbx: a bind-pose rig keeps its root joint" {
     try bvh_expectEqualSlices(u8, "Hips", data.joints[0].name);
 
     // The skinning payload is present even though we do not consume it yet: one Skin and one
-    // Cluster per joint. This is what §11's mesh phase will read.
+    // Cluster per joint. This is what section 11's mesh phase will read.
     var clusters: usize = 0;
     var skins: usize = 0;
     for (scene.objects) |o| {
@@ -16019,8 +16019,8 @@ test "bvh fromFbx: a blend-shape rig has no skeleton, and group Nulls are not bo
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ A UE5 MetaHuman export: morph targets, not bones. Its five Models are four `Null`
-    // GROUP nodes — "rig", "body_grp", "geometry_grp", "body_lod0_grp" — plus the mesh, and
+    // * A UE5 MetaHuman export: morph targets, not bones. Its five Models are four `Null`
+    // GROUP nodes - "rig", "body_grp", "geometry_grp", "body_lod0_grp" - plus the mesh, and
     // its three Deformers are BlendShape / BlendShapeChannel with no Cluster among them.
     // The old blacklist fallback admitted the four Nulls and produced a four-bone "skeleton".
     try fbx_expectEqual(@as(u32, 7400), scene.doc.version); // the 13-byte header path, at 10 MB
@@ -16049,7 +16049,7 @@ test "bvh fromFbx: a blend-shape rig has no skeleton, and group Nulls are not bo
     try fbx_expectEqual(@as(usize, 0), clusters);
     try bvh_expectError(bvh.Error.NoSkeleton, bvh.fromFbx(gpa, &scene, .{ .fps = 30.0 }));
 
-    // It still animates — 47 curves driving blend-shape weights — which we do not read.
+    // It still animates - 47 curves driving blend-shape weights - which we do not read.
     // Reporting "no skeleton" is right; reporting "no animation" would not be.
     var curves: usize = 0;
     for (scene.objects) |o| {
@@ -16071,12 +16071,12 @@ test "fbx: a Mixamo export picks the take that has the animation, not take 0" {
     var scene: fbx.Scene = try fbx.loadScene(gpa, bytes);
     defer scene.deinit();
 
-    // ★ THE FILE THAT DISPROVED "JUST PICK THE FIRST TAKE". Mixamo writes two stacks:
+    // * THE FILE THAT DISPROVED "JUST PICK THE FIRST TAKE". Mixamo writes two stacks:
     //
     //     take[0] "Take 001"    3.333 s declared,  0 curve nodes   <- an empty placeholder
     //     take[1] "mixamo.com"  2.900 s declared, 53 curve nodes   <- the actual motion
     //
-    // Both carry `LocalStop`, so DURATION CANNOT TELL THEM APART — only the curve count can.
+    // Both carry `LocalStop`, so DURATION CANNOT TELL THEM APART - only the curve count can.
     // Converting take 0 yields a clip that loads, reports a plausible 3.3 s, and never moves.
     try fbx_expectEqual(@as(usize, 2), fbx.takeCount(&scene));
     const empty: fbx.Take = fbx.takeAt(&scene, 0).?;
@@ -16095,7 +16095,7 @@ test "fbx: a Mixamo export picks the take that has the animation, not take 0" {
     defer data.deinit();
     try bvh_expectApproxEqAbs(@as(f32, 2.9), data.duration(), 0.05);
 
-    // Asking for the empty take explicitly still works — and is still empty.
+    // Asking for the empty take explicitly still works - and is still empty.
     var still: bvh.Data = try bvh.fromFbx(gpa, &scene, .{ .fps = 30.0, .take = 0 });
     defer still.deinit();
     try bvh_expectApproxEqAbs(@as(f32, 3.333), still.duration(), 0.05);
@@ -16115,7 +16115,7 @@ test "fbx: a Mixamo rig has no container node, and its names nearly overflow Bon
     var data: bvh.Data = try bvh.fromFbx(gpa, &scene, .{ .fps = 30.0 });
     defer data.deinit();
 
-    // ★ NO `Reference` CONTAINER — the root Model IS `mixamorig:Hips`, a LimbNode, sitting
+    // * NO `Reference` CONTAINER - the root Model IS `mixamorig:Hips`, a LimbNode, sitting
     // beside the two skinned meshes. So the container node flomo's heuristic was written for
     // is not universal even in Mixamo output, which is a second reason the rule is now "is
     // this node a joint?" rather than "does it move?".
@@ -16128,8 +16128,8 @@ test "fbx: a Mixamo rig has no container node, and its names nearly overflow Bon
     try bvh_expectEqual(@as(usize, 65), reals);
     try bvh_expectEqualSlices(u8, "mixamorig:Hips", data.joints[0].name);
 
-    // Two skinned meshes (Beta_Surface, Beta_Joints) with a Skin each — excluded from the
-    // skeleton, and the payload §11's mesh phase will read.
+    // Two skinned meshes (Beta_Surface, Beta_Joints) with a Skin each - excluded from the
+    // skeleton, and the payload section 11's mesh phase will read.
     var skins: usize = 0;
     var clusters: usize = 0;
     for (scene.objects) |o| {
@@ -16146,7 +16146,7 @@ test "fbx: a Mixamo rig has no container node, and its names nearly overflow Bon
     try bvh_expectEqual(@as(usize, 2), skins);
     try bvh_expectEqual(@as(usize, 129), clusters);
 
-    // ★ The closest any fixture comes to the 32-byte `BoneInfo.name` limit: the synthesised
+    // * The closest any fixture comes to the 32-byte `BoneInfo.name` limit: the synthesised
     // end site `mixamorig:RightHandMiddle4_end` is 30 bytes, fitting with ONE byte spare
     // before the NUL. A slightly longer rig prefix would start truncating for real.
     var longest: usize = 0;
@@ -16179,7 +16179,7 @@ test "fbx mesh: quads triangulate, corners weld, and the counts are exact" {
     var mesh: fbx.MeshData = try fbx.meshOf(gpa, &scene, fbx_firstGeometry(&scene).?);
     defer mesh.deinit();
 
-    // ★ Geno is 9330 QUADS over 9332 control points — 37320 corners. Fan-triangulating a quad
+    // * Geno is 9330 QUADS over 9332 control points - 37320 corners. Fan-triangulating a quad
     // gives 2 triangles, so the count is exact and any off-by-one in the negative-terminator
     // decoding shows up here immediately.
     try fbx_expectEqual(@as(usize, 9330 * 2), mesh.triangleCount());
@@ -16202,7 +16202,7 @@ test "fbx mesh: quads triangulate, corners weld, and the counts are exact" {
         try fbx_expect(v < 9332);
     }
 
-    // Normals are unit length — proof the ByPolygonVertex/Direct path read real data rather
+    // Normals are unit length - proof the ByPolygonVertex/Direct path read real data rather
     // than zeros, which would still have passed every count above.
     var checked: usize = 0;
     for (0..mesh.vertexCount()) |v| {
@@ -16232,7 +16232,7 @@ test "fbx mesh: a mixed quad/triangle mesh triangulates to the right count" {
     var mesh: fbx.MeshData = try fbx.meshOf(gpa, &scene, fbx_firstGeometry(&scene).?);
     defer mesh.deinit();
 
-    // ★ `Beta_Surface` is 14050 quads AND 172 triangles — the polygon list carries no sizes,
+    // * `Beta_Surface` is 14050 quads AND 172 triangles - the polygon list carries no sizes,
     // so the count only comes out right if the negative terminator is decoded per polygon
     // rather than a fixed stride being assumed.
     try fbx_expectEqual(@as(usize, 14050 * 2 + 172), mesh.triangleCount());
@@ -16241,8 +16241,8 @@ test "fbx mesh: a mixed quad/triangle mesh triangulates to the right count" {
         try fbx_expect(i < mesh.vertexCount());
     }
 
-    // ★ 84816 corners means a fully-split mesh would OVERFLOW 16-bit indices, which is what
-    // `types.Mesh.indices` uses. Welding is what keeps it addressable — assert it, because
+    // * 84816 corners means a fully-split mesh would OVERFLOW 16-bit indices, which is what
+    // `types.Mesh.indices` uses. Welding is what keeps it addressable - assert it, because
     // silently wrapping u16 indices produces a scrambled mesh rather than an error.
     try fbx_expect(mesh.vertexCount() < 65536);
 }
@@ -16304,12 +16304,12 @@ test "fbx skin: every vertex gets normalised weights over real joints" {
     try fbx_expectEqual(n * fbx.max_influences, skin.bone_indices.len);
     try fbx_expectEqual(n * fbx.max_influences, skin.bone_weights.len);
 
-    // ★ EVERY vertex must be influenced. Geno's clusters touch all 9332 control points, so a
-    // vertex with no weight means the cluster->joint mapping dropped a bone — the exact
+    // * EVERY vertex must be influenced. Geno's clusters touch all 9332 control points, so a
+    // vertex with no weight means the cluster->joint mapping dropped a bone - the exact
     // failure the shared index map exists to prevent.
     //
-    // ★ AND BONE INDICES ARE INTO THE FULL JOINT ARRAY, END SITES INCLUDED. `data.joints`
-    // interleaves them — an end site is appended right after the leaf it hangs off — so real
+    // * AND BONE INDICES ARE INTO THE FULL JOINT ARRAY, END SITES INCLUDED. `data.joints`
+    // interleaves them - an end site is appended right after the leaf it hangs off - so real
     // joints run to index 95 in a 75-joint skeleton. Comparing against the count of REAL
     // joints (75) rejects legitimate indices; this test did exactly that on its first run.
     const joint_count: usize = conv.data.joints.len;
@@ -16328,9 +16328,9 @@ test "fbx skin: every vertex gets normalised weights over real joints" {
         if (sum <= 0) {
             unweighted += 1;
         } else {
-            // ★ Weights must sum to ONE. Keeping the top four without renormalising leaves a
+            // * Weights must sum to ONE. Keeping the top four without renormalising leaves a
             // vertex short, and a short vertex creeps toward the origin as the skeleton moves
-            // — a subtle deflation that looks like a bad rig rather than a bad loader.
+            // - a subtle deflation that looks like a bad rig rather than a bad loader.
             try fbx_expectApproxEqAbs(@as(f32, 1.0), sum, 1.0e-4);
         }
     }
@@ -16363,10 +16363,10 @@ test "fbx skin: the joint map is the SAME numbering the skeleton uses" {
     var conv: bvh.FbxConversion = try bvh.fromFbxWithMap(gpa, &scene, .{ .fps = 30.0 });
     defer conv.data.deinit();
 
-    // ★ THE INDEX-SPACE CONTRACT, asserted rather than trusted. For every mapped object, the
+    // * THE INDEX-SPACE CONTRACT, asserted rather than trusted. For every mapped object, the
     // joint it points at must carry that object's own name. If the walk order and the map ever
     // drift apart, the mesh binds to the wrong bones and the symptom is a mesh that deforms
-    // wrongly while the skeleton animates correctly — very hard to attribute after the fact.
+    // wrongly while the skeleton animates correctly - very hard to attribute after the fact.
     var mapped: usize = 0;
     for (conv.joint_of_object, 0..) |joint, object_index| {
         if (joint < 0) {

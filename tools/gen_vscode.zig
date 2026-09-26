@@ -1,4 +1,4 @@
-//! gen_vscode.zig — generate editor debug/build configs for the wgpu demos.
+//! gen_vscode.zig - generate editor debug/build configs for the wgpu demos.
 //!
 //! Zig port of the old `scripts/build_launch_json.py`.  Source of truth is the
 //! `const example_steps = [_][]const u8{ ... }` array in build.zig; each entry
@@ -159,7 +159,7 @@ fn emitZedStandaloneTask(w: *Writer, name: []const u8) !void {
 }
 
 // ===========================================================================
-// Static (nameless) objects — multiline literals end at the closing brace
+// Static (nameless) objects - multiline literals end at the closing brace
 // with no trailing newline, so `sep` can prepend ",\n".
 // ===========================================================================
 

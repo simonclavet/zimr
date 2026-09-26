@@ -264,7 +264,7 @@ fn say(io: Io, gpa: Allocator, comptime fmt: []const u8, args: anytype) !void {
 }
 
 /// The first sentence of a declaration's doc comment, ready for a table cell: backticks become
-/// `<code>`, decoration (`──`, `★`) is dropped, and HTML is escaped. "—" when there's no doc.
+/// `<code>`, decoration (`--`, `*`) is dropped, and HTML is escaped. "-" when there's no doc.
 fn summary(gpa: Allocator, lines: []const []const u8, span: Span, first: usize) ![]u8 {
     var text: std.ArrayList(u8) = .empty;
     for (lines[span.start..first]) |line| {

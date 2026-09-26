@@ -1,22 +1,22 @@
-//! point_rendering — raylib's `models_point_rendering`, the zimr way.
+//! point_rendering - raylib's `models_point_rendering`, the zimr way.
 //!
 //! A random spherical point cloud (raylib's exact distribution: uniform
 //! theta/phi/radius, so the density bunches toward the core and the
-//! poles — that look is part of the original) with each point coloured
+//! poles - that look is part of the original) with each point coloured
 //! `colorFromHSV(r * 360, 1, 1)`: the hue wraps ten times over the
 //! 10-unit radius, giving the signature rainbow shells.  Rendered as a
 //! single `point_list` draw through the new `points3d_vs` (unlit, one
 //! VP uniform) + the existing `cube3d_fs` passthrough.
 //!
-//! raylib steps the count 1k → 10M by tens and toggles between a GPU
+//! raylib steps the count 1k -> 10M by tens and toggles between a GPU
 //! point-mesh and a CPU `DrawPoint3D` loop (a GL point-mode lesson
-//! with no WebGPU analogue — there is only one honest way to draw
+//! with no WebGPU analogue - there is only one honest way to draw
 //! points here).  This port keeps the count stepping (capped at 1M:
-//! one point is 16 bytes, so 1M = a 16MB vertex buffer — the ceiling a
+//! one point is 16 bytes, so 1M = a 16MB vertex buffer - the ceiling a
 //! phone should be asked to hold), with live FPS so the cost curve is
 //! still the demo.  The buffer is allocated ONCE at the 1M cap;
 //! stepping the count regenerates points into the same buffer via
-//! `queueWriteBuffer` and changes only the draw's vertex_count — no
+//! `queueWriteBuffer` and changes only the draw's vertex_count - no
 //! per-step allocation churn.
 //!
 //! raylib's yellow wire sphere landmark is here too, translated into
@@ -123,7 +123,7 @@ fn regenPoints(s: *State, f: *z.Frame) void {
         };
     }
     // The landmark rides after the cloud: three unit great circles
-    // (XY, XZ, YZ) of yellow points — raylib's wire sphere, pointified.
+    // (XY, XZ, YZ) of yellow points - raylib's wire sphere, pointified.
     var m: u32 = 0;
     while (m < marker_points) : (m += 1) {
         const ring: u32 = m / ring_segs;

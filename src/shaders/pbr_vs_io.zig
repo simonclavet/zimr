@@ -1,8 +1,8 @@
-//! src/shaders/pbr_vs_io.zig — typed interface for the PBR vertex
+//! src/shaders/pbr_vs_io.zig - typed interface for the PBR vertex
 //!
 //! Binding model (which @group each uniform/sampler lands in) is the
-//! stage-segregated scheme documented in src/zimr.zig §3:
-//! VS uniforms→group 0, samplers→group 1, FS uniforms→group 2.
+//! stage-segregated scheme documented in src/zimr.zig section 3:
+//! VS uniforms->group 0, samplers->group 1, FS uniforms->group 2.
 //! shader.  Companion to `pbr_vs.zig`.
 //!
 //! Describes the vertex shader's external boundary:
@@ -10,9 +10,9 @@
 //!     color, tangent).  Locations match raylib's
 //!     `RL_DEFAULT_SHADER_ATTRIB_LOCATION_*` constants.
 //!   - Uniforms: 5 mat4 transforms (model, view, projection, normal,
-//!     light_space) — all engine-managed and pushed before each draw.
+//!     light_space) - all engine-managed and pushed before each draw.
 //!   - Outputs: 6 interpolated values (= `Interp` from
-//!     `pbr_common_io`) — shared with FS for cross-stage symmetry.
+//!     `pbr_common_io`) - shared with FS for cross-stage symmetry.
 //!
 //! Phase 4a of `src/notes/typesafe_zig_shaders.md`.
 
@@ -25,16 +25,16 @@ pub const Attributes = struct {
     vertex_position: shader.Attr(.vec3, 0),
     vertex_tex_coord: shader.Attr(.vec2, 1),
     vertex_normal: shader.Attr(.vec3, 2),
-    /// vertex_color is vec4 even though glTF COLOR_0 may be vec3 —
+    /// vertex_color is vec4 even though glTF COLOR_0 may be vec3 -
     /// the default-VAO setup fills the missing component with 1.0.
     vertex_color: shader.Attr(.vec4, 3),
     /// glTF TANGENT is vec4: xyz is the tangent direction, w is
-    /// handedness (±1).  Meshes without tangents get (1,0,0,1) from
+    /// handedness (+/-1).  Meshes without tangents get (1,0,0,1) from
     /// the default VAO.
     vertex_tangent: shader.Attr(.vec4, 4),
 };
 
-/// Engine-managed uniforms.  Every name is RESERVED — pushed by
+/// Engine-managed uniforms.  Every name is RESERVED - pushed by
 /// `drawing.zig` before each draw via `rlSetUniformMatrix`.  Caller
 /// code that writes to any of these via `bind(...).set` triggers a
 /// debug-build warning (see `shader_interface.isReservedName`).

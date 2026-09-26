@@ -1,5 +1,5 @@
 //! lint:alias draw2d
-//! Unified 2D primitive surface — the shared Options structs for the
+//! Unified 2D primitive surface - the shared Options structs for the
 //! `sink.rect` / `image` / `text` / `line` / `circle` primitives. Immediate
 //! (WgpuGl / Sw / Gl), retained-GPU (`DrawList`), and retained-CPU (`Canvas`)
 //! all take these, so a `fn draw(sink: anytype)` scene runs against any backend.
@@ -23,7 +23,7 @@ const white: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
 /// `rect` / `rectXYWH`. `outline == 0` fills; `> 0` strokes at that thickness.
 /// `rect` / `rectXYWH`. `outline == 0` fills; `> 0` strokes at that px width.
-/// (Rounded + rotated rects are not implemented on the sink surface yet — add
+/// (Rounded + rotated rects are not implemented on the sink surface yet - add
 /// them here, wired to shapes2d.drawRectangleRounded / a rotated-quad emit, when a
 /// real use case needs them, rather than carrying fields that silently do nothing.)
 pub const RectOpts = struct {
@@ -32,7 +32,7 @@ pub const RectOpts = struct {
 };
 
 /// `image` / `imageXYWH`. `source == null` uses the whole texture; `source` is a
-/// pixel-space sub-rect. `npatch` set → nine/three-patch.
+/// pixel-space sub-rect. `npatch` set -> nine/three-patch.
 pub const ImageOpts = struct {
     source: ?Rectangle = null,
     origin: Vec2 = .{ 0, 0 },
@@ -45,7 +45,7 @@ pub const ImageOpts = struct {
 /// `texture`. Like `image`, but for an already-loaded GPU `WgpuTexture` (a
 /// pre-uploaded handle) rather than a pixel-carrying `Sprite`. GPU-only: the CPU
 /// sinks have no `WgpuTexture`, so a scene using `texture` won't compile against
-/// them — the accepted coverage-gap behavior. `source == null` draws the whole
+/// them - the accepted coverage-gap behavior. `source == null` draws the whole
 /// texture.
 pub const TextureOpts = struct {
     source: ?Rectangle = null,
@@ -57,7 +57,7 @@ pub const TextureOpts = struct {
 
 /// `text`. `font == null` uses the sink's default font. A pointer (not a value):
 /// retained backends record it for later replay, so it must reference a font that
-/// outlives the draw — pass `&my_font`.
+/// outlives the draw - pass `&my_font`.
 pub const TextOpts = struct {
     size: f32,
     color: Color,
@@ -85,7 +85,7 @@ pub const ShapeOpts = struct {
 
 // ===========================================================================
 // Immediate-backend emit helpers (`gl: anytype`). Shared by WgpuGl and the SW
-// adapter: they decompose a primitive into the low-level trait — `setTexture(0)`
+// adapter: they decompose a primitive into the low-level trait - `setTexture(0)`
 // binds the built-in white texture (portable: all adapters take `setTexture(u32)`),
 // then `begin`/`color4ub`/`vertex2f`. The immediate adapters' `rect`/`circle`
 // methods are one-line delegations to these.
@@ -182,7 +182,7 @@ pub fn circleOutline(
     gl.end();
 }
 
-/// A thick line as a quad (two triangles) perpendicular to a→b.
+/// A thick line as a quad (two triangles) perpendicular to a->b.
 pub fn lineEmit(
     gl: anytype,
     a: Vec2,
@@ -413,7 +413,7 @@ pub fn triangleGradient(
     gl.end();
 }
 
-/// Filled circle sector (pie slice) — a fan over the arc [start, end].
+/// Filled circle sector (pie slice) - a fan over the arc [start, end].
 pub fn circleSectorFilled(
     gl: anytype,
     center: Vec2,
@@ -431,7 +431,7 @@ pub fn circleSectorFilled(
     gl.end();
 }
 
-/// Filled regular polygon — a fan of `sides` segments over the full circle.
+/// Filled regular polygon - a fan of `sides` segments over the full circle.
 pub fn polyFilled(
     gl: anytype,
     center: Vec2,
@@ -448,7 +448,7 @@ pub fn polyFilled(
     gl.end();
 }
 
-/// Filled ring (annulus sector) — a strip between inner and outer radius over [start, end].
+/// Filled ring (annulus sector) - a strip between inner and outer radius over [start, end].
 pub fn ringFilled(
     gl: anytype,
     center: Vec2,

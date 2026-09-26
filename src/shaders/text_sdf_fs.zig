@@ -1,11 +1,11 @@
-//! src/shaders/text_sdf_fs.zig — the SDF text fragment shader (raylib's sdf.fs).
+//! src/shaders/text_sdf_fs.zig - the SDF text fragment shader (raylib's sdf.fs).
 //!
 //! Runs over the ordinary 2D batch, so `gl.text(sdf_font, ...)` between
 //! `beginShaderMode(this)` and `endShaderMode` renders each glyph quad through
 //! here. `texture0` is an SDF atlas (signed distance in alpha, 0.5 = the glyph
 //! edge; see `image.coverageToSdf`). Instead of using the sampled value AS the
-//! coverage — which blurs when the glyph is magnified past the atlas
-//! resolution — it thresholds the distance with a `smoothstep` around 0.5, so
+//! coverage - which blurs when the glyph is magnified past the atlas
+//! resolution - it thresholds the distance with a `smoothstep` around 0.5, so
 //! the edge stays a crisp ~1px transition at ANY on-screen size. That is the
 //! entire reason SDF text exists.
 //!

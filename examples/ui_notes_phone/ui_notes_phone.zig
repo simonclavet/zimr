@@ -1,16 +1,16 @@
-// examples/ui_notes_phone.zig — Q8 auto-save scratchpad.
+// examples/ui_notes_phone.zig - Q8 auto-save scratchpad.
 //
 // The phone-focused demo for turn 442b.  Wires together three
 // pieces that landed across turns 423, 441b, and 442:
 //
 //   1. The `inputTextMultiline` widget with the DOM `<textarea>`
-//      overlay (turn 441b — so the soft keyboard actually pops on
+//      overlay (turn 441b - so the soft keyboard actually pops on
 //      mobile and the user can write more than a few words).
-//   2. The `edit` callback on InputTextOpts (turn 442 — the only
+//   2. The `edit` callback on InputTextOpts (turn 442 - the only
 //      callback that fires reliably on web; great for "saved!"
 //      indicators).
 //   3. Q8 persistent state via `getOrPutState(T, id, .{.persist =
-//      true})` (turn 423 — typed comptime-generated serialize/
+//      true})` (turn 423 - typed comptime-generated serialize/
 //      deserialize for plain-data structs).
 //
 // The interaction: open the page on a phone (or any browser),
@@ -39,11 +39,11 @@ const ui = z.ui_real;
 /// State that LIVES IN Q8.  Q8's serializer walks this struct at
 /// app exit (writes to localStorage on web, to a file on host)
 /// and reconstitutes it on next startup.  Has to be plain-data
-/// (no pointers, no slices — just fixed-size primitives + arrays).
+/// (no pointers, no slices - just fixed-size primitives + arrays).
 ///
 /// `buf` is 512 bytes which is enough for a few paragraphs of
 /// notes; bigger if the demo grows.  `len` is usize because that's
-/// what `inputTextMultiline` expects — Q8 handles platform-dependent
+/// what `inputTextMultiline` expects - Q8 handles platform-dependent
 /// widths (wasm32: 4 bytes; host: 8 bytes) via the same compile-
 /// time codepath that generated the (de)serializer.
 const NotesData = struct {
@@ -67,7 +67,7 @@ const notes_state_id: ui.Id = 0x4E4F_5445;
 
 /// Sidecar passed as `user_data` to the edit callback.  Holds a
 /// pointer to the Q8-resident NotesData PLUS the current frame
-/// number (which Q8 can't know — it changes every frame).  The
+/// number (which Q8 can't know - it changes every frame).  The
 /// callback uses both: writes to NotesData via the pointer,
 /// reads the current frame via the value.
 const EditCbCtx = struct {
@@ -82,7 +82,7 @@ fn notesEditCb(d: *ui.InputTextCallbackData) void {
 }
 
 /// Non-persistent app state.  UI context, font cache, shapes
-/// texture — none of this needs to survive across launches.  The
+/// texture - none of this needs to survive across launches.  The
 /// PERSISTENT bits live in NotesData (above), reached via Q8.
 const State = struct {
     ui_host: z.UiHost,
@@ -138,7 +138,7 @@ fn update(f: *z.Frame, s: *State) void {
 
         // Sidecar lives in stack frame for THIS update call.  Safe
         // because the callback only fires SYNCHRONOUSLY inside the
-        // upcoming inputTextMultiline call — `&cb_ctx` doesn't
+        // upcoming inputTextMultiline call - `&cb_ctx` doesn't
         // escape.
         var cb_ctx = EditCbCtx{ .notes = notes, .frame = s.frame };
         _ = u.inputTextMultiline("notes-field", &notes.buf, &notes.len, .{ 380, 240 }, .{

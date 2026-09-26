@@ -1,5 +1,5 @@
 //! Scalar global initializers, including the type-limit macros the C backend
-//! emits as bare names (UINT32_MAX, INT32_MIN, UINT64_MAX, …) that used to
+//! emits as bare names (UINT32_MAX, INT32_MIN, UINT64_MAX, ...) that used to
 //! silently become 0. 32-bit limits are checked exactly. 64-bit globals now
 //! round-trip their FULL value when it fits in 2^53 (via the centralized
 //! __ld/st64 heap path); a value above 2^53 (UINT64_MAX) cannot be exact in a

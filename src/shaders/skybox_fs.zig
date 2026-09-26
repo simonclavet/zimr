@@ -1,7 +1,7 @@
-//! src/shaders/skybox_fs.zig — gradient-skybox FS body (IoT).
+//! src/shaders/skybox_fs.zig - gradient-skybox FS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version. Mixes the two sky colours (both
-//! forwarded from the VS as varyings — no UBO here) by the view ray's vertical
+//! forwarded from the VS as varyings - no UBO here) by the view ray's vertical
 //! component. Schema in `skybox_fs_io.zig`.
 
 const zm = @import("zm");

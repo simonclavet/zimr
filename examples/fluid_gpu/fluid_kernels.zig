@@ -1,23 +1,23 @@
-//! fluid_kernels.zig — the GPU fluid: Clavet/Beaudoin/Poulin (2005)
+//! fluid_kernels.zig - the GPU fluid: Clavet/Beaudoin/Poulin (2005)
 //! double-density relaxation as a SEVEN-kernel kompute module. The same
 //! algorithm as examples/sph_fluid_2d (the CPU port), now running where
 //! it was born: 20k particles in compute shaders. Every kernel is the pure
-//! kompute DSL — the SAME Zig compiles to a CPU loop and to SPIR-V→WGSL.
+//! kompute DSL - the SAME Zig compiles to a CPU loop and to SPIR-V->WGSL.
 //!
 //! THE GRID, WITHOUT ATOMICS. The original WebGPU sim builds its uniform
-//! grid with `atomicAdd` slot-claiming; zimr's SPIR-V→WGSL path has no
+//! grid with `atomicAdd` slot-claiming; zimr's SPIR-V->WGSL path has no
 //! atomics yet (queued as a transpiler arc). Instead `buildGrid` runs one
 //! invocation PER CELL: each cell scans all N particles and sequentially
-//! fills its own row — no two invocations ever touch the same memory, so no
-//! races, and the kernel is bit-identical on CPU. cells×N ≈ 1.5k×20k = 30M
-//! reads/build; two builds per substep, two substeps — well within budget.
+//! fills its own row - no two invocations ever touch the same memory, so no
+//! races, and the kernel is bit-identical on CPU. cellsxN ~ 1.5kx20k = 30M
+//! reads/build; two builds per substep, two substeps - well within budget.
 //!
 //! Per-substep order (mirrors the reference sim):
-//!   gravityMouse → buildGrid → viscosity → predict
-//!   → buildGrid → density → force → applyAndFinalize
+//!   gravityMouse -> buildGrid -> viscosity -> predict
+//!   -> buildGrid -> density -> force -> applyAndFinalize
 //!
-//! Units are PIXELS of the fixed sim domain (domain_w × domain_h), exactly
-//! the reference parameterisation. The renderer maps pixels → NDC.
+//! Units are PIXELS of the fixed sim domain (domain_w x domain_h), exactly
+//! the reference parameterisation. The renderer maps pixels -> NDC.
 const k = @import("kompute");
 const zm = @import("zm");
 const float = zm.float;
@@ -54,7 +54,7 @@ pub const Buffers = struct {
     prev: [num_particles]Vec2,
     vel: [num_particles]Vec2,
     delta: [num_particles]Vec2,
-    /// (ρ, ρ_near) per particle — also read by the renderer for colour.
+    /// (rho, rho_near) per particle - also read by the renderer for colour.
     density: [num_particles]Vec2,
     grid_counts: [grid_cells]u32,
     grid_data: [grid_cells * max_per_cell]u32,
@@ -65,8 +65,8 @@ pub const Buffers = struct {
     grid_data_pos: [grid_cells * max_per_cell]Vec2,
 };
 
-/// Scalar-field uniform (array pads break uniform layout — see the
-/// gpu-compute tutorial). 16 × 4B = 64B, a 16-multiple.
+/// Scalar-field uniform (array pads break uniform layout - see the
+/// gpu-compute tutorial). 16 x 4B = 64B, a 16-multiple.
 pub const Params = extern struct {
     count: u32,
     dt: f32,
@@ -88,7 +88,7 @@ pub const Params = extern struct {
 };
 
 pub const g = k.Globals(@This());
-// Per-field storage bindings (t1178): one binding per array — the
+// Per-field storage bindings (t1178): one binding per array - the
 // megastruct single-binding corrupted on Adreno. `bind` returns a
 // pointer-to-array; indexing reads/writes through it directly.
 const b_pos = g.bind(.pos);
@@ -129,8 +129,8 @@ pub fn clearGrid(c: k.Ctx(@This())) void {
 }
 
 /// Per PARTICLE (dispatch count = particle count): each particle claims a slot
-/// in its cell via `atomicAdd` and writes its index there. O(N) — the parallel
-/// grid build that replaces the O(cells×N) single-writer scan. The cell is
+/// in its cell via `atomicAdd` and writes its index there. O(N) - the parallel
+/// grid build that replaces the O(cellsxN) single-writer scan. The cell is
 /// computed the SAME way the neighbour passes look it up (floor(pos/h) clamped
 /// to the grid), so a particle lands in the cell its neighbours will search.
 /// Requires `clearGrid` to have zeroed grid_counts this substep.
@@ -177,10 +177,10 @@ pub fn gravityMouse(c: k.Ctx(@This())) void {
 /// Per particle: collision-style viscosity (t1178 redesign), gather form. Acts
 /// ONLY on approaching pairs (closing speed u > 0); separating pairs get nothing.
 /// The impulse is QUADRATIC in u, then CLAMPED so it can at most bring the pair's
-/// radial relative motion to rest (u' = u − J ≥ 0) — never a bounce, strictly
-/// dissipative, momentum-conserving (½ each). Distance weight is 1 inside h/2,
+/// radial relative motion to rest (u' = u - J >= 0) - never a bounce, strictly
+/// dissipative, momentum-conserving (1/2 each). Distance weight is 1 inside h/2,
 /// ramping linearly to 0 at h. Runs pre-predict on the STALE grid (last frame's
-/// bins); the soft rim weight (→0 at h) absorbs the slight stale-grid drift.
+/// bins); the soft rim weight (->0 at h) absorbs the slight stale-grid drift.
 pub fn viscosity(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
@@ -219,16 +219,16 @@ pub fn viscosity(c: k.Ctx(@This())) void {
                     continue;
                 }
                 const n: Vec2 = sep * splat2(1.0 / dist);
-                // closing (penetrating) speed: > 0 ⟺ the pair is approaching
+                // closing (penetrating) speed: > 0 <=> the pair is approaching
                 const u: f32 = dot(my_vel - b_vel[j], n);
                 if (u <= 0.0) {
-                    continue; // separating → no viscosity
+                    continue; // separating -> no viscosity
                 }
-                // distance weight: 1 inside h/2, linear → 0 at h
+                // distance weight: 1 inside h/2, linear -> 0 at h
                 const w_lin: f32 = 2.0 * (1.0 - dist / c.params.h);
                 const w: f32 = if (w_lin < 1.0) w_lin else 1.0;
                 // quadratic in u, then clamp to u so the pair AT MOST stops
-                // (u' = u − imp ≥ 0): never bounce, strictly dissipative; ½ each.
+                // (u' = u - imp >= 0): never bounce, strictly dissipative; 1/2 each.
                 const imp_raw: f32 = c.params.visc_beta * w * u * u;
                 const imp: f32 = if (imp_raw < u) imp_raw else u;
                 my_vel = my_vel - n * splat2(0.5 * imp);
@@ -238,7 +238,7 @@ pub fn viscosity(c: k.Ctx(@This())) void {
     b_vel[i] = my_vel;
 }
 
-/// Per particle: save prev, advance by vel·dt (the prediction half of
+/// Per particle: save prev, advance by vel*dt (the prediction half of
 /// Clavet's prediction-relaxation).
 pub fn predict(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
@@ -298,7 +298,7 @@ inline fn densityCore(c: k.Ctx(@This()), comptime pig: bool) void {
     b_density[i] = .{ rho, rho_near };
 }
 
-/// Per particle: ρ = Σ(1−q)², ρ_near = Σ(1−q)³ over the 3×3 neighbourhood.
+/// Per particle: rho = sum(1-q)^2, rho_near = sum(1-q)^3 over the 3x3 neighbourhood.
 pub fn density(c: k.Ctx(@This())) void {
     densityCore(c, false);
 }
@@ -311,12 +311,12 @@ pub fn densityPig(c: k.Ctx(@This())) void {
 
 /// Cooperatively load `cell`'s 3x3 neighbourhood (index + position) into the
 /// shared tile; return tile_len. `noinline` so spv2wgsl keeps it a SEPARATE
-/// WGSL function — its cell-dependent `if (in_bounds)` branches then stay
+/// WGSL function - its cell-dependent `if (in_bounds)` branches then stay
 /// inside it and do NOT enclose the workgroupBarrier that `densityTiled`
 /// issues after the call (Tint rejects a barrier inside control flow that
 /// depends on a c.id-derived cell index; the helper keeps the barrier at the
 /// kernel's top level). fluid_wg_size >= max_per_cell, so each lane loads
-/// exactly slot `lid` of each cell — straight-line, no inner loop.
+/// exactly slot `lid` of each cell - straight-line, no inner loop.
 noinline fn loadDensityTile(cell: u32, lid: u32, cols: u32, rows: u32) u32 {
     const cx: i32 = @intCast(cell % cols);
     const cy: i32 = @intCast(cell / cols);
@@ -441,7 +441,7 @@ inline fn forceCore(c: k.Ctx(@This()), comptime pig: bool) void {
     const my_near: f32 = c.params.k_near * my_d[1];
     var corr: Vec2 = .{ 0.0, 0.0 };
     // Pressure-only (Clavet double-density relaxation). Viscosity is now a
-    // SEPARATE pre-predict pass (`viscosity`) on the stale grid — moving it out
+    // SEPARATE pre-predict pass (`viscosity`) on the stale grid - moving it out
     // of here restores the paper's apply-viscosity-then-predict ordering, which
     // is more stable (and lets the sim take a larger dt).
     const ccx: i32 = @floor(my_pos[0] / c.params.h);
@@ -498,7 +498,7 @@ inline fn forceCore(c: k.Ctx(@This()), comptime pig: bool) void {
 }
 
 /// Per particle: the double-density displacement (Clavet Alg. 2, symmetric
-/// gather — sum both pressures, write only your own delta; no atomics).
+/// gather - sum both pressures, write only your own delta; no atomics).
 pub fn force(c: k.Ctx(@This())) void {
     forceCore(c, false);
 }
@@ -521,7 +521,7 @@ pub fn applyAndFinalize(c: k.Ctx(@This())) void {
     // ---- Boundary handling (corner-explosion fix) ----
     // A naive independent-axis clamp drives every corner particle onto the
     // EXACT corner point (both axes pinned), so several particles overlap at
-    // dist≈0 → the near-density term (1−r/h)³ spikes → explosive repulsion.
+    // dist~0 -> the near-density term (1-r/h)^3 spikes -> explosive repulsion.
     // Instead: a SOFT inward push that ramps up over a margin band (so density
     // stays smooth near walls), plus a hard safety clamp with a tiny
     // index-derived jitter ALONG each wall to break exact coincidence in the
@@ -562,7 +562,7 @@ pub fn applyAndFinalize(c: k.Ctx(@This())) void {
 }
 
 /// Simple-mode kernel (the "simple" UI toggle): gravity + integrate + wall
-/// bounce on a single particle's own four floats — no grid, no neighbours, no
+/// bounce on a single particle's own four floats - no grid, no neighbours, no
 /// cross-particle reads. A non-SPH sanity mode; if even this misbehaves the
 /// fault is in the primitive dispatch/storage path, not the fluid math.
 pub fn fallBounceLean(c: k.Ctx(@This())) void {

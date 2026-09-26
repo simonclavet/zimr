@@ -1,8 +1,8 @@
-//! input_actions — port of raylib [core] example - input actions.
+//! input_actions - port of raylib [core] example - input actions.
 //! raylib source: examples/core/core_input_actions.c.
 //!
 //! raylib's sample is about ONE idea: an ACTION MAP. Game logic never reads a
-//! key directly — it asks "is ACTION_UP down?", and a small indirection layer
+//! key directly - it asks "is ACTION_UP down?", and a small indirection layer
 //! decides which physical input satisfies that action. raylib proves the point
 //! by letting you swap between two keysets (WASD vs the cursor keys) while the
 //! box-moving logic stays byte-for-byte identical.
@@ -11,13 +11,13 @@
 //! (game logic depends only on logical actions) and swaps the two *keysets* for
 //! two *input schemes* that a touch screen actually has:
 //!
-//!   * PAD   — a discrete D-pad (four buttons) + a Fire button. Multi-touch, so
+//!   * PAD   - a discrete D-pad (four buttons) + a Fire button. Multi-touch, so
 //!             two thumbs give real diagonals and simultaneous fire.
-//!   * STICK — a virtual analog stick: drag inside the ring, the knob's offset
+//!   * STICK - a virtual analog stick: drag inside the ring, the knob's offset
 //!             past a dead-zone becomes the same four direction actions.
 //!
 //! Both schemes fill the SAME `Actions` struct; the box update and the on-screen
-//! read-out consume only that struct and cannot tell which scheme produced it —
+//! read-out consume only that struct and cannot tell which scheme produced it -
 //! which is the entire raylib lesson, made tactile. Toggle the scheme live and
 //! watch the identical logic keep working.
 //!
@@ -38,7 +38,7 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Scheme = enum { pad, stick };
 
-/// The logical action set — the ONLY thing the game logic reads.
+/// The logical action set - the ONLY thing the game logic reads.
 const Actions = struct {
     up: bool = false,
     down: bool = false,
@@ -210,7 +210,7 @@ fn playCenter(play: z.Rectangle, size: f32) Vec2 {
     return .{ play.x + play.width * 0.5 - size * 0.5, play.y + play.height * 0.5 - size * 0.5 };
 }
 
-/// PURE game logic: move the box by the actions. Reads ONLY `Actions` — it has
+/// PURE game logic: move the box by the actions. Reads ONLY `Actions` - it has
 /// no idea which scheme produced them. Returns the new position, clamped to the
 /// play rect. This is the whole point of the action map.
 fn applyActions(
@@ -283,7 +283,7 @@ fn update(f: *z.Frame, s: *State) void {
             toggled = true;
         }
     }
-    // toggle is edge-triggered off the same fire_was_down guard? No — give it
+    // toggle is edge-triggered off the same fire_was_down guard? No - give it
     // its own edge via a static-ish check: only flip when a fresh press lands.
     // Reuse fire edge machinery would double-fire, so gate on !fire_was_down and
     // require the toggle not to have been held: track via the flash-free path.

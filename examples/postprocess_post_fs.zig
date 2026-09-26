@@ -1,4 +1,4 @@
-//! examples/postprocess_post_fs.zig — fullscreen post-processing fragment
+//! examples/postprocess_post_fs.zig - fullscreen post-processing fragment
 //! shader for the postprocess demo. Samples the `scene` texture three times at
 //! UV offsets along the radial direction (a chromatic-aberration RGB split),
 //! then darkens toward the edges (vignette).
@@ -6,7 +6,7 @@
 //! This is the FIRST sampler shader to go through `z.shader.loadShaderVF`: the
 //! schema's `Samplers` field drives a bind group built by the unified
 //! `Resources` machinery, with no hand-built pipeline. Same authoring shape as
-//! every other Zig shader — `io.scene(uv)` is the texture read.
+//! every other Zig shader - `io.scene(uv)` is the texture read.
 //!
 //! Schema (Inputs / Samplers / Outputs) lives in `postprocess_post_fs_io.zig`.
 
@@ -15,7 +15,7 @@ const Vec2 = zm.Vec2;
 const shader_io = @import("postprocess_post_fs_io.zig");
 const shader_externs = @import("postprocess_post_fs_externs");
 
-// IoT(void) — no Ubo; the texture binding is all this stage needs.
+// IoT(void) - no Ubo; the texture binding is all this stage needs.
 pub const Io = shader_externs.IoT(void);
 pub const Out = shader_externs.Out;
 pub const TextureRef = shader_externs.TextureRef;
@@ -40,7 +40,7 @@ pub fn shaderMain(io_in: Io) Out {
     const g: f32 = io_in.scene(uv)[1];
     const b: f32 = io_in.scene(uv - off)[2];
 
-    // Vignette: fade toward the edges (edge0 > edge1 → bright center).
+    // Vignette: fade toward the edges (edge0 > edge1 -> bright center).
     const vig: f32 = smoothstep(0.85, 0.30, length(dir));
 
     out.final_color = .{ r * vig, g * vig, b * vig, 1.0 };

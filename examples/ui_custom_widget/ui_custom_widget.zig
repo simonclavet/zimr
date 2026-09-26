@@ -3,7 +3,7 @@
 // Reference implementation of a CUSTOM WIDGET built on the public
 // `beginItem` / `endItem` extension primitives plus the typed-
 // generic ext-state storage (`getState` / `getOrPutState`).  No
-// internals reached — everything imports through `z.ui`.
+// internals reached - everything imports through `z.ui`.
 //
 // The widget: `starRating(label, value: *u8, max_stars)`.  Renders
 // a row of star glyphs; clicking the Nth star sets value to N.
@@ -45,7 +45,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{ .ui_host = z.UiHost.init(gpa, font), .font = font };
 }
 
-/// Per-widget hover state.  Stored in Q2 by widget id — multiple
+/// Per-widget hover state.  Stored in Q2 by widget id - multiple
 /// `starRating` instances each get their own slot.
 const StarRatingState = struct {
     hover_index: i32 = -1, // -1 = not hovered; else index in 0..max-1
@@ -55,7 +55,7 @@ const StarRatingState = struct {
 ///
 /// Pattern (the whole point of this file):
 ///   1. Compute size from caller args.
-///   2. `u.beginItem(label, .{.size = ...})` — does ID hashing,
+///   2. `u.beginItem(label, .{.size = ...})` - does ID hashing,
 ///      cursor placement, clip test, hovered_id update, AND the
 ///      press/release state machine in one call.
 ///   3. Read/write per-id state via `u.getOrPutState`.
@@ -99,7 +99,7 @@ fn starRating(
     }
     state.hover_index = hover_idx;
 
-    // Click → set value to hovered star (1-indexed for human-
+    // Click -> set value to hovered star (1-indexed for human-
     // readable "3 out of 5 stars" semantics).
     var changed: bool = false;
     if (it.pressed and hover_idx >= 0) {
@@ -107,7 +107,7 @@ fn starRating(
         changed = true;
     }
 
-    // Draw each star into the window's draw list — clipped to the
+    // Draw each star into the window's draw list - clipped to the
     // window content rect, so stars never spill past the edge.
     // (getWindowDrawList exposes the same list built-in widgets use.)
     const dl: ui.DrawListHandle = u.getWindowDrawList();
@@ -125,9 +125,9 @@ fn starRating(
             .{ .r = 0xFF, .g = 0xD7, .b = 0x00, .a = 0xFF } // gold
         else
             .{ .r = 0x44, .g = 0x44, .b = 0x4A, .a = 0xFF }; // dim
-        // Simple square stand-in for a star — keep this example
+        // Simple square stand-in for a star - keep this example
         // about the widget pattern, not glyph rendering.  Real
-        // implementations would u.text("★", ...) at the right pos.
+        // implementations would u.text("*", ...) at the right pos.
         dl.addRectFilled(star_rect, color);
     }
 

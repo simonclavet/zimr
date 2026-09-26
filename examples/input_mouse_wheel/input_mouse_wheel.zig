@@ -1,13 +1,13 @@
 // examples/input_mouse_wheel.zig - mouse-wheel-controlled box,
 // the entire demo.
 // Port of raylib's `examples/core/core_input_mouse_wheel.c`
-// (★1, ~64 LOC).  Smallest possible demo of `getMouseWheelMove`:
+// (*1, ~64 LOC).  Smallest possible demo of `getMouseWheelMove`:
 // each notch moves a box four pixels.  Tests that the wheel
 // delta is sampled per-frame correctly (not accumulated across
 // frames, not lost when the user spins fast).
 // What this exercises:
 //   - `z.getMouseWheelMove` - returns a float wheel delta
-//     for the most recent frame.  On most setups one notch ≈ ±1.
+//     for the most recent frame.  On most setups one notch ~ +/-1.
 //     Touchpads on macOS can return fractional values for
 //     "smooth scrolling".
 // Controls:
@@ -59,7 +59,7 @@ fn update(f: *z.Frame, state: *State) void {
     state.frame_count += 1;
 
     // Wheel delta this frame.  Subtract so wheel-up makes the box
-    // visually move up.  Use the float→int truncation that raylib's
+    // visually move up.  Use the float->int truncation that raylib's
     // source does - wheel delta is float, box position is int.
     const wheel: f32 = z.getMouseWheelMove(f.input);
     const delta_pixels: i32 = @trunc(wheel * float(scroll_speed));

@@ -1,4 +1,4 @@
-//! src/shaders/cube3d_instanced_vs.zig — instanced 3D vertex shader body.
+//! src/shaders/cube3d_instanced_vs.zig - instanced 3D vertex shader body.
 //!
 //! Reconstructs the per-instance model matrix from its four instance-step vec4
 //! columns, transforms the local mesh vertex into world space, then projects it
@@ -6,7 +6,7 @@
 //! fixed directional light, 0.35 ambient floor, flat per-face normals), so the
 //! shared `cube3d_fs` shades instanced and immediate geometry identically.
 //!
-//! Same source compiles for SPIR-V (→ WGSL → GPU) and wasm32 (→ CPU dispatch).
+//! Same source compiles for SPIR-V (-> WGSL -> GPU) and wasm32 (-> CPU dispatch).
 //! Schema lives in `cube3d_instanced_vs_io.zig`.
 
 const zm = @import("zm");
@@ -39,7 +39,7 @@ pub fn shaderMain(io_in: Io) Out {
     out.position = mulMatPoint(mvp, io_in.vertex_position);
 
     // Normal to world space (direction, w = 0). Cubes use uniform scale, so the
-    // model matrix's upper-3×3 is fine without an inverse-transpose.
+    // model matrix's upper-3x3 is fine without an inverse-transpose.
     const n_local: Vec = .{ io_in.vertex_normal[0], io_in.vertex_normal[1], io_in.vertex_normal[2], 0.0 };
     const n_world: Vec = mulMatVec(model, n_local);
     const nrm: Vec3 = normalize(Vec3{ n_world[0], n_world[1], n_world[2] });

@@ -1,4 +1,4 @@
-//! zimrphysics_demo — switchable physics scenes driven by the `zimrphysics`
+//! zimrphysics_demo - switchable physics scenes driven by the `zimrphysics`
 //! (Jolt port) World and drawn with `render.drawWorld`, the pure-ECS render pass
 //! over `world.bodies` (see render.zig). Six scenes inspired by Jolt's samples:
 //! showcase (mixed shape rain), pyramid, stack (alternating yaw), restitution
@@ -312,7 +312,7 @@ fn addFlatFloor(world: *zp.World, gpa: Allocator, half: f32) !void {
     });
 }
 
-/// Wave B — shape gallery. One of (almost) every convex / decorator shape the
+/// Wave B - shape gallery. One of (almost) every convex / decorator shape the
 /// engine has, dropped in a row so each settles on the floor: SphereShape,
 /// BoxShape, CapsuleShape, CylinderShape, TaperedCapsuleShape, ConvexHullShape,
 /// StaticCompoundShape, OffsetCenterOfMassShape, RotatedTranslatedShape.
@@ -382,7 +382,7 @@ fn sceneShapes(world: *zp.World, gpa: Allocator, state: *State) !void {
     _ = try world.createBody(.{ .shape = s_rt, .position = vec(7.0, y, 0), .material = 4 });
 }
 
-/// Wave B — static special geometry: a heightfield terrain, a triangle mesh
+/// Wave B - static special geometry: a heightfield terrain, a triangle mesh
 /// ramp, an infinite plane wall, and a single triangle, with a few balls and
 /// boxes dropped on them to show they collide. Covers HeightFieldShape,
 /// MeshShape, PlaneShape, TriangleShape.
@@ -516,7 +516,7 @@ fn scenePyramid(world: *zp.World, gpa: Allocator, state: *State) !void {
     }
 }
 
-/// Eight elongated boxes stacked with alternating 90° yaw (Jolt StackTest) — a
+/// Eight elongated boxes stacked with alternating 90 deg yaw (Jolt StackTest) - a
 /// stability stress now that box-vs-box rests cleanly.
 fn sceneStack(world: *zp.World, gpa: Allocator, state: *State) !void {
     try addFlatFloor(world, gpa, 10);
@@ -596,7 +596,7 @@ fn sceneRestitution(world: *zp.World, gpa: Allocator, state: *State) !void {
 /// A tilted static ramp with a row of boxes whose friction steps 0 -> 1 (Jolt
 /// FrictionTest): the slippery ones slide off, the grippy ones hold.
 fn sceneFrictionRamp(world: *zp.World, gpa: Allocator, state: *State) !void {
-    const angle: f32 = 0.40; // ~23°
+    const angle: f32 = 0.40; // ~23 deg
     const ramp: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(9, 0.5, 6),
         .convex_radius = 0.05,
@@ -717,9 +717,9 @@ fn sceneBridge(world: *zp.World, gpa: Allocator, state: *State) !void {
             .group_id = link_group, // planks ignore each other; props (group 0) still land on them
             .material = @intCast(1 + i % 5),
         });
-        // Pin BOTH front/back corners of the shared edge (z = ±0.4). A single
+        // Pin BOTH front/back corners of the shared edge (z = +/-0.4). A single
         // mid-edge anchor puts the link's two pins on one line (the bridge X
-        // axis), leaving each plank free to ROLL about it — so any off-centre
+        // axis), leaving each plank free to ROLL about it - so any off-centre
         // load (the dropped crates) spins the deck up without limit. A point
         // constraint locks position, not rotation; two anchors spread across the
         // width remove the roll/twist DOF while still letting the bridge sag.
@@ -768,7 +768,7 @@ fn sceneChain(world: *zp.World, gpa: Allocator, state: *State) !void {
     // + 2 half-heights (the two cap-centre offsets). At this pitch the rest config
     // already has the end spheres touching, the pair ropes are taut at rest, and
     // the 5% tethers stay genuinely slack. (At the old 0.85 the caps spawned
-    // OVERLAPPED and the tethers — sized from that pitch — pinned the chain there,
+    // OVERLAPPED and the tethers - sized from that pitch - pinned the chain there,
     // so the pair ropes could never reach touching.)
     const gap: f32 = 2.0 * 0.22 + 2.0 * 0.3; // = 1.04
     const anchor: zp.BodyHandle = try world.createBody(.{
@@ -793,7 +793,7 @@ fn sceneChain(world: *zp.World, gpa: Allocator, state: *State) !void {
             .material = @intCast(1 + i % 5),
         });
         // Link the adjacent CAP-SPHERE CENTRES with max = 2 radii, so the two
-        // end spheres can touch but the link can't pull apart — a natural chain
+        // end spheres can touch but the link can't pull apart - a natural chain
         // (a distance constraint fixes only the one DOF, so links still swing
         // and spin). The anchors sit off-COM, which only holds under load thanks
         // to the per-position-iteration re-derive of the constraint (Jolt does
@@ -803,7 +803,7 @@ fn sceneChain(world: *zp.World, gpa: Allocator, state: *State) !void {
         // body's rest depth below the ceiling (min=0). The 5% slack is deliberate:
         // taut tethers pin every body to an exact depth and the pair ropes have
         // nothing left to do (the chain dangles kinked). With slack, the pair
-        // constraints define the shape and the tether only catches runaway creep —
+        // constraints define the shape and the tether only catches runaway creep -
         // the bob's load no longer has to propagate down all 8 links for a body to
         // be held (the anchor is infinite-mass), which is the iterative-solver
         // limit that bites every engine on a heavy-ended long chain, Jolt included.
@@ -826,7 +826,7 @@ fn sceneChain(world: *zp.World, gpa: Allocator, state: *State) !void {
     const bob_a: Vec = vec(0, prev_y - hh, 0);
     const bob_b: Vec = vec(0, prev_y - gap + 0.6, 0);
     try zp.createDistanceJoint(world, prev, bob, bob_a, bob_b, 0.0, two_r);
-    // Ceiling tether for the heaviest body too — this is the one the link chain
+    // Ceiling tether for the heaviest body too - this is the one the link chain
     // struggles to hold, so the direct anchor link matters most here. Same 5% slack.
     const bob_y: f32 = prev_y - gap;
     const bob_tether_max: f32 = (top_y - bob_y) * 1.05;
@@ -834,7 +834,7 @@ fn sceneChain(world: *zp.World, gpa: Allocator, state: *State) !void {
     try world.setLinearVelocity(gpa, bob, vec(7.0, 0, 0));
 }
 
-/// stepped speeds — they spin like propellers (COM at the pivot, so gravity adds
+/// stepped speeds - they spin like propellers (COM at the pivot, so gravity adds
 /// no torque). Loose balls get batted around. Headless-proven: a motor reaches
 /// its target rad/s; here sleeping is disabled so the bars never doze.
 fn sceneMotor(world: *zp.World, gpa: Allocator, state: *State) !void {
@@ -1058,7 +1058,7 @@ fn scenePulley(world: *zp.World, gpa: Allocator, state: *State) !void {
 /// "limbs", each pinned by `createSwingTwistJoint` with an increasingly wide
 /// swing cone (0.25..1.0 rad) and a tight twist range. Each limb is kicked
 /// sideways so it drives into its cone: a correct cone holds the limb within
-/// roughly its half-angle (the swing-twist cone limit now holds — see zimrphysics.zig).
+/// roughly its half-angle (the swing-twist cone limit now holds - see zimrphysics.zig).
 fn sceneRagdoll(world: *zp.World, gpa: Allocator, state: *State) !void {
     state.launch_shape = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.4 } });
 
@@ -1201,7 +1201,7 @@ fn sceneGear(world: *zp.World, gpa: Allocator, state: *State) !void {
 /// rack tracks the pinion at v = w/ratio. Pinion and rack share a no-collide group
 /// (the constraint provides the meshing; teeth are not modelled as geometry).
 /// NOTE: the rack travels one way under the constant motor; reciprocation via motor
-/// reversal or a slider spring is not wired here — both currently lose stability /
+/// reversal or a slider spring is not wired here - both currently lose stability /
 /// energy through the coupling (logged as a parity gap). Reset to replay.
 fn sceneRackPinion(world: *zp.World, gpa: Allocator, state: *State) !void {
     world.settings.allow_sleeping = false;
@@ -1323,7 +1323,7 @@ fn scenePath(world: *zp.World, gpa: Allocator, state: *State) !void {
 
 /// Newton's cradle: five equal balls hang as planar pendulums (rigid distance-constraint
 /// strings) from a static beam, just touching, restitution ~1. The leftmost is lifted and
-/// released; momentum transfers along the row and the rightmost swings out — then it
+/// released; momentum transfers along the row and the rightmost swings out - then it
 /// oscillates back and forth. `allowed_dofs = plane_2d` keeps every ball in the XY plane so
 /// the row stays aligned. Strings are drawn by drawSceneOverlay. A tiny gap helps the
 /// transfers resolve sequentially rather than as one mushy pile.
@@ -1351,7 +1351,7 @@ fn sceneNewtonsCradle(world: *zp.World, gpa: Allocator, state: *State) !void {
 
     const ball_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = r } });
     state.launch_shape = ball_shape;
-    const gap: f32 = 0.004; // 4 mm — sequential, near-invisible
+    const gap: f32 = 0.004; // 4 mm - sequential, near-invisible
     var i: usize = 0;
     while (i < 5) : (i += 1) {
         const x: f32 = float(i) * (2 * r + gap);
@@ -1377,7 +1377,7 @@ fn sceneNewtonsCradle(world: *zp.World, gpa: Allocator, state: *State) !void {
 
 /// Wrecking ball: a heavy sphere hangs from a fixed pivot by a rigid distance-constraint
 /// chain, lifted to one side. Released, it swings down and smashes through a free-standing
-/// brick wall (a 2-deep box stack), scattering it. Pure gravity drive — no motor. Combines a
+/// brick wall (a 2-deep box stack), scattering it. Pure gravity drive - no motor. Combines a
 /// distance-constraint pendulum, box stacking + friction, and big mass ratios. The chain is
 /// drawn by drawSceneOverlay. Headless-proven: the wall settles, then the ball plows through
 /// (mean brick displacement > 1.5 m) with no NaN.
@@ -1525,14 +1525,14 @@ fn scenePlinko(world: *zp.World, gpa: Allocator, state: *State) !void {
 /// bowls into a line of six dominoes that topple in sequence; the last domino shoves
 /// a heavy ball off a ledge; the ball drops onto an angled chute that funnels it into
 /// a catch bin. One self-running spectacle exercising CCD (`motion_quality =
-/// .linear_cast`) · a ramp · stacking + friction (dominoes) · restitution · a chute +
+/// .linear_cast`) * a ramp * stacking + friction (dominoes) * restitution * a chute +
 /// bin. Gravity-driven end to end (no motors), so it replays identically on Reset.
 /// Headless-proven: marble rolls, 6/6 dominoes fall, ball settles in the bin
 /// (x ~17.8, y ~-2.9), nothing goes non-finite.
 fn sceneRubeGoldberg(world: *zp.World, gpa: Allocator) !void {
     world.settings.allow_sleeping = false;
 
-    // Upper floor — ends at x=10 to make the ledge the ball gets shoved off.
+    // Upper floor - ends at x=10 to make the ledge the ball gets shoved off.
     const floor_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(7, 0.5, 2),
         .convex_radius = 0.02,
@@ -1544,7 +1544,7 @@ fn sceneRubeGoldberg(world: *zp.World, gpa: Allocator) !void {
         .friction = 0.5,
     });
 
-    // Ramp: half-length 3 along local X, tilted -28°, sloping down to the right.
+    // Ramp: half-length 3 along local X, tilted -28 deg, sloping down to the right.
     const ramp_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(3, 0.2, 1.5),
         .convex_radius = 0.02,
@@ -1570,7 +1570,7 @@ fn sceneRubeGoldberg(world: *zp.World, gpa: Allocator) !void {
         .material = 1,
     });
 
-    // Six dominoes — thin, tall, light; spaced so each topples into the next.
+    // Six dominoes - thin, tall, light; spaced so each topples into the next.
     const dom_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.08, 1.0, 0.5),
         .convex_radius = 0.01,
@@ -1588,7 +1588,7 @@ fn sceneRubeGoldberg(world: *zp.World, gpa: Allocator) !void {
         });
     }
 
-    // Trigger ball at the ledge edge — the last domino shoves it off.
+    // Trigger ball at the ledge edge - the last domino shoves it off.
     const tball_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.3 } });
     _ = try world.createBody(.{
         .shape = tball_shape,
@@ -1632,8 +1632,8 @@ fn sceneRubeGoldberg(world: *zp.World, gpa: Allocator) !void {
     _ = try world.createBody(.{ .shape = bin_wall, .position = vec(18.3, -2.6, 0), .motion_type = .static });
 }
 
-/// Tumbler (Wave-J showcase). A hexagonal drum — six tangential wall boxes welded into
-/// one compound body — spins on a velocity-motored hinge while a load of balls tumbles
+/// Tumbler (Wave-J showcase). A hexagonal drum - six tangential wall boxes welded into
+/// one compound body - spins on a velocity-motored hinge while a load of balls tumbles
 /// inside. Shows a powered hinge motor, a compound shape used as a moving container, and
 /// many-body contact, all contained so nothing can escape. Headless-proven: 15/15 balls
 /// stay inside, drum holds 1.3 rad/s, balls tumble (avg speed ~1.5), zero z-drift.
@@ -1726,8 +1726,8 @@ fn conveyorContact(
     }
 }
 
-/// Conveyor (Wave-J showcase). A flat belt — a static box whose contact friction is given
-/// a surface velocity by `conveyorContact` — carries a stream of marbles from a feed point
+/// Conveyor (Wave-J showcase). A flat belt - a static box whose contact friction is given
+/// a surface velocity by `conveyorContact` - carries a stream of marbles from a feed point
 /// on the left into a walled catch bin on the right. Shows Jolt-style contact-surface
 /// velocity (the conveyor-belt feature). Reliable BY CONTAINMENT: a left back-stop plus a
 /// walled bin (left wall just below the drop-off) mean a marble cannot escape even if it is
@@ -1897,7 +1897,7 @@ fn sceneClockwork(world: *zp.World, gpa: Allocator, state: *State) !void {
 }
 
 /// The four collision-stable shapes the stirrer rains in. tapered_capsule and convex_hull are
-/// excluded on purpose — both NaN under heavy crowding (see sceneStirrer).
+/// excluded on purpose - both NaN under heavy crowding (see sceneStirrer).
 fn stirrerObjectShape(world: *zp.World, gpa: Allocator, kind: usize) !zp.ShapeId {
     return switch (kind) {
         0 => try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.3 } }),
@@ -1915,7 +1915,7 @@ fn stirrerObjectShape(world: *zp.World, gpa: Allocator, kind: usize) !zp.ShapeId
 /// inside a ROUND bowl, vigorously steering a deep load of 36 mixed-shape objects (spheres,
 /// cubes, cylinders, capsules) around the wall. The rotor is driven by a swing-twist TWIST
 /// motor (the powered ragdoll joint, used here as a continuous drive) with a tight cone so it
-/// only spins, never tilts — the one constraint the showcase hadn't exercised under power.
+/// only spins, never tilts - the one constraint the showcase hadn't exercised under power.
 /// Two things make a big rotor stable here: (1) a ROUND wall (32 tangent segments) so the
 /// blade tip shoves objects ALONG the wall (they orbit) instead of wedging them into a flat
 /// corner; (2) FAT convex radius on the cubes/cylinders so deep contacts resolve via GJK
@@ -2142,7 +2142,7 @@ fn buildRagdoll(
 }
 
 /// Ragdoll pile (Wave-J showcase). Three Jolt-standard humanoid ragdolls are dropped with a
-/// sideways shove so they topple, collide, and flop into a heap on the ground — the classic
+/// sideways shove so they topple, collide, and flop into a heap on the ground - the classic
 /// Jolt "Ragdoll" sample. Each is 12 capsule bones joined by 11 swing-twist constraints with
 /// realistic per-joint cone/twist limits (tight spine, hinge-like elbows/knees, wide shoulders
 /// and hips). Tapping Launch fires a ball into the pile to scatter them. Headless-proven: all
@@ -2171,8 +2171,8 @@ fn sceneRagdollPile(world: *zp.World, gpa: Allocator, state: *State) !void {
 // ============================================================================
 // Mega STRESS scene: one big world combining a spinning blender in a round
 // container with many balls, a Galton board fed 100 balls, a ~100-box pyramid,
-// and a chain pendulum. Built to push the solver — broad/narrow phase plus the
-// velocity/position constraint sweeps — to the limit. Pair with the profiler's
+// and a chain pendulum. Built to push the solver - broad/narrow phase plus the
+// velocity/position constraint sweeps - to the limit. Pair with the profiler's
 // Statistics tab (each physics PHASE zone shows where the time goes).
 // ============================================================================
 
@@ -2207,7 +2207,7 @@ fn stressBlender(world: *zp.World, gpa: Allocator, state: *State, o: Vec) !void 
     // This mirrors the proven sceneStirrer geometry (curved wall so the rotor tip
     // shoves objects ALONG the wall, no corner-wedging EPA blow-ups), scaled ~1.3x
     // to fit three ragdolls, with the same 1.5 rad/s twist motor. The earlier big
-    // version (r_wall 5, blade 4.3) churned hard enough to jitter — this doesn't.
+    // version (r_wall 5, blade 4.3) churned hard enough to jitter - this doesn't.
     const grp: u32 = 3;
     const center: Vec = o + vec(0, 3.0, 0);
     const floor_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -2811,7 +2811,7 @@ fn update(f: *z.Frame, state: *State) void {
     // Physics runs on a FIXED 1/60 s timestep, decoupled from the (variable, often
     // ~30 fps on mobile) render rate. Passing the raw frame dt straight to the solver
     // was the bug behind exploding stacks: one ~1/30 s Euler step is too large for the
-    // contact solver and pumps energy into the pile. Jolt's own guidance is the same —
+    // contact solver and pumps energy into the pile. Jolt's own guidance is the same -
     // keep each step <= 1/60 s and subdivide longer frames. We accumulate real time here
     // and drain it in fixed sub-steps below (capped to avoid a slow-device spiral).
     state.phys_accum += clamp(f.time.delta_time, 0.0, 0.1);
@@ -2969,7 +2969,7 @@ fn update(f: *z.Frame, state: *State) void {
         defer zu.end();
         state.ui_host.render(f);
     }
-    // NB: no explicit endDrawing — the runner closes the frame (and endDrawing is
+    // NB: no explicit endDrawing - the runner closes the frame (and endDrawing is
     // idempotent). Leaving the pass open lets a host like the launcher compose its
     // own overlay on top of this app's frame.
 }

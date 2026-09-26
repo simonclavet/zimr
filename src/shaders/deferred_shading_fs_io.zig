@@ -1,4 +1,4 @@
-//! src/shaders/deferred_shading_fs_io.zig — typed interface for the
+//! src/shaders/deferred_shading_fs_io.zig - typed interface for the
 //! deferred lighting fragment shader.  Companion to
 //! `deferred_shading_fs.zig`.
 //!
@@ -10,7 +10,7 @@
 //! STRUCT-OF-ARRAYS instead: one vec4 array for positions, one for
 //! colors.  Two neat tricks fall out: the position's spare .w carries
 //! the light's RADIUS-ish attenuation scale, and the color's spare .a
-//! carries the ENABLED flag (0 = off) — no int-vs-bool layout drama,
+//! carries the ENABLED flag (0 = off) - no int-vs-bool layout drama,
 //! and toggling a light is one float write.
 
 const zm = @import("zm");
@@ -24,7 +24,7 @@ pub const Inputs = common.Interp;
 pub const max_lights: usize = 4;
 
 /// The G-buffer, as written by the MRT pass (locations 0/1/2 there,
-/// bindings 0..5 here — texture+sampler pairs in group 1).
+/// bindings 0..5 here - texture+sampler pairs in group 1).
 pub const Samplers = struct {
     g_world_pos: shader.Sampler2D(.albedo, .{}),
     g_world_normal: shader.Sampler2D(.normal, .{}),
@@ -44,7 +44,7 @@ pub const Ubo = struct {
     light_color: [max_lights]Vec,
 };
 
-/// Stage output — the lit fragment.
+/// Stage output - the lit fragment.
 pub const Outputs = struct {
     final_color: Vec,
 };

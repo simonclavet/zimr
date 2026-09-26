@@ -1,4 +1,4 @@
-//! procgen_noise — port of the GL `procgen_noise`: three procedurally-
+//! procgen_noise - port of the GL `procgen_noise`: three procedurally-
 //! generated noise textures (white / Perlin / cellular), each made on the CPU
 //! with the engine's `genImage*` (now in src/image.zig, GL-free), uploaded to
 //! GPU textures, and drawn as panels via the rl-immediate textured-quad path
@@ -7,7 +7,7 @@
 //! time-varying offset, with its texture recreated each frame (the GL version
 //! re-uploaded via updateTexture; until that lands on wgpu, recreate-and-free
 //! is the equivalent). Note: the GL original generated this field but never
-//! drew it — here we actually show it.
+//! drew it - here we actually show it.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -78,7 +78,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.scratch.deinit();
 }
 
-/// Draw `tex` as a `w×h` quad at (x,y) via the rl-immediate textured path,
+/// Draw `tex` as a `wxh` quad at (x,y) via the rl-immediate textured path,
 /// then a caption below it.
 fn drawPanel(
     f: *z.Frame,

@@ -1,15 +1,15 @@
-//! mjcf.zig — reading MuJoCo's own model format.
+//! mjcf.zig - reading MuJoCo's own model format.
 //!
-//! ── ★ WHY THIS EXISTS WHEN URDF ALREADY WORKS ──
+//! -- * WHY THIS EXISTS WHEN URDF ALREADY WORKS --
 //!
 //! The good robots live in MuJoCo Menagerie, and Menagerie is MJCF. URDF gets a robot's
-//! LINKAGE across — bodies, joints, meshes — and stops there. MJCF carries the things that
+//! LINKAGE across - bodies, joints, meshes - and stops there. MJCF carries the things that
 //! decide whether a robot can actually be controlled: actuator force ranges, joint damping
 //! and armature, contact parameters per geom, sensor definitions, and named keyframes to
 //! start from. A quadruped imported from URDF is a shape; the same quadruped from MJCF is a
 //! shape that can stand up.
 //!
-//! ── ★★ WHAT MAKES MJCF HARDER THAN URDF: `<default>` ──
+//! -- ** WHAT MAKES MJCF HARDER THAN URDF: `<default>` --
 //!
 //! URDF states every value on the element that owns it. MJCF has an INHERITANCE TREE: a
 //! `<default>` block sets values for a class, classes nest, a child class overrides its
@@ -26,7 +26,7 @@
 //!       </default>
 //!     </default>
 //!
-//! So a reader that ignores defaults does not get a slightly-wrong model — it gets geoms with
+//! So a reader that ignores defaults does not get a slightly-wrong model - it gets geoms with
 //! no size, no type and no friction. **Resolution is the feature; the XML was the easy part.**
 //!
 //! This file does the resolution and nothing else yet. Turn 7 builds the body tree on top.
@@ -75,11 +75,11 @@ pub const max_depth: usize = 32;
 
 /// One resolved set of attributes for one element kind, inside one class.
 ///
-/// ★ STORED AS RAW ATTRIBUTE STRINGS, not parsed values, and that is deliberate. A class may
+/// * STORED AS RAW ATTRIBUTE STRINGS, not parsed values, and that is deliberate. A class may
 /// set `size=".06"` for a geom whose `type` comes from its grandparent; whether that size
 /// means a radius, a half-extent or nothing at all is not knowable until both are in hand.
 /// Resolving inheritance on strings and parsing once at the end keeps the two concerns apart
-/// — and means an attribute this reader does not understand yet still inherits correctly
+/// - and means an attribute this reader does not understand yet still inherits correctly
 /// instead of being silently dropped.
 pub const Attributes = struct {
     /// Name/value pairs, owned by the `Defaults` arena.
@@ -103,13 +103,13 @@ pub const Attributes = struct {
 
 /// The element kinds `<default>` can carry. MJCF allows a default block for most element
 /// types; these are the ones the importer will read.
-/// ★ ONLY THE KINDS THIS IMPORTER ACTUALLY READS.
+/// * ONLY THE KINDS THIS IMPORTER ACTUALLY READS.
 ///
 /// MJCF allows a `<default>` block for most element types. Listing them all here was the
 /// obvious thing and the wrong one: five of the twelve were never consulted by anything, so
 /// the enum advertised support that did not exist and a reader had no way to tell which
 /// entries were real. `readClass` already skips unknown tags, so an unread kind costs
-/// nothing by being absent — and the day one is needed, adding it is one line next to the
+/// nothing by being absent - and the day one is needed, adding it is one line next to the
 /// code that reads it.
 pub const Kind = enum {
     geom,
@@ -119,7 +119,7 @@ pub const Kind = enum {
     velocity,
     general,
 
-    /// The MJCF tag name, which is the enum name — kept as a function so a rename cannot
+    /// The MJCF tag name, which is the enum name - kept as a function so a rename cannot
     /// silently change the file format.
     pub fn tag(self: Kind) []const u8 {
         return @tagName(self);
@@ -153,16 +153,16 @@ pub const Class = struct {
 pub const Defaults = struct {
     /// Owns every slice below.
     ///
-    /// ── ★★★ A POINTER, AND NOT AS A STYLE CHOICE ──
+    /// -- *** A POINTER, AND NOT AS A STYLE CHOICE --
     ///
     /// An `ArenaAllocator` is NOT movable once an `Allocator` has been taken from it: that
     /// allocator holds the arena struct's ADDRESS. Building into a stack-local arena and then
     /// returning the struct by value leaves every `Allocator` handed out during construction
-    /// pointing at a dead frame — and `robot.zig` says exactly this, in the comment on
+    /// pointing at a dead frame - and `robot.zig` says exactly this, in the comment on
     /// `Model.arena`. These two functions did it anyway.
     ///
-    /// ★ THE SYMPTOM WAS ABSURDLY INDIRECT: a 3324-byte leak, reported only in ReleaseSafe,
-    /// only for the one fixture whose parse happened to grow the arena past a second buffer —
+    /// * THE SYMPTOM WAS ABSURDLY INDIRECT: a 3324-byte leak, reported only in ReleaseSafe,
+    /// only for the one fixture whose parse happened to grow the arena past a second buffer -
     /// because a single-buffer arena survives the move by luck and a two-buffer one does not.
     /// It cost most of two sessions, and the answer was written down in another file the whole
     /// time.
@@ -175,7 +175,7 @@ pub const Defaults = struct {
         gpa.destroy(self.arena);
     }
 
-    /// The root class — what an element with no `class` and no enclosing default sees.
+    /// The root class - what an element with no `class` and no enclosing default sees.
     pub fn root(self: *const Defaults) *const Class {
         return &self.classes[0];
     }
@@ -193,7 +193,7 @@ pub const Defaults = struct {
 
     /// What an element sees, given the class it names (or inherits from its enclosing body).
     ///
-    /// ★ THE LOOKUP AN IMPORTER ACTUALLY WANTS. An element's own attributes win; anything it
+    /// * THE LOOKUP AN IMPORTER ACTUALLY WANTS. An element's own attributes win; anything it
     /// does not state comes from its class; anything the class does not state comes from the
     /// class's ancestors. Because `Class` is already flattened, that is two lookups rather
     /// than a walk.
@@ -229,7 +229,7 @@ pub fn readDefaults(gpa: Allocator, doc: *const codecs.xml.Document) Error!Defau
     const a: Allocator = arena.allocator();
 
     var classes: std.ArrayListUnmanaged(Class) = .empty;
-    // The root class always exists, even in a file with no `<default>` at all — that keeps
+    // The root class always exists, even in a file with no `<default>` at all - that keeps
     // every caller on one path instead of branching on "are there defaults".
     try classes.append(a, .{
         .name = "",
@@ -260,8 +260,8 @@ fn readClass(
 
     for (doc.childrenOf(element)) |*child| {
         if (std.mem.eql(u8, child.name, "default")) {
-            // A nested class. It STARTS as a copy of its parent — which is what makes
-            // `Class` flat — and then its own attributes override field by field.
+            // A nested class. It STARTS as a copy of its parent - which is what makes
+            // `Class` flat - and then its own attributes override field by field.
             const name: []const u8 = doc.attribute(child, "class") orelse "";
             if (name.len == 0) {
                 // An unnamed nested default is not meaningful: there would be no way to
@@ -322,10 +322,10 @@ const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const allocPrint = std.fmt.allocPrint;
 
 test "mjcf defaults: a nested class inherits and overrides field by field" {
-    // ★ THE SHAPE THAT MATTERS, taken from MuJoCo's own `humanoid.xml`: a geom in class
+    // * THE SHAPE THAT MATTERS, taken from MuJoCo's own `humanoid.xml`: a geom in class
     // "thigh" states only its size, and must still come out with the type, friction and
     // solimp its grandparent set. A reader that ignores this does not get a slightly wrong
-    // model — it gets geoms with no type and no size at all.
+    // model - it gets geoms with no type and no size at all.
     const source: []const u8 =
         \\<mujoco>
         \\  <default>
@@ -356,7 +356,7 @@ test "mjcf defaults: a nested class inherits and overrides field by field" {
     // Stated locally.
     try expectEqualStrings(".06", thigh.get(.geom, "size").?);
 
-    // ★ "foot" OVERRIDES friction while inheriting everything else — field by field, not
+    // * "foot" OVERRIDES friction while inheriting everything else - field by field, not
     // block by block. Replacing the whole geom set would be the easy mistake and would
     // leave a foot with no type.
     const foot: *const Class = defaults.byName("foot").?;
@@ -397,13 +397,13 @@ test "mjcf defaults: an element's own attribute beats its class" {
         "box",
         defaults.resolve("thing", .geom, "type", null).?,
     );
-    // No class named, so the root — which says nothing about geoms here.
+    // No class named, so the root - which says nothing about geoms here.
     try expect(defaults.resolve(null, .geom, "type", null) == null);
 }
 
 test "mjcf defaults: a file with no default block still resolves" {
     // The root class exists unconditionally, so an importer never branches on "are there
-    // defaults" — it asks the same question and gets null.
+    // defaults" - it asks the same question and gets null.
     const gpa: Allocator = std.testing.allocator;
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, "<mujoco><worldbody/></mujoco>", null);
     defer doc.deinit();
@@ -414,10 +414,10 @@ test "mjcf defaults: a file with no default block still resolves" {
 }
 
 test "mjcf defaults: a duplicate class name is rejected" {
-    // ★ REJECTED RATHER THAN LAST-WINS. Two classes with one name means every `class="x"`
+    // * REJECTED RATHER THAN LAST-WINS. Two classes with one name means every `class="x"`
     // in the file is ambiguous, and silently picking one produces a model that is wrong in
     // a way no reader would think to check. The URDF importer rejects duplicate link names
-    // for the same reason (§4i).
+    // for the same reason (section 4i).
     const source: []const u8 =
         \\<mujoco>
         \\  <default>
@@ -448,12 +448,12 @@ test "mjcf defaults: an unnamed nested default is rejected" {
 }
 
 test "mjcf defaults: MuJoCo's own humanoid.xml, against numbers MuJoCo reports" {
-    // ★★ THE REAL FILE, not a fixture. `humanoid.xml` has 21 nested `<default>` blocks and
+    // ** THE REAL FILE, not a fixture. `humanoid.xml` has 21 nested `<default>` blocks and
     // is the model MuJoCo itself ships as a reference, so it exercises the inheritance the
     // way real models do.
     //
     // The expected values below are what `mujoco.MjModel.from_xml_path` reports for the same
-    // file — `geom_solimp[1] = [0.9, 0.99, 0.003, 0.5, 2.0]` and `geom_friction[1] =
+    // file - `geom_solimp[1] = [0.9, 0.99, 0.003, 0.5, 2.0]` and `geom_friction[1] =
     // [0.7, 0.005, 0.0001]`. Those come from a class two levels up, so agreeing with them is
     // evidence the flattening is right rather than just self-consistent.
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
@@ -481,16 +481,16 @@ test "mjcf defaults: MuJoCo's own humanoid.xml, against numbers MuJoCo reports" 
 }
 
 // =============================================================================
-// The body tree — turn 7
+// The body tree - turn 7
 // =============================================================================
 
 /// How angles in the source are to be read.
 ///
-/// ★★ MJCF DEFAULTS TO DEGREES. URDF is radians and always radians; MJCF has a compiler
-/// switch whose DEFAULT is degrees, so `range="-30 10"` on a joint means ±half a radian, and
+/// ** MJCF DEFAULTS TO DEGREES. URDF is radians and always radians; MJCF has a compiler
+/// switch whose DEFAULT is degrees, so `range="-30 10"` on a joint means +/-half a radian, and
 /// MuJoCo's built model reports `[-0.5236, 0.1745]` for exactly that line in `humanoid.xml`.
 ///
-/// A reader that assumes radians does not fail loudly — it produces a robot whose joints have
+/// A reader that assumes radians does not fail loudly - it produces a robot whose joints have
 /// 57x the intended range, which looks like a robot that can bend its knee backwards. Read
 /// from `<compiler angle="...">` and applied to every angular quantity: joint ranges, `euler`,
 /// and `axisangle`'s angle (but NOT its axis).
@@ -538,22 +538,22 @@ pub const Compiler = struct {
 
 /// Read an element's orientation, whichever of MJCF's five spellings it used.
 ///
-/// ── ★ FIVE WAYS TO SAY THE SAME THING, and real models use four of them ──
+/// -- * FIVE WAYS TO SAY THE SAME THING, and real models use four of them --
 ///
 /// Counted across MuJoCo's own model directory: `euler` 184 times, `zaxis` 37, `xyaxes` 15,
-/// `quat` 4. A reader that handles only `quat` — the one a programmer would design — would
+/// `quat` 4. A reader that handles only `quat` - the one a programmer would design - would
 /// silently mis-orient the overwhelming majority of real elements, because a missing
 /// orientation attribute is indistinguishable from an identity one.
 ///
 /// The five, and what each means:
 ///
-///   * `quat="w x y z"` — MuJoCo's order is W FIRST, zm's is w last. Reversing this is a
+///   * `quat="w x y z"` - MuJoCo's order is W FIRST, zm's is w last. Reversing this is a
 ///     rotation that looks almost right, which is the worst kind of wrong.
-///   * `euler="a b c"` — intrinsic rotations about the axes named by `eulerseq`, in the
+///   * `euler="a b c"` - intrinsic rotations about the axes named by `eulerseq`, in the
 ///     file's angle unit.
-///   * `axisangle="x y z a"` — an axis (never converted) and an angle (always converted).
-///   * `zaxis="x y z"` — the rotation taking +Z to this direction, by the shortest path.
-///   * `xyaxes="x1 y1 z1 x2 y2 z2"` — the first two columns of the rotation matrix; the
+///   * `axisangle="x y z a"` - an axis (never converted) and an angle (always converted).
+///   * `zaxis="x y z"` - the rotation taking +Z to this direction, by the shortest path.
+///   * `xyaxes="x1 y1 z1 x2 y2 z2"` - the first two columns of the rotation matrix; the
 ///     third is their cross product. The Y column is re-orthogonalised against X because
 ///     files state it approximately.
 pub fn readOrientation(
@@ -581,7 +581,7 @@ fn orientationFrom(
     if (comptime std.mem.eql(u8, name, "quat")) {
         var v: [4]f32 = undefined;
         try readFloats(text, &v);
-        // ★ MuJoCo stores (w, x, y, z); zm stores (x, y, z, w).
+        // * MuJoCo stores (w, x, y, z); zm stores (x, y, z, w).
         return normalizeQuat(Quat{ v[1], v[2], v[3], v[0] });
     }
     if (comptime std.mem.eql(u8, name, "euler")) {
@@ -663,9 +663,9 @@ fn resolveVec(
     return vec(v[0], v[1], v[2]);
 }
 
-/// An orientation, resolved through the class chain — all five spellings.
+/// An orientation, resolved through the class chain - all five spellings.
 ///
-/// ★ THE SPELLINGS ARE MUTUALLY EXCLUSIVE AND CHECKED IN PRIORITY ORDER, so a class stating
+/// * THE SPELLINGS ARE MUTUALLY EXCLUSIVE AND CHECKED IN PRIORITY ORDER, so a class stating
 /// `euler` cannot be half-overridden by an element stating `quat`: the first spelling that
 /// resolves wins outright, exactly as `readOrientation` does for a bare element.
 fn resolveOrientation(
@@ -686,7 +686,7 @@ fn resolveOrientation(
 /// Read exactly `out.len` whitespace-separated floats.
 /// Read as many numbers as are present, leaving the rest untouched.
 ///
-/// ★ SHORTER IS LEGAL FOR A COEFFICIENT LIST, where the omitted terms mean zero — `polycoef`
+/// * SHORTER IS LEGAL FOR A COEFFICIENT LIST, where the omitted terms mean zero - `polycoef`
 /// is usually written `"0 -1"` rather than `"0 -1 0 0 0"`. `readFloats` is the strict form and
 /// stays that way: a `pos` with two numbers is a mistake, not an abbreviation, and the two
 /// cases must not share a reader.
@@ -707,13 +707,13 @@ fn readFloats(text: []const u8, out: []f32) !void {
 }
 
 test "mjcf: every orientation spelling, against quaternions MuJoCo itself reports" {
-    // ★★ THE NUMBERS BELOW CAME FROM MuJoCo 3.11.0, one `from_xml_string` per row, not from
+    // ** THE NUMBERS BELOW CAME FROM MuJoCo 3.11.0, one `from_xml_string` per row, not from
     // deriving what they ought to be. Orientation is where a reader is quietly wrong: a
     // rotation built with the wrong quaternion order, or degrees read as radians, produces a
     // model that looks plausible and is bent.
     //
     // Counted across MuJoCo's own model directory: `euler` appears 184 times, `zaxis` 37,
-    // `xyaxes` 15, `quat` 4. Handling only `quat` — the one a programmer would design for —
+    // `xyaxes` 15, `quat` 4. Handling only `quat` - the one a programmer would design for -
     // would mis-orient almost every real element.
     const gpa: Allocator = std.testing.allocator;
     const Case = struct {
@@ -764,9 +764,9 @@ test "mjcf: every orientation spelling, against quaternions MuJoCo itself report
 }
 
 test "mjcf: degrees are the default, and the humanoid proves it" {
-    // ★ THE TRAP. `humanoid.xml` says `range="-30 10"` on class `hip_x`; MuJoCo's built model
+    // * THE TRAP. `humanoid.xml` says `range="-30 10"` on class `hip_x`; MuJoCo's built model
     // reports `[-0.5236, 0.1745]` radians. A reader assuming radians gives that joint 57x the
-    // range it should have, which does not fail — it produces a knee that bends backwards.
+    // range it should have, which does not fail - it produces a knee that bends backwards.
     try expectApproxEqAbs(
         @as(f32, -0.5236),
         AngleUnit.degree.toRadians(-30.0),
@@ -790,7 +790,7 @@ test "mjcf: degrees are the default, and the humanoid proves it" {
 
 /// One body of the parsed tree, in MJCF's own terms.
 ///
-/// A faithful reading of the file, not yet a `robot.Model` — the same split `urdf.zig` uses,
+/// A faithful reading of the file, not yet a `robot.Model` - the same split `urdf.zig` uses,
 /// so the conversion to engine types is one reviewable step rather than being tangled through
 /// the parser.
 pub const Body = struct {
@@ -844,7 +844,7 @@ pub const Geom = struct {
     mesh: []const u8 = "",
     /// Filled by `resolveMeshes`: the point cloud whose convex hull this geom collides as.
     ///
-    /// ★ A CLOUD, NOT A BUILT HULL — the same call `urdf.zig` makes and for the same reason:
+    /// * A CLOUD, NOT A BUILT HULL - the same call `urdf.zig` makes and for the same reason:
     /// `robot.zig` depends only on `zimrmath` and has no hull builder, so the engine takes
     /// points and zimrphysics builds the hull when it makes the proxy.
     hull: []const Vec = &.{},
@@ -853,16 +853,16 @@ pub const Geom = struct {
 pub const Robot = struct {
     /// Owns every slice below.
     ///
-    /// ── ★★★ A POINTER, AND NOT AS A STYLE CHOICE ──
+    /// -- *** A POINTER, AND NOT AS A STYLE CHOICE --
     ///
     /// An `ArenaAllocator` is NOT movable once an `Allocator` has been taken from it: that
     /// allocator holds the arena struct's ADDRESS. Building into a stack-local arena and then
     /// returning the struct by value leaves every `Allocator` handed out during construction
-    /// pointing at a dead frame — and `robot.zig` says exactly this, in the comment on
+    /// pointing at a dead frame - and `robot.zig` says exactly this, in the comment on
     /// `Model.arena`. These two functions did it anyway.
     ///
-    /// ★ THE SYMPTOM WAS ABSURDLY INDIRECT: a 3324-byte leak, reported only in ReleaseSafe,
-    /// only for the one fixture whose parse happened to grow the arena past a second buffer —
+    /// * THE SYMPTOM WAS ABSURDLY INDIRECT: a 3324-byte leak, reported only in ReleaseSafe,
+    /// only for the one fixture whose parse happened to grow the arena past a second buffer -
     /// because a single-buffer arena survives the move by luck and a two-buffer one does not.
     /// It cost most of two sessions, and the answer was written down in another file the whole
     /// time.
@@ -877,14 +877,14 @@ pub const Robot = struct {
     /// Body pairs that must never collide, from `<contact><exclude body1="" body2=""/>` - MuJoCo's way to
     /// spare two bodies that are NOT adjacent (adjacent ones are spared anyway) but overlap by design.
     excludes: []const Exclude = &.{},
-    /// `<asset>`'s meshes, by the name geoms refer to them by. The vertices are NOT loaded —
+    /// `<asset>`'s meshes, by the name geoms refer to them by. The vertices are NOT loaded -
     /// see `MeshAsset`.
     meshes: []MeshAsset,
     /// `<sensor>` entries this engine can compute; the rest are skipped.
     sensors: []Sensor,
     /// Named frames instruments are mounted on. See `Site`.
     sites: []Site,
-    /// Loop closures — `<equality type="connect">`. See `Equality`.
+    /// Loop closures - `<equality type="connect">`. See `Equality`.
     equalities: []Equality,
 
     pub fn deinit(self: *Robot) void {
@@ -896,9 +896,9 @@ pub const Robot = struct {
 
 /// Read the whole `<worldbody>` tree, resolving every default as it goes.
 ///
-/// ── ★ `doc` AND ITS SOURCE MUST OUTLIVE THE RETURNED `Robot` ──
+/// -- * `doc` AND ITS SOURCE MUST OUTLIVE THE RETURNED `Robot` --
 ///
-/// Every name in the result — body names, joint names, the mesh an actuator refers to — is a
+/// Every name in the result - body names, joint names, the mesh an actuator refers to - is a
 /// slice INTO the file's bytes, as everywhere else in `codecs`. The `Robot`'s arena owns the
 /// arrays, not the strings in them.
 ///
@@ -907,7 +907,7 @@ pub const Robot = struct {
 /// surfaces as a garbled error message months later. In practice the source is an `@embedFile`
 /// and outlives everything, which is exactly why the requirement is easy to forget.
 pub fn readRobot(gpa: Allocator, doc: *const codecs.xml.Document) Error!Robot {
-    // ★ HEAP-ALLOCATED SO ITS ADDRESS SURVIVES THE RETURN — see `Robot.arena`.
+    // * HEAP-ALLOCATED SO ITS ADDRESS SURVIVES THE RETURN - see `Robot.arena`.
     const arena: *std.heap.ArenaAllocator = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
@@ -933,8 +933,8 @@ pub fn readRobot(gpa: Allocator, doc: *const codecs.xml.Document) Error!Robot {
         }
     }
 
-    // ★ SITES AND BODIES ARE OWNED FIRST, because `<equality>`'s site form resolves against
-    // both — `site1`/`site2` name points whose BODIES are what the closure actually ties.
+    // * SITES AND BODIES ARE OWNED FIRST, because `<equality>`'s site form resolves against
+    // both - `site1`/`site2` name points whose BODIES are what the closure actually ties.
     const owned_bodies: []Body = try bodies.toOwnedSlice(a);
     const owned_sites: []Site = try sites.toOwnedSlice(a);
 
@@ -973,9 +973,9 @@ fn readBody(
         return Error.DefaultsTooDeep;
     }
 
-    // ★ `childclass` SETS THE DEFAULT CLASS FOR EVERYTHING BELOW, not just this body.
+    // * `childclass` SETS THE DEFAULT CLASS FOR EVERYTHING BELOW, not just this body.
     // `humanoid.xml` opens with `<body name="torso" childclass="body">` and then states
-    // almost nothing on its geoms for the rest of the file — every one of them inherits
+    // almost nothing on its geoms for the rest of the file - every one of them inherits
     // through this. A reader that treats `childclass` as applying only to the body it sits on
     // gets geoms with no type and no size.
     const child_class: []const u8 = doc.attribute(element, "childclass") orelse inherited_class;
@@ -998,7 +998,7 @@ fn readBody(
             try joints.append(a, try readJoint(doc, child, child_class, defaults, compiler));
             joint_count += 1;
         } else if (std.mem.eql(u8, child.name, "freejoint")) {
-            // Shorthand for `<joint type="free"/>`, and it takes no other attributes —
+            // Shorthand for `<joint type="free"/>`, and it takes no other attributes -
             // a free joint has no axis, no range and no anchor to state.
             try joints.append(a, .{
                 .name = doc.attribute(child, "name") orelse "",
@@ -1009,8 +1009,8 @@ fn readBody(
             try geoms.append(a, try readGeom(doc, child, child_class, defaults, compiler));
             geom_count += 1;
         } else if (std.mem.eql(u8, child.name, "site")) {
-            // ★ SITES CARRY THE SAME FIVE ORIENTATION SPELLINGS as bodies and geoms, so they
-            // go through `readOrientation` rather than reading `quat` directly — a site given
+            // * SITES CARRY THE SAME FIVE ORIENTATION SPELLINGS as bodies and geoms, so they
+            // go through `readOrientation` rather than reading `quat` directly - a site given
             // `euler` or `zaxis` is perfectly legal and reasonably common on sensor mounts.
             try sites.append(a, .{
                 .name = doc.attribute(child, "name") orelse "",
@@ -1071,8 +1071,8 @@ fn readJoint(
     if (defaults.resolve(use, .joint, "range", doc.attribute(element, "range"))) |text| {
         var v: [2]f32 = undefined;
         try readFloats(text, &v);
-        // ★ ANGULAR JOINTS CONVERT, SLIDERS DO NOT. A slide joint's range is in metres and
-        // running it through a degree conversion would shrink it by 57 — the same trap as
+        // * ANGULAR JOINTS CONVERT, SLIDERS DO NOT. A slide joint's range is in metres and
+        // running it through a degree conversion would shrink it by 57 - the same trap as
         // reading radians for degrees, in the opposite direction.
         self.range = switch (self.kind) {
             .slide => .{ v[0], v[1] },
@@ -1096,11 +1096,11 @@ fn readGeom(
     const use: []const u8 = own orelse class;
     var self: Geom = .{ .name = doc.attribute(element, "name") orelse "" };
 
-    // ★★ AN EXPLICIT `type` WINS OVER AN INHERITED `mesh`, and the order matters.
+    // ** AN EXPLICIT `type` WINS OVER AN INHERITED `mesh`, and the order matters.
     //
     // These two used to be applied in sequence, with `mesh` overwriting the kind
     // unconditionally. That is wrong whenever a class carries a mesh and a geom states its
-    // own shape — a collision capsule inside a class whose visuals are meshes becomes a mesh,
+    // own shape - a collision capsule inside a class whose visuals are meshes becomes a mesh,
     // and since this importer cannot build meshes it is then SKIPPED. The robot keeps every
     // body and every name and quietly loses the collision geometry that made it solid.
     //
@@ -1122,7 +1122,7 @@ fn readGeom(
             slot.* = std.fmt.parseFloat(f32, token) catch return Error.MalformedNumberList;
         }
     }
-    // ★★ POSITION AND ORIENTATION RESOLVE THROUGH THE CLASS TOO, and missing that put every
+    // ** POSITION AND ORIENTATION RESOLVE THROUGH THE CLASS TOO, and missing that put every
     // one of the Go1's feet in the wrong place.
     //
     // These two read straight from the ELEMENT, skipping the default machinery that every
@@ -1132,7 +1132,7 @@ fn readGeom(
     //       <geom type="sphere" size="0.023" pos="0 0 -0.213" .../>
     //     </default>
     //
-    // — the offset to the ankle lives in the CLASS. Dropped, each foot collapsed onto its
+    // - the offset to the ankle lives in the CLASS. Dropped, each foot collapsed onto its
     // calf's origin, 21 cm above where it belongs. The robot then stood on its SHINS, which
     // still looks like a robot standing.
     //
@@ -1141,8 +1141,8 @@ fn readGeom(
     self.pos = try resolveVec(defaults, use, .geom, "pos", doc.attribute(element, "pos"));
     self.rot = try resolveOrientation(doc, element, use, defaults, compiler);
 
-    // ★ `fromto` REPLACES pos, orientation AND half-length in one attribute, and it is how
-    // real models are written — `humanoid.xml` uses it 14 times against 12 plain `size`s.
+    // * `fromto` REPLACES pos, orientation AND half-length in one attribute, and it is how
+    // real models are written - `humanoid.xml` uses it 14 times against 12 plain `size`s.
     // Two endpoints of a capsule's or cylinder's AXIS: the centre is their midpoint, the
     // rotation takes +Z along the segment, and the half-length is half its length. Ignore it
     // and the geom collapses to a zero-length capsule at the body origin.
@@ -1197,7 +1197,7 @@ fn readVec(
 }
 
 test "mjcf: the humanoid's body tree matches what MuJoCo builds" {
-    // ★★ THE ACCEPTANCE TEST FOR TURN 7, against a live MuJoCo 3.11.0 rather than a reading
+    // ** THE ACCEPTANCE TEST FOR TURN 7, against a live MuJoCo 3.11.0 rather than a reading
     // of the spec. For `humanoid.xml` it reports nbody=17 (16 plus the world), njnt=22,
     // nq=28, nv=27, and the parent/position table checked below.
     const gpa: Allocator = std.testing.allocator;
@@ -1211,7 +1211,7 @@ test "mjcf: the humanoid's body tree matches what MuJoCo builds" {
     try expectEqual(@as(usize, 16), robot.bodies.len);
     try expectEqual(@as(usize, 22), robot.joints.len);
 
-    // ── the tree shape, as MuJoCo reports it (its ids are ours + 1) ──
+    // -- the tree shape, as MuJoCo reports it (its ids are ours + 1) --
     const Expect = struct { name: []const u8, parent: ?u32, pos: [3]f32 };
     const expected = [_]Expect{
         .{ .name = "torso", .parent = null, .pos = .{ 0, 0, 1.282 } },
@@ -1231,11 +1231,11 @@ test "mjcf: the humanoid's body tree matches what MuJoCo builds" {
         }
     }
 
-    // ── ★ THE FREE JOINT, and it is written `<freejoint/>` rather than `type="free"` ──
+    // -- * THE FREE JOINT, and it is written `<freejoint/>` rather than `type="free"` --
     try expectEqual(JointType.free, robot.joints[0].kind);
     try expectEqualStrings("root", robot.joints[0].name);
 
-    // ── ★ A RANGE THAT CAME THROUGH A CLASS, IN DEGREES ──
+    // -- * A RANGE THAT CAME THROUGH A CLASS, IN DEGREES --
     // `hip_x_right` states only `class="hip_x"`; the class says `range="-30 10"`, and MuJoCo
     // reports [-0.5236, 0.1745] radians. Both the inheritance and the unit conversion have to
     // be right for this one line to pass.
@@ -1250,7 +1250,7 @@ test "mjcf: the humanoid's body tree matches what MuJoCo builds" {
     try expectApproxEqAbs(@as(f32, -0.5236), hip_x_right.?.range.?[0], 1.0e-4);
     try expectApproxEqAbs(@as(f32, 0.1745), hip_x_right.?.range.?[1], 1.0e-4);
 
-    // ── ★ A GEOM WHOSE TYPE AND FRICTION CAME FROM A CLASS TWO LEVELS UP ──
+    // -- * A GEOM WHOSE TYPE AND FRICTION CAME FROM A CLASS TWO LEVELS UP --
     // MuJoCo reports geom_friction[1] = [0.7, ...] and type capsule for `torso`.
     var torso_geom: ?Geom = null;
     for (robot.geoms) |geom| {
@@ -1264,7 +1264,7 @@ test "mjcf: the humanoid's body tree matches what MuJoCo builds" {
 }
 
 test "mjcf: fromto places and orients a capsule, and sets its half-length" {
-    // ★ `fromto` IS HOW REAL MODELS ARE WRITTEN — 14 uses against 12 plain sizes in
+    // * `fromto` IS HOW REAL MODELS ARE WRITTEN - 14 uses against 12 plain sizes in
     // `humanoid.xml`. It replaces position, orientation AND half-length at once, so a reader
     // that ignores it produces a zero-length capsule sitting at the body origin: present in
     // the model, invisible in the world, and contributing no collision.
@@ -1293,7 +1293,7 @@ test "mjcf: fromto places and orients a capsule, and sets its half-length" {
 }
 
 test "mjcf: childclass reaches every descendant, not just the body that states it" {
-    // ★ `humanoid.xml` opens `<body name="torso" childclass="body">` and then states almost
+    // * `humanoid.xml` opens `<body name="torso" childclass="body">` and then states almost
     // nothing on the geoms for the rest of the file. Treating `childclass` as applying only
     // to the body it sits on gives every one of those geoms no type and no size.
     const gpa: Allocator = std.testing.allocator;
@@ -1322,16 +1322,16 @@ test "mjcf: childclass reaches every descendant, not just the body that states i
 }
 
 // =============================================================================
-// Actuators, sensors and keyframes — turn 8
+// Actuators, sensors and keyframes - turn 8
 // =============================================================================
 
 /// What kind of controller MJCF wraps around a joint.
 ///
-/// ── ★ WHY THIS IS THE REASON TO READ MJCF AT ALL ──
+/// -- * WHY THIS IS THE REASON TO READ MJCF AT ALL --
 ///
 /// URDF stops at the linkage. It says a knee exists and how it bends, and nothing about what
 /// drives it. MJCF states the transmission: this joint is driven by a motor with a gear ratio
-/// of 80, a control range of ±1, and a force limit. A quadruped imported from URDF is a shape
+/// of 80, a control range of +/-1, and a force limit. A quadruped imported from URDF is a shape
 /// that falls over; the same quadruped from MJCF has legs that can push.
 pub const ActuatorKind = enum {
     /// Direct force: `force = gear * ctrl`.
@@ -1347,9 +1347,9 @@ pub const Actuator = struct {
     kind: ActuatorKind = .motor,
     /// The joint this drives, by name. Resolved to an index when the model is built.
     joint: []const u8,
-    /// ★ GEAR IS A TRANSMISSION RATIO, NOT A LIMIT. `humanoid.xml` gives its knee `gear="80"`
-    /// and a `ctrlrange` of ±1, so `ctrl = 1` means 80 N·m. Reading gear as a maximum torque
-    /// and ignoring it gives a robot whose knees produce 1 N·m — indistinguishable from a
+    /// * GEAR IS A TRANSMISSION RATIO, NOT A LIMIT. `humanoid.xml` gives its knee `gear="80"`
+    /// and a `ctrlrange` of +/-1, so `ctrl = 1` means 80 N*m. Reading gear as a maximum torque
+    /// and ignoring it gives a robot whose knees produce 1 N*m - indistinguishable from a
     /// robot with no actuators, because it simply collapses.
     gear: f32 = 1.0,
     /// Range of the control signal.
@@ -1363,9 +1363,9 @@ pub const Actuator = struct {
 
 /// A named pose the model can be reset to.
 ///
-/// ★ THE THING THAT MAKES A LEGGED ROBOT USABLE. A quadruped dropped at its zero pose is a
+/// * THE THING THAT MAKES A LEGGED ROBOT USABLE. A quadruped dropped at its zero pose is a
 /// tangle of straight legs that falls over before a controller can do anything. `humanoid.xml`
-/// ships four — `squat`, `stand_on_left_leg`, `prone`, `supine` — and Menagerie models almost
+/// ships four - `squat`, `stand_on_left_leg`, `prone`, `supine` - and Menagerie models almost
 /// always ship a `home`. Starting from one is the difference between debugging a controller
 /// and debugging a fall.
 /// One `<contact><exclude>`: two bodies, by name, that never collide.
@@ -1394,8 +1394,8 @@ pub fn readActuators(
 
     for (doc.childrenOf(block)) |*child| {
         const kind: ActuatorKind = std.meta.stringToEnum(ActuatorKind, child.name) orelse continue;
-        // An actuator's defaults live under its own tag — `<motor>` settings do not apply to
-        // a `<position>` — which is why `Kind` mirrors the tag names.
+        // An actuator's defaults live under its own tag - `<motor>` settings do not apply to
+        // a `<position>` - which is why `Kind` mirrors the tag names.
         const dk: Kind = switch (kind) {
             .motor => .motor,
             .position => .position,
@@ -1468,7 +1468,7 @@ fn readExcludes(
     return out.toOwnedSlice(a);
 }
 
-/// Read however many floats an attribute holds — the count is the model's business, not
+/// Read however many floats an attribute holds - the count is the model's business, not
 /// this reader's, and a keyframe legitimately states a different number per model.
 fn readFloatList(a: Allocator, text: ?[]const u8) Error![]const f32 {
     const source: []const u8 = text orelse return &.{};
@@ -1481,7 +1481,7 @@ fn readFloatList(a: Allocator, text: ?[]const u8) Error![]const f32 {
 }
 
 test "mjcf: the humanoid's actuators and keyframes match MuJoCo" {
-    // ★★ THIS IS WHY MJCF IS WORTH READING AT ALL. URDF says a knee exists and how it bends;
+    // ** THIS IS WHY MJCF IS WORTH READING AT ALL. URDF says a knee exists and how it bends;
     // MJCF says what drives it. MuJoCo reports nu=21 and nkey=4 for this file, with the gear
     // ratios asserted below.
     const gpa: Allocator = std.testing.allocator;
@@ -1493,10 +1493,10 @@ test "mjcf: the humanoid's actuators and keyframes match MuJoCo" {
 
     try expectEqual(@as(usize, 21), robot.actuators.len);
 
-    // ── ★ GEAR VARIES PER JOINT, AND BY SIX TIMES ACROSS THIS ROBOT ──
-    // A knee needs 80 N·m where an ankle needs 20 and a hip 120. Reading `gear` as anything
-    // other than a transmission ratio — or ignoring it, since `ctrlrange` is ±1 everywhere —
-    // gives every joint 1 N·m, which is indistinguishable from having no actuators.
+    // -- * GEAR VARIES PER JOINT, AND BY SIX TIMES ACROSS THIS ROBOT --
+    // A knee needs 80 N*m where an ankle needs 20 and a hip 120. Reading `gear` as anything
+    // other than a transmission ratio - or ignoring it, since `ctrlrange` is +/-1 everywhere -
+    // gives every joint 1 N*m, which is indistinguishable from having no actuators.
     const Want = struct { name: []const u8, gear: f32 };
     const wanted = [_]Want{
         .{ .name = "abdomen_z", .gear = 40 },
@@ -1523,7 +1523,7 @@ test "mjcf: the humanoid's actuators and keyframes match MuJoCo" {
         try expectApproxEqAbs(@as(f32, 1.0), found.?.ctrl_range.?[1], 1.0e-5);
     }
 
-    // ── ★ FOUR NAMED POSES, and this is what makes a legged robot testable ──
+    // -- * FOUR NAMED POSES, and this is what makes a legged robot testable --
     // A humanoid dropped at its zero pose is a tangle of straight limbs that falls before a
     // controller can act. MuJoCo reports nq=28, and `squat`'s qpos has exactly that many
     // numbers with the torso at z = 0.596.
@@ -1535,9 +1535,9 @@ test "mjcf: the humanoid's actuators and keyframes match MuJoCo" {
 }
 
 test "mjcf: actuator defaults do not leak between kinds" {
-    // ★ A `<motor>` default block must not configure a `<position>` servo. They are different
-    // transmissions with different meanings for the same attribute names — `kp` on a position
-    // servo is a gain, and a motor has none — so sharing a default set would silently give
+    // * A `<motor>` default block must not configure a `<position>` servo. They are different
+    // transmissions with different meanings for the same attribute names - `kp` on a position
+    // servo is a gain, and a motor has none - so sharing a default set would silently give
     // one the other's numbers.
     const gpa: Allocator = std.testing.allocator;
     const source: []const u8 =
@@ -1569,13 +1569,13 @@ test "mjcf: actuator defaults do not leak between kinds" {
     try expectEqual(ActuatorKind.position, position.kind);
     try expectApproxEqAbs(@as(f32, 200.0), position.kp, 1.0e-5);
     try expectApproxEqAbs(@as(f32, -3.0), position.ctrl_range.?[0], 1.0e-5);
-    // ★ The position servo did NOT pick up the motor's gear of 40.
+    // * The position servo did NOT pick up the motor's gear of 40.
     try expectApproxEqAbs(@as(f32, 1.0), position.gear, 1.0e-5);
 }
 
 test "mjcf: an explicit geom type beats a mesh inherited from its class" {
-    // ★★ THE FAILURE THIS PREVENTS IS INVISIBLE. A class that carries a mesh — every real
-    // model has one for visuals — used to force `kind = .mesh` on any geom inside it, even a
+    // ** THE FAILURE THIS PREVENTS IS INVISIBLE. A class that carries a mesh - every real
+    // model has one for visuals - used to force `kind = .mesh` on any geom inside it, even a
     // geom that stated its own shape. Since this importer cannot build meshes, that geom is
     // then SKIPPED at conversion: the robot keeps every body, every joint and every name, and
     // quietly loses the collision shape that made it solid.
@@ -1611,12 +1611,12 @@ test "mjcf: an explicit geom type beats a mesh inherited from its class" {
     try expectEqual(GeomType.mesh, robot.geoms[0].kind);
     try expectEqualStrings("shell", robot.geoms[0].mesh);
 
-    // ★ A CHILD CLASS OVERRIDING THE TYPE. It still inherits `mesh` — MJCF's inheritance is
-    // field by field — but the nearer `type` is the one that counts.
+    // * A CHILD CLASS OVERRIDING THE TYPE. It still inherits `mesh` - MJCF's inheritance is
+    // field by field - but the nearer `type` is the one that counts.
     try expectEqual(GeomType.capsule, robot.geoms[1].kind);
     try expectEqualStrings("shell", robot.geoms[1].mesh);
 
-    // ★ And a type stated on the element itself, over a class that says mesh.
+    // * And a type stated on the element itself, over a class that says mesh.
     try expectEqual(GeomType.box, robot.geoms[2].kind);
 }
 
@@ -1639,16 +1639,16 @@ test "mjcf: a mesh with no type still comes out as a mesh" {
 
 /// A body's stated mass properties, if it gives any.
 ///
-/// ── ★★ WHY THIS MATTERS MORE THAN IT LOOKS ──
+/// -- ** WHY THIS MATTERS MORE THAN IT LOOKS --
 ///
 /// Without it a body's mass comes from its COLLISION GEOMS, which are deliberately simplified
-/// — capsules and boxes standing in for machined parts. Measured on the Go1, whose every body
+/// - capsules and boxes standing in for machined parts. Measured on the Go1, whose every body
 /// states an `<inertial>`:
 ///
 /// | body | stated | derived from geoms | error |
 /// |---|---|---|---|
 /// | trunk | 5.2040 kg | 7.9507 kg | +53% |
-/// | FR_thigh | 1.0090 kg | 0.2592 kg | −74% |
+/// | FR_thigh | 1.0090 kg | 0.2592 kg | -74% |
 ///
 /// The inertia tensors are worse: the trunk's principal moments come out in a different
 /// ORDER, so the simulated body is heaviest about a different axis than the real one. A robot
@@ -1665,14 +1665,14 @@ pub const Inertial = struct {
 
 /// Read a body's `<inertial>`, in either of MJCF's two spellings.
 ///
-/// ★ MJCF OFFERS `fullinertia` OR `diaginertia`+orientation, and real files use the second:
+/// * MJCF OFFERS `fullinertia` OR `diaginertia`+orientation, and real files use the second:
 /// a CAD tool produces principal moments and the rotation that diagonalises them, which is
 /// what `<inertial pos=... quat=... mass=... diaginertia=.../>` records. Supporting only
-/// `fullinertia` would read every Menagerie model as having no stated inertia at all — a
+/// `fullinertia` would read every Menagerie model as having no stated inertia at all - a
 /// silent fallback to the geom-derived numbers, which is the failure this exists to prevent.
 ///
-/// The conversion is `I = R · diag(d) · Rᵀ`, and it is done here rather than in the engine so
-/// that `InertialSpec` keeps carrying one representation (§1: no eigendecomposition, no
+/// The conversion is `I = R * diag(d) * R^T`, and it is done here rather than in the engine so
+/// that `InertialSpec` keeps carrying one representation (section 1: no eigendecomposition, no
 /// degenerate-eigenvalue cases).
 pub fn readInertial(
     doc: *const codecs.xml.Document,
@@ -1700,13 +1700,13 @@ pub fn readInertial(
     if (doc.attribute(element, "diaginertia")) |text| {
         var d: [3]f32 = undefined;
         try readFloats(text, &d);
-        // The orientation of the principal axes, in whichever spelling the file used — the
+        // The orientation of the principal axes, in whichever spelling the file used - the
         // same five `readOrientation` already handles, since `<inertial>` takes them all.
         const rot: Quat = try readOrientation(doc, element, compiler);
         const x: Vec = zm.rotate(rot, vec(1, 0, 0));
         const y: Vec = zm.rotate(rot, vec(0, 1, 0));
         const z: Vec = zm.rotate(rot, vec(0, 0, 1));
-        // I = R·diag(d)·Rᵀ, written out: each column of R scaled by its moment, then
+        // I = R*diag(d)*R^T, written out: each column of R scaled by its moment, then
         // recombined. Only six of the nine entries are independent.
         inline for (0..3) |r| {
             inline for (r..3) |c| {
@@ -1729,9 +1729,9 @@ pub fn readInertial(
 
 /// One entry of `<asset>`: a mesh the model refers to by name.
 ///
-/// ── ★ WHY THE FILE IS NOT LOADED HERE ──
+/// -- * WHY THE FILE IS NOT LOADED HERE --
 ///
-/// `mjcf.zig` reads a document and knows nothing about disks — the same split `urdf.zig` uses,
+/// `mjcf.zig` reads a document and knows nothing about disks - the same split `urdf.zig` uses,
 /// and the reason both are testable from a string literal with no fixture directory. The
 /// caller resolves `file` against `meshdir` and hands the vertices back, exactly as
 /// `urdf.resolveMeshes` does.
@@ -1757,7 +1757,7 @@ pub fn readMeshAssets(a: Allocator, doc: *const codecs.xml.Document) Error![]Mes
         }
         const file: []const u8 = doc.attribute(child, "file") orelse continue;
         var self: MeshAsset = .{
-            // ★ THE NAME DEFAULTS TO THE FILE'S STEM, and every Menagerie model depends on it.
+            // * THE NAME DEFAULTS TO THE FILE'S STEM, and every Menagerie model depends on it.
             // `<mesh file="trunk.stl"/>` is referred to as `mesh="trunk"`; requiring an
             // explicit `name` would leave every geom pointing at an asset that does not exist.
             .name = doc.attribute(child, "name") orelse stemOf(file),
@@ -1785,8 +1785,8 @@ fn stemOf(path: []const u8) []const u8 {
 }
 
 test "mjcf: mesh assets, with names defaulting to the file stem" {
-    // ★ EVERY MENAGERIE MODEL DEPENDS ON THE DEFAULT. The Go1 writes
-    // `<mesh class="go1" file="trunk.stl"/>` and then refers to it as `mesh="trunk"` — the
+    // * EVERY MENAGERIE MODEL DEPENDS ON THE DEFAULT. The Go1 writes
+    // `<mesh class="go1" file="trunk.stl"/>` and then refers to it as `mesh="trunk"` - the
     // name is never stated. Requiring one would leave every geom pointing at an asset that
     // does not exist, and the robot would import with no collision geometry at all.
     const gpa: Allocator = std.testing.allocator;
@@ -1801,15 +1801,15 @@ test "mjcf: mesh assets, with names defaulting to the file stem" {
     try expectEqualStrings("trunk.stl", robot.meshes[0].file);
     try expectEqualStrings("thigh_mirror", robot.meshes[2].name);
 
-    // ★ AND `meshdir`, which is where those files actually live. Resolving against the model's
-    // own directory instead — the obvious guess — misses every one of them.
+    // * AND `meshdir`, which is where those files actually live. Resolving against the model's
+    // own directory instead - the obvious guess - misses every one of them.
     try expectEqualStrings("assets", robot.compiler.mesh_dir);
 
     // The Go1 states `angle="radian"`, unlike the humanoid, so the compiler read has to be
     // per-file rather than assumed.
     try expectEqual(AngleUnit.radian, robot.compiler.angle);
 
-    // Every geom naming a mesh resolves to one of these assets — the check that would have
+    // Every geom naming a mesh resolves to one of these assets - the check that would have
     // caught a stem-vs-name mismatch.
     for (robot.geoms) |geom| {
         if (geom.mesh.len == 0) {
@@ -1830,12 +1830,12 @@ test "mjcf: mesh assets, with names defaulting to the file stem" {
 
 /// Load every mesh a geom refers to, reducing each to a convex point cloud.
 ///
-/// ── ★ THE CALLBACK, RATHER THAN A PATH ──
+/// -- * THE CALLBACK, RATHER THAN A PATH --
 ///
 /// `mjcf.zig` never touches a disk: `load` is handed a filename already resolved against
 /// `meshdir` and returns the file's bytes, or null if it cannot be read. That is what keeps
 /// this module testable from a string literal, and it is the same seam `urdf.resolveMeshes`
-/// uses — a caller that already has an STL reader wires the two together in a few lines.
+/// uses - a caller that already has an STL reader wires the two together in a few lines.
 ///
 /// A mesh that fails to load leaves its geom with an empty hull rather than failing the
 /// import. Real models refer to visual assets that a headless caller has no reason to ship,
@@ -1860,7 +1860,7 @@ pub fn resolveMeshes(
         } else continue;
 
         const vertices: []const f32 = load(context, asset.file) orelse continue;
-        // ★ SCALE IS APPLIED BEFORE THE HULL IS REDUCED, not after. Reducing first and scaling
+        // * SCALE IS APPLIED BEFORE THE HULL IS REDUCED, not after. Reducing first and scaling
         // the survivors would be the same for a uniform scale and wrong for a per-axis one:
         // the support points of a stretched shape are not the stretched support points of the
         // original.
@@ -1879,7 +1879,7 @@ pub fn resolveMeshes(
 
 /// A named point on a body.
 ///
-/// ★ SITES EXIST TO BE MEASURED FROM. A geom is collision or visual; a site is neither — it is
+/// * SITES EXIST TO BE MEASURED FROM. A geom is collision or visual; a site is neither - it is
 /// a frame you attach an instrument to, and every frame-relative sensor names one. Reading
 /// them is therefore a prerequisite for reading sensors at all, which is why they arrive in
 /// the same change.
@@ -1893,11 +1893,11 @@ pub const Site = struct {
 
 /// What a `<sensor>` entry reads.
 ///
-/// ── ★ MJCF NAMES SENSORS BY TAG, NOT BY AN ATTRIBUTE ──
+/// -- * MJCF NAMES SENSORS BY TAG, NOT BY AN ATTRIBUTE --
 ///
 /// `<jointpos joint="x"/>` and `<framepos objtype="site" objname="x"/>` are different
 /// ELEMENTS, where actuators are `<motor>`/`<position>`/`<velocity>` distinguished the same
-/// way. So the tag is the kind, and the attribute that names the target changes with it —
+/// way. So the tag is the kind, and the attribute that names the target changes with it -
 /// `joint`, `site`, `actuator`, or the `objtype`/`objname` pair.
 pub const SensorKind = enum {
     joint_pos,
@@ -1941,8 +1941,8 @@ pub const Sensor = struct {
 
 /// Read the `<sensor>` block.
 ///
-/// ★ AN UNRECOGNISED SENSOR IS SKIPPED, NOT AN ERROR. MuJoCo has upwards of thirty kinds —
-/// touch, rangefinder, magnetometer, force, torque, subtree momentum, user — and a model that
+/// * AN UNRECOGNISED SENSOR IS SKIPPED, NOT AN ERROR. MuJoCo has upwards of thirty kinds -
+/// touch, rangefinder, magnetometer, force, torque, subtree momentum, user - and a model that
 /// happens to carry one this engine cannot compute should still import. The alternative is an
 /// importer that refuses whole robots over an instrument nobody asked to read.
 pub fn readSensors(a: Allocator, doc: *const codecs.xml.Document) Error![]Sensor {
@@ -1952,9 +1952,9 @@ pub fn readSensors(a: Allocator, doc: *const codecs.xml.Document) Error![]Sensor
 
     for (doc.childrenOf(block)) |*child| {
         const kind: SensorKind = SensorKind.fromTag(child.name) orelse continue;
-        // ★ THE TARGET ATTRIBUTE DEPENDS ON THE KIND, which is the whole awkwardness of this
+        // * THE TARGET ATTRIBUTE DEPENDS ON THE KIND, which is the whole awkwardness of this
         // corner of the format. `framepos` uses `objname` alongside an `objtype` that must say
-        // `site` — this engine has no frame sensors for anything else — while the others name
+        // `site` - this engine has no frame sensors for anything else - while the others name
         // their target directly.
         const target: []const u8 = switch (kind) {
             .joint_pos, .joint_vel => doc.attribute(child, "joint") orelse continue,
@@ -1979,12 +1979,12 @@ pub fn readSensors(a: Allocator, doc: *const codecs.xml.Document) Error![]Sensor
 
 /// A loop closure from `<equality>`.
 ///
-/// ── ★ MJCF SPELLS THIS TWO WAYS, AND BOTH ARE COMMON ──
+/// -- * MJCF SPELLS THIS TWO WAYS, AND BOTH ARE COMMON --
 ///
-/// **Body semantic**: `<connect body1="a" body2="b" anchor="x y z"/>` — the anchor is a point
+/// **Body semantic**: `<connect body1="a" body2="b" anchor="x y z"/>` - the anchor is a point
 /// in `body1`'s frame, and MuJoCo's compiler derives `body2`'s from the rest pose.
 ///
-/// **Site semantic**: `<connect site1="p" site2="q"/>` — two sites that must coincide, which is
+/// **Site semantic**: `<connect site1="p" site2="q"/>` - two sites that must coincide, which is
 /// often more readable because a site already names the point.
 ///
 /// Both reduce to the same thing: two bodies and a shared point. The site form is resolved
@@ -1992,7 +1992,7 @@ pub fn readSensors(a: Allocator, doc: *const codecs.xml.Document) Error![]Sensor
 pub const Equality = struct {
     /// True for `<weld>`, which holds ORIENTATION as well as position.
     weld: bool = false,
-    /// `<weld torquescale=...>` — how much the orientation rows count for against the
+    /// `<weld torquescale=...>` - how much the orientation rows count for against the
     /// position ones. Meaningless for a `connect`, which has no orientation rows.
     torque_scale: f32 = 1.0,
     body_a: []const u8,
@@ -2001,29 +2001,29 @@ pub const Equality = struct {
     /// polynomial relating them. See `JointCoupling`.
     couple: ?JointCoupling = null,
     /// The point in `body_a`'s frame. Null when the file used the site form and the anchor is
-    /// the site's own offset — the caller derives the partner either way.
+    /// the site's own offset - the caller derives the partner either way.
     anchor: ?Vec,
     /// True when the file named sites rather than bodies, so `anchor` is already the site's
     /// offset on `body_a`.
     from_sites: bool = false,
 };
 
-/// `<equality type="joint">` — one joint's coordinate as a polynomial in another's.
+/// `<equality type="joint">` - one joint's coordinate as a polynomial in another's.
 ///
-/// ★ `joint2` IS OPTIONAL, and its absence is meaningful rather than a default: with no second
+/// * `joint2` IS OPTIONAL, and its absence is meaningful rather than a default: with no second
 /// joint the first is pinned to a constant, which is how MJCF locks a joint without deleting
 /// it. A model that simulates a wrist both free and fixed uses one file and one equality.
 pub const JointCoupling = struct {
     driven: []const u8,
     driver: ?[]const u8,
-    /// `c0 … c4`. MuJoCo's default is `(0, 1, 0, 0, 0)` — the two joints simply equal.
+    /// `c0 ... c4`. MuJoCo's default is `(0, 1, 0, 0, 0)` - the two joints simply equal.
     poly: [5]f32 = .{ 0, 1, 0, 0, 0 },
 };
 
 /// Read `<equality>`.
 ///
-/// ★ ONLY `connect` IS READ. MuJoCo has five types — `weld`, `joint` coupling, `tendon`,
-/// `distance` and this one — and an unrecognised entry is SKIPPED rather than refused, the same
+/// * ONLY `connect` IS READ. MuJoCo has five types - `weld`, `joint` coupling, `tendon`,
+/// `distance` and this one - and an unrecognised entry is SKIPPED rather than refused, the same
 /// call made for sensors and geoms. A model carrying a weld it does not depend on should still
 /// import; one that depends on it will visibly come apart, which is the honest failure.
 pub fn readEqualities(
@@ -2043,7 +2043,7 @@ pub fn readEqualities(
                 .driver = doc.attribute(child, "joint2"),
             };
             if (doc.attribute(child, "polycoef")) |text| {
-                // ★ SHORTER THAN FIVE IS LEGAL, and common — `polycoef="0 -1"` is a mirror.
+                // * SHORTER THAN FIVE IS LEGAL, and common - `polycoef="0 -1"` is a mirror.
                 // `readFloats` fills what is there and the rest stay zero, which is what the
                 // omitted terms mean.
                 @memset(&couple.poly, 0);
@@ -2052,8 +2052,8 @@ pub fn readEqualities(
             try out.append(a, .{ .body_a = "", .body_b = "", .anchor = null, .couple = couple });
             continue;
         }
-        // ★ `connect` AND `weld` READ IDENTICALLY except for one attribute. A weld is a
-        // connect that also holds orientation, and the file says so the same way — two bodies
+        // * `connect` AND `weld` READ IDENTICALLY except for one attribute. A weld is a
+        // connect that also holds orientation, and the file says so the same way - two bodies
         // or two sites, plus an anchor. Branching on the tag once here keeps the two spellings
         // from drifting apart in the reader the way they have not in the format.
         const welds: bool = std.mem.eql(u8, child.name, "weld");
@@ -2065,7 +2065,7 @@ pub fn readEqualities(
                 .weld = welds,
                 .torque_scale = torqueScale(doc, child),
                 .body_a = first,
-                // ★ `body2` DEFAULTS TO THE WORLD, which is how a pendulum is pinned to a
+                // * `body2` DEFAULTS TO THE WORLD, which is how a pendulum is pinned to a
                 // fixed point. Requiring it would refuse a legal and useful construction.
                 .body_b = doc.attribute(child, "body2") orelse "",
                 .anchor = null,
@@ -2110,14 +2110,14 @@ fn findSite(sites: []const Site, name: []const u8) ?Site {
     return null;
 }
 
-test "★ the arena survives being returned — a moved arena would strand it" {
-    // ★★★ THE REGRESSION GUARD FOR A BUG THAT COST TWO SESSIONS. `readRobot` built into a
+test "* the arena survives being returned - a moved arena would strand it" {
+    // *** THE REGRESSION GUARD FOR A BUG THAT COST TWO SESSIONS. `readRobot` built into a
     // STACK-LOCAL `ArenaAllocator` and returned the struct by value; every `Allocator` taken
     // during construction held that dead frame's address.
     //
-    // ★ AND IT WAS NEARLY INVISIBLE. A single-buffer arena survives the move by luck. Only a
+    // * AND IT WAS NEARLY INVISIBLE. A single-buffer arena survives the move by luck. Only a
     // fixture whose parse grows the arena past a SECOND buffer strands anything, and only an
-    // optimised build lays the stack out so it shows — so the symptom was a 3324-byte leak in
+    // optimised build lays the stack out so it shows - so the symptom was a 3324-byte leak in
     // ReleaseSafe, on one file out of five.
     //
     // This test does the two things that make it detectable at all: it uses the fixture with
@@ -2129,8 +2129,8 @@ test "★ the arena survives being returned — a moved arena would strand it" {
     var robot: Robot = try readRobot(gpa, &doc);
     defer robot.deinit();
 
-    // ★ THE ARENA IS BEHIND A POINTER, which is the whole fix. Asserting on the type keeps a
-    // future tidy-up from quietly reverting it — the compiler would accept a value again.
+    // * THE ARENA IS BEHIND A POINTER, which is the whole fix. Asserting on the type keeps a
+    // future tidy-up from quietly reverting it - the compiler would accept a value again.
     comptime {
         if (@typeInfo(@FieldType(Robot, "arena")) != .pointer) {
             @compileError("Robot.arena must stay a POINTER: an Allocator taken from an arena " ++

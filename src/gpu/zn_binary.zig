@@ -1,7 +1,7 @@
-//! zn_binary.zig — zimrnum's elementwise kernels on the GPU: dense f32, two inputs, one output.
+//! zn_binary.zig - zimrnum's elementwise kernels on the GPU: dense f32, two inputs, one output.
 //!
-//! ★★ DENSE ONLY, AND THAT IS THE POINT OF THE EXAMPLE. The kernel takes flat buffers and a
-//! count — no shape, no strides — exactly like znum's `k_binary.zig`. `zn.zip` on the CPU accepts
+//! ** DENSE ONLY, AND THAT IS THE POINT OF THE EXAMPLE. The kernel takes flat buffers and a
+//! count - no shape, no strides - exactly like znum's `k_binary.zig`. `zn.zip` on the CPU accepts
 //! any rank up to 6 with arbitrary strides, so the GPU's domain is NARROWER: a broadcast view has
 //! to be materialised before it can be bound. The host does that explicitly and shows it.
 const k = @import("kompute");
@@ -17,35 +17,35 @@ pub const Buffers = extern struct {
     a: [config.max]f32,
     b: [config.max]f32,
     out: [config.max]f32,
-    /// ── ★★★ A THIRD INPUT, WHICH IS WHAT SEVERAL zimrnum FUNCTIONS NEEDED ──
+    /// -- *** A THIRD INPUT, WHICH IS WHAT SEVERAL zimrnum FUNCTIONS NEEDED --
     ///
     /// `whereInto` takes a mask plus two sources; `sgdMomentum` takes a weight, a gradient and a
     /// velocity; `adamStep` takes two moments. All were host-only for want of one more binding,
     /// not for any reason of algorithm. WebGPU guarantees eight storage buffers per stage and
     /// this pipeline used three.
     c: [config.max]f32,
-    /// Persistent state a kernel both reads and writes — a momentum velocity, an Adam moment.
+    /// Persistent state a kernel both reads and writes - a momentum velocity, an Adam moment.
     /// Separate from `c` because the sweep must be able to zero it between rows.
     state: [config.max]f32,
 };
 
-/// Uniforms must be 16-byte sized, padded with scalars — an `[3]u32` pad emits `array<u32,3>`
+/// Uniforms must be 16-byte sized, padded with scalars - an `[3]u32` pad emits `array<u32,3>`
 /// with stride 4, which WGSL rejects in the uniform address space.
 pub const Params = extern struct {
     count: u32,
     /// The learning rate for `sgd_step`. One of the pad words carrying a value instead of a
-    /// zero — a uniform must be 16-byte sized either way, so a scalar here is free.
+    /// zero - a uniform must be 16-byte sized either way, so a scalar here is free.
     scalar: f32 = 0,
     /// Columns, for the entries that decode a flat id into (row, col).
     cols: u32 = 0,
     /// Huber's threshold. Named for what it is; `scalar` already carries the learning rate.
     delta: f32 = 0,
-    /// ★ `sgd_momentum`'s decay. It gets its OWN field rather than borrowing `delta`: two kernels
+    /// * `sgd_momentum`'s decay. It gets its OWN field rather than borrowing `delta`: two kernels
     /// reading one uniform field need the same value, and Huber's threshold is 1.0 while a
     /// momentum is 0.9. Sharing would have made one of the two rows fail on the device only.
     momentum: f32 = 0,
-    // ★ Three words of padding. Nine real fields is 36 bytes and WGSL uniform blocks round to
-    // 16, so the next multiple is 48 — twelve words. The host names the exact size in its error,
+    // * Three words of padding. Nine real fields is 36 bytes and WGSL uniform blocks round to
+    // 16, so the next multiple is 48 - twelve words. The host names the exact size in its error,
     // so this is measured rather than guessed at.
     /// How many times `repeat_each` repeats each element. **Not `b_row`**: that is a row stride
     /// and `bcast_add` legitimately sets it to zero, which as a divisor is a fault. Overloading a
@@ -58,14 +58,14 @@ pub const Params = extern struct {
     slice_start: u32 = 0,
     /// How many columns `concat_columns` takes from `ba` before switching to `bb`.
     left_columns: u32 = 0,
-    /// ── ★★★ STRIDES IN THE UNIFORM, AND A STRIDE OF ZERO BROADCASTS ──
+    /// -- *** STRIDES IN THE UNIFORM, AND A STRIDE OF ZERO BROADCASTS --
     ///
     /// This is `zn.broadcastTo`'s representation, moved into a uniform. A `(1, n)` row stretched
-    /// down a `(m, n)` field has `row = 0`, so every output row reads the same input row — no
+    /// down a `(m, n)` field has `row = 0`, so every output row reads the same input row - no
     /// copy, no second buffer. It is the same trick the CPU view uses, and it is why the tensor
     /// type already held the GPU's parameters.
     ///
-    /// ★ Second half of a uniform that is now 32 bytes: still a multiple of 16, so nothing
+    /// * Second half of a uniform that is now 32 bytes: still a multiple of 16, so nothing
     /// changes for the entries that ignore these.
     a_row: u32 = 0,
     a_col: u32 = 0,
@@ -97,7 +97,7 @@ pub fn mul(c: k.Ctx(@This())) void {
 
 /// The entries this file exports. ONE list: the comptime loop below installs from it, and the
 /// host derives its pipeline table from it too, so a kernel is named in exactly one place.
-/// `out = if (a > 0) b else 0` — relu's gradient, with `a` the FORWARD INPUT and `b` the
+/// `out = if (a > 0) b else 0` - relu's gradient, with `a` the FORWARD INPUT and `b` the
 /// incoming gradient. Matches `zn.reluGrad`.
 pub fn relu_grad(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
@@ -106,7 +106,7 @@ pub fn relu_grad(c: k.Ctx(@This())) void {
     bout[c.id] = if (ba[c.id] > 0) bb[c.id] else 0;
 }
 
-/// `out = a - rate * b` — one plain gradient-descent step, with `a` the weights and `b` the
+/// `out = a - rate * b` - one plain gradient-descent step, with `a` the weights and `b` the
 /// gradient. Matches `zn.sgdStep`.
 pub fn sgd_step(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
@@ -290,7 +290,7 @@ pub fn bcast_add(c: k.Ctx(@This())) void {
     bout[c.id] = av + bv;
 }
 
-/// `out = dy * y * (1 - y)` — sigmoid's gradient from its OUTPUT `a = y` and the incoming
+/// `out = dy * y * (1 - y)` - sigmoid's gradient from its OUTPUT `a = y` and the incoming
 /// gradient `b = dy`. Taking the output is what makes it one multiply instead of recomputing the
 /// sigmoid; `relu` had to take its input for the opposite reason.
 pub fn sigmoid_grad(c: k.Ctx(@This())) void {
@@ -301,7 +301,7 @@ pub fn sigmoid_grad(c: k.Ctx(@This())) void {
     bout[c.id] = bb[c.id] * y * (1.0 - y);
 }
 
-/// `out = dy * (1 - y*y)` — tanh's gradient, also from its output.
+/// `out = dy * (1 - y*y)` - tanh's gradient, also from its output.
 pub fn tanh_grad(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
         return;
@@ -373,11 +373,11 @@ pub fn lerpf(c: k.Ctx(@This())) void {
     bout[c.id] = if (t <= 0.5) x + t * (y - x) else y - (1.0 - t) * (y - x);
 }
 
-/// `out[0] = mean((a - b)^2)` — the loss, as a scalar. Matches `zn.mseLoss`.
+/// `out[0] = mean((a - b)^2)` - the loss, as a scalar. Matches `zn.mseLoss`.
 ///
-/// ★ One thread over the whole buffer, like `sum_all`: the checkable reference a tree reduction
+/// * One thread over the whole buffer, like `sum_all`: the checkable reference a tree reduction
 /// will be compared against. The CPU side compensates and this does not, so the row measures the
-/// drift of a plain 4096-term accumulation — the same number `sum all (scalar)` reports, and the
+/// drift of a plain 4096-term accumulation - the same number `sum all (scalar)` reports, and the
 /// justification for `sumAll`'s compensated default.
 pub fn mse_loss(c: k.Ctx(@This())) void {
     if (c.id >= 1) {
@@ -405,7 +405,7 @@ pub fn mae_loss(c: k.Ctx(@This())) void {
     bout[0] = total / float(c.params.count);
 }
 
-/// Huber: squared below `delta`, linear above — the same branch as `zn.huberLoss`, so the two
+/// Huber: squared below `delta`, linear above - the same branch as `zn.huberLoss`, so the two
 /// sides agree on which side of the threshold every element falls.
 pub fn huber_loss(c: k.Ctx(@This())) void {
     if (c.id >= 1) {
@@ -422,7 +422,7 @@ pub fn huber_loss(c: k.Ctx(@This())) void {
 }
 
 /// Binary cross-entropy from logits `a` against targets `b`, in the overflow-free form
-/// `max(x,0) - x·t + log(1 + e^-|x|)` that `zn.bceLogitsLoss` uses. The sweep's `b` is a ramp on
+/// `max(x,0) - x*t + log(1 + e^-|x|)` that `zn.bceLogitsLoss` uses. The sweep's `b` is a ramp on
 /// [-1, 1] rather than a probability; the expression is defined for any real target and both
 /// sides compute the same one, so the row still compares the implementation.
 pub fn bce_loss(c: k.Ctx(@This())) void {
@@ -438,10 +438,10 @@ pub fn bce_loss(c: k.Ctx(@This())) void {
     bout[0] = total / float(c.params.count);
 }
 
-/// 2-D cross-correlation of `a` (a `cols × cols` image) with the 3×3 kernel held in `b[0..9]`,
-/// stride 1, padding 1 — so the output is the image's size. One thread per output pixel.
+/// 2-D cross-correlation of `a` (a `cols x cols` image) with the 3x3 kernel held in `b[0..9]`,
+/// stride 1, padding 1 - so the output is the image's size. One thread per output pixel.
 ///
-/// ★ Padding is implicit: a tap that lands outside the image is skipped, contributing zero.
+/// * Padding is implicit: a tap that lands outside the image is skipped, contributing zero.
 /// The bounds tests are on signed values because the top-left taps land at -1.
 pub fn conv2d_same(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
@@ -504,7 +504,7 @@ pub fn where_pick(k_ctx: k.Ctx(@This())) void {
 /// One SGD-with-momentum step. `a` is the weight, `b` the gradient, `state` the velocity, which
 /// this kernel updates in place. `scalar` is the learning rate, `delta` the momentum.
 ///
-/// ★ The velocity accumulates the GRADIENT, not the step — the same choice `zn.sgdMomentum`
+/// * The velocity accumulates the GRADIENT, not the step - the same choice `zn.sgdMomentum`
 /// makes, so changing the learning rate does not retroactively rescale the history.
 pub fn sgd_momentum(k_ctx: k.Ctx(@This())) void {
     if (k_ctx.id >= k_ctx.params.count) {
@@ -515,11 +515,11 @@ pub fn sgd_momentum(k_ctx: k.Ctx(@This())) void {
     bout[k_ctx.id] = ba[k_ctx.id] - k_ctx.params.scalar * velocity;
 }
 
-/// One Adam step from a zeroed state, which is step 1 — so both bias corrections are exactly
-/// `1 - beta` and the update reduces to `rate · sign(gradient)`. `a` is the weight, `b` the
+/// One Adam step from a zeroed state, which is step 1 - so both bias corrections are exactly
+/// `1 - beta` and the update reduces to `rate * sign(gradient)`. `a` is the weight, `b` the
 /// gradient; `state` holds the first moment and `c` the second.
 ///
-/// ★ Step 1 rather than a general step because the sweep runs each row once from a known state.
+/// * Step 1 rather than a general step because the sweep runs each row once from a known state.
 /// The general form is `zn.adamStep`, and the CPU twin here calls it with step 1.
 pub fn adam_step(k_ctx: k.Ctx(@This())) void {
     if (k_ctx.id >= k_ctx.params.count) {
@@ -538,7 +538,7 @@ pub fn adam_step(k_ctx: k.Ctx(@This())) void {
         k_ctx.params.scalar * corrected_first / (@sqrt(corrected_second) + 1.0e-8);
 }
 
-// ★ ONE ENTRY PER LINE, deliberately. `zig fmt` column-aligns a list whose items share
+// * ONE ENTRY PER LINE, deliberately. `zig fmt` column-aligns a list whose items share
 // a line, and that realignment silently broke an append anchor three times during the
 // port. A vertical list is stable under formatting, so adding a kernel is a one-line
 // diff that no tooling will reflow.

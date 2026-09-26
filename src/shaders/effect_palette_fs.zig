@@ -1,14 +1,14 @@
-//! src/shaders/effect_palette_fs.zig — indexed-palette recolor,
+//! src/shaders/effect_palette_fs.zig - indexed-palette recolor,
 //! raylib's `palette_switch.fs` ported (their `shaders_palette_switch`).
 //!
 //! raylib's version reads an 8-bit INDEXED sprite and uses the red
 //! channel as a palette index.  The gallery's source is a live
 //! full-color scene, so the index comes from quantizing the texel's
-//! NTSC luminance into `active_colors` buckets — the same table lookup,
+//! NTSC luminance into `active_colors` buckets - the same table lookup,
 //! doubling as a posterizer.  Swap the table, recolor the world; the
 //! example ships a few palettes to cycle (that IS the raylib demo).
 //!
-//! The lookup is a branchless select-by-match over the fixed 8 slots —
+//! The lookup is a branchless select-by-match over the fixed 8 slots -
 //! uniform control flow, no dynamic indexing into the uniform array
 //! (some drivers hate that; a sum of masked entries never can).
 

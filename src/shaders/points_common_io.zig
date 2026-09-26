@@ -1,4 +1,4 @@
-//! src/shaders/points_common_io.zig — the `Interp` varyings shared by
+//! src/shaders/points_common_io.zig - the `Interp` varyings shared by
 //! `points_vs` and `points_fs`. Single source of truth: VS Outputs and FS
 //! Inputs both alias this, so they can't drift.
 

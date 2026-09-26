@@ -1,12 +1,12 @@
-//! src/shaders/lambert_common_io.zig — Interp varyings shared by
+//! src/shaders/lambert_common_io.zig - Interp varyings shared by
 //!
 //! Binding model (which @group each uniform/sampler lands in) is the
-//! stage-segregated scheme documented in src/zimr.zig §3:
-//! VS uniforms→group 0, samplers→group 1, FS uniforms→group 2.
+//! stage-segregated scheme documented in src/zimr.zig section 3:
+//! VS uniforms->group 0, samplers->group 1, FS uniforms->group 2.
 //! `lambert_vs` and `lambert_fs`.
 //!
 //! Lambertian diffuse + ambient.  Adds a world-space normal varying
-//! to unlit's tex-coord-only shape.  Single source of truth — VS
+//! to unlit's tex-coord-only shape.  Single source of truth - VS
 //! Outputs and FS Inputs both alias this.
 
 const zm = @import("zm");

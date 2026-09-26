@@ -1,22 +1,22 @@
 // examples/audio_sound_lab.zig - loading, polyphony and positioning.
-// MERGES three raylib audio samples behind a mode switch — `audio_sound_loading`,
+// MERGES three raylib audio samples behind a mode switch - `audio_sound_loading`,
 // `audio_sound_multi` and `audio_sound_positioning`. They all need the same
 // device bring-up and differ only in what they do with a Sound, so one app means
 // one build and one listening session instead of three.
 //
-//   LOAD  — decode a real FILE (a .wav) into a Wave, read back what the decoder
+//   LOAD  - decode a real FILE (a .wav) into a Wave, read back what the decoder
 //           actually found (rate / channels / frames), then upload it as a Sound:
 //           play / stop / pause / resume, volume + pitch.
 //           Deliberately a small WAV, not the bundled 96 s Vorbis: decoding that
 //           to PCM would allocate ~16 MB up front and stall startup, and OGG is
-//           already covered — as STREAMING, which is the right way to play it —
+//           already covered - as STREAMING, which is the right way to play it -
 //           by the music_streaming example.
-//   MULTI — polyphony via ALIASES. One Sound = one playback slot, so re-playing
+//   MULTI - polyphony via ALIASES. One Sound = one playback slot, so re-playing
 //           it restarts it. `sounds.loadAlias` shares the decoded buffer but adds
 //           an independent voice, so N aliases = N overlapping copies for the
 //           price of one buffer. Tap fast and hear them stack.
-//   POS   — pan + distance attenuation from a draggable emitter. NOTE zimr's pan
-//           is [-1, 1] (left..right), NOT raylib's [0, 1] — see sounds.setPan.
+//   POS   - pan + distance attenuation from a draggable emitter. NOTE zimr's pan
+//           is [-1, 1] (left..right), NOT raylib's [0, 1] - see sounds.setPan.
 //
 // Lifecycle rule that bites: aliases share the source's buffer id, so ALIASES
 // MUST BE UNLOADED BEFORE THE SOURCE, or their buffer id is already stale.
@@ -45,7 +45,7 @@ const alias_count: usize = 8;
 
 const Mode = enum { load, multi, position };
 
-/// What the emitter geometry resolves to — a named type so the audio params and
+/// What the emitter geometry resolves to - a named type so the audio params and
 /// the on-screen readout can't drift apart.
 const Placement = struct {
     pan: f32,
@@ -90,7 +90,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     var clip_frames: u32 = 0;
     var clip_ch: u32 = 0;
     if (clip_ok) {
-        // What the DECODER found — not what we assumed. This is the whole point
+        // What the DECODER found - not what we assumed. This is the whole point
         // of the loading path: the file dictates rate/channels, not the caller.
         clip_rate = wave.sampleRate;
         clip_frames = wave.frameCount;
@@ -229,7 +229,7 @@ fn update(f: *z.Frame, s: *State) void {
             .{ .size = 14, .color = c.gray, .font = &s.font },
         );
     } else if (s.mode == .multi) {
-        // One bar per alias voice, lit while it's sounding — polyphony made
+        // One bar per alias voice, lit while it's sounding - polyphony made
         // visible, so "did they overlap?" isn't a matter of trusting my ears.
         var playing: usize = 0;
         for (s.alias, 0..) |a, i| {

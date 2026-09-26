@@ -3295,7 +3295,7 @@ Comment block above the branch explains the intent (press-
 feedback) and points at the regression history.  Tests added:
 
 - `Turn 411: hovered idle tab paints with tab_hovered`
-- `Turn 411: hover wins over active (active+hovered → tab_hovered, not tab_active)`
+- `Turn 411: hover wins over active (active+hovered -> tab_hovered, not tab_active)`
 - `Turn 411: active tab not hovered paints tab_active`
 
 #### Fix 2 — lift via geometry (`openTabBar` + `openTabItem` + `closeTabBar`)
@@ -3875,12 +3875,12 @@ Same shape in the header label path (`i` instead of `cur_col`).
 
 In `src/ui.zig` after the P8.2 suite:
 
-1. `P8.3 padding: TableOpts defaults — both no_pad_* are false`
+1. `P8.3 padding: TableOpts defaults - both no_pad_* are false`
 2. `P8.3 padding: default places col-0 cursor at col.x + cell_padding_x`
 3. `P8.3 padding: no_pad_outer_x makes col-0 cursor flush against outer-left` — cursor at `col[0].x` exactly
 4. `P8.3 padding: no_pad_outer_x does NOT affect col-1 (inner column)` — inner columns keep their padding
 5. `P8.3 padding: no_pad_inner_x makes col-1+ cursors flush against divider` — col 0 keeps padding; col 1, 2 flush
-6. `P8.3 padding: both flags true ⇒ every column cursor flush against its left edge`
+6. `P8.3 padding: both flags true => every column cursor flush against its left edge`
 7. `P8.3 padding: vertical cell_padding_y is unaffected by either flag` — invariance check
 
 #### Acceptance demo
@@ -3946,13 +3946,13 @@ In `src/ui.zig` after the P8.1 suite:
 
 1. `P8.2 borders: defaults match pre-P8.2 (master true, all granular true)`
 2. `P8.2 borders: master \`borders = false\` overrides all granular flags` — backward-compat regression alarm
-3. `P8.2 borders: all granular true ⇒ outer rect emits 4 line cmds (per-side)` — pins the new representation: a 1-col 1-row no-bg no-inner table emits exactly 4 outer-edge `addLine` cmds (no `addRectOutline`)
+3. `P8.2 borders: all granular true => outer rect emits 4 line cmds (per-side)` — pins the new representation: a 1-col 1-row no-bg no-inner table emits exactly 4 outer-edge `addLine` cmds (no `addRectOutline`)
 4. `P8.2 borders: borders_outer_h = false drops top + bottom outer lines` — 2 lines remain (left + right)
 5. `P8.2 borders: borders_outer_v = false drops left + right outer lines` — 2 lines remain (top + bottom)
 6. `P8.2 borders: borders_inner_v = false drops column dividers` — 3-col table, only 4 outer lines (no dividers)
 7. `P8.2 borders: borders_inner_v = true on a 3-col table adds 2 dividers` — positive pair to test 6
 8. `P8.2 borders: borders_inner_h = false drops inter-row separators` — 3 rows, no horizontal lines at all
-9. `P8.2 borders: borders_inner_h = true on 3 rows ⇒ 2 inter-row lines` — positive pair to test 8
+9. `P8.2 borders: borders_inner_h = true on 3 rows => 2 inter-row lines` — positive pair to test 8
 
 #### Acceptance demo
 

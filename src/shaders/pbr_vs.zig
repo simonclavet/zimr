@@ -1,18 +1,18 @@
-//! src/shaders/pbr_vs.zig — PBR vertex shader body.
+//! src/shaders/pbr_vs.zig - PBR vertex shader body.
 //!
 //! WebGPU architecture (esp. the stage-segregated binding model that
 //! places these VS uniforms in group 0) is documented centrally in
-//! src/zimr.zig — read that first.
+//! src/zimr.zig - read that first.
 //!
 //! Standard typed-shader form (same as lambert_vs.zig): the schema
 //! lives in `pbr_vs_io.zig`; `shaderMain(io) Out` runs on SPIR-V
-//! (→ WGSL/GLSL → GPU) AND wasm32 (→ CPU dispatch).  `installSpirvEntry`
+//! (-> WGSL/GLSL -> GPU) AND wasm32 (-> CPU dispatch).  `installSpirvEntry`
 //! materializes the SPIR-V `entry` on GPU targets, no-op on native.
 //!
 //! Computes: world-space position/normal/tangent (normal via
 //! `mat_normal`, tangent via `mat_model` preserving handedness w),
 //! texcoord/color passthrough, the light-space position for shadow
-//! lookup, and the clip-space position (projection · view · world).
+//! lookup, and the clip-space position (projection * view * world).
 //! Varying-name discipline (snake_case engine vars, camelCase
 //! literature notation) is documented in `pbr_fs.zig`.
 

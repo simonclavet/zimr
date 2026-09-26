@@ -1,4 +1,4 @@
-//! src/shaders/hybrid_raymarch_fs.zig — sphere-traced SDF scene with
+//! src/shaders/hybrid_raymarch_fs.zig - sphere-traced SDF scene with
 //! true depth output, the marcher behind `shaders_hybrid_rendering`
 //! (and, alone on screen, `shaders_raymarching_rendering`).
 //!
@@ -9,7 +9,7 @@
 //!
 //! The hybrid trick: on a hit, the world-space point is projected
 //! through the SAME view-projection the raster pass uses and
-//! `clip.z / clip.w` goes out through the FragDepth builtin — so
+//! `clip.z / clip.w` goes out through the FragDepth builtin - so
 //! rasterized cubes and these marched blobs depth-test against each
 //! other with zero coordination.  A miss writes the sky and depth 1.0
 //! (behind everything real).
@@ -42,18 +42,18 @@ fn vlen(v: Vec3) f32 {
     return @sqrt(@max(dot(v, v), 1.0e-12));
 }
 
-/// Polynomial smooth minimum (iq) — what makes metaballs meta.
+/// Polynomial smooth minimum (iq) - what makes metaballs meta.
 fn smin(a: f32, b: f32, k: f32) f32 {
     const h: f32 = clamp01(0.5 + 0.5 * (b - a) / k);
     return b + (a - b) * h - k * h * (1.0 - h);
 }
 
 /// One ball's center at time t. Each ball drifts at its OWN angular speed (so
-/// they don't stay rigidly 120° apart) on a radius that CHURNS between ~0 and
+/// they don't stay rigidly 120 deg apart) on a radius that CHURNS between ~0 and
 /// ~1 using two out-of-phase frequencies. When a ball's radius shrinks it dives
 /// toward the center; because the phases are staggered per ball, they
 /// periodically pile into the middle and MERGE (smooth-union) into one metaball,
-/// then spread back out — organic, near-non-repeating clustering rather than a
+/// then spread back out - organic, near-non-repeating clustering rather than a
 /// rigid ring that never touches.
 fn ballCenter(i: f32, t: f32) Vec3 {
     const a: f32 = i * 2.0943951 + t * (0.5 + i * 0.17);
@@ -77,7 +77,7 @@ fn mapScene(p: Vec3, t: f32) f32 {
     return d;
 }
 
-/// Tetrahedron-gradient normal — four taps, no branches.
+/// Tetrahedron-gradient normal - four taps, no branches.
 fn sceneNormal(p: Vec3, t: f32) Vec3 {
     const e: f32 = 0.0015;
     const k0: Vec3 = .{ 1.0, -1.0, -1.0 };

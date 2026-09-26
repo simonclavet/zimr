@@ -640,7 +640,7 @@ fn panelDragDrop(u: ui.Ui, s: *DragDropState) void {
     u.separator();
 
     // Process any pending move resolved this frame.  We collect the
-    // (chip_id → new_lane) intent across all targets, then apply.
+    // (chip_id -> new_lane) intent across all targets, then apply.
     var moved_chip_id: ?u32 = null;
     var moved_to_lane: Lane = .todo;
 

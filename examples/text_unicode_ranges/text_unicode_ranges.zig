@@ -1,23 +1,23 @@
 // examples/text_unicode_ranges.zig - adding Unicode ranges to a font at RUNTIME.
 // Ports raylib's `text_unicode_ranges`: the font starts with plain ASCII, and
-// each range you enable is BAKED INTO A NEW ATLAS — so glyphs that rendered as
+// each range you enable is BAKED INTO A NEW ATLAS - so glyphs that rendered as
 // fallback boxes suddenly appear. Toggle the ranges and watch the glyph count
 // grow.
 //
 // raylib's original pulls ranges (Devanagari / Arabic / Hebrew / CJK) out of a
-// large NotoSans font. The bundled RobotoMono has no such coverage — shipping a
-// multi-megabyte CJK font just for a demo isn't worth it — so this port keeps the
+// large NotoSans font. The bundled RobotoMono has no such coverage - shipping a
+// multi-megabyte CJK font just for a demo isn't worth it - so this port keeps the
 // MECHANISM identical and uses the scripts this TTF actually has (checked against
 // its cmap: Latin-1, Latin Extended-A, most Greek, nearly all Cyrillic).
 //
 // What this exercises (the engine work this drove):
-//   - `z.releaseFont(gl, gpa, font)` — NEW. Re-baking a font means registering a
+//   - `z.releaseFont(gl, gpa, font)` - NEW. Re-baking a font means registering a
 //     new GPU atlas; the old one has to go back. `z.unloadFont` only frees the
 //     CPU glyph arrays, so without this each re-bake abandons a GPU texture, and
-//     after 64 the registry runs out of slots and hands back the WHITE texture —
+//     after 64 the registry runs out of slots and hands back the WHITE texture -
 //     text would silently turn into solid blocks. `releaseFont` destroys the
 //     atlas + its bind group and recycles the registry slot.
-//   - `z.loadFontEx(f, gpa, ttf, size, codepoints)` — bakes the chosen set.
+//   - `z.loadFontEx(f, gpa, ttf, size, codepoints)` - bakes the chosen set.
 //
 // Leak-clean (`.memory = .managed`): every re-bake releases its predecessor, so
 // toggling ranges all day keeps exactly ONE atlas alive.
@@ -29,7 +29,7 @@ const z = @import("zimr");
 const zm = @import("zm");
 
 // Stays on RobotoMono ON PURPOSE: this example needs Greek + Cyrillic, and the
-// other bundled font (Atkinson Mono) has ZERO Cyrillic and only 4/57 Greek —
+// other bundled font (Atkinson Mono) has ZERO Cyrillic and only 4/57 Greek -
 // every sample line below would render as fallback boxes. Probe the cmap before
 // swapping a font under a Unicode example.
 const roboto_mono_ttf = @embedFile("roboto_mono_ttf");
@@ -41,7 +41,7 @@ const font_px: i32 = 22;
 const max_cp: usize = 400;
 
 /// One toggleable script. `sample` only contains codepoints from its own range,
-/// so before the range is enabled the line renders as fallback marks — and after,
+/// so before the range is enabled the line renders as fallback marks - and after,
 /// as real glyphs. That contrast IS the example.
 const Range = struct {
     name: []const u8,
@@ -59,14 +59,14 @@ const ranges = [_]Range{
 
 const State = struct {
     /// `Frame` carries no allocator (gpu/gl/input/time/window only), so stash the
-    /// one `init` was handed — re-baking a font in `update` needs it.
+    /// one `init` was handed - re-baking a font in `update` needs it.
     gpa: Allocator,
     ui_host: z.UiHost,
     font: z.Font, // re-baked whenever the enabled set changes
     ui_font: z.Font,
     enabled: [ranges.len]bool = @splat(false),
     glyph_count: i32 = 0,
-    bakes: u32 = 0, // how many atlases we've built — proves slots are recycled
+    bakes: u32 = 0, // how many atlases we've built - proves slots are recycled
 };
 
 /// Build the codepoint set for the currently-enabled ranges (ASCII is always in)
@@ -113,7 +113,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
 }
 
-/// Toggle a range and re-bake. The OLD atlas is released first — this is the
+/// Toggle a range and re-bake. The OLD atlas is released first - this is the
 /// whole point of `releaseFont`.
 fn toggleRange(f: *z.Frame, s: *State, gpa: Allocator, idx: usize) void {
     var next: [ranges.len]bool = s.enabled;

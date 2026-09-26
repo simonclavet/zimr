@@ -1,4 +1,4 @@
-//! examples/pipeline_uniforms_vs.zig — pipeline_uniforms vertex shader body.
+//! examples/pipeline_uniforms_vs.zig - pipeline_uniforms vertex shader body.
 //!
 //! Transforms each 2D vertex by the UBO's 4x4 matrix and passes the colour
 //! through. The matrix (host-supplied) spins the triangle and squashes it

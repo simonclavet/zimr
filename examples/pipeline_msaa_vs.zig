@@ -1,4 +1,4 @@
-//! examples/pipeline_msaa_vs.zig — pipeline_msaa vertex shader body.
+//! examples/pipeline_msaa_vs.zig - pipeline_msaa vertex shader body.
 //! Transforms the 2D triangle by the UBO matrix; no varyings out.
 
 const zm = @import("zm");

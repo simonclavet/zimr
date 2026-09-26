@@ -1,13 +1,13 @@
 // examples/shadowmap/shadowmap.zig
 //
-// shaders_shadowmap_rendering — the full two-pass shadow map. A floor, a
+// shaders_shadowmap_rendering - the full two-pass shadow map. A floor, a
 // handful of boxes and a slowly rotating Stanford bunny are lit by one
 // directional light that casts real shadows, computed with classic shadow
 // mapping:
 //
 //   PASS 1 (light's eye)  : render every caster from the light's ORTHOGRAPHIC
 //                           point of view with the depth shader (mode 0, raw
-//                           ndc*0.5+0.5) into a sampleable render texture —
+//                           ndc*0.5+0.5) into a sampleable render texture -
 //                           the "shadow map" (closest depth to the light).
 //   PASS 2 (camera)       : render the scene from an orbiting perspective
 //                           camera with `lit_shadow`, which projects each
@@ -19,7 +19,7 @@
 // per-frame model matrix (spin about Y); `lit_shadow_vs` now carries a
 // normal matrix so the bunny shades correctly as it turns. Two manual
 // pipelines (depth + lit_shadow); the RTT round-trip uses the engine's
-// `beginTextureMode`/`endTextureMode`. No inline WGSL — both shader pairs are
+// `beginTextureMode`/`endTextureMode`. No inline WGSL - both shader pairs are
 // authored in Zig (shadermath) and embedded as build artifacts.
 //
 // CANNOT be verified in the sandbox (no GPU); Simon verifies in the browser.
@@ -117,7 +117,7 @@ const static_icount: usize = floor_indices.len + cubes.len * cube_face_indices.l
 
 // ---- Host mirrors of the shader uniform blocks -----------------------------
 
-// depth_vs_io.Ubo (96 bytes) — light/depth pass.
+// depth_vs_io.Ubo (96 bytes) - light/depth pass.
 const DepthUbo = struct {
     mvp: [4]Vec,
     params: Vec,
@@ -126,17 +126,17 @@ const DepthUbo = struct {
     pad1: i32 = 0,
     pad2: i32 = 0,
 };
-// lit_shadow_vs_io.Ubo (192 bytes) — group 0.
+// lit_shadow_vs_io.Ubo (192 bytes) - group 0.
 const LitVsUbo = struct {
     mvp: [4]Vec,
     light_vp: [4]Vec,
     normal_matrix: [4]Vec,
 };
-// lit_shadow_fs_io.Ubo (32 bytes) — group 2.
+// lit_shadow_fs_io.Ubo (32 bytes) - group 2.
 const LitFsUbo = struct {
     light_dir: Vec,
     base_color: Vec,
-    /// {bias_slope, bias_min, 0, 0} — f16-map bias (see lit_shadow_fs_io).
+    /// {bias_slope, bias_min, 0, 0} - f16-map bias (see lit_shadow_fs_io).
     params: Vec,
 };
 
@@ -407,7 +407,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .{ .vertex = true, .copy_dst = true },
         "sm_bunny_vbo",
     );
-    // 208,353 indices · 2 bytes ≡ 2 mod 4 → createBufferInit pads the write.
+    // 208,353 indices * 2 bytes == 2 mod 4 -> createBufferInit pads the write.
     const bunny_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
@@ -422,7 +422,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // A float color target stores the light-view depth at ~16-bit precision
     // (vs 256 levels for rgba8), which is what lets the shadow bias drop low
     // enough to avoid both acne and peter-panning. Sampled with a NEAREST
-    // sampler below — linear filtering would blend depths across silhouette
+    // sampler below - linear filtering would blend depths across silhouette
     // edges and corrupt the comparison.
     const rt: z.RenderTexture = z.RenderTexture.create(device, .{
         .width = @intCast(rt_size),
@@ -716,7 +716,7 @@ fn update(f: *z.Frame, s: *State) void {
     // ---- Object model matrices ----
     const id: Mat = identity();
 
-    // Bunny: base-center → spin about Y → scale → seat on the floor.
+    // Bunny: base-center -> spin about Y -> scale -> seat on the floor.
     const spin: Mat = rotationY(t * 0.6);
     const bunny_spot: Vec = vec(-1.4, 0.0, 1.7);
     const center_it: Mat = translation(-s.bunny_cx, -s.bunny_min_y, -s.bunny_cz);
@@ -727,10 +727,10 @@ fn update(f: *z.Frame, s: *State) void {
     writeObjUniforms(gf, &s.static_obj, id, id, cam_vp, light_vp, to_light);
     writeObjUniforms(gf, &s.bunny, bunny_model, spin, cam_vp, light_vp, to_light);
 
-    // ============ PASS 1: shadow map (light's eye → RTT) ============
+    // ============ PASS 1: shadow map (light's eye -> RTT) ============
     // Raw offscreen pass: the shadow map is rgba16_float and we draw it with
     // our own depth pipeline, so we must NOT let beginTextureMode bind the 2D
-    // (rgba8) pipeline into this pass — that is an attachment-format mismatch.
+    // (rgba8) pipeline into this pass - that is an attachment-format mismatch.
     z.beginTextureModeRaw(f.gl, s.rt, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
     const p1: *z.PassState = f.gl.pass;
     Backend.setPipeline(p1, z.shader.RenderPipeline(void, void){ .gpu_handle = s.depth_pipeline });
@@ -743,7 +743,7 @@ fn update(f: *z.Frame, s: *State) void {
     // ============ SCREEN: open the frame, PASS 2 renders the lit scene into it ======
     z.beginDrawing(f.gl);
 
-    // ============ PASS 2: lit scene + shadow (camera → screen) ======
+    // ============ PASS 2: lit scene + shadow (camera -> screen) ======
     const p2: *z.PassState = f.gl.pass;
     p2.queue = gf.queue;
     Backend.setPipeline(p2, z.shader.RenderPipeline(void, void){ .gpu_handle = s.lit_pipeline });

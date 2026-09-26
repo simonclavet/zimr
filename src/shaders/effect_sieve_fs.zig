@@ -1,10 +1,10 @@
-//! src/shaders/effect_sieve_fs.zig — the Sieve of Eratosthenes, raylib's
+//! src/shaders/effect_sieve_fs.zig - the Sieve of Eratosthenes, raylib's
 //! `eratosthenes.fs` ported (their `shaders_eratosthenes_sieve`, by ProfJski).
 //!
-//! The quad is a `scale`×`scale` grid of integers (cell = floor(uv*scale)).
+//! The quad is a `scale`x`scale` grid of integers (cell = floor(uv*scale)).
 //! Each fragment tests its cell's integer for primality by trial division up
-//! to sqrt — the loop bound `i*i <= value` avoids a sqrt — painting primes
-//! white and composites by a spectrum of their LARGEST factor ≤ sqrt (raylib
+//! to sqrt - the loop bound `i*i <= value` avoids a sqrt - painting primes
+//! white and composites by a spectrum of their LARGEST factor <= sqrt (raylib
 //! leaves the `break` commented, so the last factor found wins). Purely
 //! procedural: it ignores `texture0` (the gallery still binds it; wgpu allows
 //! an unused layout entry), so this slot is a pure fragment-compute demo.

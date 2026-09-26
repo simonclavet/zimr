@@ -1,4 +1,4 @@
-//! draw2d_demo — exercises the unified draw2d IMMEDIATE surface on the GPU
+//! draw2d_demo - exercises the unified draw2d IMMEDIATE surface on the GPU
 //! backend: `sink.rect` (fill + outline), `sink.circle`, and `sink.image` with a
 //! Sprite (which uploads + caches its GPU residency on first draw). See
 //! notes/drawing_api.md.

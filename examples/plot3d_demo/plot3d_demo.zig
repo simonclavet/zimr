@@ -1,4 +1,4 @@
-// examples/plot3d_demo.zig — the first target that drives `zimr.plot3d`.
+// examples/plot3d_demo.zig - the first target that drives `zimr.plot3d`.
 //
 // Purpose is twofold:
 //   1. A real full-graph compile gate. plot3d was ported and then migrated
@@ -6,14 +6,14 @@
 //      so its function bodies had only ever been forced through `zig test`.
 //      Being an actual wgpu example compiles it under the true backend.
 //   2. Visual validation of the quaternion conventions. zm's `qmul` is Hamilton
-//      order (`qmul(a,b) == a*b`, matching matrices and Jolt) — but rotation is
+//      order (`qmul(a,b) == a*b`, matching matrices and Jolt) - but rotation is
 //      something the eye confirms, not the type checker. Drag-orbit here runs the
 //      exact compose path (`plot.rotation = qmul(qmul(q_pitch, rotation), q_yaw)`).
 //
 // Three series, each lighting up a different code path:
-//   · a parametric helix      -> plotLine     (projection + per-segment depth)
-//   · a Lissajous point cloud -> plotScatter  (markers, NDC normalize)
-//   · a sinc ripple surface   -> plotSurface  (the painter's-algorithm
+//   * a parametric helix      -> plotLine     (projection + per-segment depth)
+//   * a Lissajous point cloud -> plotScatter  (markers, NDC normalize)
+//   * a sinc ripple surface   -> plotSurface  (the painter's-algorithm
 //                                              triangle batch + colormap fill)
 
 const std = @import("std");
@@ -32,7 +32,7 @@ const screen_h: i32 = 820;
 
 const helix_n: usize = 240;
 const cloud_n: usize = 400;
-const grid_n: usize = 32; // surface is grid_n × grid_n vertices
+const grid_n: usize = 32; // surface is grid_n x grid_n vertices
 
 const State = struct {
     ui_host: z.UiHost,
@@ -48,7 +48,7 @@ const State = struct {
     cloud_y: [cloud_n]f32 = undefined,
     cloud_z: [cloud_n]f32 = undefined,
 
-    // Surface vertex buffers (row-major grid_n × grid_n), rebuilt per frame.
+    // Surface vertex buffers (row-major grid_n x grid_n), rebuilt per frame.
     surf_x: [grid_n * grid_n]f32 = undefined,
     surf_y: [grid_n * grid_n]f32 = undefined,
     surf_z: [grid_n * grid_n]f32 = undefined,
@@ -72,7 +72,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
 }
 
-/// sinc ripple: z = amp · sinc(k·r − phase), sampled on a [-2,2]² grid.
+/// sinc ripple: z = amp * sinc(k*r - phase), sampled on a [-2,2]^2 grid.
 fn rebuildSurface(s: *State, phase: f32) void {
     const span: f32 = 4.0; // domain width, centered at 0
     for (0..grid_n) |iy| {
@@ -120,7 +120,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
 
     rebuildSurface(s, 0.0);
-    // Scale the built-in ±0.5 unit cube up to ±0.8 plot units.
+    // Scale the built-in +/-0.5 unit cube up to +/-0.8 plot units.
     for (p3.cube_vtx, 0..) |v, i| {
         s.cube_v[i] = v * splat(1.6);
     }
@@ -198,7 +198,7 @@ fn update(f: *z.Frame, s: *State) void {
             }
             if (s.show_mesh) {
                 p3.plotMesh(s.ctx, "cube", s.cube_v[0..], p3.cube_idx[0..], .{ .fill_alpha = 0.35 });
-                // A free-standing triangle and quad in opposite corners — small,
+                // A free-standing triangle and quad in opposite corners - small,
                 // mostly here to force-analyze plotTriangle/plotQuad under the
                 // real build (their generic bodies are otherwise uninstantiated).
                 const tx: [3]f32 = .{ -1.8, -1.0, -1.4 };

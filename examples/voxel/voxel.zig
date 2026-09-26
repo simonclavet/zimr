@@ -1,9 +1,9 @@
-//! voxel — raylib's `models_basic_voxel`, the zimr way.
+//! voxel - raylib's `models_basic_voxel`, the zimr way.
 //!
-//! An 8×8×8 solid block of unit cubes.  A crosshair sits locked at
+//! An 8x8x8 solid block of unit cubes.  A crosshair sits locked at
 //! screen center; a tap casts a ray through it (`getScreenToWorldRay`,
 //! this port) and tests every remaining voxel's AABB
-//! (`getRayCollisionBox`) — the CLOSEST hit is removed, Minecraft-style
+//! (`getRayCollisionBox`) - the CLOSEST hit is removed, Minecraft-style
 //! block-breaking.  Cubes are drawn through the immediate-mode 3D batch
 //! (`drawCube` + `drawCubeWires`), exactly raylib's per-voxel loop, so
 //! the whole field coalesces into a couple of draws.
@@ -31,7 +31,7 @@ pub var zimr_app: z.App = .{};
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-const world: usize = 8; // 8×8×8 voxel field
+const world: usize = 8; // 8x8x8 voxel field
 const beige: Color = .{ .r = 211, .g = 176, .b = 131, .a = 255 };
 const wire: Color = .{ .r = 30, .g = 30, .b = 36, .a = 255 };
 const bg_clear: Color = .{ .r = 232, .g = 232, .b = 236, .a = 255 };
@@ -187,7 +187,7 @@ fn handleInput(
         }
         s.dragging = true;
     } else {
-        // Release: a press that stayed put is a tap → break a voxel.
+        // Release: a press that stayed put is a tap -> break a voxel.
         if (s.dragging and s.pressed and s.drag_total < 10.0) {
             breakVoxel(s, cam, vw, vh);
         }

@@ -1,8 +1,8 @@
-//! billboards — port of the GL `billboards`, on the new textured-3D path.
+//! billboards - port of the GL `billboards`, on the new textured-3D path.
 //! A ring of soft glowing sprites (a procedurally-generated radial-alpha texture)
 //! drawn as camera-facing billboards via `drawBillboard`, plus a few solid cubes
 //! and a grid. As the camera orbits, the billboards always face it (flat to the
-//! view) while the cubes show their 3D faces — the billboard effect. The sprite
+//! view) while the cubes show their 3D faces - the billboard effect. The sprite
 //! has an alpha falloff, so this also exercises the textured pipeline's alpha
 //! blending. Billboards are drawn last (after the opaque cubes) for correct
 //! alpha compositing; depth-test still lets the cubes occlude them.
@@ -35,7 +35,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.sprite.deinit(); // texture + view + sampler + bind group
 }
 
-/// Generate a 64×64 soft round sprite: bright centre fading to transparent edge.
+/// Generate a 64x64 soft round sprite: bright centre fading to transparent edge.
 fn makeSprite(gpa: Allocator) !z.Image {
     const n: usize = 64;
     const img: z.Image = try z.genImageColor(gpa, @intCast(n), @intCast(n), .{ .r = 0, .g = 0, .b = 0, .a = 0 });

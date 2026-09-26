@@ -1,7 +1,7 @@
-//! recursive_hud — render once, composite as a nested tunnel. An animated scene (a
+//! recursive_hud - render once, composite as a nested tunnel. An animated scene (a
 //! framed HUD: border, rotating sweep, orbiting dots) is rendered ONCE into a render
 //! texture, then that single texture is drawn back to the screen as a stack of concentric,
-//! progressively smaller + dimmer copies — a screen-inside-screen recursion. Pure
+//! progressively smaller + dimmer copies - a screen-inside-screen recursion. Pure
 //! render-once-reuse: the scene is rasterized one time and composited N times.
 const std = @import("std");
 const Allocator = std.mem.Allocator;

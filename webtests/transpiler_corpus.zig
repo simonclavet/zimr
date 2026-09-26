@@ -1,4 +1,4 @@
-//! transpiler_corpus.zig — the spv2wgsl differential/fixture corpus test,
+//! transpiler_corpus.zig - the spv2wgsl differential/fixture corpus test,
 //! ported from webtests/transpiler_corpus.ts (ZIG_BRIDGE_PLAN Phase 5c).
 //! Compiled to wasm32, transpiled to JS by our own c2js, run by
 //! webtests/runner.mjs. DOGFOOD: all logic is Zig through our pipeline;
@@ -593,7 +593,7 @@ fn refreshFixture() void {
 
     // ---- MERGE, don't replace: carry forward pinned entries whose
     // SPIR-V isn't among the live set.  The live scan is whatever
-    // `.zig-cache` currently holds, which is BUILD-STATE-DEPENDENT — a
+    // `.zig-cache` currently holds, which is BUILD-STATE-DEPENDENT - a
     // partially evicted cache once silently shrank the fixture from 97
     // pinned shaders to 47.  Entries for shaders that merely aren't
     // built right now must survive a refresh; genuinely deleted shaders
@@ -685,7 +685,7 @@ fn checkFixture() void {
         const spv_md5_h: Handle = js_get_index(keys_h, k);
         const spv_md5: []const u8 = jsStrInto(spv_md5_h, &kbuf);
         // Read the expected WGSL md5 by the SAME index (parallel arrays).
-        // NB: do NOT look it up via js_get(expected, spv_md5.ptr, len) — the
+        // NB: do NOT look it up via js_get(expected, spv_md5.ptr, len) - the
         // c2js kernel's __jstr caches decoded strings by POINTER, and spv_md5
         // reuses one stack buffer (kbuf) every iteration, so a pointer-keyed
         // lookup would return the first key's value forever. Indexing

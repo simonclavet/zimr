@@ -6,7 +6,7 @@
 //! module's job is to make the policy's input small and informative and its output small and
 //! smooth.
 //!
-//! The shape is DReCon's (Bergamin 2019 §6.3-6.4), because they ablated it and we would otherwise
+//! The shape is DReCon's (Bergamin 2019 section 6.3-6.4), because they ablated it and we would otherwise
 //! be guessing:
 //!
 //!   * **A subset of bodies in the observation, not all of them.** Six: the two toes, the torso,
@@ -30,6 +30,7 @@
 //! falls back to another axis rather than dividing by a vanishing horizontal component.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const rbt = @import("robot.zig");
 const dance = @import("robot_dance.zig");
@@ -451,7 +452,7 @@ pub const Controller = struct {
     }
 };
 
-// ── The checks. ──
+// -- The checks. --
 
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
@@ -586,8 +587,7 @@ test "robot_policy: the observation does not move with the character" {
     for (before, after) |a, b| {
         worst = @max(worst, @abs(a - b));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  observation: {d} numbers, worst change under a 10 m move and a 0.8 rad turn {e}\n", .{
+    report.print("\n  observation: {d} numbers, worst change under a 10 m move and a 0.8 rad turn {e}\n", .{
         observationSize(subset),
         worst,
     });
@@ -628,8 +628,7 @@ test "robot_policy: the observation does not move with the character" {
     }
     observe(m, subset, sim, moved_reference, &ahead, root, previous, after);
     const turned: f32 = @abs(atan2Rad(after[14], after[13]) - atan2Rad(before[14], before[13]));
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  drift made visible: the reference moved 0.5 m alone -> seen {d:.6} m; " ++
+    report.print("  drift made visible: the reference moved 0.5 m alone -> seen {d:.6} m; " ++
         "turned 0.3 rad alone -> seen {d:.6} rad\n", .{ shifted, turned });
     try expect(@abs(shifted - 0.5) < 1.0e-4);
     try expect(@abs(turned - 0.3) < 1.0e-3);
@@ -686,8 +685,7 @@ test "robot_policy: the filter, and a zero action that changes nothing" {
             try expect(a == 0.0);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  action: {d} of {d} model degrees of freedom, {d} watched bodies\n", .{
+    report.print("  action: {d} of {d} model degrees of freedom, {d} watched bodies\n", .{
         subset.dofs,
         track.actionSize(m),
         subset.bodies.len,

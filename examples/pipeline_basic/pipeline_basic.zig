@@ -1,10 +1,10 @@
-//! pipeline_basic — the first example on zimr's public custom-pipeline API.
+//! pipeline_basic - the first example on zimr's public custom-pipeline API.
 //! Ported from raygpu's `pipeline_basic.c`: a custom render pipeline + a vertex
 //! buffer + a single draw, drawing one gradient triangle.
 //!
 //! The headline is COMPOSITION + COMPLETE CONTROL, the zimr way: the shaders are
 //! authored in ZIG (`pipeline_basic_vs.zig` / `_fs.zig`, schemas in the matching
-//! `_io.zig` files) and transpiled at build time — the app never writes or sees
+//! `_io.zig` files) and transpiled at build time - the app never writes or sees
 //! WGSL. `z.shader.loadShaderVF` builds the pipeline + bind-group layout from the
 //! typed schema; the triangle still composites into the same pass as the 2D
 //! caption below it.
@@ -21,7 +21,7 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // Build-time-transpiled WGSL of the Zig shaders (wired via the example's
 // `.shaders` list in build.zig). The app embeds the artifact but never authors
-// WGSL — these are the only mention of it and they're machine-generated.
+// WGSL - these are the only mention of it and they're machine-generated.
 const vs_wgsl = @embedFile("pipeline_basic_vs.wgsl");
 const fs_wgsl = @embedFile("pipeline_basic_fs.wgsl");
 const vs_io = @import("pipeline_basic_vs_io.zig");
@@ -64,7 +64,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
     z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&vertices));
 
-    // The vertex layout is DERIVED from the typed schema — single source of
+    // The vertex layout is DERIVED from the typed schema - single source of
     // truth, so the buffer and the shader can't drift apart.
     const shader: z.shader.LoadedShader(fs_io) = try z.shader.loadShaderVF(vs_io, fs_io, .{
         .f = f.gpu,

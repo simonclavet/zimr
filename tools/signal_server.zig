@@ -1,5 +1,5 @@
 //! ============================================================================
-//! signal_server.zig — a tiny WebSocket "signaling" server for zimr multiplayer
+//! signal_server.zig - a tiny WebSocket "signaling" server for zimr multiplayer
 //! ============================================================================
 //!
 //! WHAT THIS IS FOR
@@ -8,7 +8,7 @@
 //! flows DIRECTLY between their machines (via WebRTC data channels), never
 //! through a server. But there's a chicken-and-egg problem: before two browsers
 //! can talk directly, they have to exchange a little bit of connection info
-//! first — "here's my network address, here's the encryption I speak, here are
+//! first - "here's my network address, here's the encryption I speak, here are
 //! the routes you can reach me on." That exchange is called SIGNALING, and it
 //! needs a middleman that both peers can reach. That's all this server is.
 //!
@@ -20,7 +20,7 @@
 //!
 //! Concretely, the thing peers exchange through here is WebRTC's SDP (Session
 //! Description Protocol) offers/answers and ICE candidates. We don't parse any
-//! of it — to us it's just opaque text we shuttle from one peer to another.
+//! of it - to us it's just opaque text we shuttle from one peer to another.
 //!
 //! ROOMS
 //! -----
@@ -61,7 +61,7 @@
 //! We're on Zig 0.17 master, and in this build the old blocking sockets
 //! (std.net, the posix socket calls, std.Thread.Mutex) are gone. Networking now
 //! lives behind the new `Io` interface: you get an `Io` handle and do everything
-//! through it — listen, accept, read, write — and concurrency is "green threads"
+//! through it - listen, accept, read, write - and concurrency is "green threads"
 //! (`io.async`) rather than OS threads. This server is built entirely on that.
 //!
 //! THE CONCURRENCY DESIGN (short version)
@@ -70,7 +70,7 @@
 //! only rule we need for correctness: writes to a socket must not interleave. We
 //! get that with a SINGLE async `Io.Mutex` that every write takes. It's an
 //! *async* mutex, so it's safe to hold across an `await` (a socket write is an
-//! await) — waiters suspend instead of spinning. Reads don't take the lock at
+//! await) - waiters suspend instead of spinning. Reads don't take the lock at
 //! all: each connection reads only its own socket, and reading + writing the
 //! same socket at once is fine (TCP is full-duplex). See the big note down by
 //! `main` for the one gotcha that cost an afternoon.
@@ -86,12 +86,12 @@ const bufPrint = std.fmt.bufPrint;
 // The RFC 6455 "magic string." The WebSocket handshake proves the server
 // actually speaks WebSocket by concatenating the client's key with this exact
 // GUID and hashing it. It's the same constant for every WebSocket server on
-// Earth — it's in the spec, not a secret.
+// Earth - it's in the spec, not a secret.
 const magic_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 const default_port = "7777";
 
-// Signaling messages are tiny — an SDP offer is a couple KB, an ICE candidate
+// Signaling messages are tiny - an SDP offer is a couple KB, an ICE candidate
 // is a few hundred bytes. 16 KB is comfortably roomy. If a peer ever tries to
 // send something bigger than this we just drop that frame (see readFrame).
 const max_message_bytes: usize = 16 * 1024;
@@ -107,7 +107,7 @@ const read_buffer_bytes: usize = max_message_bytes + 4096;
 const room_cap: usize = 8;
 
 // ----------------------------------------------------------------------------
-// Peer — one connected client.
+// Peer - one connected client.
 // ----------------------------------------------------------------------------
 // We keep the room name inline as a fixed 64-byte buffer instead of an allocated
 // slice. Room names are short, and a fixed buffer means one less thing to
@@ -128,7 +128,7 @@ const Peer = struct {
     }
 
     // Copy a room name in, clamped so an over-long name can't overflow the 64
-    // bytes (it'd just get truncated — fine for our purposes).
+    // bytes (it'd just get truncated - fine for our purposes).
     fn setRoom(self: *Peer, name: []const u8) void {
         const n: usize = @min(name.len, self.room.len);
         @memcpy(self.room[0..n], name[0..n]);
@@ -137,7 +137,7 @@ const Peer = struct {
 };
 
 // ----------------------------------------------------------------------------
-// Registry — the one piece of shared state across all connection tasks.
+// Registry - the one piece of shared state across all connection tasks.
 // ----------------------------------------------------------------------------
 // Every connected peer lives in `peers`. `next_id` hands out the 1,2,3,... ids.
 // `mutex` guards all of it AND serializes every socket write (see the module
@@ -191,7 +191,7 @@ const Frame = struct { opcode: u8, len: usize };
 // One sharp edge with the new reader: `reader.take(n)` hands back a slice that
 // points straight into the reader's internal buffer, and that view is only valid
 // until the very next read call (which may shuffle the buffer). So we copy out
-// anything we still need — the two header bytes, the 4 mask bytes — the instant
+// anything we still need - the two header bytes, the 4 mask bytes - the instant
 // we have them, before taking again.
 fn readFrame(reader: *Io.Reader, out: []u8) !Frame {
     // The two mandatory header bytes. take(n) fills the buffer as needed and
@@ -225,7 +225,7 @@ fn readFrame(reader: *Io.Reader, out: []u8) !Frame {
         return error.MessageTooLarge;
     }
 
-    // The 4-byte masking key (client frames only). Copy it out immediately —
+    // The 4-byte masking key (client frames only). Copy it out immediately -
     // taking the payload next would invalidate this view.
     var mask: [4]u8 = .{ 0, 0, 0, 0 };
     if (masked) {
@@ -258,7 +258,7 @@ fn readFrame(reader: *Io.Reader, out: []u8) !Frame {
 // payload is), write it, then write the payload.
 //
 // IMPORTANT: every caller of this holds the registry mutex, so two tasks can
-// never be halfway through writing to the SAME socket at once — their frames
+// never be halfway through writing to the SAME socket at once - their frames
 // would interleave into garbage otherwise.
 //
 // Also IMPORTANT: the new Io writer BUFFERS. writeAll alone may leave bytes
@@ -291,7 +291,7 @@ fn writeFrame(io: Io, stream: net.Stream, opcode: u8, payload: []const u8) !void
         header_len = 10;
     }
 
-    // A writer with an empty buffer (&.{}) — writes go essentially straight
+    // A writer with an empty buffer (&.{}) - writes go essentially straight
     // through, and we flush at the end to be certain nothing is left behind.
     var writer: net.Stream.Writer = stream.writer(io, &.{});
     try writer.interface.writeAll(header[0..header_len]);
@@ -302,7 +302,7 @@ fn writeFrame(io: Io, stream: net.Stream, opcode: u8, payload: []const u8) !void
 }
 
 // Convenience: send a text message to one peer. If the write fails (peer's
-// socket is broken), we don't propagate an error — we just mark the peer dead
+// socket is broken), we don't propagate an error - we just mark the peer dead
 // and let its own read loop clean it up on the next lap. This keeps every
 // caller from having to think about "what if that peer just vanished."
 fn sendText(io: Io, peer: *Peer, text: []const u8) void {
@@ -423,7 +423,7 @@ fn handleJoin(io: Io, peer: *Peer, room: []const u8) !void {
     var used: usize = (try bufPrint(&welcome_buf, "WELCOME {d}", .{peer.id})).len;
     for (registry.peers.items) |other| {
         if (other.alive and std.mem.eql(u8, other.roomName(), room)) {
-            // If we somehow overflow 1024 bytes of peer ids, just stop adding —
+            // If we somehow overflow 1024 bytes of peer ids, just stop adding -
             // the welcome is still valid, merely truncated.
             const chunk: []u8 = bufPrint(welcome_buf[used..], " {d}", .{other.id}) catch break;
             used += chunk.len;
@@ -441,7 +441,7 @@ fn handleJoin(io: Io, peer: *Peer, room: []const u8) !void {
 
     // Add the newcomer to the registry, THEN send it its welcome. (Order matters
     // only in that we don't want the newcomer listing itself in its own
-    // welcome — so we append after building the list above.)
+    // welcome - so we append after building the list above.)
     try registry.peers.append(registry.gpa, peer);
     sendText(io, peer, welcome_buf[0..used]);
 }
@@ -475,11 +475,11 @@ fn handleSignal(io: Io, peer: *Peer, rest: []const u8) !void {
     }
 }
 
-// The DATA relay — the fallback path when two peers can't reach each other
+// The DATA relay - the fallback path when two peers can't reach each other
 // directly (strict NATs, symmetric firewalls). A client whose WebRTC connection
 // failed sends "RELAY <to> <channel> <base64-payload>"; we reframe it as
 // "RELAYED <from> <channel> <base64-payload>" and hand it to the target, exactly
-// like handleSignal does for the handshake. The payload is opaque to us — we
+// like handleSignal does for the handshake. The payload is opaque to us - we
 // only need the destination id. This keeps every session playable with no TURN
 // server, at the cost of routing those peers' packets through here.
 fn handleRelay(io: Io, peer: *Peer, rest: []const u8) !void {
@@ -520,7 +520,7 @@ fn cleanupPeer(io: Io, peer: *Peer) void {
     }
 
     // Announce the departure to whoever's left in the room (only if the peer had
-    // actually joined a room — a peer that connected but never sent JOIN has no
+    // actually joined a room - a peer that connected but never sent JOIN has no
     // room to notify).
     if (peer.room_len > 0) {
         var left_buf: [32]u8 = undefined;
@@ -579,9 +579,9 @@ fn handleConnection(io: Io, stream: net.Stream) void {
     std.log.info("[signal] peer {d} connected", .{peer.id});
 
     // The read loop: pull one frame at a time and act on it. This is where the
-    // task spends almost all its life — parked in readFrame, awaiting the next
+    // task spends almost all its life - parked in readFrame, awaiting the next
     // message. Because it's a green thread awaiting an async read, it costs us
-    // nothing while idle (given a properly-sized async pool — see main).
+    // nothing while idle (given a properly-sized async pool - see main).
     while (peer.alive) {
         const frame: Frame = readFrame(reader, msg_buf) catch break; // EndOfStream = peer left
 
@@ -606,14 +606,14 @@ fn handleConnection(io: Io, stream: net.Stream) void {
         } else if (std.mem.startsWith(u8, message, "RELAY ")) {
             handleRelay(io, peer, message[6..]) catch break;
         }
-        // Unknown verbs are silently ignored — be liberal in what you accept.
+        // Unknown verbs are silently ignored - be liberal in what you accept.
     }
 
     std.log.info("[signal] peer {d} disconnected", .{peer.id});
 }
 
 // ----------------------------------------------------------------------------
-// main — set up the io, bind the socket, and accept forever.
+// main - set up the io, bind the socket, and accept forever.
 // ----------------------------------------------------------------------------
 pub fn main(init: std.process.Init) !void {
     const port_text: []const u8 = init.environ_map.get("PORT") orelse default_port;
@@ -624,19 +624,19 @@ pub fn main(init: std.process.Init) !void {
     registry = .{ .gpa = std.heap.smp_allocator };
 
     // ========================================================================
-    // THE GOTCHA THAT COST AN AFTERNOON — read this before touching the io.
+    // THE GOTCHA THAT COST AN AFTERNOON - read this before touching the io.
     // ========================================================================
     // We build our OWN Io.Threaded here instead of using init.io. Why?
     //
     // The default io sizes its async thread pool to (CPU count - 1). On a
     // single-core machine that's ZERO. And when the async pool is full (or
-    // zero-sized), `io.async` doesn't queue the task or spawn a thread — it runs
+    // zero-sized), `io.async` doesn't queue the task or spawn a thread - it runs
     // the task INLINE, right there on the calling thread.
     //
     // Our calling thread is the accept loop below. So with the default io on one
     // core, the very first connection's handleConnection would run inline, and
     // the moment it parked in its read loop waiting for a message, it would take
-    // the accept loop down with it — frozen — and no second peer could ever
+    // the accept loop down with it - frozen - and no second peer could ever
     // connect. (This is exactly the bug we hit: peer 1 joined fine, peer 2's
     // handshake hung forever.)
     //

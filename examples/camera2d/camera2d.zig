@@ -1,6 +1,6 @@
-//! camera2d — the Camera2D pan / zoom / rotate transform, ported to WebGPU. A world
+//! camera2d - the Camera2D pan / zoom / rotate transform, ported to WebGPU. A world
 //! scene (grid + landmark shapes + origin marker) is viewed through a Camera2D whose
-//! target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising
+//! target pans on a Lissajous path, zoom breathes, and rotation slowly turns - exercising
 //! the full 2D camera (offset / target / zoom / rotation) via `beginMode2D`. The GL
 //! original was mouse-driven; this animates itself. Viewport-relative under `.responsive`.
 const std = @import("std");

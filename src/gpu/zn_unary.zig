@@ -1,18 +1,18 @@
-//! zn_unary.zig — the floating-point unary activations, ported from znum's `k_unary.zig`.
+//! zn_unary.zig - the floating-point unary activations, ported from znum's `k_unary.zig`.
 //!
-//! ── ★★★ PORTED, NOT RE-DERIVED ──
+//! -- *** PORTED, NOT RE-DERIVED --
 //!
 //! The shape is znum's and so is the reasoning: lean entries taking a raw `id`, one alias per
 //! binding declared at module scope, a `kernels` list with a comptime loop that installs them,
 //! and guards written as an early return because a unary kernel has no barrier to strand.
 //!
-//! ★★ THE BODIES ARE CALLS INTO `zm`, WHICH IS THE POINT. `zm.sigmoid` and friends compile for
+//! ** THE BODIES ARE CALLS INTO `zm`, WHICH IS THE POINT. `zm.sigmoid` and friends compile for
 //! the host and for SPIR-V from ONE source, so the CPU reference and this shader are the same
 //! arithmetic rather than two implementations that agree until they do not. The sweep measures
 //! whether that holds on a real device; the tutorial claims it, and a claim nobody measured is
 //! just a sentence.
 //!
-//! ★ `T` is `f32` here. znum injects it per dtype through a module substitution
+//! * `T` is `f32` here. znum injects it per dtype through a module substitution
 //! (`-Mdtype=kernels/dtype_f32.zig`), which is the next piece of that machinery to bring across.
 const k = @import("kompute");
 const zm = @import("zm");
@@ -177,12 +177,12 @@ pub const Params = extern struct {
     /// jobs is how a kernel ends up clamping to the learning rate.
     lo: f32 = 0,
     hi: f32 = 0,
-    /// ★ Padding to 32 bytes. `compute_host` refuses a `Params` that is not a multiple of 16 —
+    /// * Padding to 32 bytes. `compute_host` refuses a `Params` that is not a multiple of 16 -
     /// WGSL uniform blocks are std140-aligned, so a 24-byte struct silently mismatches the GPU
     /// and the kernel reads garbage. The guard caught this the moment `lo`/`hi` were added, with
     /// the size and the fix in the message. Exactly the kind of check worth having.
     /// Slope for `leaky_relu` and alpha for `elu`. One word, two kernels that never run in the
-    /// same dispatch — but named for what it IS, not for one of its users.
+    /// same dispatch - but named for what it IS, not for one of its users.
     alpha: f32 = 0,
     /// Window size for the two poolings.
     pool: u32 = 0,
@@ -222,7 +222,7 @@ pub fn gelu(id: u32) void {
 }
 
 /// One list, one loop. Adding an entry is a line here and a line in `build.zig`'s
-/// `.entries` — which is the shape the kernel manifest will formalise.
+/// `.entries` - which is the shape the kernel manifest will formalise.
 pub fn expf(id: u32) void {
     if (id >= params.count) {
         return;
@@ -402,9 +402,9 @@ pub fn scale(id: u32) void {
 
 /// Softmax along each row: `out[r][c] = e^(x[r][c] - max_r) / sum_r`.
 ///
-/// ── ★★★ ONE THREAD PER ROW, AND THAT IS A KNOWN LIMITATION ──
+/// -- *** ONE THREAD PER ROW, AND THAT IS A KNOWN LIMITATION --
 ///
-/// Each thread walks its whole row three times — max, exponentiate-and-sum, divide. With 64 rows
+/// Each thread walks its whole row three times - max, exponentiate-and-sum, divide. With 64 rows
 /// that is 64 threads, which leaves a modern GPU almost entirely idle. The tiled alternative is
 /// one WORKGROUP per row with a shared-memory tree reduction, and it is the obvious next step.
 ///
@@ -412,8 +412,8 @@ pub fn scale(id: u32) void {
 /// checkable reference, and once a faster one exists the two can be compared ON THE SAME DEVICE
 /// rather than only against the CPU.
 ///
-/// ★★ THE ROW MAXIMUM IS SUBTRACTED HERE TOO, and it has to be: `exp` overflows f32 above ~88 and
-/// the CPU implementation subtracts. Skipping it would not merely be less accurate — the two
+/// ** THE ROW MAXIMUM IS SUBTRACTED HERE TOO, and it has to be: `exp` overflows f32 above ~88 and
+/// the CPU implementation subtracts. Skipping it would not merely be less accurate - the two
 /// sides would disagree by an infinity the moment a logit got large.
 /// `logSumExp` of each row, one value per row.
 ///
@@ -476,8 +476,8 @@ pub fn softmax_rows(id: u32) void {
 
 /// Normalise each row to zero mean and unit variance. Matches `zn.layerNormRows`.
 ///
-/// ★ Three passes over the row — mean, variance, write — exactly as the CPU does. A single-pass
-/// form using E[x²] − E[x]² exists and is NOT used: it subtracts two large nearly-equal numbers
+/// * Three passes over the row - mean, variance, write - exactly as the CPU does. A single-pass
+/// form using E[x^2] - E[x]^2 exists and is NOT used: it subtracts two large nearly-equal numbers
 /// and loses most of its significant digits when the mean is large relative to the spread, which
 /// is the normal case for an unnormalised activation. The two sides must also agree, and the CPU
 /// version is the two-pass one.
@@ -510,10 +510,10 @@ pub fn layernorm_rows(id: u32) void {
     }
 }
 
-/// `out[c] = sum over rows of x[r][c]` — one output per COLUMN. The bias gradient of a dense
+/// `out[c] = sum over rows of x[r][c]` - one output per COLUMN. The bias gradient of a dense
 /// layer, which sums the incoming gradient down the batch.
 ///
-/// ★ One thread per column, each walking its column with a stride of `cols`. That stride is a
+/// * One thread per column, each walking its column with a stride of `cols`. That stride is a
 /// cache miss per step, which is the price of the column-major access an axis-0 reduction needs;
 /// the tiled form transposes into shared memory first and is the follow-up.
 pub fn sum_axis0(id: u32) void {
@@ -529,12 +529,12 @@ pub fn sum_axis0(id: u32) void {
     bout[id] = total;
 }
 
-/// `out[0] = sum of every element` — a scalar.
+/// `out[0] = sum of every element` - a scalar.
 ///
-/// ★★ ONE THREAD FOR THE WHOLE BUFFER, and that is as slow as it sounds. It exists as the
+/// ** ONE THREAD FOR THE WHOLE BUFFER, and that is as slow as it sounds. It exists as the
 /// CHECKABLE REFERENCE for the tree reduction that replaces it: a workgroup-shared log-depth sum
 /// has a barrier at every level and no CPU oracle can see a barrier mistake, so it needs a
-/// same-device comparison — and this is what it will be compared against.
+/// same-device comparison - and this is what it will be compared against.
 pub fn sum_all(id: u32) void {
     if (id >= 1) {
         return;
@@ -552,40 +552,40 @@ const lanes: u32 = config.workgroup;
 
 const partial = k.shared(f32, lanes, "red_partial");
 
-/// `out[0] = sum of every element`, by a workgroup-shared tree — the FAST scalar reduction.
+/// `out[0] = sum of every element`, by a workgroup-shared tree - the FAST scalar reduction.
 ///
-/// ⚠ **THIS KERNEL HAS NO VALID CPU TWIN, AND THAT IS STRUCTURAL.** `compute_host`'s CPU path
-/// runs `for id in 0..n: kernel(id)` — each lane executes the WHOLE kernel before the next lane
+/// !! **THIS KERNEL HAS NO VALID CPU TWIN, AND THAT IS STRUCTURAL.** `compute_host`'s CPU path
+/// runs `for id in 0..n: kernel(id)` - each lane executes the WHOLE kernel before the next lane
 /// starts. A barrier is a no-op there, so lane 0 completes all six tree levels before lane 1 has
 /// written its partial. The result is wrong, and no amount of care in the kernel fixes it.
 ///
 /// The sweep row is still valid, because it compares the GPU against `zn.sumAll` rather than
 /// against this kernel's host execution. But nothing on a host can verify the BARRIERS, which is
-/// the sharpest form of the limitation recorded in §10.3: a CPU oracle checks arithmetic, never
+/// the sharpest form of the limitation recorded in section 10.3: a CPU oracle checks arithmetic, never
 /// synchronisation.
 ///
-/// ── ★★★ SIX BARRIER LEVELS, AND NOT ONE MAY SIT IN A BRANCH ──
+/// -- *** SIX BARRIER LEVELS, AND NOT ONE MAY SIT IN A BRANCH --
 ///
 /// Each lane strides the buffer accumulating its own partial, then the 64 partials collapse in
 /// log2(64) = 6 levels. The textbook level is `if (lid < stride) p[lid] += p[lid + stride];`
-/// followed by a barrier — and that `if` is derived from the thread id, which is exactly what put
+/// followed by a barrier - and that `if` is derived from the thread id, which is exactly what put
 /// the tiled matmul's barrier five blocks deep and got the module rejected with
 /// "'workgroupBarrier' must only be called from uniform control flow".
 ///
-/// ★★ SO THE LEVEL IS ARITHMETIC. Every lane reads, every lane writes, and inactive lanes add a
+/// ** SO THE LEVEL IS ARITHMETIC. Every lane reads, every lane writes, and inactive lanes add a
 /// term multiplied by ZERO. `(lid + stride) % lanes` keeps the index in range without a guard.
 /// The result is identical and there is no branch for the structurizer to wrap a barrier in.
 ///
-/// ★ TWO barriers per level, not one: all lanes must finish READING a level's values before any
+/// * TWO barriers per level, not one: all lanes must finish READING a level's values before any
 /// lane WRITES them, or a fast lane overwrites a slow lane's source. One barrier would be a race
-/// that gives a wrong total on some devices and not others — the worst kind.
+/// that gives a wrong total on some devices and not others - the worst kind.
 pub fn sum_all_tiled(id: u32) void {
     const lid: u32 = id % lanes;
 
-    // ★★★ THE TRIP COUNT IS COMPUTED FROM UNIFORM VALUES, NOT FROM THE LANE.
+    // *** THE TRIP COUNT IS COMPUTED FROM UNIFORM VALUES, NOT FROM THE LANE.
     //
     // `while (i < count) : (i += lanes)` starting at `i = lid` runs the same number of times in
-    // every lane HERE — but Tint cannot know that, because the start is per-lane. The barrier
+    // every lane HERE - but Tint cannot know that, because the start is per-lane. The barrier
     // that follows the loop then sits after control flow the analysis calls non-uniform, and the
     // module is rejected. Deriving the bound from `count` and `lanes` makes it provably uniform,
     // and the range guard becomes a multiply by 0-or-1 instead of a branch.
@@ -596,7 +596,7 @@ pub fn sum_all_tiled(id: u32) void {
         const idx: u32 = step * lanes + lid;
         const in_range: u32 = @intFromBool(idx < params.count);
         // Clamped rather than guarded: an out-of-range lane reads element 0 and multiplies it
-        // by zero. Strided so consecutive lanes touch consecutive addresses — a coalesced walk.
+        // by zero. Strided so consecutive lanes touch consecutive addresses - a coalesced walk.
         acc += bx[idx * in_range] * float(in_range);
     }
     partial[lid] = acc;
@@ -620,7 +620,7 @@ pub fn sum_all_tiled(id: u32) void {
 
 /// `out[0] = mean of every element`. Matches `zn.meanAll`.
 ///
-/// ★ The division is by a value from the uniform, not a constant: `count` is what the host
+/// * The division is by a value from the uniform, not a constant: `count` is what the host
 /// dispatched with, so a shorter buffer divides by its own length rather than by whatever the
 /// kernel happened to be written against.
 pub fn mean_all(id: u32) void {
@@ -637,9 +637,9 @@ pub fn mean_all(id: u32) void {
 
 /// `out[0] = largest element`. Matches `zn.maxAll`.
 ///
-/// ★★ SEEDED FROM ELEMENT 0, NOT FROM NEGATIVE INFINITY. Seeding with `-inf` would return `-inf`
+/// ** SEEDED FROM ELEMENT 0, NOT FROM NEGATIVE INFINITY. Seeding with `-inf` would return `-inf`
 /// for an empty buffer, which READS AS AN ANSWER. Seeding from the first element means the empty
-/// case cannot be answered wrongly here — and `zn.maxAll` returns `DomainError` for it, which a
+/// case cannot be answered wrongly here - and `zn.maxAll` returns `DomainError` for it, which a
 /// kernel has no way to express at all. The asymmetry is worth knowing: a kernel cannot report a
 /// domain error, so the host must not dispatch one.
 pub fn max_all(id: u32) void {
@@ -654,7 +654,7 @@ pub fn max_all(id: u32) void {
     bout[0] = best;
 }
 
-/// NaN below zero — the same undefined result the CPU gives, which the sweep's `compare` now
+/// NaN below zero - the same undefined result the CPU gives, which the sweep's `compare` now
 /// treats as agreement rather than as a mismatch.
 pub fn sqrtf(id: u32) void {
     if (id >= params.count) {
@@ -840,7 +840,7 @@ pub fn mean_axis0(id: u32) void {
 }
 
 /// `out[c] = row index of the largest x[r][c]`, written as a float. Ties to the first, NaN
-/// never wins — the comparison is `>`, matching `zn.argmaxRows`.
+/// never wins - the comparison is `>`, matching `zn.argmaxRows`.
 pub fn argmax_axis0(id: u32) void {
     if (id >= params.cols) {
         return;
@@ -859,7 +859,7 @@ pub fn argmax_axis0(id: u32) void {
     bout[id] = @floatFromInt(best_at);
 }
 
-/// Running sum along each row. One thread per row, sequential — a scan has a parallel form
+/// Running sum along each row. One thread per row, sequential - a scan has a parallel form
 /// with log-depth barriers, and this is the reference it will be compared against.
 pub fn cumsum_rows(id: u32) void {
     const rows: u32 = params.count / params.cols;
@@ -898,8 +898,8 @@ pub fn variance_axis0(id: u32) void {
     bout[id] = sq / width;
 }
 
-/// Max pooling of a `cols × cols` image over non-overlapping `pool × pool` windows. One thread
-/// per output pixel; the output is `(cols / pool)²` wide.
+/// Max pooling of a `cols x cols` image over non-overlapping `pool x pool` windows. One thread
+/// per output pixel; the output is `(cols / pool)^2` wide.
 pub fn max_pool2d(id: u32) void {
     const ow: u32 = params.cols / params.pool;
     if (id >= ow * ow) {
@@ -967,7 +967,7 @@ pub fn log1p(id: u32) void {
     bout[id] = zm.log1p(bx[id]);
 }
 
-/// The same `sign(x)·exp(log|x|/3)` as `zn.cbrtf`, so the two agree on negatives.
+/// The same `sign(x)*exp(log|x|/3)` as `zn.cbrtf`, so the two agree on negatives.
 pub fn cbrtf(id: u32) void {
     if (id >= params.count) {
         return;
@@ -1012,10 +1012,10 @@ pub fn rsqrtf(id: u32) void {
     bout[id] = zm.rsqrt(bx[id]);
 }
 
-/// ── ★★ THESE CALL `zm` DIRECTLY, WHICH IS THE POINT ──
+/// -- ** THESE CALL `zm` DIRECTLY, WHICH IS THE POINT --
 ///
 /// Every other kernel here writes its arithmetic out. These four go through `zm.sign`,
-/// `zm.expm1`, `zm.log1p` and `zm.relu` — the functions zimrmath gained this pass — so the sweep
+/// `zm.expm1`, `zm.log1p` and `zm.relu` - the functions zimrmath gained this pass - so the sweep
 /// proves the new zimrmath code **lowers to SPIR-V and agrees with its own CPU path**, which is
 /// the whole claim the library makes.
 pub fn signz(id: u32) void {
@@ -1060,7 +1060,7 @@ pub fn cos_turns(id: u32) void {
     bout[id] = cosTurns(bx[id]);
 }
 
-// ★ ONE ENTRY PER LINE, deliberately. `zig fmt` column-aligns a list whose items share
+// * ONE ENTRY PER LINE, deliberately. `zig fmt` column-aligns a list whose items share
 // a line, and that realignment silently broke an append anchor three times during the
 // port. A vertical list is stable under formatting, so adding a kernel is a one-line
 // diff that no tooling will reflow.

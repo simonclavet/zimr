@@ -1,18 +1,18 @@
-//! src/shaders/default_shapes_fs_io.zig — typed interface for the
+//! src/shaders/default_shapes_fs_io.zig - typed interface for the
 //!
 //! Binding model (which @group each uniform/sampler lands in) is the
-//! stage-segregated scheme documented in src/zimr.zig §3:
-//! VS uniforms→group 0, samplers→group 1, FS uniforms→group 2.
+//! stage-segregated scheme documented in src/zimr.zig section 3:
+//! VS uniforms->group 0, samplers->group 1, FS uniforms->group 2.
 //! default 2D shapes fragment shader.  Companion to
 //! `default_shapes_fs.zig` (shader body).
 //!
 //! Replaces the fragment stage of the hand-written
 //! the engine-emitted `default_shapes_fs.wgsl`.  See
-//! `src/notes/webgpu-migration-plan.md` §3 Phase C for context.
+//! `src/notes/webgpu-migration-plan.md` section 3 Phase C for context.
 //!
-//! Output is the per-fragment color (texture sample × per-vertex tint).
-//! Untextured drawing binds the 1×1 white texture so the sample is
-//! identity and the per-vertex color flows through unchanged — single
+//! Output is the per-fragment color (texture sample x per-vertex tint).
+//! Untextured drawing binds the 1x1 white texture so the sample is
+//! identity and the per-vertex color flows through unchanged - single
 //! shader handles both code paths.
 
 const zm = @import("zm");
@@ -30,9 +30,9 @@ pub const Inputs = common.Interp;
 /// texture+sampler to its declared slot via the material bind group.
 ///
 /// The sampler slot/binding numbering: WebGL uses sequential ints
-/// (0, 1, 2…); WebGPU uses an explicit `@group(N) @binding(N)` pair.
+/// (0, 1, 2...); WebGPU uses an explicit `@group(N) @binding(N)` pair.
 /// `Sampler2D(.albedo, .{})` maps to the engine's per-material bind group
-/// — see `src/renderer_2d.zig::buildMaterialBindGroup` for the wgpu
+/// - see `src/renderer_2d.zig::buildMaterialBindGroup` for the wgpu
 /// side and the equivalent in `rlgl.zig` for the GL side.
 pub const Samplers = struct {
     texture0: shader.Sampler2D(.albedo, .{}),

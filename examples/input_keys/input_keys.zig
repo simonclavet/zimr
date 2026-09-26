@@ -1,6 +1,6 @@
 // examples/input_keys.zig - the simplest possible keyboard input
 // demo: arrow keys move a ball.
-// Port of raylib's `examples/core/core_input_keys.c` (★1, ~65 LOC).
+// Port of raylib's `examples/core/core_input_keys.c` (*1, ~65 LOC).
 // Smallest example in the entire raylib catalogue - really just
 // validates that `isKeyDown` returns true continuously while a
 // key is held, and that we have a way to wire that to a position
@@ -17,7 +17,7 @@
 //     per frame, we multiply by `60 * dt` so the speed feels the
 //     same whether the framerate is 60 or 144 fps.
 // Controls:
-//   ↑ ↓ ← →  move the ball
+//   ^ v <- ->  move the ball
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

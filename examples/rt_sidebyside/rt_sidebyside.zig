@@ -1,14 +1,14 @@
-//! rt_sidebyside — the rt_fs path tracer on THREE execution targets, side
+//! rt_sidebyside - the rt_fs path tracer on THREE execution targets, side
 //! by side from ONE Zig shader:
 //!   - LEFT  : `rt_fs.shaderMain` dispatched per pixel on the CPU (raster), 1/5 res.
 //!   - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen
 //!             GPU pass.
 //!   - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime),
 //!             accumulated over a few samples and baked into the binary as a
-//!             const. It cannot move — it is literally read-only data.
+//!             const. It cannot move - it is literally read-only data.
 //!
 //! One path tracer. One scatter/PRNG. Three targets. The CPU + GPU halves render
-//! live (1 sample/frame — watch the path-trace grain); the comptime corner is a
+//! live (1 sample/frame - watch the path-trace grain); the comptime corner is a
 //! clean multi-sample average computed at build time.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -35,7 +35,7 @@ const trivial_vs_wgsl = @embedFile("trivial_vs.wgsl");
 const width: u32 = 800;
 const height: u32 = 450;
 
-// CPU side at 1/5 res — a per-pixel path trace on the CPU is expensive.
+// CPU side at 1/5 res - a per-pixel path trace on the CPU is expensive.
 // sw_w/sw_h are the INITIAL dims; `ensureCpuTarget` reshapes the buffer to
 // the live canvas aspect each frame at this constant pixel budget.
 const sw_w: u32 = width / 5;
@@ -106,7 +106,7 @@ fn buildUbo(
     };
 
     // geom = (cx,cy,cz,radius); albedo = (r,g,b,material 0=lambert/1=metal/2=glass);
-    // extra = (param,..) — glass IOR / metal fuzz.
+    // extra = (param,..) - glass IOR / metal fuzz.
     ubo.sphere_geom = .{
         vec4(0, -100.5, -1, 100), // ground
         vec4(-0.9, 0.0, -1.0, 0.5), // glass
@@ -180,9 +180,9 @@ const corner_image: [corner_rows * corner_cols]Color = blk: {
     break :blk img;
 };
 
-/// Raw RGBA8 view of the corner — uploaded ONCE to a small texture and
+/// Raw RGBA8 view of the corner - uploaded ONCE to a small texture and
 /// drawn as a single quad (the 960-rect grid this replaces was measurable
-/// per-frame cost; on the helmet's 2304-rect version it was 60→16 fps).
+/// per-frame cost; on the helmet's 2304-rect version it was 60->16 fps).
 const corner_bytes: [corner_rows * corner_cols * 4]u8 = blk: {
     // Zig 1245 forbids @bitCast from a struct; read Color fields directly.
     @setEvalBranchQuota(corner_rows * corner_cols * 8 + 1000);
@@ -293,11 +293,11 @@ fn update(f: *z.Frame, s: *State) void {
     // The one call that replaces this example's hand-rolled orbit/pinch/wheel
     // handler. It reads touch + mouse, skips the first drag frame (no pop), and
     // clamps distance/pitch. Gated on last frame's wantCaptureMouse (the windows
-    // must be submitted first, which happens below) — one frame of latency is
+    // must be submitted first, which happens below) - one frame of latency is
     // fine, and OrbitCamera's own first-frame skip covers the resume.
     _ = s.cam.update(f, s.ui_wanted_mouse, orbit_opts);
 
-    // The shared scene UBO — both halves read it, so they render the same view.
+    // The shared scene UBO - both halves read it, so they render the same view.
     // frame_seed varies per frame: the noise "dances" as it path-traces live.
     const ubo: shader_io.Ubo = buildUbo(s.cam.yaw, s.cam.pitch, s.cam.distance, float(s.frame), vw, vh);
 
@@ -322,7 +322,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- Composite: software (CPU) over the LEFT of the splitter.  The
     //      divider is a width FRACTION (rotation-stable) that follows the
-    //      pointer — helmet mechanics (t1168) — except while the UI owns
+    //      pointer - helmet mechanics (t1168) - except while the UI owns
     //      the mouse (dragging the panel must not sweep the split).
     const m: Vec2 = z.getMousePosition(f.input);
     const is_first_zero: bool = s.last_mouse[0] < 0 and m[0] == 0 and m[1] == 0;
@@ -347,7 +347,7 @@ fn update(f: *z.Frame, s: *State) void {
         ui.text("CPU | GPU | comptime", .{});
         ui.text("drag: orbit, wheel: zoom", .{});
     }
-    // Windows are submitted now, so wantCaptureMouse is valid — stash it for
+    // Windows are submitted now, so wantCaptureMouse is valid - stash it for
     // next frame's scene-input gate (hovering a window OR an active drag).
     s.ui_wanted_mouse = ui.wantCaptureMouse();
     s.ui_host.render(f);
@@ -387,7 +387,7 @@ pub const app: z.AppSpec(State) = .{
             .height = height,
             // responsive: CSS px == design px, so the GPU fullscreen pass, the
             // CPU present, and the UI scissor all share one coordinate space
-            // (no .fit inverse gap — that broke the left-half height + UI clip).
+            // (no .fit inverse gap - that broke the left-half height + UI clip).
             .scale_mode = .responsive,
             .depth_format = null,
         },

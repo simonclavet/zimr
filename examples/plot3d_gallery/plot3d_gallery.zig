@@ -9,7 +9,7 @@
 //!
 //! Note: ImPlot3D's README renders a rubber-duck OBJ for its mesh example. That
 //! asset is not bundled here, so the "Mesh" tab generates a torus to show the
-//! same thing the duck does — an arbitrary solid triangle mesh, shaded.
+//! same thing the duck does - an arbitrary solid triangle mesh, shaded.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -280,7 +280,7 @@ fn tabSphere(s: *State) void {
     if (p3.beginPlot(s.ctx, "Sphere###sph", .{ 0, plot_h }, .{})) {
         p3.setupAxes(s.ctx, "x", "y", "z", .{}, .{}, .{});
         p3.setupAxesLimits(s.ctx, -1.2, 1.2, -1.2, 1.2, -1.2, 1.2, .once);
-        // fill_alpha = 0 leaves only the triangle edges → a see-through mesh.
+        // fill_alpha = 0 leaves only the triangle edges -> a see-through mesh.
         p3.plotMesh(s.ctx, "Sphere", s.sph_v[0..s.sph_vn], s.sph_i[0..s.sph_in], .{
             .fill_alpha = 0.0,
             .line_color = white,
@@ -332,7 +332,7 @@ fn tabMarkers(s: *State) void {
                 .flags = .{ .no_legend = true },
             });
 
-            // Open markers (right column): transparent fill → outline only.
+            // Open markers (right column): transparent fill -> outline only.
             p3.plotLine(s.ctx, f32, lbl_open[i], xr[0..], ys[0..], zs[0..], .{
                 .line_color = col,
                 .line_weight = 1.5,

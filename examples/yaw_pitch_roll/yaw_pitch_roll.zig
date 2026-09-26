@@ -1,11 +1,11 @@
-//! yaw_pitch_roll — raylib's `models_yaw_pitch_roll`.
+//! yaw_pitch_roll - raylib's `models_yaw_pitch_roll`.
 //!
-//! The classic aircraft-orientation demo: three independent rotations —
+//! The classic aircraft-orientation demo: three independent rotations -
 //! PITCH (nose up/down, X axis), YAW (nose left/right, Y axis), and ROLL
-//! (bank, Z axis) — composed as one XYZ rotation matrix and applied to a
+//! (bank, Z axis) - composed as one XYZ rotation matrix and applied to a
 //! plane. raylib loads a WWI biplane .obj; a standalone can't fetch that,
 //! so the plane here is built from immediate-3D-batch primitives (fuselage,
-//! wings, tail, nose) — enough of a recognizable body that all three axes
+//! wings, tail, nose) - enough of a recognizable body that all three axes
 //! read clearly. Each part's offset from the origin AND its own orientation
 //! are rotated by the same matrix, so the whole craft turns rigidly.
 //!
@@ -168,7 +168,7 @@ fn easeToZero(v: f32, step: f32) f32 {
     return 0;
 }
 
-/// On-screen held buttons: pitch (±), yaw (±), roll (±). Phone-first: 2 rows.
+/// On-screen held buttons: pitch (+/-), yaw (+/-), roll (+/-). Phone-first: 2 rows.
 fn controlPanel(u: z.ui_real.Ui, s: *State, vw: f32, vh: f32) void {
     u.setNextWindowPos(.{ 8, vh - 108 }, .{});
     u.setNextWindowSize(.{ @min(340, vw - 16), 100 }, .{});

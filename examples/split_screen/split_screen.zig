@@ -1,4 +1,4 @@
-//! split_screen — port of the GL `split_screen`: two players, one
+//! split_screen - port of the GL `split_screen`: two players, one
 //! world, two perspectives.
 //!
 //! The original was the architecture test for the (GL-era) Scene renderer's
@@ -7,17 +7,17 @@
 //! split-screen awareness in the renderer.  That Scene system dies with the
 //! GL path; this port keeps the demo's ESSENCE on the wgpu idioms:
 //!   - ONE world (immediate-3D primitives + the two zone spheres), drawn
-//!     TWICE per frame with two cameras — each into its own RenderTexture
+//!     TWICE per frame with two cameras - each into its own RenderTexture
 //!     (the helmet's RTT pattern), composited side by side.
 //!   - Per-camera ATMOSPHERE computed in app code: whichever zone sphere a
 //!     camera is inside tints that camera's half (a translucent overlay in
-//!     the RTT's own 2D space).  Same story — one world, two views, two
-//!     atmospheres — without renderer special-casing.
+//!     the RTT's own 2D space).  Same story - one world, two views, two
+//!     atmospheres - without renderer special-casing.
 //!   - The engine learned `App.target_size` for this port: `beginMode3D`
 //!     inside `beginTextureMode` now uses the RTT's aspect, so a half-width
 //!     viewport renders undistorted.
 //! The halves track the live canvas (backing size / 2 each), so rotation
-//! and resize stay correct — the t1168 fullscreen rules.
+//! and resize stay correct - the t1168 fullscreen rules.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -39,7 +39,7 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // The two atmosphere zones: a blue one on the left of the world, an amber
 // one on the right.  Each camera orbits INSIDE its zone, so by construction
-// each half always shows that zone's tint (cross over and it would switch —
+// each half always shows that zone's tint (cross over and it would switch -
 // same "exercise for the reader" as the original).
 const zone_blue_center: Vec = pointVec(-4, 1, 0);
 const zone_amber_center: Vec = pointVec(4, 1, 0);
@@ -62,7 +62,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
 }
 
-/// Keep each half's render texture at half the surface BACKING width ×
+/// Keep each half's render texture at half the surface BACKING width x
 /// full backing height (pixel-perfect at any orientation; recreated only
 /// when the size actually changes).
 fn ensureTargets(f: *z.Frame, s: *State) void {
@@ -97,7 +97,7 @@ fn drawZoneRings(f: *z.Frame, center: Vec, radius: f32, color: Color) void {
     }
 }
 
-/// The shared world — drawn identically for both cameras.  A ground grid,
+/// The shared world - drawn identically for both cameras.  A ground grid,
 /// a small scatter of primitives, and the two zone spheres as wireframes so
 /// each player can SEE the atmosphere volumes.
 fn drawWorld(f: *z.Frame) void {
@@ -111,7 +111,7 @@ fn drawWorld(f: *z.Frame) void {
     z.drawCylinderBetween(f.gl, pointVec(1.5, 0, 2.5), pointVec(1.5, 2.0, 2.5), 0.5, 0.0, 14, c.amber_500);
 
     // The atmosphere volumes, visible from inside and out (three orthogonal
-    // rings each — the wgpu immediate set has no drawSphereWires yet).
+    // rings each - the wgpu immediate set has no drawSphereWires yet).
     drawZoneRings(f, zone_blue_center, zone_radius, c.sky_300);
     drawZoneRings(f, zone_amber_center, zone_radius, c.amber_300);
 }
@@ -152,7 +152,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // OFFSCREEN FIRST (tile-based-GPU safe; app owns begin/endDrawing).
     // Each camera orbits INSIDE its own zone at radius 2, looking across
-    // the world at the other zone's center — so each half frames the whole
+    // the world at the other zone's center - so each half frames the whole
     // scene from its side.
     const rad: f32 = s.angle * pi / 180.0;
     const cam_left: Camera3D = .{

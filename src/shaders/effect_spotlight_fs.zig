@@ -1,4 +1,4 @@
-//! src/shaders/effect_spotlight_fs.zig — spotlight darkness mask,
+//! src/shaders/effect_spotlight_fs.zig - spotlight darkness mask,
 //! raylib's `spotlight.fs` ported (their
 //! `shaders_spotlight_rendering`).
 //!
@@ -6,14 +6,14 @@
 //! alpha is 1 outside every spotlight, 0 inside a spot's inner circle,
 //! and a linear ramp between.  A gallery effect samples the source
 //! instead of overlaying it, so the same math becomes a direct filter:
-//! `texel * mix(dark_level, 1, visibility)` — one pass, identical
+//! `texel * mix(dark_level, 1, visibility)` - one pass, identical
 //! picture.
 //!
 //! The nearest-spot search keeps raylib's wrinkle: the distance being
 //! minimized is `dist(pos, spot_j) - radius_j + radius_i`, i.e. spots
 //! are compared by how far the fragment is from each spot's EDGE, so a
 //! big and a small spotlight blend correctly where they overlap.  The
-//! loops are over a fixed uniform-sized array — uniform control flow,
+//! loops are over a fixed uniform-sized array - uniform control flow,
 //! Tint-friendly.
 
 const zm = @import("zm");

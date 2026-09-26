@@ -1,4 +1,4 @@
-//! textures_image_text — draw text INTO a CPU image, then upload the result as a
+//! textures_image_text - draw text INTO a CPU image, then upload the result as a
 //! texture and display it. Ports raylib's `textures_image_text` (a generated
 //! checker image instead of the resources/parrots.png asset): text is rasterized
 //! onto the image pixels with `imageDrawTextWithFont` BEFORE the image becomes a

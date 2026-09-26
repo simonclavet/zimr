@@ -1,8 +1,8 @@
-//! Address-of a local SCALAR (`&w` for a plain `var w`) — the C out-parameter
+//! Address-of a local SCALAR (`&w` for a plain `var w`) - the C out-parameter
 //! idiom `f(&x)`. Such a local is heap-backed like an aggregate, so `&w` is a
 //! real address: reads load from its slot and writes store to it (via the same
 //! __ld/st-or-view path, so 64-bit works too). `&x` inside the bitcast/copy
-//! idioms (`memcpy(&a,&b,n)`) is deliberately NOT treated this way — those temps
+//! idioms (`memcpy(&a,&b,n)`) is deliberately NOT treated this way - those temps
 //! stay plain SSA values. run_test() returns 0 on success, else a code.
 
 fn setU64(p: *u64, v: u64) void {

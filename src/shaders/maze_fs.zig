@@ -1,12 +1,12 @@
-//! src/shaders/maze_fs.zig — face-shaded maze material.
+//! src/shaders/maze_fs.zig - face-shaded maze material.
 //!
 //! Pick a base color from the fragment's world normal (which axis it
 //! faces most strongly), then apply Lambert with a 0.35 ambient floor.
 //! Cube tops/floor read as one tone, undersides/ceiling another, and
-//! the two wall orientations (±X vs ±Z) get their own colors so corners
-//! and corridors are legible from any angle — all from the geometry,
-//! no texture. Same source compiles for SPIR-V (→ WGSL → GPU) and
-//! wasm32 (→ CPU). Schema lives in `maze_fs_io.zig`.
+//! the two wall orientations (+/-X vs +/-Z) get their own colors so corners
+//! and corridors are legible from any angle - all from the geometry,
+//! no texture. Same source compiles for SPIR-V (-> WGSL -> GPU) and
+//! wasm32 (-> CPU). Schema lives in `maze_fs_io.zig`.
 
 const zm = @import("zm");
 const Vec = zm.Vec;

@@ -123,9 +123,9 @@ fn update(f: *z.Frame, s: *State) void {
     // horizontal scrollbar at the bottom edge always lands in
     // the viewport.
     // Reserve room top + bottom.  Top strip holds the column-label
-    // header.  Bottom inset keeps the window's lower edge — where
+    // header.  Bottom inset keeps the window's lower edge - where
     // the horizontal scrollbar gets rendered at `w.pos[1] +
-    // w.size[1] - 12` — clear of the home indicator / browser
+    // w.size[1] - 12` - clear of the home indicator / browser
     // gesture bar so the user can actually see and tap it.
     const top_strip: f32 = 50;
     const bottom_inset: f32 = 24;
@@ -145,13 +145,13 @@ fn update(f: *z.Frame, s: *State) void {
     })) |w| {
         defer w.close();
 
-        // Data rows.  No separate header row inside the window —
+        // Data rows.  No separate header row inside the window -
         // the column headings are drawn above (outside the
         // scrolling area) so they stay visible while the user
         // pans.
         // Row clipper (ImGuiListClipper): only the rows intersecting the
         // scroll viewport are iterated + submitted, so a 500-row (or 100k-row)
-        // grid costs the same as the ~20 visible rows — CPU loop + draw-list
+        // grid costs the same as the ~20 visible rows - CPU loop + draw-list
         // both shrink to the visible window. Fixed row height = one text line.
         const style: ui.Style = s.ui_host.ctx.style;
         const item_height: f32 = style.font_size + style.item_spacing[1];

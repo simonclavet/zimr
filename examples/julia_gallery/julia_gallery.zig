@@ -1,10 +1,10 @@
-//! julia_gallery — four classic Julia sets in a 2×2 grid, each computed
+//! julia_gallery - four classic Julia sets in a 2x2 grid, each computed
 //! ENTIRELY at COMPILE TIME and baked into the binary, then drawn on the GPU.
 //! The graphical sibling of the CLI `julia_gallery` (which wrote a PNG).
 //!
-//! Same z = z² + c kernel as comptime_julia, but the image is split into
-//! four cells, each with its own Julia constant `c` and hue — dragon, fern,
-//! starfish, spiral. The whole 2×2 escape grid lives in read-only data; runtime
+//! Same z = z^2 + c kernel as comptime_julia, but the image is split into
+//! four cells, each with its own Julia constant `c` and hue - dragon, fern,
+//! starfish, spiral. The whole 2x2 escape grid lives in read-only data; runtime
 //! does zero fractal math, just maps baked escape values to colors.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -19,7 +19,7 @@ const Case = struct {
     hue: f32,
 };
 
-// The four classic constants, laid out row-major in the 2×2 grid.
+// The four classic constants, laid out row-major in the 2x2 grid.
 const cases = [_]Case{
     .{ .cx = -0.7, .cy = 0.27015, .hue = 0.00 }, // dragon  (top-left)
     .{ .cx = -0.4, .cy = 0.6, .hue = 0.25 }, // fern    (top-right)
@@ -27,7 +27,7 @@ const cases = [_]Case{
     .{ .cx = -0.7269, .cy = 0.1889, .hue = 0.66 }, // spiral  (bottom-right)
 };
 
-// 2×2 of 50×44 cells = 100×88 total — same comptime budget as comptime_julia.
+// 2x2 of 50x44 cells = 100x88 total - same comptime budget as comptime_julia.
 const cols: usize = 2;
 const rows: usize = 2;
 const cell_w: usize = 50;
@@ -38,7 +38,7 @@ const iter_limit: u32 = 128;
 const view_w: f32 = 3.4;
 const view_h: f32 = view_w * float(cell_h) / float(cell_w);
 
-/// The Julia iteration — `z` starts at the pixel coordinate, `c` is fixed per
+/// The Julia iteration - `z` starts at the pixel coordinate, `c` is fixed per
 /// cell. Smooth (continuous) escape value, or null for interior points.
 fn juliaEscape(
     zx0: f32,

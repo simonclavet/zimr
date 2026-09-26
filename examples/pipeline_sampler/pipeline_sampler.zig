@@ -1,4 +1,4 @@
-//! pipeline_sampler — Phase 3 opener (`src/notes/webgpu_control.md`):
+//! pipeline_sampler - Phase 3 opener (`src/notes/webgpu_control.md`):
 //! texture sampling control. One pattern (a checker tinted by a gradient,
 //! painted by a COMPUTE shader into a storage texture) is drawn four ways with
 //! UVs running 0..2.5 so both the filter and the address mode are obvious:
@@ -9,7 +9,7 @@
 //! Filter: nearest = hard texel blocks, linear = smooth. Address (UV > 1):
 //! repeat tiles, clamp holds the edge texel, mirror flips every tile. All four
 //! share one texture + one pipeline; only the SAMPLER in the bind group differs
-//! (no new plumbing — SamplerDesc already carries filters + address mode).
+//! (no new plumbing - SamplerDesc already carries filters + address mode).
 //!
 //! Build:  zig build wgpu-pipeline-sampler
 //! Device: zig build wgpu-pipeline-sampler-standalone -Dmode=release
@@ -135,7 +135,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    // Paint the checker+gradient into a storage texture via compute — the fill's
+    // Paint the checker+gradient into a storage texture via compute - the fill's
     // scaffolding is built and released inside the helper (leak-safe).
     const st: z.material.StorageTexture = try z.material.storageTextureFilled(
         gpa,
@@ -195,7 +195,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .label = "sampler_render",
     });
     // The render bgl defined the pipeline + all four cell bind groups, which
-    // retain it — release the build-only handle now.
+    // retain it - release the build-only handle now.
     z.wgpu.destroyBindGroupLayout(bgl);
 
     s.* = .{
@@ -253,7 +253,7 @@ pub const app: z.AppSpec(State) = .{
     .init = initState,
     // .memory left default (arena): init builds a compute pipeline / multi-pass
     // chain (mipmap or bloom) whose intermediate handles aren't kept in State,
-    // so a full managed teardown needs added State fields — deferred.
+    // so a full managed teardown needs added State fields - deferred.
     .deinit = deinit,
     .update = update,
 };

@@ -1,6 +1,6 @@
-//! render.zig — draw a `zimrphysics` World with zimr's 3D immediate-mode API.
+//! render.zig - draw a `zimrphysics` World with zimr's 3D immediate-mode API.
 //!
-//! The pattern: the renderer is a *pure read* over `world.bodies` — the physics
+//! The pattern: the renderer is a *pure read* over `world.bodies` - the physics
 //! ECS (`entities.Entities(Body)`) IS the scene description, so there is no
 //! parallel render state to allocate, sync, or tear down. Per-body colour rides
 //! on the Body's own `material` tag (an opaque `u16` the caller already owns), so
@@ -17,7 +17,7 @@ const float = zm.float;
 
 const phys = z.zimrphysics;
 
-/// A body with this `material` is collidable but not drawn — "glass" walls that
+/// A body with this `material` is collidable but not drawn - "glass" walls that
 /// keep bodies contained while staying out of the camera's way.
 pub const invisible_material: u16 = 0xFFFF;
 
@@ -34,7 +34,7 @@ const matFromQuat = zm.matFromQuat;
 const WgpuGl = z.WgpuGl;
 
 /// How the world is coloured and tessellated. `palette` is indexed by
-/// `Body.material` (wrapping), so materials 0,1,2,… select palette[0],[1],[2],…;
+/// `Body.material` (wrapping), so materials 0,1,2,... select palette[0],[1],[2],...;
 /// static bodies use `static_color` so the ground reads as fixed.
 pub const Style = struct {
     palette: []const Color,
@@ -66,7 +66,7 @@ fn darkenColor(c: Color, factor: f32) Color {
     };
 }
 
-/// Heightfield local vertex (gx, gz): `(gx·cell, height, gz·cell)`, matching the
+/// Heightfield local vertex (gx, gz): `(gx*cell, height, gz*cell)`, matching the
 /// engine's `hfVertex`.
 fn hfVertexLocal(hf: *const phys.HeightField, gx: u32, gz: u32) Vec {
     const fx: f32 = float(gx);

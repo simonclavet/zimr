@@ -1,9 +1,9 @@
-//! textured_curve — a "road" texture swept along a cubic Bézier as a UV-mapped
+//! textured_curve - a "road" texture swept along a cubic Bezier as a UV-mapped
 //! ribbon. Each of `segments` steps becomes a quad extended along the curve
 //! normal by `width`; U runs 0..1 across the width and V accumulates along the
 //! length so the road texture tiles down the curve. Drag the four control
 //! points (endpoints + tangents) to reshape it; sliders set width and segment
-//! count; a toggle overlays the base Bézier.
+//! count; a toggle overlays the base Bezier.
 //!
 //! Port of raylib `textures_textured_curve` (its rlSetTexture + rlBegin(QUADS)
 //! sweep). The road bitmap is generated procedurally instead of loading
@@ -147,7 +147,7 @@ fn scale(a: Vec2, s: f32) Vec2 {
     return .{ a[0] * s, a[1] * s };
 }
 
-/// The hero: sweep the road texture along the cubic Bézier as a UV ribbon.
+/// The hero: sweep the road texture along the cubic Bezier as a UV ribbon.
 fn drawTexturedCurve(f: *z.Frame, s: *State) void {
     const segs: i32 = if (s.segments < 2) 2 else s.segments;
     const step: f32 = 1.0 / float(segs);
@@ -304,7 +304,7 @@ fn update(f: *z.Frame, s: *State) void {
     // ---- draw the ribbon first (under the handles) ----
     drawTexturedCurve(f, s);
 
-    // optional reference Bézier as a sampled polyline
+    // optional reference Bezier as a sampled polyline
     if (s.show_curve) {
         var prev: Vec2 = s.p_start;
         var k: i32 = 1;

@@ -1,9 +1,9 @@
-//! scenes.zig — box2d sample ports for the zimrphysics2d testbed.
+//! scenes.zig - box2d sample ports for the zimrphysics2d testbed.
 //!
 //! Each scene is a `build(*World)` that constructs a world out of the Options-struct
 //! spawn helpers below; a few carry an `update(*World)` hook for per-frame behaviour
 //! (wind, spawners). The registry `list` is grouped by box2d category. Adding a
-//! sample is one build fn + one list entry — the renderer/UI/drag handle the rest.
+//! sample is one build fn + one list entry - the renderer/UI/drag handle the rest.
 //! See src/notes/box2d_samples_plan.md for the full 137-sample triage.
 
 const z = @import("zimr");
@@ -202,7 +202,7 @@ fn attachSensorCircle(
     });
 }
 
-/// Attach a sensor box (no collision) — a region that reports overlapping bodies.
+/// Attach a sensor box (no collision) - a region that reports overlapping bodies.
 fn attachSensorBox(
     world: *phys.World,
     h: BodyHandle,
@@ -217,7 +217,7 @@ fn attachSensorBox(
     });
 }
 
-/// A BodyIndex → live-enough BodyHandle (createJoint/force paths consume `.index()` only).
+/// A BodyIndex -> live-enough BodyHandle (createJoint/force paths consume `.index()` only).
 fn bodyHandleOf(idx: usize) BodyHandle {
     return BodyHandle.pack(@intCast(idx), 0);
 }
@@ -286,7 +286,7 @@ fn attachOffsetBox(
     });
 }
 
-/// Attach a box at body-local `center`, rotated by `angle` radians, with explicit friction —
+/// Attach a box at body-local `center`, rotated by `angle` radians, with explicit friction -
 /// the analogue of box2d v2's `SetAsBox(hw, hh, center, angle)`.
 fn attachRotBox(
     world: *phys.World,
@@ -319,7 +319,7 @@ fn arena(
     return g;
 }
 
-/// World point → a body's local frame (R(-θ)·(p − origin)).
+/// World point -> a body's local frame (R(-theta)*(p - origin)).
 fn worldToLocal(
     world: *phys.World,
     h: BodyHandle,
@@ -504,7 +504,7 @@ fn attachHull(
 
 fn robustHighMass1(world: *phys.World) !void {
     // Three pyramids of unit boxes, each capped by a heavy box (density 100/200/300)
-    // resting on one box — a high mass-ratio stability stress test.
+    // resting on one box - a high mass-ratio stability stress test.
     _ = try groundBox(world, 50, 1);
     const extent: f32 = 1.0;
     var j: usize = 0;
@@ -572,7 +572,7 @@ fn robustOverlap(world: *phys.World) !void {
 }
 
 fn robustTinyPyramid(world: *phys.World) !void {
-    // A 30-row pyramid of 2.5 cm squares — small-scale stacking robustness.
+    // A 30-row pyramid of 2.5 cm squares - small-scale stacking robustness.
     _ = try groundBox(world, 5, 1);
     const base_count: i32 = 30;
     const extent: f32 = 0.025;
@@ -596,7 +596,7 @@ fn robustTinyPyramid(world: *phys.World) !void {
 fn bodyBad(world: *phys.World) !void {
     // A "bad body": a dynamic body with zero density (no mass) behaves like a kinematic body.
     // Shown beside a normal capsule for comparison. (box2d also pushes the bad body upward each
-    // step "for science" — omitted; our Scene.update hook is stateless.)
+    // step "for science" - omitted; our Scene.update hook is stateless.)
     _ = try groundSegment(world, 20);
     const bad: BodyHandle = try addBody(world, .{ .x = 0, .y = 3, .angle = 0.25 * pi, .w = 0.5 });
     try attachCapsule(world, bad, .{ .half_len = 1, .r = 1, .density = 0 });
@@ -645,7 +645,7 @@ fn bodyWakeTouching(world: *phys.World) !void {
 // ---- Continuous (CCD) ----
 
 fn continuousSpecFallback(world: *phys.World) !void {
-    // Fast skinny box dropped at -100 m/s onto a polygon ledge — speculative-contact CCD,
+    // Fast skinny box dropped at -100 m/s onto a polygon ledge - speculative-contact CCD,
     // with the box sitting at a large offset (-8) from its body origin.
     const ground: BodyHandle = try groundSegment(world, 10);
     const ledge = [_]Vec2{ .{ -2, 4 }, .{ 2, 4 }, .{ 2, 4.1 }, .{ -0.5, 4.2 }, .{ -2, 4.2 } };
@@ -656,7 +656,7 @@ fn continuousSpecFallback(world: *phys.World) !void {
 }
 
 fn continuousSpecSliver(world: *phys.World) !void {
-    // A thin sliver triangle falling at -100 m/s onto a segment — speculative CCD on slivers.
+    // A thin sliver triangle falling at -100 m/s onto a segment - speculative CCD on slivers.
     _ = try groundSegment(world, 10);
     const sliver = [_]Vec2{ .{ -2, 0 }, .{ -1, 0 }, .{ 2, 0.5 } };
     const fast: BodyHandle = try addBody(world, .{ .x = 0, .y = 12, .vy = -100 });
@@ -706,7 +706,7 @@ fn continuousRestitutionThreshold(world: *phys.World) !void {
 }
 
 fn continuousChainSlide(world: *phys.World) !void {
-    // A fast circle (100 m/s) slides inside a closed chain loop — CCD against a chain, no ghosts.
+    // A fast circle (100 m/s) slides inside a closed chain loop - CCD against a chain, no ghosts.
     const ground: BodyHandle = try phys.createBody(world, .{ .motion_type = .static });
     var pts: [80]Vec2 = undefined;
     const w: f32 = 2.0;
@@ -752,7 +752,7 @@ fn continuousSegmentSlide(world: *phys.World) !void {
 
 fn jointsUserConstraint(world: *phys.World, st: *SceneState) !void {
     // box2d Joints|User Constraint: a soft "cable" constraint built entirely in the update hook from
-    // public body accessors — no engine joint. Two cables anchored at a fixed point pull a falling box,
+    // public body accessors - no engine joint. Two cables anchored at a fixed point pull a falling box,
     // computed as a TGS soft constraint and applied by setting the box's velocity each step.
     const box: BodyHandle = try phys.createBody(world, .{
         .motion_type = .dynamic,
@@ -873,7 +873,7 @@ fn jointTopDownFriction(world: *phys.World) !void {
 // ---- Shapes (stateful) ----
 
 fn shapesRecreateStaticBuild(world: *phys.World, st: *SceneState) !void {
-    // Each step the static ground is destroyed and recreated from scratch — exercises rebuilding
+    // Each step the static ground is destroyed and recreated from scratch - exercises rebuilding
     // a static body every frame under a resting dynamic box without it falling through.
     const b: BodyHandle = try addBody(world, .{ .x = 0, .y = 1 });
     try attachBox(world, b, .{ .hw = 1, .hh = 1 });
@@ -1167,7 +1167,7 @@ fn jointScissorLift(world: *phys.World) !void {
 
 fn benchmarkLargeCompounds(world: *phys.World) !void {
     // box2d Benchmark|Large Compounds: many compound bodies, each assembled from several shapes with the
-    // mass solve deferred (ShapeDef.update_body_mass=false) and applied once via applyMassFromShapes — O(N)
+    // mass solve deferred (ShapeDef.update_body_mass=false) and applied once via applyMassFromShapes - O(N)
     // per body instead of O(N^2). Here a modest grid of plus-shaped compounds drops into a wide bin.
     _ = try groundBox(world, 16, 1);
 
@@ -1285,7 +1285,7 @@ fn benchmarkSleep(world: *phys.World) !void {
 }
 
 fn benchmarkKinematic(world: *phys.World) !void {
-    // One large kinematic body — a grid of square shapes — spinning slowly; a broadphase stress
+    // One large kinematic body - a grid of square shapes - spinning slowly; a broadphase stress
     // test. (box2d uses a wider grid; reduced for the phone.)
     const body: BodyHandle = try addBody(world, .{ .motion = .kinematic, .w = 1.0 });
     const span: i32 = 8;
@@ -1321,7 +1321,7 @@ fn benchmarkRainUpdate(world: *phys.World, st: *SceneState) void {
 }
 
 fn benchmarkCapacity(world: *phys.World) !void {
-    // A large number of small bodies dropped into a bin — exercises body-pool capacity. (box2d
+    // A large number of small bodies dropped into a bin - exercises body-pool capacity. (box2d
     // spawns many more; reduced for the phone.)
     const ground: BodyHandle = try phys.createBody(world, .{ .motion_type = .static });
     try attachOffsetBox(world, ground, 25, 1, .{ 0, 0 }, 1);
@@ -1355,7 +1355,7 @@ fn benchBin(
 }
 
 fn benchmarkCompounds(world: *phys.World) !void {
-    // A grid of two-triangle compound bodies dropped into a bin — box2d's compound-collision
+    // A grid of two-triangle compound bodies dropped into a bin - box2d's compound-collision
     // benchmark (3000 bodies there; reduced for the phone). Each body carries a left and right
     // triangle hull that together read as a hollow wedge.
     _ = try benchBin(world, 15, 20);
@@ -1395,14 +1395,14 @@ fn benchmarkCompounds(world: *phys.World) !void {
     }
 }
 
-/// A cheap deterministic hash → [0,1), so the barrel's mixed shapes vary without an RNG.
+/// A cheap deterministic hash -> [0,1), so the barrel's mixed shapes vary without an RNG.
 fn hash01(n: f32) f32 {
     const h: f32 = @sin(n * 12.9898) * 43758.5453;
     return h - @floor(h);
 }
 
 fn benchmarkBarrel(world: *phys.World) !void {
-    // A bin packed with a grid of mixed shapes — circles, capsules, rounded boxes, and wedges —
+    // A bin packed with a grid of mixed shapes - circles, capsules, rounded boxes, and wedges -
     // box2d's "Barrel" benchmark in its mixed-shape mode. Sizes vary deterministically per index.
     _ = try benchBin(world, 11, 22);
 
@@ -1710,7 +1710,7 @@ fn determinismFallingHinges(world: *phys.World) !void {
 }
 
 fn robustnessMultiplePrismatic(world: *phys.World) !void {
-    // A tower of 6 boxes chained by stiff, limited prismatic joints (default horizontal axis) — a
+    // A tower of 6 boxes chained by stiff, limited prismatic joints (default horizontal axis) - a
     // robustness test of stacked prismatic constraints.
     const ground: BodyHandle = try phys.createBody(world, .{ .motion_type = .static });
     var prev: BodyHandle = ground;
@@ -1758,7 +1758,7 @@ fn showcaseDominos(world: *phys.World) !void {
     const top: BodyHandle = try phys.createBody(world, .{ .motion_type = .static, .position = .{ 0, 32 } });
     try attachBox(world, top, .{ .hw = 23, .hh = 0.25, .friction = 0.2 });
 
-    // The cannon shot — launched up and to the right.
+    // The cannon shot - launched up and to the right.
     const shot: BodyHandle = try addBody(world, .{ .x = 3, .y = 35, .vx = 17, .vy = 15 });
     try attachCircle(world, shot, .{ .r = 1, .density = 5, .friction = 0, .restitution = 0.02 });
 
@@ -1909,7 +1909,7 @@ fn showcaseDominos(world: *phys.World) !void {
 }
 
 // ================================================================================
-// Benchmark — Washer (spinning ring drum)
+// Benchmark - Washer (spinning ring drum)
 // ================================================================================
 
 // A kinematic "washer" ring spun slowly: 36 wedge polygons (between r1..r2) plus 4 inner spokes
@@ -1917,7 +1917,7 @@ fn showcaseDominos(world: *phys.World) !void {
 // 90x90 grid (8100 squares); the physics + growable pools handle that fine (~70ms/step on device),
 // but the debug-draw vertex ring (gpu_iface.vbo_ring_vertices = 262144) overflows past ~8000 bodies
 // and the demo's 60Hz fixed step can't keep real-time at 70ms/step. So the shipped grid is 62x62
-// (~3844 squares) — under the vertex ring, and deliberately large so the broad-phase cost (the
+// (~3844 squares) - under the vertex ring, and deliberately large so the broad-phase cost (the
 // dominant term once the pile densifies) is visible in the perf overlay. The growability proof
 // lives in the host harnesses; this scene is tuned to be playable.
 fn benchmarkWasher(world: *phys.World) !void {
@@ -1991,12 +1991,12 @@ fn benchmarkWasher(world: *phys.World) !void {
 // Issues (box2d robustness / solver repros)
 // ================================================================================
 
-// A near-degenerate sliver triangle — three almost-collinear points sitting far from the body
-// origin — dropped onto a segment. Stresses hull centroid and the "bad Steiner point" inertia path.
+// A near-degenerate sliver triangle - three almost-collinear points sitting far from the body
+// origin - dropped onto a segment. Stresses hull centroid and the "bad Steiner point" inertia path.
 fn issuesDisable(world: *phys.World, st: *SceneState) !void {
     // box2d Issues|Disable: a dynamic "attachment" arm jointed to a static platform by a motorised
     // revolute. box2d toggles b2Body_Disable/Enable on the arm via a checkbox; here it is automated
-    // on a timer — the swinging arm vanishes from the sim and reappears, its joint going inactive and
+    // on a timer - the swinging arm vanishes from the sim and reappears, its joint going inactive and
     // restoring cleanly (the crash this scene originally guarded against).
     const attach: BodyHandle = try addBody(world, .{ .x = -2, .y = 3 });
     try attachBox(world, attach, .{ .hw = 0.5, .hh = 2.0 });
@@ -2046,7 +2046,7 @@ fn issuesBadSteiner(world: *phys.World) !void {
 }
 
 // A dynamic platform held by a motorised revolute to a hanging attachment AND a limited, motorised
-// prismatic to ground — the original mixed-joint crash repro, shown in its default dynamic state.
+// prismatic to ground - the original mixed-joint crash repro, shown in its default dynamic state.
 fn issuesCrash01(world: *phys.World) !void {
     const ground: BodyHandle = try groundSegment(world, 20);
     const attach: BodyHandle = try addBody(world, .{ .x = -2, .y = 3 });
@@ -2064,7 +2064,7 @@ fn issuesCrash01(world: *phys.World) !void {
     });
 }
 
-// A bullet fired at very high speed into a static polygon — a continuous-collision repro that once
+// A bullet fired at very high speed into a static polygon - a continuous-collision repro that once
 // tunnelled straight through the static shape.
 fn issuesStaticVsBullet(world: *phys.World) !void {
     const wall: BodyHandle = try addBody(world, .{ .motion = .static });
@@ -2091,7 +2091,7 @@ fn issuesStaticVsBullet(world: *phys.World) !void {
     try attachCircle(world, ball, .{ .r = 0.3, .density = 3, .friction = 0.2, .restitution = 0.9 });
 }
 
-// A light centre mass between two heavy circles on stiff spring-prismatics — a solver stress test
+// A light centre mass between two heavy circles on stiff spring-prismatics - a solver stress test
 // that jitters (diverges) when the middle mass is too small or the sub-step count too low.
 fn issuesUnstablePrismatic(world: *phys.World) !void {
     _ = try groundSegment(world, 100);
@@ -2138,7 +2138,7 @@ fn weldRotor(
     } });
 }
 
-// Four box rotors rigidly welded around a gravity-free central disc with a stiff constraint hertz —
+// Four box rotors rigidly welded around a gravity-free central disc with a stiff constraint hertz -
 // a weld-joint stability test; the high stiffness makes the windmill wobble rather than hold rigid.
 fn issuesUnstableWindmill(world: *phys.World) !void {
     const g: BodyHandle = try phys.createBody(world, .{ .motion_type = .static });
@@ -2238,7 +2238,7 @@ fn benchmarkShapeDistanceLab(ctx: *render.LabCtx) void {
 
 // box2d Benchmark|CreateDestroy rebuilds a 100-row pyramid every frame to time the create/destroy
 // paths. A scene here can only track a few handles, so we churn a small cluster instead: every
-// ~0.45s the four boxes are destroyed and respawned at the top (they fall in between) — the same
+// ~0.45s the four boxes are destroyed and respawned at the top (they fall in between) - the same
 // create/destroy exercise, device-sized.
 fn benchmarkCreateDestroy(world: *phys.World, st: *SceneState) !void {
     _ = try groundBox(world, 14, 1);
@@ -2391,7 +2391,7 @@ fn benchmarkSensorLab(ctx: *render.LabCtx) void {
 }
 
 // box2d Joints|Gear Lift: two toothed gears that physically MESH (driver + limited follower), the
-// follower winding a 40-link chain that lifts a door. box2d v3 has no gear joint — the gearing is
+// follower winding a 40-link chain that lifts a door. box2d v3 has no gear joint - the gearing is
 // real tooth-on-tooth collision, so the geometry is reproduced with box2d's exact numbers (gear1
 // teeth sit at r+tooth_hh, gear2 at r+tooth_hw, which is what makes them interlock). The SVG-path
 // frame is replaced with a simple floor; update_s cycles gear1's motor so the door rises and lowers.
@@ -2651,7 +2651,7 @@ fn continuousPinballControl(
     }
 }
 
-// box2d Robustness|Cart: a deliberately punishing setup — a 1000-density chassis riding on two tiny
+// box2d Robustness|Cart: a deliberately punishing setup - a 1000-density chassis riding on two tiny
 // 0.1 m wheels under hot gravity (-22). box2d leaves the wheels passive (it's a solver stress test with
 // tuning sliders); here the wheel revolutes get motors so left/right drives the cart along the ground,
 // which also shows the joints holding the heavy chassis together while it rolls.
@@ -2715,7 +2715,7 @@ fn robustnessCartControl(
 // box2d Events|Joint: six 1x1 boxes, each hung from the ground by a DIFFERENT joint type (distance,
 // motor, prismatic, revolute, weld, wheel). Every joint carries a force/torque threshold and a
 // user_data = its index. Drag a box hard (existing pointer drag) and when the joint force/torque
-// exceeds the threshold, getJointEvents reports it and update_s destroys that joint — the box drops.
+// exceeds the threshold, getJointEvents reports it and update_s destroys that joint - the box drops.
 // box2d uses 20000 N thresholds, but the demo's drag tops out near 1000*mass (~4 kN here), so those
 // would never break; lowered to 2.5 kN / 1.5 kN.m so a firm yank breaks a joint while gravity (~40 N)
 // and gentle drags hold.
@@ -3385,7 +3385,7 @@ pub const list = [_]Scene{
     },
 };
 
-/// Unique category names, in list order — drives the scene picker's category dropdown.
+/// Unique category names, in list order - drives the scene picker's category dropdown.
 pub const categories = blk: {
     @setEvalBranchQuota(20000);
     var buf: [list.len][]const u8 = undefined;
@@ -3416,7 +3416,7 @@ pub fn categoryIndex(name: []const u8) usize {
     return 0;
 }
 
-/// First scene index in a category (0 if none) — used when the category changes.
+/// First scene index in a category (0 if none) - used when the category changes.
 pub fn firstInCategory(cat: usize) usize {
     var i: usize = 0;
     while (i < list.len) : (i += 1) {
@@ -3568,7 +3568,7 @@ fn bodySleep(world: *phys.World) !void {
 
 fn bodyWeeble(world: *phys.World) !void {
     _ = try groundBox(world, 40, 1);
-    // Roly-poly: a dense low circle plus a light tall box → self-rights.
+    // Roly-poly: a dense low circle plus a light tall box -> self-rights.
     const b: BodyHandle = try addBody(world, .{ .x = 0, .y = 3, .angle = 0.5 });
     try attachCircle(world, b, .{ .r = 1.0, .cy = -1.0, .density = 6 });
     try attachBox(world, b, .{ .hw = 0.5, .hh = 1.5, .density = 0.2 });
@@ -3668,8 +3668,8 @@ fn shapeBoxRestitution(world: *phys.World) !void {
 
 fn shapesModifyGeometry(world: *phys.World, st: *SceneState) !void {
     // box2d Shapes|Modify Geometry: a kinematic body whose single shape is swapped through
-    // circle → capsule → box → segment at runtime via setShapeGeometry, while a dynamic box rests
-    // on it — the morphing platform visibly changes the contact each cycle.
+    // circle -> capsule -> box -> segment at runtime via setShapeGeometry, while a dynamic box rests
+    // on it - the morphing platform visibly changes the contact each cycle.
     const ground: BodyHandle = try addBody(world, .{ .motion = .static });
     try attachOffsetBox(world, ground, 10.0, 1.0, .{ 0, -1 }, 1.0);
 
@@ -3806,7 +3806,7 @@ fn shapeOffset(world: *phys.World) !void {
     while (i < 8) : (i += 1) {
         const fi: f32 = float(i);
         const b: BodyHandle = try addBody(world, .{ .x = -5.0 + fi * 1.4, .y = 5 });
-        // Shape offset from the body origin → spins about an off-centre mass.
+        // Shape offset from the body origin -> spins about an off-centre mass.
         try attachOffsetBox(world, b, 0.4, 0.4, .{ 0.6, 0.0 }, 1);
     }
 }
@@ -3937,7 +3937,7 @@ fn jointCantilever(world: *phys.World) !void {
 
 fn jointSoftBody(world: *phys.World) !void {
     _ = try groundBox(world, 40, 1);
-    // A ring of point-masses tied by distance springs → a wobbly blob.
+    // A ring of point-masses tied by distance springs -> a wobbly blob.
     const n: usize = 12;
     const radius: f32 = 2.0;
     const cx: f32 = 0;
@@ -4032,7 +4032,7 @@ fn benchTumbler(world: *phys.World) !void {
 }
 
 // ================================================================================
-// Wave 2 — joints, chains, structures, stress
+// Wave 2 - joints, chains, structures, stress
 // ================================================================================
 
 fn jointWheel(world: *phys.World) !void {
@@ -4697,8 +4697,8 @@ fn benchSpinner(world: *phys.World) !void {
 }
 
 fn benchmarkBarrel24(world: *phys.World) !void {
-    // box2d Benchmark|Barrel 2.4: a tall U-shaped bin (floor + two 90°-rotated walls) packed with a
-    // 26 × (5·26) grid of unit cubes — the classic v2.4-era stress arrangement. Ported 1:1.
+    // box2d Benchmark|Barrel 2.4: a tall U-shaped bin (floor + two 90 deg-rotated walls) packed with a
+    // 26 x (5*26) grid of unit cubes - the classic v2.4-era stress arrangement. Ported 1:1.
     const ground_size: f32 = 25.0;
 
     const bin_floor: BodyHandle = try addBody(world, .{ .motion = .static });
@@ -4815,7 +4815,7 @@ fn benchManyTumblers(world: *phys.World) !void {
 }
 
 // ================================================================================
-// Wave 3 — event-driven scenes (read getContactEvents/getSensorEvents/getBodyEvents
+// Wave 3 - event-driven scenes (read getContactEvents/getSensorEvents/getBodyEvents
 // in a per-frame update hook and react). Visualisation is the engine's debug draw.
 // ================================================================================
 
@@ -4843,14 +4843,14 @@ fn platformerPreSolve(
     } else if (ud_b == tag_platform and ud_a == tag_player) {
         sign = -1.0;
     } else {
-        return true; // not a platform/player pair → ordinary solid contact
+        return true; // not a platform/player pair -> ordinary solid contact
     }
     return sign * normal[1] > 0.95;
 }
 
 fn eventsPlatformer(world: *phys.World, st: *SceneState) !void {
     // box2d Events|Platformer: jump-through (one-way) platforms via a pre-solve veto. box2d drives the
-    // player with the keyboard; here it auto-jumps on a timer so the one-way behaviour is visible — the
+    // player with the keyboard; here it auto-jumps on a timer so the one-way behaviour is visible - the
     // player rises straight through each platform and lands on top coming back down.
     _ = try groundSegment(world, 20);
 
@@ -5023,7 +5023,7 @@ fn eventSensorTypes(world: *phys.World, st: *SceneState) !void {
         .filter = .{ .category = cat_sensor },
     });
 
-    // Kinematic sensor — bobs up and down (update). Stash the handle for the update hook.
+    // Kinematic sensor - bobs up and down (update). Stash the handle for the update hook.
     const kin: BodyHandle = try addBody(world, .{ .x = 0, .y = 0, .motion = .kinematic, .vy = 1 });
     _ = try phys.createShape(world, kin, .{
         .geom = .{ .polygon = phys.makeBox(1.0, 1.0) },
@@ -5033,7 +5033,7 @@ fn eventSensorTypes(world: *phys.World, st: *SceneState) !void {
     });
     st.body[0] = kin;
 
-    // Dynamic sensor — a sensor box plus a real solid box so the body is physical.
+    // Dynamic sensor - a sensor box plus a real solid box so the body is physical.
     const dyn: BodyHandle = try addBody(world, .{ .x = 3, .y = 1 });
     _ = try phys.createShape(world, dyn, .{
         .geom = .{ .polygon = phys.makeBox(1.0, 1.0) },
@@ -5067,14 +5067,14 @@ fn eventSensorTypesUpdate(world: *phys.World, st: *SceneState) void {
 }
 
 fn launchSensorBullet(world: *phys.World) !BodyHandle {
-    // A small fast bullet (CCD) fired left→right across all three sensors.
+    // A small fast bullet (CCD) fired left->right across all three sensors.
     const bullet: BodyHandle = try addBody(world, .{ .x = -26.7, .y = 6, .vx = 250, .bullet = true });
     try attachCircle(world, bullet, .{ .r = 0.25, .friction = 0.8, .rolling = 0.01 });
     return bullet;
 }
 
 fn eventSensorHits(world: *phys.World, st: *SceneState) !void {
-    // box2d Events|Sensor Hits: a fast bullet repeatedly tunnel-tests three sensors — a static
+    // box2d Events|Sensor Hits: a fast bullet repeatedly tunnel-tests three sensors - a static
     // tripwire segment, a kinematic tripwire drifting right, and a dynamic capsule riding a motorised
     // prismatic. Even at ~250 m/s the CCD bullet trips every sensor's begin event. box2d fires the
     // bullet on a key; here the launch is automated on a timer, destroying the prior bullet each time.
@@ -5204,7 +5204,7 @@ fn eventSensorBookendUpdate(world: *phys.World) void {
 }
 
 fn eventBodyMove(world: *phys.World) !void {
-    // No floor — bodies rain, bounce off two static ledges, fall away, and are recycled
+    // No floor - bodies rain, bounce off two static ledges, fall away, and are recycled
     // to the top by reading body-move events.
     const l1: BodyHandle = try addBody(world, .{ .x = -3, .y = 2, .motion = .static, .angle = -0.3 });
     try attachBox(world, l1, .{ .hw = 3, .hh = 0.2 });
@@ -5239,7 +5239,7 @@ fn eventBodyMoveUpdate(world: *phys.World) void {
 
 /// box2d's "Projectile Event": a bullet is auto-fired at a stack of rounded boxes every couple of
 /// seconds; on its first contact it detonates a small explosion at the impact point and is removed.
-/// The original fires on mouse-drag — here it loops autonomously. Exercises bullet bodies, contact
+/// The original fires on mouse-drag - here it loops autonomously. Exercises bullet bodies, contact
 /// events, world.explode, and runtime body destruction, all driven from the scene-state slot.
 fn eventProjectile(world: *phys.World, st: *SceneState) !void {
     const ground: BodyHandle = try phys.createBody(world, .{ .motion_type = .static });
@@ -5393,5 +5393,5 @@ fn labConvexHullLab(ctx: *render.LabCtx) void {
 }
 
 fn labEmpty(world: *phys.World) !void {
-    _ = world; // convex hull queries nothing — the pointer is just a hull point
+    _ = world; // convex hull queries nothing - the pointer is just a hull point
 }

@@ -1,4 +1,4 @@
-//! gallery — multi-app demo on WebGPU, now via the pushViewport primitive
+//! gallery - multi-app demo on WebGPU, now via the pushViewport primitive
 //! (P1 of the multi-app refactor). One App hosts four independent sub-apps in a
 //! 2x2 grid: pulse (gradient), spinner (rotating triangle), sparkles (per-app-RNG
 //! particles), counter (big frame count). The host opens ONE draw frame, then for
@@ -6,7 +6,7 @@
 //! a viewport the sub-app draws in LOCAL coordinates as if it owns a small screen
 //! (it reads f.window for its size, draws from 0,0); pushViewport sets the
 //! modelview to translate it into the cell and clips to it. This is the manual
-//! shape every example will take once migrated to the launcher model — the
+//! shape every example will take once migrated to the launcher model - the
 //! sub-apps here are written exactly like a future embedded example body (no
 //! begin/clear/end, no absolute offsets, reads f.window).
 const std = @import("std");
@@ -212,7 +212,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.clearViewport(f, z.colors.slate_950);
 
     // Cells from the LIVE canvas each frame (responsive). f.window here is the
-    // full canvas — pushViewport overrides it to the cell for each sub-app.
+    // full canvas - pushViewport overrides it to the cell for each sub-app.
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
     const cw: f32 = w * 0.5;
@@ -223,7 +223,7 @@ fn update(f: *z.Frame, s: *State) void {
     const cell_counter: z.Rectangle = .{ .x = cw, .y = ch, .width = cw, .height = ch };
 
     // Each sub-app draws in LOCAL coords inside its cell; pushViewport places +
-    // clips it (1:1 reflow here — logical size == cell size).
+    // clips it (1:1 reflow here - logical size == cell size).
     z.pushViewport(f, .{ .rect = cell_pulse, .logical_w = cw, .logical_h = ch });
     updatePulse(&s.pulse, f, s.font);
     z.popViewport(f);

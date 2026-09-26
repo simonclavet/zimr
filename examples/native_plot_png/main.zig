@@ -1,4 +1,4 @@
-//! native_plot_png — a small, native, pure-Zig program that renders a
+//! native_plot_png - a small, native, pure-Zig program that renders a
 //! publication-quality plot straight to a PNG file. No GPU, no browser, no
 //! third-party code: zimr rasterizes into a supersampled buffer (4x AA) with
 //! its own `imageDraw*` + truetype text, then encodes with its own PNG codec.

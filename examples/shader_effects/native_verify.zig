@@ -1,10 +1,10 @@
-//! native_verify — render every 2D effect NATIVELY through the same
+//! native_verify - render every 2D effect NATIVELY through the same
 //! `shaderMain`s the gallery compiles to WGSL, over a synthetic test
 //! pattern, into one contact sheet (`effects_verify.png`): source,
 //! grade, waves, outline, palette, left to right.
 //!
 //! Each panel is a fullscreen quad through `deferred_shading_vs` with
-//! the effect FS sampling the pattern via a TextureRef — the CPU twin
+//! the effect FS sampling the pattern via a TextureRef - the CPU twin
 //! of the gallery's GPU pass.  Cheap assertions per effect catch the
 //! "shipped a blob" class of bug before a device ever sees it.
 //! `zig build shader-effects-verify`.
@@ -78,7 +78,7 @@ fn runEffect(
         fs_io,
         connect,
         .{ .front_face = .none, .depth_test = false },
-        .{ 0, 0, 0, 0 }, // transparent clear — panels composite like the app
+        .{ 0, 0, 0, 0 }, // transparent clear - panels composite like the app
     );
 }
 
@@ -168,7 +168,7 @@ pub fn main() !void {
         }
     }
     // Spot center (inside disk 0's inner circle) must keep the disk's
-    // red; the bar's far end (x=190,y=127 — outside all spots) must be
+    // red; the bar's far end (x=190,y=127 - outside all spots) must be
     // darkened to ~12% of its source brightness.
     const center_px: [4]u8 = spotlight[70 * src_w + 60];
     const far_src: [4]u8 = pattern[127 * src_w + 190];

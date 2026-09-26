@@ -1,4 +1,4 @@
-//! logo_raylib — the classic "framed square" logo, drawn entirely from primitives: a filled
+//! logo_raylib - the classic "framed square" logo, drawn entirely from primitives: a filled
 //! square, a smaller filled square punched out of its middle to leave a thick border, and a word
 //! centred inside. Rebadged for this engine ("zimr"), and on the dark theme it's a light frame on
 //! the page colour. A gentle breathe keeps it alive. The point of the original survives: it is NOT

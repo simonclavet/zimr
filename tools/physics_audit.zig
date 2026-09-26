@@ -1,4 +1,4 @@
-//! physics_audit — headless, deterministic probe of the zimrphysics engine.
+//! physics_audit - headless, deterministic probe of the zimrphysics engine.
 //!
 //! No GPU/window: it builds tiny worlds, steps them with `zp.step`, and asserts
 //! on body state (rest heights, tunneling, NaN, restitution, raycast). Each
@@ -209,7 +209,7 @@ fn raycastScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     }
 }
 
-/// A box dropped tilted 30° about Z must settle finite and rest on the floor
+/// A box dropped tilted 30 deg about Z must settle finite and rest on the floor
 /// (COM in a sane band), not tunnel. Exercises non-axis-aligned axis selection.
 fn boxTiltedScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var world: zp.World = try zp.World.init(gpa, 64);
@@ -232,7 +232,7 @@ fn boxTiltedScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("box-tilted", ok, bufPrint(&buf, "rest y={d:.3} (band 0.2..1.3)", .{y}) catch "fmt");
 }
 
-/// A 3-2-1 box pyramid must settle without any box tunneling — the box-on-box
+/// A 3-2-1 box pyramid must settle without any box tunneling - the box-on-box
 /// under load case the physics_pyramid example needs (boxes use SAT, not EPA).
 fn boxPyramidScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var world: zp.World = try zp.World.init(gpa, 64);
@@ -335,7 +335,7 @@ fn queryAabbScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("queryAabb", hits.items.len == 1, detail);
 }
 
-/// World.deinit smoke: build, step, free — exercises every field access in the
+/// World.deinit smoke: build, step, free - exercises every field access in the
 /// new deinit (a wrong field name fails to compile; arena frees are no-ops here).
 fn worldDeinitScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var world: zp.World = try zp.World.init(gpa, 16);
@@ -662,7 +662,7 @@ fn pulleyScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 fn pathScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     // A frictionless bead constrained to a valley-shaped Hermite path (in the XY plane)
     // must (a) stay exactly on the path plane (z == 0), (b) slide down to the bottom, and
-    // (c) conserve energy — swing back up to near its start height on the far side.
+    // (c) conserve energy - swing back up to near its start height on the far side.
     var world: zp.World = try zp.World.init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
@@ -730,7 +730,7 @@ fn pathScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 fn newtonsCradleScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     // Two equal balls as planar pendulums, restitution 1: the lifted ball swings in and
-    // must transfer (near) all its velocity to the resting ball, stopping itself dead —
+    // must transfer (near) all its velocity to the resting ball, stopping itself dead -
     // momentum + energy conservation through the contact (Jolt-style elastic collision).
     var world: zp.World = try zp.World.init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
@@ -816,7 +816,7 @@ fn newtonsCradleScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 fn wreckingBallScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     // A heavy ball on a rigid chain swings into a free-standing brick wall: the wall must
     // stand on its own (small displacement before impact) then be demolished (large mean
-    // displacement after), with no NaN — a pendulum + stacking + mass-ratio showcase.
+    // displacement after), with no NaN - a pendulum + stacking + mass-ratio showcase.
     var world: zp.World = try zp.World.init(gpa, 128);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
@@ -1248,7 +1248,7 @@ fn sliderPerpHoldScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 fn rackReciprocationScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     // Reversing a velocity-motored pinion under rack-pinion coupling must reciprocate
-    // cleanly through exact rest — no deadlock, no NaN. Guards the motor/coupling path.
+    // cleanly through exact rest - no deadlock, no NaN. Guards the motor/coupling path.
     var world: zp.World = try zp.World.init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
@@ -2043,11 +2043,11 @@ fn fixedWeldScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-/// Friction ramp (Jolt FrictionTest): a 23° static ramp; a near-frictionless box
+/// Friction ramp (Jolt FrictionTest): a 23 deg static ramp; a near-frictionless box
 /// must slide much farther downhill than a high-friction box that grips.
 fn frictionRampScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var world: zp.World = try zp.World.init(gpa, 16);
-    const angle: f32 = 0.40; // ~23°, below the grippy box's friction so it holds
+    const angle: f32 = 0.40; // ~23 deg, below the grippy box's friction so it holds
     const ramp: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(8, 0.5, 8),
         .convex_radius = 0.05,

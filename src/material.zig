@@ -1,10 +1,10 @@
 //! lint:alias material
-//! material.zig — the public custom-pipeline API ("complete WebGPU control").
+//! material.zig - the public custom-pipeline API ("complete WebGPU control").
 //!
 //! This is the keystone of `src/notes/webgpu_control.md`. It collapses the ~90
-//! lines of pipeline plumbing that `cube_demo` hand-rolls — create shader_runtime
-//! module → pipeline layout → `StateCombo` → encode descriptor → create
-//! pipeline, then `setPipeline` → `setVertexBuffer` → draw — into one `Pipeline`
+//! lines of pipeline plumbing that `cube_demo` hand-rolls - create shader_runtime
+//! module -> pipeline layout -> `StateCombo` -> encode descriptor -> create
+//! pipeline, then `setPipeline` -> `setVertexBuffer` -> draw - into one `Pipeline`
 //! an app builds with a designated struct literal and draws with one call,
 //! inside the normal frame pass.
 //!
@@ -37,7 +37,7 @@ const PassState = gpu_iface.PassState;
 const Backend = gpu_iface.WgpuBackend;
 
 // ---------------------------------------------------------------------------
-// Convenience re-exports — an app needs only `z.Pipeline` + these enums/types,
+// Convenience re-exports - an app needs only `z.Pipeline` + these enums/types,
 // not direct `z.gpu`/`z.wgpu` reaching for the common cases.
 // ---------------------------------------------------------------------------
 pub const VertexFormat = wgpu.VertexFormat;
@@ -53,7 +53,7 @@ pub const Constant = gpu.PipelineConstant;
 pub const ShaderStage = wgpu.ShaderStage;
 /// One bind-group-layout entry (uniform/storage/sampler/texture/storage texture).
 pub const LayoutEntry = shader_introspect.BindGroupLayoutEntry;
-/// Reflect the resource bindings out of WGSL source — the "shader_runtime inspection"
+/// Reflect the resource bindings out of WGSL source - the "shader_runtime inspection"
 /// surface. Returns owned `WgslBinding`s (free with `freeWgslBindings`).
 pub const WgslBinding = shader_introspect.WgslBinding;
 pub const reflectWgslBindings = shader_introspect.reflectWgslBindings;
@@ -102,7 +102,7 @@ pub const Pipeline = struct {
         const color_fmt: wgpu.TextureFormat = f.gpu.backbuffer_format;
         const depth_fmt: wgpu.TextureFormat = f.gpu.depth_format orelse .undefined_;
 
-        // One module, both stages — raygpu's LoadPipeline shape.
+        // One module, both stages - raygpu's LoadPipeline shape.
         const module: wgpu.ShaderModuleHandle =
             wgpu.createShaderModuleWgsl(device, opts.wgsl, opts.label);
 
@@ -140,7 +140,7 @@ pub const Pipeline = struct {
     }
 
     /// Free the render pipeline, its pipeline layout, and its shader_runtime module.
-    /// The app owns the `Pipeline` and calls this from its own `deinit` —
+    /// The app owns the `Pipeline` and calls this from its own `deinit` -
     /// managed memory means every GPU handle has a named owner that releases
     /// it. (Unlike `loadShaderVF`, this pipeline is built directly, not shared
     /// through the pipeline cache, so destroying it here is correct.)
@@ -236,7 +236,7 @@ pub const Pipeline = struct {
 };
 
 // ---------------------------------------------------------------------------
-// Bind-group helpers — wrap the encode + create boilerplate for the common
+// Bind-group helpers - wrap the encode + create boilerplate for the common
 // "build a layout, build a group" path so an app states only the entries. The
 // raw `z.gpu.encode*` + `z.wgpu.create*` calls remain available for full
 // control (e.g. dynamic offsets, multi-binding groups built incrementally).
@@ -349,7 +349,7 @@ pub const StorageFill = struct {
 /// `@group(0) @binding(0)` bound to `view`, dispatch `opts.groups`, then release
 /// EVERYTHING it created (pipeline, bind group, layout). Self-contained: no
 /// handle escapes this call, so there is nothing for the caller to track or free
-/// afterwards — only the texture behind `view` persists, and the caller already
+/// afterwards - only the texture behind `view` persists, and the caller already
 /// owns that. This is the leak-safe way to paint a storage texture (or one mip
 /// level, or an array layer set) exactly once.
 pub fn fillStorageView(
@@ -379,14 +379,14 @@ pub fn fillStorageView(
     });
     pipe.dispatch(f, bg, opts.groups);
     // The fill is submitted; the pipeline + bind group / layout were all only
-    // needed to build and dispatch it. Release them — nothing escapes.
+    // needed to build and dispatch it. Release them - nothing escapes.
     pipe.deinit();
     wgpu.destroyBindGroup(bg);
     wgpu.destroyBindGroupLayout(bgl);
 }
 
 /// Create a 2D `StorageTexture` and paint it once via `wgsl`, dispatched over an
-/// 8×8 workgroup grid covering `width`×`height`. Returns the OWNED texture —
+/// 8x8 workgroup grid covering `width`x`height`. Returns the OWNED texture -
 /// free it with `.deinit()`. The compute scaffolding used to fill it is created
 /// and released internally (see `fillStorageView`), so this returns the single
 /// thing the caller must track.
@@ -409,7 +409,7 @@ pub fn storageTextureFilled(
     return st;
 }
 
-/// A compute pipeline — the compute-side companion to `Pipeline`. One WGSL
+/// A compute pipeline - the compute-side companion to `Pipeline`. One WGSL
 /// module with a `@compute` entry, plus the bind group layouts it samples /
 /// writes. `dispatch` runs it ONCE on its own command encoder, which is the
 /// right shape for filling a texture or buffer outside the frame's render pass

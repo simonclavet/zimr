@@ -1,4 +1,4 @@
-//! tools/spv2wgsl_check.zig — pure-Zig differential validator for
+//! tools/spv2wgsl_check.zig - pure-Zig differential validator for
 //! `spv2wgsl`.  Phase 0.4 of `src/notes/spv2wgsl-rewrite-plan.md`.
 //!
 //! Replaces the earlier `webtests/spv2wgsl_diff.ts` TypeScript/Bun
@@ -15,13 +15,13 @@
 //! For each input `.spv` (or directory full of them), the tool runs
 //! `spv2wgsl.convertSpirvToWgsl` and reports:
 //!
-//!   1. Translation success — `convertSpirvToWgsl` returned without
+//!   1. Translation success - `convertSpirvToWgsl` returned without
 //!      error.
-//!   2. Structural WGSL check — braces and parens balance; no
+//!   2. Structural WGSL check - braces and parens balance; no
 //!      obviously-malformed identifiers; no stray top-level junk.
 //!   3. No unresolved markers (`__unresolved_N__`).
 //!   4. No `// ERROR:` or `UNHANDLED` translator diagnostics.
-//!   5. No "phi-overwrite-after-if" lexical fingerprint — the
+//!   5. No "phi-overwrite-after-if" lexical fingerprint - the
 //!      canonical bug we discovered in the mandelbrot diagnostic
 //!      and the bug pattern this rewrite arc fixes.
 //!
@@ -34,9 +34,9 @@
 //! `zig build corpus-diff` .
 //!
 //! Exit codes:
-//!   0 — every shader passed every check
-//!   1 — at least one shader failed at least one check
-//!   2 — usage / setup error
+//!   0 - every shader passed every check
+//!   1 - at least one shader failed at least one check
+//!   2 - usage / setup error
 
 const std = @import("std");
 const ArrayList = std.ArrayList;
@@ -109,7 +109,7 @@ const Result = struct {
 };
 
 // ============================================================================
-// WGSL structural check — minimal lexical validator
+// WGSL structural check - minimal lexical validator
 // ============================================================================
 //
 // What we check for:
@@ -237,9 +237,9 @@ fn checkWgslStructural(wgsl: []const u8) ?[]const u8 {
 //     phiN = X;       <- inside the if
 //     ...
 //   }
-//   phiN = Y;         <- outside, immediately after — overwrites X
+//   phiN = Y;         <- outside, immediately after - overwrites X
 //
-// Works at ANY nesting level — the if might itself be inside a loop
+// Works at ANY nesting level - the if might itself be inside a loop
 // or function body.  We approximate by walking line-by-line: when we
 // see a `}` on line K followed by `phiN = ...;` on line K+1, we
 // scan backward from K-1 to find the matching `{` (counting `}` as
@@ -429,13 +429,13 @@ fn varNameAfter(wgsl: []const u8, from: usize) []const u8 {
     return wgsl[name_start..i];
 }
 
-/// Binding-consistency check — the build-time tripwire for the class of
+/// Binding-consistency check - the build-time tripwire for the class of
 /// device bug that Dawn only rejects at `createShaderModule`/pipeline time and
 /// that the mock smoke test can't see.  Invariant, derived from the WGSL text
 /// alone (no host layout, no GPU):
 ///
 ///   NO DUPLICATE `(group, binding)` cell.  Two `var`s at the same cell is
-///   exactly Dawn's "multiple variables use the same resource binding" — the
+///   exactly Dawn's "multiple variables use the same resource binding" - the
 ///   6-texture PBR sampler collision that shipped before this gate existed.
 ///   We report BOTH colliding names so the fix is obvious.
 ///
@@ -448,7 +448,7 @@ fn varNameAfter(wgsl: []const u8, from: usize) []const u8 {
 ///
 /// Returns an owned message on the first violation, else null.
 fn checkWgslBindings(arena: Allocator, wgsl: []const u8) !?[]const u8 {
-    // Groups 0-3, bindings 0-63 — the range the sampler solver tracks.
+    // Groups 0-3, bindings 0-63 - the range the sampler solver tracks.
     var name_at: [4][64]?[]const u8 = undefined;
     for (0..4) |gi| {
         for (0..64) |bi| {
@@ -571,9 +571,9 @@ fn checkOne(
 
 /// True when `path` exists AND holds at least one byte.
 ///
-/// ★ THE SIZE CHECK IS THE POINT. A FAILED shader compile leaves a ZERO-BYTE `.spv` behind in
+/// * THE SIZE CHECK IS THE POINT. A FAILED shader compile leaves a ZERO-BYTE `.spv` behind in
 /// the cache, and this walker would happily hand it to the translator, which correctly refuses
-/// an empty module — reported as TRANS-FAIL. That is build detritus being scored as a
+/// an empty module - reported as TRANS-FAIL. That is build detritus being scored as a
 /// translator bug, and it cost real time: two of five failures in the SSAO session were empty
 /// files, and their presence made the three REAL failures look like a pre-existing condition.
 ///
@@ -596,7 +596,7 @@ fn lessThanStr(
 
 /// Every `.spv` the build has ever produced and still has cached.
 ///
-/// ── ★★ THIS IS CACHE-DERIVED, NOT SOURCE-DERIVED, AND THAT HAS TEETH ──
+/// -- ** THIS IS CACHE-DERIVED, NOT SOURCE-DERIVED, AND THAT HAS TEETH --
 ///
 /// The walk is over `.zig-cache/o/<hash>/`, which knows nothing about which shader sources
 /// currently exist. Three consequences, all of them real:
@@ -604,20 +604,20 @@ fn lessThanStr(
 ///   1. **A DELETED OR RENAMED SHADER KEEPS BEING CHECKED** until the cache is cleared. Its
 ///      failures have no source to fix.
 ///   2. **EVERY REVISION OF A SHADER UNDER DEVELOPMENT ACCUMULATES.** Iterating on one shader
-///      left THREE cached entries, all failing, all reported separately — which read as three
+///      left THREE cached entries, all failing, all reported separately - which read as three
 ///      independent problems.
-///   3. ★ **DELETING A SOURCE FILE IS NOT A CONTROL EXPERIMENT.** Removing three new shaders
+///   3. * **DELETING A SOURCE FILE IS NOT A CONTROL EXPERIMENT.** Removing three new shaders
 ///      and re-running gave an IDENTICAL failure count, which looked like proof they were
 ///      innocent. The cached `.spv` were still there and still being scanned. They were
-///      guilty. To attribute a failure here, identify the input directly —
-///      `strings <hash>/shader.spv | grep <name>` names it immediately — or clear the cache.
+///      guilty. To attribute a failure here, identify the input directly -
+///      `strings <hash>/shader.spv | grep <name>` names it immediately - or clear the cache.
 ///
 /// The breadth is deliberate: scanning everything the build ever emitted is what makes this a
 /// corpus rather than a spot check, and it catches shaders no example currently draws. But the
 /// price is that a result here is evidence about the CACHE, not about the working tree.
 fn listOurCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
     // Walk .zig-cache/o/<hash>/ for shader.opt.spv, shader.spv, or compute.spv.
-    // `compute.spv` is the kompute compute-kernel output (addCompute) — without
+    // `compute.spv` is the kompute compute-kernel output (addCompute) - without
     // it the kernels' WGSL was never reached by this gate, so the fluid_sort
     // struct-dedup failure had no build-time tripwire at all.
     var out: ArrayList([]const u8) = .empty;
@@ -679,7 +679,7 @@ fn listTintCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
 
 /// Pull a shader's own name out of its SPIR-V, for failure reporting.
 ///
-/// ★ THE CACHE NAMES EVERY SHADER BY CONTENT HASH, which is exactly no help when one fails:
+/// * THE CACHE NAMES EVERY SHADER BY CONTENT HASH, which is exactly no help when one fails:
 /// `ERR-MARKER ... 13f8626c97ee8878e34ed80e22be531d` says nothing about WHICH shader is
 /// broken. Attributing three failures in the SSAO session meant running
 /// `strings <hash>/shader.spv | grep` by hand, and the missing attribution is what made a
@@ -687,7 +687,7 @@ fn listTintCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
 ///
 /// SPIR-V keeps `OpName`/`OpSource` debug strings in the module, so the source name is sitting
 /// right there in the bytes. This scans for the first identifier-shaped run ending in `_fs`,
-/// `_vs` or `_io` — deliberately lexical rather than a real SPIR-V parse, because this runs
+/// `_vs` or `_io` - deliberately lexical rather than a real SPIR-V parse, because this runs
 /// only on the failure path and must never itself fail.
 fn guessShaderName(spv: []const u8) ?[]const u8 {
     var i: usize = 0;
@@ -740,7 +740,7 @@ fn printRow(
             r.name,
         },
     );
-    // ★ On any failure, say WHICH SHADER — the hash alone is unactionable.
+    // * On any failure, say WHICH SHADER - the hash alone is unactionable.
     if (r.outcome() != .ok) {
         if (r.source_name) |src| {
             try stdout_w.interface.print("     shader: {s}\n", .{src});

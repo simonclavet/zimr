@@ -3,18 +3,18 @@
 //
 // The spectrum comes from a WebAudio AnalyserNode tapped off the master bus. It
 // is a TAP, not an insert: master already reaches the speakers, and the analyser
-// merely receives a copy — so attaching one cannot alter what you hear. Each
+// merely receives a copy - so attaching one cannot alter what you hear. Each
 // frame it writes one byte per frequency bin (0..255) STRAIGHT into a wasm-side
 // slice; there is no intermediate copy.
 //
 // What this exercises (the engine work this drove):
-//   - `z.analyser.attach / read / detach` — NEW. Backed by three new host
+//   - `z.analyser.attach / read / detach` - NEW. Backed by three new host
 //     functions in the WebAudio bridge (`js_audio_create_analyser`,
 //     `js_audio_get_frequency_data`, `js_audio_destroy_analyser`), which is only
 //     possible now that bridge.zig provides an `audio` import namespace at all.
 //
 // Bins are drawn on a LOG frequency axis, because a linear one wastes most of the
-// screen on the inaudible top octaves — musical content lives in the bottom fifth
+// screen on the inaudible top octaves - musical content lives in the bottom fifth
 // of a linear FFT.
 //
 // Leak-clean (`.memory = .managed`): sounds + UiHost are released in deinit.
@@ -142,7 +142,7 @@ fn update(f: *z.Frame, s: *State) void {
             peak = @max(peak, float(s.spectrum[k]) / 255.0);
         }
 
-        // Attack fast, release slow — otherwise the bars strobe and read as noise.
+        // Attack fast, release slow - otherwise the bars strobe and read as noise.
         const prev: f32 = s.smooth[i];
         s.smooth[i] = if (peak > prev) peak else prev + (peak - prev) * 0.18;
 
@@ -190,7 +190,7 @@ fn update(f: *z.Frame, s: *State) void {
         if (u.button(if (s.loop_on) "Auto: ON" else "Auto: OFF", .{})) {
             s.loop_on = !s.loop_on;
         }
-        // If bins is 0 the analyser never attached — say so, rather than showing a
+        // If bins is 0 the analyser never attached - say so, rather than showing a
         // convincingly-empty graph.
         if (s.bins == 0) {
             u.text("no analyser (audio host missing?)", .{});

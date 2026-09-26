@@ -1,4 +1,4 @@
-//! compute_particles — 65536 particles driven by `z.Compute`, demonstrating the
+//! compute_particles - 65536 particles driven by `z.Compute`, demonstrating the
 //! CPU/GPU compute toggle on the zero-copy render path. The SAME kernel auto-flips
 //! between a GPU dispatch and a CPU loop every few seconds, with the live state carried
 //! across the flip so the sim never resets. Both backends render through `z.DrawPoints`:
@@ -126,7 +126,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     s.pipe.run("particleStep", particle_count); // GPU dispatch or CPU loop, per s.pipe.backend
 
-    // CPU result lives in host memory — copy it into the buffer DrawPoints renders.
+    // CPU result lives in host memory - copy it into the buffer DrawPoints renders.
     // (The GPU path skips this: the kernel already wrote that buffer in place.)
     if (s.pipe.backend == .cpu) {
         if (s.pipe.readLatest(.pos)) |pos| {

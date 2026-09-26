@@ -1,4 +1,4 @@
-//! ring_drawing — a parametric ring (annulus). The swept angle sweeps open and closed
+//! ring_drawing - a parametric ring (annulus). The swept angle sweeps open and closed
 //! like a loading dial, the inner/outer radii breathe, and the demo cycles three render
 //! modes: filled ring, ring outline, and circle-sector outline. Tap to advance the mode
 //! (it also auto-advances). A panel reads back the live angle span and radii. Ported from

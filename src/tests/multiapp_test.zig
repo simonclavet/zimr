@@ -58,7 +58,7 @@ const TestSubApp = struct {
 };
 
 // Single kill/restart cycle
-test "multiapp: single init → tick → deinit cycle is balanced" {
+test "multiapp: single init -> tick -> deinit cycle is balanced" {
     const ta: Allocator = std.testing.allocator;
     var app: TestSubApp = try TestSubApp.init(ta, "single-cycle");
     defer app.deinit();
@@ -333,7 +333,7 @@ const LoggingSubApp = struct {
     }
 };
 
-test "multiapp: child with stored Logger.Prefixed - kill/restart × 10" {
+test "multiapp: child with stored Logger.Prefixed - kill/restart x 10" {
     const ta: Allocator = std.testing.allocator;
     var cap: logger_mod.Capture = logger_mod.Capture.init(ta);
     defer cap.deinit();

@@ -1,4 +1,4 @@
-//! src/shader2d.zig — a USER fragment shader, run over the ordinary 2D batch.
+//! src/shader2d.zig - a USER fragment shader, run over the ordinary 2D batch.
 //!
 //! This is raylib's `BeginShaderMode` / `EndShaderMode`, and it is a different thing from
 //! `effects2d`:
@@ -18,19 +18,19 @@
 //! shapes shader, by construction:
 //!
 //!   * same vertex stage (the engine's `default_shapes_vs`, reused verbatim),
-//!   * same vertex buffer layout (position, uv, packed colour — 20 bytes),
+//!   * same vertex buffer layout (position, uv, packed colour - 20 bytes),
 //!   * same varyings (`frag_tex_coord`, `frag_color`),
 //!   * projection still at group 0, texture+sampler still at group 1.
 //!
 //! WebGPU keeps bind groups bound across a pipeline change as long as the two pipeline layouts
-//! agree on a prefix of bind-group layouts — and here groups 0 and 1 are literally the SAME
+//! agree on a prefix of bind-group layouts - and here groups 0 and 1 are literally the SAME
 //! handles the renderer already built. So swapping a user shader in costs one `setPipeline`
 //! and one `setBindGroup` (for group 2, the user's uniforms). No bind group is rebuilt, no
 //! texture is re-bound, and the batch is not re-uploaded.
 //!
 //! The user's uniforms land at group 2 because that is what the engine's group convention
 //! already does with a FRAGMENT uniform (vertex uniforms group 0, samplers group 1, fragment
-//! uniforms group 2) — and the shapes layout leaves group 2 empty. Nothing had to be moved to
+//! uniforms group 2) - and the shapes layout leaves group 2 empty. Nothing had to be moved to
 //! make room.
 const std = @import("std");
 
@@ -52,7 +52,7 @@ pub const Shader2D = struct {
     /// The render pipeline: engine vertex stage + the user's fragment stage.
     pipeline: wgpu.RenderPipelineHandle = .invalid,
 
-    /// Group 2 — the user's uniforms. Bound by `beginShaderMode`.
+    /// Group 2 - the user's uniforms. Bound by `beginShaderMode`.
     params_bind_group: wgpu.BindGroupHandle = .invalid,
     params_buffer: wgpu.BufferHandle = .invalid,
 
@@ -68,7 +68,7 @@ pub const Shader2D = struct {
     /// The uniform block, mirroring `shapes_filter_fs_io.Ubo`.
     ///
     /// One vector, not four floats. A std140 uniform array has a SIXTEEN-byte element stride,
-    /// so a `[4]f32` would occupy 64 bytes with three quarters of it padding — and the layout
+    /// so a `[4]f32` would occupy 64 bytes with three quarters of it padding - and the layout
     /// validator in `shader_interface` rejects it outright rather than letting the CPU and the
     /// GPU disagree about where `params[1]` lives.
     pub const Params = extern struct {
@@ -77,7 +77,7 @@ pub const Shader2D = struct {
 
     /// Compile a user fragment shader into a pipeline that can replace the engine's own.
     ///
-    /// `fragment_wgsl` is the WGSL the build generated from the user's `*_fs.zig` — the same
+    /// `fragment_wgsl` is the WGSL the build generated from the user's `*_fs.zig` - the same
     /// `@embedFile`-able artifact every other shader in zimr uses.
     pub fn init(
         gpa: Allocator,
@@ -133,7 +133,7 @@ pub const Shader2D = struct {
         // ---- the pipeline: engine vertex stage, user fragment stage ---------------------
         //
         // The first two bind-group layouts are the RENDERER'S OWN HANDLES. That is not a
-        // convenience — it is the requirement. WebGPU only keeps groups 0 and 1 bound across
+        // convenience - it is the requirement. WebGPU only keeps groups 0 and 1 bound across
         // the pipeline swap if the two layouts agree on that prefix, and handing it the same
         // handles is the only way to be certain they do.
         self.pipeline_layout = wgpu.createPipelineLayout(device, &.{
@@ -174,7 +174,7 @@ pub const Shader2D = struct {
     /// It does NOT free the renderer's vertex module or its group-0/group-1 layouts, which are
     /// borrowed. Creating a pipeline creates a layout, a bind-group layout and a shader module
     /// as well as the pipeline itself, and an example that frees only the obvious one leaks
-    /// the other three silently — which is exactly what the smoke harness's leak census
+    /// the other three silently - which is exactly what the smoke harness's leak census
     /// caught in `effects2d` once.
     pub fn deinit(self: *Shader2D) void {
         wgpu.destroyRenderPipeline(self.pipeline);

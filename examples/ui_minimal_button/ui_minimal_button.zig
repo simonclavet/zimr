@@ -1,4 +1,4 @@
-//! ui_minimal_button — port of the GL `ui_minimal_button` diagnostic. The
+//! ui_minimal_button - port of the GL `ui_minimal_button` diagnostic. The
 //! GL version used three separate UiContexts to probe font binding (no font /
 //! TTF size 10 / TTF size 16); on wgpu the font path is settled (z.Font +
 //! UiHost), so this becomes the same shape with a single UiHost driving three
@@ -34,7 +34,7 @@ fn update(f: *z.Frame, s: *State) void {
     defer s.ui_host.render(f);
 
     // Tile three windows down the actual canvas (derived from f.window each
-    // frame) so they always fit, whatever the device's responsive size is —
+    // frame) so they always fit, whatever the device's responsive size is -
     // a fixed 880-tall layout overflowed shorter canvases.
     const fw: f32 = f.window.widthf();
     const fh: f32 = f.window.heightf();

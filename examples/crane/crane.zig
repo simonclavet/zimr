@@ -1,22 +1,22 @@
-//! crane — moving a swinging load and arriving with it still.
+//! crane - moving a swinging load and arriving with it still.
 //!
 //! Two identical gantry cranes get the same job: carry the payload to the flag and stop. The
 //! near one runs a position PD on the trolley; the far one plans. Same acceleration limit, same
 //! cable, same target.
 //!
-//! ── ★★ WATCH THE TROLLEY, NOT THE LOAD ──
+//! -- ** WATCH THE TROLLEY, NOT THE LOAD --
 //!
 //! The planner **decelerates early and briefly runs backwards** near the end. That looks like a
 //! mistake and it is the entire trick:
 //!
-//!     ẍ = a          θ̈ = −(g/L)·sin θ − (a/L)·cos θ
+//!     x_ddot = a          theta_ddot = -(g/L)*sin theta - (a/L)*cos theta
 //!
 //! Accelerating forward swings the payload BACKWARD. So to arrest a load that is already
-//! swinging you have to accelerate INTO it — and by then the trolley is already at the flag, so
+//! swinging you have to accelerate INTO it - and by then the trolley is already at the flag, so
 //! a controller that only watches trolley POSITION has nothing left to say. It arrives, and the
 //! load keeps swinging.
 //!
-//! ── ★★★ MEASURED, SAME LIMIT, SAME TRAVEL ──
+//! -- *** MEASURED, SAME LIMIT, SAME TRAVEL --
 //!
 //!     controller     final x   |angle|   |rate|   peak |vel|   residual swing
 //!     position PD      9.994    0.1348   0.3129       2.077           0.2217
@@ -24,11 +24,11 @@
 //!
 //! **A thousandfold less residual swing.** The PD leaves the load swinging through 12.7 degrees.
 //!
-//! ★ AND THE PLANNER SPENDS RAIL SPEED TO GET IT: 3.26 m/s against 2.08. Speed is a STATE limit
-//! and `boxQP` bounds controls only, so there is no constraint to write — the cost weight is the
+//! * AND THE PLANNER SPENDS RAIL SPEED TO GET IT: 3.26 m/s against 2.08. Speed is a STATE limit
+//! and `boxQP` bounds controls only, so there is no constraint to write - the cost weight is the
 //! whole brake. The readout shows peak speed for exactly that reason.
 //!
-//! ── ★ THE PLAN IS AN APPROXIMATION AND THE SIMULATION IS NOT ──
+//! -- * THE PLAN IS AN APPROXIMATION AND THE SIMULATION IS NOT --
 //!
 //! The planner uses the small-angle model; the crane is stepped with the real `sin`/`cos`. That
 //! is what real MPC does, and it makes "does the linearisation hold?" something you can watch
@@ -99,9 +99,9 @@ const State = struct {
     transform: [1]Mat,
 };
 
-// Cost weights over `[x, ẋ, θ, θ̇]`.
+// Cost weights over `[x, x_dot, theta, theta_dot]`.
 //
-// ★ THE SWING TERMS CARRY REAL WEIGHT ALONG THE WAY, not only at the end. Penalising the swing
+// * THE SWING TERMS CARRY REAL WEIGHT ALONG THE WAY, not only at the end. Penalising the swing
 // solely at the terminal knot lets the plan fling the load and promise to sort it out later,
 // which it then cannot do inside the acceleration limit.
 const state_weight = [_]f32{ 4.0, 2.0, 60.0, 60.0 };
@@ -161,7 +161,7 @@ fn resetAll(s: *State) void {
         c.peak_speed = 0;
         c.trail_count = 0;
         c.trail_next = 0;
-        // ★ AND THE PLAN, NOT ONLY THE CRANE. `solveCrane` warm-starts from `plan.ctrl`; leaving
+        // * AND THE PLAN, NOT ONLY THE CRANE. `solveCrane` warm-starts from `plan.ctrl`; leaving
         // the last run's commands there means the first tick after a reset applies them.
         @memset(c.plan.ctrl, 0);
     }
@@ -186,7 +186,7 @@ fn advance(s: *State, c: *Crane, depth: f32) void {
         _ = mpc.solveCrane(body, &c.plan, &c.state, weights(), s.accel_limit, sim_timestep, 3);
         c.accel = c.plan.ctrl[0];
     } else {
-        // ★ A POSITION PD, WHICH IS THE HONEST BASELINE. It sees the trolley and nothing else —
+        // * A POSITION PD, WHICH IS THE HONEST BASELINE. It sees the trolley and nothing else -
         // no term in it refers to the payload, because there is nowhere sensible to put one.
         const err: f32 = s.target - c.state[mpc.crane_pos_offset];
         c.accel = clamp(
@@ -197,7 +197,7 @@ fn advance(s: *State, c: *Crane, depth: f32) void {
     }
 
     const u = [_]f32{c.accel};
-    // ★ THE REAL DYNAMICS, NOT THE PLANNED ONE.
+    // * THE REAL DYNAMICS, NOT THE PLANNED ONE.
     c.state = mpc.craneStep(body, &c.state, &u, sim_timestep, false);
     c.peak_speed = @max(c.peak_speed, @abs(c.state[mpc.crane_vel_offset]));
 
@@ -253,7 +253,7 @@ fn drawCrane(s: *State, gl: *z.WgpuGl, c: *const Crane, depth: f32) void {
     s.transform[0] = mulMat(translation(load[0], load[1], load[2]), scaling(0.45, 0.45, 0.45));
     z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (still) load_still else load_swinging);
 
-    // ★ THE PAYLOAD'S PATH, which is the comparison drawn: one arrives and stops, the other
+    // * THE PAYLOAD'S PATH, which is the comparison drawn: one arrives and stops, the other
     // keeps drawing arcs long after the trolley has parked.
     if (c.trail_count > 1) {
         const start: usize = if (c.trail_count < trail_length) 0 else c.trail_next;
@@ -266,12 +266,12 @@ fn drawCrane(s: *State, gl: *z.WgpuGl, c: *const Crane, depth: f32) void {
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
-    // ★ THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
+    // * THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
     // know how tall the viewport is. Kept in the signature because every example shares it.
     _ = viewport_h;
     const captured: bool = u.wantCaptureMouse();
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
-    // ★ AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
+    // * AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
     // which on a phone left the thing the demo is ABOUT as a sliver at the bottom. Letting the
     // window size to its content keeps it as small as it can be, and capping the width stops it
     // spanning the screen.

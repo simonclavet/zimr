@@ -1,14 +1,14 @@
 // examples/mandel_julia/mandel_julia.zig
 //
-// Mandelbrot↔Julia morph on WebGPU. The fragment shader interpolates between
+// Mandelbrot<->Julia morph on WebGPU. The fragment shader interpolates between
 // the mandelbrot iteration (z=pixel, c=pixel; param t=0) and the Julia
 // iteration (z=pixel, c=julia_const; t=1) by a single uniform `t`. Animating t
-// 0→1→0 sweeps continuously through every intermediate fractal — a striking
+// 0->1->0 sweeps continuously through every intermediate fractal - a striking
 // visual that's also a good stress of the escape-loop shader on the pure-Zig
-// SPIR-V→WGSL pipeline.
+// SPIR-V->WGSL pipeline.
 //
 // WebGPU port of examples/mandel_julia.zig. Uses loadShaderVF (the comptime
-// VS↔FS varying check) with the trivial fullscreen VS.
+// VS<->FS varying check) with the trivial fullscreen VS.
 //
 // Build:      zig build wgpu-mandel-julia
 // Standalone: zig build wgpu-mandel-julia-standalone
@@ -50,7 +50,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    // Morph param t oscillates 0↔1 (smooth ease via cosine): 0 = mandelbrot,
+    // Morph param t oscillates 0<->1 (smooth ease via cosine): 0 = mandelbrot,
     // 1 = Julia, everything between is a continuous blend.
     const t: f32 = 0.5 - 0.5 * @cos(f.time.time * 0.4);
 

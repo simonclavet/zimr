@@ -1,4 +1,4 @@
-//! src/shaders/effect_outline_fs_io.zig — alpha-edge outline effect
+//! src/shaders/effect_outline_fs_io.zig - alpha-edge outline effect
 //! schema.  Companion to `effect_outline_fs.zig`; shared shape in
 //! `effect_common_io.zig` (this file only adds the Ubo).
 

@@ -20,7 +20,8 @@
 //!   `// lint:off <tag>: <why>` (one line) or a file-level `//! lint:off <tag>`
 //!   (container doc-comment). Rough groupings of the ~26 tags:
 //!     idiom/style : untyped-local, branch-braces, fn-args-multiline, import-at-top,
-//!                   decl-order, line-length, named-struct-init, anon-return,
+//!                   decl-order, line-length, ascii-comments, ascii-test-names,
+//!                   named-struct-init, anon-return,
 //!                   module-var, screaming-const, prefer-std-alias
 //!     math -> zm  : std-math, reserved-math-names, clamp-pattern, prefer-vec,
 //!                   array-mult, int-from-float, float-from-int, as-round,
@@ -104,7 +105,7 @@ const Issue = struct {
     tag: []const u8, // static string
     message: []u8, // owned - freed by `deinit`
     rule: u8, // claude.md rule number, 0 for bonus checks
-    fix: ?Fix = null, // present ⇒ `--fix` can repair this mechanically; replacement owned
+    fix: ?Fix = null, // present => `--fix` can repair this mechanically; replacement owned
 
     /// Frees everything an issue owns: its message and its fix's replacement.
     /// Every list of issues is torn down through this one function, so an owned
@@ -242,7 +243,7 @@ fn lineHasDirectiveFor(
     var p: usize = marker_idx + marker.len;
     while (p < text.len and (text[p] == ' ' or text[p] == '\t')) : (p += 1) {}
 
-    // Parse the rule list — tokens separated by ',', terminated by ':' / ws.
+    // Parse the rule list - tokens separated by ',', terminated by ':' / ws.
     var rule_end: usize = p;
     while (rule_end < text.len) : (rule_end += 1) {
         const c: u8 = text[rule_end];
@@ -283,7 +284,7 @@ fn lineHasDirectiveFor(
 ///
 /// Syntax:
 ///   - Rule list is comma-separated, no spaces inside the list.
-///   - At least one rule name is required — bare `// lint:off` is
+///   - At least one rule name is required - bare `// lint:off` is
 ///     ignored so accidental blanket suppression can't happen.
 ///   - Justification after the optional `:` is for humans, not parsed.
 fn lineSuppressedByDirective(
@@ -291,7 +292,7 @@ fn lineSuppressedByDirective(
     line_idx: u32,
     tag: []const u8,
 ) bool {
-    // ── `std-math`: A FILE-LEVEL OPT-OUT ONLY, NEVER A PER-LINE ONE ──
+    // -- `std-math`: A FILE-LEVEL OPT-OUT ONLY, NEVER A PER-LINE ONE --
     //
     // The ban exists for exactly one reason: std.math is host-only and does not reliably lower
     // to SPIR-V. A file that can never reach a shader has no portability exposure, and applying
@@ -325,7 +326,7 @@ const Ctx = struct {
     ast: *const Ast,
     issues: *ArrayList(Issue),
     /// Whole-module zm aliases found in this file (`const X = @import("zm");`).
-    /// Empty ⇒ the file doesn't import zm ⇒ the reserved-math rule is skipped
+    /// Empty => the file doesn't import zm => the reserved-math rule is skipped
     /// entirely (decision 2b in RESERVED_MATH_PLAN.md).  Usually one entry
     /// (`zm`), occasionally `math`.  Points into `source`.
     zm_aliases: []const []const u8 = &.{},
@@ -335,9 +336,9 @@ const Ctx = struct {
     std_aliases: []const []const u8 = &.{},
 
     /// Node indices (`true` = yes) of canonical `const X = zm.X;` binding
-    /// inits.  `no-qualified-zm` skips these — that single `zm.X` is the legal
+    /// inits.  `no-qualified-zm` skips these - that single `zm.X` is the legal
     /// home for the named import `X`.  Sized to `ast.nodes.len` by the per-file
-    /// pre-pass; empty ⇒ nothing is treated as a binding init.  Points nowhere
+    /// pre-pass; empty => nothing is treated as a binding init.  Points nowhere
     /// into `source` (it is a parallel bool array, freed after the file).
     canonical_zm_inits: []const bool = &.{},
 
@@ -350,7 +351,7 @@ const Ctx = struct {
     /// Whether this file has a column-0 `const zm = @import("zm");` (or `pub`
     /// variant).  Only such files are subject to `no-qualified-zm`; a file
     /// whose sole zm import is per-struct/indented (runtime.zig's per-namespace
-    /// imports) can't host a file-scope binding and is exempt — mirroring the
+    /// imports) can't host a file-scope binding and is exempt - mirroring the
     /// P4 migration tool's own col-0 requirement.
     zm_col0: bool = false,
 
@@ -395,7 +396,7 @@ const Ctx = struct {
     }
 
     /// Emit an issue located at an AST token.  This is the form almost
-    /// every rule wants — it resolves the token's 1-based line/column
+    /// every rule wants - it resolves the token's 1-based line/column
     /// and forwards to `emit`, so call sites stay a single line instead
     /// of repeating the `tokenLineCol` dance.  Use the lower-level
     /// `emit` directly only when the position is not a token (e.g. the
@@ -480,15 +481,15 @@ const Ctx = struct {
 // ============================================================================
 // Module-scope `var` is forbidden except for three convention-based
 // blanket carve-outs (matched here in code):
-//   - `warned_*` flags       — one-shot per-process log warnings.
+//   - `warned_*` flags       - one-shot per-process log warnings.
 //                              `drawing.zig`'s `warned_text_no_font` is the
 //                              canonical example.  Lifting these onto a
 //                              context would re-fire per ctx, defeating
 //                              the "warn once per process" intent.
-//   - `zimr_app`             — the user-owned C-ABI bridge in every
+//   - `zimr_app`             - the user-owned C-ABI bridge in every
 //                              example.  The framework reaches it via
 //                              `@import("root").zimr_app` at comptime.
-//   - `*_fs.zig` / `*_vs.zig`— SPIR-V stage source files; `extern var
+//   - `*_fs.zig` / `*_vs.zig`- SPIR-V stage source files; `extern var
 //                              name: T addrspace(.output)` is structural
 //                              for shader entry points.
 //
@@ -502,7 +503,7 @@ const Ctx = struct {
 //     // lint:off module-var: JS-bridge log sink
 //     var defaultSink: ?*const fn (level: i32, msg: []const u8) void = null;
 //
-// The directive is general — it works for any rule, not just module-var.
+// The directive is general - it works for any rule, not just module-var.
 // See `lineSuppressedByDirective` for the full syntax.
 
 fn isAllowlistedModuleVar(path: []const u8, name: []const u8) bool {
@@ -524,9 +525,9 @@ fn isAllowlistedModuleVar(path: []const u8, name: []const u8) bool {
 // A "type signal" is any AST construct in the init expression
 // that names a type, making `const x = <expr>` self-documenting
 // without a separate `:T` annotation.
-// See `src/notes/lint-zimr-plan.md` § "Type-signal definition"
+// See `src/notes/lint-zimr-plan.md` section  "Type-signal definition"
 // for the full list.  In short:
-//   - PascalCase identifier with ≥1 lowercase letter
+//   - PascalCase identifier with >=1 lowercase letter
 //   - Single uppercase letter (generic-param convention)
 //   - Primitive type identifier (i32/u8/.../bool/void/...)
 //   - `@as(...)` / `@TypeOf(...)` builtin
@@ -550,16 +551,16 @@ const c_types = std.StaticStringMap(void).initComptime(.{
 });
 
 // ============================================================================
-// zimr "keywords" — the curated zm vocabulary that is part of the language.
+// zimr "keywords" - the curated zm vocabulary that is part of the language.
 // ============================================================================
 // A keyword is a zm decl that (1) must be aliased at file scope (`const NAME =
-// zm.NAME;`) and used bare — never written `zm.NAME` in a body (`no-qualified-zm`)
-// — and (2) may NOT be the name of any other decl/local (`reserved-math-names`),
+// zm.NAME;`) and used bare - never written `zm.NAME` in a body (`no-qualified-zm`)
+// - and (2) may NOT be the name of any other decl/local (`reserved-math-names`),
 // so bare `dot`/`clamp`/`atan2` always means the zimrmath function and stays
 // greppable. NON-keyword zm decls (matFromAxisAngle, quatFromEulerXYZ, the obscure
 // helpers, and common-word decls like `float`/`angle`/`texture`) need NEITHER:
 // they may be used qualified as `zm.X` without an alias. The list is hand-curated
-// (NOT every zm decl — that would forbid common local names) and maintained here;
+// (NOT every zm decl - that would forbid common local names) and maintained here;
 // every entry must be a real `pub` decl in zimrmath.zig.
 const keywords = std.StaticStringMap(void).initComptime(.{
     // scalar functions
@@ -600,7 +601,7 @@ const keywords = std.StaticStringMap(void).initComptime(.{
     .{ "sqrt2", {} },        .{ "sqrt1_2", {} },       .{ "euler", {} },          .{ "log2e", {} },
     .{ "log10e", {} },       .{ "ln2", {} },           .{ "ln10", {} },           .{ "two_sqrtpi", {} },
     .{ "rad_per_deg", {} },  .{ "deg_per_rad", {} },
-    // types (a zimr program means zm.Color/zm.Mat4/... by these names — never re-bind them)
+    // types (a zimr program means zm.Color/zm.Mat4/... by these names - never re-bind them)
       .{ "Aabb", {} },           .{ "Aabb2", {} },
     .{ "Boolx4", {} },       .{ "Boolx8", {} },        .{ "Boolx16", {} },        .{ "CameraProjection", {} },
     .{ "ColorU32", {} },     .{ "Complex", {} },       .{ "F32x4Component", {} }, .{ "F32x8", {} },
@@ -630,7 +631,7 @@ const keywords = std.StaticStringMap(void).initComptime(.{
 // of a rule is enough context for someone to decide whether the rule
 // applies to their case or whether the linter is wrong.
 //
-// Suppressed under `--quiet`.  Per-tag, per-run (not per-file) — the
+// Suppressed under `--quiet`.  Per-tag, per-run (not per-file) - the
 // `seen_tags` set lives in `main` across the whole file loop.
 
 const RuleNote = struct {
@@ -798,6 +799,40 @@ const rule_notes = [_]RuleNote{
         \\local, or split a chained method call across `.` boundaries.
         \\Markdown files are exempt; the rule is only for `.zig` and
         \\other code files.
+        ,
+    },
+    .{
+        .tag = "ascii-comments",
+        .title = "Comments are ASCII",
+        .body =
+        \\Every comment - `//`, `///` and `//!` - is plain ASCII. A comment
+        \\that needs a font gets mangled by a terminal with the wrong
+        \\locale, a diff viewer or a patch pasted through a chat window,
+        \\and a symbol nobody can type is a symbol nobody can grep for.
+        \\Spellings: `->` `<-` `=>` for arrows, `*` for stars, bullets and
+        \\middle dots, `-` for every dash, `x` for times, `~` for
+        \\approximately, `>=` `<=` `!=`, `+/-`, `...`, `sqrt`, `deg`,
+        \\`section 12`, `M^-1` and `S^T` for superscripts, `f_x` for
+        \\subscripts, Greek letters by name (`theta`, `omega`), `q_dot`
+        \\and `r_hat` for accented symbols, `+-+` and `|` for boxes.
+        \\When a comment is ABOUT a character (a UTF-8 byte count, say),
+        \\name it by code point: `U+4E2D is 3 bytes`. String and char
+        \\literals are data and are not checked - except test names,
+        \\which have their own rule, `ascii-test-names`.
+        ,
+    },
+    .{
+        .tag = "ascii-test-names",
+        .title = "Test names are ASCII",
+        .body =
+        \\A `test "..."` name is prose, not data: it is printed by the test
+        \\runner, pasted into `-Dtest-filter=<substring>`, and quoted in
+        \\notes. A name holding an arrow or a star is one nobody can type
+        \\into a filter from a keyboard, and one a Windows console may print
+        \\as garbage. Same spellings as `ascii-comments`: `->` for arrows,
+        \\`*` for stars, `-` for dashes, `x` for times, `sqrt`, `pi`, and a
+        \\character that is the SUBJECT of the test named by code point
+        \\(`U+20AC is three bytes E2 82 AC`).
         ,
     },
     .{
@@ -1369,7 +1404,7 @@ fn lookupRuleNote(tag: []const u8) ?RuleNote {
     return null;
 }
 
-/// PascalCase with ≥1 lowercase letter, OR single uppercase letter.
+/// PascalCase with >=1 lowercase letter, OR single uppercase letter.
 /// Filters out ALL_CAPS_CONSTANTS (e.g. `MAX_BUFFER`).
 fn isTypeNamedIdentifier(name: []const u8) bool {
     if (name.len == 0) {
@@ -1456,7 +1491,7 @@ fn childNodes(
         .shl_sat,
         .@"orelse",
         .@"catch",
-        // ── ASSIGNMENTS. Their absence here was a silent hole in EVERY rule ──
+        // -- ASSIGNMENTS. Their absence here was a silent hole in EVERY rule --
         //
         // `childNodes` ends in `else => return buf[0..0]`, so an unhandled tag reports no
         // children and its whole subtree goes unvisited by every check in this file. `.assign`
@@ -1567,7 +1602,7 @@ fn childNodes(
         // of the union) - not strictly needed since the tag
         // .error_union itself is a type signal, but harmless.
         // `return X;` - walk the operand so node-checks (std-math,
-        // clamp-pattern, as-round, …) fire inside return expressions too.
+        // clamp-pattern, as-round, ...) fire inside return expressions too.
         // `return;` (void) has no operand.  Was a blind spot: `std-math`
         // missed `return std.math.clamp(...)` in image.zig.
         .@"return" => {
@@ -1627,7 +1662,7 @@ fn hasTypeSignalImpl(
             if (eql(u8, name, "@Type")) {
                 return true;
             }
-            // `@import("foo")` / `@cImport({...})` yield a `type` value —
+            // `@import("foo")` / `@cImport({...})` yield a `type` value -
             // a namespace.  Conventionally used as `const std = @import("std")`;
             // forcing a `: type` annotation everywhere would be noise.
             if (eql(u8, name, "@import")) {
@@ -1701,7 +1736,7 @@ fn hasTypeSignal(ast: *const Ast, node: Index) bool {
 // An *alias* is a `const NAME = <reference path>;` whose entire init is a bare
 // identifier or a field-access chain (`zm.Vec2`, `foo.bar.Baz`). These re-bind
 // an existing decl rather than computing a value, so the untyped-local rule does
-// not apply — a `:type` annotation on `const Vec2 = zm.Vec2;` would be noise.
+// not apply - a `:type` annotation on `const Vec2 = zm.Vec2;` would be noise.
 // (Aliases should live at file scope; this only matters for transitional locals.)
 fn isAliasInit(ast: *const Ast, node: Index) bool {
     return switch (ast.nodeTag(node)) {
@@ -1777,12 +1812,12 @@ fn walkInitForNamedStruct(ctx: Ctx, node: Index) anyerror!void {
     const tag: Ast.Node.Tag = ast.nodeTag(node);
 
     switch (tag) {
-        // Transparent unary wrappers — descend.
+        // Transparent unary wrappers - descend.
         .@"try", .@"comptime", .@"nosuspend" => {
             const inner: Index = ast.nodeData(node).node;
             try walkInitForNamedStruct(ctx, inner);
         },
-        // Binary branchers — both arms could carry the value.
+        // Binary branchers - both arms could carry the value.
         .@"orelse", .@"catch" => {
             const l, const r = ast.nodeData(node).node_and_node;
             try walkInitForNamedStruct(ctx, l);
@@ -1805,7 +1840,7 @@ fn walkInitForNamedStruct(ctx: Ctx, node: Index) anyerror!void {
         },
 
         // The rule fire: typed struct literal `Name{ ... }`.
-        // Skip the `_dot_` variants — those are already anonymous.
+        // Skip the `_dot_` variants - those are already anonymous.
         .struct_init,
         .struct_init_comma,
         .struct_init_one,
@@ -1820,7 +1855,7 @@ fn walkInitForNamedStruct(ctx: Ctx, node: Index) anyerror!void {
             const type_tok: u32 = main_tok - 1;
             const type_name: []const u8 = ast.tokenSlice(type_tok);
             // Delete the WHOLE type expression (its first token through the
-            // byte before `{`) and replace with `.` — correct for qualified
+            // byte before `{`) and replace with `.` - correct for qualified
             // types like `foo.Bar{...}`, not just single-token names.
             const fix: Fix = .{
                 .start = @intCast(ast.tokenStart(ast.firstToken(node))),
@@ -1857,7 +1892,7 @@ fn checkNamedStructInit(ctx: Ctx, vd: Ast.full.VarDecl) !void {
 }
 
 /// True when `init_node` is exactly `<alias>.<name>` for one of the file's zm
-/// aliases and `<name>` equals the decl name — i.e. the canonical import
+/// aliases and `<name>` equals the decl name - i.e. the canonical import
 /// binding `const length = zm.length;`, which is the one allowed form.
 fn isCanonicalZmBinding(ctx: Ctx, init_node: Index, name: []const u8) bool {
     const ast: *const Ast = ctx.ast;
@@ -1880,7 +1915,7 @@ fn isCanonicalZmBinding(ctx: Ctx, init_node: Index, name: []const u8) bool {
         }
         return false;
     }
-    // Binding-less `@import("zm").NAME` — the only file-scope alias form
+    // Binding-less `@import("zm").NAME` - the only file-scope alias form
     // available to files that cannot introduce a `zm` const because a
     // fn-local `const zm = @import("zm");` would illegally shadow it
     // (e.g. runtime.zig imports zm per-namespace).
@@ -2018,7 +2053,7 @@ fn checkVarDecl(
     }
 
     // Rule: redundant-cast.  `const n: T = zm.int(T2, x)` (or floori/roundi/
-    // ceili) spells the target type twice — the `: T` annotation already drives
+    // ceili) spells the target type twice - the `: T` annotation already drives
     // the rounding builtin's result type, so the bare `@trunc(x)` form suffices.
     // Only the direct-initializer case is flagged (wrapped inits keep the
     // helper, where inference may not reach).
@@ -2045,7 +2080,7 @@ fn checkVarDecl(
     }
 
     // Rule state-uninit: `var x: State = undefined` bypasses Zig's exhaustive
-    // struct-literal check — a literal `.{...}` forces every field to be set (or
+    // struct-literal check - a literal `.{...}` forces every field to be set (or
     // defaulted / explicitly `= undefined`), but starting from whole-struct
     // `undefined` and filling piecemeal leaves any forgotten field as garbage.
     // Require the State to be born from a `.{...}` literal instead. Scoped to
@@ -2274,7 +2309,7 @@ fn checkStdMath(
     }
     // Flag the literal `std.math` AND any `<alias>.math` where the alias is a
     // whole-module `@import("std")` binding (e.g. `const std_mod = @import("std")`
-    // → `std_mod.math.pi`).  Aliasing the import must not evade the ban.
+    // -> `std_mod.math.pi`).  Aliasing the import must not evade the ban.
     const obj_name: []const u8 = ast.tokenSlice(ast.nodeMainToken(lhs));
     var is_std: bool = eql(u8, obj_name, "std");
     if (!is_std) {
@@ -2305,7 +2340,7 @@ fn checkStdMath(
 /// named alias `Vec` / `Vec3` / `Vec2` everywhere EXCEPT:
 ///   - the canonical definitions in `zimrmath.zig` (`pub const Vec = @Vector(...)`),
 ///   - `extern`/`packed` struct field types, where the explicit width documents
-///     the GPU memory layout (a UBO/vertex `vec4<f32>`) — pre-marked in
+///     the GPU memory layout (a UBO/vertex `vec4<f32>`) - pre-marked in
 ///     `ctx.extern_field_vecs`.
 /// Autofix: splice the alias name over the whole `@Vector(N, f32)` span. The
 /// alias resolves through `zm` in any file that does vector math (which, by the
@@ -2319,15 +2354,15 @@ fn checkPreferVec(ctx: Ctx, node: Index, tag: Ast.Node.Tag) !void {
         return;
     }
     const ast: *const Ast = ctx.ast;
-    // zimrmath.zig defines Vec/Vec2/Vec3 themselves — leave those alone.
+    // zimrmath.zig defines Vec/Vec2/Vec3 themselves - leave those alone.
     if (endsWith(u8, ctx.path, "zimrmath.zig")) {
         return;
     }
     if (!eql(u8, ast.tokenSlice(ast.nodeMainToken(node)), "@Vector")) {
         return;
     }
-    // (Vec works in extern/packed fields too — proven: it transpiles to the
-    // same `vec4<f32>` std140 layout — so those are NOT exempt.)
+    // (Vec works in extern/packed fields too - proven: it transpiles to the
+    // same `vec4<f32>` std140 layout - so those are NOT exempt.)
     // Read the two args: a lane count (number_literal) and an element type.
     const a0_opt, const a1_opt = ast.nodeData(node).opt_node_and_opt_node;
     const a0: Index = a0_opt.unwrap() orelse return;
@@ -2363,7 +2398,7 @@ fn checkPreferVec(ctx: Ctx, node: Index, tag: Ast.Node.Tag) !void {
 }
 
 /// True when the file has a file-scope `const <name> = <zmAlias>.<name>;` binding
-/// — the canonical home for `name`. When present, an inline `zm.<name>` in a body
+/// - the canonical home for `name`. When present, an inline `zm.<name>` in a body
 /// can be safely rewritten to bare `<name>` (it already resolves to this binding,
 /// no collision), which is what the `no-qualified-zm` autofix does.
 fn fileScopeBindsZm(
@@ -2405,7 +2440,7 @@ fn fileScopeBindsZm(
 /// must go through a file-scope named import (`const X = zm.X;`), never inline
 /// in a body.  The canonical binding init is the one allowed `zm.X` (pre-marked
 /// in `ctx.canonical_zm_inits`).  Files that don't import zm are exempt
-/// (`zm_aliases` empty — e.g. zimrmath itself).  Mirrors checkDebugPrint: fires
+/// (`zm_aliases` empty - e.g. zimrmath itself).  Mirrors checkDebugPrint: fires
 /// on a `field_access` whose object identifier is a zm alias, at the field
 /// token.  A blocked name (a local/param/fn already owns `X`) or runtime.zig's
 /// per-struct zm opts out with `// lint:off no-qualified-zm: <reason>`.
@@ -2448,7 +2483,7 @@ fn checkNoQualifiedZm(ctx: Ctx, node: Index, tag: Ast.Node.Tag) !void {
     }
     // Autofix half-1: if `const <field> = zm.<field>;` already exists at file
     // scope, the inline use can be rewritten to bare `<field>` simply by deleting
-    // the `zm.` prefix (the field token already resolves to that binding — safe,
+    // the `zm.` prefix (the field token already resolves to that binding - safe,
     // no collision). When the binding is absent we only report: adding it is the
     // riskier half (needs a free-name check) and is left to the developer.
     if (fileScopeBindsZm(ast, ctx.zm_aliases, field)) {
@@ -2523,10 +2558,10 @@ fn checkClampPattern(
     node: Index,
     tag: Ast.Node.Tag,
 ) !void {
-    // @max(L, @min(V, H)) → suggest std.math.clamp(V, L, H)
-    // @min(H, @max(L, V)) → suggest std.math.clamp(V, L, H)
+    // @max(L, @min(V, H)) -> suggest std.math.clamp(V, L, H)
+    // @min(H, @max(L, V)) -> suggest std.math.clamp(V, L, H)
     // Precision: skip when L or H is itself a builtin call (the
-    // outer @max/@min then can't be a clamp — see ray-AABB t-near
+    // outer @max/@min then can't be a clamp - see ray-AABB t-near
     // / t-far computation in drawing.zig for a real-world example
     // of `@max(@max(@min,@min), @min)` that is NOT a clamp).
     if (tag != .builtin_call_two and tag != .builtin_call_two_comma) {
@@ -2745,7 +2780,7 @@ fn inSrcDir(path: []const u8) bool {
 /// std.debug.print bypasses `std_options` and writes to the raw stderr
 /// writer, whose wasm path traps under ReleaseSmall - a SILENT freeze in
 /// a release standalone (a real bug: a UI font-misconfig diagnostic took
-/// `no-std-timer` — flags `std.time.Timer` (and it fires only on that exact
+/// `no-std-timer` - flags `std.time.Timer` (and it fires only on that exact
 /// field-access path). This pinned std (0.17-dev) has no `std.time.Timer`
 /// (nor `nanoTimestamp`/`milliTimestamp`), so reaching for it fails to compile
 /// with an inscrutable "struct 'time' has no member" error. In examples, use
@@ -3062,12 +3097,12 @@ fn checkAsRound(
 }
 
 /// `@as(f32, @floatFromInt(x))` / `@as(f64, @floatFromInt(x))` are the redundant
-/// int→float cast form: the `@as(T, ...)` wrapper only exists to give
-/// `@floatFromInt` a result type, which `zm.float(x)` (→f32) / `zm.float64(x)`
-/// (→f64) supply on their own.  Flags them and AUTOFIXES to the helper call
+/// int->float cast form: the `@as(T, ...)` wrapper only exists to give
+/// `@floatFromInt` a result type, which `zm.float(x)` (->f32) / `zm.float64(x)`
+/// (->f64) supply on their own.  Flags them and AUTOFIXES to the helper call
 /// (the fix rewrites the whole `@as(...)` node; the file still needs a
 /// `const float = zm.float;` / `const float64 = zm.float64;` alias in scope).
-/// Bare `@floatFromInt(x)` in an inferred context is left alone — without an
+/// Bare `@floatFromInt(x)` in an inferred context is left alone - without an
 /// explicit f32/f64 there is no way to pick between the two helpers.
 fn checkFloatFromInt(
     ctx: Ctx,
@@ -3112,7 +3147,7 @@ fn checkFloatFromInt(
     const x_opt, _ = vdata.opt_node_and_opt_node;
     const x: Index = x_opt.unwrap() orelse return;
 
-    // Whole `@as(...)` node byte span → replaced wholesale by `helper(x_src)`.
+    // Whole `@as(...)` node byte span -> replaced wholesale by `helper(x_src)`.
     const as_last: u32 = ast.lastToken(node);
     const as_start: u32 = @intCast(ast.tokenStart(ast.firstToken(node)));
     const as_end: u32 = @intCast(ast.tokenStart(as_last) + ast.tokenSlice(as_last).len);
@@ -3136,7 +3171,7 @@ fn checkFloatFromInt(
     );
 }
 
-/// Byte length of the source line containing `byte_offset`, newline excluded —
+/// Byte length of the source line containing `byte_offset`, newline excluded -
 /// matches the line-length rule's measure (raw bytes, no tab expansion).
 fn lineLenAt(source: [:0]const u8, byte_offset: usize) usize {
     var start: usize = byte_offset;
@@ -3205,7 +3240,7 @@ fn isInsideFmtOff(source: []const u8, byte_offset: usize) bool {
 /// uniform primitive" if every param has the same primitive
 /// type, no param has a doc comment, and the full signature
 /// line fits in 80 cols.  In that case the diff-ability
-/// rationale doesn't apply — `fn vec(x: f32, y: f32, z: f32)`
+/// rationale doesn't apply - `fn vec(x: f32, y: f32, z: f32)`
 /// is a stable mathematical shape, not a list of named
 /// parameters that might gain/lose members.
 fn isSimpleUniformPrimitiveSig(
@@ -3244,7 +3279,7 @@ fn isSimpleUniformPrimitiveSig(
         }
     }
 
-    // (5) full signature line ≤ 80 cols.  The signature is
+    // (5) full signature line <= 80 cols.  The signature is
     // already on one line (else the rule wouldn't have been
     // about to fire); measure that line.
     if (params.len == 0) {
@@ -3321,7 +3356,7 @@ fn checkFnArgsMultiline(
             }
             // Carve-out for simple uniform primitive constructors
             // (turn 362).  `fn vec(x: f32, y: f32, z: f32) Vec` and
-            // friends are stable mathematical shapes — diff-ability
+            // friends are stable mathematical shapes - diff-ability
             // rationale doesn't apply.  See
             // `isSimpleUniformPrimitiveSig` for the exact criteria.
             if (isSimpleUniformPrimitiveSig(ctx, proto, params.items)) {
@@ -3443,7 +3478,7 @@ fn walkTypeExpr(ctx: Ctx, node: Index) anyerror!void {
 /// Walk one node, run every per-node check, then recurse into
 /// children.  `pos` says whether we're at container or
 /// statement scope; `fn_depth` says how many fn/test bodies we're
-/// nested inside (0 means module scope, ≥1 means inside a fn).
+/// nested inside (0 means module scope, >=1 means inside a fn).
 // returned-stack-reference: `return &<local>` hands the caller a pointer to a
 // stack variable that dies when the function returns.  We approximate scope with
 // a per-function set of local var/const names (the plan's "(a)" machinery), and
@@ -4133,7 +4168,7 @@ fn walkNode(
         }
     }
     // Struct/union field types (`field: @Vector(4, f32)`) aren't visited by the
-    // generic descent either — reach them so prefer-vec covers UBO/vertex
+    // generic descent either - reach them so prefer-vec covers UBO/vertex
     // schema fields (`Vec` transpiles to the same `vec4<f32>` there).
     if (ast.fullContainerField(node)) |cf| {
         if (cf.ast.type_expr.unwrap()) |tn| {
@@ -4302,7 +4337,7 @@ fn walkNode(
 /// config (`AppSpec` with a `.window`) must set `.depth_format`, or `beginMode3D`
 /// asserts at runtime ("needs a depth attachment"). This is a runtime-only crash a
 /// GPU-less build can't catch, so we catch it here. Helper files that draw 3D but
-/// carry no AppSpec (e.g. a shared render.zig) are exempt — they don't own the
+/// carry no AppSpec (e.g. a shared render.zig) are exempt - they don't own the
 /// window, the file that includes them does.
 fn runDepthFormat(ctx: Ctx) !void {
     const src: []const u8 = ctx.source;
@@ -4317,7 +4352,7 @@ fn runDepthFormat(ctx: Ctx) !void {
         return;
     }
     if (std.mem.indexOf(u8, src, "depth_format") != null) {
-        return; // set somewhere in this file — good enough (it's a small config)
+        return; // set somewhere in this file - good enough (it's a small config)
     }
 
     // Point at the first beginMode3D call so the message lands on the offending line.
@@ -4352,6 +4387,102 @@ fn runLineLength(ctx: Ctx) !void {
             line += 1;
             line_start = i + 1;
         }
+    }
+}
+
+/// Where a non-ASCII byte sits, as far as the two ASCII rules care.
+const NonAsciiPlace = enum { data, comment, test_name };
+
+/// `ascii-comments` and `ascii-test-names`: every comment - plain, doc and container
+/// doc - and every `test "..."` name is ASCII.
+///
+/// Works from the non-ASCII bytes rather than from the comments, because they are rare:
+/// each one is located in the token stream by binary search. Zig identifiers are ASCII,
+/// so a non-ASCII byte is either inside a token or between tokens, where the only thing
+/// that can hold it is a plain `//` comment. Inside a token it is a doc comment, a test
+/// name (a string literal right after `test`), or data - any other string or char
+/// literal, which is allowed. One issue per line, at its first offender.
+fn runAsciiComments(ctx: Ctx) !void {
+    const ast: *const Ast = ctx.ast;
+    const tags: []const std.zig.Token.Tag = ast.tokens.items(.tag);
+    const starts: []const u32 = ast.tokens.items(.start);
+    var line: u32 = 1;
+    var last_reported_line: u32 = 0;
+    var i: usize = 0;
+    while (i < ctx.source.len) : (i += 1) {
+        const byte: u8 = ctx.source[i];
+        if (byte == '\n') {
+            line += 1;
+            continue;
+        }
+        const is_ascii: bool = byte < 0x80;
+        const line_already_reported: bool = line == last_reported_line;
+        if (is_ascii or line_already_reported) {
+            continue;
+        }
+
+        // The last token starting at or before `i`.
+        var low: usize = 0;
+        var high: usize = starts.len;
+        while (low < high) {
+            const mid: usize = low + (high - low) / 2;
+            if (starts[mid] <= i) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        const place: NonAsciiPlace = place: {
+            if (low == 0) {
+                break :place .comment; // before the first token: a leading plain comment
+            }
+            const token: u32 = @intCast(low - 1);
+            const token_end: usize = starts[token] + ast.tokenSlice(token).len;
+            const inside_token: bool = i < token_end;
+            if (!inside_token) {
+                break :place .comment;
+            }
+            const tag: std.zig.Token.Tag = tags[token];
+            const is_doc_comment: bool = tag == .doc_comment or tag == .container_doc_comment;
+            if (is_doc_comment) {
+                break :place .comment;
+            }
+            const is_test_name: bool = tag == .string_literal and token > 0 and tags[token - 1] == .keyword_test;
+            if (is_test_name) {
+                break :place .test_name;
+            }
+            break :place .data;
+        };
+        if (place == .data) {
+            continue;
+        }
+
+        var line_start: usize = i;
+        while (line_start > 0 and ctx.source[line_start - 1] != '\n') : (line_start -= 1) {}
+        const col: u32 = @intCast(i - line_start + 1);
+        const sequence_len: u3 = std.unicode.utf8ByteSequenceLength(byte) catch 1;
+        const sequence_end: usize = @min(i + sequence_len, ctx.source.len);
+        const codepoint: u21 = std.unicode.utf8Decode(ctx.source[i..sequence_end]) catch byte;
+        switch (place) {
+            .comment => try ctx.emit(
+                line,
+                col,
+                "ascii-comments",
+                0,
+                "comment holds U+{X:0>4} - write it in ASCII (`->` not an arrow, `*` not a star, `x` not a times sign)",
+                .{codepoint},
+            ),
+            .test_name => try ctx.emit(
+                line,
+                col,
+                "ascii-test-names",
+                0,
+                "test name holds U+{X:0>4} - write it in ASCII, so `-Dtest-filter` can be typed to reach it",
+                .{codepoint},
+            ),
+            .data => unreachable, // skipped above
+        }
+        last_reported_line = line;
     }
 }
 
@@ -4860,7 +4991,7 @@ fn declNameToken(ast: *const Ast, node: Index) ?u32 {
 ///
 /// Recursion: a self-call sits after the function's own name token, so it is
 /// never flagged. The forward leg of mutual recursion (A defined before B, A's
-/// body calls B) IS flagged on purpose — that is the "weird recursion" that has
+/// body calls B) IS flagged on purpose - that is the "weird recursion" that has
 /// to be opted into with `// lint:off decl-order: <why>` on the call line.
 ///
 /// Limitation: only file-scope (`rootDecls`) names are tracked. A decl nested
@@ -5035,7 +5166,7 @@ fn isShaderPath(path: []const u8) bool {
 }
 
 /// Catches `inline fn ...` (and `pub inline fn ...`) at module scope.
-/// Skips comment lines.  Doesn't try to parse — the pattern is
+/// Skips comment lines.  Doesn't try to parse - the pattern is
 /// unambiguous enough on a per-line basis in shader-DSL files.
 fn checkShaderInlineFn(
     ctx: Ctx,
@@ -5140,7 +5271,7 @@ fn findIoParamName(ctx: Ctx, proto: Ast.full.FnProto) ?[]const u8 {
 }
 
 /// True if `node` is a method call on the Io parameter named `io_name`
-/// — i.e. `<io_name>.<method>(...)`.  Namespace calls such as
+/// - i.e. `<io_name>.<method>(...)`.  Namespace calls such as
 /// `zm.dot(...)` don't match (`zm` is an import, not the io param), and
 /// plain field reads such as `io.view_pos` aren't calls.
 fn isSamplerCallOn(
@@ -5167,7 +5298,7 @@ fn isSamplerCallOn(
     }
     // Explicit-LOD accessors (`<name>Level`, lowering to `textureSampleLevel`)
     // take no derivatives and are exempt from WGSL's uniformity rule, so they
-    // are valid in helpers and branches — and are the ONLY kind of sample legal
+    // are valid in helpers and branches - and are the ONLY kind of sample legal
     // in a vertex shader. Mirror the bare-`sampleLevel` exemption below: match
     // only the implicit-LOD accessor `io.<name>(uv)`, never `io.<name>Level(...)`.
     const method_tok: u32 = ast.nodeData(fn_expr).node_and_token[1];
@@ -5178,12 +5309,12 @@ fn isSamplerCallOn(
     return true;
 }
 
-/// True if `node` is a call to an IMPLICIT-LOD sampler helper by NAME —
+/// True if `node` is a call to an IMPLICIT-LOD sampler helper by NAME -
 /// `zsample2d(...)`, `zm.zsample2d(...)`, `sampleLod(...)`, or `zm.sampleLod(...)`.
 /// These lower to `textureSample`, which WGSL/Tint permit only in UNIFORM
 /// control flow, so they must be caught outside shaderMain's uniform top.
 /// `sampleLevel(...)` takes an EXPLICIT LOD (no derivatives) and lowers to
-/// `textureSampleLevel`, which is valid in ANY control flow — it is the escape
+/// `textureSampleLevel`, which is valid in ANY control flow - it is the escape
 /// hatch for sampling in a helper/branch, so it is intentionally NOT matched.
 fn isBareSamplerCall(ctx: Ctx, node: Index) bool {
     const ast: *const Ast = ctx.ast;
@@ -5330,7 +5461,7 @@ fn isControlFlowTag(tag: Ast.Node.Tag) bool {
 }
 
 /// Scan shaderMain's body in statement order.  Texture samples are
-/// allowed only in the straight-line *prologue* — the run of statements
+/// allowed only in the straight-line *prologue* - the run of statements
 /// before the first control-flow construct, where every invocation is
 /// still in lockstep (= uniform).  After any if/loop/switch, later
 /// statements (even unconditional ones) may be reached non-uniformly, so
@@ -5338,7 +5469,7 @@ fn isControlFlowTag(tag: Ast.Node.Tag) bool {
 /// WGSL's uniformity rule: it never permits a real violation, and the
 /// fix it asks for (sample at the very top) is always available.  A
 /// possible false positive (a sample that is in fact uniform after a
-/// uniform branch) is acceptable — false negatives, which would let the
+/// uniform branch) is acceptable - false negatives, which would let the
 /// error reach the browser, are not.
 fn scanMainBody(
     ctx: Ctx,
@@ -5387,9 +5518,9 @@ fn runSamplerDiscipline(ctx: Ctx) !void {
                 try scanForSamplers(ctx, body, io_name, false, false);
             }
         } else if (eql(u8, fn_name, "entry")) {
-            // Direct `@SpirvType` shader (billboard/skybox/points/decal …): the
+            // Direct `@SpirvType` shader (billboard/skybox/points/decal ...): the
             // exported `entry` fn has no Io param, so the IoT path skips it. It
-            // can still call `zsample2d(...)` — which must sit at uniform control
+            // can still call `zsample2d(...)` - which must sit at uniform control
             // flow just the same. Scan it treating `entry` as the main body; the
             // empty io_name means only bare sampler calls match.
             try scanMainBody(ctx, body, "");
@@ -5412,7 +5543,7 @@ fn isScreaming(name: []const u8) bool {
 }
 
 /// Flag file-scope value consts named in SCREAMING_CASE. Zig idiom: value consts are
-/// snake_case, types are PascalCase — an all-uppercase name is the C-macro style we don't
+/// snake_case, types are PascalCase - an all-uppercase name is the C-macro style we don't
 /// use here. Suppress a genuine exception with `// lint:off screaming-const: <reason>`.
 fn runScreamingConsts(ctx: Ctx) !void {
     const ast: *const Ast = ctx.ast;
@@ -5441,7 +5572,7 @@ fn runChecks(ctx: Ctx) !void {
         try walkNode(ctx, decl, .container, 0);
     }
 
-    // ── ★★★ std-math IS SWEPT OVER EVERY NODE, NOT WALKED ──
+    // -- *** std-math IS SWEPT OVER EVERY NODE, NOT WALKED --
     //
     // `childNodes` enumerates tags and returns NO children for anything unlisted, and `walkNode`
     // visits only some children of the tags it does handle - `if`/`while` bodies but never their
@@ -5469,6 +5600,7 @@ fn runChecks(ctx: Ctx) !void {
     // Two checks operate on the whole file in one go rather than
     // node-by-node, so they live outside the walk.
     try runLineLength(ctx);
+    try runAsciiComments(ctx);
     try runDepthFormat(ctx);
     try runShaderChecks(ctx);
     try runShaderSafeChecks(ctx);
@@ -5487,18 +5619,18 @@ fn runChecks(ctx: Ctx) !void {
 
 /// Files scheduled for deletion: the doomed GL backend, plus the top-level GL example
 /// programs that are being ported to `examples/wgpu_*/` or dropped as redundant. The linter
-/// skips these entirely — there's no point enforcing style on code about to be removed.
+/// skips these entirely - there's no point enforcing style on code about to be removed.
 /// Shader sources (`_fs.zig`/`_vs.zig`) are NOT skipped: they are live and the shader rules
 /// still apply to them.
 fn isSkipped(path: []const u8) bool {
-    // GL-retirement P5 (t1176): the doomed-file lists are gone — the files
+    // GL-retirement P5 (t1176): the doomed-file lists are gone - the files
     // are deleted.  What remains are DATA files: machine-written arrays that
     // a Zig file imports as an asset or a test oracle.  Style rules like
     // line-length and untyped-local describe how a human should write code;
     // they say nothing useful about a generated number table, and the
     // generator would have to be taught to satisfy them for no gain.
-    //   * quad_glb_data.zig  — an embedded GLB byte array (wgpu example asset)
-    //   * tests/fixtures/    — generated reference data, e.g. the robot.zig
+    //   * quad_glb_data.zig  - an embedded GLB byte array (wgpu example asset)
+    //   * tests/fixtures/    - generated reference data, e.g. the robot.zig
     //                          oracle emitted by scripts/robot_oracle.py
     const sep = std.fs.path.sep_str;
     if (endsWith(u8, path, "examples" ++ sep ++ "quad_glb_data.zig")) {
@@ -5517,7 +5649,7 @@ fn isSkipped(path: []const u8) bool {
 // implied by suffix) promises it can be @imported by shader sources
 // compiled through the SPIR-V pipeline and by comptime executors.  The
 // checkable subset of that promise: no allocators, no runtime std
-// facilities, no extern declarations, no wasm-bridge imports — outside
+// facilities, no extern declarations, no wasm-bridge imports - outside
 // `test` blocks (host tests are fine; they never enter the pipeline).
 // ===========================================================================
 
@@ -5527,7 +5659,7 @@ fn isSkipped(path: []const u8) bool {
 // WGSL forbids calling an implicit-LOD sampler (`textureSample`) from
 // non-uniform control flow.  The robust, checkable rule: every texture
 // sample must be taken at the unconditional top of `shaderMain` and its
-// value threaded down — never inside an `if`/loop, and never inside a
+// value threaded down - never inside an `if`/loop, and never inside a
 // helper fn (which may be called conditionally).  This catches the class
 // of bug that otherwise only surfaces as a Tint validation error at
 // runtime, since neither naga nor nagac enforces uniformity.
@@ -5672,21 +5804,21 @@ fn markCanonicalZmInits(ast: *const Ast, aliases: []const []const u8, out: []boo
 // (@trunc / @floor / @round / @ceil).  Each takes one arg, so they parse as
 // builtin_call_two with a single populated slot.
 
-// If `node` is a call to a zimrmath float->int cast helper — `zm.int`,
+// If `node` is a call to a zimrmath float->int cast helper - `zm.int`,
 // `zm.floori`, `zm.roundi`, `zm.ceili` (or the bare names inside zimrmath
-// itself) — return the helper name; else null.  Used to spot a helper whose
+// itself) - return the helper name; else null.  Used to spot a helper whose
 // explicit target type is already pinned by an enclosing typed decl.
 
 // Ban @as(T, @trunc(x)) and friends.  The rounding builtins convert straight
 // to an integer once the result type is known, so the @as wrapper is never
 // right: drop it (`@trunc(x)`) when T is inferable, or use the zm.int / floori
-// / roundi / ceili helper when T must be spelled.  Purely syntactic — an @as
+// / roundi / ceili helper when T must be spelled.  Purely syntactic - an @as
 // whose VALUE argument (the second one) is a rounding builtin call.
 
 // Ban @intFromFloat outright.  In current Zig the rounding builtins
 // `@trunc`/`@floor`/`@round`/`@ceil` perform the float->int conversion
 // directly when the result type is an integer (e.g. `const i: i32 =
-// @trunc(x);`), so `@intFromFloat(@trunc(x))` is redundant — just write
+// @trunc(x);`), so `@intFromFloat(@trunc(x))` is redundant - just write
 // `@trunc(x)`.  Using the rounding builtin directly also names the rounding
 // mode at the call site, killing the silent truncate-toward-zero footgun that
 // bare `@intFromFloat(x)` used to hide.  (The narrower `floor-pattern` rule
@@ -5752,14 +5884,14 @@ fn scanRawPassBind(
     }
 }
 
-/// A `_fs.zig`/`_vs.zig` GPU shader body — one that imports its generated
-/// `*_externs` module and defines `shaderMain` — MUST bind the SPIR-V entry
+/// A `_fs.zig`/`_vs.zig` GPU shader body - one that imports its generated
+/// `*_externs` module and defines `shaderMain` - MUST bind the SPIR-V entry
 /// with `installSpirvEntry(shaderMain)`. Forgetting it compiles clean AND
 /// passes the headless smoke: `shaderMain` is then unreferenced, the SPIR-V
 /// backend dead-strips it, spv2wgsl emits an entry-less (empty) module, and the
 /// failure only surfaces on a real GPU as `CreateRenderPipeline(... entryPoint
 /// "entry" doesn't exist)`. That device-only blind spot is exactly why this is
-/// a lint rule — the gate is the last place it can be caught before hardware.
+/// a lint rule - the gate is the last place it can be caught before hardware.
 fn scanShaderEntry(
     gpa: Allocator,
     path: []const u8,
@@ -5781,7 +5913,7 @@ fn scanShaderEntry(
     if (std.mem.indexOf(u8, src, "installSpirvEntry") != null) {
         return;
     }
-    // Point at the shaderMain definition — that's what needs binding.
+    // Point at the shaderMain definition - that's what needs binding.
     const at: usize = std.mem.indexOf(u8, src, "pub fn shaderMain") orelse
         std.mem.indexOf(u8, src, "shaderMain").?;
     var line: u32 = 1;
@@ -6153,7 +6285,7 @@ fn analyzeSource(
 
 /// True when `bytes` clears both parse AND AstGen (ZIR lowering), i.e. it gets at
 /// least as far as a real build's front-end. The fix loop's guard uses this to
-/// catch SEMANTIC breakage a parse-only check misses — an undeclared identifier
+/// catch SEMANTIC breakage a parse-only check misses - an undeclared identifier
 /// or duplicate decl produced when two fixes in one pass conflict (e.g. one
 /// deletes a binding while another rewrites a use to depend on it). AstGen treats
 /// `@import` opaquely, so cross-module references never false-trip this.
@@ -6179,7 +6311,7 @@ fn applyFixes(gpa: Allocator, source: []const u8, fixes: []const Fix) ![]u8 {
     var cursor: usize = 0;
     for (fixes) |fx| {
         if (fx.start < cursor) {
-            continue; // defensive: overlap survived filtering — skip
+            continue; // defensive: overlap survived filtering - skip
         }
         try out.appendSlice(gpa, source[cursor..fx.start]);
         try out.appendSlice(gpa, fx.replacement);
@@ -6193,7 +6325,7 @@ fn applyFixes(gpa: Allocator, source: []const u8, fixes: []const Fix) ![]u8 {
 /// with overlapping edits dropped (deferred to a later pass).
 fn collectFixes(gpa: Allocator, issues: []const Issue, out: *ArrayList(Fix)) !void {
     out.clearRetainingCapacity();
-    // ★ Deleting an unused declaration waits for a pass with nothing else to do. Another fix in
+    // * Deleting an unused declaration waits for a pass with nothing else to do. Another fix in
     // the same pass may be about to USE it - `float-from-int` writes `float(x)` against the
     // `const float = zm.float;` that `unused-global` wants gone - and applying both broke the
     // file, so the parse guard discarded the whole pass and neither fix ever landed. The fix loop
@@ -6240,7 +6372,7 @@ const FixOutcome = struct {
     rolled_back: bool,
 };
 
-/// Iteratively analyze → collect fixes → splice, until no more fixes (or 5
+/// Iteratively analyze -> collect fixes -> splice, until no more fixes (or 5
 /// passes). The loop is what lets a cascade settle: removing decl A in pass 1
 /// can make decl B unused, caught in pass 2. Each pass re-parses the spliced
 /// result and rolls back if it parses worse than its input.
@@ -6277,7 +6409,7 @@ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *con
         const next: []u8 = try applyFixes(gpa, cur, fixes.items);
         const after_ok: bool = compilesClean(gpa, next);
         if (before_ok and !after_ok) {
-            gpa.free(next); // guard: a clean file just went broken — discard the pass
+            gpa.free(next); // guard: a clean file just went broken - discard the pass
             rolled_back = true;
             break;
         }
@@ -6333,7 +6465,7 @@ const ImportEdge = struct {
     col: u32,
 };
 
-/// ── `import-cycle`: the one rule that needs every file at once ──
+/// -- `import-cycle`: the one rule that needs every file at once --
 ///
 /// Builds the graph of `@import("*.zig")` edges between the files of this run - each path
 /// resolved against the importing file, so `../robot.zig` and `robot.zig` meet - and reports
@@ -6366,7 +6498,7 @@ fn checkImportCycles(
     const out_edges: []ArrayList(u32) = try arena.alloc(ArrayList(u32), files.len);
     @memset(out_edges, .empty);
     for (files, 0..) |path, i| {
-        // ★ NO `isSkipped` here. That list exempts generated data from STYLE rules, but a
+        // * NO `isSkipped` here. That list exempts generated data from STYLE rules, but a
         // generated fixture that imports `robot.zig` is still a dependency - skipping it hid the
         // `robot.zig` <-> `kuka_iiwa.zig` cycle on this rule's first run.
         const bytes: []u8 = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited) catch continue;
@@ -6584,7 +6716,7 @@ pub fn main(init: std.process.Init) !u8 {
     var out_buf: [4096]u8 = undefined;
     // Violations + fix notes go to STDERR, not out: when lint runs as a
     // build GATE (a dependency of a compile), Zig's Run step surfaces a failed
-    // child's stderr but swallows its out — so out-only reports vanished
+    // child's stderr but swallows its out - so out-only reports vanished
     // from build logs, leaving just "run exe zimrlint failure". stderr makes
     // the actual `[rule]` line visible (and nothing consumes lint's out).
     var out_writer: std.Io.File.Writer = std.Io.File.stdout().writer(io, &out_buf);
@@ -6718,7 +6850,7 @@ pub fn main(init: std.process.Init) !u8 {
 
         const has_parse_errors: bool = try analyzeSource(gpa, path, source_z, &args, &issues);
 
-        // ── THE RATCHET ──
+        // -- THE RATCHET --
         // Grandfathered issues are counted, recorded, and not reported. Anything ABOVE the
         // recorded count for a (file, tag) is new and fails. See `Args.baseline_path`.
         var kept: ArrayList(Issue) = .empty;
@@ -6765,7 +6897,7 @@ pub fn main(init: std.process.Init) !u8 {
         try printIssues(out, &seen_tags, kept.items);
         total_issues += kept.items.len;
 
-        // Cache write: stamp only when clean (never on parse errors — we want a
+        // Cache write: stamp only when clean (never on parse errors - we want a
         // re-check next run).
         if (issues.items.len == 0 and !has_parse_errors) {
             writeStamp(io, stamp_sub_path, .{
@@ -6785,7 +6917,7 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
 
-    // ── import-cycle: the one cross-file rule. It runs over EVERY input, after the per-file
+    // -- import-cycle: the one cross-file rule. It runs over EVERY input, after the per-file
     // reports, because the loop above skips stamped-clean files and a cycle is usually two clean
     // files. Not ratcheted: the baseline is per (file, rule), and a cycle belongs to no one file.
     {

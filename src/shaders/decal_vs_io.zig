@@ -1,4 +1,4 @@
-//! src/shaders/decal_vs_io.zig — typed interface for the shader-projected decal
+//! src/shaders/decal_vs_io.zig - typed interface for the shader-projected decal
 //! receiver vertex stage. Standard VS: the shared Cube3D camera UBO at group 0
 //! (only the view-projection is read), two world-space attributes, two world
 //! varyings. Body in `decal_vs.zig`.
@@ -13,12 +13,12 @@ pub const Attributes = struct {
     n: shader.Attr(.vec3, 1),
 };
 
-/// group(0) binding(0): shared camera UBO — mirrors just the leading mat4x4 of
+/// group(0) binding(0): shared camera UBO - mirrors just the leading mat4x4 of
 /// Cube3D's camera block (only the view-projection is used). The host binds
 /// Cube3D's camera bind group here (`self.resources`).
 pub const Ubo = struct {
     vp: [4]@Vector(4, f32) align(16),
 };
 
-/// Varyings to the FS — world position + world normal.
+/// Varyings to the FS - world position + world normal.
 pub const Outputs = common.Interp;

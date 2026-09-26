@@ -1,6 +1,6 @@
-//! trails — render-texture ACCUMULATION. Several emitters trace Lissajous paths;
+//! trails - render-texture ACCUMULATION. Several emitters trace Lissajous paths;
 //! their glowing dots are drawn into a persistent render texture that is NOT cleared each
-//! frame (beginTextureMode with clear = null → load). A faint black rectangle is drawn over
+//! frame (beginTextureMode with clear = null -> load). A faint black rectangle is drawn over
 //! the texture each frame to fade old trails, so the result is flowing ribbons of light.
 //! Exercises the accumulate/load path of the render-texture API. Viewport-relative.
 const std = @import("std");

@@ -1,8 +1,8 @@
-//! helmet_sw — ONE Zig PBR shader, THREE targets, side by side.
+//! helmet_sw - ONE Zig PBR shader, THREE targets, side by side.
 //!
 //! `src/shaders/pbr_vs.zig` + `pbr_fs.zig` are compiled three ways from the
 //! same source:
-//!   - RIGHT (GPU): Zig → SPIR-V → WGSL, run by `z.pbr3d`'s WebGPU pipeline
+//!   - RIGHT (GPU): Zig -> SPIR-V -> WGSL, run by `z.pbr3d`'s WebGPU pipeline
 //!     into an offscreen render texture, composited as 2D.
 //!   - LEFT (CPU): the same files compiled for wasm32 (re-exported as
 //!     `z.pbr_shaders`) and run per-vertex / per-fragment by the programmable
@@ -10,12 +10,12 @@
 //!     sampling the same five glTF maps through CPU `TextureRef`s.
 //!   - CORNER (COMPTIME): the Zig compiler itself rasterizes a build-baked
 //!     decimated proxy through the same two `shaderMain`s and the result
-//!     ships as a const — see the `corner_image` block below.
+//!     ships as a const - see the `corner_image` block below.
 //! Same mesh (`pbr3d.buildCpuMesh` feeds CPU+GPU; the corner's proxy is a
 //! decimation of it), same maps (`decodeMaterialMap` feeds both live
-//! halves; the corner's 64² base color is a downsample of the same data),
+//! halves; the corner's 64^2 base color is a downsample of the same data),
 //! same camera, same Ubo values.  Cook-Torrance, normal mapping, AO,
-//! emissive — written once, in Zig, run by hardware, software, and the
+//! emissive - written once, in Zig, run by hardware, software, and the
 //! compiler.
 //!
 //! Drag to orbit, wheel/pinch to zoom; the splitter follows the pointer.
@@ -45,15 +45,15 @@ const pbr_vs_wgsl = @embedFile("pbr_vs.wgsl");
 const pbr_fs_wgsl = @embedFile("pbr_fs.wgsl");
 
 // CPU half renders a CONSTANT PIXEL BUDGET at whatever aspect the live
-// canvas has (portrait, landscape, resized window — the dims re-derive
+// canvas has (portrait, landscape, resized window - the dims re-derive
 // every frame in `ensureTargets`), so rotating the phone never stretches
-// and never changes the per-frame CPU cost.  ~27k px ≈ the old 220×124.
+// and never changes the per-frame CPU cost.  ~27k px ~ the old 220x124.
 const cpu_pixel_budget: f32 = 27_000;
 // GPU half renders into a render texture recreated at the canvas's
-// BACKING size (CSS × devicePixelRatio) whenever it changes — pixel-
+// BACKING size (CSS x devicePixelRatio) whenever it changes - pixel-
 // perfect at any orientation.
-// CPU material maps are downsampled to this edge — at ~200px render
-// width, 512² nearest-sampled maps are indistinguishable from 2048².
+// CPU material maps are downsampled to this edge - at ~200px render
+// width, 512^2 nearest-sampled maps are indistinguishable from 2048^2.
 const cpu_map_edge: u32 = 512;
 
 const cam_target: Vec = vec(0, 0, 0);
@@ -68,7 +68,7 @@ const light_dir: [3]f32 = .{ -0.5, -0.6, -0.6 };
 const light_color: [3]f32 = .{ 1, 1, 1 };
 const light_ambient: [3]f32 = .{ 0.2, 0.22, 0.26 };
 
-// Initial orbit camera — shared by the runtime state AND the comptime
+// Initial orbit camera - shared by the runtime state AND the comptime
 // corner (the corner is FROZEN at this pose, like the rt/mandel insets).
 const initial_yaw: f32 = 0.6;
 const initial_pitch: f32 = 0.15;
@@ -78,21 +78,21 @@ const initial_dist: f32 = 3.2;
 // Geometry can't comptime-parse (the GLB is allocator-based, and 15k tris
 // is far past any comptime budget), so a build step (tools/mesh_bake.zig)
 // pre-bakes a vertex-cluster-decimated proxy (~1k clusters / ~2k tris) and
-// the base-color map at 64² into the `helmet_proxy` module.  Here the
+// the base-color map at 64^2 into the `helmet_proxy` module.  Here the
 // compiler runs pbr_vs.shaderMain over every proxy vertex at the frozen
 // initial camera, then `rasterizeToImage` (the pure sibling of the runtime
 // rasterizer, differentially tested against it) runs pbr_fs.shaderMain per
-// covered pixel — same Ubo values, same sRGB sampling — and the image
+// covered pixel - same Ubo values, same sRGB sampling - and the image
 // bakes into the binary as a const.
 //
-// Corner-only material simplifications: a flat 1×1 normal map (the TBN
+// Corner-only material simplifications: a flat 1x1 normal map (the TBN
 // then collapses to the geometric normal, so the proxy carries NO real
-// tangents — `(1,0,0,1)` placeholders suffice), matte metallic-roughness,
+// tangents - `(1,0,0,1)` placeholders suffice), matte metallic-roughness,
 // white AO, and BLACK emissive (the helmet's emissive_factor is (1,1,1);
 // a white fallback would glow everywhere, black zeroes the term).
 const proxy = @import("helmet_proxy");
 const corner_size: usize = 48;
-/// The Ubo every CPU-side evaluation feeds the shader — the live half from
+/// The Ubo every CPU-side evaluation feeds the shader - the live half from
 /// the runtime glTF material, the comptime corner from the baked proxy's
 /// factors.  Pure, so the compiler can call it too.  Same struct the GPU's
 /// std140 block is generated from; same light values pbr3d.buildUbo writes.
@@ -131,7 +131,7 @@ fn buildUboFromFactors(
     return ubo;
 }
 
-/// Raw RGBA8 — uploaded ONCE to a small texture at init and drawn as a
+/// Raw RGBA8 - uploaded ONCE to a small texture at init and drawn as a
 /// single quad.  (v1 drew it as a 2304-rect grid like the rt inset; on the
 /// phone that batch cost was the difference between 60 and 16 fps.)
 const corner_image: [corner_size * corner_size * 4]u8 = blk: {
@@ -210,7 +210,7 @@ const corner_image: [corner_size * corner_size * 4]u8 = blk: {
 /// One CPU-side material map: owned RGBA8 pixels + dims, handed to the
 /// fragment shader as a `TextureRef`.  `srgb` mirrors pbr3d's per-slot
 /// format choice (base color + emissive upload as `rgba8_unorm_srgb`),
-/// so the CPU sampler applies the same sRGB→linear conversion the GPU
+/// so the CPU sampler applies the same sRGB->linear conversion the GPU
 /// view does and the shader body sees identical values.
 const CpuMap = struct {
     pixels: []u8,
@@ -272,7 +272,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 /// Box-filter `src` down to at most `max_edge` per side (power-of-two
-/// integer factor; a 2048² helmet map at max_edge 512 averages 4×4 blocks).
+/// integer factor; a 2048^2 helmet map at max_edge 512 averages 4x4 blocks).
 /// Factor-1 inputs are duped so the caller uniformly owns the result.
 fn downsampleRgba8(
     gpa: Allocator,
@@ -319,7 +319,7 @@ fn downsampleRgba8(
 }
 
 /// Decode one material map for the CPU half, downsampled to `cpu_map_edge`.
-/// Slots without a map get the SAME 1×1 neutral the GPU fallbacks use
+/// Slots without a map get the SAME 1x1 neutral the GPU fallbacks use
 /// (white / flat-normal / matte-dielectric MR), so absent maps shade
 /// identically on both halves.
 fn loadCpuMap(
@@ -328,7 +328,7 @@ fn loadCpuMap(
     material: ?z.codecs.gltf.Material,
     slot: z.pbr3d.MaterialSlot,
 ) !CpuMap {
-    // Color maps are sRGB-encoded; data maps (MR / normal / AO) are linear —
+    // Color maps are sRGB-encoded; data maps (MR / normal / AO) are linear -
     // the same split pbr3d uses when picking the GPU texture format.
     const is_srgb: bool = switch (slot) {
         .base_color, .emissive => true,
@@ -398,7 +398,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         emissive_factor = .{ m.emissive_factor[0], m.emissive_factor[1], m.emissive_factor[2] };
     }
 
-    // Placeholder dims — `ensureTargets` re-derives both halves' sizes from
+    // Placeholder dims - `ensureTargets` re-derives both halves' sizes from
     // the live canvas on the first frame (and every rotation/resize after).
     const sw: z.raster.Context = try z.raster.Context.init(gpa, 220, 124);
     const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
@@ -445,7 +445,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 /// Keep both halves' render targets matched to the LIVE canvas: the GPU
-/// render texture at the surface's backing size (CSS × DPR — pixel-perfect,
+/// render texture at the surface's backing size (CSS x DPR - pixel-perfect,
 /// recreated only when the size actually changes), and the CPU raster buffer
 /// at `cpu_pixel_budget` pixels shaped to the canvas aspect (constant cost
 /// at any orientation).  Cheap no-op when nothing changed.
@@ -529,7 +529,7 @@ fn buildCpuUbo(s: *const State, eye: Vec) pbr.fs.Ubo {
 }
 
 /// Run pbr_vs.shaderMain over every vertex, then rasterize the triangles
-/// through pbr_fs.shaderMain with depth testing — the software mirror of
+/// through pbr_fs.shaderMain with depth testing - the software mirror of
 /// what the GPU pipeline does with the same two files.
 fn renderCpuHelmet(
     s: *State,
@@ -568,7 +568,7 @@ fn renderCpuHelmet(
     base_fs_io._occlusion = s.maps[3].ref();
     base_fs_io._emissive = s.maps[4].ref();
     // Shadows are gated off (shadow_enabled = 0); the unconditional sample
-    // at the shader's uniform top still happens, so bind a white 1×1.
+    // at the shader's uniform top still happens, so bind a white 1x1.
     const white_px = [_]u8{ 255, 255, 255, 255 };
     base_fs_io._shadow_map = .{ .pixels = &white_px, .width = 1, .height = 1 };
 
@@ -592,7 +592,7 @@ fn update(f: *z.Frame, s: *State) void {
     const vh: f32 = @max(f.window.heightf(), 1);
 
     // OFFSCREEN FIRST (tile-based-GPU safe; app owns begin/endDrawing).
-    // ---- Shared orbit camera — BOTH halves consume these matrices.
+    // ---- Shared orbit camera - BOTH halves consume these matrices.
     //      The projection aspect is the LIVE canvas aspect, so portrait,
     //      landscape, and mid-rotation frames all render undistorted. ----
     const cp: f32 = @cos(s.cam_pitch);

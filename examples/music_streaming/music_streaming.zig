@@ -1,9 +1,9 @@
-//! music_streaming — port of the GL `music_streaming`: stream an embedded
+//! music_streaming - port of the GL `music_streaming`: stream an embedded
 //! OGG (~2.3 MB, 96 s stereo Vorbis) on the wgpu audio bridge. `music.loadFromMemory`
 //! kicks off the browser's async `decodeAudioData` (the `js_audio_decode_ogg_bytes`
 //! path implemented this turn); `isReady` flips true a few frames later. Tap PLAY
 //! to play/stop the looping track; tap the bar to seek. A progress bar tracks
-//! the playhead. No per-frame pump — the decoded buffer loops in Web Audio.
+//! the playhead. No per-frame pump - the decoded buffer loops in Web Audio.
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;

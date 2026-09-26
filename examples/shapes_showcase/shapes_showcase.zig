@@ -1,4 +1,4 @@
-//! shapes_showcase — a grid of animated 2D shape primitives. Exercises the new
+//! shapes_showcase - a grid of animated 2D shape primitives. Exercises the new
 //! gradient / polygon / fan / outline primitives (drawCircleGradient, drawCircleLines,
 //! drawPoly, drawPolyLines, drawRectangleGradientVertical/Ex, drawTriangleFan, drawTriangleLines)
 //! alongside existing ones (sectors, ellipses, splines, dashed lines), on the shared

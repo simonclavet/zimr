@@ -1,13 +1,13 @@
-//! src/shaders/effect_mask_fs.zig — blend two sources, by a mask or by a divider.
+//! src/shaders/effect_mask_fs.zig - blend two sources, by a mask or by a divider.
 //!
 //! Ports the *shading* half of raylib's `shaders_simple_mask` and
 //! `shaders_multi_sample2d` in one shader, because they are the same shader:
 //! sample two textures, produce a blend factor, mix. The only difference is where
-//! the blend factor comes from —
+//! the blend factor comes from -
 //!
-//!   MASK    — a third texture's luminance (raylib's simple_mask, which keys on a
+//!   MASK    - a third texture's luminance (raylib's simple_mask, which keys on a
 //!             mask image; here it is any texture, so a live one works too).
-//!   DIVIDER — a position along x (raylib's multi_sample2d, which wipes between two
+//!   DIVIDER - a position along x (raylib's multi_sample2d, which wipes between two
 //!             textures at a draggable split).
 //!
 //! Both branches sample BOTH sources unconditionally. That is deliberate: a
@@ -33,7 +33,7 @@ pub fn shaderMain(io_in: Io) Out {
 
     const uv = io_in.frag_uv;
 
-    // Sample everything up front — see the note above on uniform control flow.
+    // Sample everything up front - see the note above on uniform control flow.
     const a: Vec = io_in.tex_a(uv);
     const b: Vec = io_in.tex_b(uv);
     const m: Vec = io_in.tex_mask(uv);

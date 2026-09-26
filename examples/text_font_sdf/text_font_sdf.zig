@@ -1,8 +1,8 @@
-//! text_font_sdf — port of raylib [text] example - font SDF loading.
+//! text_font_sdf - port of raylib [text] example - font SDF loading.
 //! raylib source: examples/text/text_font_sdf.c.
 //!
 //! The point of SDF text: a normal glyph atlas stores COVERAGE, so magnifying a
-//! glyph past the resolution it was baked at just bilinear-blurs that coverage —
+//! glyph past the resolution it was baked at just bilinear-blurs that coverage -
 //! the edge goes soft. A signed-distance-field atlas stores, per texel, the
 //! distance to the nearest glyph edge; a `smoothstep` around the 0.5 iso-line
 //! reconstructs a crisp ~1px edge at ANY magnification. raylib proves it by
@@ -11,10 +11,10 @@
 //! SDF stays razor-sharp.
 //!
 //! Engine work this drove:
-//!   * `z.loadFontSdf` — bake a coverage atlas, then `image.coverageToSdf`
+//!   * `z.loadFontSdf` - bake a coverage atlas, then `image.coverageToSdf`
 //!     (a pure, unit-tested signed 8SSEDT) turns coverage into distance in the
 //!     alpha channel; uploaded LINEAR-filtered.
-//!   * `src/shaders/text_sdf_fs.zig` — raylib's `sdf.fs`, the `smoothstep(0.5)`
+//!   * `src/shaders/text_sdf_fs.zig` - raylib's `sdf.fs`, the `smoothstep(0.5)`
 //!     fragment stage, run over the 2D batch via `beginShaderMode`. The SDF
 //!     glyphs are just `gl.text` drawn between begin/endShaderMode.
 //!
@@ -38,9 +38,9 @@ const samples = [_][]const u8{ "Sphinx", "SHARP", "Ag&Q@", "zimr" };
 
 const State = struct {
     ui_font: z.Font,
-    /// Small coverage atlas — blurs when magnified far past its bake size.
+    /// Small coverage atlas - blurs when magnified far past its bake size.
     bitmap_font: z.Font,
-    /// Same face, baked as a signed distance field — crisp at any size.
+    /// Same face, baked as a signed distance field - crisp at any size.
     sdf_font: z.Font,
     sdf_shader: z.Shader2D,
     ui_host: z.UiHost,

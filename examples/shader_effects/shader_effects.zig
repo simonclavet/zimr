@@ -1,19 +1,19 @@
-//! shader_effects — raylib's 2D texture-shader examples, gathered into
+//! shader_effects - raylib's 2D texture-shader examples, gathered into
 //! one live gallery.
 //!
 //! Covers four of their `shaders_*` demos with one FS file each:
 //!
-//!   grade    → `shaders_color_correction` (and, at saturation −1,
+//!   grade    -> `shaders_color_correction` (and, at saturation -1,
 //!              `shaders_texture_grayscale` for free)
-//!   waves    → `shaders_texture_waves`
-//!   outline  → `shaders_texture_outline`
-//!   palette  → `shaders_palette_switch`
+//!   waves    -> `shaders_texture_waves`
+//!   outline  -> `shaders_texture_outline`
+//!   palette  -> `shaders_palette_switch`
 //!
 //! Where raylib filters a static PNG, the gallery filters a LIVE scene:
 //! bouncing balls, spinning slabs and a big label drawn by the 2D
 //! renderer into an offscreen texture every frame (on a TRANSPARENT
-//! clear — the outline effect keys on alpha).  The effect pass is a
-//! fullscreen quad through `deferred_shading_vs` — reused yet again —
+//! clear - the outline effect keys on alpha).  The effect pass is a
+//! fullscreen quad through `deferred_shading_vs` - reused yet again -
 //! with the chosen effect FS, into a second texture that's blitted to
 //! screen.  Sliders are contextual per effect; the palette has a few
 //! tables to cycle, which IS the raylib demo.
@@ -69,7 +69,7 @@ fn cycleMode(m: Mode, dir: i32) Mode {
 const bg_clear: Color = .{ .r = 28, .g = 27, .b = 34, .a = 255 };
 const white: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
-/// The palette tables the palette effect cycles through — recoloring by
+/// The palette tables the palette effect cycles through - recoloring by
 /// table swap is the whole point of raylib's `shaders_palette_switch`.
 const palette_count: usize = 3;
 const palettes: [palette_count][8][4]f32 = .{
@@ -100,8 +100,8 @@ const State = struct {
     gpa: Allocator,
 
     /// Keyed BY THE MODE ENUM, not by a parallel index. Adding an effect used to
-    /// mean editing four things in lockstep — the array, its length, the
-    /// `switch (mode) => index` map, and the ubo writes — and any one of them
+    /// mean editing four things in lockstep - the array, its length, the
+    /// `switch (mode) => index` map, and the ubo writes - and any one of them
     /// could silently drift. An EnumArray makes the mapping total and checked:
     /// a new Mode member that nobody initialises is a COMPILE error, not a
     /// wrong-pipeline-at-runtime.
@@ -252,7 +252,7 @@ fn ensureTargets(f: *z.Frame, s: *State) void {
     ) catch return;
 }
 
-/// The live source: bouncing balls, two spinning slabs, a big label —
+/// The live source: bouncing balls, two spinning slabs, a big label -
 /// drawn on a TRANSPARENT clear so the outline effect has alpha to bite.
 fn drawSourceScene(f: *z.Frame, s: *State, t: f32, dt: f32) void {
     const w: f32 = float(s.rt_src.width);
@@ -270,7 +270,7 @@ fn drawSourceScene(f: *z.Frame, s: *State, t: f32, dt: f32) void {
         }
     }
 
-    // Clear to TRANSPARENT — the outline effect keys on the alpha channel.
+    // Clear to TRANSPARENT - the outline effect keys on the alpha channel.
     z.beginTextureMode(f.gl, s.rt_src, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
 
     for (&s.balls) |*b| {
@@ -341,14 +341,14 @@ fn writeEffectUbos(f: *z.Frame, s: *State, t: f32) void {
     z.wgpu.queueWriteBuffer(q, s.fx.get(.sieve).ubo, 0, std.mem.asBytes(&sieve));
 
     // The ASCII cell grid is defined in PIXELS, so the shader must be told the
-    // live canvas size — derive it from the UV and it would stretch with aspect.
+    // live canvas size - derive it from the UV and it would stretch with aspect.
     var ascii: AsciiUbo = .{
         .params = .{ s.ascii_cell, s.ascii_mix, 0, 0 },
         .resolution = .{ f.window.widthf(), f.window.heightf(), 0, 0 },
     };
     z.wgpu.queueWriteBuffer(q, s.fx.get(.ascii).ubo, 0, std.mem.asBytes(&ascii));
 
-    // Purely procedural — it never samples the scene, it just needs the clock.
+    // Purely procedural - it never samples the scene, it just needs the clock.
     var cubes: CubesUbo = .{ .params = .{ t, s.cubes_div, s.cubes_fill, 0 } };
     z.wgpu.queueWriteBuffer(q, s.fx.get(.cubes).ubo, 0, std.mem.asBytes(&cubes));
 }
@@ -360,7 +360,7 @@ fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
 
-    // ===== OFFSCREEN PASSES FIRST — tile-based-GPU safe: never tear down the
+    // ===== OFFSCREEN PASSES FIRST - tile-based-GPU safe: never tear down the
     // swapchain mid-frame. Uses s.* mode/slider state from the PREVIOUS frame
     // (a 1-frame lag, imperceptible at 60fps); the UI below updates it for the
     // next frame. This is why the app owns its own begin/endDrawing. =====
@@ -368,7 +368,7 @@ fn update(f: *z.Frame, s: *State) void {
     writeEffectUbos(f, s, t);
     if (s.mode != .source) {
         // raylib's shape: open the target, run the shader over the source, close.
-        // No pipeline/bind-group/vertex-buffer bookkeeping in userland any more —
+        // No pipeline/bind-group/vertex-buffer bookkeeping in userland any more -
         // and no `mode -> index` map to keep in sync, because the EnumArray IS the
         // map.
         z.beginTextureModeRaw(f.gl, s.rt_out, .{ .r = 28, .g = 27, .b = 34, .a = 255 });
@@ -378,7 +378,7 @@ fn update(f: *z.Frame, s: *State) void {
         z.endTextureModeRaw(f.gl);
     }
 
-    // ===== SCREEN PASS — opens exactly ONCE, after all offscreen work. =====
+    // ===== SCREEN PASS - opens exactly ONCE, after all offscreen work. =====
     z.beginDrawing(f.gl);
     z.clearViewport(f, bg_clear);
     const composited: z.WgpuRenderTexture = if (s.mode == .source) s.rt_src else s.rt_out;
@@ -388,7 +388,7 @@ fn update(f: *z.Frame, s: *State) void {
     const u: z.ui_real.Ui = s.ui_host.begin(f);
     //
     // A CYCLER, not a grid of buttons. The grid's height grew with every effect
-    // added, and the newest one kept landing outside the window — where `itemAdd`
+    // added, and the newest one kept landing outside the window - where `itemAdd`
     // CLIPS it, so it still draws but can never be tapped. That has now bitten
     // twice (ascii, then cubes), and "budget more pixels per row" only postpones
     // it: the height of a grid is O(number of effects), so the bug comes back the
@@ -490,7 +490,7 @@ pub const app: z.AppSpec(State) = .{
     .deinit = deinit,
     .update = update,
     // Owns its own begin/endDrawing so the source + effect render-textures are
-    // built BEFORE the screen pass opens — no mid-frame swapchain teardown, so
+    // built BEFORE the screen pass opens - no mid-frame swapchain teardown, so
     // no tile-based-GPU frame-feedback tiling.
     .manages_own_frame = true,
 };

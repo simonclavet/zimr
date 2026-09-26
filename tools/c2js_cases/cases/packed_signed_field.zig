@@ -1,5 +1,5 @@
 //! Signed sub-32-bit packed-struct bitfields (`i7`, `i3`, `i9`, `i13`) read back
-//! WITHOUT sign extension — a negative field read as its raw unsigned bits
+//! WITHOUT sign extension - a negative field read as its raw unsigned bits
 //! (e.g. i7 -3 -> 125): silent, 0 markers. The C backend extracts the field and
 //! calls `zig_wrap_iN(x, UINT8_C(width))`; the transpiler parsed the leading
 //! token (`UINT8_C`) of the width arg instead of the unwrapped number, so the

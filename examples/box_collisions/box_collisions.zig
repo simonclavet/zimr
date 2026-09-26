@@ -1,12 +1,12 @@
-//! box_collisions — raylib's `models_box_collisions`, the zimr way.
+//! box_collisions - raylib's `models_box_collisions`, the zimr way.
 //!
 //! A green player box slides around an arena holding a gray enemy cube
 //! and a gray enemy sphere.  Every frame the player's AABB is tested
-//! against both (`checkCollisionBoxes`, `checkCollisionBoxSphere` —
+//! against both (`checkCollisionBoxes`, `checkCollisionBoxSphere` -
 //! raylib's exact predicates, re-exported this port); on any overlap
 //! the player flashes RED and the panel says which enemy it's touching.
 //!
-//! Phone-first: raylib steers with arrow keys.  Here you DRAG — one
+//! Phone-first: raylib steers with arrow keys.  Here you DRAG - one
 //! finger anywhere slides the player to the ground point under it,
 //! computed by casting `getScreenToWorldRay` (last port's engine
 //! addition) against the ground plane.  The camera is fixed like
@@ -192,7 +192,7 @@ const State = struct {
 
 fn deinit(gpa: Allocator, s: *State) void {
     _ = gpa;
-    // Per-object uniforms + bind groups (NOT obj.mesh — those alias s.meshes below).
+    // Per-object uniforms + bind groups (NOT obj.mesh - those alias s.meshes below).
     for (s.objs) |o| {
         z.wgpu.destroyBuffer(o.vs_ubo);
         z.wgpu.destroyBuffer(o.fs_ubo);

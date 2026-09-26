@@ -1,4 +1,4 @@
-//! HOST harness (not shipped): exercises the new Canvas primitive surface →
+//! HOST harness (not shipped): exercises the new Canvas primitive surface ->
 //! PNG so each slice of the drawing-API migration can be viewed in-sandbox with
 //! no device. Excluded from the style gate via build.zig `deletion_skip`.
 const std = @import("std");

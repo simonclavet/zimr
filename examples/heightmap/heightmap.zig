@@ -1,17 +1,17 @@
-//! heightmap — raylib's `models_heightmap`, the zimr way.
+//! heightmap - raylib's `models_heightmap`, the zimr way.
 //!
 //! A Perlin-noise image is turned into a terrain mesh by
-//! `genMeshHeightmap` (already in the engine — each pixel's grayscale
+//! `genMeshHeightmap` (already in the engine - each pixel's grayscale
 //! becomes a vertex height), then drawn with the new height-banded
 //! `terrain_fs` on the shared `gbuffer_vs`, so the landscape colours
-//! itself water→grass→rock→snow from its own shape with no texture
+//! itself water->grass->rock->snow from its own shape with no texture
 //! upload.  A "regen" button rolls a fresh noise field (new offset)
 //! and rebuilds the mesh into the same GPU buffers.
 //!
 //! raylib loads a PNG heightmap and maps a matching PNG as the
 //! surface texture; this port generates the field procedurally (so the
 //! standalone needs no asset) and reads height as colour instead of
-//! sampling a texture — the terrain look falls out of the geometry.
+//! sampling a texture - the terrain look falls out of the geometry.
 //!
 //! Phone-first: slow auto-orbit; one finger drags to take over, pinch
 //! zooms.  The little source-noise image is shown in the corner via
@@ -157,7 +157,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const device: z.wgpu.DeviceHandle = f.gpu.device;
 
-    // (map_dim-1)^2 quads * 2 tris * 3 verts — the fixed vertex budget.
+    // (map_dim-1)^2 quads * 2 tris * 3 verts - the fixed vertex budget.
     const cap: usize = @as(usize, @intCast(map_dim - 1)) * @as(usize, @intCast(map_dim - 1)) * 6;
     const scratch: []MeshVertex = try gpa.alloc(MeshVertex, cap);
     const vbo: z.wgpu.BufferHandle = z.wgpu.createBuffer(device, .{

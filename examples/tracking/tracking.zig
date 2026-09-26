@@ -1,38 +1,38 @@
-//! tracking — why a planner beats a servo, on the one claim that survives measurement.
+//! tracking - why a planner beats a servo, on the one claim that survives measurement.
 //!
 //! Two identical arms follow the same moving target. The near one runs a PD tuned as well as I
 //! could tune it; the far one plans, and is shown the target's path 0.3 seconds ahead.
 //!
-//! ── ★★★ THE CLAIM, AND IT IS ABOUT INFORMATION RATHER THAN TUNING ──
+//! -- *** THE CLAIM, AND IT IS ABOUT INFORMATION RATHER THAN TUNING --
 //!
-//! A servo tracking a target moving at speed `v` holds a steady-state lag of roughly `2v/√kp`.
-//! It is ALWAYS behind, and no gain removes it — raising `kp` shrinks the lag as `1/√kp` while
+//! A servo tracking a target moving at speed `v` holds a steady-state lag of roughly `2v/sqrtkp`.
+//! It is ALWAYS behind, and no gain removes it - raising `kp` shrinks the lag as `1/sqrtkp` while
 //! pushing toward saturation and ringing. **A planner shown the future has no lag, because it
 //! can lead.**
 //!
-//! Measured, same arm, same 400 N·m limit, joint-space RMS error:
+//! Measured, same arm, same 400 N*m limit, joint-space RMS error:
 //!
 //!     PD kp   2500    0.685 rad
 //!     PD kp   9000    0.437 rad
 //!     PD kp  20000    0.287 rad
 //!     PD kp  45000    0.209 rad
-//!     PD kp  90000    0.156 rad     ← the servo's true optimum
-//!     PD kp 180000    0.168 rad     ← past it; the trend reverses
-//!     MPC preview     0.096 rad     ← 1.63x better than the best gain
+//!     PD kp  90000    0.156 rad     <- the servo's true optimum
+//!     PD kp 180000    0.168 rad     <- past it; the trend reverses
+//!     MPC preview     0.096 rad     <- 1.63x better than the best gain
 //!
-//! ★★★ AND AN ABLATION SEPARATES THE CAUSE FROM THE CORRELATION. Remove the preview — every knot
-//! referencing the target at NOW instead of in the future — and the planner scores **0.213**,
+//! *** AND AN ABLATION SEPARATES THE CAUSE FROM THE CORRELATION. Remove the preview - every knot
+//! referencing the target at NOW instead of in the future - and the planner scores **0.213**,
 //! which LOSES to a well-tuned PD. **Preview is the entire advantage.** A planner that merely
 //! knows the dynamics does not beat a servo here; one that knows the future does.
 //!
-//! ── ★★ THE ARM IS BUILT TO BE HARD FOR A SERVO ──
+//! -- ** THE ARM IS BUILT TO BE HARD FOR A SERVO --
 //!
 //! Five segments, 1.9 m, and a **6 kg gripper at the tip**. That end mass makes the inertia
-//! strongly configuration-dependent — the shoulder feels a different load at every pose — so no
+//! strongly configuration-dependent - the shoulder feels a different load at every pose - so no
 //! single `kp` is right everywhere. The planner re-linearises the actual mass matrix at every
 //! knot and does not care.
 //!
-//! ── ★ AND THIS IS THE BOTTOM HALF OF A LARGER DESIGN ──
+//! -- * AND THIS IS THE BOTTOM HALF OF A LARGER DESIGN --
 //!
 //! The intended system has a learned policy choosing a kinematic target a fraction of a second
 //! ahead, and a planner reaching it smoothly and precisely. Here the target comes from a closed
@@ -71,22 +71,22 @@ const translation = zm.translation;
 const scaling = zm.scaling;
 const mulMat = zm.mulMat;
 
-// ── ★★★ 1/125, NOT 1/250 — AND THE COARSER STEP IS *MORE* ACCURATE HERE ──
+// -- *** 1/125, NOT 1/250 - AND THE COARSER STEP IS *MORE* ACCURATE HERE --
 //
 // A knot IS one model timestep, so halving the sim rate halves the knots needed for the same
 // preview horizon. 40 knots at 1/125 is **0.32 s** of lookahead; 75 at 1/250 was 0.30 s. Same
 // foresight, a fifth of the work:
 //
 //     250 Hz, 75 knots, 6 iters   56250 knot-iters/s   MPC 0.250
-//     125 Hz, 40 knots, 4 iters   10000 knot-iters/s   MPC 0.218   ← cheaper AND better
+//     125 Hz, 40 knots, 4 iters   10000 knot-iters/s   MPC 0.218   <- cheaper AND better
 //
-// ★ THE ESTIMATE THAT CAUSED THE PROBLEM: 14.7 us per knot was measured NATIVELY, and this runs
+// * THE ESTIMATE THAT CAUSED THE PROBLEM: 14.7 us per knot was measured NATIVELY, and this runs
 // in wasm at 2-3x that. **A native measurement is not a wasm budget**, and the frame time was
 // blown by a factor never accounted for.
 const sim_dt: f32 = 1.0 / 125.0;
-// ★★★ 75 KNOTS AND SIX ITERATIONS ARE BOTH MEASURED FLOORS, NOT ROUND NUMBERS.
+// *** 75 KNOTS AND SIX ITERATIONS ARE BOTH MEASURED FLOORS, NOT ROUND NUMBERS.
 //
-// Cutting to 50 knots and 2 iterations made the demo fast and destroyed the result — the planner
+// Cutting to 50 knots and 2 iterations made the demo fast and destroyed the result - the planner
 // went from 0.096 rad to 0.315 and LOST to the servo's 0.156. **A demo tuned for frame rate that
 // no longer shows its own result is worthless**, so the cheap configuration was re-measured
 // rather than assumed to behave like the expensive one.
@@ -100,9 +100,9 @@ const sim_dt: f32 = 1.0 / 125.0;
 const preview_knots: u32 = 40; // 0.32 s of lookahead at 1/125
 /// How many poses are tabulated around the loop.
 ///
-/// ── ★★★ THE PATH REPEATS, SO THE JOINT REFERENCE IS A TABLE, NOT A SOLVE ──
+/// -- *** THE PATH REPEATS, SO THE JOINT REFERENCE IS A TABLE, NOT A SOLVE --
 ///
-/// The first version ran `Ik` once per knot per tick — **76 solves per arm per sim step, at
+/// The first version ran `Ik` once per knot per tick - **76 solves per arm per sim step, at
 /// 250 Hz**, which is about 600 IK solves and 3 ms of pure inverse kinematics per rendered
 /// frame, per arm. Measured, that alone capped the demo near 16 fps and it ran at about 1.
 ///
@@ -113,19 +113,19 @@ const table_size: u32 = 512;
 /// Replan every this many sim steps; `feedbackControl` covers the gap, which is what real MPC
 /// does anyway and what the tutorial describes.
 ///
-/// ★ THE COST FORCES A CADENCE: 75 knots x 6 iterations x 14.7 us is **6.6 ms per replan per
+/// * THE COST FORCES A CADENCE: 75 knots x 6 iterations x 14.7 us is **6.6 ms per replan per
 /// arm**, and two arms inside a 16 ms frame cannot each do that every step. At this cadence the
 /// per-frame planning cost is about 6.6 ms, which leaves room to render.
 ///
-/// ★★★ AND THE COST IS NOW MEASURED, NOT ASSUMED. `feedbackControl` does NOT cover the gaps for
+/// *** AND THE COST IS NOW MEASURED, NOT ASSUMED. `feedbackControl` does NOT cover the gaps for
 /// free:
 ///
 ///     cadence 1 (250 Hz)   0.098 m
 ///     cadence 2 (125 Hz)   0.117 m
-///     cadence 4  (63 Hz)   0.186 m   ← what this used to be, nearly 2x worse
+///     cadence 4  (63 Hz)   0.186 m   <- what this used to be, nearly 2x worse
 ///     cadence 8  (31 Hz)   0.331 m
 ///
-/// ★ AND THE BUDGET ALLOWED BETTER ALL ALONG, because only ONE arm plans — the other is a servo.
+/// * AND THE BUDGET ALLOWED BETTER ALL ALONG, because only ONE arm plans - the other is a servo.
 /// The cost was double-counted at 13.2 ms/frame when it is 6.6, which is affordable inside 16.
 /// **An arithmetic slip in a budget estimate had been paying for itself in accuracy.**
 const replan_every: u32 = 2;
@@ -141,14 +141,14 @@ const grip_colour: Color = .{ .r = 89, .g = 204, .b = 153, .a = 255 };
 const target_colour: Color = .{ .r = 237, .g = 184, .b = 89, .a = 255 };
 const path_colour: Color = .{ .r = 84, .g = 96, .b = 120, .a = 255 };
 const lag_colour: Color = .{ .r = 226, .g = 106, .b = 154, .a = 255 };
-// ★ ONE COLOUR PER CONTROLLER. Both traces were the same green, so the picture was a tangle
-// with no way to tell whose was whose — which makes a comparison illegible however good it is.
+// * ONE COLOUR PER CONTROLLER. Both traces were the same green, so the picture was a tangle
+// with no way to tell whose was whose - which makes a comparison illegible however good it is.
 const trace_servo: Color = .{ .r = 214, .g = 118, .b = 148, .a = 255 };
 const trace_plan: Color = .{ .r = 108, .g = 200, .b = 168, .a = 255 };
 
 /// The target's path: a tilted circle the arm can follow all the way round.
-/// ★ A BIGGER CIRCLE AND A FASTER ONE. Both widen the servo's structural lag — `e ≈ 2v/√kp`
-/// grows directly with speed — so the difference is easier to see, and the arm has to work.
+/// * A BIGGER CIRCLE AND A FASTER ONE. Both widen the servo's structural lag - `e ~ 2v/sqrtkp`
+/// grows directly with speed - so the difference is easier to see, and the arm has to work.
 fn targetAt(t: f32, speed: f32) Vec {
     const a: f32 = t * speed;
     return vec(0.92 + 0.46 * @cos(a), 0.46 * @sin(a), 1.15 + 0.26 * @sin(a * 0.5));
@@ -165,10 +165,10 @@ const Arm = struct {
     error_sum: f64,
     error_count: u32,
     tick: u32,
-    /// Where the gripper has been. ★ THE OSCILLATION IS THE POINT AND IT IS TRANSIENT — a servo
+    /// Where the gripper has been. * THE OSCILLATION IS THE POINT AND IT IS TRANSIENT - a servo
     /// wobbling around the path looks, in any single frame, exactly like one sitting on it. Over
     /// a lap the two traces are unmistakable.
-    /// ★ SIZED TO ROUGHLY ONE LAP AT THE DEFAULT SPEED. Three laps of a flailing servo is
+    /// * SIZED TO ROUGHLY ONE LAP AT THE DEFAULT SPEED. Three laps of a flailing servo is
     /// spaghetti that hides the very wobble it is drawn to show.
     trail: [180]Vec,
     trail_count: usize,
@@ -194,7 +194,7 @@ const State = struct {
 
     servo: Arm,
     planner: Arm,
-    /// `table_size × nq` poses around the loop, and the loop's period.
+    /// `table_size x nq` poses around the loop, and the loop's period.
     pose_table: []f32,
     loop_period: f32,
 
@@ -255,7 +255,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.state_w = try gpa.alloc(f32, s.planner.plan.ndx);
     s.term_w = try gpa.alloc(f32, s.planner.plan.ndx);
     s.ctrl_w = try gpa.alloc(f32, s.model.nu);
-    // ★ TRACKING WEIGHTS AT EVERY KNOT, not a terminal push — the whole path matters, which is
+    // * TRACKING WEIGHTS AT EVERY KNOT, not a terminal push - the whole path matters, which is
     // the opposite of a deadline reach. And the reference is a trajectory by construction, so
     // the "destination as a reference" mistake cannot be made here.
     for (0..s.model.nv) |i| {
@@ -270,7 +270,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.loop_period = 0;
     s.clock = 0;
     s.speed = 2.2; // tip travels about 1.0 m/s
-    // ★★★ THE SERVO OPENS AT ITS MEASURED BEST **FOR THIS TASK**. It was 90000 on the small slow
+    // *** THE SERVO OPENS AT ITS MEASURED BEST **FOR THIS TASK**. It was 90000 on the small slow
     // circle; on the bigger faster one the optimum moved to 180000 and 90000 costs the servo a
     // fifth of its accuracy. Swept here: 1.507, 1.105, 0.895, **0.771**, 1.889.
     //
@@ -292,8 +292,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 /// Solve the whole loop once, into a table indexed by phase.
 ///
-/// ★ CHAINED FROM THE PREVIOUS ENTRY, so each solve starts beside its answer and converges in a
-/// few iterations — and the table comes out CONTINUOUS, which a fresh solve per entry would not
+/// * CHAINED FROM THE PREVIOUS ENTRY, so each solve starts beside its answer and converges in a
+/// few iterations - and the table comes out CONTINUOUS, which a fresh solve per entry would not
 /// guarantee on a redundant arm. Two passes, so the last entry meets the first.
 fn buildPoseTable(s: *State) void {
     const m: *rbt.Model = &s.model;
@@ -329,7 +329,7 @@ fn poseAt(s: *const State, t: f32, out: []f32) void {
     for (0..nq) |q| {
         const a: f32 = s.pose_table[lo * nq + q];
         const b: f32 = s.pose_table[hi * nq + q];
-        // ★ SHORTEST-WAY INTERPOLATION IS NOT NEEDED: these are hinge angles from a chained
+        // * SHORTEST-WAY INTERPOLATION IS NOT NEEDED: these are hinge angles from a chained
         // solve, so neighbours are already close and a straight lerp cannot wrap the long way.
         out[q] = a + frac * (b - a);
     }
@@ -365,7 +365,7 @@ fn resetArms(s: *State) void {
         @memcpy(a.data.pos, s.rest);
         @memset(a.data.vel, 0);
         @memset(a.data.ctrl, 0);
-        // ── ★★★ AND `applied_force`, WHICH IS THE ONE THAT COST A DAY ──
+        // -- *** AND `applied_force`, WHICH IS THE ONE THAT COST A DAY --
         //
         // `PoseHold` writes it and clears it each apply; a planner drives `ctrl` and never
         // touches it, so it inherits whatever a servo left and `step` adds BOTH. Measured, the
@@ -389,13 +389,13 @@ fn advance(s: *State, a: *Arm) void {
     const nstate: u32 = m.nq + m.nv;
 
     if (a.planned) {
-        // ── ★★★ THE PREVIEW: EVERY KNOT GETS THE TARGET AT THAT KNOT'S FUTURE TIME ──
+        // -- *** THE PREVIEW: EVERY KNOT GETS THE TARGET AT THAT KNOT'S FUTURE TIME --
         //
         // This is the information a servo does not have and cannot be given. A gain reacts to
         // where the target IS; a plan is built around where it WILL BE, so it leads instead of
         // lagging. That is the whole difference, and it is a difference in information rather
         // than in tuning.
-        // ★ THE REFERENCE IS A TABLE READ, NOT 51 IK SOLVES. Same numbers, none of the cost.
+        // * THE REFERENCE IS A TABLE READ, NOT 51 IK SOLVES. Same numbers, none of the cost.
         if (a.tick % replan_every == 0) {
             for (0..a.plan.horizon + 1) |k| {
                 const when: f32 = s.clock + float(k) * sim_dt;
@@ -410,16 +410,16 @@ fn advance(s: *State, a: *Arm) void {
                 .reference = a.reference,
             }, .{ .iterations = 4 });
         }
-        // ★★ AND `feedbackControl` COVERS THE GAP BETWEEN REPLANS, which is what real MPC does
+        // ** AND `feedbackControl` COVERS THE GAP BETWEEN REPLANS, which is what real MPC does
         // and what the tutorial describes: the backward pass returns a GAIN as well as a
         // sequence, so the plan keeps correcting for where the robot actually is.
         mpc.feedbackControl(m, &a.data, &a.plan, a.data.ctrl[0..m.nu]);
         mpc.shift(&a.plan);
         a.tick += 1;
     } else {
-        // ★ THE SERVO AIMS WHERE THE TARGET IS NOW. That is all it can know, and it is not a
-        // strawman — its gain is swept live on the slider, so you can hunt for a better one.
-        // ★ THE SERVO READS THE SAME TABLE, at the CURRENT time. Both controllers now pay the
+        // * THE SERVO AIMS WHERE THE TARGET IS NOW. That is all it can know, and it is not a
+        // strawman - its gain is swept live on the slider, so you can hunt for a better one.
+        // * THE SERVO READS THE SAME TABLE, at the CURRENT time. Both controllers now pay the
         // same (zero) price for their reference, so the comparison measures control rather than
         // whose inverse kinematics ran more iterations.
         poseAt(s, s.clock, a.aim);
@@ -451,7 +451,7 @@ fn update(f: *z.Frame, s: *State) void {
     defer s.ui_host.render(f);
     const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
 
-    // ★ PROFILING OFF ACROSS THE PLANNER: two planners at 75 knots is far more instrumented work
+    // * PROFILING OFF ACROSS THE PLANNER: two planners at 75 knots is far more instrumented work
     // than a frame's worth of timestamps can carry on wasm. The cartpole and the catch both hit
     // this wall; the smoke runner exhausts Node's heap without it.
     const was_frozen: bool = profiler.isFrozen();
@@ -459,8 +459,8 @@ fn update(f: *z.Frame, s: *State) void {
     defer if (!was_frozen) profiler.unfreeze();
 
     if (s.running) {
-        // ★ A FIXED NUMBER OF STEPS PER FRAME. An accumulator chasing wall-clock time spirals
-        // the moment a frame runs long — it asks for more steps, which makes the next frame
+        // * A FIXED NUMBER OF STEPS PER FRAME. An accumulator chasing wall-clock time spirals
+        // the moment a frame runs long - it asks for more steps, which makes the next frame
         // longer still. A demo wants smooth motion, not wall-clock-accurate physics.
         var step: u32 = 0;
         while (step < steps_per_frame) : (step += 1) {
@@ -510,7 +510,7 @@ fn drawArm(s: *State, gl: *z.WgpuGl, a: *const Arm, depth: f32) void {
         z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (tip) grip_colour else link_colour);
     }
 
-    // ★★★ THE TRACE THE GRIPPER ACTUALLY DREW, against the path it was asked to follow. The
+    // *** THE TRACE THE GRIPPER ACTUALLY DREW, against the path it was asked to follow. The
     // servo's wanders visibly inside and outside the circle; the planner's sits on it. This is
     // the whole result, drawn, and it needs no number to read.
     if (a.trail_count >= 2) {
@@ -522,7 +522,7 @@ fn drawArm(s: *State, gl: *z.WgpuGl, a: *const Arm, depth: f32) void {
         }
     }
 
-    // ★★ THE LAG, DRAWN. A line from the gripper to where the target actually is — short on the
+    // ** THE LAG, DRAWN. A line from the gripper to where the target actually is - short on the
     // planner, long and permanent on the servo. This is the whole demo in one segment, and it is
     // legible without reading a number.
     const goal: Vec = toRender(targetAt(s.clock, s.speed), depth);
@@ -548,9 +548,9 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         if (u.slider("path speed", &s.speed, .{ .min = 0.6, .max = 3.6, .fmt = "{d:.2}" })) {
             resetArms(s);
         }
-        // ★ THE SERVO'S GAIN IS LIVE. Hunt for a better one — the point is that none of them
+        // * THE SERVO'S GAIN IS LIVE. Hunt for a better one - the point is that none of them
         // removes the lag, only trades it against saturation and ringing.
-        // ★★★ THE RANGE REACHES PAST THE SERVO'S OPTIMUM, WHICH IS 90000. Capping the slider at
+        // *** THE RANGE REACHES PAST THE SERVO'S OPTIMUM, WHICH IS 90000. Capping the slider at
         // 40000 hid the best gain the PD family has and would have overstated the planner's
         // advantage by nearly a factor of two. A comparison whose slider cannot reach the
         // opponent's best setting is a strawman with a user interface.
@@ -588,8 +588,8 @@ fn report(u: ui.Ui, label: []const u8, a: *const Arm) void {
         0
     else
         @floatCast(a.error_sum / float64(a.error_count));
-    // ★ TWO SHORT LINES RATHER THAN ONE LONG ONE. The single line ran off the panel on a phone
-    // and truncated mid-word at "wors" — a readout you cannot read is not a readout.
+    // * TWO SHORT LINES RATHER THAN ONE LONG ONE. The single line ran off the panel on a phone
+    // and truncated mid-word at "wors" - a readout you cannot read is not a readout.
     u.text("{s}  now {d:>5.3}  mean {d:>5.3}", .{ label, a.live, mean });
     u.text("      worst {d:>5.3} m", .{a.worst});
 }

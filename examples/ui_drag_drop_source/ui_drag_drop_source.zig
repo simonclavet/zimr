@@ -6,7 +6,7 @@
 // What to look at:
 // - Click any of the build chips and drag it.  The preview
 //   tooltip appears at the cursor showing the build label.
-// - Drag-and-release without a target → nothing happens, the
+// - Drag-and-release without a target -> nothing happens, the
 //   preview disappears.
 // - Status text below the chips shows the current drag state
 //   (idle / pending / active <typename>).
@@ -65,7 +65,7 @@ fn update(f: *z.Frame, s: *State) void {
         for (s.labels, 0..) |label, i| {
             const payload: BuildPayload = .{ .id = @intCast(1000 + i) };
             if (u.button(label, .{})) {
-                // Click-without-drag → no-op for this demo.
+                // Click-without-drag -> no-op for this demo.
             }
             if (u.beginDragDropSource(.{})) {
                 u.setDragDropPayload(BuildPayload, &payload);

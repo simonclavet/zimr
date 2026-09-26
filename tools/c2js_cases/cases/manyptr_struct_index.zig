@@ -1,6 +1,6 @@
 // `[*]Struct` (many-item pointer) indexing must stride by the WHOLE struct size.
 // A struct-pointer local records its pointee on ty.struct_tag (NOT ty.elem), and
-// the `&p[i]` address path — which underlies both `p[i].field` reads and stores —
+// the `&p[i]` address path - which underlies both `p[i].field` reads and stores -
 // consulted only ty.elem, so it struck a stride of 1 and silently miscompiled
 // every many-pointer struct access (field read, field store, and whole-struct
 // store), including such a pointer passed as a function parameter. The cross-check

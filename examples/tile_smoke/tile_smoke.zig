@@ -1,4 +1,4 @@
-//! tile_smoke — shared-memory NEIGHBOUR-TILING de-risk on device (Stage 2a).
+//! tile_smoke - shared-memory NEIGHBOUR-TILING de-risk on device (Stage 2a).
 //! Places particles, builds the uniform grid, then runs the per-cell tiled
 //! gather and checks every particle's neighbour count against a brute-force
 //! O(n_part^2) ground truth. Exact integer pass/fail. The CPU backend runs the same
@@ -72,7 +72,7 @@ fn runGather(pipe: *z.Compute(tg)) void {
     pipe.run("tileBuildGrid", n_part);
     pipe.run("gatherTiled", tg.grid_cells * tg.wg_size);
     // readLatest(.dbg) slices to element_count, so set it to the full gather
-    // width — all grid_cells*wg_size entries come back (out_count is shorter and
+    // width - all grid_cells*wg_size entries come back (out_count is shorter and
     // slices to its own len).
     pipe.element_count = tg.grid_cells * tg.wg_size;
 }

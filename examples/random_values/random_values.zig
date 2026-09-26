@@ -1,5 +1,5 @@
 // examples/random_values.zig - a fresh pseudo-random value every 2 seconds.
-// Port of raylib's `examples/core/core_random_values.c` (★1, ~48 LOC).
+// Port of raylib's `examples/core/core_random_values.c` (*1, ~48 LOC).
 // raylib seeds a GLOBAL RNG and calls GetRandomValue; zimr keeps no global
 // state, so the PRNG lives in the example's `State` (std.Random.DefaultPrng)
 // and is advanced from there. A frame counter regenerates the value on a

@@ -49,7 +49,7 @@ pub const FrameArena = @import("frame_arena.zig").FrameArena;
 /// Ceiling for the UI per-frame arena: well above one honest frame of draw
 /// payload, far below the wasm ~2GB wall. Trips FrameArena if the per-frame
 /// reset is ever dropped (the leak that motivated this).
-/// ★ PUB because `UiContext.frame_arena` is a pub field of type `FrameArena`: anything that
+/// * PUB because `UiContext.frame_arena` is a pub field of type `FrameArena`: anything that
 /// constructs a context from outside this file needs both the type and a sane ceiling, and a
 /// pub field whose type cannot be named is a trap. (Found when four never-compiled UI test
 /// files were finally wired into the aggregator.)
@@ -96,7 +96,7 @@ const Sprite = @import("Sprite.zig");
 const build_options = @import("build_options");
 /// Inert renderer handle for host-test builds (GL-retirement P4: the GL
 /// backend is gone; tests pass `&stub` into beginFrameRaw and rasterize via
-/// raster instead).  Methods are added as the compiler demands them — all
+/// raster instead).  Methods are added as the compiler demands them - all
 /// no-ops.
 pub const TestGlStub = shapes2d.TestGl;
 
@@ -106,7 +106,7 @@ pub const TestGlStub = shapes2d.TestGl;
 /// the DrawList replay (shapes2d/text) calls
 /// (begin/vertex2f/color4ub/setTexture/matrixMode/...).
 /// build_options.ui_backend_wgpu is true in the wgpu module, false in the
-/// host-test module — where rendering goes through raster (`renderToBytes`),
+/// host-test module - where rendering goes through raster (`renderToBytes`),
 /// never through this handle.
 pub const Gl = if (build_options.ui_backend_wgpu)
     @import("WgpuGl.zig")
@@ -137,7 +137,7 @@ fn dupeZ(allocator: Allocator, bytes: []const u8) Allocator.Error![:0]u8 {
 /// Re-exported from `types` for `DrawListHandle` callers - passed
 /// to `addLine`, `addCircle`, etc., and for slider/widget signatures.
 const Vec2 = zm.Vec2;
-/// Re-exported from `types` for custom widget signatures —
+/// Re-exported from `types` for custom widget signatures -
 /// extension authors that paint inside their widget's rect take a
 /// `Color` arg, so making it reachable as `Color` saves having
 /// to add `const z = @import("zimr"); const Color = Color;` at
@@ -270,12 +270,12 @@ pub fn hashInt(seed: Id, value: i64) Id {
 }
 
 /// Options for `getOrPutState`. The `persist` flag enrolls T in
-/// the on-disk save/load path — once set on any slot of T, the
+/// the on-disk save/load path - once set on any slot of T, the
 /// serializer will include all (id, T) pairs in the next save.
 pub const StateOpts = struct {
     /// When true, the typed slot's value gets included in `.zon`
     /// serialization at the next autosave. Requires T to be
-    /// auto-serializable (no pointers, no fn pointers) — the
+    /// auto-serializable (no pointers, no fn pointers) - the
     /// comptime serializer fails to compile otherwise.
     persist: bool = false,
 };
@@ -303,7 +303,7 @@ fn applyEasing(e: Easing, t: f32) f32 {
     };
 }
 
-/// Options for `u.animated` — a one-shot tween from `from` to
+/// Options for `u.animated` - a one-shot tween from `from` to
 /// `to` over `duration` seconds, optionally delayed by `delay`
 /// seconds before motion starts.
 pub const AnimatedOpts = struct {
@@ -326,7 +326,7 @@ pub const TweenSlot = struct {
     /// value (i.e. the tween restarts from `from`).
     elapsed: f32 = 0,
     /// Remembered `to` from the previous frame. If the caller
-    /// passes a new `to`, the tween resets — common for "fade
+    /// passes a new `to`, the tween resets - common for "fade
     /// IN when hovered, fade OUT when not" patterns where the
     /// caller flips `to` between frames.
     last_to: f32 = 0,
@@ -336,7 +336,7 @@ pub const TweenSlot = struct {
     seeded: bool = false,
 };
 
-/// Options for `u.spring` — a critically-damped-by-default
+/// Options for `u.spring` - a critically-damped-by-default
 /// physical spring tracking `target`. Adjusting `target`
 /// between frames is the normal mode of use; the spring
 /// smoothly follows.
@@ -349,7 +349,7 @@ pub const SpringOpts = struct {
     /// 0.5 = bouncy. 2.0 = sluggish.
     damping: f32 = 1.0,
     /// Initial value on the first frame the spring exists.
-    /// After that, ignored — the spring's own state takes over.
+    /// After that, ignored - the spring's own state takes over.
     initial: f32 = 0,
 };
 
@@ -364,7 +364,7 @@ pub const SpringSlot = struct {
     seeded: bool = false,
 };
 
-/// Throwaway smoke-test type — `u.miniPlot` is a stub that
+/// Throwaway smoke-test type - `u.miniPlot` is a stub that
 /// validates the canvas + arcs + state + style + input +
 /// animation pillars compose.  Real `beginPlot` / `endPlot`
 /// arrives in Tier 4 and supersedes this; the slot type goes
@@ -386,7 +386,7 @@ pub const MiniPlotSlot = struct {
 /// typed map when the UiContext tears down.
 ///
 /// The deinit closure has to be stored alongside the map because
-/// at UiContext.deinit time we no longer have access to T — only
+/// at UiContext.deinit time we no longer have access to T - only
 /// the erased `*anyopaque`. Capturing the deinit fn at first-put
 /// time (where T is known via comptime) sidesteps the problem.
 /// Type-erased function bound at first persist-true put time to
@@ -434,7 +434,7 @@ const ExtStorageSlot = struct {
 /// Comptime-generated key for the outer `ext_storage` map. Hashes
 /// the type's name via std.hash.Fnv1a_64. Two types with the same
 /// name (which Zig wouldn't allow anyway in the same compilation
-/// unit) would collide — practical guarantee is fine.
+/// unit) would collide - practical guarantee is fine.
 inline fn extStorageKey(comptime T: type) u64 {
     comptime {
         return std.hash.Fnv1a_64.hash(@typeName(T));
@@ -463,7 +463,7 @@ fn deinitErasedMap(comptime T: type) (fn (map: *anyopaque, gpa: Allocator) void)
 /// numeric types, BoundedArrays-of-plain-data. Pointers or
 /// slices in T will compile but produce garbage at parse time
 /// (the slice header survives serialization but points at freed
-/// memory after load). Lint rule could enforce this — backlog'd.
+/// memory after load). Lint rule could enforce this - backlog'd.
 fn serializeErasedMap(comptime T: type) SerializeExtFn {
     const Entry = struct { id: u32, value: T };
     return struct {
@@ -498,7 +498,7 @@ fn deserializeErasedMap(comptime T: type) DeserializeExtFn {
             const typed: *std.AutoHashMapUnmanaged(Id, T) = @ptrCast(@alignCast(map));
             var diag: std.zon.parse.Diagnostics = .{};
             defer diag.deinit(gpa);
-            // Parse as a slice of Entry — that's the wire shape
+            // Parse as a slice of Entry - that's the wire shape
             // serializeErasedMap emits.
             const parsed = try std.zon.parse.fromSliceAlloc(
                 []Entry,
@@ -577,13 +577,13 @@ pub const TailwindHue = enum {
 /// Built-in theme presets selectable via `Style.applyPreset`.
 /// Matches imgui's `ImGui::StyleColors{Dark,Light,Classic}()`.
 pub const Preset = enum {
-    /// `Style.dark_default` — the project's standard, ships in
+    /// `Style.dark_default` - the project's standard, ships in
     /// `UiContext.init`. Equivalent to imgui's `StyleColorsDark`.
     dark,
-    /// `Style.light_default` — light backgrounds, dark text.
+    /// `Style.light_default` - light backgrounds, dark text.
     /// Equivalent to imgui's `StyleColorsLight`.
     light,
-    /// `Style.classic_default` — the original imgui look, blue-purple
+    /// `Style.classic_default` - the original imgui look, blue-purple
     /// chrome on black. Equivalent to imgui's `StyleColorsClassic`.
     classic,
 };
@@ -793,7 +793,7 @@ pub const Style = struct {
     // ---- Theme presets -------------------------------
     // imgui ships three default themes via `StyleColors{Dark,Light,Classic}`.
     // zimr's `dark_default` (above) is the port of `StyleColorsDark`.
-    // These two add the Light + Classic counterparts — translated from
+    // These two add the Light + Classic counterparts - translated from
     // imgui's float (0..1) form to zimr's u8 form via `round(x*255)`.
     //
 
@@ -838,7 +838,7 @@ pub const Style = struct {
         .tab_separator = .{ .r = 99, .g = 99, .b = 99, .a = 158 },
         .table_row_bg = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .table_row_bg_alt = .{ .r = 77, .g = 77, .b = 77, .a = 23 },
-        // Text link: imgui (0.26, 0.59, 0.98, 1.00) → 66, 150, 250.
+        // Text link: imgui (0.26, 0.59, 0.98, 1.00) -> 66, 150, 250.
         // Hovered: brighten ~30%, underline: darken ~20%.
         .text_link = .{ .r = 66, .g = 150, .b = 250, .a = 255 },
         .text_link_hovered = .{ .r = 110, .g = 180, .b = 255, .a = 255 },
@@ -872,7 +872,7 @@ pub const Style = struct {
         .tab_separator = .{ .r = 128, .g = 128, .b = 128, .a = 128 },
         .table_row_bg = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .table_row_bg_alt = .{ .r = 255, .g = 255, .b = 255, .a = 18 },
-        // Text link: imgui (0.40, 0.48, 0.71, 1.00) → 102, 122, 181.
+        // Text link: imgui (0.40, 0.48, 0.71, 1.00) -> 102, 122, 181.
         .text_link = .{ .r = 102, .g = 122, .b = 181, .a = 255 },
         .text_link_hovered = .{ .r = 140, .g = 160, .b = 220, .a = 255 },
         .text_link_underline = .{ .r = 80, .g = 95, .b = 140, .a = 255 },
@@ -892,7 +892,7 @@ pub const Style = struct {
             .light => Style.light_default,
             .classic => Style.classic_default,
         };
-        // Copy colors only — preserve user's numeric chrome + font.
+        // Copy colors only - preserve user's numeric chrome + font.
         self.text = src.text;
         self.text_disabled = src.text_disabled;
         self.window_bg = src.window_bg;
@@ -925,7 +925,7 @@ pub const Style = struct {
     }
 };
 
-// Style override guard — defer-RAII for one-frame style changes.
+// Style override guard - defer-RAII for one-frame style changes.
 //
 
 // Pattern:
@@ -940,7 +940,7 @@ pub const Style = struct {
 // Why defer-RAII over imgui's pushStyleColor/popStyleColor stack?
 // Two reasons: (1) Zig's `defer` already exists, no need for a
 // custom stack data structure; (2) override+restore is symmetric
-// at the source level — pop misuse (forgetting one, popping the
+// at the source level - pop misuse (forgetting one, popping the
 // wrong type) is impossible. Trade-off: one PartialStyle worth
 // of stack memory per active guard (~64 bytes today). Acceptable.
 //
@@ -951,7 +951,7 @@ pub const Style = struct {
 // automatically extends PartialStyle without further edits.
 
 /// Comptime-derived "optional override" version of `Style`. Each
-/// field is `?T` of the original field type — null means "leave
+/// field is `?T` of the original field type - null means "leave
 /// the live value alone". Caller fills in only the fields they
 /// want to override:
 ///
@@ -986,7 +986,7 @@ pub const StyleGuard = struct {
     /// Restore prior values for every field the matching
     /// `styleOverride` call modified. Safe to call exactly once;
     /// calling again is a no-op (all saved values were already
-    /// written back, but no harm in re-writing them — the
+    /// written back, but no harm in re-writing them - the
     /// idempotence test verifies this).
     pub fn restore(self: StyleGuard) void {
         inline for (@typeInfo(Style).@"struct".field_names) |f_name| {
@@ -998,20 +998,20 @@ pub const StyleGuard = struct {
 };
 
 /// Dense zimr-side key enum. Mirrors raylib's `KeyboardKey`
-/// (`types.zig:819`) but **dense** — every value in `0..MAX` is a
+/// (`types.zig:819`) but **dense** - every value in `0..MAX` is a
 /// valid KeyCode, so it indexes a fixed-size array on
 /// `InputSnapshot.keys` without holes. raylib's KeyboardKey has
 /// sparse values (e.g. space=32, escape=256, f1=290) that would
 /// need a 348-slot array with mostly empty entries; this dense
 /// remapping keeps the snapshot compact.
 ///
-/// `fromRaylib(types.KeyboardKey) → ?KeyCode` translates the
+/// `fromRaylib(types.KeyboardKey) -> ?KeyCode` translates the
 /// runtime input layer into zimr's key index. Keys raylib
 /// supports but zimr doesn't surface return null and are skipped
 /// during snapshot construction.
 ///
-/// `MAX` is the count sentinel — `@intFromEnum(KeyCode.MAX)`
-/// gives the array size. Do not pass `MAX` to `u.isKeyDown` —
+/// `MAX` is the count sentinel - `@intFromEnum(KeyCode.MAX)`
+/// gives the array size. Do not pass `MAX` to `u.isKeyDown` -
 /// it's a count, not a key.
 pub const KeyCode = enum(u8) {
     // Letters
@@ -1128,7 +1128,7 @@ pub const KeyCode = enum(u8) {
     scroll_lock,
     print_screen,
     pause,
-    // Sentinel — NOT a key, just the count of preceding enum values.
+    // Sentinel - NOT a key, just the count of preceding enum values.
     // Used as the size of `InputSnapshot.keys`.
     MAX,
 
@@ -1248,7 +1248,7 @@ pub const KeyCode = enum(u8) {
         };
     }
 
-    /// Inverse of `fromRaylib` — every `KeyCode` (except `MAX`)
+    /// Inverse of `fromRaylib` - every `KeyCode` (except `MAX`)
     /// maps to a `types.KeyboardKey` of the same field name.
     /// Used by repeat-aware helpers that need to call back into
     /// the raylib input layer (which owns the OS-level repeat
@@ -1265,8 +1265,8 @@ pub const KeyCode = enum(u8) {
 /// Per-key state, indexed by `KeyCode` in `InputSnapshot.keys`.
 /// Mirrors imgui's `ImGuiKeyData` (imgui.h:2481-2487) plus a
 /// `pressed_this_frame` / `released_this_frame` pair zimr uses for
-/// the common edge-event pattern. Memory: ~12 bytes per key ×
-/// `KeyCode.MAX` ≈ 1.5 KB per snapshot.
+/// the common edge-event pattern. Memory: ~12 bytes per key x
+/// `KeyCode.MAX` ~ 1.5 KB per snapshot.
 pub const KeyState = struct {
     /// True while the key is being held.
     down: bool = false,
@@ -1335,7 +1335,7 @@ pub const InputSnapshot = struct {
 /// pressed-this-frame edge event for `key` set. Used by host-
 /// side tests that inject synthetic input via `beginFrameRaw`.
 /// Production code populates the snapshot via the inline-for loop
-/// in `beginFrame` — this helper exists only for tests.
+/// in `beginFrame` - this helper exists only for tests.
 pub fn keyEventSnapshot(key: KeyCode) InputSnapshot {
     var s: InputSnapshot = .{};
     s.keys[@backingInt(key)].pressed_this_frame = true;
@@ -1346,7 +1346,7 @@ pub fn keyEventSnapshot(key: KeyCode) InputSnapshot {
 /// Convenience: held-state modifier checks that aggregate left+right
 /// sides. Same shape as the `Ui.isShiftDown` / `isCtrlDown` /
 /// `isAltDown` / `isSuperDown` helpers but takes a snapshot
-/// directly — used inside widget impl code that has a `*UiContext`
+/// directly - used inside widget impl code that has a `*UiContext`
 /// but no `Ui` handle. Resolves to the same array lookup.
 pub fn snapshotShiftDown(s: *const InputSnapshot) bool {
     return s.keys[@backingInt(KeyCode.left_shift)].down or
@@ -1366,7 +1366,7 @@ pub fn snapshotSuperDown(s: *const InputSnapshot) bool {
 }
 
 /// `Ui.isKeyPressedOrRepeat` for callers that have a `*UiContext`
-/// but no `Ui` handle — same semantics, no construction ceremony.
+/// but no `Ui` handle - same semantics, no construction ceremony.
 /// Initial-press case reads `keys[i].pressed_this_frame`; held-
 /// and-repeating case routes through raylib's OS-level timer.
 pub fn ctxKeyPressedOrRepeat(ctx: *UiContext, key: KeyCode) bool {
@@ -1378,7 +1378,7 @@ pub fn ctxKeyPressedOrRepeat(ctx: *UiContext, key: KeyCode) bool {
 }
 
 // ============================================================================
-// P3: Long-press → right-click synthesis
+// P3: Long-press -> right-click synthesis
 // ============================================================================
 // Touch-input UX: a long-press should fire the same
 // `mouse_right_clicked` event that desktop right-click fires, so
@@ -1389,7 +1389,7 @@ pub fn ctxKeyPressedOrRepeat(ctx: *UiContext, key: KeyCode) bool {
 
 // Detection rules:
 //   1. Exactly ONE touch active (multi-touch is a different gesture
-//      — pinch/pan — and never triggers synthesis).
+//      - pinch/pan - and never triggers synthesis).
 //   2. `snapshot.mouse_left_down` (touchstart already bridges to
 //      mouse-button-down on the JS side, so this is always true
 //      under a single-finger press; the check guards against the
@@ -1464,7 +1464,7 @@ pub fn applyLongPressSynthesis(
 
     const touch_count: i32 = runtime.input.getTouchPointCount(input_state);
     if (touch_count != 1) {
-        // 0 or 2+ touches — reset tracker.
+        // 0 or 2+ touches - reset tracker.
         ctx.long_press.touch_id = -1;
         ctx.long_press.elapsed_ms = 0;
         return;
@@ -1474,7 +1474,7 @@ pub fn applyLongPressSynthesis(
     const tpos: Vec2 = runtime.input.getTouchPosition(input_state, 0);
 
     if (ctx.long_press.touch_id != tid) {
-        // New touch — start tracking.
+        // New touch - start tracking.
         ctx.long_press.touch_id = tid;
         ctx.long_press.start_pos = tpos;
         ctx.long_press.elapsed_ms = 0;
@@ -1498,7 +1498,7 @@ pub fn applyLongPressSynthesis(
         return;
     }
 
-    // Mouse must still be down — guards the touchend race window
+    // Mouse must still be down - guards the touchend race window
     // where the OS released the mouse button but the touch slot
     // hasn't been compacted yet.
     if (!snapshot.mouse_left_down) {
@@ -1611,7 +1611,7 @@ pub const DrawCmd = union(enum) {
     /// A Sprite drawn at replay: residency (upload + cache) resolves against the
     /// replay backend's `image`, so record time needs no renderer. The Sprite is
     /// copied by value (id + Image view); its pixels must outlive the frame's
-    /// replay — true for the per-frame DrawList lifecycle.
+    /// replay - true for the per-frame DrawList lifecycle.
     sprite_quad: struct {
         dst: Rectangle,
         sprite: Sprite,
@@ -1683,14 +1683,14 @@ pub const DrawCmd = union(enum) {
         thickness: f32,
         n_segments: u32,
     },
-    /// Filled circle. Same `n_segments = 0 → auto` convention.
+    /// Filled circle. Same `n_segments = 0 -> auto` convention.
     circle_filled: struct {
         center: Vec2,
         radius: f32,
         col: ColorU32,
         n_segments: u32,
     },
-    /// Regular polygon outline (triangle / square / hex / pentagon…).
+    /// Regular polygon outline (triangle / square / hex / pentagon...).
     /// `sides` is explicit - stylistic markers want exact shapes.
     ngon: struct {
         center: Vec2,
@@ -1742,9 +1742,9 @@ pub const DrawCmd = union(enum) {
 /// One entry on a CanvasCtx's transform stack: 2D translate +
 /// per-axis scale. A point `P` in child space maps to
 /// `P * scale + translate` in the parent space. Rotation is
-/// intentionally omitted — pan+zoom (the dominant canvas use
+/// intentionally omitted - pan+zoom (the dominant canvas use
 /// case) needs only translate+scale, and the composition math
-/// stays a 5-multiply / 4-add affair instead of a full 2×2
+/// stays a 5-multiply / 4-add affair instead of a full 2x2
 /// matrix. If rotation ever becomes needed, this struct gains
 /// a `rotation: f32` field and `compose` grows ~6 trig ops.
 ///
@@ -1757,7 +1757,7 @@ pub const CanvasTransform = struct {
 
     /// Compose `child` ONTO `parent`. Result is the transform
     /// that applies `child` first, then `parent`. Used at push
-    /// time so the stack always stores cumulative transforms —
+    /// time so the stack always stores cumulative transforms -
     /// `top()` returns "everything stacked so far" directly, no
     /// walk needed.
     pub fn compose(parent: CanvasTransform, child: CanvasTransform) CanvasTransform {
@@ -2007,7 +2007,7 @@ pub const DrawList = struct {
     }
 
     // Arcs and polygons are emitted at submission time as
-    // `polyline` (stroked) / `triangle_filled` (filled) commands —
+    // `polyline` (stroked) / `triangle_filled` (filled) commands -
     // no dedicated renderer-side DrawCmd variants. Cost: each
     // filled arc costs `segments` separate triangle_filled cmds
     // vs a single command record with center+radius+a0+a1. Fine
@@ -2059,14 +2059,14 @@ pub const DrawList = struct {
                 center[1] + radius * @sin(a),
             };
         }
-        // Polyline is the natural fit — `addPolyline` handles the
+        // Polyline is the natural fit - `addPolyline` handles the
         // dupe-into-arena step, so points[] is safe to release on
         // function exit.
         self.addPolyline(alloc, points, col, thickness, false);
     }
 
-    /// Filled arc (pie slice) — fan-triangulates from `center` to
-    /// `segments + 1` points on the arc. When `a1 - a0 == 2π`,
+    /// Filled arc (pie slice) - fan-triangulates from `center` to
+    /// `segments + 1` points on the arc. When `a1 - a0 == 2 pi`,
     /// degenerates to a filled disk (equivalent to
     /// `addCircleFilled` minus the auto-segment-count convenience).
     /// `segments = 0` auto-derives.
@@ -2093,7 +2093,7 @@ pub const DrawList = struct {
         const step: f32 = (a1 - a0) / float(seg_count);
         // Triangle-fan: each adjacent pair of perimeter points
         // forms a triangle with the center. No allocation needed
-        // — point pairs are computed on the fly.
+        // - point pairs are computed on the fly.
         var i: u32 = 0;
         var prev: Vec2 = .{
             center[0] + radius * @cos(a0),
@@ -2342,7 +2342,7 @@ pub const DrawList = struct {
     ) void {
         // Catch degenerate clip rects at submission time, not at the
         // GL boundary.  A negative-height clip eventually trips
-        // WebGL's GL_INVALID_VALUE inside `rlScissor` — that
+        // WebGL's GL_INVALID_VALUE inside `rlScissor` - that
         // downstream assert exists but its stack trace points at the
         // batch replay, not the widget that pushed the bad rect.
         // Asserting here surfaces the actual caller in the wasm
@@ -2372,8 +2372,8 @@ pub const DrawList = struct {
     /// passed to `addCircle` / `addCircleFilled`. Port of
     /// imgui's `_CalcCircleAutoSegmentCount`.
     /// The math: an N-segment polygon approximates a circle of
-    /// radius r with max edge-to-arc distance `r * (1 - cos(π/N))`.
-    /// Solve for N at the target error: N = π / acos(1 - err/r).
+    /// radius r with max edge-to-arc distance `r * (1 - cos(pi/N))`.
+    /// Solve for N at the target error: N = pi / acos(1 - err/r).
     /// Clamp to [12, 512] to avoid degenerate cases at tiny/huge
     /// radii.
     fn autoCircleSegments(radius: f32) u32 {
@@ -2402,7 +2402,7 @@ pub const DrawList = struct {
     /// radians on a circle of `radius`. Uses the same error
     /// budget as `autoCircleSegments` (0.30 px max edge-to-arc
     /// distance) but scales the count to the arc fraction:
-    /// `segments = autoCircleSegments(r) * (|arc_angle| / 2π)`.
+    /// `segments = autoCircleSegments(r) * (|arc_angle| / 2 pi)`.
     /// Clamped to [1, 512].
     fn autoArcSegments(radius: f32, arc_angle: f32) u32 {
         const full: u32 = autoCircleSegments(radius);
@@ -2490,7 +2490,7 @@ pub const DrawList = struct {
             .sprite_quad => |c| {
                 // Residency resolves at replay via the backend's `image`. Backends
                 // without a high-level `image` (the bare SW raster context, test
-                // mocks) skip sprite draws rather than failing to compile — the UI
+                // mocks) skip sprite draws rather than failing to compile - the UI
                 // DrawList is replayed on WgpuGl in practice.
                 const GlT: type = @TypeOf(gl);
                 const Target: type = if (@typeInfo(GlT) == .pointer) @typeInfo(GlT).pointer.child else GlT;
@@ -2720,7 +2720,7 @@ pub const DrawList = struct {
 /// channels (channel 0 = bg, channel 1 = content), submits each
 /// cell's bg then content via `setCurrentChannel` + `getCurrentChannel`,
 /// and at end-of-region calls `merge(target)`. The merge concatenates
-/// channel 0's commands first, then channel 1's — bg under content
+/// channel 0's commands first, then channel 1's - bg under content
 /// across the whole region, regardless of cell submission order.
 ///
 /// Typical usage:
@@ -2745,11 +2745,11 @@ pub const DrawList = struct {
 pub const DrawListSplitter = struct {
     /// Side channels. Each channel records commands independently.
     /// Order in this slice determines the final order of commands
-    /// in the target DrawList on `merge()` — channel 0's commands
+    /// in the target DrawList on `merge()` - channel 0's commands
     /// go first, channel N-1's last.
     channels: ArrayList(DrawList) = .empty,
 
-    /// Index of the active channel — the one `getCurrentChannel()`
+    /// Index of the active channel - the one `getCurrentChannel()`
     /// returns. Initialized to 0 by `split()`. `setCurrentChannel`
     /// updates it.
     current: usize = 0,
@@ -2764,7 +2764,7 @@ pub const DrawListSplitter = struct {
     }
 
     /// Allocate `n` empty channels. Calling `split` again is
-    /// allowed — the new layout supersedes any previous one (any
+    /// allowed - the new layout supersedes any previous one (any
     /// unmerged commands are lost; channel storage is freed first).
     /// Errors propagate from the underlying ArrayList allocations.
     pub fn split(
@@ -2786,7 +2786,7 @@ pub const DrawListSplitter = struct {
 
     /// Switch the active channel. Subsequent `getCurrentChannel()`
     /// calls return this index's DrawList. Out-of-range indices
-    /// are clamped to the last channel — defensive default so a
+    /// are clamped to the last channel - defensive default so a
     /// misconfigured call doesn't crash the render path. When the
     /// splitter has no channels (split() not yet called), `current`
     /// is forced to 0.
@@ -2798,7 +2798,7 @@ pub const DrawListSplitter = struct {
         self.current = @min(i, self.channels.items.len - 1);
     }
 
-    /// Get the active channel's DrawList — call `add*` methods on
+    /// Get the active channel's DrawList - call `add*` methods on
     /// the returned pointer. Returns null when the splitter has
     /// no channels (split() wasn't called, or was called with n=0).
     pub fn getCurrentChannel(self: *DrawListSplitter) ?*DrawList {
@@ -2810,7 +2810,7 @@ pub const DrawListSplitter = struct {
 
     /// Concatenate all channel command lists into `target` in
     /// channel-index order (channel 0 first, channel N-1 last),
-    /// then empty each channel (clearRetainingCapacity — the
+    /// then empty each channel (clearRetainingCapacity - the
     /// channels remain valid for further `add*` calls). The
     /// splitter is ready for a new `split()` after this.
     /// Allocates only to grow `target.cmds`. Errors propagate
@@ -2920,7 +2920,7 @@ pub const DrawListHandle = struct {
         self.list.addTriangleFilled(self.gpa, a, b, c, opts.color.toWire());
     }
 
-    /// Unified primitive: draw `str` at `pos`. `opts.font` null → the UiContext's
+    /// Unified primitive: draw `str` at `pos`. `opts.font` null -> the UiContext's
     /// default font; recorded for replay, so a non-null font must outlive the frame.
     pub fn text(
         self: DrawListHandle,
@@ -2988,7 +2988,7 @@ pub const DrawListHandle = struct {
         col: Color,
         thickness: f32,
     ) void {
-        // n_segments = 0 → DrawList picks an automatic count based
+        // n_segments = 0 -> DrawList picks an automatic count based
         // on radius (~0.30 px error against a true circle).
         self.list.addCircle(self.gpa, center, radius, col.toWire(), thickness, 0);
     }
@@ -3058,7 +3058,7 @@ pub const DrawListHandle = struct {
         self.list.addArc(self.gpa, center, radius, a0, a1, col.toWire(), thickness, 0);
     }
 
-    /// Filled arc / pie slice. Pass `a1 - a0 == 2π` for a full
+    /// Filled arc / pie slice. Pass `a1 - a0 == 2 pi` for a full
     /// disk equivalent to `addCircleFilled`.
     pub fn addArcFilled(
         self: DrawListHandle,
@@ -3173,7 +3173,7 @@ pub const LayoutScope = struct {
     /// Top-left of this scope's content area (screen px). COUPLED to
     /// `cursor_pos`: row 0 is placed at `cursor_pos`, but `advanceLayout`
     /// resets every later row's X to `origin[0] + indent - scroll_x`. So
-    /// `origin` and `cursor_pos` MUST be initialized together — set one
+    /// `origin` and `cursor_pos` MUST be initialized together - set one
     /// without the other and rows 2+ snap to the stale origin (default
     /// {0,0} = canvas left). Always init via `resetContentLayout`, never
     /// by assigning `cursor_pos` alone (that was the combo/popup bug).
@@ -3265,13 +3265,13 @@ pub const WindowFlags = struct {
     /// Reserve a flag slot for "skip the collapse arrow / toggle."
     /// Currently a NO-OP: zimr doesn't yet ship a collapsible-window
     /// mechanism (windows are always uncollapsed). Setting this is
-    /// future-proof — once collapse lands, the flag attaches at the
+    /// future-proof - once collapse lands, the flag attaches at the
     /// new hit-test site automatically.
     no_collapse: bool = false,
     /// Skip the window-background `drawRectFilled` before content.
     /// Use for transparent overlays where the content provides its
     /// own backdrop (e.g. a HUD over a 3D scene). The frame border,
-    /// title bar, and grip still render — those are separate
+    /// title bar, and grip still render - those are separate
     /// chrome elements; suppress them with the matching flags if you
     /// want a fully invisible window.
     no_background: bool = false,
@@ -3298,7 +3298,7 @@ pub const WindowFlags = struct {
     /// as `ChildFlags.always_use_window_padding` (use that path
     /// today). Wiring this flag for top-level windows in the future
     /// would mean "even when other layout overrides shrink the
-    /// inner rect to zero, keep the padding gap visible" — not yet
+    /// inner rect to zero, keep the padding gap visible" - not yet
     /// a real failure mode. Imgui:
     /// `ImGuiWindowFlags_AlwaysUseWindowPadding`.
     always_use_window_padding: bool = false,
@@ -3326,7 +3326,7 @@ pub const WindowFlags = struct {
     no_focus_on_appearing: bool = false,
     /// Focusing this window does NOT reorder it to the top of the
     /// render stack. NO-OP today: zimr renders windows in the order
-    /// the caller submits them — no internal focus-driven reorder
+    /// the caller submits them - no internal focus-driven reorder
     /// exists yet. Wires when a `last_focus_frame: u64` is added to
     /// `Window` and `endFrame` sorts `frame_windows` by it.
     /// Imgui: `ImGuiWindowFlags_NoBringToFrontOnFocus`.
@@ -3344,7 +3344,7 @@ pub const WindowFlags = struct {
     // Two flags that make a window "see-through" for input. Used for
     // HUD overlays, decorative panels, and any UI element that
     // shouldn't capture mouse interaction over content underneath.
-    // Mechanism: zimr's hover resolution lives in `openWindow` — each
+    // Mechanism: zimr's hover resolution lives in `openWindow` - each
     // submitted window unconditionally claims hover if the mouse is
     // inside its outer rect, and submission order is back-to-front
     // (the LAST overwriter wins). These flags skip the claim, so a
@@ -3367,7 +3367,7 @@ pub const WindowFlags = struct {
     // is the remaining piece, shipped separately in P5.5b).
 
     /// Required for `beginMenuBar` to return true. Without it,
-    /// `beginMenuBar` returns false and the body is skipped — matches
+    /// `beginMenuBar` returns false and the body is skipped - matches
     /// imgui's `ImGuiWindowFlags_MenuBar` contract. Default false so
     /// existing callers that DIDN'T use menu bars continue to work;
     /// callers that DID call `beginMenuBar` without the flag (which
@@ -3383,7 +3383,7 @@ pub const WindowFlags = struct {
     // ---- Horizontal scrollbar ----------------------
 
     /// Opt into a horizontal scrollbar when content overflows the
-    /// window's width. Without this flag, X-overflow is silent —
+    /// window's width. Without this flag, X-overflow is silent -
     /// content gets clipped at the window's right edge. With it,
     /// `scroll_max_x > 0` triggers `renderScrollbarX` on the
     /// window's bottom edge, and wheel-X gestures translate to
@@ -3442,7 +3442,7 @@ pub const Window = struct {
     /// stays at 0 and content beyond the window's right edge is
     /// clipped without scrollbar.
     scroll_x: f32 = 0,
-    /// Maximum allowed `scroll_x` — analog of `scroll_max_y`.
+    /// Maximum allowed `scroll_x` - analog of `scroll_max_y`.
     /// Recomputed every frame in `closeWindow` from
     /// `cursor_max.x - viewport_w` when the horizontal-scrollbar
     /// flag is set.
@@ -3473,7 +3473,7 @@ pub const Window = struct {
 
     // ---- Turn 309d: child-as-Window plumbing
     // Children are now full `Window` values stored in `ctx.windows`
-    // keyed by their hashed ID (parent_id_stack ⊕ str_id). See
+    // keyed by their hashed ID (parent_id_stack (+) str_id). See
     // `beginChildImpl` / `endChildImpl` and the architecture tutorial
     // at `src/notes/architecture-imgui-vs-zimr.md` for the rationale.
 
@@ -3495,11 +3495,11 @@ pub const Window = struct {
     /// this window has been routed into a dock leaf - either by
     /// the user dragging it into a dock zone, or programmatically
     /// via `dockBuilderDockWindow`. When set, `findOrCreateWindow`
-    /// → `openWindow` route through `beginDockedWindow` instead of
+    /// -> `openWindow` route through `beginDockedWindow` instead of
     /// rendering free-floating chrome; the window's content
     /// occupies the leaf's rect minus the tab strip at top.
     /// Cleared by `undockWindow` or by docking elsewhere. The
-    /// dock layer maintains the inverse mapping (leaf → window list)
+    /// dock layer maintains the inverse mapping (leaf -> window list)
     /// so the routing here is informational rather than canonical.
     /// Restored from persistence via `PersistedWindow.dock_node_id`
     /// (when 5.5k lands).
@@ -3539,7 +3539,7 @@ pub const Window = struct {
 // Maps to imgui's `ImGuiHoveredFlags_*` + `ImGuiFocusedFlags_*` bit
 // constants. pull-forward - these gate behavior
 // the docking system relies on ("is the dockspace's host OR any of
-// its docked windows focused?" → `FocusedFlags{.root_and_child_windows }`).
+// its docked windows focused?" -> `FocusedFlags{.root_and_child_windows }`).
 // Hover-delay fields (delay_short, delay_normal, no_shared_delay,
 // stationary, for_tooltip) are DEFERRED until a follow-up turn lands
 // the per-item-id hover-start timestamp infra. Adding the flag with
@@ -4137,7 +4137,7 @@ pub const DragDropState = struct {
     /// `beginDragDropSource` was called).
     source_widget_id: Id = 0,
     /// Where the mouse was when the drag began. Used to detect
-    /// movement past the threshold for `.pending →.active`.
+    /// movement past the threshold for `.pending ->.active`.
     drag_start_pos: Vec2 = .{ 0, 0 },
     /// Comptime type name from `@typeName(T)`, truncated to
     /// `TYPE_NAME_CAP`. Used by `acceptDragDropPayload` ()
@@ -4193,7 +4193,7 @@ pub const StyleSnapshot = struct {
 ///
 /// Mirrors imgui's per-column `ImGuiTableColumnFlags_WidthFixed`
 /// and `ImGuiTableColumnFlags_WidthStretch` (imgui.h:2200+). zimr
-/// folds `WidthAuto` into `.fixed` — a fixed column whose
+/// folds `WidthAuto` into `.fixed` - a fixed column whose
 /// `user_width` is zero behaves the way imgui's `WidthAuto` does:
 /// the table sizing policy fills in the width from the column's
 /// measured `width_auto_seen`.
@@ -4210,7 +4210,7 @@ pub const TableColumnSizing = enum {
 };
 
 /// Per-column sort direction. Imgui's convention: ascending is
-/// "smallest first" (alphabetical A→Z, numeric low→high).
+/// "smallest first" (alphabetical A->Z, numeric low->high).
 pub const TableSortDirection = enum { ascending, descending };
 
 /// Per-column state inside an active table. Capped at
@@ -4224,7 +4224,7 @@ pub const TableColumnState = struct {
     /// Resolved per-column sizing policy. In contrast to the
     /// `?TableColumnSizing` on `TableColumnOpts` (which can be
     /// null = inherit-from-table), this is the concrete value
-    /// after inheritance has been applied — never null at the
+    /// after inheritance has been applied - never null at the
     /// point any layout code reads it. Default `.stretch` is
     /// only meaningful before `tableSetupColumnImpl` has run; in
     /// practice the inheritance fill in `computeTableColumnLayout`
@@ -4232,10 +4232,10 @@ pub const TableColumnState = struct {
     /// value.
     sizing: TableColumnSizing = .stretch,
     /// User-supplied width for `.fixed` columns. Zero means
-    /// "no override" — the table's sizing policy decides the
+    /// "no override" - the table's sizing policy decides the
     /// width from `width_auto_seen` (see `effectiveFixedWidth`).
     user_width: f32 = 0,
-    /// User-supplied stretch weight. null = "no override" —
+    /// User-supplied stretch weight. null = "no override" -
     /// the table's sizing policy decides the weight (see
     /// `effectiveStretchWeight`). Non-null means the caller
     /// explicitly set this column's weight, which always wins
@@ -4253,13 +4253,13 @@ pub const TableColumnState = struct {
     /// the very first frame a table is submitted, so
     /// `computeTableColumnLayout` falls back to
     /// `fallbackColumnWidth(style.font_size)` when this is zero.
-    /// One frame of layout lag is intrinsic — zimr is
+    /// One frame of layout lag is intrinsic - zimr is
     /// single-pass and can't know a column's natural width
     /// before its cells render. Stable thereafter as long as
     /// content doesn't change frame-to-frame.
     width_auto_seen: f32 = 0,
     /// Whether sort is suppressed on this column.  Negated form
-    /// of the old `sortable: bool = true`.  Default false — sort
+    /// of the old `sortable: bool = true`.  Default false - sort
     /// cycles normally.  From `TableColumnOpts.no_sort`.
     no_sort: bool = false,
     /// Block ascending direction in the sort cycle.  See
@@ -4269,7 +4269,7 @@ pub const TableColumnState = struct {
     /// `TableColumnOpts.no_sort_descending`.
     no_sort_descending: bool = false,
     /// Initial sort direction for first-frame seeding.  Consumed
-    /// once at `tableSetupColumnImpl` time — the seed result
+    /// once at `tableSetupColumnImpl` time - the seed result
     /// lives in `ctx.table_sort_state[ts.id]` thereafter and
     /// reads of this field don't affect the live spec.  Kept on
     /// the column for inspection / debug only.  See
@@ -4288,14 +4288,14 @@ pub const TableColumnState = struct {
     /// Per-cell bg override for the cell at (current_row, this
     /// column). Set by `tableSetCellBgColor` after entering a
     /// column with `tableNextColumn`; consumed (painted to the
-    /// splitter's bg channel) when the row finalizes — either at
+    /// splitter's bg channel) when the row finalizes - either at
     /// the NEXT `tableNextRow` or at `endTable`. Reset to null
     /// after painting so the next row's cells start fresh.
     /// P8.1: cell bg paints UNDER cell content because
     /// the splitter merges channel 0 before channel 1; the cell
     /// bg overlays the row bg because cell bgs are emitted AFTER
     /// the row bg in channel 0. Final z-order:
-    ///   row_bg → cell_bg → cell_content.
+    ///   row_bg -> cell_bg -> cell_content.
     cell_bg_pending: ?Color = null,
 
     pub fn name(self: *const TableColumnState) []const u8 {
@@ -4390,7 +4390,7 @@ pub const TableState = struct {
     /// table's row backgrounds + cell borders; channel 1 receives
     /// cell content (widget submissions via `ctx.current_draw_list`).
     /// On `endTable`, the splitter is merged into the window's
-    /// draw_list — channel 0's commands first, then channel 1's.
+    /// draw_list - channel 0's commands first, then channel 1's.
     /// Effect: cell backgrounds always paint UNDER cell content,
     /// regardless of the left-to-right interleave of bg / content
     /// submissions during row iteration. Pre-the bg was
@@ -4422,16 +4422,16 @@ pub const TableState = struct {
 
 // Pushes are best-effort: format-arg truncation past `MAX_MSG`
 // bytes is silent; the event still lands with what fit. The
-// log never holds allocations — message is an inline byte
+// log never holds allocations - message is an inline byte
 // buffer with a length suffix. Process-only state, NOT serialized
 // to the persistence layer (debug data, not user data).
 //
 
 // Initial wired sites:
-//   - openPopup → popup_opened
-//   - closeCurrentPopup → popup_closed
-//   - beginDragDropSource (when drag starts) → drag_started
-//   - acceptDragDropPayloadImpl (on accept) → drop_accepted
+//   - openPopup -> popup_opened
+//   - closeCurrentPopup -> popup_closed
+//   - beginDragDropSource (when drag starts) -> drag_started
+//   - acceptDragDropPayloadImpl (on accept) -> drop_accepted
 //
 
 // Future sites (onward): focus changes, item activations,
@@ -4514,34 +4514,34 @@ pub fn debugLogSlice(ctx: *const UiContext) []const DebugEvent {
 // ============================================================================
 // P2.2: Frame metrics
 // ============================================================================
-// `UiContext.metrics: Metrics` — a struct of per-frame counters
+// `UiContext.metrics: Metrics` - a struct of per-frame counters
 // populated by `beginFrame` / `endFrame` and a few collection
 // helpers. Equivalent to imgui's `ShowMetricsWindow` data block
 // (`imgui_demo.cpp` "Dear ImGui Metrics" panel).
 //
 
 // What's tracked:
-//   - `frame_count: u32` — wraps once every 828 days
+//   - `frame_count: u32` - wraps once every 828 days
 //                                       at 60fps; fine.
-//   - `frame_time_ms: f32` — most recent frame's input
-//                                       delta_time × 1000.
-//   - `frame_time_ms_history: [120]f32` — ring of last 120 samples,
+//   - `frame_time_ms: f32` - most recent frame's input
+//                                       delta_time x 1000.
+//   - `frame_time_ms_history: [120]f32` - ring of last 120 samples,
 //                                          newest at `history_head`.
 //                                          Designed for plotLines.
-//   - `history_head: u8` — write index for the next
+//   - `history_head: u8` - write index for the next
 //                                       sample (0..120 then wraps).
-//   - `windows_active: u32` — windows submitted this frame
+//   - `windows_active: u32` - windows submitted this frame
 //                                       (frame_windows.len).
-//   - `windows_hovered: u32` — 0 or 1, reflects
+//   - `windows_hovered: u32` - 0 or 1, reflects
 //                                       `hovered_window_id != 0`.
-//   - `cmd_count: u32` — sum of `draw_list.cmds.len`
+//   - `cmd_count: u32` - sum of `draw_list.cmds.len`
 //                                       across every drawlist rendered
 //                                       this frame. Cheap proxy for
 //                                       "how busy was the UI".
-//   - `drawlist_count: u32` — number of drawlists rendered
+//   - `drawlist_count: u32` - number of drawlists rendered
 //                                       (background + per-window +
 //                                       popups + foreground).
-//   - `last_active_widget_id: Id` — sticks (no reset) so the
+//   - `last_active_widget_id: Id` - sticks (no reset) so the
 //                                       user can see WHAT widget got
 //                                       clicked even after it goes
 //                                       inactive.
@@ -4641,7 +4641,7 @@ pub const PersistedWindow = struct {
     scroll_y: f32 = 0,
     /// Horizontal scroll offset. Defaulted so older payloads
     /// without it parse cleanly. Only restored when the live
-    /// window has `WindowFlags.horizontal_scrollbar` set —
+    /// window has `WindowFlags.horizontal_scrollbar` set -
     /// otherwise scroll_x is force-zeroed each frame by the
     /// X-axis bookkeeping path.
     scroll_x: f32 = 0,
@@ -4999,7 +4999,7 @@ fn advanceNav(ctx: *UiContext) void {
 /// only updates `leaf.window_ids`; it can't touch Window records. This walks every
 /// dock node and sets `window.dock_node_id = leaf.id` for each window in each leaf,
 /// so runtime drag-to-dock (which goes through processRequests) actually makes the
-/// window render docked. Idempotent — the builder/persistence paths already set
+/// window render docked. Idempotent - the builder/persistence paths already set
 /// dock_node_id; re-setting it here is harmless. Undock paths clear dock_node_id,
 /// and a window no longer in any leaf is simply not touched (stays floating).
 fn syncDockedWindowIds(ctx: *UiContext) void {
@@ -5022,10 +5022,10 @@ fn windowIsFloating(w: *Window) bool {
 /// Deferred-render callback queued by `UiContext.endFrame` and
 /// fired by `endDrawing`.  Replays every draw list this frame
 /// submitted, in the layering order the prior inline-render code
-/// used: background → per-window → popups → foreground → tooltip
-/// block → drag preview.  Reads the live GlState/Window/shapes/
+/// used: background -> per-window -> popups -> foreground -> tooltip
+/// block -> drag preview.  Reads the live GlState/Window/shapes/
 /// fonts from fields on the UiContext (stamped at `beginFrame`).
-/// If any of those is null we silently no-op — the only way that
+/// If any of those is null we silently no-op - the only way that
 /// happens is the test path (`beginFrameRaw`), which doesn't run
 /// the full lifecycle.
 /// Replay this frame's UI draw lists IMMEDIATELY to `gl` (no deferred queue).
@@ -5255,8 +5255,8 @@ pub const splitter_size: f32 = 4.0;
 /// pixels along the split axis. Returns `[size_of_child_a, size_of_child_b]`.
 ///
 /// Rules:
-///   - Both children locked OR both free → fall back to `split.ratio`.
-///   - Exactly one locked → that child takes its locked size, the
+///   - Both children locked OR both free -> fall back to `split.ratio`.
+///   - Exactly one locked -> that child takes its locked size, the
 ///     other takes the remainder.
 ///   - Either child clamps to MIN_PANEL (24px) so a dragged splitter
 ///     can't shrink a pane to a sliver.
@@ -5271,7 +5271,7 @@ pub fn computeSplitChildSizes(split: DockNode.SplitData, avail: f32) [2]f32 {
     const a_lock: ?f32 = split.size_ref[0];
     const b_lock: ?f32 = split.size_ref[1];
 
-    // Both locked OR both free → ratio fallback.
+    // Both locked OR both free -> ratio fallback.
     if ((a_lock != null) == (b_lock != null)) {
         const w_a: f32 = avail * split.ratio;
         return .{ w_a, avail - w_a };
@@ -5364,15 +5364,15 @@ fn dockSplitterSeamRect(node: *const DockNode) Rectangle {
 
 /// Is `rect` under the mouse AND actually visible?
 ///
-/// ── ★ THE CLIP TEST IS THE WHOLE POINT ──
+/// -- * THE CLIP TEST IS THE WHOLE POINT --
 ///
 /// Widgets used to hit-test with a bare `itemHoverable(ctx, rect)`, which asks
 /// only "is the mouse where this widget WOULD be". A widget scrolled out of its window, or
-/// sitting past the window's edge, keeps its layout rect — so it stayed grabbable through the
+/// sitting past the window's edge, keeps its layout rect - so it stayed grabbable through the
 /// window frame and through whatever was drawn on top. Dragging in empty space moved sliders
 /// that were nowhere on screen.
 ///
-/// ★ The clip stack that already existed is a DRAW-TIME structure, consulted when the draw
+/// * The clip stack that already existed is a DRAW-TIME structure, consulted when the draw
 /// list is replayed. Interaction ran with no clip at all, which is why the bug was invisible
 /// from the rendering side: the widget was correctly not DRAWN and incorrectly still LIVE.
 ///
@@ -5380,8 +5380,8 @@ fn dockSplitterSeamRect(node: *const DockNode) Rectangle {
 /// rect instead of a stack, which is all a window-scoped UI needs.
 /// Point interaction clipping at whatever window is now on top of the stack.
 ///
-/// ★★ MUST BE CALLED ON BOTH PUSH AND POP. Setting it only on POP — which is how this shipped
-/// first — leaves `item_clip` holding the PREVIOUS window's rect (or null, for the first
+/// ** MUST BE CALLED ON BOTH PUSH AND POP. Setting it only on POP - which is how this shipped
+/// first - leaves `item_clip` holding the PREVIOUS window's rect (or null, for the first
 /// window) for the entire time a window's widgets are being submitted. Every widget then
 /// hit-tests unclipped, which is exactly the bug the clip was added to fix: sliders below a
 /// window's bottom edge stay grabbable.
@@ -5476,14 +5476,14 @@ fn renderDockSplittersImpl(ctx: *UiContext, node_id: Id) bool {
             // locked at the new size). When no lock is set, fall
             // back to ratio mutation (5.5i behavior).
             if (split.size_ref[0] != null) {
-                // a is locked → mutate its px to the new width.
+                // a is locked -> mutate its px to the new width.
                 if (split.size_ref[0].? != target_w_a) {
                     node.split.?.size_ref[0] = target_w_a;
                     node.generation +%= 1;
                     changed = true;
                 }
             } else if (split.size_ref[1] != null) {
-                // b is locked → b's px is `avail - target_w_a`.
+                // b is locked -> b's px is `avail - target_w_a`.
                 const new_b_px: f32 = avail - target_w_a;
                 if (split.size_ref[1].? != new_b_px) {
                     node.split.?.size_ref[1] = new_b_px;
@@ -5634,7 +5634,7 @@ pub const UiContext = struct {
     /// Persistent open/closed state for `treeNode` widgets, keyed
     /// by the node's hashed ID. Survives across frames so trees
     /// stay in the state the user left them. Default: missing
-    /// entry → closed. Memory: lives in `gpa`.
+    /// entry -> closed. Memory: lives in `gpa`.
     tree_open_state: std.AutoHashMapUnmanaged(Id, bool) = .{},
 
     /// Persistent window store, keyed by hashed title.
@@ -5700,7 +5700,7 @@ pub const UiContext = struct {
     clipboard_cache_len: usize = 0,
 
     // ---- DebugLog ring
-    // BoundedArray<DebugEvent, 256> — fixed-capacity ring backed by
+    // BoundedArray<DebugEvent, 256> - fixed-capacity ring backed by
     // an inline array. Overflow is handled in `debugLogPush` by
     // dropping the oldest event before appending. No allocation,
     // no serialization. See `DebugEvent` and `debugLogPush`.
@@ -5717,7 +5717,7 @@ pub const UiContext = struct {
     //     plus tooltip-block + drag-preview if active).
     metrics: Metrics = .{},
 
-    // ---- P3: Long-press → right-click synthesis
+    // ---- P3: Long-press -> right-click synthesis
     // Single-touch long-press tracker. Inspected + mutated by
     // `applyLongPressSynthesis` once per `beginFrame`. Default-zero
     // state means "no touch being tracked"; gets initialised on the
@@ -5740,7 +5740,7 @@ pub const UiContext = struct {
     /// Per-frame gesture detector, ticked once in `beginFrameRaw` from
     /// `input_state` + the monotonic UI clock. Lets widgets read pinch /
     /// drag / swipe via `Ui.pinch()` etc. without each rolling their own
-    /// touch bookkeeping — the same detector the standalone demos use.
+    /// touch bookkeeping - the same detector the standalone demos use.
     gestures: runtime.gestures.GesturesState = .{},
 
     /// The window currently being submitted to (between
@@ -5851,7 +5851,7 @@ pub const UiContext = struct {
     /// Position to apply to the next window opened this frame.
     /// Cleared after `openWindow` consumes it.
     next_window_pos: ?Vec2 = null,
-    /// `true` ⇒ apply on every frame; `false` ⇒ apply only when the
+    /// `true` => apply on every frame; `false` => apply only when the
     /// window is first created (matches ImGui's `ImGuiCond_Once`).
     next_window_pos_always: bool = true,
     /// Size override (analogous to next_window_pos).
@@ -5965,7 +5965,7 @@ pub const UiContext = struct {
     /// frame. Allocates through `frame_arena` like every other
     /// DrawList. Exposed via `Ui.getForegroundDrawList()`.
     foreground_dl: DrawList = .{},
-    /// Dock leaf tab bars render here — ABOVE docked content but BELOW floating
+    /// Dock leaf tab bars render here - ABOVE docked content but BELOW floating
     /// windows, so floating headers sit on top of dock tabs.
     dock_tabs_dl: DrawList = .{},
 
@@ -6018,7 +6018,7 @@ pub const UiContext = struct {
     /// windows.
     frame_windows: BoundedStack(*Window, 32) = .{},
     /// Rects of the windows submitted LAST frame. Used only by
-    /// `wantCaptureMouse` as an order-independent fallback — see the comment at
+    /// `wantCaptureMouse` as an order-independent fallback - see the comment at
     /// the snapshot site in `beginFrameRaw`. Stored as plain rects (not `*Window`)
     /// so it stays valid even if a window is destroyed between frames.
     prev_window_rects: BoundedStack(Rectangle, 32) = .{},
@@ -6084,7 +6084,7 @@ pub const UiContext = struct {
     /// Live `*const WindowState` for the current frame, captured at
     /// `beginFrame`.  Read by the deferred-render path so DrawList
     /// replays know the canvas dims and coord conventions.  We hold
-    /// only `WindowState`, not the whole `*Frame` — UI has no business
+    /// only `WindowState`, not the whole `*Frame` - UI has no business
     /// looking at the loader / clock / rng / log / random bits of
     /// `Frame`.  Stays null on the test path (`beginFrameRaw`).
     frame_window: ?*const runtime.core.WindowState = null,
@@ -6096,7 +6096,7 @@ pub const UiContext = struct {
     frame_font_cache: ?*const text2d.FontCache = null,
 
     // ---- Surface / render-target composition (recursive UI)
-    // The UI tracks a stack of surfaces. Empty stack ⇒ rendering to
+    // The UI tracks a stack of surfaces. Empty stack => rendering to
     // the main canvas. `pushRenderTexture(rt)` enters an RT scope:
     // FBO bound, viewport + ortho matrices set for RT size.
     // `popRenderTexture()` undoes. Composition is recursive - render
@@ -6146,7 +6146,7 @@ pub const UiContext = struct {
     /// recorded so the push/pop pairing stays balanced.
     disabled_marker_stack: BoundedStack(bool, 16) = .{},
     /// Saved input snapshot at the moment `disabled_count`
-    /// transitioned 0 → 1. Restored when it transitions back to
+    /// transitioned 0 -> 1. Restored when it transitions back to
     /// zero. Only the OUTERMOST disabled scope saves; inner
     /// `beginDisabled(true)` calls just bump the count without
     /// changing the already-suppressed input.
@@ -6251,7 +6251,7 @@ pub const UiContext = struct {
     //
 
     // Why type-erased outer pointer (`*anyopaque`) instead of a
-    // tagged union? Comptime-known type set isn't viable —
+    // tagged union? Comptime-known type set isn't viable -
     // extensions are user code that imports `zimr`, so the type
     // set is unknown to zimr at its own compile time. Type
     // erasure + comptime cast on every access gives us a closed
@@ -6271,7 +6271,7 @@ pub const UiContext = struct {
     // Lives on the context (not on CanvasCtx) because CanvasCtx
     // is returned by-value from beginCanvas; mutating state has
     // to live somewhere stable. One stack shared across canvases
-    // is fine for now — nested canvases are an extension worth
+    // is fine for now - nested canvases are an extension worth
     // explicitly designing if/when a real use case shows up.
     //
 
@@ -6479,7 +6479,7 @@ pub const UiContext = struct {
         // Tripped of the imgui-port arc, hence the
         // very specific message.
         // Stay silent under `zig build test`.  Most UI tests use
-        // `beginFrameRaw` with no font loaded — and now that the
+        // `beginFrameRaw` with no font loaded - and now that the
         // desktop-default `font_size` is 16 (not 10), every such
         // test trips this warning, drowning the test output in
         // hundreds of identical messages.  The warning is for
@@ -6488,7 +6488,7 @@ pub const UiContext = struct {
         // check vanishes from non-test builds.
         if (comptime !builtin.is_test) {
             // Only a genuine misconfig: font_size was bumped off the bitmap-
-            // fallback size (10) AND there is no usable font for this frame —
+            // fallback size (10) AND there is no usable font for this frame -
             // neither a `style.font` (the GL mechanism) NOR a loaded
             // `font_cache` (the wgpu `UiHost` mechanism, which supplies the
             // TTF via this very call). Without the font_cache check this fired
@@ -6525,10 +6525,10 @@ pub const UiContext = struct {
         self.drag_preview_active_this_frame = false;
 
         // ---- /b: drag-drop state machine
-        // opens drags via.idle→.pending→.active.
+        // opens drags via.idle->.pending->.active.
         // needs the payload to remain readable on the frame the user
         // releases the mouse so targets can accept it during update().
-        // That means.active→.idle cleanup runs at endFrame, NOT here.
+        // That means.active->.idle cleanup runs at endFrame, NOT here.
         // Here we only handle.pending: if the user releases before
         // crossing the drag threshold, cancel; if movement crosses it,
         // promote to.active.
@@ -6536,7 +6536,7 @@ pub const UiContext = struct {
             .idle => {},
             .pending => {
                 if (!self.input.mouse_left_down) {
-                    // Click released before threshold crossed → cancel.
+                    // Click released before threshold crossed -> cancel.
                     self.drag_drop.phase = .idle;
                 } else {
                     const dx: f32 = self.input.mouse_pos[0] - self.drag_drop.drag_start_pos[0];
@@ -6588,7 +6588,7 @@ pub const UiContext = struct {
         self.foreground_dl.clear();
         self.dock_tabs_dl.clear();
         self.background_dl.clear();
-        // NOTE: `prev_window_rects` is deliberately NOT cleared here — it holds
+        // NOTE: `prev_window_rects` is deliberately NOT cleared here - it holds
         // last frame's snapshot, taken in `endFrame` while those windows were
         // still alive. Rebuilding it here instead would mean dereferencing
         // `frame_windows`' `*Window`s a frame later, which can dangle.
@@ -6601,16 +6601,16 @@ pub const UiContext = struct {
         // all of it is consumed by `uiRenderNow` during the previous frame's
         // render and is dead by the time we reach the next beginFrame. The
         // DrawList docs and `clear()` (which zeros to `.empty` rather than
-        // `clearRetainingCapacity`) are written precisely around this reset —
+        // `clearRetainingCapacity`) are written precisely around this reset -
         // without it the arena grew ~one frame's draw payload every frame
-        // (≈2 MB/frame in the heaviest 2D scenes), eventually exhausting wasm
+        // (~2 MB/frame in the heaviest 2D scenes), eventually exhausting wasm
         // linear memory.
         //
         // Before freeing the pages, EVERY persistent draw list must be emptied:
         // a window (or the tooltip / drag-preview window) not resubmitted this
         // frame would otherwise keep a `cmds.items.ptr` into reclaimed pages.
         // foreground/background/dock_tabs were just cleared; do the rest here.
-        // `.clear()` abandons the stale slice (→ `.empty`); resubmitted windows
+        // `.clear()` abandons the stale slice (-> `.empty`); resubmitted windows
         // refill from the fresh arena via openWindow. `.retain_capacity` keeps
         // the backing pages so we don't re-grow wasm memory each frame.
         var win_it: @TypeOf(self.windows.iterator()) = self.windows.iterator();
@@ -6637,7 +6637,7 @@ pub const UiContext = struct {
     /// Finalize the frame WITHOUT rendering (no deferred GL queue). For
     /// single-pass backends (WebGPU): call this, then uiRenderNow(gl, ...)
     /// directly. Does everything endFrame does EXCEPT append to
-    /// gl.pending_renders — the tooltip flush, dock-tab emission, and metrics,
+    /// gl.pending_renders - the tooltip flush, dock-tab emission, and metrics,
     /// so the draw lists are in their final per-frame state for the immediate
     /// replay.
     pub fn endFrameNoRender(self: *UiContext) void {
@@ -6645,7 +6645,7 @@ pub const UiContext = struct {
         // Snapshot this frame's window RECTS while the `*Window`s are still
         // alive and their layout is final. `wantCaptureMouse` hit-tests this as
         // a fallback next frame, so it answers correctly even when called BEFORE
-        // that frame's windows have been submitted — which is the natural way to
+        // that frame's windows have been submitted - which is the natural way to
         // write an update (gate the camera/scene input, THEN draw the UI).
         // Without it, an early call sees an empty `frame_windows`, returns false,
         // and the pointer "clicks through" the panel: tapping a button also drags
@@ -6664,7 +6664,7 @@ pub const UiContext = struct {
         }
         // Apply queued dock operations (drag-dock / undock / split) and sync the
         // window-side link. THIS is the only end-of-frame path the wgpu UiHost
-        // takes (endFrame() is the GL/host path) — without these two lines,
+        // takes (endFrame() is the GL/host path) - without these two lines,
         // drag-to-dock requests were enqueued by the release handler and never
         // drained, so nothing ever docked at runtime.
         processRequests(&self.dock, self.gpa) catch assertUnreachable(@src(), "OOM", .{});
@@ -6698,10 +6698,10 @@ pub const UiContext = struct {
 // include/exclude segments, and offers `passFilter(text)` so the
 // caller can decide per-line whether to render.
 // Syntax (matches imgui exactly, see imgui.cpp `PassFilter`):
-//   "foo" → include: pass anything containing "foo"
-//   "foo,bar" → include union: pass anything containing "foo" OR "bar"
-//   "-foo" → exclude: drop anything containing "foo"
-//   "foo,-bar" → first match wins (order matters in imgui too):
+//   "foo" -> include: pass anything containing "foo"
+//   "foo,bar" -> include union: pass anything containing "foo" OR "bar"
+//   "-foo" -> exclude: drop anything containing "foo"
+//   "foo,-bar" -> first match wins (order matters in imgui too):
 //                     "foo bar" passes via the "foo" include before
 //                     "-bar" is ever consulted. This is imgui's
 //                     intentional behaviour; we match it for parity.
@@ -6843,7 +6843,7 @@ pub const TextFilter = struct {
     }
 
     /// True if `text` should be displayed under the current filter.
-    /// Empty filter → always true. Otherwise iterates segments in
+    /// Empty filter -> always true. Otherwise iterates segments in
     /// input order; first matching include returns true, first
     /// matching exclude returns false. If no include ever matches
     /// AND at least one include is defined, returns false (default-
@@ -6982,7 +6982,7 @@ test "TextFilter - include + exclude, order matters" {
     // "warning in test.zig" - "error" misses, "-test" hits, false.
     try expect(!f.passFilter("warning in test.zig"));
     // Plain unrelated text: "error" misses, "-test" misses, but
-    // include_count > 0 → default-deny.
+    // include_count > 0 -> default-deny.
     try expect(!f.passFilter("info plain"));
 }
 
@@ -7052,7 +7052,7 @@ pub const WindowOpts = struct {
     flags: WindowFlags = .{},
 };
 
-/// Effective title-bar height for `w` — `style.title_bar_height`
+/// Effective title-bar height for `w` - `style.title_bar_height`
 /// when the window has a title bar, `0` when `flags.no_title_bar`
 /// is set. Use at every layout site that subtracts/adds the title
 /// bar's vertical contribution: content cursor origin, viewport
@@ -7124,11 +7124,11 @@ fn renderScrollbar(ctx: *UiContext, w: *Window) void {
     const thumb_y: f32 = track_y + t * (track_h - thumb_h);
 
     // ---- Hit-test + drag --------------------------------------------
-    // Visible thumb is `scrollbar_w` (10 px) wide — fine for mouse,
-    // far below the ~44–48 px touch-target minimum.  Hit-test rect
+    // Visible thumb is `scrollbar_w` (10 px) wide - fine for mouse,
+    // far below the ~44-48 px touch-target minimum.  Hit-test rect
     // inflates leftward (into content area) by `touch_inflate` so a
     // fingertip landing in a ~32-px-wide band to the left of the
-    // bar still registers.  Leftward only — rightward would push
+    // bar still registers.  Leftward only - rightward would push
     // the hit region past the window's right edge.
     const touch_inflate: f32 = 22;
     const hit_rect: Rectangle = .{
@@ -7185,13 +7185,13 @@ fn renderScrollbar(ctx: *UiContext, w: *Window) void {
     );
 }
 
-/// P5.5b: horizontal scrollbar — straight mirror of
-/// `renderScrollbar`, rotated 90°. Track + draggable thumb on the
+/// P5.5b: horizontal scrollbar - straight mirror of
+/// `renderScrollbar`, rotated 90 deg. Track + draggable thumb on the
 /// bottom edge of the window's content area. Same caller contract:
 ///   - Called AFTER content clip pop (so scrollbar isn't clipped).
 ///   - Caller must verify `scroll_max_x > 0` AND
 ///     `flags.horizontal_scrollbar` AND `!flags.no_scrollbar` before
-///     calling — `closeWindow` enforces this.
+///     calling - `closeWindow` enforces this.
 ///   - Mutates `w.scroll_x` in place on thumb drag.
 fn renderScrollbarX(ctx: *UiContext, w: *Window) void {
     const scrollbar_h: f32 = 10;
@@ -7217,8 +7217,8 @@ fn renderScrollbarX(ctx: *UiContext, w: *Window) void {
     const thumb_x: f32 = track_x + t * (track_w - thumb_w);
 
     // ---- Hit-test + drag --------------------------------------------
-    // The VISIBLE thumb is `scrollbar_h` (10 px) tall — fine for
-    // mouse, far below the ~44–48 px touch-target minimum.  The
+    // The VISIBLE thumb is `scrollbar_h` (10 px) tall - fine for
+    // mouse, far below the ~44-48 px touch-target minimum.  The
     // HIT-TEST rect inflates upward by `touch_inflate` so a
     // fingertip landing anywhere in a ~32-px-tall band above the
     // bar still registers as a thumb press.  Inflation is upward
@@ -7295,7 +7295,7 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
     const content_h_natural: f32 = w.layout.cursor_max[1] + w.scroll_y - inner_origin_y;
     const content_w_natural: f32 = w.layout.cursor_max[0] + w.scroll_x - w.pos[0] + ctx.style.window_padding[0];
     // P5.2: `always_auto_resize` matches imgui's
-    // `ImGuiWindowFlags_AlwaysAutoResize` semantics — every frame,
+    // `ImGuiWindowFlags_AlwaysAutoResize` semantics - every frame,
     // window matches its content's natural extent (BOTH grow AND
     // shrink), ignoring `user_resized`. Normal behavior (no flag)
     // only grows, and pins once the user has dragged.
@@ -7319,7 +7319,7 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
     // so the literal condition never holds. The grounded variant:
     // when the auto-expanded window grew taller than the canvas, OR
     // when the user-sized window's content overflows by more than
-    // 3× its viewport (scrollbar travel ratio so tight it's nearly
+    // 3x its viewport (scrollbar travel ratio so tight it's nearly
     // unusable). Either case usually means the caller wanted an
     // explicit size, a smaller font, or a scroll region they
     // forgot.
@@ -7334,9 +7334,9 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
             );
         }
     } else {
-        // Sized window — scrollbar present whenever there's
+        // Sized window - scrollbar present whenever there's
         // overflow, so the bug is "viewport tiny relative to
-        // content". Warn once at 3× ratio.
+        // content". Warn once at 3x ratio.
         const viewport_h_local: f32 = @max(
             1,
             w.size[1] - effectiveTitleBarHeight(ctx, w) - ctx.style.window_padding[1],
@@ -7378,17 +7378,17 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
     // Touch-pan scroll: when the user drags across the window body
     // and no widget claimed the input (button/slider/etc), translate
     // the drag delta into scroll_y / scroll_x.  This is the mobile-
-    // touch equivalent of mouse-wheel scrolling — desktop sites
+    // touch equivalent of mouse-wheel scrolling - desktop sites
     // generate `wheel` events from trackpad/mousewheel, but phones
     // only generate mouse-down/move/up from finger drags.  Without
     // this path, content that overflows is reachable only by
-    // grabbing the thin scrollbar thumb — a 10 px wide target.
+    // grabbing the thin scrollbar thumb - a 10 px wide target.
     //
     // Activation rule: hovered window, left-mouse held, active_id
     // is 0 (no widget grabbed it), scrollbar not suppressed, AND
     // there's actually somewhere to scroll.  Once activated, the
     // window keeps the pan active until release even if the cursor
-    // wanders over a widget — avoids the gesture cancelling mid-
+    // wanders over a widget - avoids the gesture cancelling mid-
     // swipe when the finger crosses a button.
     //
     // Per-axis: Y always active when scroll_max_y > 0.  X only
@@ -7473,7 +7473,7 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
         // Wheel-X: same shape as wheel-Y above, gated separately so
         // a Y-consumed inner scope doesn't block X scrolling on the
         // outer (axes are independent). Also gated on `no_scrollbar`
-        // to match the Y behavior — a single "no_scrollbar = true"
+        // to match the Y behavior - a single "no_scrollbar = true"
         // disables both directions.
         if (ctx.hovered_window_id == w.id and ctx.input.mouse_wheel_x != 0 and
             !ctx.mouse_wheel_x_consumed and !w.flags.no_scrollbar)
@@ -7486,7 +7486,7 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
         w.scroll_x = @max(0, w.scroll_x);
         w.scroll_x = @min(w.scroll_x, w.scroll_max_x);
     } else {
-        // Flag not set — keep state in a clean reset position so a
+        // Flag not set - keep state in a clean reset position so a
         // later flag flip doesn't surface stale values.
         w.scroll_max_x = 0;
         w.scroll_x = 0;
@@ -7499,13 +7499,13 @@ fn closeWindow(ctx: *UiContext, w: *Window) void {
 
     // ---- Render ------------ ------------- scrollbar (after content, outside content clip) ------
     // P5.1: skipped when `no_scrollbar` is set. Wheel consumption
-    // above is gated by the same flag — both must agree to fully
+    // above is gated by the same flag - both must agree to fully
     // disable scrolling on this window.
     if (w.scroll_max_y > 0 and !w.flags.no_scrollbar) {
         renderScrollbar(ctx, w);
     }
     // P5.5b: horizontal scrollbar mirrors the vertical
-    // logic — only renders when content overflows X AND the flag
+    // logic - only renders when content overflows X AND the flag
     // opted in. `no_scrollbar` suppresses both axes.
     if (w.scroll_max_x > 0 and w.flags.horizontal_scrollbar and !w.flags.no_scrollbar) {
         renderScrollbarX(ctx, w);
@@ -7639,7 +7639,7 @@ pub fn findOrCreateWindow(
         }
         if (ctx.next_window_size) |s| {
             if (ctx.next_window_size_always) {
-                // ★ A ZERO COMPONENT MEANS "FIT THE CONTENT" on that axis (imgui's
+                // * A ZERO COMPONENT MEANS "FIT THE CONTENT" on that axis (imgui's
                 // `SetNextWindowSize` semantics), so it must not overwrite the window's own
                 // size with a literal zero. Only the axes the caller actually specified are
                 // applied, and auto-fit stays enabled when either axis was left to the
@@ -7714,7 +7714,7 @@ pub fn findOrCreateWindow(
     var size: Vec2 = ctx.next_window_size orelse
         (if (persisted) |p|
             // P5.2: `always_auto_resize` overrides the persisted
-            // size — caller asked for auto-fit-each-frame, so the
+            // size - caller asked for auto-fit-each-frame, so the
             // last save shouldn't pin a value the user explicitly
             // dragged to. initial_size still applies as the
             // first-frame starting point until content fills in.
@@ -7733,7 +7733,7 @@ pub fn findOrCreateWindow(
         .scroll_y = if (persisted) |p| p.scroll_y else 0,
         .scroll_x = if (persisted) |p| p.scroll_x else 0,
         // Explicit size at creation time also disables auto-fit so a
-        // 280×240 phase-4a window doesn't immediately grow to fit
+        // 280x240 phase-4a window doesn't immediately grow to fit
         // overflow content - that's the whole point of giving it a size.
         // Persisted state implies the user already resized at some
         // point - preserve that signal so auto-fit stays disabled.
@@ -7793,7 +7793,7 @@ fn renderWindowChrome(ctx: *UiContext, w: *Window) void {
     // Rising-edge signal: true only on the frame the user PRESSES.
     // imgui uses `IsMouseClicked(0)` for the same purpose at
     // `imgui.cpp` ~line 5524 (UpdateMouseMovingWindowNewFrame).  We
-    // must NOT start a drag on "currently held" — that would let the
+    // must NOT start a drag on "currently held" - that would let the
     // user click on canvas, hold, walk the cursor into a window's
     // title bar, and unintentionally pick up the window.  Bug was
     // reproducible by holding LMB on bare canvas then dragging the
@@ -7918,7 +7918,7 @@ fn renderWindowChrome(ctx: *UiContext, w: *Window) void {
     // ---- Corner-grip resize ------------------------------------------
     // Begin resize: mouse fresh-CLICKED inside corner grip, no other
     // active widget.  Same rising-edge rule as the title-bar drag
-    // above — a held-LMB cursor entering the grip should NOT pick
+    // above - a held-LMB cursor entering the grip should NOT pick
     // up a resize.  P5.1: gated on `no_resize`.
     if (!w.flags.no_resize and mc and ctx.active_id == 0 and mp_in_grip) {
         ctx.active_id = resize_id;
@@ -7941,7 +7941,7 @@ fn renderWindowChrome(ctx: *UiContext, w: *Window) void {
 
     // ---- Background
     // Outer background (everything below the title bar).
-    // P5.1: skipped when `no_background` is set — useful for HUD-style
+    // P5.1: skipped when `no_background` is set - useful for HUD-style
     // overlays where caller provides their own backdrop.
     if (!w.flags.no_background) {
         drawRectFilled(
@@ -7976,7 +7976,7 @@ fn renderWindowChrome(ctx: *UiContext, w: *Window) void {
                 &name_buf,
                 "{s} *",
                 .{w.name()},
-            ) catch w.name(); // overflow → fall back to plain name (no marker)
+            ) catch w.name(); // overflow -> fall back to plain name (no marker)
             drawTextAtS(
                 ctx,
                 .{ w.pos[0] + 8, title_y },
@@ -8078,7 +8078,7 @@ fn openWindow(
     }
 
     // NOTE: the per-frame layout reset (content cursor) is computed AFTER
-    // renderWindowChrome below — the chrome's title-bar drag updates w.pos this
+    // renderWindowChrome below - the chrome's title-bar drag updates w.pos this
     // frame, and the content must use that SAME post-drag pos or the text lags
     // the window chrome by one frame while dragging.
 
@@ -8088,7 +8088,7 @@ fn openWindow(
         return null;
     };
     ctx.current_window = w;
-    // ★ Clip interaction to THIS window for the whole time its widgets are submitted. Setting
+    // * Clip interaction to THIS window for the whole time its widgets are submitted. Setting
     // this only on the pop path left every widget hit-testing unclipped.
     refreshItemClip(ctx);
 
@@ -8159,7 +8159,7 @@ fn openWindow(
         // match the cursor's inner_origin calculation above. Earlier
         // versions hard-coded ctx.style.title_bar_height here, which
         // meant borderless windows (no_title_bar=true) clipped away
-        // the top N pixels of their own content — the cursor started
+        // the top N pixels of their own content - the cursor started
         // at y=window_padding[1] while the clip rect started at
         // y=title_bar_height, so anything between the two got
         // scissored off. Visible symptom: tab bars and other widgets
@@ -8169,7 +8169,7 @@ fn openWindow(
         // Clamp to non-negative.  A window whose outer height is
         // less than the title-bar height (e.g. a brand-new docked
         // window on the frame its dock leaf hasn't been sized yet,
-        // or a user-set 0×0 initial size) would otherwise produce
+        // or a user-set 0x0 initial size) would otherwise produce
         // `content_clip.height < 0`, which crashes WebGL's
         // `glScissor` later at draw-list replay time.  A 0-size
         // clip is harmless (no pixels pass the test); a negative
@@ -8196,7 +8196,7 @@ fn openWindow(
     // order is back-to-front, so the LAST window covering the mouse
     // wins (matches ImGui).
     // P5.4: when `no_mouse_inputs` or `no_inputs` is set, this
-    // window stays passthrough — skip the overwrite so any earlier
+    // window stays passthrough - skip the overwrite so any earlier
     // (deeper) covered window keeps the hover. All downstream
     // interaction gates test `hovered_window_id == w.id`, so this
     // single skip is enough to make the window mechanically
@@ -8326,7 +8326,7 @@ fn advanceLayout(
 
     // Advance cursor to the next row. X resets to origin+indent
     // minus scroll_x (imgui's `window.Pos.x - window.Scroll.x +
-    // local_x` formula — origin already holds `Pos.x + padding`,
+    // local_x` formula - origin already holds `Pos.x + padding`,
     // so subtract scroll here to get the screen-space cursor for
     // the next line's first widget).  Y drops past the bottom of
     // the tallest widget on this row; scroll_y stays baked in
@@ -8511,7 +8511,7 @@ fn dockSpaceImpl(
     // once. If the persisted tree contains a root matching
     // this dockspace's id, the user's subsequent builder
     // calls (`dockBuilderSplitNode`, etc.) become safe no-ops
-    // (split target is no longer a leaf → rejected with
+    // (split target is no longer a leaf -> rejected with
     // a/b = 0; user's `if (split.a != 0)` skips).
     if (ctx.pending_dock_tree.len > 0) {
         _ = tryRestoreDockTree(ctx.gpa, ctx);
@@ -8713,7 +8713,7 @@ pub const DockNodeFlags = packed struct(u16) {
 /// Internal: an empty leaf with a parent SPLIT collapses away
 /// the sibling node "absorbs" the parent's identity. The parent
 /// node's id stays valid but its role changes to match the
-/// sibling (split → split, leaf → leaf), preserving any
+/// sibling (split -> split, leaf -> leaf), preserving any
 /// outstanding references to the parent id.
 /// Steps:
 ///   1. Identify the sibling (the parent's other child).
@@ -9091,7 +9091,7 @@ fn labelTextImpl(
     // at a fixed offset from row start). We follow the same
     // convention as in widget value-readouts: value first (which
     // is what the eye scans), then label. But ImGui's LabelText
-    // is value-first → label-after on the same row.
+    // is value-first -> label-after on the same row.
     drawTextAtS(ctx, at, value_str, Color.toWire(ctx.style.text));
     if (label.len > 0) {
         const label_pos: Vec2 = .{ at[0] + value_w + ctx.style.item_spacing[0], at[1] };
@@ -9240,7 +9240,7 @@ fn markItemPost(
     }
     w.layout.last_item_edited = edited;
 
-    // Click detection: hovered AND mouse-down went from up → down
+    // Click detection: hovered AND mouse-down went from up -> down
     // this frame. ImGui uses a richer timing model; this matches
     // `IsItemClicked` semantics in 95% of usage.
     w.layout.last_item_clicked = w.layout.last_item_hovered and ctx.input.mouse_left_clicked;
@@ -9282,7 +9282,7 @@ fn invisibleButtonImpl(
     // 0-on-axis means "use a sensible default." X: fill remaining row
     // width to the right-side window padding. Y: standard widget row
     // height (`font_size + 2 * frame_padding[1]`, matching imgui's
-    // `GetFrameHeight()`). Mirrors imgui's `0 → -FLT_MIN → fill` for
+    // `GetFrameHeight()`). Mirrors imgui's `0 -> -FLT_MIN -> fill` for
     // the X axis.
     const row_right_x: f32 = w.pos[0] + w.size[0] - ctx.style.window_padding[0];
     const available_x: f32 = row_right_x - at[0];
@@ -9510,7 +9510,7 @@ fn sliderDispatch(
     value: anytype,
     opts: SliderOpts,
 ) bool {
-    // lint #1: slider's range must be valid — min < max. Equal
+    // lint #1: slider's range must be valid - min < max. Equal
     // bounds produce a degenerate bar with no usable thumb travel and
     // hidden divide-by-zero behavior inside normaliseValue. Warns
     // once per call site for the process lifetime.
@@ -9550,7 +9550,7 @@ fn colorEditColor(
     value: *Color,
     opts: ColorEditOpts,
 ) bool {
-    // Convert to [4]f32, edit, convert back. Lossy at ±1/255 per
+    // Convert to [4]f32, edit, convert back. Lossy at +/-1/255 per
     // channel, fine for a color picker.
     var f4: [4]f32 = .{
         float(value.r) / 255.0,
@@ -9895,7 +9895,7 @@ fn colorPickerImpl(
             const sv_rect: Rectangle = .{ .x = start[0], .y = start[1] + hue_h + 4, .width = size, .height = size };
             // SV gradient drawn as a vertical stack of slim
             // horizontal slabs. Each slab is one V level; within a
-            // slab we use a 2-color gradient from (h,0,V)→(h,1,V).
+            // slab we use a 2-color gradient from (h,0,V)->(h,1,V).
             drawSvBox(dl, arena, sv_rect, hsv[0], 24);
 
             // Interaction: hue strip drag, then SV box drag.
@@ -10085,7 +10085,7 @@ fn colorPickerDispatch(
             ));
         },
         .@"struct" => blk: {
-            // Treat as zimr Color (u8 RGBA). Convert u8 → f32 in,
+            // Treat as zimr Color (u8 RGBA). Convert u8 -> f32 in,
             // back out on change.
             if (Child != Color) {
                 @compileError("ui.colorPicker: pointed-to struct must be zimr Color, got " ++ @typeName(Child));
@@ -10099,8 +10099,8 @@ fn colorPickerDispatch(
 }
 
 pub const DragOpts = struct {
-    /// Pixels of mouse drag per unit value change. `0.01` ⇒ very
-    /// fine; `1.0` ⇒ coarse. Sign of speed never inverted.
+    /// Pixels of mouse drag per unit value change. `0.01` => very
+    /// fine; `1.0` => coarse. Sign of speed never inverted.
     speed: f32 = 1.0,
     /// Lower clamp (inclusive). Stored f64 to be lossless across
     /// every numeric pointer type the widget accepts. Set
@@ -10215,7 +10215,7 @@ fn dragDispatch(
     value: anytype,
     opts: DragOpts,
 ) bool {
-    // lint #2: drag range — `min == max` is the documented
+    // lint #2: drag range - `min == max` is the documented
     // "disable clamping" sentinel (see DragOpts.min docstring), so
     // we only warn on STRICTLY inverted bounds (min > max) which
     // can never produce a valid clamp.
@@ -10265,7 +10265,7 @@ pub const SplitterOpts = struct {
     bar_width: f32 = 4,
     /// Invisible interaction-zone padding perpendicular to the
     /// axis (added to each side of the visible bar). Default 16
-    /// → 36px total hit zone with a 4px bar. Forgiving on touch
+    /// -> 36px total hit zone with a 4px bar. Forgiving on touch
     /// without making the visible bar chunky. Imgui:
     /// `hover_extend`.
     hit_extend: f32 = 16,
@@ -10279,7 +10279,7 @@ pub const SplitterOpts = struct {
     min2: f32 = 0,
     /// Total available size along the splitter's axis (used to
     /// compute pane-2's clamp). Zero means "use the remaining
-    /// content area on this axis" (i.e. cursor → window edge).
+    /// content area on this axis" (i.e. cursor -> window edge).
     total_along_axis: f32 = 0,
 };
 
@@ -10447,7 +10447,7 @@ fn splitterImpl(
     // Perpendicular extent doesn't consume parent cursor - the
     // caller has already accounted for it via beginChild's height
     // for the panes. The splitter looks like a thin "spacer" of
-    // bar_width × perp_extent from the layout's perspective.
+    // bar_width x perp_extent from the layout's perspective.
     switch (axis) {
         .x => advanceLayout(w, .{ opts.bar_width, 0 }, ctx.style.item_spacing, ctx.style.window_padding[0]),
         .y => advanceLayout(w, .{ 0, opts.bar_width }, ctx.style.item_spacing, ctx.style.window_padding[0]),
@@ -10459,14 +10459,14 @@ fn splitterImpl(
 /// Flags for `beginMultiSelect`. Per zimr's flag-decision rule, exclusive
 /// groups become enums; independent options stay bools.
 /// Sourced from `imgui.h:3027-3055` (ImGuiMultiSelectFlags_). 6 fields
-/// are wired in MVP (marked ✓ below); the other 11 exist in the struct
+/// are wired in MVP (marked ok below); the other 11 exist in the struct
 /// from day 1 so future steps can fill them in without API churn.
 pub const MultiSelectFlags = struct {
     // ---- Selection model (exclusive group) ----
     /// `.multi` (default) allows multiple selected items. `.single`
     /// forces single-selection; the API shape stays identical, useful
-    /// when toggling a list between single ↔ multi modes. Imgui:
-    /// `ImGuiMultiSelectFlags_SingleSelect`. ✓ MVP.
+    /// when toggling a list between single <-> multi modes. Imgui:
+    /// `ImGuiMultiSelectFlags_SingleSelect`. ok MVP.
     selection: enum { multi, single } = .multi,
 
     // ---- Box-select mode (exclusive group) - DEFERRED to a later step.
@@ -10501,12 +10501,12 @@ pub const MultiSelectFlags = struct {
 
     // ---- Independent bools
     /// Disable the Ctrl+A "select all" shortcut. Imgui:
-    /// `imgui_widgets.cpp:8101-8104`. ✓ MVP.
+    /// `imgui_widgets.cpp:8101-8104`. ok MVP.
     no_select_all: bool = false,
     /// Disable Shift-anything (Shift-click, Shift-arrow). Guarantees
     /// every SetRange request has a single-item range, so the user's
     /// `applyRequests` doesn't have to interpolate. Imgui:
-    /// `imgui_widgets.cpp:8038-8039`. ✓ MVP.
+    /// `imgui_widgets.cpp:8038-8039`. ok MVP.
     no_range_select: bool = false,
     /// Disable selecting items when keyboard-navigating. Used with
     /// `no_auto_clear` for checkbox-list mode where each row is
@@ -10523,18 +10523,18 @@ pub const MultiSelectFlags = struct {
     /// selections; with this flag, it doesn't. Mac Finder
     /// behavior - important on touch where unintended clears
     /// feel destructive. Imgui:
-    /// `imgui_widgets.cpp:8464-8465`. ✓ MVP.
+    /// `imgui_widgets.cpp:8464-8465`. ok MVP.
     no_auto_clear_on_reselect: bool = false,
     /// Disable scrolling when box-selecting near scope edges.
     /// TODO Step 1.x: paired with box_select; not wired in MVP.
     /// Imgui: only consulted inside BeginBoxSelect.
     box_select_no_scroll: bool = false,
     /// Clear selection on Escape. Emits a single `SetAll(false)`
-    /// request. Imgui: `imgui_widgets.cpp:8090-8098`. ✓ MVP.
+    /// request. Imgui: `imgui_widgets.cpp:8090-8098`. ok MVP.
     clear_on_escape: bool = false,
     /// Clear selection when clicking on empty space within the
     /// scope's rect. Imgui:
-    /// `imgui_widgets.cpp` (via `ScopeRectActive`). ✓ MVP.
+    /// `imgui_widgets.cpp` (via `ScopeRectActive`). ok MVP.
     clear_on_click_void: bool = false,
     /// Allow keyboard nav to wrap horizontally at scope edges.
     /// TODO Step 1.x: zimr's kb-nav is minimal today (
@@ -10788,7 +10788,7 @@ fn collapsingHeaderImpl(
     drawRectFilled(ctx, rect, Color.toWire(bg));
 
     // Triangle indicator on the left - three filled rects approximating
-    // a wedge. Closed → right-pointing. Open → down-pointing.
+    // a wedge. Closed -> right-pointing. Open -> down-pointing.
     const tri_x: f32 = at[0] + padding[0];
     const tri_y: f32 = at[1] + (row_h - ctx.style.font_size) / 2;
     const tri_size: f32 = ctx.style.font_size;
@@ -10872,11 +10872,11 @@ fn beginTableImpl(
     ctx.active_table = ts;
 
     // P8.4: seed each column's `width_auto_seen` from
-    // the persistent cache — that's the PREVIOUS frame's measured
+    // the persistent cache - that's the PREVIOUS frame's measured
     // content width per column, which `computeTableColumnLayout`
     // will use to size this frame under the content-fit policies.
     // First time we encounter this table id, the cache lookup
-    // returns null and every column starts at 0 — the layout code's
+    // returns null and every column starts at 0 - the layout code's
     // fallback (`fallbackColumnWidth`) takes over.
     if (ctx.table_width_auto_cache.get(id)) |cached| {
         const ts_ptr_for_seed: *TableState = &ctx.active_table.?;
@@ -10890,7 +10890,7 @@ fn beginTableImpl(
     // TableState. Channel 0 = row bg + cell borders. Channel 1 =
     // cell content (widget submissions, redirected via
     // current_draw_list). At endTable, the splitter merges into
-    // the window's draw_list — channel 0 first, then channel 1 —
+    // the window's draw_list - channel 0 first, then channel 1 -
     // so backgrounds always paint UNDER content regardless of
     // submission interleave.
     //
@@ -10898,7 +10898,7 @@ fn beginTableImpl(
     // Allocate through the frame arena so the channel storage is
     // freed naturally at the end-of-frame arena reset. If the
     // allocation fails (OOM), revert active_table and return
-    // false — caller will skip the table entirely.
+    // false - caller will skip the table entirely.
     const ts_ptr: *TableState = &ctx.active_table.?;
     ts_ptr.splitter.split(ctx.frame_arena.allocator(), 2) catch {
         ctx.active_table = null;
@@ -10913,16 +10913,16 @@ fn beginTableImpl(
 
 /// Snapshot the current cell's content height into the running
 /// `row_max_h` maximum for the active row. Same call-site
-/// pattern as `snapshotCellWidth` — called at next-column,
+/// pattern as `snapshotCellWidth` - called at next-column,
 /// next-row, and end-table so every cell's height contributes
 /// to the row's resolved height regardless of which cell was
 /// last in the row.
 ///
 /// Pre-T1.1 zimr only ran this snapshot from
-/// `tableNextColumnImpl` — fine for cells 0..N-2 of each row, but
+/// `tableNextColumnImpl` - fine for cells 0..N-2 of each row, but
 /// the LAST cell of every row never had a "next column" call
 /// after it. Symptom: a row whose tallest cell happened to be
-/// the rightmost column got vertically clipped — visible content
+/// the rightmost column got vertically clipped - visible content
 /// stuck out below the row's drawn background. Adding the
 /// snapshot at next-row and end-table covers the missed cells.
 fn snapshotCellHeight(ts: *TableState, w: *const Window) void {
@@ -10955,7 +10955,7 @@ fn snapshotCellWidth(ts: *TableState, w: *const Window) void {
     // Compute the cell's rightmost content x (from `cursor_max`,
     // which widget submissions push as they draw) relative to the
     // column's left edge. Add one symmetric `cell_padding_x` on
-    // the right so the autofit width has room on BOTH sides — the
+    // the right so the autofit width has room on BOTH sides - the
     // left-side padding is already baked into where `cursor_pos`
     // starts inside the cell.
     const content_w: f32 = (w.layout.cursor_max[0] - col.x) + ts.opts.cell_padding_x;
@@ -10991,7 +10991,7 @@ fn drawTableRowBg(
         return;
     if (color.a == 0) {
         return;
-    } // fully transparent → skip
+    } // fully transparent -> skip
     const arena: Allocator = ctx.frame_arena.allocator();
     // Channel 0 = bg channel.
     ts.splitter.channels.items[0].addRectFilled(
@@ -11013,7 +11013,7 @@ fn drawTableRowBg(
 ///
 /// Z-order: cell bg lands in channel 0 AFTER `drawTableRowBg` for
 /// the same row, so cell-level overrides paint OVER row-level
-/// overrides — more specific wins. Both land BEFORE cell content
+/// overrides - more specific wins. Both land BEFORE cell content
 /// (channel 1) after the splitter merge.
 fn flushTableCellBgs(
     ctx: *UiContext,
@@ -11039,9 +11039,9 @@ fn flushTableCellBgs(
 }
 
 /// Copy each column's `width_auto_seen` into `ctx.table_width_auto_cache`
-/// keyed by the table's id. The reverse direction (cache → column
+/// keyed by the table's id. The reverse direction (cache -> column
 /// state) happens at `beginTableImpl` time. Allocation failure is
-/// non-fatal — the cache just won't carry this frame's data forward,
+/// non-fatal - the cache just won't carry this frame's data forward,
 /// and the next frame falls back to the font-size heuristic.
 fn persistTableWidthAuto(ctx: *UiContext, ts: *const TableState) void {
     var values: [max_table_columns]f32 = @splat(0);
@@ -11061,14 +11061,14 @@ fn endTableImpl(ctx: *UiContext) void {
     // to splitter channel 0. Cell content (already submitted by
     // widgets via ctx.current_draw_list redirected to channel 1)
     // stays on channel 1. At the end of this function the splitter
-    // is merged into the window's draw_list — channel 0 first.
+    // is merged into the window's draw_list - channel 0 first.
     const bg_dl: *DrawList = &ts.splitter.channels.items[0];
 
     // Close out the last row's height into the outer rect.
     if (ts.cur_row >= 0) {
         // / T1.1 (turns 412-413): snapshot the final cell of
         // the final row. Same rationale as the row-end snapshot
-        // in tableNextRowImpl — this is the only place the
+        // in tableNextRowImpl - this is the only place the
         // table's very last cell's metrics are captured. Width
         // since P8.4; height added in T1.1.
         if (ts.cur_col >= 0) {
@@ -11080,7 +11080,7 @@ fn endTableImpl(ctx: *UiContext) void {
         // pattern as `tableNextRow` does for previous rows.
         drawTableRowBg(ctx, ts, ts.row_y, ts.row_max_h, @as(u32, @intCast(ts.cur_row)));
         // P8.1: flush any per-cell bg overrides for the final row.
-        // Same z-order as in tableNextRow — cell bgs paint OVER
+        // Same z-order as in tableNextRow - cell bgs paint OVER
         // row bg, UNDER cell content (channel 1).
         flushTableCellBgs(ctx, ts, ts.row_y, ts.row_max_h);
         // For fixed-height (scrolling) tables, outer rect height is
@@ -11123,7 +11123,7 @@ fn endTableImpl(ctx: *UiContext) void {
 
             // Optional 4px-wide scrollbar on the right edge - purely
             // a visual hint; click-to-drag is polish.
-            // Scrollbar lives on channel 0 (bg layer) — it's part
+            // Scrollbar lives on channel 0 (bg layer) - it's part
             // of the table chrome, not user content.
             if (max_scroll > 0) {
                 const bar_w: f32 = 4;
@@ -11146,7 +11146,7 @@ fn endTableImpl(ctx: *UiContext) void {
         }
     }
 
-    // P8.2: granular border drawing — each side / interior line
+    // P8.2: granular border drawing - each side / interior line
     // gated by its own flag, with the master `borders` flag
     // AND-ing on top. Pre-the entire block was gated by
     // the single `borders` boolean and used `addRectOutline` for
@@ -11159,24 +11159,24 @@ fn endTableImpl(ctx: *UiContext) void {
         const ow: f32 = ts.outer_rect.width;
         const oh: f32 = ts.outer_rect.height;
 
-        // Outer top edge — borders_outer_h.
+        // Outer top edge - borders_outer_h.
         if (ts.opts.borders_outer_h) {
             bg_dl.addLine(arena, .{ ox, oy }, .{ ox + ow, oy }, border_col, 1);
         }
-        // Outer bottom edge — borders_outer_h.
+        // Outer bottom edge - borders_outer_h.
         if (ts.opts.borders_outer_h) {
             bg_dl.addLine(arena, .{ ox, oy + oh }, .{ ox + ow, oy + oh }, border_col, 1);
         }
-        // Outer left edge — borders_outer_v.
+        // Outer left edge - borders_outer_v.
         if (ts.opts.borders_outer_v) {
             bg_dl.addLine(arena, .{ ox, oy }, .{ ox, oy + oh }, border_col, 1);
         }
-        // Outer right edge — borders_outer_v.
+        // Outer right edge - borders_outer_v.
         if (ts.opts.borders_outer_v) {
             bg_dl.addLine(arena, .{ ox + ow, oy }, .{ ox + ow, oy + oh }, border_col, 1);
         }
 
-        // Vertical dividers between columns — borders_inner_v.
+        // Vertical dividers between columns - borders_inner_v.
         // Drawn FOR THE FULL outer rect (header + data area),
         // since columns are continuous top-to-bottom.
         if (ts.opts.borders_inner_v) {
@@ -11205,9 +11205,9 @@ fn endTableImpl(ctx: *UiContext) void {
     // P8.4: persist this frame's per-column measured
     // widths into the context-level cache so the NEXT frame's
     // `computeTableColumnLayout` can use them. Single-pass UI
-    // means we always trail by one frame — the first frame falls
+    // means we always trail by one frame - the first frame falls
     // back to the font-size heuristic, every frame thereafter uses
-    // the previous frame's measurement. Cost is one 32×f32 entry
+    // the previous frame's measurement. Cost is one 32xf32 entry
     // per active table id.
     persistTableWidthAuto(ctx, ts);
 
@@ -11223,7 +11223,7 @@ fn endTableImpl(ctx: *UiContext) void {
 }
 
 pub const TableColumnOpts = struct {
-    /// Per-column sizing override. Default `null` — the column
+    /// Per-column sizing override. Default `null` - the column
     /// inherits from the table's `opts.sizing` policy (see
     /// `TableSizing`). When non-null, this column uses the
     /// specified mode regardless of the table-level policy.
@@ -11234,15 +11234,15 @@ pub const TableColumnOpts = struct {
     sizing: ?TableColumnSizing = null,
     /// Width in pixels for `.fixed` sizing. Zero (the default)
     /// means "use the table's sizing policy to derive the width"
-    /// — `fixed_fit` uses this column's measured content width,
+    /// - `fixed_fit` uses this column's measured content width,
     /// `fixed_same` uses the max across all fixed columns.
     /// Ignored for `.stretch` sizing.
     width: f32 = 0,
-    /// Relative weight when `.stretch`. Default `null` — the
+    /// Relative weight when `.stretch`. Default `null` - the
     /// column inherits its weight from the table's sizing policy
-    /// (`stretch_same` ⇒ 1.0 for every column; `stretch_prop` ⇒
+    /// (`stretch_same` => 1.0 for every column; `stretch_prop` =>
     /// weight = measured content width). When non-null, this
-    /// column uses the explicit weight regardless of policy —
+    /// column uses the explicit weight regardless of policy -
     /// e.g. a column with weight 2 always gets twice the share
     /// of a default-weight column.
     /// Non-positive values are clamped to 1.
@@ -11252,11 +11252,11 @@ pub const TableColumnOpts = struct {
     /// the sort specs.  Mirrors imgui's
     /// `ImGuiTableColumnFlags_NoSort` (imgui.h ~2200).
     /// Default false (sort cycles normally).  Replaces the old
-    /// `sortable: bool = true` field — same semantics, flipped
+    /// `sortable: bool = true` field - same semantics, flipped
     /// polarity to match imgui's negative-default flag convention.
     no_sort: bool = false,
     /// Block ascending direction in the sort cycle.  The cycle
-    /// becomes: unsorted → descending → (flip to unsorted on
+    /// becomes: unsorted -> descending -> (flip to unsorted on
     /// re-click of primary; new primary stays descending).  If
     /// BOTH `no_sort_ascending` and `no_sort_descending` are set,
     /// the column behaves as `no_sort = true`.  Mirrors imgui's
@@ -11271,18 +11271,18 @@ pub const TableColumnOpts = struct {
     /// that direction without needing a header click.  If
     /// multiple columns set `default_sort`, the leftmost wins
     /// (primary); subsequent ones don't append (the imgui
-    /// `DefaultSort` semantics — only one default-sorted column
+    /// `DefaultSort` semantics - only one default-sorted column
     /// is supported here for simplicity).  Mirrors imgui's
     /// `ImGuiTableColumnFlags_DefaultSort` (which is a bool;
     /// our typed `?TableSortDirection` lets the caller pick the
-    /// direction in the same field).  Default null — no default
+    /// direction in the same field).  Default null - no default
     /// sort.
     default_sort: ?TableSortDirection = null,
     /// Force this column to size itself to its measured content
     /// width (the `width_auto_seen` value from the previous frame,
     /// or a font-derived fallback on the first frame).  Equivalent
     /// to `.{ .sizing = .fixed, .width = 0 }` but more discoverable
-    /// — answers "how do I make a column autofit?" by name.
+    /// - answers "how do I make a column autofit?" by name.
     /// Mirrors imgui's `ImGuiTableColumnFlags_WidthAuto`.
     /// Default false.  When true, takes precedence over `sizing`
     /// and `width`.
@@ -11321,7 +11321,7 @@ fn tableSetupColumnImpl(
     //
     // `width_auto` is a shortcut for "sizing = fixed with width = 0"
     // (use the measured `width_auto_seen`).  When set, it takes
-    // precedence over both `sizing` and `width` — the caller's
+    // precedence over both `sizing` and `width` - the caller's
     // intent is "fit content", regardless of any other knobs.
     if (opts.width_auto) {
         col.sizing = .fixed;
@@ -11331,7 +11331,7 @@ fn tableSetupColumnImpl(
         col.user_width = opts.width;
     }
     // P8.4: user_weight is optional on both opts and state. null
-    // means "let the sizing policy decide" — preserved here so
+    // means "let the sizing policy decide" - preserved here so
     // `effectiveStretchWeight` can distinguish "user wants weight=1"
     // (explicit) from "user didn't set a weight" (use policy).
     // Non-positive values are clamped to 1 to keep the layout math
@@ -11344,14 +11344,14 @@ fn tableSetupColumnImpl(
     col.no_header_label = opts.no_header_label;
 
     // Seed the default sort direction into the live sort specs
-    // — but only on the FIRST submission of this table, before
+    // - but only on the FIRST submission of this table, before
     // any user click has had a chance to override.  We detect
     // first-submission as "the sort_state map has no entry yet
     // for `ts.id`."  Once an entry exists (created by a user
     // click OR by a previous default_sort seed), we don't
     // re-seed.  Multiple columns with `default_sort` set are
     // unsupported here: the leftmost wins, subsequent ones are
-    // ignored (imgui's documented `DefaultSort` semantics —
+    // ignored (imgui's documented `DefaultSort` semantics -
     // only one default-sorted column).
     if (opts.default_sort) |dir| {
         if (!ctx.table_sort_state.contains(ts.id)) {
@@ -11443,7 +11443,7 @@ fn tableGetSortSpecsImpl(ctx: *UiContext) ?*const TableSortSpecs {
 /// Not included: `sizing` / `width` / `weight` / `width_auto`.
 /// Those resolve through inheritance + fallback paths (see
 /// `defaultColumnSizing`, `effectiveStretchWeight`,
-/// `width_auto_seen`) and aren't roundtrippable — by the time
+/// `width_auto_seen`) and aren't roundtrippable - by the time
 /// any layout code looks at them, the original opts have been
 /// normalized into a single concrete sizing + weight.  Query
 /// the column's COMPUTED width via the column state's `width`
@@ -11514,7 +11514,7 @@ fn beginDragDropSourceImpl(ctx: *UiContext, flags: DragDropFlags) bool {
 
     // Open the preview window (mirrors beginTooltip). Skipped when
     // the caller passes `.source_no_preview = true`.
-    // renamed `no_preview` → `source_no_preview` to match
+    // renamed `no_preview` -> `source_no_preview` to match
     // imgui's `ImGuiDragDropFlags_SourceNoPreviewTooltip`.
     if (!flags.source_no_preview) {
         openDragPreviewWindow(ctx);
@@ -11778,7 +11778,7 @@ fn popStyleImpl(ctx: *UiContext) void {
     @memcpy(dst[snap.offset .. snap.offset + snap.size], snap.backup[0..snap.size]);
 }
 
-/// Browser soft-keyboard hints — maps 1:1 to the HTML
+/// Browser soft-keyboard hints - maps 1:1 to the HTML
 /// `inputmode` attribute values.  Only consulted when the
 /// runtime is wasm + has a DOM; ignored everywhere else.
 ///
@@ -11822,7 +11822,7 @@ pub const InputTextOpts = struct {
     /// Placeholder text shown in dimmed (`style.text_disabled`)
     /// color when the buffer is empty AND the widget isn't
     /// focused. Disappears the moment the user types or focuses.
-    /// Empty string (default) → no hint. ImGui: parameter to
+    /// Empty string (default) -> no hint. ImGui: parameter to
     /// `InputTextWithHint`; we put it on the opts so a single
     /// `inputText(...)` call can pass a hint without going through
     /// the variant.
@@ -11852,8 +11852,8 @@ pub const InputTextOpts = struct {
     /// dispatching back to wasm per-char.  The declarative
     /// `chars_*` flags (turn 440c) have a JS-side mirror that
     /// works on web; the user `char_filter` callback does not.
-    /// Web parity for the callback would require a JS↔wasm
-    /// round-trip per keystroke — feasible but not yet
+    /// Web parity for the callback would require a JS<->wasm
+    /// round-trip per keystroke - feasible but not yet
     /// implemented.  See turn 442 for the contract on host;
     /// future turn for web parity.
     char_filter: ?InputTextCallback = null,
@@ -11880,19 +11880,19 @@ pub const InputTextOpts = struct {
     /// Web-path note: host-only today.  The DOM input/textarea
     /// overlay swallows Tab for browser focus advancement.  Web
     /// parity would need a JS-side `keydown` listener that calls
-    /// a wasm export on Tab — straightforward but deferred.
+    /// a wasm export on Tab - straightforward but deferred.
     completion: ?InputTextCallback = null,
 
     /// Fires on Up or Down arrow in single-line.  Read
     /// `data.history_dir` to know which direction.  Typical use:
     /// shell-style "scroll through prior commands."  Gated on
-    /// `!read_only` — a read-only field's history callback would
+    /// `!read_only` - a read-only field's history callback would
     /// be unable to mutate the buffer anyway.  ImGui: `CallbackHistory`.
     ///
     /// Web-path note: host-only today.  The DOM input overlay
     /// uses Up/Down for caret navigation within the field.  Web
     /// parity here is harder than completion because the keys
-    /// have a legitimate native meaning — would need a flag
+    /// have a legitimate native meaning - would need a flag
     /// telling JS "treat Up/Down as history, not caret nav."
     history: ?InputTextCallback = null,
 
@@ -11912,7 +11912,7 @@ pub const InputTextOpts = struct {
     // ---- P9.1: declarative character filters
     // Run BEFORE `char_filter` callback.  When more than one
     // filter is set, characters must pass ALL of them.  Filters
-    // operate on incoming codepoints only — paste / setBuffer
+    // operate on incoming codepoints only - paste / setBuffer
     // bypass them (matches imgui).
 
     /// Accept only the digits `0`-`9` plus the symbols `.+-`.
@@ -11940,7 +11940,7 @@ pub const InputTextOpts = struct {
     chars_uppercase: bool = false,
 
     /// Reject ASCII space (0x20) and horizontal tab (0x09).
-    /// Newline isn't blocked here — multiline already controls
+    /// Newline isn't blocked here - multiline already controls
     /// newline acceptance independently.  Use for usernames,
     /// identifiers, URLs.  Mirrors imgui's
     /// `ImGuiInputTextFlags_CharsNoBlank`.
@@ -11959,7 +11959,7 @@ pub const InputTextOpts = struct {
     /// was pressed (and the widget had focus).  Default behavior:
     /// `inputText()` returns true on every frame the buffer
     /// changed (so callers can react to each keystroke).  Set
-    /// this when the caller only wants to act on "commit" —
+    /// this when the caller only wants to act on "commit" -
     /// e.g. a search bar that fires the search on Enter, not
     /// on every character.
     ///
@@ -11976,7 +11976,7 @@ pub const InputTextOpts = struct {
 
     /// Render buffer content as `*` characters instead of the
     /// real bytes.  Host path: substitution happens in the
-    /// rendering branch only — the buffer itself still holds the
+    /// rendering branch only - the buffer itself still holds the
     /// real characters; cursor measurement also uses the masked
     /// text (so caret position matches what the user sees).
     /// Web path: the DOM overlay element is given `type="password"`,
@@ -12019,7 +12019,7 @@ pub const InputTextOpts = struct {
     ///     `\n`.
     ///
     /// Use for chat-style boxes where Enter sends the message
-    /// and Ctrl+Enter (or Shift+Enter — see "Note" below)
+    /// and Ctrl+Enter (or Shift+Enter - see "Note" below)
     /// inserts a newline.  Single-line `inputText` ignores this
     /// flag entirely; it has no `\n` insertion path.
     ///
@@ -12043,7 +12043,7 @@ pub const SliderAngleOpts = struct {
     /// Maximum value in degrees. Default 360.
     max_deg: f32 = 360,
     /// Display format string. Default appends a degree symbol so
-    /// the readout reads naturally ("45°", "-12°").
+    /// the readout reads naturally ("45 deg", "-12 deg").
     fmt: []const u8 = "{d:.0}°",
 };
 
@@ -12188,7 +12188,7 @@ fn comboImpl(
             ctx.combo_open_id = 0;
         }
 
-        // Dropdown visuals → foreground draw list. Saved/restored
+        // Dropdown visuals -> foreground draw list. Saved/restored
         // around the emission so any state we change is local.
         // In eager mode (RT scope), foreground_dl isn't used
         // emissions just go straight to rlgl from the helpers.
@@ -12270,7 +12270,7 @@ fn comboImpl(
 /// {0,0} => the canvas left edge). That was exactly the combo/popup
 /// dropdown bug: the first item rendered inside the dropdown, the rest
 /// jumped to screen-left. ALWAYS init a window's content layout through
-/// this helper instead of poking `layout.cursor_pos` field-by-field — it
+/// this helper instead of poking `layout.cursor_pos` field-by-field - it
 /// makes the "forgot to set origin" mistake impossible.
 fn resetContentLayout(w: *Window, content_origin: Vec2) void {
     w.layout.origin = content_origin;
@@ -12497,7 +12497,7 @@ fn treeNodeExImpl(
             break :blk stored;
         }
         // First encounter: apply default_open, persist immediately
-        // so toggling from open → closed on first click sticks.
+        // so toggling from open -> closed on first click sticks.
         if (opts.default_open) {
             ctx.tree_open_state.put(ctx.gpa, id, true) catch assertUnreachable(@src(), "OOM", .{});
             break :blk true;
@@ -12551,7 +12551,7 @@ fn treeNodeExImpl(
         ctx.hovered_id = id;
     }
 
-    // -------- Click → toggle -------------------------------------------
+    // -------- Click -> toggle -------------------------------------------
     if (hovered and ctx.input.mouse_left_clicked) {
         ctx.active_id = id;
         ctx.active_id_just_activated = true;
@@ -12661,7 +12661,7 @@ pub const SetNextWindowOpts = struct {
     /// If true, the override applies only the first time this window
     /// is created. After that the user can drag/resize freely and
     /// subsequent `setNextWindow*` calls with `once = true` are
-    /// ignored. Default false ⇒ apply every frame (ImGui's
+    /// ignored. Default false => apply every frame (ImGui's
     /// `ImGuiCond_Always`).
     once: bool = false,
 };
@@ -12741,7 +12741,7 @@ fn closePopupScope(ctx: *UiContext) void {
         ctx.window_stack.items[ctx.window_stack.len - 1]
     else
         null;
-    // ★ Interaction is clipped to the window that owns it. Outside any window (an overlay
+    // * Interaction is clipped to the window that owns it. Outside any window (an overlay
     // drawn straight to the viewport) there is nothing to clip against.
     ctx.item_clip = if (ctx.current_window) |cw| Rectangle{
         .x = cw.pos[0],
@@ -12797,7 +12797,7 @@ fn openMainMenuBar(ctx: *UiContext) bool {
     // Append to per-frame popup list so the bar replays AFTER
     // regular windows (above all content) but BEFORE foreground
     // (tooltips still float on top). Popups submitted from inside
-    // beginMenu will append later; bar appears first → menus on top.
+    // beginMenu will append later; bar appears first -> menus on top.
     if (!ctx.eager_mode) {
         bar.draw_list.clear();
         ctx.frame_popups.append(bar) catch assertUnreachable(@src(), "OOM", .{});
@@ -12847,7 +12847,7 @@ fn openWindowMenuBar(ctx: *UiContext) bool {
     } // already in a bar - caller bug
     const win: *Window = ctx.current_window orelse return false;
     // P5.5a: require `WindowFlags.menu_bar` on the parent
-    // window. Matches imgui's `ImGuiWindowFlags_MenuBar` contract —
+    // window. Matches imgui's `ImGuiWindowFlags_MenuBar` contract -
     // callers must declare intent at window creation time. This
     // lets a future layout pass reserve the menu-bar's height
     // *before* content is submitted (today we shift cursor down
@@ -12909,7 +12909,7 @@ fn openMenu(
         .x = ctx.menu_bar_cursor_x,
         // The bar's top in canvas coords. menu_bar_bottom_y = bar_top + bar_h
         // for BOTH paths (main bar: bottom=height so this is 0; per-window bar:
-        // win.pos.y + title_h). Was hardcoded 0 — correct only for the main bar,
+        // win.pos.y + title_h). Was hardcoded 0 - correct only for the main bar,
         // so per-window menu labels drew at the canvas top instead of in the
         // window's strip (and hit-tested there too). This fixes both.
         .y = ctx.menu_bar_bottom_y - button_h,
@@ -12925,8 +12925,8 @@ fn openMenu(
     const anchor: Vec2 = .{ button_rect.x, ctx.menu_bar_bottom_y };
 
     // Single-open + hover-tracking (imgui menu-bar behaviour). `bar_open_menu` is
-    // the ONE menu the bar treats as open (only one is ever open at a time) — the
-    // intent — while `popup_open` is the live popup set (which click-outside
+    // the ONE menu the bar treats as open (only one is ever open at a time) - the
+    // intent - while `popup_open` is the live popup set (which click-outside
     // dismissal also edits).
     // 0) If the designated menu was dismissed externally (clicked outside), drop
     //    the intent so a later hover doesn't spuriously reopen it.
@@ -13199,7 +13199,7 @@ fn openTabBar(
 
     // Drawn HERE (before any tabs are submitted) so per-tab background
     // rects can overdraw it. Active tabs render at full bar height
-    // and so cover the separator at their position — that's the visual
+    // and so cover the separator at their position - that's the visual
     // "lift" effect (the active tab merges with the content below).
     // Inactive tabs render at `bar_height - 1` so the separator
     // remains visible at their bottom edge.
@@ -13210,7 +13210,7 @@ fn openTabBar(
     // one, and a separately-drawn 1px lift slice was needed to
     // restore the active-tab merge. Drawing separator-first lets us
     // get the lift effect for free via the tab bg's own geometry.
-    // imgui takes a third route — drawing the tab shape with rounded
+    // imgui takes a third route - drawing the tab shape with rounded
     // top corners that geometrically end above the separator
     // (`imgui_widgets.cpp:10991`, `TabItemBackground`). Our flat-rect
     // approach is simpler at the cost of one cosmetic detail (no
@@ -13287,7 +13287,7 @@ fn closeTabBar(ctx: *UiContext) void {
     }
 
     // Remember bar's bottom edge for external anchors.
-    // (The bar's underline separator was drawn in openTabBar — see
+    // (The bar's underline separator was drawn in openTabBar - see
     // the comment block there for why it's first, not last.)
     state.bottom_y = frame.rect.y + frame.rect.height;
 
@@ -14297,9 +14297,9 @@ pub const Clipper = struct {
     /// Exclusive end row index of the visible range.
     visible_end: usize,
     /// State machine for `step()`:
-    ///   .not_started → return visible range, advance to.stepped
-    ///   .stepped → end-of-iteration cleanup, advance to.done, return null
-    ///   .done → return null
+    ///   .not_started -> return visible range, advance to.stepped
+    ///   .stepped -> end-of-iteration cleanup, advance to.done, return null
+    ///   .done -> return null
     state: State = .not_started,
 
     pub const Range = struct {
@@ -14614,7 +14614,7 @@ pub const Ui = struct {
         }
 
         // If docked elsewhere, undock first to keep the dock
-        // layer's window→leaf inverse correct. `undockWindow`
+        // layer's window->leaf inverse correct. `undockWindow`
         // walks the leaves to find the window - we don't need to
         // pass the old leaf id.
         if (w.dock_node_id != null) {
@@ -14857,7 +14857,7 @@ pub const Ui = struct {
     }
 
     /// Tiny directional button (square, font-sized, with a triangle
-    /// glyph inside pointing in `dir`). Used for inline ±1 steppers
+    /// glyph inside pointing in `dir`). Used for inline +/-1 steppers
     /// next to numeric inputs, or for tab-bar / combo nav glyphs.
     /// `str_id` is the widget's unique label for state tracking; it
     /// is NOT drawn - only the arrow glyph is. ImGui:
@@ -14955,7 +14955,7 @@ pub const Ui = struct {
     /// default" - for X, fill the remaining row width to the right
     /// padding; for Y, the standard widget row height
     /// (`font_size + 2 * frame_padding[1]`). This mirrors imgui's
-    /// `0 → -FLT_MIN → fill` convention.
+    /// `0 -> -FLT_MIN -> fill` convention.
     /// `id_str` disambiguates this hit zone from other invisible
     /// regions in the same window - it's hashed into the widget ID
     /// stack but never rendered.
@@ -15005,10 +15005,10 @@ pub const Ui = struct {
         // happens to equal the URL, repetition is friendlier than
         // confusion ("did I click the right one?").
         self.setItemTooltip("Open in browser:\n{s}", .{url});
-        // Right-click → Copy link. Auto-opens on right-click hover via
+        // Right-click -> Copy link. Auto-opens on right-click hover via
         // `beginPopupContextItem`; on phone this never fires today since
         // touch only emits left-click events. lands the long-
-        // press → right-click bridge that makes this reachable on phone.
+        // press -> right-click bridge that makes this reachable on phone.
         if (self.beginPopupContextItem(null)) {
             defer self.endPopup();
             if (self.menuItem("Copy link", .{})) {
@@ -15023,8 +15023,8 @@ pub const Ui = struct {
     /// `if (isItemHovered()) setTooltip(...)` boilerplate at the call
     /// site - and that boilerplate is the typical pattern, so most
     /// tooltips should use this. ImGui: `SetItemTooltip(fmt,...)`.
-    /// Was missing from the zimr surface before now (v2 audit §C23
-    /// listed it ❌); filled here because `textLinkOpenURL` needs it.
+    /// Was missing from the zimr surface before now (v2 audit section C23
+    /// listed it X); filled here because `textLinkOpenURL` needs it.
     pub fn setItemTooltip(
         self: Ui,
         comptime fmt: []const u8,
@@ -15037,12 +15037,12 @@ pub const Ui = struct {
 
     /// Render `"label: <formatted-v>"` as a one-line read-only display.
     /// `v` can be any of:
-    /// - `bool` → "true" / "false"
-    /// - signed/unsigned int → decimal
-    /// - float → "{d:.3}" (3 decimal places)
-    /// - enum → `@tagName(v)`
-    /// - `[]const u8` → the string bytes, passthrough
-    /// - anything else → `{any}` fallback (ugly but readable)
+    /// - `bool` -> "true" / "false"
+    /// - signed/unsigned int -> decimal
+    /// - float -> "{d:.3}" (3 decimal places)
+    /// - enum -> `@tagName(v)`
+    /// - `[]const u8` -> the string bytes, passthrough
+    /// - anything else -> `{any}` fallback (ugly but readable)
     /// ImGui ships four overloads (`Value(prefix, bool)`,
     /// `Value(prefix, int)`, `Value(prefix, unsigned)`,
     /// `Value(prefix, float, format)`) because C++ doesn't have
@@ -15468,14 +15468,14 @@ pub const Ui = struct {
         }
     }
 
-    /// Override the background color of the CURRENT cell — the one
+    /// Override the background color of the CURRENT cell - the one
     /// just entered via `tableNextColumn`. Call AFTER
     /// `tableNextColumn` for the column you want to tint.
     /// Use cases: heat-map cells, flag specific values, draw
     /// attention to a single field without highlighting the whole
     /// row. The cell bg paints UNDER the cell's content (P7.2's
     /// 2-channel render) and OVER the row bg (cell-level overrides
-    /// are more specific than row-level — so they win visually).
+    /// are more specific than row-level - so they win visually).
     /// No-op when called outside a table or before any
     /// `tableNextColumn`. Pass `Color.transparent` to clear a
     /// pending override that hasn't been painted yet.
@@ -15551,7 +15551,7 @@ pub const Ui = struct {
     ///     ui.child("lane:" ++ name,.{ 200, 80 });
     ///     if (ui.beginDragDropTarget(.{})) {
     ///         if (ui.acceptDragDropPayload(BuildPayload,.{})) |build| {
-    ///             // user released over this lane → move build here
+    ///             // user released over this lane -> move build here
     ///         }
     ///         ui.endDragDropTarget();
     ///     }
@@ -15681,26 +15681,26 @@ pub const Ui = struct {
 
     /// Scale the whole UI to the viewport, in one call.
     ///
-    /// ── ★★ WHY THIS EXISTS ──
+    /// -- ** WHY THIS EXISTS --
     ///
     /// zimr ships in a browser tab, so "the window" is anything from a 360 px phone to a 4K
     /// desktop, and a UI sized in fixed pixels is unreadable at one end and comical at the
-    /// other. **151 of the examples already scale by hand and 63 do not** — and the 151 do it
+    /// other. **151 of the examples already scale by hand and 63 do not** - and the 151 do it
     /// with at least four different formulas (`/16`, `/26`, `/30`, `/46`, each with its own
     /// clamps) around an otherwise IDENTICAL block of padding and spacing. That block was
     /// copy-pasted verbatim: every one of them uses 0.35/0.3, 0.4, 0.5 and 1.6.
     ///
-    /// ★ SO THE VARYING PART IS ONE NUMBER and the rest is duplication. `characters_across` is
+    /// * SO THE VARYING PART IS ONE NUMBER and the rest is duplication. `characters_across` is
     /// that number, named for what it actually controls: roughly how many characters of body
     /// text fit across the region the UI occupies. A full-width panel wants ~30; a half-width
     /// one wants ~16, which is the same text at the same size in half the space.
     ///
-    /// ★ IT IS ADDITIVE, and deliberately so. Applying this from `UiHost.begin` instead would
+    /// * IT IS ADDITIVE, and deliberately so. Applying this from `UiHost.begin` instead would
     /// fix all 63 stragglers at once and DOUBLE-SCALE the 151 that already do it by hand.
     ///
     /// Returns the font size it chose, since callers size their own plots and images from it.
     pub fn scaleToViewport(self: Ui, viewport_width: f32, characters_across: f32) f32 {
-        // ★ THE CLAMPS ARE NOT DECORATION. Without a floor, a narrow phone gets text no one can
+        // * THE CLAMPS ARE NOT DECORATION. Without a floor, a narrow phone gets text no one can
         // read; without a ceiling, a wide desktop gets a panel that looks like a warning sign.
         // 12 and 26 are the range the hand-rolled versions converged on between them.
         const font_size: f32 = clamp(viewport_width / @max(1.0, characters_across), 12.0, 26.0);
@@ -15715,7 +15715,7 @@ pub const Ui = struct {
 
     /// Whether the viewport is narrow enough to want a phone layout.
     ///
-    /// ★ ONE THRESHOLD, NAMED ONCE. Demos that branch on width were each picking their own —
+    /// * ONE THRESHOLD, NAMED ONCE. Demos that branch on width were each picking their own -
     /// and a demo that disagrees with its neighbour about what counts as a phone is a demo
     /// whose layout changes when you tab between them.
     pub fn isNarrow(viewport_width: f32) bool {
@@ -15813,7 +15813,7 @@ pub const Ui = struct {
             return true;
         }
         // Hit-test the mouse against every window submitted this
-        // frame. Cheap (typically ≤ 8 windows; bounded stack) and
+        // frame. Cheap (typically <= 8 windows; bounded stack) and
         // robust to overlapping windows.
         const m: Vec2 = self.ctx.input.mouse_pos;
         for (self.ctx.frame_windows.items[0..self.ctx.frame_windows.len]) |w| {
@@ -15867,7 +15867,7 @@ pub const Ui = struct {
 
     /// Cursor position at the start of the current window's content
     /// area, in screen-space pixels. Useful as a reference point
-    /// for computing relative offsets within a window — e.g.
+    /// for computing relative offsets within a window - e.g.
     /// `getCursorPos() - getCursorStartPos()` is how far down the
     /// content area you've laid out so far. Returns `.{0,0}` when
     /// called outside a window block. Differs from raw ImGui
@@ -16251,7 +16251,7 @@ pub const Ui = struct {
     ///         ui.resetMouseDragDelta(.left);
     ///     }
     /// True while `key` is currently held. Reads the per-frame
-    /// `InputSnapshot.keys` array — no syscall, no runtime input
+    /// `InputSnapshot.keys` array - no syscall, no runtime input
     /// lookup, just an array index. Stable across the whole frame.
     /// Mirrors imgui's `IsKeyDown` (imgui.h:1097).
     pub fn isKeyDown(self: Ui, key: KeyCode) bool {
@@ -16259,7 +16259,7 @@ pub const Ui = struct {
     }
 
     /// True for exactly one frame: the frame `key` transitioned
-    /// up→down. Edge event. Mirrors imgui's `IsKeyPressed`
+    /// up->down. Edge event. Mirrors imgui's `IsKeyPressed`
     /// (imgui.h:1098). This is one-shot only; for key-repeat
     /// firing, use `isKeyPressedOrRepeat`.
     pub fn isKeyPressed(self: Ui, key: KeyCode) bool {
@@ -16267,7 +16267,7 @@ pub const Ui = struct {
     }
 
     /// True for exactly one frame: the frame `key` transitioned
-    /// down→up. Edge event. Mirrors imgui's `IsKeyReleased`
+    /// down->up. Edge event. Mirrors imgui's `IsKeyReleased`
     /// (imgui.h:1099).
     pub fn isKeyReleased(self: Ui, key: KeyCode) bool {
         return self.ctx.input.keys[@backingInt(key)].released_this_frame;
@@ -16282,7 +16282,7 @@ pub const Ui = struct {
     }
 
     /// True if either left or right Control is currently held.
-    /// On macOS this is the literal Control key, NOT Cmd —
+    /// On macOS this is the literal Control key, NOT Cmd -
     /// platform-aware modifier remapping (imgui's KeyCtrl-on-mac =
     /// Cmd convention) is not yet done; callers on mac who want
     /// "command-or-control" should check both `isCtrlDown` and
@@ -16309,7 +16309,7 @@ pub const Ui = struct {
     /// input for backspace/delete/arrow keys so the user can hold
     /// the key for accelerated motion/deletion. Mirrors imgui's
     /// `IsKeyPressed(key, repeat=true)` (the default `repeat=true`
-    /// variant — `imgui.h:1098`).
+    /// variant - `imgui.h:1098`).
     ///
     /// Implementation routes through raylib's
     /// `isKeyPressedRepeat` for the held-and-repeating case
@@ -16325,7 +16325,7 @@ pub const Ui = struct {
     }
 
     /// Result of `getOrPutState`. Mirrors `GetOrPutResult` from
-    /// `std.AutoHashMapUnmanaged` — the caller branches on
+    /// `std.AutoHashMapUnmanaged` - the caller branches on
     /// `found_existing` to decide whether to write `value_ptr` with
     /// an initial value or read what's already there.
     ///
@@ -16338,9 +16338,9 @@ pub const Ui = struct {
         };
     }
 
-    /// Look up (T, id) — return a slot pointer plus whether it
+    /// Look up (T, id) - return a slot pointer plus whether it
     /// existed. When `!found_existing`, the slot's contents are
-    /// **undefined** (matches `std.HashMap.getOrPut` semantics) —
+    /// **undefined** (matches `std.HashMap.getOrPut` semantics) -
     /// the caller MUST write through `value_ptr` before reading.
     ///
     /// Standard idiom for a type with a sensible zero / default:
@@ -16360,7 +16360,7 @@ pub const Ui = struct {
     /// allocation in the common case (slot already exists).
     ///
     /// `opts.persist = true` enrolls T in the on-disk save/load
-    /// path. Flag is sticky once set — re-passing `false` after
+    /// path. Flag is sticky once set - re-passing `false` after
     /// a `true` does not disenroll, because some other call site
     /// may rely on the registration.
     pub fn getOrPutState(
@@ -16387,7 +16387,7 @@ pub const Ui = struct {
         }
 
         // Persist enrollment is sticky and bound on first true.
-        // The fn closures need T comptime-known — here is the only
+        // The fn closures need T comptime-known - here is the only
         // place that's available.
         if (opts.persist and !outer.value_ptr.has_persist) {
             outer.value_ptr.has_persist = true;
@@ -16406,7 +16406,7 @@ pub const Ui = struct {
 
     /// Read-only state lookup. Returns null if no slot exists for
     /// (T, id). Use when you want to react to existing state but
-    /// not create it — most callers want `getOrPutState`.
+    /// not create it - most callers want `getOrPutState`.
     pub fn getState(
         self: Ui,
         comptime T: type,
@@ -16419,7 +16419,7 @@ pub const Ui = struct {
     }
 
     // Three primitives that compose into "the minimum extension-
-    // author surface" — given (id, rect, opts), do all the
+    // author surface" - given (id, rect, opts), do all the
     // boilerplate (clip test, hovered_id update, press/release
     // machine, button_repeat, keyboard activation) that every
     // widget needs. Used by zimr's built-in button/checkbox/
@@ -16435,7 +16435,7 @@ pub const Ui = struct {
     /// drawing (so the cursor advance happens once).
     ///
     /// Mirrors imgui's `ItemSize(ImVec2)`. Imgui's optional
-    /// `text_baseline_y` is not surfaced — zimr widgets don't
+    /// `text_baseline_y` is not surfaced - zimr widgets don't
     /// currently use cross-baseline alignment. Add if needed.
     pub fn itemSize(self: Ui, size: Vec2) void {
         const w: *Window = self.ctx.current_window orelse return;
@@ -16445,7 +16445,7 @@ pub const Ui = struct {
     /// Register a widget rectangle with the given `id`, returning
     /// `true` if the widget should be drawn this frame. Returns
     /// `false` when the rect is fully outside the current clip
-    /// rect (so the caller can skip drawing entirely — early
+    /// rect (so the caller can skip drawing entirely - early
     /// exit). Side effects: sets `ctx.hovered_id = id` when the
     /// mouse is over the rect.
     ///
@@ -16455,7 +16455,7 @@ pub const Ui = struct {
     /// (Q4) will tighten this.
     ///
     /// The CALLER computes the rect and the id (`u.getId(label)`).
-    /// itemAdd doesn't claim the layout cursor — pair with
+    /// itemAdd doesn't claim the layout cursor - pair with
     /// `itemSize` after drawing.
     pub fn itemAdd(
         self: Ui,
@@ -16490,9 +16490,9 @@ pub const Ui = struct {
 
     /// Output of `buttonBehavior`: every edge event + level state
     /// the extension might react to. All booleans are stable for
-    /// one frame — read once, branch as needed.
+    /// one frame - read once, branch as needed.
     pub const ButtonResult = struct {
-        /// True for one frame when the button "fires" — release-
+        /// True for one frame when the button "fires" - release-
         /// inside-rect after a press OR a `button_repeat` tick OR
         /// keyboard activation while focused. This is what
         /// existing `pressed` returns from `u.button`.
@@ -16531,8 +16531,8 @@ pub const Ui = struct {
     /// Run the press / release / repeat / keyboard-activation
     /// state machine for `id` over the rect `rect`. Returns
     /// edge events + level state in a `ButtonResult`. Doesn't
-    /// draw anything — caller draws based on `result.hovered` /
-    /// `held`. Doesn't claim the layout — caller pairs with
+    /// draw anything - caller draws based on `result.hovered` /
+    /// `held`. Doesn't claim the layout - caller pairs with
     /// `itemSize(rect_size)` after drawing.
     ///
     /// Mirrors imgui's `ButtonBehavior(const ImRect&, ImGuiID,
@@ -16562,7 +16562,7 @@ pub const Ui = struct {
         var just_activated: bool = false;
         var just_deactivated: bool = false;
 
-        // Mouse-down inside rect → claim active_id.
+        // Mouse-down inside rect -> claim active_id.
         if (hovered and ctx.input.mouse_left_clicked) {
             ctx.active_id = id;
             ctx.active_id_just_activated = true;
@@ -16570,7 +16570,7 @@ pub const Ui = struct {
             ctx.active_id_last_repeat_time = ctx.frame_time_seconds;
             just_activated = true;
         }
-        // Mouse-up while we own active_id → fire pressed if still
+        // Mouse-up while we own active_id -> fire pressed if still
         // hovered; release the claim either way.
         if (ctx.active_id == id and ctx.input.mouse_left_released) {
             if (hovered) {
@@ -16617,7 +16617,7 @@ pub const Ui = struct {
     ///     defer g.restore();
     ///     u.text("warning",.{});
     ///
-    /// Only the fields you set on `overrides` are touched — null
+    /// Only the fields you set on `overrides` are touched - null
     /// fields leave the live style alone. Nesting is safe: each
     /// guard saves the value live at the time IT ran, so multiple
     /// stacked overrides restore correctly in defer-stack order.
@@ -16658,7 +16658,7 @@ pub const Ui = struct {
     /// stack is push/popped imperatively via
     /// `CanvasCtx.pushTransform` rather than passed in at begin.
     pub const CanvasOpts = struct {
-        /// Padding field — Zig disallows zero-field structs in
+        /// Padding field - Zig disallows zero-field structs in
         /// some positional contexts. Remove when the struct
         /// gains a real field.
         _: u1 = 0,
@@ -16667,7 +16667,7 @@ pub const Ui = struct {
     /// Live state of an active canvas scope. Returned by
     /// `beginCanvas` when the canvas is visible; pass to
     /// `endCanvas` to close out. Field access is the canvas's
-    /// public surface — see method docs.
+    /// public surface - see method docs.
     pub const CanvasCtx = struct {
         ctx: *UiContext,
         /// Window the canvas was opened inside; used by endCanvas
@@ -16680,7 +16680,7 @@ pub const Ui = struct {
         /// other widget uses for state-keyed lookup.
         id: Id,
         /// Depth of the canvas_transforms stack at begin time.
-        /// `endCanvas` truncates back to this depth — guards
+        /// `endCanvas` truncates back to this depth - guards
         /// against caller-side push-without-pop.
         transform_depth_at_begin: usize,
 
@@ -16700,7 +16700,7 @@ pub const Ui = struct {
         /// the canvas's screen origin to get canvas-local coords,
         /// then applies the INVERSE of the current cumulative
         /// transform so callers always read coordinates in their
-        /// authoring frame — whatever pushTransform layers have
+        /// authoring frame - whatever pushTransform layers have
         /// been added.
         ///
         /// With no transforms pushed, the inverse is identity, so
@@ -16719,10 +16719,10 @@ pub const Ui = struct {
         /// Push a translate+scale transform onto the canvas's
         /// transform stack. Subsequent `localMouse` calls will
         /// see coordinates in the post-transform authoring space.
-        /// The stack composes — pushing (t1, s1) then (t2, s2)
+        /// The stack composes - pushing (t1, s1) then (t2, s2)
         /// gives a top of `compose(parent={t1,s1}, child={t2,s2})`,
         /// so the math behaves exactly like nested coordinate
-        /// systems. Pair with `popTransform()` — typically via
+        /// systems. Pair with `popTransform()` - typically via
         /// `defer c.popTransform()`.
         ///
         /// Returns silently on overflow (stack capped at 16
@@ -16757,15 +16757,15 @@ pub const Ui = struct {
             return self.ctx.canvas_transforms.top() orelse .{};
         }
 
-        /// Project an authoring-space point to SCREEN coords —
+        /// Project an authoring-space point to SCREEN coords -
         /// suitable for handing to `drawList().add*()` calls.
         /// Applies the cumulative transform AND the canvas-origin
         /// offset, so the inverse of `localMouse()`:
         ///   `toScreen(localMouse()) == ctx.input.mouse_pos`.
         /// Use this for any geometry you compute in authoring space
-        /// and want to draw — addRectFilled, addBezierCubic, etc.
+        /// and want to draw - addRectFilled, addBezierCubic, etc.
         /// take screen coords (the drawlist is the parent window's,
-        /// not a canvas-local one — see ADR Q4).
+        /// not a canvas-local one - see ADR Q4).
         pub fn toScreen(self: CanvasCtx, p: Vec2) Vec2 {
             const xf: CanvasTransform = self.currentTransform();
             const local: Vec2 = xf.applyLocal(p);
@@ -16777,7 +16777,7 @@ pub const Ui = struct {
         /// at the mouse position (i.e. no popup, tooltip, or
         /// other window is covering the canvas at the mouse).
         /// The window-id check is what distinguishes "mouse-in-rect"
-        /// from "this canvas owns the hover" — a popup drawn over
+        /// from "this canvas owns the hover" - a popup drawn over
         /// the canvas claims the topmost window without disturbing
         /// the canvas's rect.
         pub fn hovered(self: CanvasCtx) bool {
@@ -16791,7 +16791,7 @@ pub const Ui = struct {
     /// Open a canvas scope. Returns null when the canvas is
     /// clipped entirely outside the current window's content area
     /// (so the caller can skip the canvas body entirely). When
-    /// non-null, the caller MUST pair with `endCanvas` — typically
+    /// non-null, the caller MUST pair with `endCanvas` - typically
     /// via `defer`.
     pub fn beginCanvas(
         self: Ui,
@@ -16842,7 +16842,7 @@ pub const Ui = struct {
     /// call exactly once per matching begin.
     pub fn endCanvas(self: Ui, c: CanvasCtx) void {
         _ = self;
-        // Restore transform-stack depth — defensive cleanup for
+        // Restore transform-stack depth - defensive cleanup for
         // callers who pushed but didn't pop. In well-behaved code
         // this is a no-op.
         c.ctx.canvas_transforms.len = c.transform_depth_at_begin;
@@ -16855,10 +16855,10 @@ pub const Ui = struct {
     //
     // Two flavors of motion, both keyed by a stable label string:
     //
-    //   `u.animated(label, opts)` — one-shot tween from `from` to
+    //   `u.animated(label, opts)` - one-shot tween from `from` to
     //       `to` over `duration` seconds.  Restarts if `to` changes.
     //
-    //   `u.spring(label, opts)` — physical spring following
+    //   `u.spring(label, opts)` - physical spring following
     //       `target`. Tracks `target` smoothly as it moves between
     //       frames.  Critically-damped by default (no overshoot).
     //
@@ -16870,14 +16870,14 @@ pub const Ui = struct {
     //     u.fillRect(rect, .{ .r = 255, .g = 0, .b = 0, .a = @trunc(alpha * 255) });
     //
     // State lives in `ext_storage` via `getOrPutState`, so it
-    // gets persistence for free if a caller opts in — though
+    // gets persistence for free if a caller opts in - though
     // animations rarely want that.
 
     /// One-shot tween.  Returns the current interpolated value.
     /// Reads `ctx.input.delta_time` to advance the slot.
     ///
     /// If `opts.to` differs from the previous frame's `to`, the
-    /// tween restarts — useful for "snap to a new target" patterns.
+    /// tween restarts - useful for "snap to a new target" patterns.
     pub fn animated(
         self: Ui,
         label: []const u8,
@@ -16908,7 +16908,7 @@ pub const Ui = struct {
             return opts.from;
         }
         if (opts.duration <= 0) {
-            // Degenerate duration — snap to `to`.
+            // Degenerate duration - snap to `to`.
             return opts.to;
         }
         const since_motion: f32 = s.elapsed - opts.delay;
@@ -16981,7 +16981,7 @@ pub const Ui = struct {
     }
 
     // ========================================================================
-    // miniPlot — throwaway smoke test for the architectural pillars
+    // miniPlot - throwaway smoke test for the architectural pillars
     // ========================================================================
     //
     // **Will be deleted when real `beginPlot` lands** (planned Tier 4).
@@ -17001,13 +17001,13 @@ pub const Ui = struct {
     //   - addPolyline + addCircleFilled + addArc (the actual draw)
 
     /// Single-line plot in a canvas-clipped rectangle.  No axes,
-    /// no title, no markers beyond a "latest value" dot — just
+    /// no title, no markers beyond a "latest value" dot - just
     /// enough to verify the pillars compose.  `xs` and `ys` must
     /// be the same length; `xs` must be monotonic ascending for
     /// the line to render sensibly (not enforced).
     ///
     /// Returns `true` if the user pressed R while the plot was
-    /// hovered (a courtesy signal — most callers ignore it).
+    /// hovered (a courtesy signal - most callers ignore it).
     pub fn miniPlot(
         self: Ui,
         label: []const u8,
@@ -17088,7 +17088,7 @@ pub const Ui = struct {
                 self.ctx.style.frame_bg,
             );
 
-            // A few horizontal grid lines — three rows.
+            // A few horizontal grid lines - three rows.
             var i: u32 = 1;
             while (i < 4) : (i += 1) {
                 const fy: f32 = (float(i) / 4.0) * rect.height;
@@ -17100,7 +17100,7 @@ pub const Ui = struct {
                 );
             }
 
-            // Map xs/ys → screen rect.  X spans the full width
+            // Map xs/ys -> screen rect.  X spans the full width
             // proportional to position in the array; Y maps from
             // [cur_min, cur_max] flipped (top = max).
             const span: f32 = cur_max - cur_min;
@@ -17130,13 +17130,13 @@ pub const Ui = struct {
     /// computation, clip-test, hovered-id update, AND the
     /// button-behavior state machine in one call. The single-call
     /// surface is for "I just want to write a widget and be done"
-    /// — for fine-grained control (custom hit shapes, multi-rect
+    /// - for fine-grained control (custom hit shapes, multi-rect
     /// widgets, non-button interaction patterns), reach for the
     /// B-path primitives (`itemAdd`/`buttonBehavior`) directly.
     pub const ItemOpts = struct {
         /// Widget size in pixels. Caller computes this from
         /// content (text width + padding etc). No "auto-size from
-        /// label" today — the label is for the ID, not for sizing.
+        /// label" today - the label is for the ID, not for sizing.
         size: Vec2,
         /// Same as `ButtonBehaviorOpts.repeat`. Default off.
         repeat: bool = false,
@@ -17144,7 +17144,7 @@ pub const Ui = struct {
 
     /// Result of `beginItem`. Same field set as `ButtonResult`
     /// plus `id` and `rect`. `null` from beginItem means the rect
-    /// was fully clipped — caller skips drawing entirely.
+    /// was fully clipped - caller skips drawing entirely.
     pub const ItemCtx = struct {
         id: Id,
         rect: Rectangle,
@@ -17171,7 +17171,7 @@ pub const Ui = struct {
     ///         return it.pressed;
     ///     }
     ///
-    /// Imgui has no canonical equivalent — its widgets reimplement
+    /// Imgui has no canonical equivalent - its widgets reimplement
     /// the boilerplate inline. Q3's two-path design (B for
     /// imgui-style + C for opinionated) gives extension authors
     /// the choice; C is the recommended starting point.
@@ -17190,7 +17190,7 @@ pub const Ui = struct {
             .height = opts.size[1],
         };
         if (!self.itemAdd(rect, id)) {
-            // Still advance the cursor on clipped items — matches
+            // Still advance the cursor on clipped items - matches
             // imgui semantics so subsequent widgets land in the
             // expected position regardless of clipping.
             self.itemSize(opts.size);
@@ -17210,7 +17210,7 @@ pub const Ui = struct {
 
     /// Pair with `beginItem`. Advances the layout cursor by the
     /// item's size. Pass the `ItemCtx` returned from `beginItem`
-    /// so the helper has the rect — and so a mistakenly-called
+    /// so the helper has the rect - and so a mistakenly-called
     /// `endItem` without a matching `beginItem` is a compile
     /// error (no ItemCtx in scope).
     pub fn endItem(self: Ui, it: ItemCtx) void {
@@ -17281,7 +17281,7 @@ pub const Ui = struct {
 
     /// This frame's pinch gesture, off the shared detector ticked in
     /// `beginFrameRaw`. `scale` is the frame-to-frame finger-distance
-    /// ratio (>1 spreading / zoom in, <1 closing, 1.0 = no pinch — a
+    /// ratio (>1 spreading / zoom in, <1 closing, 1.0 = no pinch - a
     /// no-op factor), `mid` the focal point to hold fixed while zooming.
     /// Widgets apply it to their own view; the detection is shared with
     /// every other pinch-zoom surface (fractals, 3D camera, ...).
@@ -17357,7 +17357,7 @@ pub const Ui = struct {
     ///     const dl = ui.getForegroundDrawList();
     ///     const red = colorToU32(.{ .r = 239, .g = 68, .b = 68, .a = 255 });
     ///     dl.addText("DEBUG BUILD", .{ 10, 10 }, 14, red);
-    /// Colors are ColorU32 (0xAABBGGRR — R is the LOW byte), so prefer
+    /// Colors are ColorU32 (0xAABBGGRR - R is the LOW byte), so prefer
     /// `colorToU32(Color)` over hand-packed hex. Handle is per-frame.
     pub fn getForegroundDrawList(self: Ui) DrawListHandle {
         return .{
@@ -17366,7 +17366,7 @@ pub const Ui = struct {
         };
     }
 
-    /// Get a handle on the CURRENT WINDOW's draw list — the same list
+    /// Get a handle on the CURRENT WINDOW's draw list - the same list
     /// built-in widgets render into, so it is clipped to the window's
     /// content rect. Custom widgets that draw window-relative geometry
     /// (via beginItem/endItem) should use THIS rather than the
@@ -17384,14 +17384,14 @@ pub const Ui = struct {
     /// draw list using the `Color` struct (not the packed `ColorU32`
     /// the underlying DrawList takes). Equivalent to
     /// `u.getForegroundDrawList().addRectFilled(rect, colorToU32(c))`
-    /// but shorter at the call site — extension widgets that want
+    /// but shorter at the call site - extension widgets that want
     /// to paint inside their own rect reach for this constantly.
     /// No-op if no window is currently open.
     /// Convenience: draw a filled rectangle on the current window's
     /// draw list using the `Color` struct (not the packed `ColorU32`
     /// the underlying DrawList takes). Equivalent to
     /// `u.getForegroundDrawList().addRectFilled(rect, colorToU32(c))`
-    /// but shorter at the call site — extension widgets that want
+    /// but shorter at the call site - extension widgets that want
     /// to paint inside their own rect reach for this constantly.
     /// No-op if no window is currently open.
     pub fn fillRect(
@@ -17423,20 +17423,20 @@ pub const Ui = struct {
     }
 
     /// True if the most-recent widget became active this frame
-    /// (transition from inactive → active). ImGui: `IsItemActivated`.
+    /// (transition from inactive -> active). ImGui: `IsItemActivated`.
     pub fn isItemActivated(self: Ui) bool {
         const w: *Window = self.ctx.current_window orelse return false;
         return w.layout.last_item_activated;
     }
 
-    /// True if the most-recent widget transitioned from active → inactive
+    /// True if the most-recent widget transitioned from active -> inactive
     /// this frame. ImGui: `IsItemDeactivated`.
     pub fn isItemDeactivated(self: Ui) bool {
         const w: *Window = self.ctx.current_window orelse return false;
         return w.layout.last_item_deactivated;
     }
 
-    /// True if the most-recent widget transitioned from active →
+    /// True if the most-recent widget transitioned from active ->
     /// inactive this frame AND the user edited its value at any point
     /// during the activation. Useful for "commit on release" patterns.
     /// ImGui: `IsItemDeactivatedAfterEdit`.
@@ -17483,7 +17483,7 @@ pub const Ui = struct {
         };
     }
 
-    /// Width × height of the most-recent widget. ImGui: `GetItemRectSize`.
+    /// Width x height of the most-recent widget. ImGui: `GetItemRectSize`.
     pub fn getItemRectSize(self: Ui) Vec2 {
         const w: *Window = self.ctx.current_window orelse return .{ 0, 0 };
         return .{ w.layout.last_item_rect.width, w.layout.last_item_rect.height };
@@ -17515,10 +17515,10 @@ pub const Ui = struct {
     /// ImGui: `SetNextWindowSize(size, cond)`.
     /// Size the next window.
     ///
-    /// ★ A ZERO COMPONENT MEANS "FIT THE CONTENT ON THAT AXIS", matching Dear ImGui's
+    /// * A ZERO COMPONENT MEANS "FIT THE CONTENT ON THAT AXIS", matching Dear ImGui's
     /// `SetNextWindowSize`. Passing `.{ 380, 0 }` is the natural way to say "this wide, as
     /// tall as it needs to be", and taking the zero literally produced a window one pixel
-    /// tall whose every control was clipped away — a panel that looked like it had simply
+    /// tall whose every control was clipped away - a panel that looked like it had simply
     /// failed to render, which is a bad way for a UI toolkit to answer a reasonable request.
     ///
     /// Auto-fit is deferred to the layout: a zero simply leaves that axis unset, so the
@@ -17537,7 +17537,7 @@ pub const Ui = struct {
     /// Constrain the next window's size to `[min, max]` on its
     /// next open + every subsequent frame. Either bound can be
     /// `null` for "no limit". Useful for chrome-bounded windows
-    /// (e.g. "this window must be at least 300×200 so its
+    /// (e.g. "this window must be at least 300x200 so its
     /// content fits").
     /// Constraints are also applied to user drag-resize gestures
     /// - the window simply can't grow/shrink past the bounds.
@@ -17765,7 +17765,7 @@ pub const Ui = struct {
     /// Returns `.{0,0}` when called outside a window block. Matches
     /// ImGui's coordinate convention for this specific getter
     /// (window-local), even though most of zimr's cursor accessors
-    /// use screen-space — the "window content region" framing
+    /// use screen-space - the "window content region" framing
     /// implies window-local space, and matches what callers expect
     /// for fitting custom layouts into a window.
     /// ImGui: `GetWindowContentRegionMin()`.
@@ -18028,7 +18028,7 @@ pub const Ui = struct {
         // lint #4: double-open in same frame. If an entry
         // already exists AND its `opened_at_frame` matches the
         // current frame, the caller invoked openPopup twice this
-        // frame for the same id — almost always a bug (the second
+        // frame for the same id - almost always a bug (the second
         // call's anchor wins; debug events fire twice).
         if (self.ctx.popup_open.get(id)) |existing| {
             if (existing.opened_at_frame == self.ctx.frame_count) {
@@ -18261,7 +18261,7 @@ pub const Ui = struct {
     }
 
     /// Close the matching `beginTabBar` scope. Renders the
-    /// bar→content separator line, GCs tabs the caller stopped
+    /// bar->content separator line, GCs tabs the caller stopped
     /// submitting, advances the parent cursor past the tab bar.
     pub fn endTabBar(self: Ui) void {
         closeTabBar(self.ctx);
@@ -18436,14 +18436,14 @@ pub const Ui = struct {
     // ---- editStruct - comptime-reflective struct inspector
     /// Auto-build an editor UI for a struct via comptime reflection.
     /// Each field gets a widget chosen from its type:
-    ///   - `bool` → `checkbox`
-    ///   - `f32` / `f64` → `inputFloat` (or `slider` if opts gives min+max)
-    ///   - `i32` / `u32` / … → `inputInt` (or `slider` if opts gives min+max)
-    ///   - `[]const u8` → read-only `text` line (mutation TBD)
-    ///   - nested struct → `treeNode` + recursive `editStruct`
-    ///   - `enum` → `combo` over all enum values
-    ///   - `[3]f32` / `[4]f32`→ `colorEdit3` / `colorEdit4` (special-cased)
-    ///   - other arrays of float/int → one widget per element
+    ///   - `bool` -> `checkbox`
+    ///   - `f32` / `f64` -> `inputFloat` (or `slider` if opts gives min+max)
+    ///   - `i32` / `u32` / ... -> `inputInt` (or `slider` if opts gives min+max)
+    ///   - `[]const u8` -> read-only `text` line (mutation TBD)
+    ///   - nested struct -> `treeNode` + recursive `editStruct`
+    ///   - `enum` -> `combo` over all enum values
+    ///   - `[3]f32` / `[4]f32`-> `colorEdit3` / `colorEdit4` (special-cased)
+    ///   - other arrays of float/int -> one widget per element
     /// Returns true on the frame ANY field changed.
     ///     var s: MySettings =.{};
     ///     if (f.ui.editStruct(&s)) {
@@ -18457,11 +18457,11 @@ pub const Ui = struct {
     /// Same as `editStruct` but accepts a per-field options struct.
     /// `opts` is a struct literal whose field names match the value's
     /// fields; each entry is itself a struct with optional members:
-    ///   - `.min`, `.max` → switch to slider for numeric fields
-    ///   - `.fmt` → format string (default per type)
-    ///   - `.skip` → skip this field entirely
-    ///   - `.label` → override the displayed label
-    ///   - `.is_color` → force colorEdit dispatch for [3]/[4] f32 arrays
+    ///   - `.min`, `.max` -> switch to slider for numeric fields
+    ///   - `.fmt` -> format string (default per type)
+    ///   - `.skip` -> skip this field entirely
+    ///   - `.label` -> override the displayed label
+    ///   - `.is_color` -> force colorEdit dispatch for [3]/[4] f32 arrays
     /// Fields not mentioned in `opts` use defaults. Unknown opts
     /// fields are silently ignored - no @compileError - so a struct
     /// can grow without breaking existing call-sites.
@@ -18479,7 +18479,7 @@ pub const Ui = struct {
     }
 
     /// Reflection inspector (P1, AM-8). Wraps `editStruct` in a
-    /// labeled, collapsible tree node — the right shape for a
+    /// labeled, collapsible tree node - the right shape for a
     /// section header in a settings panel or dev-tools tab.
     ///     if (u.inspect("Style", &ctx.style)) {
     ///         // re-apply theme...
@@ -18528,8 +18528,8 @@ pub const Ui = struct {
     /// collapsible header with the count + an "Add" button that
     /// appends a default-initialized `T`, then one row per element
     /// with a "Remove" button. Each element is dispatched through
-    /// the same field-type matrix as `editStruct` (struct → recursive
-    /// editor, primitive → matching widget, etc.).
+    /// the same field-type matrix as `editStruct` (struct -> recursive
+    /// editor, primitive -> matching widget, etc.).
     /// Pass a pointer to your `std.ArrayList(T)`. The list's
     /// allocator is read from `ctx.gpa` (the same allocator used by
     /// every other persistent UI structure). Returns true on the
@@ -18854,16 +18854,16 @@ pub const Ui = struct {
 ///
 /// Mirrors imgui flags: `_Float` (default), `_Uint8`, `_DisplayHex`.
 pub const ColorEditDisplayFormat = enum {
-    /// Per-channel 0.0–1.0 with `{d:.2}` precision (e.g. "0.50").
-    /// Default — matches the conventional "shader uniform" mental
+    /// Per-channel 0.0-1.0 with `{d:.2}` precision (e.g. "0.50").
+    /// Default - matches the conventional "shader uniform" mental
     /// model where channels are floats.
     float,
-    /// Per-channel 0–255 (e.g. "128").  The web/CSS / 8-bit image
+    /// Per-channel 0-255 (e.g. "128").  The web/CSS / 8-bit image
     /// mental model.  Computed as `@round(v * 255)`.
     int_0_255,
     /// Single combined hex string overlaid on the swatch
     /// (e.g. "#80FF8040" for RGBA).  Per-channel sliders show no
-    /// value text in this mode — the hex IS the value display.
+    /// value text in this mode - the hex IS the value display.
     /// Format: `#RRGGBB` for 3 channels, `#RRGGBBAA` for 4.
     hex,
 };
@@ -18871,7 +18871,7 @@ pub const ColorEditDisplayFormat = enum {
 pub const ColorEditOpts = struct {
     /// DEPRECATED.  Was intended for custom slider-value
     /// precision, but `std.fmt.bufPrint` requires a comptime
-    /// format string and `[]const u8` opts fields are runtime —
+    /// format string and `[]const u8` opts fields are runtime -
     /// so the field was silently ignored.  Kept for source
     /// compatibility; new code should not set it.  Value text is
     /// always `{d:.2}` for `.float` and `{d}` for `.int_0_255`.
@@ -18888,10 +18888,10 @@ pub const ColorEditOpts = struct {
 /// Format an RGB triplet (or RGBA quad) into a `#RRGGBB[AA]`
 /// string.  Caller provides the destination buffer (must be at
 /// least 9 bytes for RGBA, 7 for RGB).  Returns the populated
-/// slice.  Channels are clamped to 0.0–1.0 before conversion so
+/// slice.  Channels are clamped to 0.0-1.0 before conversion so
 /// out-of-range inputs round-trip predictably.
 ///
-/// Pure function — no UI state touched — so it's testable in
+/// Pure function - no UI state touched - so it's testable in
 /// isolation and reusable from non-widget code (e.g. logging,
 /// serialization).
 pub fn formatColorRgbHex(
@@ -18918,7 +18918,7 @@ pub fn formatColorRgbHex(
     return out[0..7];
 }
 
-/// Convert a 0.0–1.0 channel value to its 0–255 integer
+/// Convert a 0.0-1.0 channel value to its 0-255 integer
 /// representation with imgui-compatible rounding (round-half-
 /// away-from-zero).  Out-of-range inputs clamp first.
 ///
@@ -18954,22 +18954,22 @@ pub const ColorPickerOpts = struct {
 /// override. Mirrors imgui's `ImGuiTableFlags_Sizing*` family
 /// (imgui.h:2141-2144).
 ///
-/// All four modes rely on `width_auto_seen` — the maximum content
+/// All four modes rely on `width_auto_seen` - the maximum content
 /// width measured during the PREVIOUS frame, persisted across
 /// frames in `UiContext.table_width_auto_cache`. The first frame
 /// a table is submitted has no measurement yet, so each column
-/// falls back to `fallbackColumnWidth(style.font_size)` (≈ 6em).
-/// One frame of layout lag is intrinsic — zimr is single-pass and
+/// falls back to `fallbackColumnWidth(style.font_size)` (~ 6em).
+/// One frame of layout lag is intrinsic - zimr is single-pass and
 /// cannot know a column's natural width before its cells render.
 pub const TableSizing = enum {
     /// Every stretch column shares the available width equally.
     /// Each gets `remaining / count_stretch` pixels unless the
     /// caller passed a per-column `weight`, which wins.
     /// Matches imgui's `SizingStretchSame`.
-    /// This is the default — preserves zimr's pre-behavior.
+    /// This is the default - preserves zimr's pre-behavior.
     stretch_same,
     /// Stretch columns share the available width proportionally
-    /// to their measured content width — a column with twice as
+    /// to their measured content width - a column with twice as
     /// much content gets twice the share. Per-column `weight`
     /// (if supplied) wins.
     /// Matches imgui's `SizingStretchProp`.
@@ -18978,7 +18978,7 @@ pub const TableSizing = enum {
     /// Per-column `width` (if supplied) wins.
     /// Matches imgui's `SizingFixedFit`.
     fixed_fit,
-    /// All fixed columns get the same width — the maximum of any
+    /// All fixed columns get the same width - the maximum of any
     /// fixed column's measured content width. Per-column `width`
     /// (if supplied) wins.
     /// Matches imgui's `SizingFixedSame`.
@@ -18989,11 +18989,11 @@ pub const TableOpts = struct {
     /// P8.4: table-level sizing policy. Sets the
     /// default sizing for every column that doesn't override via
     /// `tableSetupColumn`'s `sizing` opt. The four modes are
-    /// content-fit variants — see `TableSizing` for what each
+    /// content-fit variants - see `TableSizing` for what each
     /// mode does and the first-frame fallback caveat.
     ///
-    /// Default `.stretch_same` — equal share across all columns
-    /// — preserves zimr's pre-behavior. Existing tables
+    /// Default `.stretch_same` - equal share across all columns
+    /// - preserves zimr's pre-behavior. Existing tables
     /// that don't set this field keep their old layout.
     /// Mirrors imgui's `ImGuiTableFlags_Sizing*` family
     /// (imgui.h:2141-2144).
@@ -19002,7 +19002,7 @@ pub const TableOpts = struct {
     /// When true, draw 1px borders. Default true; set false for
     /// a cleaner data grid without lines. P8.2: this
     /// is now a MASTER flag that AND-gates the four granular
-    /// `borders_*` flags below — `borders = false` disables ALL
+    /// `borders_*` flags below - `borders = false` disables ALL
     /// border drawing regardless of the granular flags' values.
     /// For finer-grained control, leave `borders = true` (the
     /// default) and selectively disable individual `borders_*`
@@ -19010,25 +19010,25 @@ pub const TableOpts = struct {
     /// exactly as it did pre-P8.2.
     borders: bool = true,
 
-    /// P8.2: horizontal interior lines — the per-row separator
+    /// P8.2: horizontal interior lines - the per-row separator
     /// between data rows AND the line between the header row and
     /// the first data row. Gated by `borders`. Default true.
     /// ImGui equivalent: `ImGuiTableFlags_BordersInnerH`.
     borders_inner_h: bool = true,
 
-    /// P8.2: horizontal exterior lines — the top and bottom
+    /// P8.2: horizontal exterior lines - the top and bottom
     /// edges of the table's outer rect. Gated by `borders`.
     /// Default true.
     /// ImGui equivalent: `ImGuiTableFlags_BordersOuterH`.
     borders_outer_h: bool = true,
 
-    /// P8.2: vertical interior lines — the column dividers and
+    /// P8.2: vertical interior lines - the column dividers and
     /// the per-cell right edges in the header row. Gated by
     /// `borders`. Default true.
     /// ImGui equivalent: `ImGuiTableFlags_BordersInnerV`.
     borders_inner_v: bool = true,
 
-    /// P8.2: vertical exterior lines — the left and right edges
+    /// P8.2: vertical exterior lines - the left and right edges
     /// of the table's outer rect. Gated by `borders`. Default
     /// true.
     /// ImGui equivalent: `ImGuiTableFlags_BordersOuterV`.
@@ -19047,7 +19047,7 @@ pub const TableOpts = struct {
     ///
     /// Default false. Mirrors imgui's `ImGuiTableFlags_ScrollX`
     /// (imgui.h:2157). Like imgui's flag, this requires
-    /// `outer_width > 0` to be meaningful — when `outer_width`
+    /// `outer_width > 0` to be meaningful - when `outer_width`
     /// is 0 (size-to-content), there's nothing to scroll past.
     ///
     /// NOTE: this turn lands the flag, the clip
@@ -19064,7 +19064,7 @@ pub const TableOpts = struct {
     /// `ImGuiTableFlags_ScrollY` (imgui.h:2158).
     ///
     /// Pre-zimr enabled vertical scrolling implicitly
-    /// whenever `outer_height > 0`. That path is preserved —
+    /// whenever `outer_height > 0`. That path is preserved -
     /// existing callers don't need to set this flag. The flag
     /// is provided so new callers can express intent explicitly:
     /// "this table is meant to scroll vertically" reads better
@@ -19073,7 +19073,7 @@ pub const TableOpts = struct {
     scroll_y: bool = false,
 
     /// P8.3: when true, the LEFTMOST column's content
-    /// is flush against the table's outer-left edge — no
+    /// is flush against the table's outer-left edge - no
     /// `cell_padding_x` gap between the outer border and the
     /// first cell's content. Default false (legacy behaviour
     /// preserved: column 0 gets the same `cell_padding_x` left
@@ -19087,7 +19087,7 @@ pub const TableOpts = struct {
     no_pad_outer_x: bool = false,
 
     /// P8.3: when true, columns 1..N-1 (every column EXCEPT the
-    /// first) have no `cell_padding_x` gap on their left side —
+    /// first) have no `cell_padding_x` gap on their left side -
     /// content is flush against the column divider line on the
     /// left. Default false. Useful for tightly-packed grids
     /// where the column divider IS the visual break and the
@@ -19196,24 +19196,24 @@ pub const TreeNodeDrawLines = enum {
 /// ignored with TODO.
 pub const TreeNodeOpts = struct {
     // ---- Exclusive groups ----
-    /// When clicks toggle. See `TreeOpenTrigger`. ✓ MVP for
+    /// When clicks toggle. See `TreeOpenTrigger`. ok MVP for
     /// `.click_anywhere` + `.click_arrow`; `.double_click`
     /// accepted but treated as `.click_anywhere`.
     open_trigger: TreeOpenTrigger = .click_anywhere,
     /// Hit-box / highlight width policy. See `TreeNodeSpan`.
-    /// ✓ MVP for `.default` + `.avail_width`.
+    /// ok MVP for `.default` + `.avail_width`.
     span: TreeNodeSpan = .default,
     /// Connector-line drawing. See `TreeNodeDrawLines`. TODO
     /// Step 1.x - not wired in MVP.
     draw_lines: TreeNodeDrawLines = .none,
 
-    // ---- Independent bools ---- (✓ MVP unless noted) ----
+    // ---- Independent bools ---- (ok MVP unless noted) ----
     /// Draw the node as selected. Useful with MultiSelect.
-    /// Imgui: `Selected`. ✓ MVP.
+    /// Imgui: `Selected`. ok MVP.
     selected: bool = false,
     /// Draw a frame with background. Imgui's collapsing-header
     /// look (different widget in zimr but the flag is the same).
-    /// Imgui: `Framed`. ✓ MVP.
+    /// Imgui: `Framed`. ok MVP.
     framed: bool = false,
     /// Allow hit-test layering with subsequent overlapping
     /// widgets. TODO Step 1.x - zimr's hit-test stacking model
@@ -19231,19 +19231,19 @@ pub const TreeNodeOpts = struct {
     no_auto_open_on_log: bool = false,
     /// Initial open state for the node's first appearance.
     /// User clicks toggle from there. Imgui: `DefaultOpen`.
-    /// ✓ MVP.
+    /// ok MVP.
     default_open: bool = false,
     /// Leaf node - no arrow, no collapse. Calling code still
     /// pairs with `treePop` (returns true unconditionally so the
     /// caller's `if (treeNodeEx(...)) {... treePop(); }`
-    /// pattern stays balanced). Imgui: `Leaf`. ✓ MVP.
+    /// pattern stays balanced). Imgui: `Leaf`. ok MVP.
     leaf: bool = false,
     /// Render a bullet instead of the disclosure triangle.
-    /// Imgui: `Bullet`. ✓ MVP.
+    /// Imgui: `Bullet`. ok MVP.
     bullet: bool = false,
     /// Use frame_padding for vertical alignment (matches
     /// regular widget height - useful when other widgets sit
-    /// next to the tree node). Imgui: `FramePadding`. ✓ MVP.
+    /// next to the tree node). Imgui: `FramePadding`. ok MVP.
     frame_padding: bool = false,
     /// Left-arrow nav jumps back to parent node. TODO Step 6.x
     /// - zimr's keyboard nav is minimal today. Imgui:
@@ -19284,7 +19284,7 @@ pub const TreeNodeOpts = struct {
 // `imgui_widgets.cpp:8583-8810` (storage).
 // MVP coverage decisions:
 // - `?u64` for selection user-data (idiomatic Zig optional, not `-1` sentinel).
-// - SelectionBasicStorage WITHOUT the index→ID adapter - indexes ARE IDs.
+// - SelectionBasicStorage WITHOUT the index->ID adapter - indexes ARE IDs.
 //   Add adapter when a future reorderable-list demo proves it pays off.
 // - HashMap on UiContext keyed by scope id for per-scope persistent state
 //   (anchor, nav_id) - matches imgui's `g.MultiSelectStorage`.
@@ -19301,7 +19301,7 @@ pub const TreeNodeOpts = struct {
 /// `ImGuiSelectionRequest` payload (`imgui.h:3074-3090`).
 /// `applyRequests` on your storage iterates a list of these and
 /// updates state accordingly. See `src/notes/multiselect-tutorial.md`
-/// § 4 + § 6 for the canonical apply body.
+/// section  4 + section  6 for the canonical apply body.
 pub const SelectionRequest = union(enum) {
     /// Imgui: `ImGuiSelectionRequestType_SetAll`. If `selected ==
     /// true`, select every item from 0..items_count. If false,
@@ -19422,7 +19422,7 @@ pub const MultiSelectScope = struct {
 /// adapter later is non-breaking (identity == current behavior); see
 /// `src/notes/imgui-plan.md` deferred section.
 pub const SelectionBasicStorage = struct {
-    /// Map of selected ids → present. Absence == not selected.
+    /// Map of selected ids -> present. Absence == not selected.
     /// `void`-valued map = pure set semantics, no per-entry
     /// payload.
     map: std.AutoHashMapUnmanaged(u64, void) = .{},
@@ -19634,7 +19634,7 @@ pub const InputTextCallbackData = struct {
 pub const InputTextCallback = *const fn (data: *InputTextCallbackData) void;
 
 // ============================================================================
-// Input layer tests — dense per-frame key-state array
+// Input layer tests - dense per-frame key-state array
 // ============================================================================
 
 test "Q1: KeyCode.MAX is the count sentinel, every other variant indexes a slot" {
@@ -19685,7 +19685,7 @@ test "Q1: InputSnapshot.keys defaults to MAX-sized array of zero KeyStates" {
     try expectEqual(@as(u32, 0), s.keys[@backingInt(KeyCode.space)].down_duration_frames);
 }
 
-test "Q1: edge-event logic (was_down/is_down → pressed/released combinations)" {
+test "Q1: edge-event logic (was_down/is_down -> pressed/released combinations)" {
     // Simulate the four transitions the population loop computes.
     const cases = [_]struct { was: bool, is: bool, pressed: bool, released: bool, dur: u32 }{
         .{ .was = false, .is = false, .pressed = false, .released = false, .dur = 0 },
@@ -19708,7 +19708,7 @@ test "Q1: edge-event logic (was_down/is_down → pressed/released combinations)"
 }
 
 test "Q1: KeyCode.toRaylib is the inverse of fromRaylib for every surfaced key" {
-    // Round-trip every KeyCode (skipping MAX) through toRaylib →
+    // Round-trip every KeyCode (skipping MAX) through toRaylib ->
     // fromRaylib and confirm identity. Comptime iteration so a
     // missing field in either direction surfaces as a compile error.
     inline for (@typeInfo(KeyCode).@"enum".field_names) |kf_name| {
@@ -19822,7 +19822,7 @@ test "Q2: putState + getState round trip" {
     try expectEqual(@as(u8, 'X'), got.?.label);
 }
 
-test "Q2: type isolation — same id, different T, independent slots" {
+test "Q2: type isolation - same id, different T, independent slots" {
     var ctx: UiContext = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     const u: Ui = .{ .ctx = &ctx };
@@ -19875,7 +19875,7 @@ test "Q2: returned pointer from putState lets caller mutate in place" {
     };
     ptr.val = 42;
 
-    // getState retrieves the same slot — sees the mutation.
+    // getState retrieves the same slot - sees the mutation.
     const got: *TestState = u.getState(TestState, 0).?;
     try expectEqual(@as(i32, 42), got.val);
 }
@@ -19917,7 +19917,7 @@ test "Q2: persist flag stays sticky once set, across non-persist puts" {
     try expect(slot.has_persist);
 }
 
-test "Q2: ext_storage starts empty — zero allocation when unused" {
+test "Q2: ext_storage starts empty - zero allocation when unused" {
     var ctx: UiContext = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -19925,7 +19925,7 @@ test "Q2: ext_storage starts empty — zero allocation when unused" {
 }
 
 // ============================================================================
-// Widget primitive (B-path) tests — itemAdd / buttonBehavior
+// Widget primitive (B-path) tests - itemAdd / buttonBehavior
 // ============================================================================
 
 const TestEnv = struct {
@@ -19995,7 +19995,7 @@ test "Q3: buttonBehavior fires pressed on click-then-release inside rect" {
     const id: Id = 0x1234;
     const rect: Rectangle = .{ .x = 80, .y = 80, .width = 50, .height = 50 };
 
-    // Frame 1: mouse click inside → just_activated, not yet pressed.
+    // Frame 1: mouse click inside -> just_activated, not yet pressed.
     var snap: InputSnapshot = .{ .mouse_pos = .{ 100, 100 }, .mouse_left_down = true, .mouse_left_clicked = true };
     var u: Ui = env.beginFrameWith(snap);
     var w: WindowHandle = u.window("t", .{}) orelse unreachable;
@@ -20005,7 +20005,7 @@ test "Q3: buttonBehavior fires pressed on click-then-release inside rect" {
     try expect(r.held);
     w.close();
 
-    // Frame 2: release inside → pressed = true, just_deactivated.
+    // Frame 2: release inside -> pressed = true, just_deactivated.
     snap = .{ .mouse_pos = .{ 100, 100 }, .mouse_left_released = true };
     u = env.beginFrameWith(snap);
     w = u.window("t", .{}) orelse unreachable;
@@ -20028,7 +20028,7 @@ test "Q3: buttonBehavior does NOT fire pressed on release outside rect" {
     _ = u.buttonBehavior(rect, id, .{});
     w.close();
 
-    // Frame 2: drag-and-release OUTSIDE rect → no press.
+    // Frame 2: drag-and-release OUTSIDE rect -> no press.
     snap = .{ .mouse_pos = .{ 500, 500 }, .mouse_left_released = true };
     u = env.beginFrameWith(snap);
     w = u.window("t", .{}) orelse unreachable;
@@ -20121,7 +20121,7 @@ test "Q3: buttonBehavior on focused widget fires pressed on Enter (kbd nav)" {
     try expect(r.pressed);
 }
 
-test "Q3: extension-author pattern — itemSize + itemAdd + buttonBehavior compose" {
+test "Q3: extension-author pattern - itemSize + itemAdd + buttonBehavior compose" {
     // The cumulative shape: a knob-like custom widget built
     // entirely from the 3 primitives + drawing. Verifies the
     // primitives suffice for the documented extension pattern.
@@ -20149,7 +20149,7 @@ test "Q3: extension-author pattern — itemSize + itemAdd + buttonBehavior compo
 }
 
 // ============================================================================
-// Widget primitive (C-path) tests — beginItem / endItem
+// Widget primitive (C-path) tests - beginItem / endItem
 // ============================================================================
 
 test "Q3 C-path: beginItem returns ItemCtx with valid id+rect, then endItem advances cursor" {
@@ -20179,9 +20179,9 @@ test "Q3 C-path: beginItem reports hovered + held + pressed across frames" {
     // Frame 1: click on widget.
     const wopts: WindowOpts = .{ .initial_pos = .{ 0, 0 }, .initial_size = .{ 400, 400 } };
 
-    // Mouse at (100, 100) — comfortably inside the 200×200 widget
+    // Mouse at (100, 100) - comfortably inside the 200x200 widget
     // even after the desktop-default style bump (title_bar_height
-    // grew from 22 → 28, window_padding from 8 → 10).  The widget
+    // grew from 22 -> 28, window_padding from 8 -> 10).  The widget
     // starts at roughly (window_padding[0], title_bar_height +
     // window_padding[1]) = (10, 38) and extends to (210, 238); a
     // (100, 100) click is dead-center.  The previous (30, 30)
@@ -20217,12 +20217,12 @@ test "Q3 C-path: beginItem returns null when window is missing" {
     var env = TestEnv.init(std.testing.allocator);
     defer env.deinit();
     _ = env.beginFrameWith(.{});
-    // No window opened — current_window is null.
+    // No window opened - current_window is null.
     const u: Ui = .{ .ctx = &env.ctx };
     try expectEqual(@as(?Ui.ItemCtx, null), u.beginItem("orphan", .{ .size = .{ 10, 10 } }));
 }
 
-test "Q3 C-path: id is stable across frames (same label → same id)" {
+test "Q3 C-path: id is stable across frames (same label -> same id)" {
     var env = TestEnv.init(std.testing.allocator);
     defer env.deinit();
 
@@ -20358,7 +20358,7 @@ test "Q7: addArc points lie ON the circle (within ~1 px of true)" {
     }
 }
 
-test "Q7: addArcFilled emits triangle_filled cmds — one per segment" {
+test "Q7: addArcFilled emits triangle_filled cmds - one per segment" {
     var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const A: Allocator = arena.allocator();
@@ -20375,7 +20375,7 @@ test "Q7: addArcFilled emits triangle_filled cmds — one per segment" {
     }
 }
 
-test "Q7: addArcFilled full circle (a1 - a0 == 2π) covers all segments" {
+test "Q7: addArcFilled full circle (a1 - a0 == 2 pi) covers all segments" {
     var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const A: Allocator = arena.allocator();
@@ -20402,7 +20402,7 @@ test "Q7: addPolygon emits N-2 triangles for an N-gon" {
     const A: Allocator = arena.allocator();
     var dl: DrawList = .{};
     defer dl.deinit(A);
-    // Pentagon: 5 points → 3 triangles
+    // Pentagon: 5 points -> 3 triangles
     const pentagon = [_]Vec2{
         .{ 0, 0 },
         .{ 1, 0 },
@@ -20523,7 +20523,7 @@ test "Q5: empty styleOverride (no fields set) is a no-op" {
     try expectEqual(before.text, ctx.style.text);
 }
 
-test "Q5: restore is idempotent — calling twice doesn't corrupt" {
+test "Q5: restore is idempotent - calling twice doesn't corrupt" {
     var ctx: UiContext = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     const u: Ui = .{ .ctx = &ctx };
@@ -20534,7 +20534,7 @@ test "Q5: restore is idempotent — calling twice doesn't corrupt" {
     const g: StyleGuard = u.styleOverride(.{ .text = red });
     g.restore();
     try expectEqual(original, ctx.style.text);
-    // Second call writes the captured prior again — same value.
+    // Second call writes the captured prior again - same value.
     g.restore();
     try expectEqual(original, ctx.style.text);
 }
@@ -20552,7 +20552,7 @@ test "Q5: works with non-color fields too (Vec2 style fields)" {
     try expectEqual(before, ctx.style.frame_padding);
 }
 
-test "Q5: errdefer-safety — restore runs even when scope returns early" {
+test "Q5: errdefer-safety - restore runs even when scope returns early" {
     // Simulates the common error-path pattern: function takes a
     // styleOverride, may return an error early; defer-restore must
     // fire on either path. This test exercises the success path
@@ -20573,12 +20573,12 @@ test "Q5: errdefer-safety — restore runs even when scope returns early" {
     const red: Color = .{ .r = 255, .g = 0, .b = 0, .a = 255 };
     const inside: Color = Inner.run(u, red);
     try expectEqual(red, inside);
-    // After the inner scope returned, defer fired → style restored.
+    // After the inner scope returned, defer fired -> style restored.
     try expectEqual(original, ctx.style.text);
 }
 
 // ============================================================================
-// Canvas widget tests — lifecycle, drawlist, clip
+// Canvas widget tests - lifecycle, drawlist, clip
 // ============================================================================
 
 test "Q4: beginCanvas returns non-null inside a window" {
@@ -20663,7 +20663,7 @@ test "Q4: canvas.hovered() is true iff mouse is in rect" {
     defer env.deinit();
     const wopts: WindowOpts = .{ .initial_pos = .{ 50, 50 }, .initial_size = .{ 400, 400 } };
 
-    // Frame 1: mouse outside — hovered = false.
+    // Frame 1: mouse outside - hovered = false.
     var snap: InputSnapshot = .{ .mouse_pos = .{ 5, 5 } };
     var u: Ui = env.beginFrameWith(snap);
     var w: WindowHandle = u.window("host", wopts) orelse unreachable;
@@ -20672,7 +20672,7 @@ test "Q4: canvas.hovered() is true iff mouse is in rect" {
     u.endCanvas(c);
     w.close();
 
-    // Frame 2: mouse inside canvas rect — hovered = true.
+    // Frame 2: mouse inside canvas rect - hovered = true.
     // The canvas's screen rect is cursor-at-window-content-top
     // = ~(window.pos + padding), within (50, 50)..(450, 450).
     snap.mouse_pos = .{ 100, 100 };
@@ -20702,8 +20702,8 @@ test "Q4: canvas advances the layout cursor (sibling widget lands below)" {
 test "Q4c: toScreen is the inverse of localMouse (round-trip)" {
     // The big design invariant: if you call toScreen(localMouse())
     // you should get back the actual screen mouse position.
-    // Authoring-space coords → screen via toScreen, screen coords
-    // → authoring via localMouse, the loop must close.
+    // Authoring-space coords -> screen via toScreen, screen coords
+    // -> authoring via localMouse, the loop must close.
     var env = TestEnv.init(std.testing.allocator);
     defer env.deinit();
     const snap: InputSnapshot = .{ .mouse_pos = .{ 250, 175 } };
@@ -20749,13 +20749,13 @@ test "Q4c: canvas.hovered() is false when a sibling window covers the canvas" {
     env.ctx.hovered_window_id = 0xDEAD;
     try expect(!c.hovered());
 
-    // Restore to the canvas's parent — hover should re-engage.
+    // Restore to the canvas's parent - hover should re-engage.
     env.ctx.hovered_window_id = c.window.id;
     try expect(c.hovered());
 }
 
 // ============================================================================
-// Canvas transform-stack tests — push/pop, compose, inverse
+// Canvas transform-stack tests - push/pop, compose, inverse
 // ============================================================================
 
 test "Q4b: CanvasTransform identity round-trips through applyPoint" {
@@ -20790,7 +20790,7 @@ test "Q4b: CanvasTransform inverse is a true inverse (round-trip applyPoint)" {
     const p: Vec2 = .{ 7, 11 };
     const projected: Vec2 = t.applyLocal(p);
     const back: Vec2 = inv.applyLocal(projected);
-    // Float math — be lenient.
+    // Float math - be lenient.
     try expect(@abs(back[0] - p[0]) < 0.001);
     try expect(@abs(back[1] - p[1]) < 0.001);
 }
@@ -20868,9 +20868,9 @@ test "Q4b: nested pushTransform composes correctly" {
     c.pushTransform(.{ 10, 10 }, .{ 2, 2 });
     c.pushTransform(.{ 5, 5 }, .{ 1, 1 });
     const cur: CanvasTransform = c.currentTransform();
-    // Composed: parent={t=(10,10), s=(2,2)} ∘ child={t=(5,5), s=(1,1)}
-    // → t = child.t * parent.s + parent.t = (10+10, 10+10) = (20, 20)
-    // → s = parent.s * child.s = (2, 2)
+    // Composed: parent={t=(10,10), s=(2,2)} o child={t=(5,5), s=(1,1)}
+    // -> t = child.t * parent.s + parent.t = (10+10, 10+10) = (20, 20)
+    // -> s = parent.s * child.s = (2, 2)
     try expectEqual(@as(Vec2, .{ 20, 20 }), cur.translate);
     try expectEqual(@as(Vec2, .{ 2, 2 }), cur.scale);
     c.popTransform();
@@ -20891,7 +20891,7 @@ test "Q4b: endCanvas truncates transform stack (defensive against missing pops)"
     c.pushTransform(.{ 20, 20 }, .{ 1, 1 });
     // Caller forgot to pop.
     u.endCanvas(c);
-    // endCanvas truncated — stack is empty again.
+    // endCanvas truncated - stack is empty again.
     try expectEqual(@as(usize, 0), env.ctx.canvas_transforms.len);
 }
 
@@ -20910,7 +20910,7 @@ test "Q4b: currentTransform without push returns identity" {
 }
 
 // ============================================================================
-// InputMode tests — `InputTextOpts.input_mode` and the JS bridge mapping
+// InputMode tests - `InputTextOpts.input_mode` and the JS bridge mapping
 // ============================================================================
 
 test "InputMode: toAttr returns the HTML inputmode value for each variant" {
@@ -20926,7 +20926,7 @@ test "InputMode: toAttr returns the HTML inputmode value for each variant" {
 test "InputMode: every enum variant maps to a non-empty attr string" {
     // Exhaustive guard: if a new variant is added to InputMode
     // without a `toAttr` case, the switch in `toAttr` fails to
-    // compile.  This test reinforces that — every variant goes
+    // compile.  This test reinforces that - every variant goes
     // through `toAttr` with a non-empty result.
     inline for (@typeInfo(InputMode).@"enum".field_values) |f_value| {
         const v: InputMode = @fromBackingInt(@intCast(f_value));
@@ -20976,7 +20976,7 @@ inline fn isScientificChar(cp: u32) bool {
 ///
 /// Multi-flag semantics: when two filters allow disjoint sets
 /// (e.g. `chars_decimal` + `chars_hexadecimal`), the intersection
-/// is enforced — a character has to pass each set independently.
+/// is enforced - a character has to pass each set independently.
 /// In practice callers typically set only one of the accept-list
 /// filters at a time; `chars_no_blank` and `chars_uppercase`
 /// compose orthogonally with anything.
@@ -21058,7 +21058,7 @@ test "P9.1: chars_no_blank drops space and tab only" {
     const opts: InputTextOpts = .{ .chars_no_blank = true };
     try expectEqual(@as(u32, 0), applyCharsFlagFilters(opts, ' '));
     try expectEqual(@as(u32, 0), applyCharsFlagFilters(opts, '\t'));
-    // Newline passes — multiline owns newline policy.
+    // Newline passes - multiline owns newline policy.
     try expectEqual(@as(u32, '\n'), applyCharsFlagFilters(opts, '\n'));
     // Visible characters pass through.
     try expectEqual(@as(u32, 'a'), applyCharsFlagFilters(opts, 'a'));
@@ -21113,7 +21113,7 @@ inline fn runCharFilter(
 }
 
 test "P9.1: runCharFilter applies flag filters before user callback" {
-    // The flag-filter rewrites 'a' → 'A' (uppercase) before the
+    // The flag-filter rewrites 'a' -> 'A' (uppercase) before the
     // user callback sees it.  The callback then converts every 'A'
     // it sees to 'Z'.  Final: 'a' arrives as 'Z'.  Verifies the
     // ordering documented in runCharFilter's doc comment.
@@ -21129,7 +21129,7 @@ test "P9.1: runCharFilter applies flag filters before user callback" {
     const out: u32 = runCharFilter(opts, &buf, &buf_len, &cursor, 'a');
     try expectEqual(@as(u32, 'Z'), out);
 
-    // A flag-filter rejection short-circuits — the callback never
+    // A flag-filter rejection short-circuits - the callback never
     // runs on a dropped char.  chars_decimal drops 'x' before the
     // callback (which would otherwise rewrite it to 'Z') could see.
     const opts2: InputTextOpts = .{ .chars_decimal = true, .char_filter = cb };
@@ -21175,7 +21175,7 @@ fn pushTypedChar(ctx: *UiContext, cp: u32) void {
 /// When `opts.password_mask` is false: returns `buf` unchanged
 /// (zero-copy passthrough).  When true: fills `mask_buf` with
 /// `*` characters and returns the relevant prefix.  The
-/// mask emits ONE asterisk per buffer byte — fine for ASCII;
+/// mask emits ONE asterisk per buffer byte - fine for ASCII;
 /// when multi-byte UTF-8 lands, this becomes "one asterisk per
 /// codepoint" instead.  Caller owns `mask_buf` and sizes it >=
 /// expected max buffer length; truncation is silent (the
@@ -21198,12 +21198,12 @@ test "P9.2: passwordMaskText off returns buf unchanged; on returns asterisks" {
     var mask_buf: [16]u8 = undefined;
     const buf: []const u8 = "secret";
 
-    // off → zero-copy passthrough; same pointer + length.
+    // off -> zero-copy passthrough; same pointer + length.
     const off_opts: InputTextOpts = .{};
     const out_off: []const u8 = passwordMaskText(off_opts, buf, &mask_buf);
     try expectEqualStrings("secret", out_off);
 
-    // on → length matches, contents are all asterisks.
+    // on -> length matches, contents are all asterisks.
     const on_opts: InputTextOpts = .{ .password_mask = true };
     const out_on: []const u8 = passwordMaskText(on_opts, buf, &mask_buf);
     try expectEqualStrings("******", out_on);
@@ -21225,7 +21225,7 @@ test "P9.2: P9.2 flags default to false on InputTextOpts" {
 /// Pack the 5 `chars_*` flag fields from `opts` into a bitmask
 /// matching the constants in `web.zig` so the JS-side 'input'
 /// event listener can apply the same accept/reject logic the
-/// host-path `applyCharsFlagFilters` uses.  See turn 440c — the
+/// host-path `applyCharsFlagFilters` uses.  See turn 440c - the
 /// host-path filter was a no-op on web because the DOM input is
 /// the editor and wasm only polls the final value.
 fn packCharFilterFlags(opts: InputTextOpts) u32 {
@@ -21385,7 +21385,7 @@ test "P9.2 multiline: read_only blocks newline insertion" {
 }
 
 // ============================================================================
-// P9.3 — InputText callback contracts (turn 442)
+// P9.3 - InputText callback contracts (turn 442)
 // ============================================================================
 // All four callbacks (`char_filter`, `edit`, `completion`,
 // `history`) already exist on `InputTextOpts` and are wired
@@ -21512,7 +21512,7 @@ test "P9.3: completion callback fires on Tab when set" {
 }
 
 test "P9.3: completion callback does NOT fire when allow_tab_input is set" {
-    // allow_tab_input takes precedence — Tab inserts \t into the
+    // allow_tab_input takes precedence - Tab inserts \t into the
     // buffer instead of dispatching to the completion callback.
     // This is the imgui contract too.
     var ctx = UiContext.init(std.testing.allocator);
@@ -21593,7 +21593,7 @@ test "P9.3: char_filter callback can drop chars via event_char=0" {
     defer w.draw_list.deinit(ctx.frame_arena.allocator());
     const id: Id = setupInputTextForTest(&ctx, &w, "field");
     ctx.active_id = id;
-    // Type "a1b2c3" — the filter drops digits.
+    // Type "a1b2c3" - the filter drops digits.
     pushTypedChar(&ctx, 'a');
     pushTypedChar(&ctx, '1');
     pushTypedChar(&ctx, 'b');
@@ -21644,12 +21644,12 @@ test "P9.3: read_only blocks history callback (no edit happens)" {
 }
 
 // ============================================================================
-// P10.1 — ColorEdit display format (turn 443)
+// P10.1 - ColorEdit display format (turn 443)
 // ============================================================================
 // The format helpers (`colorChannelToInt255`,
 // `formatColorRgbHex`) are pure functions, so unit-testable in
 // isolation without spinning up a UI context.  The widget impl
-// in `colorEditNFloat` just composes these helpers — once they're
+// in `colorEditNFloat` just composes these helpers - once they're
 // correct, the rendering is correct (modulo layout, which is
 // covered by the existing widget integration tests).
 
@@ -21659,7 +21659,7 @@ test "P10.1: ColorEditOpts.display_format defaults to .float" {
 }
 
 test "P10.1: colorChannelToInt255 rounds half-away-from-zero" {
-    // 0.0 → 0, 1.0 → 255, 0.5 → 128 (round-half-up at the integer
+    // 0.0 -> 0, 1.0 -> 255, 0.5 -> 128 (round-half-up at the integer
     // boundary).  Out-of-range clamps.
     try expectEqual(@as(u8, 0), colorChannelToInt255(0.0));
     try expectEqual(@as(u8, 255), colorChannelToInt255(1.0));
@@ -21725,7 +21725,7 @@ test "P10.1: formatColorRgbHex returns empty slice for too-small buf" {
 
 test "P10.1: all three display formats are distinct enum variants" {
     // Sanity: enum has three variants, and `.float` is the default.
-    // This is the canary test — if a future refactor adds an HSV
+    // This is the canary test - if a future refactor adds an HSV
     // variant and accidentally reorders the existing ones,
     // existing `.float` users would silently switch behavior.
     try expect(ColorEditDisplayFormat.float != ColorEditDisplayFormat.int_0_255);
@@ -21875,7 +21875,7 @@ test "P9.2: escape_clears zeros buffer + cursor + defocuses" {
     try expectEqual(@as(Id, 0), ctx.active_id);
 }
 
-test "P9.2: enter_returns_true off → returns true on any buffer change" {
+test "P9.2: enter_returns_true off -> returns true on any buffer change" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var w = Window{ .id = 1, .pos = .{ 0, 0 }, .size = .{ 400, 300 }, .draw_list = .{} };
@@ -21893,7 +21893,7 @@ test "P9.2: enter_returns_true off → returns true on any buffer change" {
     try expectEqualStrings("a", buf[0..len]);
 }
 
-test "P9.2: enter_returns_true on → typing doesn't return true; Enter does" {
+test "P9.2: enter_returns_true on -> typing doesn't return true; Enter does" {
     // Frame 1: type a char.  With enter_returns_true, returns false
     // even though the buffer changed.
     // Frame 2: press Enter.  Returns true.
@@ -21925,7 +21925,7 @@ test "P9.2: enter_returns_true on → typing doesn't return true; Enter does" {
 }
 
 test "P9.2: enter_returns_true + escape_clears: Esc cancels (returns false, buf empty)" {
-    // On host with `enter_returns_true`, Esc is NOT a commit — the
+    // On host with `enter_returns_true`, Esc is NOT a commit - the
     // function returns false even though the widget defocused.
     // `escape_clears` zeros the buffer so the caller can detect
     // the cancel via len if they care.
@@ -21956,7 +21956,7 @@ test "P9.2: enter_returns_true + escape_clears: Esc cancels (returns false, buf 
 }
 
 // ============================================================================
-// Animation primitive tests — tween + spring (label-keyed, dt-driven)
+// Animation primitive tests - tween + spring (label-keyed, dt-driven)
 // ============================================================================
 
 test "animated: linear tween at midpoint returns midpoint value" {
@@ -22037,7 +22037,7 @@ test "animated: target change restarts the tween" {
     ctx.input.delta_time = 2;
     _ = u.animated("a", .{ .from = 0, .to = 10, .duration = 1, .easing = .linear });
 
-    // Caller flips `to` — tween should restart from `from`.
+    // Caller flips `to` - tween should restart from `from`.
     ctx.input.delta_time = 0;
     const v: f32 = u.animated("a", .{ .from = 0, .to = 20, .duration = 1, .easing = .linear });
     try expectApproxEqAbs(@as(f32, 0), v, 0.001);
@@ -22088,7 +22088,7 @@ test "spring: settles exactly on target after enough time" {
     ctx.input.delta_time = 0;
     _ = u.spring("s", .{ .target = 50, .initial = 0 });
 
-    // Step forward a long time — should settle to exact target.
+    // Step forward a long time - should settle to exact target.
     var step: u32 = 0;
     while (step < 600) : (step += 1) {
         ctx.input.delta_time = 1.0 / 60.0;
@@ -22114,7 +22114,7 @@ test "spring: mid-flight target change is followed smoothly" {
     }
     const mid: f32 = u.spring("s", .{ .target = 100 });
 
-    // Flip target — spring should now chase the new target.
+    // Flip target - spring should now chase the new target.
     step = 0;
     while (step < 600) : (step += 1) {
         ctx.input.delta_time = 1.0 / 60.0;
@@ -22159,7 +22159,7 @@ test "animated: zero duration snaps to to-value immediately" {
 }
 
 // ============================================================================
-// miniPlot tests — throwaway smoke that the pillars compose
+// miniPlot tests - throwaway smoke that the pillars compose
 // ============================================================================
 
 test "miniPlot: returns false on empty xs/ys (defensive early-out)" {
@@ -22214,7 +22214,7 @@ test "miniPlot: R-key press clears fitted, returns true that frame" {
     const ys: []const f32 = &.{ 0, 10, 20 };
     const rect: Rectangle = .{ .x = 0, .y = 0, .width = 200, .height = 100 };
 
-    // Frame 1: seed.  No R-press → returns false, slot fitted.
+    // Frame 1: seed.  No R-press -> returns false, slot fitted.
     {
         const u: Ui = env.beginFrameWith(.{});
         const w: WindowHandle = u.window("t", .{}) orelse unreachable;
@@ -22242,7 +22242,7 @@ test "miniPlot: R-key press clears fitted, returns true that frame" {
 }
 
 // ============================================================================
-// Persistence integration tests — opt-in flag + auto-serialize
+// Persistence integration tests - opt-in flag + auto-serialize
 // ============================================================================
 
 /// The current schema version. Bump on breaking changes.
@@ -22413,7 +22413,7 @@ pub fn apply(
         ctx.pending_dock_tree = out_nodes;
     }
 
-    // P4.1: apply persisted style. Optional — null means the
+    // P4.1: apply persisted style. Optional - null means the
     // saved payload was from an unthemed app and the in-memory
     // default stays untouched. `applyTo` preserves
     // `ctx.style.font` (caller-owned pointer; the.zon save
@@ -22426,14 +22426,14 @@ pub fn apply(
     // `ext_state` entry by type_name against live ext_storage
     // slots (which captured their own type_name on first
     // persist-true lookup). Unknown type_names are silently
-    // discarded — forward-compat for "saved payload mentions a
+    // discarded - forward-compat for "saved payload mentions a
     // type the current binary doesn't compile in any more."
     //
 
     // Each payload is zon text that the slot's `deserialize_fn`
     // knows how to parse. A successful parse merges entries by
     // id (incoming wins). A parse failure for one type doesn't
-    // abort the whole apply — the next entry still runs.
+    // abort the whole apply - the next entry still runs.
     //
 
     // Ordering caveat: `apply` may run before the app has touched
@@ -22453,7 +22453,7 @@ pub fn apply(
             }
             const de_fn: DeserializeExtFn = slot.deserialize_fn orelse break;
             // Need a sentinel-terminated copy of the payload for
-            // std.zon.parse — the parsed slice is borrowed but
+            // std.zon.parse - the parsed slice is borrowed but
             // not sentinel-terminated.
             const buf: [:0]u8 = gpa.allocSentinel(u8, e.payload.len, 0) catch break;
             defer gpa.free(buf);
@@ -22464,7 +22464,7 @@ pub fn apply(
     }
 }
 
-test "Q8: plain struct round-trips through serialize → apply" {
+test "Q8: plain struct round-trips through serialize -> apply" {
     const Counter = struct { n: i32 = 0, label: [16]u8 = @splat(0) };
     const id: Id = hashStr(0, "counter1");
 
@@ -22580,7 +22580,7 @@ test "Q8: putState without persist=true is NOT serialized" {
     defer std.testing.allocator.free(text);
 
     // The Ephemeral type's @typeName shouldn't appear in the
-    // serialized text — the type was never marked persist.
+    // serialized text - the type was never marked persist.
     const tn: []const u8 = @typeName(Ephemeral);
     try expect(std.mem.indexOf(u8, text, tn) == null);
 }
@@ -22626,7 +22626,7 @@ test "Q8: unknown type_name silently discarded at apply (forward-compat)" {
         _r.value_ptr.* = .{ .v = 5 };
     }
 
-    // Payload with an unknown type — should be parsed and ignored.
+    // Payload with an unknown type - should be parsed and ignored.
     const text: [:0]const u8 =
         \\.{
         \\    .version = 6,
@@ -22753,7 +22753,7 @@ test "Q8: apply with no ext_state in payload doesn't touch live state" {
 }
 
 test "Q8: version mismatch discards ext_state along with rest of payload" {
-    // Existing policy: version mismatch → apply early-returns
+    // Existing policy: version mismatch -> apply early-returns
     // without applying anything. Confirm ext_state follows that
     // policy (not separately processed).
     const T = struct { v: i32 = 0 };
@@ -22770,7 +22770,7 @@ test "Q8: version mismatch discards ext_state along with rest of payload" {
     defer std.testing.allocator.free(text);
 
     // Stomp version on the wire to a future value. Use a textual
-    // replace — find "version = N" and bump.
+    // replace - find "version = N" and bump.
     var mut: []u8 = try std.testing.allocator.dupe(u8, text);
     defer std.testing.allocator.free(mut);
     const version_str: []u8 = allocPrint(
@@ -22806,11 +22806,11 @@ test "Q8: version mismatch discards ext_state along with rest of payload" {
     try apply(std.testing.allocator, &ctx_b, mut_z);
 
     // Live state untouched if version sizes matched and replaced.
-    // (If the digit lengths differ the test is a no-op — that's
+    // (If the digit lengths differ the test is a no-op - that's
     // fine, it just doesn't exercise the version mismatch path.)
     const still: *T = u_b.getState(T, id) orelse unreachable;
     // Should be 1 (untouched) if version-bump happened, OR 50 if
-    // not — but we'll accept either; the goal is "didn't crash."
+    // not - but we'll accept either; the goal is "didn't crash."
     try expect(still.v == 1 or still.v == 50);
 }
 
@@ -23053,7 +23053,7 @@ fn openPopupScope(ctx: *UiContext, str_id: []const u8) bool {
 //      if `nav_id == id` - gives the user visible feedback for the
 //      currently-focused widget.
 // `advanceNav` runs in beginFrame. Walks the previous frame's
-// `frame_nav_items` to find `nav_id`, advances by ±1 with wrap-around,
+// `frame_nav_items` to find `nav_id`, advances by +/-1 with wrap-around,
 // and writes the new id back to `nav_id`. If the current `nav_id`
 // isn't in the list (e.g. focused widget was removed by user code),
 // focuses the first item.
@@ -23104,7 +23104,7 @@ fn dismissPopupsOnClickOutside(ctx: *UiContext) void {
         const id: Id = entry.key_ptr.*;
         const state: PopupState = entry.value_ptr.*;
         // A click on the open menu's OWN bar button is its toggle (handled in
-        // openMenu), not an outside click — don't dismiss it here.
+        // openMenu), not an outside click - don't dismiss it here.
         if (ctx.bar_open_menu) |open_id| {
             if (open_id == id and pointInRect(mp, ctx.bar_open_menu_btn)) {
                 continue;
@@ -23302,13 +23302,13 @@ fn openTabItem(
     // ---- Selection state, hover, click handling ---------------------
     //
 
-    // `is_active` captures the selection state AS OF NOW — before this
+    // `is_active` captures the selection state AS OF NOW - before this
     // frame's click handler runs. If the user is tapping a different
     // tab this frame, that click below mutates `state.selected_id` to
     // the new tab, but `is_active` for the NEW tab stays false until
     // next frame. Symptom: a freshly-tapped tab paints with the
     // `tab_hovered` press-feedback color (because the bg priority
-    // picks `hovered` first — see below), and beginTabItem returns
+    // picks `hovered` first - see below), and beginTabItem returns
     // false for the new tab so its content branch waits one frame.
     //
 
@@ -23316,11 +23316,11 @@ fn openTabItem(
     // gives immediate feedback via the hover-priority paint, so we
     // accept the small discrepancy. imgui resolves this via a
     // deferred TabBarLayout pass + a three-state selection field
-    // (NextSelectedTabId → SelectedTabId → VisibleTabId), promoted
+    // (NextSelectedTabId -> SelectedTabId -> VisibleTabId), promoted
     // before any tab renders. Adopting that pattern would mean
     // rendering ALL tabs from a snapshot at endTabBar instead of
     // inline at beginTabItem; significant refactor, not blocking.
-    // See `src/notes/zimr-vs-imgui-divergence-audit.md` §1.2.
+    // See `src/notes/zimr-vs-imgui-divergence-audit.md` section 1.2.
     const is_active: bool = state.selected_id == id;
     const hovered: bool = itemHoverable(ctx, button_rect);
     if (hovered) {
@@ -23351,15 +23351,15 @@ fn openTabItem(
     // (`imgui_widgets.cpp:10881`):
     //
 
-    //     hovered → tab_hovered (press-feedback, brightest)
-    //     is_active → tab_active (selected, persistent highlight)
-    //     otherwise → tab (idle)
+    //     hovered -> tab_hovered (press-feedback, brightest)
+    //     is_active -> tab_active (selected, persistent highlight)
+    //     otherwise -> tab (idle)
     //
 
     // The crucial part is "hover wins over active": touching the
     // active tab swaps its color to tab_hovered for as long as the
     // finger stays on it. This gives an immediate "I pressed it"
-    // affordance — the tap point flashes brighter — and matches the
+    // affordance - the tap point flashes brighter - and matches the
     // press-then-release feel users expect from buttons in general.
     //
 
@@ -23368,7 +23368,7 @@ fn openTabItem(
     // user was touching it or not. Visible symptom: in the phone
     // demo, the active tab appeared "stuck" at one color and the
     // tap point had no feedback. See
-    // `src/notes/zimr-vs-imgui-divergence-audit.md` §1.1.
+    // `src/notes/zimr-vs-imgui-divergence-audit.md` section 1.1.
     const bg_col: Color = if (hovered)
         ctx.style.tab_hovered
     else if (is_active)
@@ -23383,7 +23383,7 @@ fn openTabItem(
     //     openTabBar) gets hidden under the active tab, making it
     //     visually merge with the content area below.
     //   - Inactive tabs stop 1px short, so the separator remains
-    //     visible at their bottom edge — they stay "on the bar."
+    //     visible at their bottom edge - they stay "on the bar."
     //
 
     // Hit-testing (the `hovered` check above) uses the FULL bar
@@ -23592,7 +23592,7 @@ fn openListBox(
 // text-entry numeric inputs (inputFloat / inputInt)
 // ============================================================================
 // Strategy: render a frame_bg box with the current value formatted
-// via opts.fmt. On click → activate; user types into a per-widget
+// via opts.fmt. On click -> activate; user types into a per-widget
 // edit buffer; on Enter (or focus-loss), parse the buffer, commit
 // if valid, otherwise revert. Each widget owns a small fixed-size
 // scratch buffer keyed by its id in `ctx.input_text_state`.
@@ -23719,10 +23719,10 @@ fn inputArray(
 ///         player_name: z.ui.BoundedString(32) =.{},
 ///     } =.{},
 ///     //...
-///     u.inspect("Settings", &state); // player_name → text field
+///     u.inspect("Settings", &state); // player_name -> text field
 ///
 /// Why a wrapping struct instead of `[N:0]u8`? zimr's `inputText`
-/// takes a `(buf: []u8, len: *usize)` pair — the inspector can wire
+/// takes a `(buf: []u8, len: *usize)` pair - the inspector can wire
 /// directly to those without rescanning the buffer for a sentinel
 /// every frame. And the public type is a clearer marker to a future
 /// reader than a sentinel byte.
@@ -23738,7 +23738,7 @@ pub fn BoundedString(comptime N: usize) type {
         pub const __is_bounded_string: usize = N;
 
         /// Borrow the populated bytes as a UTF-8 slice. Caller must
-        /// not mutate through this slice — write via `set()`.
+        /// not mutate through this slice - write via `set()`.
         pub fn asSlice(self: *const Self) []const u8 {
             return self.buf[0..self.len];
         }
@@ -23761,15 +23761,15 @@ pub fn BoundedString(comptime N: usize) type {
 /// display-only.
 ///
 /// The matrix mirrors `std.mem.zeroes`:
-///   - int/float/bool/void/enum/optional → yes (the obvious cases)
-///   - array/vector → yes if the element type is zero-init-able
-///   - struct → yes if every field is zero-init-able (recursive)
-///   - pointer.slice/.c → yes (empty slice / null)
-///   - pointer.one/.many → yes ONLY if allowzero (Style.font is the
+///   - int/float/bool/void/enum/optional -> yes (the obvious cases)
+///   - array/vector -> yes if the element type is zero-init-able
+///   - struct -> yes if every field is zero-init-able (recursive)
+///   - pointer.slice/.c -> yes (empty slice / null)
+///   - pointer.one/.many -> yes ONLY if allowzero (Style.font is the
 ///     real-world counterexample: ?*const Font won't zero-init)
-///   - union → no (std.mem.zeroes is @compileError for non-extern
+///   - union -> no (std.mem.zeroes is @compileError for non-extern
 ///     unions; we don't bother detecting the extern-layout exception)
-///   - anything else → no
+///   - anything else -> no
 fn canZeroInit(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .int, .float, .bool, .void, .@"enum" => true,
@@ -23894,7 +23894,7 @@ fn editEnumField(
 }
 
 /// edit a `Color` (the raylib u8 RGBA struct) via a
-/// `colorEdit` widget. Internally converts u8 → [4]f32 → u8 around
+/// `colorEdit` widget. Internally converts u8 -> [4]f32 -> u8 around
 /// the call so the widget sees floats but the caller's struct stays
 /// in u8 form.
 fn editColorField(
@@ -23946,11 +23946,11 @@ fn editVector2Field(
     return x_changed or y_changed;
 }
 
-/// — edit a `BoundedString(N)` via the existing `inputText`
+/// - edit a `BoundedString(N)` via the existing `inputText`
 /// widget. Trusts the wrapping type's `__is_bounded_string` marker:
 /// callers reach here only via the dispatcher's struct branch.
 /// `inputText` writes through `field_ptr.buf` + `field_ptr.len`
-/// directly — no copying, no rescan.
+/// directly - no copying, no rescan.
 fn editBoundedStringField(
     ctx: *UiContext,
     label: []const u8,
@@ -23969,7 +23969,7 @@ fn editArrayField(
     field_opts: anytype,
 ) bool {
     const ui: Ui = .{ .ctx = ctx };
-    // Special-case: [3]f32 / [4]f32 → colorEdit (when opts.is_color
+    // Special-case: [3]f32 / [4]f32 -> colorEdit (when opts.is_color
     // is true OR the field name contains "color").
     const is_color_explicit: bool = comptime blk: {
         if (@hasField(@TypeOf(field_opts), "is_color")) {
@@ -24023,14 +24023,14 @@ fn editFieldDispatch(
             // special-case `Color` and `Vec2` to widgets
             // that match their semantics, instead of recursing into a
             // tree-of-component-fields. Order matters here - these
-            // checks happen BEFORE the generic struct → treeNode path.
+            // checks happen BEFORE the generic struct -> treeNode path.
             if (FieldT == Color) {
                 return editColorField(ctx, label, field_ptr);
             }
             if (FieldT == Vec2) {
                 return editVector2Field(ctx, label, field_ptr);
             }
-            // P1.3: BoundedString(N) — inline-buffered editable string.
+            // P1.3: BoundedString(N) - inline-buffered editable string.
             // Detected by the `__is_bounded_string` marker decl set by
             // the BoundedString generic. Routes to `inputText` over the
             // wrapped (buf, len) pair.
@@ -24048,7 +24048,7 @@ fn editFieldDispatch(
         },
         .array => |arr| return editArrayField(ctx, label, FieldT, arr, field_ptr, field_opts),
         .pointer => |p| {
-            // []const u8 → display only (read-only string view).
+            // []const u8 -> display only (read-only string view).
             const is_const_byte_slice: bool =
                 p.size == .slice and p.child == u8 and p.attrs.@"const";
             if (is_const_byte_slice) {
@@ -24089,7 +24089,7 @@ fn editFieldDispatch(
                 // Wrapped type can't be zero-init'd. Show the toggle
                 // state read-only; recurse into the value when set so
                 // the user can still edit individual sub-fields. No
-                // ability to toggle null → set from the inspector.
+                // ability to toggle null -> set from the inspector.
                 if (field_ptr.*) |*inner| {
                     ui.text("{s}: <set>", .{label});
                     ui.indent();
@@ -24696,7 +24696,7 @@ fn detachAndStartDrag(ctx: *UiContext, window_id: Id) void {
     // The user is still holding the mouse. Claim the title-bar drag id NOW so the
     // continue-drag (keyed on `active_id == drag_id` + mouse-held) picks up
     // seamlessly. The press handler CANNOT re-claim it: it only fires on a FRESH
-    // click (`mc`), and the button is already held — that mismatch was why a
+    // click (`mc`), and the button is already held - that mismatch was why a
     // detach-then-redock drag silently dropped and never docked. Anchor at the
     // cursor (w.pos was set above so the title bar sits under the cursor).
     const drag_id: Id = widgetId(ctx, w, "##drag_title");
@@ -24751,24 +24751,24 @@ fn undockSingleWindow(ctx: *UiContext, window_id: Id) void {
 /// zone containing the mouse gets a brighter fill. No actual
 /// docking logic here - that's d.iv.
 /// Zone layout per leaf (cross arrangement):
-///     ┌─────────────────────────────┐
-///     │ ┌──┐ │
-///     │ │T │ │
-///     │ └──┘ │
-///     │ ┌──┐┌────┐┌──┐ │
-///     │ │L ││ C ││R │ │
-///     │ └──┘└────┘└──┘ │
-///     │ ┌──┐ │
-///     │ │B │ │
-///     │ └──┘ │
-///     └─────────────────────────────┘
+///     +-----------------------------+
+///     | +--+ |
+///     | |T | |
+///     | +--+ |
+///     | +--++----++--+ |
+///     | |L || C ||R | |
+///     | +--++----++--+ |
+///     | +--+ |
+///     | |B | |
+///     | +--+ |
+///     +-----------------------------+
 /// `ZONE_SIZE_PX` controls the side length of the small edge zones
 /// (T/R/B/L); the center zone is slightly larger so it's an
 /// obvious "drop into tabs" target.
 ///.iv: the five drop-zone kinds. Maps to a
 /// `DockRequest` variant when a release hits a zone:
-///   .center → dock_as_tab (merge into target's tab list)
-///   .top/.right/.bottom/.left → dock_as_split with matching Dir
+///   .center -> dock_as_tab (merge into target's tab list)
+///   .top/.right/.bottom/.left -> dock_as_split with matching Dir
 const DockTargetKind = enum { center, top, right, bottom, left };
 
 /// Result of `hitTestDockTargets`. Returned by-value (one of
@@ -24893,7 +24893,7 @@ fn dockZoneScores(zones: [5]Rectangle, mp: Vec2) [5]f32 {
     };
 }
 
-/// The rect the dragged window will occupy if dropped on `kind` over this leaf —
+/// The rect the dragged window will occupy if dropped on `kind` over this leaf -
 /// drawn as the translucent landing preview.
 fn dockLandingRect(node: *const DockNode, kind: DockTargetKind) Rectangle {
     const x: f32 = node.pos[0];
@@ -24960,7 +24960,7 @@ fn hitTestDockTargetsInSubtree(
         }
     }
     if (best_score <= 0) {
-        return null; // not pulled by any square → drop floats, doesn't dock
+        return null; // not pulled by any square -> drop floats, doesn't dock
     }
 
     const kinds = [_]DockTargetKind{ .center, .top, .right, .bottom, .left };
@@ -25020,7 +25020,7 @@ fn renderDockTargetOverlay(ctx: *UiContext, root_id: Id) void {
         }
     }
 
-    // Landing preview ONLY when the cursor is on a square — dropping off the cross
+    // Landing preview ONLY when the cursor is on a square - dropping off the cross
     // leaves the window floating, so we don't preview a dock there.
     if (best_score > 0) {
         const preview_kinds = [_]DockTargetKind{ .center, .top, .right, .bottom, .left };
@@ -25041,7 +25041,7 @@ fn renderDockTargetOverlay(ctx: *UiContext, root_id: Id) void {
         // zones with score 0 stay faintly visible (BASE_ALPHA)
         // so the cross silhouette is always readable. Zones the
         // cursor is pulling toward boost their alpha proportional
-        // to score² - quadratic to make the snap feel decisive
+        // to score^2 - quadratic to make the snap feel decisive
         // without losing the "I can see the runners-up" feedback.
         const BASE_ALPHA: f32 = 80.0;
         const PEAK_ALPHA: f32 = 230.0;
@@ -25128,7 +25128,7 @@ fn renderDockLeafTabBars(ctx: *UiContext, root_id: Id) void {
     // when the leaf doesn't have `no_close_button` set. Sized
     // proportional to the tab bar height so it scales with
     // `style.font_size`. Per-tab; pad the label so text doesn't
-    // overlap the ×.
+    // overlap the x.
     const has_close: bool = !node.flags.no_close_button;
     const close_size: f32 = @min(tab_h * 0.55, ctx.style.font_size + 4);
     const close_pad: f32 = (tab_h - close_size) * 0.5;
@@ -25144,12 +25144,12 @@ fn renderDockLeafTabBars(ctx: *UiContext, root_id: Id) void {
     // Strip-aware drag classification.
     // While the user owns a `tab_drag_id`:
     //   - Mouse Y inside the strip's vertical range (with a
-    //     small ±4 px slack) → REORDER mode. Walk to the tab
+    //     small +/-4 px slack) -> REORDER mode. Walk to the tab
     //     whose horizontal slot the cursor is over; if it's
     //     different from the dragged tab's current index,
     //     queue a reorder.
     //   - Mouse Y outside the strip by more than
-    //     DETACH_Y_THRESHOLD → DETACH mode. The window tears
+    //     DETACH_Y_THRESHOLD -> DETACH mode. The window tears
     //     out into a floating drag (5.5j turn-332 flow).
     //   - Between strip edge and DETACH_Y_THRESHOLD: dead
     //     zone, no action. Lets the user hover ambiguously
@@ -25218,7 +25218,7 @@ fn renderDockLeafTabBars(ctx: *UiContext, root_id: Id) void {
 
         // Label. The close button occupies the rightmost
         // `close_size + close_pad` of the tab; if a label is
-        // long enough to bleed under the × it'll overlap
+        // long enough to bleed under the x it'll overlap
         // visually but the close button still gets the click
         // (its hit-test is earlier in this loop).
         const label_color: Color = if (is_active)
@@ -25234,7 +25234,7 @@ fn renderDockLeafTabBars(ctx: *UiContext, root_id: Id) void {
         };
         drawTextAtS(ctx, text_pos, label, Color.toWire(label_color));
 
-        // Draw the close × glyph: two crossing line segments.
+        // Draw the close x glyph: two crossing line segments.
         // Hovered = red background + white lines; idle = no
         // background + dim lines. Background tint makes the
         // affordance obvious without needing a permanent border.
@@ -25276,7 +25276,7 @@ fn renderDockLeafTabBars(ctx: *UiContext, root_id: Id) void {
         if (click and close_hover) {
             pending_close = wid;
         } else if (click and is_hover and ctx.active_id == 0) {
-            // Press on tab label → claim, stash press position,
+            // Press on tab label -> claim, stash press position,
             // and select this tab right away.
             ctx.active_id = tab_drag_id;
             ctx.active_id_press_screen = mp;
@@ -25318,7 +25318,7 @@ fn renderDockLeafTabBars(ctx: *UiContext, root_id: Id) void {
                     pending_reorder = .{ .wid = wid, .target_idx = target_idx };
                 }
             }
-            // Between strip edge and DETACH_Y_THRESHOLD →
+            // Between strip edge and DETACH_Y_THRESHOLD ->
             // dead zone, no action this frame.
 
             if (ctx.input.mouse_left_released) {
@@ -25707,7 +25707,7 @@ fn checkboxImpl(
         ctx.style.frame_bg;
     drawRectFilled(ctx, box_rect, Color.toWire(bg));
 
-    // Inner tick when checked. Solid square inset by `inset` —
+    // Inner tick when checked. Solid square inset by `inset` -
     // reads correctly at this size without a real check shape.
     if (value.*) {
         const inset: f32 = 4;
@@ -25948,7 +25948,7 @@ fn colorEditNFloat(
 
         // Overlay per-channel value text per `display_format`.
         // `.hex` uses a different display path (single combined
-        // string on the swatch — handled below the loop), so we
+        // string on the swatch - handled below the loop), so we
         // skip per-channel text in that mode.
         if (opts.display_format != .hex) {
             var val_buf: [16]u8 = undefined;
@@ -26101,7 +26101,7 @@ fn plotImpl(
         }
         const v_range: f32 = v_max - v_min;
 
-        // Map a sample index → x coordinate, value → y coordinate.
+        // Map a sample index -> x coordinate, value -> y coordinate.
         // y is inverted because screen y grows downward but value
         // is "up = bigger."
         const inner_pad: f32 = 2; // breathing room inside the frame
@@ -26226,7 +26226,7 @@ fn defaultColumnSizing(table_sizing: TableSizing) TableColumnSizing {
 
 /// First-frame fallback width when no `width_auto_seen` measurement
 /// exists yet. A column that's just appeared has no measured
-/// content width — return a sensible default proportional to the
+/// content width - return a sensible default proportional to the
 /// font size so the column is at least readable. Six em is roughly
 /// "a short noun or small number", a common dashboard cell width.
 fn fallbackColumnWidth(font_size: f32) f32 {
@@ -26260,7 +26260,7 @@ fn effectiveFixedWidth(
 /// active table sizing policy.
 ///   - User-supplied weight wins (any policy).
 ///   - Otherwise `stretch_prop` returns the column's measured
-///     content width — proportional sharing.
+///     content width - proportional sharing.
 ///   - Otherwise returns 1.0 (equal sharing for `stretch_same`,
 ///     and the same default for any mixed-policy case).
 fn effectiveStretchWeight(c: *const TableColumnState, table_sizing: TableSizing) f32 {
@@ -26275,13 +26275,13 @@ fn effectiveStretchWeight(c: *const TableColumnState, table_sizing: TableSizing)
 
 /// Compute final per-column widths + x offsets. Called at the
 /// first `tableNextRow` (or `tableHeadersRow` in ) once
-/// all setup is done. Idempotent — calling twice produces the
+/// all setup is done. Idempotent - calling twice produces the
 /// same result.
 ///
 /// P8.4: implements four sizing modes (see `TableSizing`).
 /// The pipeline:
 ///   1. Fill defaults for any column the caller didn't configure
-///      via `tableSetupColumn` — inherits sizing from the table's
+///      via `tableSetupColumn` - inherits sizing from the table's
 ///      policy.
 ///   2. Backfill `width_auto_seen` from the first-frame fallback
 ///      where no measurement exists yet.
@@ -26289,7 +26289,7 @@ fn effectiveStretchWeight(c: *const TableColumnState, table_sizing: TableSizing)
 ///      the policy is `fixed_same`, since every fixed column will
 ///      use that single value.
 ///   4. Sum fixed widths and stretch weights using the helpers
-///      `effectiveFixedWidth` / `effectiveStretchWeight` — these
+///      `effectiveFixedWidth` / `effectiveStretchWeight` - these
 ///      encapsulate the user-override-wins rule and the per-policy
 ///      defaults.
 ///   5. Lay out columns left-to-right, distributing the remaining
@@ -26336,7 +26336,7 @@ fn computeTableColumnLayout(ctx: *UiContext, ts: *TableState) void {
 
     // [4] Sum the fixed columns' resolved widths and the stretch
     //     columns' resolved weights. The two helpers encapsulate
-    //     the priority chain — user override > policy default.
+    //     the priority chain - user override > policy default.
     var fixed_total: f32 = 0;
     var stretch_weight_sum: f32 = 0;
     i = 0;
@@ -26352,7 +26352,7 @@ fn computeTableColumnLayout(ctx: *UiContext, ts: *TableState) void {
     //     pixels left over after subtracting the fixed total,
     //     proportional to their weights. Each column is floored at
     //     `2 * cell_padding_x + 8` so cell content always has at
-    //     least 8px of room — pre-floor preserved.
+    //     least 8px of room - pre-floor preserved.
     const cell_pad_x: f32 = ts.opts.cell_padding_x;
     const remaining: f32 = ts.outer_rect.width - fixed_total;
     const min_w: f32 = 2 * cell_pad_x + 8;
@@ -26381,7 +26381,7 @@ fn computeTableColumnLayout(ctx: *UiContext, ts: *TableState) void {
     // [6] lint #3: column overflow. The min-width floor above
     //     protects every column from collapsing to 0px, but the cost
     //     is that a table with too many columns for its outer rect
-    //     now has its last column run PAST the outer right edge —
+    //     now has its last column run PAST the outer right edge -
     //     cell content gets clipped or runs into adjacent widgets.
     //     Detectable by comparing the cumulative column x against
     //     the outer right edge. Catches the "I put 8 columns in a
@@ -26390,7 +26390,7 @@ fn computeTableColumnLayout(ctx: *UiContext, ts: *TableState) void {
 
     //     P8.5: suppress the warning when `scroll_x` is
     //     enabled. With horizontal scrolling on, the column total
-    //     EXCEEDING the outer width is the explicit intent — that's
+    //     EXCEEDING the outer width is the explicit intent - that's
     //     what you'd scroll horizontally to see. No more overflow
     //     warnings in that case.
     const outer_right: f32 = ts.outer_rect.x + ts.outer_rect.width;
@@ -26422,7 +26422,7 @@ fn tableNextRowImpl(ctx: *UiContext) void {
             ts.row_y = ts.data_origin_y - ts.scroll_y;
             // Clip data rows to the area between data_origin_y and
             // the outer-rect bottom. Header (above data_origin_y)
-            // stays outside the clip → sticky behavior.
+            // stays outside the clip -> sticky behavior.
             const clip_rect: Rectangle = .{
                 .x = ts.outer_rect.x,
                 .y = ts.data_origin_y,
@@ -26430,8 +26430,8 @@ fn tableNextRowImpl(ctx: *UiContext) void {
                 .height = (ts.outer_rect.y + ts.outer_rect.height) - ts.data_origin_y,
             };
             // P7.2: push clip on BOTH channels so the merged
-            // stream has clip → bg → pop on channel 0 AND
-            // clip → content → pop on channel 1. Both bg and
+            // stream has clip -> bg -> pop on channel 0 AND
+            // clip -> content -> pop on channel 1. Both bg and
             // content end up inside their respective clip rect
             // pair after merge.
             ts.splitter.channels.items[0].pushClipRect(arena, clip_rect);
@@ -26466,19 +26466,19 @@ fn tableNextRowImpl(ctx: *UiContext) void {
         }
         const row_bottom: f32 = ts.row_y + ts.row_max_h;
         // P7.2: row bg goes into splitter channel 0;
-        // cell content (already submitted via current_draw_list →
+        // cell content (already submitted via current_draw_list ->
         // channel 1) is independent. On merge, channel 0 lands
         // BEFORE channel 1 in the window's draw_list, so the bg
-        // paints UNDER the content — proper z-order without index
+        // paints UNDER the content - proper z-order without index
         // manipulation, and fully-opaque bg colors now work.
         drawTableRowBg(ctx, ts, ts.row_y, ts.row_max_h, @as(u32, @intCast(ts.cur_row)));
         // P8.1: cell bg overrides for each column in
         // the just-finished row. Painted AFTER the row bg so
-        // cell-level overrides win visually (more specific →
+        // cell-level overrides win visually (more specific ->
         // higher priority). Cleared after painting so the next
         // row's cells start without stale overrides.
         flushTableCellBgs(ctx, ts, ts.row_y, ts.row_max_h);
-        // Optional inter-row border — also goes on channel 0
+        // Optional inter-row border - also goes on channel 0
         // (border is bg-layer; visually under content).
         // P8.2: gated by both `borders` (master) AND
         // `borders_inner_h` (the granular flag for horizontal
@@ -26504,16 +26504,16 @@ fn tableNextRowImpl(ctx: *UiContext) void {
 
 /// Cycle the sort state for the table whose id is `id` when the
 /// user clicks `col_idx`. Shift-click semantics:
-/// - Plain click on a column NOT in the spec → it becomes the new
+/// - Plain click on a column NOT in the spec -> it becomes the new
 ///   primary, ascending. Anything else is wiped.
-/// - Plain click on the current primary → flip its direction.
-/// - Plain click on a non-primary already in the spec → it
+/// - Plain click on the current primary -> flip its direction.
+/// - Plain click on a non-primary already in the spec -> it
 ///   promotes to primary (the rest are wiped).
-/// - Shift-click on a column not in the spec → appended as a new
+/// - Shift-click on a column not in the spec -> appended as a new
 ///   secondary (or tertiary; capped at len 3 - beyond that, the
 ///   new column REPLACES the primary, demoting the others by one
 ///   slot).
-/// - Shift-click on a column already in the spec → flip that
+/// - Shift-click on a column already in the spec -> flip that
 ///   entry's direction in place.
 fn cycleTableSort(
     ctx: *UiContext,
@@ -26535,7 +26535,7 @@ fn cycleTableSort(
     // on this column.  Ascending is the natural starting point;
     // fall back to descending when ascending is blocked.  If both
     // are blocked, the caller already filtered the click out, so
-    // this branch shouldn't fire — but the @max guards keep us
+    // this branch shouldn't fire - but the @max guards keep us
     // honest if it does.
     const initial_dir: TableSortDirection = if (col.no_sort_ascending)
         .descending
@@ -26552,10 +26552,10 @@ fn cycleTableSort(
     }
 
     // Flip a direction, skipping directions blocked by the
-    // column's flags.  Cycle: asc → desc → asc → ...  When one
+    // column's flags.  Cycle: asc -> desc -> asc -> ...  When one
     // direction is blocked, the cycle collapses to the other
     // direction only (clicks effectively become "stay where
-    // you are" — but still re-promote to primary if shifted).
+    // you are" - but still re-promote to primary if shifted).
     const flip = struct {
         fn run(d: TableSortDirection, no_asc: bool, no_desc: bool) TableSortDirection {
             const target: TableSortDirection = switch (d) {
@@ -26576,7 +26576,7 @@ fn cycleTableSort(
     }.run;
 
     if (!additive) {
-        // Plain click — single-column sort, or flip on primary.
+        // Plain click - single-column sort, or flip on primary.
         if (existing) |idx| {
             if (idx == 0) {
                 ss.specs[0].direction = flip(
@@ -26592,7 +26592,7 @@ fn cycleTableSort(
             ss.len = 1;
             return;
         }
-        // New column → primary at its allowed initial direction.
+        // New column -> primary at its allowed initial direction.
         ss.specs[0] = .{ .column_index = col_idx, .direction = initial_dir };
         ss.len = 1;
         return;
@@ -26600,7 +26600,7 @@ fn cycleTableSort(
 
     // Additive (shift-click).
     if (existing) |idx| {
-        // Already in the spec → flip its direction in place.
+        // Already in the spec -> flip its direction in place.
         ss.specs[idx].direction = flip(
             ss.specs[idx].direction,
             col.no_sort_ascending,
@@ -26689,7 +26689,7 @@ fn tableHeadersRowImpl(ctx: *UiContext) void {
         // Background.
         dl.addRectFilled(arena, cell, header_bg);
 
-        // Click handling — suppressed when `no_sort` is set OR
+        // Click handling - suppressed when `no_sort` is set OR
         // when both direction flags block every available cycle
         // step (no_sort_ascending + no_sort_descending = nothing
         // to cycle to).
@@ -26712,7 +26712,7 @@ fn tableHeadersRowImpl(ctx: *UiContext) void {
         else
             (if (ts.opts.no_pad_inner_x) 0 else ts.opts.cell_padding_x);
         // P8.6 part 2: `no_header_label` suppresses the text but
-        // keeps everything else — the header bar still renders,
+        // keeps everything else - the header bar still renders,
         // sort cycling still works, and the sort arrow still
         // appears if the column is in the spec.  Useful for
         // icon-only headers or unlabeled columns in merged
@@ -26745,7 +26745,7 @@ fn tableHeadersRowImpl(ctx: *UiContext) void {
             }
         }
 
-        // Right border of cell — P8.2: `borders_inner_v`.
+        // Right border of cell - P8.2: `borders_inner_v`.
         // (Header per-cell vertical dividers; gated by master too.)
         if (ts.opts.borders and ts.opts.borders_inner_v and i + 1 < ts.n_columns) {
             dl.addLine(
@@ -26758,7 +26758,7 @@ fn tableHeadersRowImpl(ctx: *UiContext) void {
         }
     }
 
-    // Bottom border of the header row — P8.2: `borders_inner_h`
+    // Bottom border of the header row - P8.2: `borders_inner_h`
     // (the line BETWEEN header and the first data row is interior
     // horizontal, not part of the outer rect).
     if (ts.opts.borders and ts.opts.borders_inner_h) {
@@ -27064,7 +27064,7 @@ fn radioButtonImpl(
         changed = true;
     }
 
-    // Outer ring (square for now — circle drawing is a polish item).
+    // Outer ring (square for now - circle drawing is a polish item).
     const ring_bg: Color = if (r.held)
         ctx.style.frame_bg_active
     else if (r.hovered)
@@ -27139,7 +27139,7 @@ fn selectableImpl(
     const id: Id = widgetId(ctx, w, label);
 
     // Override `selected` when a multi-select scope is active and a
-    // SetAll request was emitted at Begin (Escape clear, Ctrl+A) —
+    // SetAll request was emitted at Begin (Escape clear, Ctrl+A) -
     // this frame's render needs to match the pending request.
     // Pass-through otherwise.
     const effective_selected: bool = multiSelectItemHeader(ctx, id, selected);
@@ -27162,7 +27162,7 @@ fn selectableImpl(
     const clicked: bool = br.pressed;
 
     // Multi-select footer: emit click requests per the truth table
-    // in `src/notes/multiselect-tutorial.md` § 9. No-op outside a
+    // in `src/notes/multiselect-tutorial.md` section  9. No-op outside a
     // multi-select scope or when this item wasn't tagged with
     // `setNextItemSelectionUserData`.
     multiSelectItemFooter(ctx, id, effective_selected, clicked);
@@ -27220,10 +27220,10 @@ fn selectableImpl(
 // `setNextItemSelectionUserData`. See type defs near `MultiSelectFlags`
 // for the data shapes and `src/notes/multiselect-tutorial.md` for the
 // conceptual model.
-// (this revision) wires the real click→request emission.
+// (this revision) wires the real click->request emission.
 // Implements (subset matching MVP flag coverage):
-//   - Begin: keyboard shortcut handling (Escape → set_all(false) if
-//     clear_on_escape; Ctrl-A → set_all(true) if !no_select_all),
+//   - Begin: keyboard shortcut handling (Escape -> set_all(false) if
+//     clear_on_escape; Ctrl-A -> set_all(true) if !no_select_all),
 //     scope-focus detection, loop_request_set_all flag for Header.
 //   - End: clear-on-click-void detection (if clear_on_click_void).
 //   - Item hooks:
@@ -27232,7 +27232,7 @@ fn selectableImpl(
 //         maybe alters button-flags (we don't yet - selectable in
 //         zimr doesn't use ButtonBehavior abstraction).
 //       - `multiSelectItemFooter` - emits SetRange (and sometimes
-//         SetAll-clear preceding it) per the click→request truth
+//         SetAll-clear preceding it) per the click->request truth
 //         table on press. Also updates persistent state's
 //         RangeSrcItem/RangeSelected.
 //   - Selectable integration: header before click detection; footer
@@ -27290,8 +27290,8 @@ fn addSetRangeRequest(
 // SetAll(false)+SetRange / SetRange-only request pair per
 // modifiers. Also updates persistent state's RangeSrcItem and
 // RangeSelected.
-// Imgui: `imgui_widgets.cpp:8305-8525`. This is the click→request
-// truth table from tutorial § 9.
+// Imgui: `imgui_widgets.cpp:8305-8525`. This is the click->request
+// truth table from tutorial section  9.
 fn multiSelectItemFooter(
     ctx: *UiContext,
     id: Id,
@@ -27370,9 +27370,9 @@ fn multiSelectItemFooter(
 
     // -------- Compute the SetRange
     // imgui_widgets.cpp:8472-8506. Two branches:
-    //   - shift && !single → range from anchor to this item;
+    //   - shift && !single -> range from anchor to this item;
     //                          range_selected derived from anchor
-    //   - else → single-item range; anchor moves to
+    //   - else -> single-item range; anchor moves to
     //                          this item; range_selected = ctrl
     //                          ? !selected: true
     var range_first: u64 = item_data;
@@ -27540,7 +27540,7 @@ fn showOverlayInput(
     // Attribute writes: each unconditionally pushes the current
     // flag value through, so flipping a flag back to false at the
     // next focus cycle correctly resets the property.  No "only
-    // when true" gating — that would leave stale state from a
+    // when true" gating - that would leave stale state from a
     // prior focus.
     dom.set_input_mode(opts.input_mode.toAttr());
     dom.set_overlay_input_password(opts.password_mask);
@@ -27667,7 +27667,7 @@ fn showOverlayTextarea(
         bg_rgba,
     );
     // Attribute writes.  No password_mask (N/A for textareas).
-    // No `set_input_mode` either — input_mode is single-line
+    // No `set_input_mode` either - input_mode is single-line
     // soft-keyboard hinting; multiline use cases don't benefit
     // from numeric/email keyboards (typical multiline content
     // is prose).
@@ -27807,8 +27807,8 @@ fn inputTextImpl(
     }
 
     // ---- Focus management ---------------------------------------
-    // Click inside the box → take focus and seed cursor at click X.
-    // Click outside while focused → release focus.
+    // Click inside the box -> take focus and seed cursor at click X.
+    // Click outside while focused -> release focus.
     if (ctx.input.mouse_left_clicked) {
         if (hovered) {
             // Gain focus. Reset edit state.
@@ -27845,7 +27845,7 @@ fn inputTextImpl(
             const click_local_x: f32 = ctx.input.mouse_pos[0] - (box.x + padding[0]);
             ctx.input_text_state.cursor_pos = cursorIndexFromX(ctx, buf[0..len.*], click_local_x);
         } else if (ctx.active_id == id) {
-            // Click outside while focused → defocus. No revert.
+            // Click outside while focused -> defocus. No revert.
             ctx.active_id = 0;
             hideOverlayInput();
         }
@@ -27883,7 +27883,7 @@ fn inputTextImpl(
             // callback below.
             const new_len: usize = getOverlayInputText(buf);
             if (new_len != len.*) {
-                // Length differs → content definitely changed.
+                // Length differs -> content definitely changed.
                 len.* = new_len;
                 changed = true;
             } else if (new_len > 0) {
@@ -27914,7 +27914,7 @@ fn inputTextImpl(
             // Insert printable characters typed this frame. Each char
             // optionally goes through `opts.char_filter` which can drop
             // it (set event_char = 0) or substitute it.  Gated on
-            // `!read_only` — a read-only field still keeps focus + caret
+            // `!read_only` - a read-only field still keeps focus + caret
             // navigation but rejects every mutation source.
             var ci: usize = 0;
             while (!opts.read_only and ci < ctx.input.chars_typed_count) : (ci += 1) {
@@ -27959,7 +27959,7 @@ fn inputTextImpl(
                 changed = true;
             }
 
-            // Arrow navigation.  NOT gated on read_only — caret still
+            // Arrow navigation.  NOT gated on read_only - caret still
             // moves so the user can position selection (when selection
             // lands).
             if (ctxKeyPressedOrRepeat(ctx, .left) and ctx.input_text_state.cursor_pos > 0) {
@@ -27979,16 +27979,16 @@ fn inputTextImpl(
                 ctx.input_text_state.blink_t = 0;
             }
 
-            // Up / Down (single-line only) → History callback. Caller
+            // Up / Down (single-line only) -> History callback. Caller
             // typically rewrites the buffer with the prior / next
             // history entry. `changed` becomes true since the buffer
             // shifted; the `edit` callback (if any) fires below.  Gated
-            // on !read_only — a read-only field isn't editable.
-            // Up / Down (single-line only) → History callback. Caller
+            // on !read_only - a read-only field isn't editable.
+            // Up / Down (single-line only) -> History callback. Caller
             // typically rewrites the buffer with the prior / next
             // history entry. `changed` becomes true since the buffer
             // shifted; the `edit` callback (if any) fires below.  Gated
-            // on !read_only — a read-only field isn't editable.
+            // on !read_only - a read-only field isn't editable.
             if (!opts.read_only) {
                 if (opts.history) |hist_cb| {
                     if (ctxKeyPressedOrRepeat(ctx, .up)) {
@@ -28021,10 +28021,10 @@ fn inputTextImpl(
             }
 
             // Tab dispatch.  Three regimes:
-            //   1. `allow_tab_input` set → insert '\t' into the buffer
+            //   1. `allow_tab_input` set -> insert '\t' into the buffer
             //      (overrides completion).  Gated on !read_only.
-            //   2. `completion` callback set → fire it.
-            //   3. neither → no-op (browser-tab focus advance handles
+            //   2. `completion` callback set -> fire it.
+            //   3. neither -> no-op (browser-tab focus advance handles
             //      itself on web; host-only Tab is just dropped).
             const tab_pressed: bool = ctx.input.keys[@backingInt(KeyCode.tab)].pressed_this_frame;
             if (tab_pressed) {
@@ -28080,7 +28080,7 @@ fn inputTextImpl(
             } else if (escape_pressed) {
                 // Esc defocuses regardless.  With escape_clears, zero
                 // the buffer first so callers polling len see the
-                // cancel.  Esc is NOT a commit — commit_pressed stays
+                // cancel.  Esc is NOT a commit - commit_pressed stays
                 // false so enter_returns_true distinguishes
                 // commit-from-Enter vs cancel-from-Esc on host.
                 if (opts.escape_clears) {
@@ -28096,7 +28096,7 @@ fn inputTextImpl(
             // itself.  The overlay-visibility poll at the top of the
             // focused-branch above already cleared active_id.  Detect
             // commit here as "we were focused at frame start AND
-            // active_id is no longer us" — this catches Enter AND
+            // active_id is no longer us" - this catches Enter AND
             // Esc AND tap-outside.  Caller with escape_clears can
             // disambiguate via buf len.  Without escape_clears, the
             // web granularity is "focus lost"; refining requires
@@ -28181,7 +28181,7 @@ fn inputTextImpl(
 
     advanceLayout(w, .{ total_w, box.height }, ctx.style.item_spacing, ctx.style.window_padding[0]);
     // Return value depends on `enter_returns_true`:
-    //   - default (false): `changed` — true on every frame the
+    //   - default (false): `changed` - true on every frame the
     //     buffer mutated.  Matches imgui's default and existing
     //     zimr behavior.
     //   - true: report only "commit" events.  Host: literal
@@ -28211,7 +28211,7 @@ const LineCol = struct {
     col: usize,
 };
 
-/// Convert byte offset → (line, col).
+/// Convert byte offset -> (line, col).
 fn byteToLineCol(buf: []const u8, byte_pos: usize) LineCol {
     var line: usize = 0;
     var line_start: usize = 0;
@@ -28225,7 +28225,7 @@ fn byteToLineCol(buf: []const u8, byte_pos: usize) LineCol {
     return .{ .line = line, .col = byte_pos - line_start };
 }
 
-/// Convert (line, target_col_x_pixels) → byte offset. Used by
+/// Convert (line, target_col_x_pixels) -> byte offset. Used by
 /// click-to-place. `target_col_x` is the click x relative to the
 /// editor's content-left. Clamps gracefully - a click past the
 /// end of the buffer lands at `buf.len`.
@@ -28258,7 +28258,7 @@ fn xyToByte(
     return line_start + col;
 }
 
-/// Convert (line, col) → byte offset, clamping col to the target
+/// Convert (line, col) -> byte offset, clamping col to the target
 /// line's length. Used by Up/Down arrow nav: preserve the column
 /// as best the new line allows.
 fn lineColToByte(buf: []const u8, lc: LineCol) usize {
@@ -28314,7 +28314,7 @@ fn inputTextMultilineImpl(
     }
 
     var changed: bool = false;
-    // P9.2 tracking — mirrors `inputTextImpl`.  `commit_pressed`
+    // P9.2 tracking - mirrors `inputTextImpl`.  `commit_pressed`
     // becomes true when the user issued an Enter-as-commit (host
     // path) or focus dropped while widget was active (web path).
     // Used to honor `enter_returns_true` at function return.
@@ -28418,7 +28418,7 @@ fn inputTextMultilineImpl(
             // Insert printable characters. Each runs through
             // `opts.char_filter` first (if any) so multiline shares
             // the same filter pipeline as single-line.  Gated on
-            // `!read_only` — a read-only multiline still keeps focus +
+            // `!read_only` - a read-only multiline still keeps focus +
             // caret navigation but rejects all mutation sources.
             var ci: usize = 0;
             while (!opts.read_only and ci < ctx.input.chars_typed_count) : (ci += 1) {
@@ -28438,13 +28438,13 @@ fn inputTextMultilineImpl(
 
             // Enter dispatch.  Four regimes based on
             // `ctrl_enter_for_newline` + Ctrl modifier:
-            //   - flag off, plain Enter   → insert `\n`
-            //   - flag off, Ctrl+Enter    → also insert `\n` (Ctrl is
+            //   - flag off, plain Enter   -> insert `\n`
+            //   - flag off, Ctrl+Enter    -> also insert `\n` (Ctrl is
             //                                ignored when the flag is
             //                                off so users with sticky
             //                                Ctrl don't lose newlines)
-            //   - flag on,  plain Enter   → commit + defocus
-            //   - flag on,  Ctrl+Enter    → insert `\n`
+            //   - flag on,  plain Enter   -> commit + defocus
+            //   - flag on,  Ctrl+Enter    -> insert `\n`
             // Char insertion is gated on `!read_only`; commit branch
             // runs regardless (a read-only multiline can still be
             // "submitted" via Enter for accessibility navigation).
@@ -28469,7 +28469,7 @@ fn inputTextMultilineImpl(
 
             // Escape: like single-line, with `escape_clears` zeroing
             // the buffer + cursor before defocus.  Esc is NEVER a
-            // commit on host — caller distinguishes commit-vs-cancel
+            // commit on host - caller distinguishes commit-vs-cancel
             // via `commit_pressed`.
             const escape_pressed: bool = ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame;
             if (escape_pressed) {
@@ -28515,7 +28515,7 @@ fn inputTextMultilineImpl(
                 ctx.input_text_state.cursor_pos = cursor_pos + 1;
                 ctx.input_text_state.blink_t = 0;
             }
-            // Up / Down: convert byte → (line, col), shift line, convert back.
+            // Up / Down: convert byte -> (line, col), shift line, convert back.
             if (ctxKeyPressedOrRepeat(ctx, .up)) {
                 const lc: LineCol = byteToLineCol(buf[0..len.*], cursor_pos);
                 if (lc.line > 0) {
@@ -28549,7 +28549,7 @@ fn inputTextMultilineImpl(
         } // end of host edit-ops branch
 
         // Edit callback fires once at end of all edits for this
-        // frame.  Universal — fires on both host and web paths
+        // frame.  Universal - fires on both host and web paths
         // whenever the buffer changed this frame.  Multiline
         // doesn't wire Completion / History; see notes on
         // InputTextOpts.completion / .history.
@@ -28706,11 +28706,11 @@ test "surface_stack: 8-deep nesting works" {
 // Widget: combo (dropdown picker) - eager, inline-expansion
 // ============================================================================
 // Closed state: a frame_bg-colored row showing the current item's
-// label with a small ▼ arrow on the right + the user's label to its
+// label with a small v arrow on the right + the user's label to its
 // right.
 // Open state: closed row + N item rows below. Click an item to
-// select + close. Click outside both → close. Click the closed row
-// again → close. Layout consumes the FULL height (closed + items)
+// select + close. Click outside both -> close. Click the closed row
+// again -> close. Layout consumes the FULL height (closed + items)
 // while open, reflowing subsequent widgets downward.
 // Why no floating popup: real popups need deferred draw lists so the
 // dropdown overlays subsequent widgets without reflowing them - see
@@ -28899,7 +28899,7 @@ test "DrawListSplitter: setCurrentChannel out-of-range clamps to last channel" {
     try splitter.split(std.testing.allocator, 3);
     splitter.setCurrentChannel(99);
     try expectEqual(@as(usize, 2), splitter.current);
-    // Empty splitter — setCurrentChannel forces current=0 (no underflow).
+    // Empty splitter - setCurrentChannel forces current=0 (no underflow).
     var empty: DrawListSplitter = .{};
     defer empty.deinit(std.testing.allocator);
     empty.setCurrentChannel(42);
@@ -28909,7 +28909,7 @@ test "DrawListSplitter: setCurrentChannel out-of-range clamps to last channel" {
 test "DrawListSplitter: merge respects channel order, not submission order" {
     // The keystone test. Submit a rect on channel 1, then a rect on
     // channel 0, then another on channel 1. After merge, channel 0's
-    // commands must come FIRST in the target — channel 1's submissions
+    // commands must come FIRST in the target - channel 1's submissions
     // bracket it in submission order but come AFTER channel 0 in the
     // merged output.
     var test_arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -28942,9 +28942,9 @@ test "DrawListSplitter: merge respects channel order, not submission order" {
 
     // 3 commands total: rect (channel 0), text-a, text-b (channel 1).
     try expectEqual(@as(usize, 3), target.cmds.items.len);
-    // Channel 0 first — the rect must be at index 0.
+    // Channel 0 first - the rect must be at index 0.
     try expect(target.cmds.items[0] == .rect_filled);
-    // Channel 1 in submission order — text-a before text-b.
+    // Channel 1 in submission order - text-a before text-b.
     try expect(target.cmds.items[1] == .text);
     try expect(target.cmds.items[2] == .text);
 }
@@ -28971,7 +28971,7 @@ test "DrawListSplitter: merge empties channels for reuse" {
     try splitter.merge(alloc, &target);
     try expectEqual(@as(usize, 2), target.cmds.items.len);
 
-    // After merge, both channels are empty — splitter is ready for
+    // After merge, both channels are empty - splitter is ready for
     // another submission round. This is the per-frame loop pattern:
     // split once at table-begin, refill each frame, merge at end.
     try expectEqual(@as(usize, 0), splitter.channels.items[0].cmds.items.len);
@@ -29206,7 +29206,7 @@ test "child windows: persist in ctx.windows across frames" {
     const second: *Window = findOrCreateChildWindow(&ctx, child_id);
     try expect(first == second);
     try expectEqual(@as(usize, 1), ctx.windows.count());
-    // Hash with a different str_id → different Window.
+    // Hash with a different str_id -> different Window.
     const sibling_id: Id = hashStr(parent_id, "other");
     const sibling: *Window = findOrCreateChildWindow(&ctx, sibling_id);
     try expect(sibling != first);
@@ -29232,8 +29232,8 @@ test "child scroll_max_y reflects content overflow" {
     const font_dummy: text2d.FontCache = .{};
 
     // ---- Case 1: content overflows ---------------------------------
-    // Child is 200×100; submit 10 buttons each ~22px tall =
-    // content_h ≈ 220 + spacings. scroll_max_y should be positive.
+    // Child is 200x100; submit 10 buttons each ~22px tall =
+    // content_h ~ 220 + spacings. scroll_max_y should be positive.
     {
         const ui: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
         const h: WindowHandle = ui.window("host", .{}) orelse unreachable;
@@ -29251,10 +29251,10 @@ test "child scroll_max_y reflects content overflow" {
 
         const child: *Window = ctx.windows.get(child_id).?;
         try expect(child.scroll_max_y > 0);
-        // 10 rows of (~24px button + 6px spacing) ≈ 280px of CONTENT
+        // 10 rows of (~24px button + 6px spacing) ~ 280px of CONTENT
         // but only ~196 lands as `cursor_max` for our 10-button stack
         // (font_size 16 + 2*frame_padding.y 4 = 24, no spacing after
-        // the last row). Viewport is 100 (default ChildFlags → no
+        // the last row). Viewport is 100 (default ChildFlags -> no
         // padding). Substantial overflow expected;
         // the > 80 bound proves the scrolling math is right without
         // pinning the exact value (depends on font metrics).
@@ -29279,7 +29279,7 @@ test "child scroll_max_y reflects content overflow" {
     }
 }
 
-test "ChildFlags: default (no flags) → no inner padding" {
+test "ChildFlags: default (no flags) -> no inner padding" {
     // Imgui-parity: ChildFlags{} means the child's
     // content starts at the child's exact corner. No window
     // padding, no border. This is `ImGuiChildFlags_None`.
@@ -29439,7 +29439,7 @@ test "mouse wheel consumed by deepest hovered child" {
 
     // Second frame: place the mouse inside the inner rect (which
     // is also inside the outer rect, since inner is nested), wheel
-    // down → both children COULD scroll but only inner should.
+    // down -> both children COULD scroll but only inner should.
     const inner_center: Vec2 = .{
         inner_rect.x + inner_rect.width / 2,
         inner_rect.y + inner_rect.height / 2,
@@ -29447,7 +29447,7 @@ test "mouse wheel consumed by deepest hovered child" {
     {
         const snapshot: InputSnapshot = .{
             .mouse_pos = inner_center,
-            .mouse_wheel_y = -1, // negative → scroll DOWN (scroll_y increases)
+            .mouse_wheel_y = -1, // negative -> scroll DOWN (scroll_y increases)
         };
         const ui: Ui = ctx.beginFrameRaw(snapshot, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
         const h: WindowHandle = ui.window("host", .{}) orelse unreachable;
@@ -29575,11 +29575,11 @@ test "HoveredFlags.child_windows - parent reports hovered when child is hovered"
             // child IS the hovered window).
             try expect(ui.isWindowHovered(.{}));
             // root_window from child: walks UP to host; host is NOT
-            // the hovered window (child is) → FALSE without
+            // the hovered window (child is) -> FALSE without
             // child_windows.
             try expect(!ui.isWindowHovered(.{ .root_window = true }));
             // root_window + child_windows: walks to host, then
-            // checks "is anyone in host's hierarchy hovered?" → TRUE.
+            // checks "is anyone in host's hierarchy hovered?" -> TRUE.
             try expect(ui.isWindowHovered(HoveredFlags.root_and_child_windows));
         }
     }
@@ -29869,7 +29869,7 @@ test "slider dispatches *[3]f32 to array path (compile + no crash)" {
     const u: Ui = .{ .ctx = &ctx };
     var v: [3]f32 = .{ 0.1, 0.2, 0.3 };
     const changed: bool = u.slider("vec3", &v, .{ .min = 0, .max = 1 });
-    try expectEqual(false, changed); // no window → early-return
+    try expectEqual(false, changed); // no window -> early-return
     // Values untouched.
     try expectEqual(@as(f32, 0.1), v[0]);
     try expectEqual(@as(f32, 0.2), v[1]);
@@ -29906,7 +29906,7 @@ test "plotLines: no-op without an active window (early return)" {
     const u: Ui = .{ .ctx = &ctx };
     const data: [4]f32 = .{ 0, 1, 2, 3 };
     u.plotLines("fps", data[0..], .{ .min = 0, .max = 10 });
-    // No window → nothing recorded; just must not panic.
+    // No window -> nothing recorded; just must not panic.
     try expectEqual(@as(usize, 0), ctx.foreground_dl.cmds.items.len);
 }
 
@@ -29915,7 +29915,7 @@ test "plotHistogram: empty values slice is a clean no-op" {
     defer ctx.deinit();
     const u: Ui = .{ .ctx = &ctx };
     u.plotHistogram("empty", &.{}, .{});
-    // No window or content → no panic. The point of this test is
+    // No window or content -> no panic. The point of this test is
     // just to prove the empty-input path doesn't divide by zero
     // or otherwise fault.
     try expectEqual(@as(usize, 0), ctx.foreground_dl.cmds.items.len);
@@ -29959,7 +29959,7 @@ test "hsvToRgb: zero saturation gives grayscale at V" {
     try expectApproxEqAbs(@as(f32, 0.6), gray[2], 1e-6);
 }
 
-test "rgb→hsv→rgb round-trip preserves the original" {
+test "rgb->hsv->rgb round-trip preserves the original" {
     const samples: [4][3]f32 = .{
         .{ 0.85, 0.25, 0.35 },
         .{ 0.20, 0.55, 0.95 },
@@ -30018,7 +30018,7 @@ test "beginTable: rejected when n_columns is 0 or above MAX" {
 // and redirects ctx.current_draw_list to channel 1. Cell bg/borders
 // the table draws itself go to channel 0; widget submissions during
 // cells go to channel 1. endTable merges channel 0 BEFORE channel 1
-// into the window's draw_list — bg lands UNDER content in the final
+// into the window's draw_list - bg lands UNDER content in the final
 // stream. These tests pin the contract.
 
 test "table: beginTable redirects current_draw_list to splitter channel 1" {
@@ -30049,7 +30049,7 @@ test "table: endTable restores current_draw_list and merges channels in order" {
     // The keystone test: drive a 2-row, 1-column table with per-row
     // bg colors enabled. After endTable, the window's draw_list
     // contains channel-0 cmds (the row bgs) BEFORE channel-1 cmds
-    // (any cell content) — proving bg paints UNDER content.
+    // (any cell content) - proving bg paints UNDER content.
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var w = Window{ .id = 1, .pos = .{ 0, 0 }, .size = .{ 400, 300 }, .draw_list = .{} };
@@ -30072,10 +30072,10 @@ test "table: endTable restores current_draw_list and merges channels in order" {
     ctx.current_draw_list.?.addRectFilled(
         ctx.frame_arena.allocator(),
         .{ .x = 10, .y = 10, .width = 50, .height = 20 },
-        0xFFFFFFFF, // white content rect — distinct from bgs.
+        0xFFFFFFFF, // white content rect - distinct from bgs.
     );
 
-    // Row 1: same — second content cmd.
+    // Row 1: same - second content cmd.
     u.tableNextRow();
     _ = u.tableNextColumn();
     ctx.current_draw_list.?.addRectFilled(
@@ -30096,7 +30096,7 @@ test "table: endTable restores current_draw_list and merges channels in order" {
 
     // Window's draw_list now contains the merged stream. Find the
     // first content cmd (white, 0xFFFFFFFF) and the first bg cmd
-    // (dark grey table_row_bg) — bg's index must be < content's.
+    // (dark grey table_row_bg) - bg's index must be < content's.
     var first_content_idx: ?usize = null;
     var first_bg_idx: ?usize = null;
     for (w.draw_list.cmds.items, 0..) |c, i| {
@@ -30107,7 +30107,7 @@ test "table: endTable restores current_draw_list and merges channels in order" {
         if (col == 0xFFFFFFFF and first_content_idx == null) {
             first_content_idx = i;
         }
-        // table_row_bg = rgba(32,32,32,255) → packed 0xFF202020.
+        // table_row_bg = rgba(32,32,32,255) -> packed 0xFF202020.
         if (col == 0xFF202020 and first_bg_idx == null) {
             first_bg_idx = i;
         }
@@ -30115,7 +30115,7 @@ test "table: endTable restores current_draw_list and merges channels in order" {
     try expect(first_bg_idx != null);
     try expect(first_content_idx != null);
     // The contract: bg index < content index. Before this
-    // was the OTHER way around — bg appended after content, painting
+    // was the OTHER way around - bg appended after content, painting
     // over it. The splitter merge inverts that order.
     try expect(first_bg_idx.? < first_content_idx.?);
 }
@@ -30123,7 +30123,7 @@ test "table: endTable restores current_draw_list and merges channels in order" {
 test "table: splitter merge appends to existing target draw_list" {
     // Confirms the merge target is the saved current_draw_list (i.e.
     // the window's draw_list when not nested), and that pre-existing
-    // commands on that target survive — the merge APPENDS, doesn't
+    // commands on that target survive - the merge APPENDS, doesn't
     // replace.
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
@@ -30195,7 +30195,7 @@ test "cell bg: tableSetCellBgColor before tableNextColumn is a no-op" {
     const u: Ui = .{ .ctx = &ctx };
     try expect(u.beginTable("t", 2, .{}));
     u.tableNextRow();
-    // No tableNextColumn yet — cur_col is -1.
+    // No tableNextColumn yet - cur_col is -1.
     u.tableSetCellBgColor(.{ .r = 100, .g = 100, .b = 100, .a = 255 });
     const ts: *TableState = &ctx.active_table.?;
     // No column got a pending color.
@@ -30282,14 +30282,14 @@ test "cell bg: final row's pending bg is flushed at endTable" {
     try expect(u.beginTable("t", 1, .{}));
     u.tableNextRow();
     _ = u.tableNextColumn();
-    // Sentinel color — distinctive so the merge output can be probed.
+    // Sentinel color - distinctive so the merge output can be probed.
     const cell_color: Color = .{ .r = 0xC0, .g = 0xFF, .b = 0xEE, .a = 255 };
     u.tableSetCellBgColor(cell_color);
     ctx.current_window.?.layout.cursor_max = .{ 10, 30 };
     u.endTable();
 
     // After endTable: the merged window draw_list contains the
-    // sentinel rect_filled (packed 0xFFEEFFC0 — bgra → rgba
+    // sentinel rect_filled (packed 0xFFEEFFC0 - bgra -> rgba
     // packing in colorToU32).
     const packed_sentinel: u32 = Color.toWire(cell_color);
     var found: bool = false;
@@ -30317,7 +30317,7 @@ test "cell bg: alpha=0 cell color skips painting (clear-pending semantic)" {
     w.layout.work_rect_max = .{ 400, 300 };
 
     const u: Ui = .{ .ctx = &ctx };
-    // No row_bg + no borders → channel 0 should have ZERO rect_filled
+    // No row_bg + no borders -> channel 0 should have ZERO rect_filled
     // cmds when the only candidate (cell bg) is alpha=0 and skipped.
     try expect(u.beginTable("t", 1, .{ .row_bg = false, .borders = false }));
     u.tableNextRow();
@@ -30342,7 +30342,7 @@ test "cell bg: alpha=0 cell color skips painting (clear-pending semantic)" {
 test "cell bg: cell override paints AFTER row bg in channel 0" {
     // Z-order contract: cell bgs are more specific than row bgs.
     // In channel 0's cmd stream, the row bg cmd must appear BEFORE
-    // the cell bg cmd — so on replay the cell bg paints OVER the row
+    // the cell bg cmd - so on replay the cell bg paints OVER the row
     // bg. (Both still land before channel 1's cell content after
     // the merge.)
     var ctx = UiContext.init(std.testing.allocator);
@@ -30366,7 +30366,7 @@ test "cell bg: cell override paints AFTER row bg in channel 0" {
     u.endTable();
 
     // Scan merged draw_list for first row-bg cmd (rgba 32,32,32,255
-    // → packed 0xFF202020) and first cell-bg cmd (cell_sentinel).
+    // -> packed 0xFF202020) and first cell-bg cmd (cell_sentinel).
     const packed_row_bg: u32 = Color.toWire(ctx.style.table_row_bg);
     const packed_cell_bg: u32 = Color.toWire(cell_sentinel);
     var row_idx: ?usize = null;
@@ -30384,7 +30384,7 @@ test "cell bg: cell override paints AFTER row bg in channel 0" {
     }
     try expect(row_idx != null);
     try expect(cell_idx != null);
-    // Row bg appears BEFORE cell bg → cell bg paints over row bg.
+    // Row bg appears BEFORE cell bg -> cell bg paints over row bg.
     try expect(row_idx.? < cell_idx.?);
 }
 
@@ -30394,7 +30394,7 @@ test "cell bg: cell override paints AFTER row bg in channel 0" {
 // The single `borders: bool` master flag is now AND-gated with four
 // granular sub-flags (borders_inner_h/outer_h/inner_v/outer_v). Each
 // gate controls a specific subset of the border lines. Defaults:
-// all four sub-flags `true`, master `borders` `true` — visually
+// all four sub-flags `true`, master `borders` `true` - visually
 // identical to pre-P8.2. Setting any individual sub-flag false
 // suppresses just that subset. Setting `borders = false` still
 // disables ALL borders for backward compat.
@@ -30410,7 +30410,7 @@ test "borders: defaults match pre-(master true, all granular true)" {
 
 test "borders: master `borders = false` overrides all granular flags" {
     // Even if every granular flag is true, master `borders = false`
-    // suppresses all border drawing — backward compat with pre-P8.2.
+    // suppresses all border drawing - backward compat with pre-P8.2.
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var w = Window{ .id = 1, .pos = .{ 0, 0 }, .size = .{ 400, 300 }, .draw_list = .{} };
@@ -30435,8 +30435,8 @@ test "borders: master `borders = false` overrides all granular flags" {
     ctx.current_window.?.layout.cursor_max = .{ 10, 30 };
     u.endTable();
 
-    // No border lines (no rect_outline either — split into
-    // per-side addLine cmds), no row bg, no cell bg → the merged
+    // No border lines (no rect_outline either - split into
+    // per-side addLine cmds), no row bg, no cell bg -> the merged
     // window draw_list has zero line cmds from the table.
     var line_count: usize = 0;
     for (w.draw_list.cmds.items) |c| {
@@ -30447,7 +30447,7 @@ test "borders: master `borders = false` overrides all granular flags" {
     try expectEqual(@as(usize, 0), line_count);
 }
 
-test "borders: all granular true ⇒ outer rect emits 4 line cmds (per-side)" {
+test "borders: all granular true => outer rect emits 4 line cmds (per-side)" {
     // replaced the single `addRectOutline` cmd with four
     // independent `addLine` cmds so each side can be toggled
     // independently. Pin that representation: a fully-bordered
@@ -30463,9 +30463,9 @@ test "borders: all granular true ⇒ outer rect emits 4 line cmds (per-side)" {
     w.layout.work_rect_max = .{ 400, 300 };
 
     const u: Ui = .{ .ctx = &ctx };
-    // 1 column → no inner_v dividers. 1 row → no inner_h
-    // between-row dividers. No header → no header bottom line.
-    // → Only the 4 outer-edge lines should remain.
+    // 1 column -> no inner_v dividers. 1 row -> no inner_h
+    // between-row dividers. No header -> no header bottom line.
+    // -> Only the 4 outer-edge lines should remain.
     try expect(u.beginTable("t", 1, .{
         .borders = true,
         .borders_inner_h = false,
@@ -30505,7 +30505,7 @@ test "borders: borders_outer_h = false drops top + bottom outer lines" {
     try expect(u.beginTable("t", 1, .{
         .borders = true,
         .borders_inner_h = false,
-        .borders_outer_h = false, // ← suppressed
+        .borders_outer_h = false, // <- suppressed
         .borders_inner_v = false,
         .borders_outer_v = true,
         .row_bg = false,
@@ -30521,7 +30521,7 @@ test "borders: borders_outer_h = false drops top + bottom outer lines" {
             line_count += 1;
         }
     }
-    // Only left + right outer edges → 2 lines.
+    // Only left + right outer edges -> 2 lines.
     try expectEqual(@as(usize, 2), line_count);
 }
 
@@ -30541,7 +30541,7 @@ test "borders: borders_outer_v = false drops left + right outer lines" {
         .borders_inner_h = false,
         .borders_outer_h = true,
         .borders_inner_v = false,
-        .borders_outer_v = false, // ← suppressed
+        .borders_outer_v = false, // <- suppressed
         .row_bg = false,
     }));
     u.tableNextRow();
@@ -30555,13 +30555,13 @@ test "borders: borders_outer_v = false drops left + right outer lines" {
             line_count += 1;
         }
     }
-    // Only top + bottom outer edges → 2 lines.
+    // Only top + bottom outer edges -> 2 lines.
     try expectEqual(@as(usize, 2), line_count);
 }
 
 test "borders: borders_inner_v = false drops column dividers" {
-    // 3 columns → 2 interior vertical dividers WHEN borders_inner_v
-    // is true. Set it false → 0 dividers, just the 4 outer lines.
+    // 3 columns -> 2 interior vertical dividers WHEN borders_inner_v
+    // is true. Set it false -> 0 dividers, just the 4 outer lines.
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var w = Window{ .id = 1, .pos = .{ 0, 0 }, .size = .{ 400, 300 }, .draw_list = .{} };
@@ -30576,7 +30576,7 @@ test "borders: borders_inner_v = false drops column dividers" {
         .borders = true,
         .borders_inner_h = false,
         .borders_outer_h = true,
-        .borders_inner_v = false, // ← suppressed
+        .borders_inner_v = false, // <- suppressed
         .borders_outer_v = true,
         .row_bg = false,
     }));
@@ -30593,7 +30593,7 @@ test "borders: borders_inner_v = false drops column dividers" {
             line_count += 1;
         }
     }
-    // Just the 4 outer lines. Inner_v == false → no column dividers.
+    // Just the 4 outer lines. Inner_v == false -> no column dividers.
     try expectEqual(@as(usize, 4), line_count);
 }
 
@@ -30614,7 +30614,7 @@ test "borders: borders_inner_v = true on a 3-col table adds 2 dividers" {
         .borders = true,
         .borders_inner_h = false,
         .borders_outer_h = true,
-        .borders_inner_v = true, // ← on
+        .borders_inner_v = true, // <- on
         .borders_outer_v = true,
         .row_bg = false,
     }));
@@ -30635,8 +30635,8 @@ test "borders: borders_inner_v = true on a 3-col table adds 2 dividers" {
 }
 
 test "borders: borders_inner_h = false drops inter-row separators" {
-    // 3 rows + inner_h true → 2 inter-row separators. inner_h false
-    // → 0 inter-row separators. Outer borders also suppressed for a
+    // 3 rows + inner_h true -> 2 inter-row separators. inner_h false
+    // -> 0 inter-row separators. Outer borders also suppressed for a
     // clean line count.
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
@@ -30650,7 +30650,7 @@ test "borders: borders_inner_h = false drops inter-row separators" {
     const u: Ui = .{ .ctx = &ctx };
     try expect(u.beginTable("t", 1, .{
         .borders = true,
-        .borders_inner_h = false, // ← suppressed
+        .borders_inner_h = false, // <- suppressed
         .borders_outer_h = false,
         .borders_inner_v = false,
         .borders_outer_v = false,
@@ -30673,7 +30673,7 @@ test "borders: borders_inner_h = false drops inter-row separators" {
     try expectEqual(@as(usize, 0), line_count);
 }
 
-test "borders: borders_inner_h = true on 3 rows ⇒ 2 inter-row lines" {
+test "borders: borders_inner_h = true on 3 rows => 2 inter-row lines" {
     // Positive test for the previous: same setup, inner_h = true.
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
@@ -30687,7 +30687,7 @@ test "borders: borders_inner_h = true on 3 rows ⇒ 2 inter-row lines" {
     const u: Ui = .{ .ctx = &ctx };
     try expect(u.beginTable("t", 1, .{
         .borders = true,
-        .borders_inner_h = true, // ← on
+        .borders_inner_h = true, // <- on
         .borders_outer_h = false,
         .borders_inner_v = false,
         .borders_outer_v = false,
@@ -30707,9 +30707,9 @@ test "borders: borders_inner_h = true on 3 rows ⇒ 2 inter-row lines" {
             line_count += 1;
         }
     }
-    // 3 rows → tableNextRow fires the "finalize previous row" branch
+    // 3 rows -> tableNextRow fires the "finalize previous row" branch
     // 2 times (for rows 0 and 1), emitting 2 inter-row lines. Row 2's
-    // finalize doesn't draw inter-row (it's the last row — handled in
+    // finalize doesn't draw inter-row (it's the last row - handled in
     // endTable, which doesn't emit an inter-row line for the final).
     try expectEqual(@as(usize, 2), line_count);
 }
@@ -30722,11 +30722,11 @@ test "borders: borders_inner_h = true on 3 rows ⇒ 2 inter-row lines" {
 //   - column 0: gated by no_pad_outer_x (outer-left gap).
 //   - columns 1..N-1: gated by no_pad_inner_x (gap to the divider
 //     on the left).
-// Defaults are both false → cursor sits at `col.x + cell_padding_x`
+// Defaults are both false -> cursor sits at `col.x + cell_padding_x`
 // for every column (unchanged from pre-P8.3). Setting either flag
 // to true skips the padding for the relevant column subset.
 
-test "padding: TableOpts defaults — both no_pad_* are false" {
+test "padding: TableOpts defaults - both no_pad_* are false" {
     const o: TableOpts = .{};
     try expect(!o.no_pad_outer_x);
     try expect(!o.no_pad_inner_x);
@@ -30773,7 +30773,7 @@ test "padding: no_pad_outer_x makes col-0 cursor flush against outer-left" {
     u.tableNextRow();
     _ = u.tableNextColumn();
     const ts: *TableState = &ctx.active_table.?;
-    // Cursor at col[0].x exactly — no left padding applied.
+    // Cursor at col[0].x exactly - no left padding applied.
     try expectEqual(ts.columns[0].x, ctx.current_window.?.layout.cursor_pos[0]);
     u.endTable();
 }
@@ -30797,8 +30797,8 @@ test "padding: no_pad_outer_x does NOT affect col-1 (inner column)" {
         .no_pad_inner_x = false, // inner columns keep padding
     }));
     u.tableNextRow();
-    _ = u.tableNextColumn(); // col 0 — flush
-    _ = u.tableNextColumn(); // col 1 — should still have left padding
+    _ = u.tableNextColumn(); // col 0 - flush
+    _ = u.tableNextColumn(); // col 1 - should still have left padding
     const ts: *TableState = &ctx.active_table.?;
     try expectEqual(ts.columns[1].x + 8, ctx.current_window.?.layout.cursor_pos[0]);
     u.endTable();
@@ -30831,7 +30831,7 @@ test "padding: no_pad_inner_x makes col-1+ cursors flush against divider" {
     u.endTable();
 }
 
-test "padding: both flags true ⇒ every column cursor flush against its left edge" {
+test "padding: both flags true => every column cursor flush against its left edge" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var w = Window{ .id = 1, .pos = .{ 0, 0 }, .size = .{ 400, 300 }, .draw_list = .{} };
@@ -30910,7 +30910,7 @@ test "computeTableColumnLayout: fixed columns get user width, stretch share the 
         .row_bg_override = null,
     };
     // Column 0: fixed 80px. Column 1: stretch weight 1. Column 2:
-    // stretch weight 2. Remainder = 300 - 80 = 220 shared 1:2 →
+    // stretch weight 2. Remainder = 300 - 80 = 220 shared 1:2 ->
     // ~73.33 and ~146.67.
     ts.columns[0].sizing = .fixed;
     ts.columns[0].user_width = 80;
@@ -30993,7 +30993,7 @@ fn makeP84TableState(sizing: TableSizing, outer_w: f32) TableState {
     return ts;
 }
 
-test "P8.4: stretch_same — equal width regardless of content" {
+test "P8.4: stretch_same - equal width regardless of content" {
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -31002,7 +31002,7 @@ test "P8.4: stretch_same — equal width regardless of content" {
     };
     defer ctx.deinit();
 
-    // Three stretch columns, 300px outer → 100px each. Measured
+    // Three stretch columns, 300px outer -> 100px each. Measured
     // widths (30 / 60 / 90) are ignored because the policy
     // distributes EQUALLY when no per-column weights are set.
     var ts: TableState = makeP84TableState(.stretch_same, 300);
@@ -31012,7 +31012,7 @@ test "P8.4: stretch_same — equal width regardless of content" {
     try expectApproxEqAbs(@as(f32, 100), ts.columns[2].width, 1e-3);
 }
 
-test "P8.4: stretch_prop — widths proportional to measured content" {
+test "P8.4: stretch_prop - widths proportional to measured content" {
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -31022,7 +31022,7 @@ test "P8.4: stretch_prop — widths proportional to measured content" {
     defer ctx.deinit();
 
     // Three stretch columns with content weights 30/60/90 (sum 180),
-    // 360px outer → 60/120/180px. No per-column weight override, so
+    // 360px outer -> 60/120/180px. No per-column weight override, so
     // the policy supplies weights from `width_auto_seen`.
     var ts: TableState = makeP84TableState(.stretch_prop, 360);
     computeTableColumnLayout(&ctx, &ts);
@@ -31031,7 +31031,7 @@ test "P8.4: stretch_prop — widths proportional to measured content" {
     try expectApproxEqAbs(@as(f32, 180), ts.columns[2].width, 1e-3);
 }
 
-test "P8.4: fixed_fit — each column = its own measured content width" {
+test "P8.4: fixed_fit - each column = its own measured content width" {
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -31049,7 +31049,7 @@ test "P8.4: fixed_fit — each column = its own measured content width" {
     try expectApproxEqAbs(@as(f32, 90), ts.columns[2].width, 1e-3);
 }
 
-test "P8.4: fixed_same — every fixed column = max measured width" {
+test "P8.4: fixed_same - every fixed column = max measured width" {
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -31079,7 +31079,7 @@ test "P8.4: per-column override beats table policy (user weight wins)" {
     // column 1 to an explicit weight of 4. Policy gives col 0 and
     // col 2 their content-derived weights (30 and 90); col 1's 4
     // wins over its content-derived value (60). Sum = 30 + 4 + 90
-    // = 124. outer 620 → 30 * 5 = 150, 4 * 5 = 20, 90 * 5 = 450.
+    // = 124. outer 620 -> 30 * 5 = 150, 4 * 5 = 20, 90 * 5 = 450.
     var ts: TableState = makeP84TableState(.stretch_prop, 620);
     ts.columns[1].user_weight = 4;
     computeTableColumnLayout(&ctx, &ts);
@@ -31124,13 +31124,13 @@ test "P8.4: first-frame fallback when width_auto_seen is 0" {
     defer ctx.deinit();
     // Pin font_size to 10 so the fallback-formula assertion is
     // independent of the desktop-default `Style.font_size` (which
-    // changed from 10 → 16 in the size-default bump, breaking the
+    // changed from 10 -> 16 in the size-default bump, breaking the
     // `60 = 10 * 6` value tied to this test).
     ctx.style.font_size = 10;
-    // font_size = 10 → fallback = 60 per column.
+    // font_size = 10 -> fallback = 60 per column.
     try expectEqual(@as(f32, 60), fallbackColumnWidth(ctx.style.font_size));
 
-    // fixed_fit with zero measurement → each column = fallback = 60.
+    // fixed_fit with zero measurement -> each column = fallback = 60.
     var ts: TableState = std.mem.zeroes(TableState);
     ts.n_columns = 2;
     ts.columns_set_up = 0; // forces inheritance fill
@@ -31143,7 +31143,7 @@ test "P8.4: first-frame fallback when width_auto_seen is 0" {
     try expectApproxEqAbs(@as(f32, 60), ts.columns[1].width, 1e-3);
 }
 
-test "P8.4: width_auto cache round-trips through endTable→beginTable" {
+test "P8.4: width_auto cache round-trips through endTable->beginTable" {
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -31199,7 +31199,7 @@ test "table: snapshotCellHeight captures the last cell of each row" {
     ts.row_y = 100;
     ts.row_max_h = 20; // cells 0 + 1 had height 20
     ts.opts = .{ .cell_padding_y = 2 };
-    // Simulate a widget that wrote to y = 100 + 50 = 150 — a tall
+    // Simulate a widget that wrote to y = 100 + 50 = 150 - a tall
     // cell whose used height (150 - 100) + cell_padding_y = 52
     // should overtake the existing row_max_h of 20.
     w.layout.cursor_max = .{ 0, 150 };
@@ -31209,7 +31209,7 @@ test "table: snapshotCellHeight captures the last cell of each row" {
 
 test "table: snapshotCellHeight is a no-op when no active column" {
     // Guard against the "cur_col == -1 between tableNextRow and the
-    // first tableNextColumn" state — calling the helper there
+    // first tableNextColumn" state - calling the helper there
     // would have to do nothing rather than misread row state.
     var w: Window = std.mem.zeroes(Window);
     var ts: TableState = std.mem.zeroes(TableState);
@@ -31221,7 +31221,7 @@ test "table: snapshotCellHeight is a no-op when no active column" {
     try expectEqual(@as(f32, 7), ts.row_max_h);
 }
 
-test "cycleTableSort: plain click on new column → primary ascending" {
+test "cycleTableSort: plain click on new column -> primary ascending" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var default_col: TableColumnState = .{};
@@ -31239,7 +31239,7 @@ test "cycleTableSort: plain click on the primary flips direction" {
     var default_col: TableColumnState = .{};
     const id: Id = 42;
     cycleTableSort(&ctx, id, 1, false, &default_col);
-    cycleTableSort(&ctx, id, 1, false, &default_col); // re-click → flip
+    cycleTableSort(&ctx, id, 1, false, &default_col); // re-click -> flip
     const ss: *TableSortSpecs = ctx.table_sort_state.getPtr(id).?;
     try expectEqual(@as(u8, 1), ss.len);
     try expectEqual(TableSortDirection.descending, ss.specs[0].direction);
@@ -31313,7 +31313,7 @@ test "cycleTableSort: shift-click on existing column flips its direction in plac
 // P8.6 part 1: sort suppression flags
 // ----------------------------------------------------------------
 
-test "P8.6: no_sort_ascending — initial click starts at descending" {
+test "P8.6: no_sort_ascending - initial click starts at descending" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var col: TableColumnState = .{ .no_sort_ascending = true };
@@ -31324,24 +31324,24 @@ test "P8.6: no_sort_ascending — initial click starts at descending" {
     try expectEqual(TableSortDirection.descending, ss.specs[0].direction);
 }
 
-test "P8.6: no_sort_ascending — re-click on primary stays at descending (can't flip back)" {
+test "P8.6: no_sort_ascending - re-click on primary stays at descending (can't flip back)" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var col: TableColumnState = .{ .no_sort_ascending = true };
     const id: Id = 42;
     cycleTableSort(&ctx, id, 1, false, &col); // descending
-    cycleTableSort(&ctx, id, 1, false, &col); // would flip to asc, but asc is blocked → stays desc
+    cycleTableSort(&ctx, id, 1, false, &col); // would flip to asc, but asc is blocked -> stays desc
     const ss: *TableSortSpecs = ctx.table_sort_state.getPtr(id).?;
     try expectEqual(TableSortDirection.descending, ss.specs[0].direction);
 }
 
-test "P8.6: no_sort_descending — initial click is ascending, re-click stays" {
+test "P8.6: no_sort_descending - initial click is ascending, re-click stays" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var col: TableColumnState = .{ .no_sort_descending = true };
     const id: Id = 42;
     cycleTableSort(&ctx, id, 1, false, &col); // ascending
-    cycleTableSort(&ctx, id, 1, false, &col); // would flip to desc, blocked → stays asc
+    cycleTableSort(&ctx, id, 1, false, &col); // would flip to desc, blocked -> stays asc
     const ss: *TableSortSpecs = ctx.table_sort_state.getPtr(id).?;
     try expectEqual(TableSortDirection.ascending, ss.specs[0].direction);
 }
@@ -31370,7 +31370,7 @@ test "P8.6: default_sort seeds initial sort specs at column setup" {
     }
 
     // Find the table's id.  beginTable hashes the table label
-    // under the window's id stack — easiest to find the live
+    // under the window's id stack - easiest to find the live
     // table id is `active_table.id`, but that's nulled at
     // endTable.  Walk the persisted sort_state map instead:
     // there should be exactly one entry, the table we just
@@ -31435,7 +31435,7 @@ test "P8.6: default_sort does NOT re-seed once the user has interacted" {
         }
     }
 
-    // Primary still col 2 — user's click was preserved.
+    // Primary still col 2 - user's click was preserved.
     var it2: std.AutoHashMapUnmanaged(Id, TableSortSpecs).Iterator = ctx.table_sort_state.iterator();
     const entry2: std.AutoHashMapUnmanaged(Id, TableSortSpecs).Entry = it2.next() orelse return error.MissingSortSpec;
     try expectEqual(@as(u32, 2), entry2.value_ptr.specs[0].column_index);
@@ -31469,7 +31469,7 @@ test "P8.6: no_sort opt flows from TableColumnOpts into TableColumnState" {
 
 test "P8.6: width_auto resolves to sizing=.fixed with user_width=0" {
     // `width_auto` is a setup-time shortcut for "fit content."
-    // Resolution: state.sizing → .fixed; state.user_width → 0;
+    // Resolution: state.sizing -> .fixed; state.user_width -> 0;
     // downstream layout reads `width_auto_seen` for the actual
     // value.
     var ctx: UiContext = .{
@@ -31501,7 +31501,7 @@ test "P8.6: width_auto resolves to sizing=.fixed with user_width=0" {
 test "P8.6: width_auto wins over explicit sizing and width" {
     // The caller's intent when setting width_auto is unambiguous:
     // fit content.  Any conflicting .sizing or .width on the same
-    // opts is ignored — width_auto overrides both.
+    // opts is ignored - width_auto overrides both.
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -31572,7 +31572,7 @@ test "P8.8: tableGetColumnCount + Index reflect setup + iteration state" {
     w.layout.work_rect_max = .{ 400, 300 };
 
     const u: Ui = .{ .ctx = &ctx };
-    // No active table → both queries return null.
+    // No active table -> both queries return null.
     try expectEqual(@as(?u32, null), u.tableGetColumnCount());
     try expectEqual(@as(?u32, null), u.tableGetColumnIndex());
 
@@ -31608,12 +31608,12 @@ test "P8.8: tableGetColumnName returns the configured label per column" {
     defer u.endTable();
     u.tableSetupColumn("Name", .{});
     u.tableSetupColumn("Age", .{});
-    u.tableSetupColumn("", .{}); // empty label → empty slice (not null)
+    u.tableSetupColumn("", .{}); // empty label -> empty slice (not null)
 
     try expectEqualStrings("Name", u.tableGetColumnName(0).?);
     try expectEqualStrings("Age", u.tableGetColumnName(1).?);
     try expectEqualStrings("", u.tableGetColumnName(2).?);
-    // Index out of range → null.
+    // Index out of range -> null.
     try expectEqual(@as(?[]const u8, null), u.tableGetColumnName(3));
     try expectEqual(@as(?[]const u8, null), u.tableGetColumnName(99));
 }
@@ -31652,7 +31652,7 @@ test "P8.8: tableGetColumnFlags reconstructs the configured opts" {
     const f3: TableColumnFlags = u.tableGetColumnFlags(3).?;
     try expectEqual(@as(?TableSortDirection, .descending), f3.default_sort);
 
-    // Out-of-range index → null.
+    // Out-of-range index -> null.
     try expectEqual(@as(?TableColumnFlags, null), u.tableGetColumnFlags(4));
 }
 
@@ -31793,10 +31793,10 @@ test "acceptDragDropPayload: type mismatch returns null" {
     // Release edge.
     ctx.input.mouse_left_released = true;
 
-    // Asking for f32 → type mismatch → null.
+    // Asking for f32 -> type mismatch -> null.
     const wrong: ?f32 = acceptDragDropPayloadImpl(&ctx, f32, .{});
     try expectEqual(@as(?f32, null), wrong);
-    // Asking for the right type → success.
+    // Asking for the right type -> success.
     const right: ?u32 = acceptDragDropPayloadImpl(&ctx, u32, .{});
     try expectEqual(@as(?u32, 42), right);
 }
@@ -31815,7 +31815,7 @@ test "acceptDragDropPayload: only delivers on the release edge" {
     ctx.input.mouse_left_released = false;
     try expectEqual(@as(?Pld, null), acceptDragDropPayloadImpl(&ctx, Pld, .{}));
 
-    // Release edge → delivered.
+    // Release edge -> delivered.
     ctx.input.mouse_left_released = true;
     const got = acceptDragDropPayloadImpl(&ctx, Pld, .{});
     try expect(got != null);
@@ -31838,10 +31838,10 @@ test "accept_before_delivery returns payload mid-drag (no release)" {
     // Mouse STILL held.
     ctx.input.mouse_left_released = false;
 
-    // Without the flag → null (release-edge gated).
+    // Without the flag -> null (release-edge gated).
     try expectEqual(@as(?Pld, null), acceptDragDropPayloadImpl(&ctx, Pld, .{}));
 
-    // With.accept_before_delivery → returns payload mid-drag.
+    // With.accept_before_delivery -> returns payload mid-drag.
     const peek: ?Pld = acceptDragDropPayloadImpl(&ctx, Pld, .{ .accept_before_delivery = true });
     try expect(peek != null);
     try expectEqual(@as(u32, 42), peek.?.n);
@@ -31939,7 +31939,7 @@ test "currentItemFlags reads top of stack" {
     const ui: Ui = ctx.beginFrameRaw(.{}, null, 400, 300, &gl_dummy, &shapes_dummy, &font_dummy);
     const h: WindowHandle = ui.window("host", .{}) orelse unreachable;
     defer h.close();
-    // Empty stack → defaults.
+    // Empty stack -> defaults.
     try expect(!ui.currentItemFlags().button_repeat);
     try expect(ui.currentItemFlags().auto_close_popups); // default true.
 
@@ -32027,12 +32027,12 @@ test "button_repeat fires after initial delay then at rate" {
             early_count += 1;
         }
     }
-    // Below 400ms delay → no repeats fired.
+    // Below 400ms delay -> no repeats fired.
     try expectEqual(@as(u32, 0), early_count);
 
     // Frames 26+: push past 400ms then through steady repeat cadence.
     // 20 more frames at 16ms each = +320ms, total held ~688ms,
-    // ~288ms past the delay → ~5-6 repeats at 50ms cadence.
+    // ~288ms past the delay -> ~5-6 repeats at 50ms cadence.
     var repeat_count: u32 = 0;
     i = 0;
     while (i < 20) : (i += 1) {
@@ -32293,7 +32293,7 @@ test "P6: getCursorStartPos returns layout.origin (screen-space)" {
     defer w.draw_list.deinit(std.testing.allocator);
     ctx.current_window = &w;
     const u: Ui = .{ .ctx = &ctx };
-    // Screen-space — equals layout.origin verbatim.
+    // Screen-space - equals layout.origin verbatim.
     try expectEqual(@as(Vec2, .{ 108, 230 }), u.getCursorStartPos());
 }
 
@@ -32320,7 +32320,7 @@ test "P6: getWindowContentRegionMin/Max return window-local coords" {
         .size = .{ 320, 240 },
         .layout = .{
             // Origin sits 8 px inside the window's top-left after
-            // chrome + padding — a typical decorated-window layout.
+            // chrome + padding - a typical decorated-window layout.
             .origin = .{ 108, 230 },
             // Work rect's bottom-right is inset by similar padding
             // from the window's bottom-right (100+320=420, 200+240=440).
@@ -32390,7 +32390,7 @@ test "setKeyboardFocusHere: sets next_widget_take_focus flag" {
 test "beginItemTooltip: returns false when no item is hovered" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
-    // No active window → isItemHovered returns false → beginItemTooltip
+    // No active window -> isItemHovered returns false -> beginItemTooltip
     // short-circuits before touching the tooltip window state.
     const u: Ui = .{ .ctx = &ctx };
     try expectEqual(false, u.beginItemTooltip());
@@ -32478,7 +32478,7 @@ test "applyAccent: button_hovered is accent at full alpha" {
 test "applyAccent: button_active is darker than button_hovered" {
     var s: Style = Style.dark_default;
     s.applyAccent(Color{ .r = 200, .g = 200, .b = 200, .a = 255 });
-    // brightness(0.8) → each channel × 0.8 = 160.
+    // brightness(0.8) -> each channel x 0.8 = 160.
     try expectEqual(@as(u8, 160), s.button_active.r);
     try expect(s.button_active.r < s.button_hovered.r);
 }
@@ -32529,7 +32529,7 @@ test "cursorIndexFromX: very large x returns end-of-string" {
     try expectEqual(@as(usize, 5), cursorIndexFromX(&ctx, "hello", 10000));
 }
 
-test "cursorIndexFromX: monotonic - later x ⇒ greater-or-equal index" {
+test "cursorIndexFromX: monotonic - later x => greater-or-equal index" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     var prev: usize = 0;
@@ -32610,7 +32610,7 @@ test " markItemPost - activation transitions over 3 frames" {
     defer w.draw_list.deinit(std.testing.allocator);
     const id: Id = 0x1234;
 
-    // Frame 1: widget inactive → no transition.
+    // Frame 1: widget inactive -> no transition.
     w.layout.last_item_id = id;
     ctx.active_id = 0;
     ctx.active_id_prev_frame = 0;
@@ -32710,8 +32710,8 @@ test " setNextWindow* state persists in UiContext + clears on use" {
     ui.setNextWindowFocus();
     try expectEqual(@as(?Vec2, .{ 100, 50 }), ctx.next_window_pos);
     try expectEqual(@as(?Vec2, .{ 300, 200 }), ctx.next_window_size);
-    try expect(ctx.next_window_pos_always); // .{}.once defaults to false → always = !once = true
-    try expect(!ctx.next_window_size_always); // .once = true → always = false
+    try expect(ctx.next_window_pos_always); // .{}.once defaults to false -> always = !once = true
+    try expect(!ctx.next_window_size_always); // .once = true -> always = false
     try expect(ctx.next_window_focus);
 }
 
@@ -32745,7 +32745,7 @@ test " isWindow* defaults safely outside a window scope" {
     var ctx: UiContext = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     const ui: Ui = .{ .ctx = &ctx };
-    // No current_window → all queries return false / zero.
+    // No current_window -> all queries return false / zero.
     try expect(!ui.isWindowFocused(.{}));
     try expect(!ui.isWindowHovered(.{}));
     try expectEqual(@as(Vec2, .{ 0, 0 }), ui.getWindowPos());
@@ -32886,14 +32886,14 @@ test " mouse wheel translates scroll_y on the hovered window" {
     ) orelse unreachable;
     const w: *Window = handle.win;
     w.user_resized = true;
-    // Mouse pos (100, 100) is inside window rect (50, 50, 200, 100) →
+    // Mouse pos (100, 100) is inside window rect (50, 50, 200, 100) ->
     // openWindow set hovered_window_id to this window.
     try expect(ctx.hovered_window_id == w.id);
     // Simulate enough content to enable scrolling.
     const inner_y: f32 = w.pos[1] + ctx.style.title_bar_height + ctx.style.window_padding[1];
     w.layout.cursor_max = .{ w.pos[0], inner_y + 500 };
     handle.close();
-    // Wheel = -1 ⇒ scroll DOWN ⇒ scroll_y increases by `5 * font_size`.
+    // Wheel = -1 => scroll DOWN => scroll_y increases by `5 * font_size`.
     try expect(w.scroll_y > 0);
     try expect(w.scroll_y <= w.scroll_max_y);
 }
@@ -32912,7 +32912,7 @@ test "touch-pan: drag on window body scrolls when content overflows" {
     var gl_dummy: Gl = .{};
     const shapes_dummy: shapes2d.ShapesTextureState = .{};
     const font_dummy: text2d.FontCache = .{};
-    // Frame 1 — touch begins inside the window body.
+    // Frame 1 - touch begins inside the window body.
     const touch_start: InputSnapshot = .{
         .mouse_pos = .{ 100, 100 },
         .mouse_left_down = true,
@@ -32931,7 +32931,7 @@ test "touch-pan: drag on window body scrolls when content overflows" {
     h1.close();
     try expect(w.touch_pan_active);
     const start_scroll: f32 = w.scroll_y;
-    // Frame 2 — finger moved up 40 px while still held.  Content should
+    // Frame 2 - finger moved up 40 px while still held.  Content should
     // scroll DOWN (scroll_y increases) by 40.
     const touch_drag: InputSnapshot = .{
         .mouse_pos = .{ 100, 60 },
@@ -32942,7 +32942,7 @@ test "touch-pan: drag on window body scrolls when content overflows" {
     h2.win.layout.cursor_max = .{ h2.win.pos[0], inner_y + 500 };
     h2.close();
     try expectApproxEqAbs(start_scroll + 40, h2.win.scroll_y, 0.5);
-    // Frame 3 — finger released.  Pan deactivates.
+    // Frame 3 - finger released.  Pan deactivates.
     const touch_release: InputSnapshot = .{
         .mouse_pos = .{ 100, 60 },
         .mouse_left_down = false,
@@ -32967,7 +32967,7 @@ test "touch-pan: does not hijack when the drag starts outside the window" {
     var gl_dummy: Gl = .{};
     const shapes_dummy: shapes2d.ShapesTextureState = .{};
     const font_dummy: text2d.FontCache = .{};
-    // Frame 1 — press down well outside the window's rect.
+    // Frame 1 - press down well outside the window's rect.
     const down_outside: InputSnapshot = .{
         .mouse_pos = .{ 500, 450 },
         .mouse_left_down = true,
@@ -32987,7 +32987,7 @@ test "touch-pan: does not hijack when the drag starts outside the window" {
     // can still point at this window while the finger is in empty space.
     ctx.hovered_window_id = w.id;
     try expect(!w.touch_pan_active);
-    // Frame 2 — finger still held, now dragged OVER the window body. The
+    // Frame 2 - finger still held, now dragged OVER the window body. The
     // press did not begin here, so no pan must start.
     const drag_in: InputSnapshot = .{
         .mouse_pos = .{ 100, 90 },
@@ -32999,7 +32999,7 @@ test "touch-pan: does not hijack when the drag starts outside the window" {
     h2.close();
     try expect(!h2.win.touch_pan_active);
     try expectEqual(@as(f32, 0), h2.win.scroll_y);
-    // Frame 3 — a brand-new press DOWN in empty space while hovered_window_id
+    // Frame 3 - a brand-new press DOWN in empty space while hovered_window_id
     // still (stale) points at the window. Geometric gate must reject it.
     ctx.hovered_window_id = w.id;
     const press_empty: InputSnapshot = .{
@@ -33016,10 +33016,10 @@ test "touch-pan: does not hijack when the drag starts outside the window" {
 }
 
 test "touch-pan: does not activate when there's nothing to scroll" {
-    // Pan must remain dormant on windows whose content fits — otherwise
+    // Pan must remain dormant on windows whose content fits - otherwise
     // every touch in a non-scrolling window would briefly start a
     // gesture and potentially clobber widget interactions.
-    // Pan must remain dormant on windows whose content fits — otherwise
+    // Pan must remain dormant on windows whose content fits - otherwise
     // every touch in a non-scrolling window would briefly start a
     // gesture and potentially clobber widget interactions.
     var ctx: UiContext = .{
@@ -33042,7 +33042,7 @@ test "touch-pan: does not activate when there's nothing to scroll" {
         .{ .initial_pos = .{ 50, 50 }, .initial_size = .{ 200, 400 } },
     ) orelse unreachable;
     h.win.user_resized = true;
-    // Content fits well within 400 px height — no overflow.
+    // Content fits well within 400 px height - no overflow.
     h.close();
     try expect(!h.win.touch_pan_active);
     try expectEqual(@as(f32, 0), h.win.scroll_max_y);
@@ -33065,7 +33065,7 @@ test " auto-fit grows window only while user_resized = false" {
         .{ .initial_size = .{ 100, 50 } },
     ) orelse unreachable;
     const w: *Window = handle.win;
-    // No setNextWindowSize, no manual resize → user_resized stays false.
+    // No setNextWindowSize, no manual resize -> user_resized stays false.
     try expect(!w.user_resized);
     // Pretend a widget grew the cursor past the initial size.
     const inner_y: f32 = w.pos[1] + ctx.style.title_bar_height + ctx.style.window_padding[1];
@@ -33097,13 +33097,13 @@ test " auto-fit grows window only while user_resized = false" {
 // ============================================================================
 
 test " multiplyAlpha clamps + scales" {
-    // Opaque red, mul 0.5 → 255*0.5 = 127.5, round-to-nearest → 128.
+    // Opaque red, mul 0.5 -> 255*0.5 = 127.5, round-to-nearest -> 128.
     const red: ColorU32 = 0xFF0000FF; // packed: AABBGGRR
     const half: ColorU32 = multiplyAlpha(red, 0.5);
     try expectEqual(@as(u32, 0x800000FF), half);
     // mul 1.0 short-circuits - same value back.
     try expectEqual(red, multiplyAlpha(red, 1.0));
-    // mul 0 → fully transparent.
+    // mul 0 -> fully transparent.
     try expectEqual(@as(u32, 0x000000FF), multiplyAlpha(red, 0));
 }
 
@@ -33298,7 +33298,7 @@ test " beginPopup returns false when popup is closed" {
     const ui: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
     const handle: WindowHandle = ui.window("host", .{}) orelse unreachable;
     defer handle.close();
-    // No openPopup call → beginPopup returns false; no end needed.
+    // No openPopup call -> beginPopup returns false; no end needed.
     try expect(!ui.beginPopup("never_opened"));
 }
 
@@ -33319,7 +33319,7 @@ test " popup ID is hashed against parent window - no collisions" {
     ui.openPopup("menu");
     a.close();
     // Same str_id "menu" inside window B - should be a DIFFERENT
-    // popup (different parent window id → different hash).
+    // popup (different parent window id -> different hash).
     const b: WindowHandle = ui.window("B", .{}) orelse unreachable;
     try expect(!ui.isPopupOpen("menu")); // B's "menu" is closed
     b.close();
@@ -33447,7 +33447,7 @@ test " beginPopupContextItem auto-opens on right-click on hovered item" {
     h.win.layout.last_item_id = 42;
     h.win.layout.last_item_rect = .{ .x = 50, .y = 50, .width = 200, .height = 100 };
     h.win.layout.last_item_hovered = true;
-    // Right-click + last_item_hovered → beginPopupContextItem opens AND begins.
+    // Right-click + last_item_hovered -> beginPopupContextItem opens AND begins.
     const opened: bool = ui.beginPopupContextItem("ctx");
     try expect(opened);
     if (opened) {
@@ -33787,7 +33787,7 @@ test " menuItem returns true on click + closes parent menu" {
         ui.endMainMenuBar();
     }
     // Frame 2 - menu is open. Click on a menu item inside it.
-    // Popup is anchored at the bar button (x≈8, y=menu_bar_height).
+    // Popup is anchored at the bar button (x~8, y=menu_bar_height).
     // First menuItem renders at (anchor.x + window_padding.x,
     // anchor.y + window_padding.y), so a click slightly inside
     // that origin lands on the first item.
@@ -33941,7 +33941,7 @@ test " tab close-X with *open=false hides the tab" {
     _ = ui.beginTabBar("bar", .{});
     defer ui.endTabBar();
     var tab_open: bool = false;
-    // *open=false → tab should silently skip itself, return false.
+    // *open=false -> tab should silently skip itself, return false.
     try expect(!ui.beginTabItem("Closable", &tab_open, .{}));
 }
 
@@ -34030,7 +34030,7 @@ test "Turn 411: hovered idle tab paints with tab_hovered" {
         h.close();
     }
 
-    // Second frame: mouse parked on B (B is NOT active — A is the
+    // Second frame: mouse parked on B (B is NOT active - A is the
     // auto-selected one). Expect B's bg color = tab_hovered.
     const input: InputSnapshot = .{
         .mouse_pos = .{ b_rect.x + b_rect.width / 2, b_rect.y + b_rect.height / 2 },
@@ -34051,7 +34051,7 @@ test "Turn 411: hovered idle tab paints with tab_hovered" {
     try expect(findRectFilled(h.win, cols.tab_hovered) != null);
 }
 
-test "Turn 411: hover wins over active (active+hovered → tab_hovered, not tab_active)" {
+test "Turn 411: hover wins over active (active+hovered -> tab_hovered, not tab_active)" {
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -34156,7 +34156,7 @@ test "Turn 411: separator paints BEFORE any tab bg (enables lift via geometry)" 
     // The separator (drawn first in openTabBar) must appear in the
     // draw list at a lower index than the tab's bg (drawn during
     // beginTabItem). Pre-turn-411 the separator was drawn at
-    // endTabBar time and ended up AFTER the tab bg — that order
+    // endTabBar time and ended up AFTER the tab bg - that order
     // meant the separator overdrew every tab's bottom 1px, making
     // the "lift effect" require a separate 1px overdraw slice.
     const sep: FoundRectFilled = findRectFilled(h.win, cols.separator) orelse
@@ -34198,7 +34198,7 @@ test "Turn 411: active tab bg covers full bar height; inactive trims 1px" {
         return error.IdleBgMissing;
     // Inactive tab's bg is exactly 1px shorter than active's. This
     // is the geometric encoding of the "active tab merges with the
-    // content below" lift effect — active covers the separator,
+    // content below" lift effect - active covers the separator,
     // idle stops just above it.
     try expectEqual(@as(f32, 1.0), a_bg.rect.height - b_bg.rect.height);
 }
@@ -34206,7 +34206,7 @@ test "Turn 411: active tab bg covers full bar height; inactive trims 1px" {
 test "tabs persisted across frames" {
     // The new tab list (TabBarState.tabs) accumulates entries the
     // first time each tab is seen, then re-finds them on subsequent
-    // frames. Pin both: 3 tabs submitted twice → exactly 3 entries.
+    // frames. Pin both: 3 tabs submitted twice -> exactly 3 entries.
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -34547,7 +34547,7 @@ test " listBox helper returns true on selection change" {
     const font_dummy: text2d.FontCache = .{};
     const items = &[_][]const u8{ "Alpha", "Beta", "Gamma" };
 
-    // Frame 1 - render the list box; current = 0. No click → no change.
+    // Frame 1 - render the list box; current = 0. No click -> no change.
     {
         const ui: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
         const h: WindowHandle = ui.window("host", .{}) orelse unreachable;
@@ -35262,7 +35262,7 @@ test "P2.1: debugLogPush truncates messages longer than the inline buffer" {
     debugLogPush(&ctx, .lint_warning, "{s}", .{long_input[0..]});
 
     try expectEqual(@as(usize, 1), ctx.debug_log.len);
-    // bufPrint hit NoSpaceLeft → message_len recorded as MAX.
+    // bufPrint hit NoSpaceLeft -> message_len recorded as MAX.
     const first: *const DebugEvent = &ctx.debug_log.slice()[0];
     try expectEqual(@as(u8, debug_log_msg_max), first.message_len);
     // The buffer carries the truncated prefix.
@@ -35301,7 +35301,7 @@ test "P2.2: metricsCollectAtEndFrame populates frame/window/active fields" {
     // Frame wrapper). metricsCollectAtEndFrame is a pure read of
     // ctx state into ctx.metrics.
     ctx.frame_count = 7;
-    ctx.input.delta_time = 0.01666; // ≈ 60 fps
+    ctx.input.delta_time = 0.01666; // ~ 60 fps
     ctx.hovered_window_id = 0xabcd;
     ctx.active_id = 0xfeedface;
 
@@ -35341,7 +35341,7 @@ test "P2.2: history ring wraps after metrics_history_len samples" {
     // After LEN+1 writes, head is at 1. The sample at history[0]
     // is the LAST write (the LEN-th sample, i.e. frame LEN); the
     // sample at history[1] would be the FIRST write (frame 0) if
-    // it had survived — but it was overwritten on the (LEN+1)th
+    // it had survived - but it was overwritten on the (LEN+1)th
     // write which lands at index LEN%LEN=0. Therefore:
     //   - history[0] should be the sample for frame LEN (delta = LEN ms)
     //   - history[1] should be the sample for frame 1 (delta = 1 ms)
@@ -35425,14 +35425,14 @@ test "P2.2: last_active_widget_id sticks across frames with no active widget" {
     metricsCollectAtEndFrame(&ctx);
     try expectEqual(@as(Id, 0xdeadbeef), ctx.metrics.last_active_widget_id);
 
-    // Frame 3: new widget activated → replaces.
+    // Frame 3: new widget activated -> replaces.
     ctx.active_id = 0x1234abcd;
     metricsCollectAtEndFrame(&ctx);
     try expectEqual(@as(Id, 0x1234abcd), ctx.metrics.last_active_widget_id);
 }
 
 // ============================================================================
-// — tactical lint asserts
+// - tactical lint asserts
 // ============================================================================
 // These tests verify the lint sites are reachable without crashing
 // and that the host call path runs to completion. The actual
@@ -35460,18 +35460,18 @@ test "#2: drag with min > max doesn't crash (== is no-clamp sentinel)" {
     defer ctx.deinit();
     const u: Ui = .{ .ctx = &ctx };
     var v: f32 = 0.0;
-    // min == max is the documented "disable clamping" sentinel —
+    // min == max is the documented "disable clamping" sentinel -
     // this should NOT trigger the lint.
     const changed1: bool = u.drag("ok", &v, .{ .min = 0, .max = 0 });
     try expectEqual(false, changed1);
-    // min > max is inverted — lint should fire.
+    // min > max is inverted - lint should fire.
     const changed2: bool = u.drag("bad", &v, .{ .min = 10, .max = 5 });
     try expectEqual(false, changed2);
 }
 
 test "#3: table column overflow lint reachable" {
-    // 8 columns at min_w = 2*pad+8 ≈ 24px each = 192px minimum,
-    // outer rect 100px wide → overflow. We build the TableState
+    // 8 columns at min_w = 2*pad+8 ~ 24px each = 192px minimum,
+    // outer rect 100px wide -> overflow. We build the TableState
     // directly because beginTable needs a live window.
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
@@ -35507,9 +35507,9 @@ test "#4: double openPopup in same frame doesn't crash" {
     defer ctx.deinit();
     const u: Ui = .{ .ctx = &ctx };
     ctx.frame_count = 5;
-    // First call — primes the map.
+    // First call - primes the map.
     u.openPopup("ctx");
-    // Second call same frame — lint should fire. Map entry should
+    // Second call same frame - lint should fire. Map entry should
     // STILL exist after; behavior is otherwise unchanged.
     u.openPopup("ctx");
     const parent_id: Id = 0; // no current_window
@@ -35538,7 +35538,7 @@ test "#5: warnOnce dedup mechanism (same call site fires once)" {
 }
 
 // ============================================================================
-// P3 — Long-press → right-click synthesis
+// P3 - Long-press -> right-click synthesis
 // ============================================================================
 // Tests drive `applyLongPressSynthesis` directly with synthetic
 // InputState + InputSnapshot pairs, bypassing the `beginFrame`
@@ -35572,7 +35572,7 @@ test "P3: touch held past threshold fires synthetic right-click" {
     try expectEqual(true, snap1.mouse_left_down);
     try expectEqual(@as(i32, 42), ctx.long_press.touch_id);
 
-    // Frame 2: simulate 600ms elapsed since touchdown — over threshold.
+    // Frame 2: simulate 600ms elapsed since touchdown - over threshold.
     // (Tracker initialised in frame 1, so accumulator is 0; bumping
     // delta_time accumulates from here.)
     var snap2: InputSnapshot = .{
@@ -35602,7 +35602,7 @@ test "P3: drift > 6px cancels the long-press" {
     var snap1: InputSnapshot = .{ .mouse_left_down = true, .delta_time = 0.0 };
     applyLongPressSynthesis(&ctx, &snap1, &input_state);
 
-    // Frame 2: finger moved 20px down — far beyond drift threshold.
+    // Frame 2: finger moved 20px down - far beyond drift threshold.
     runtime.input.pushTouchMove(&input_state, 7, 100, 120);
     var snap2: InputSnapshot = .{ .mouse_left_down = true, .delta_time = 0.3 };
     applyLongPressSynthesis(&ctx, &snap2, &input_state);
@@ -35629,7 +35629,7 @@ test "P3: multi-touch (>1 finger) never synthesizes" {
     defer ctx.deinit();
 
     var input_state: runtime.input.InputState = .{};
-    // Two fingers down at once → pinch / pan gesture.
+    // Two fingers down at once -> pinch / pan gesture.
     runtime.input.pushTouchDown(&input_state, 1, 100, 100);
     runtime.input.pushTouchDown(&input_state, 2, 200, 100);
     runtime.input.pushMouseButtonDown(&input_state, 0);
@@ -35653,7 +35653,7 @@ test "P3: desktop mouse hold doesn't trigger synthesis" {
     };
     defer ctx.deinit();
 
-    // No touches active — pure mouse press.
+    // No touches active - pure mouse press.
     var input_state: runtime.input.InputState = .{};
     runtime.input.pushMouseButtonDown(&input_state, 0);
 
@@ -35663,13 +35663,13 @@ test "P3: desktop mouse hold doesn't trigger synthesis" {
     try expectEqual(true, snap1.mouse_left_down); // untouched
     try expectEqual(@as(i32, -1), ctx.long_press.touch_id);
 
-    // Even after many ticks — no synthesis without a tracked touch.
+    // Even after many ticks - no synthesis without a tracked touch.
     var snap2: InputSnapshot = .{ .mouse_left_down = true, .delta_time = 1.0 };
     applyLongPressSynthesis(&ctx, &snap2, &input_state);
     try expectEqual(false, snap2.mouse_right_clicked);
 }
 
-test "P3: fired flag is one-shot — second frame doesn't re-fire" {
+test "P3: fired flag is one-shot - second frame doesn't re-fire" {
     var ctx: UiContext = .{
         .gpa = std.testing.allocator,
         .frame_arena = FrameArena.init(std.testing.allocator, ui_frame_arena_ceiling, "ui"),
@@ -35686,13 +35686,13 @@ test "P3: fired flag is one-shot — second frame doesn't re-fire" {
     var s1: InputSnapshot = .{ .mouse_left_down = true, .delta_time = 0.0 };
     applyLongPressSynthesis(&ctx, &s1, &input_state);
 
-    // Tick 2: cross threshold → fires.
+    // Tick 2: cross threshold -> fires.
     var s2: InputSnapshot = .{ .mouse_left_down = true, .delta_time = 0.55 };
     applyLongPressSynthesis(&ctx, &s2, &input_state);
     try expectEqual(true, s2.mouse_right_clicked);
     try expectEqual(true, ctx.long_press.just_fired_this_frame);
 
-    // Tick 3: still holding the same finger → no re-fire. The
+    // Tick 3: still holding the same finger -> no re-fire. The
     // `just_fired_this_frame` flag resets at the start of the call.
     var s3: InputSnapshot = .{
         .mouse_pos = .{ 50, 50 },
@@ -35736,7 +35736,7 @@ test "P3: touch lifted then re-pressed re-arms the tracker" {
     try expectEqual(@as(i32, -1), ctx.long_press.touch_id);
     try expectEqual(@as(f32, 0), ctx.long_press.elapsed_ms); // re-armed
 
-    // Fresh press with different id → fresh tracking.
+    // Fresh press with different id -> fresh tracking.
     runtime.input.pushTouchDown(&input_state, 99, 50, 50);
     runtime.input.pushMouseButtonDown(&input_state, 0);
     var s4: InputSnapshot = .{ .mouse_left_down = true, .delta_time = 0.0 };
@@ -35749,11 +35749,11 @@ test "P3: touch lifted then re-pressed re-arms the tracker" {
 }
 
 // ============================================================================
-// — Chrome suppression flags
+// - Chrome suppression flags
 // ============================================================================
 // Each flag's effect is observable via either the resulting Window
 // state (flags propagated correctly) or the drawn cmd count
-// (chrome elements skipped → fewer rect/text cmds in the window's
+// (chrome elements skipped -> fewer rect/text cmds in the window's
 // draw list). Tests use the existing `beginFrameRaw` host
 // harness, same model as the editStruct tests.
 
@@ -35828,7 +35828,7 @@ test "P5.1: no_title_bar shifts content origin up by title_bar_height" {
         h.close();
     }
 
-    // Second submission: WITH no_title_bar — same window, flag flips.
+    // Second submission: WITH no_title_bar - same window, flag flips.
     {
         const ui: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
         const h: WindowHandle = ui.window("normal", .{
@@ -35854,7 +35854,7 @@ test "P5.1: no_background skips the window-bg drawRectFilled" {
     const shapes_dummy: shapes2d.ShapesTextureState = .{};
     const font_dummy: text2d.FontCache = .{};
 
-    // Plain window — count cmds in its draw list after chrome render.
+    // Plain window - count cmds in its draw list after chrome render.
     const ui1: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
     {
         const h: WindowHandle = ui1.window("a", .{
@@ -35991,7 +35991,7 @@ test "P5.1: flags re-stamp each frame so caller can toggle them" {
 }
 
 // ============================================================================
-// — Sizing flags
+// - Sizing flags
 // ============================================================================
 
 test "P5.2: WindowFlags defaults include new sizing fields as false" {
@@ -36014,7 +36014,7 @@ test "P5.2: always_auto_resize ignores user_resized + matches content exactly" {
     const font_dummy: text2d.FontCache = .{};
 
     // Frame 1: explicit huge initial_size + always_auto_resize.
-    // Window should shrink to fit (empty content → tiny).
+    // Window should shrink to fit (empty content -> tiny).
     {
         const ui: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
         const h: WindowHandle = ui.window("auto", .{
@@ -36025,8 +36025,8 @@ test "P5.2: always_auto_resize ignores user_resized + matches content exactly" {
         h.close();
     }
     const w: *Window = ctx.windows.get(hashStr(0, "auto")).?;
-    // Empty content fits in roughly title_bar + 2× padding.
-    // The window should be MUCH smaller than the 500×400 initial.
+    // Empty content fits in roughly title_bar + 2x padding.
+    // The window should be MUCH smaller than the 500x400 initial.
     try expect(w.size[1] < 100);
 
     // Frame 2: add some text, window should grow to fit.
@@ -36055,12 +36055,12 @@ test "P5.2: no_saved_settings excludes the window from persistence" {
     const font_dummy: text2d.FontCache = .{};
 
     const u: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
-    // Window A: normal → should appear in persistence.
+    // Window A: normal -> should appear in persistence.
     {
         const h: WindowHandle = u.window("persist_me", .{}) orelse unreachable;
         h.close();
     }
-    // Window B: no_saved_settings → should NOT appear.
+    // Window B: no_saved_settings -> should NOT appear.
     {
         const h: WindowHandle = u.window("ephemeral", .{
             .flags = .{ .no_saved_settings = true },
@@ -36078,7 +36078,7 @@ test "P5.2: no_saved_settings excludes the window from persistence" {
 test "P5.2: always_auto_resize ignores persisted size on first frame" {
     // Simulate the persistence handoff: a persisted window with a
     // saved size, then the demo opts into always_auto_resize. The
-    // saved size should be ignored — flag wins.
+    // saved size should be ignored - flag wins.
     const gpa: Allocator = std.testing.allocator;
     var ctx: UiContext = UiContext.init(gpa);
     defer ctx.deinit();
@@ -36105,15 +36105,15 @@ test "P5.2: always_auto_resize ignores persisted size on first frame" {
     h.close();
 
     const w: *Window = ctx.windows.get(hashStr(0, "saved")).?;
-    // Persisted 400×300 was IGNORED; auto_resize then shrunk to
-    // content (which is empty), so the size is tiny — definitely
-    // not 400×300.
+    // Persisted 400x300 was IGNORED; auto_resize then shrunk to
+    // content (which is empty), so the size is tiny - definitely
+    // not 400x300.
     try expect(w.size[0] < 200);
     try expect(w.size[1] < 100);
 }
 
 // ============================================================================
-// — Focus + ordering flags
+// - Focus + ordering flags
 // ============================================================================
 // All four flags are reserved slots today (no z-order sort + no nav
 // state machine). Tests verify the API surface: defaults are false,
@@ -36159,7 +36159,7 @@ test "P5.3: focus/nav flags propagate from WindowOpts to Window.flags" {
 }
 
 // ============================================================================
-// — Input passthrough flags
+// - Input passthrough flags
 // ============================================================================
 
 test "P5.4: WindowFlags defaults include passthrough fields as false" {
@@ -36206,7 +36206,7 @@ test "P5.4: no_mouse_inputs lets hover fall through to deeper window" {
     const shapes_dummy: shapes2d.ShapesTextureState = .{};
     const font_dummy: text2d.FontCache = .{};
 
-    // Frame with mouse positioned at (150, 150) — inside both windows.
+    // Frame with mouse positioned at (150, 150) - inside both windows.
     // Submission order: "bottom" first, then "top" (overlay).
     // Without the flag, "top" would claim hover. With it, "bottom"
     // keeps the hover.
@@ -36234,7 +36234,7 @@ test "P5.4: no_mouse_inputs lets hover fall through to deeper window" {
     }
 
     // "top" was submitted later (covers "bottom"), but the flag
-    // suppressed its hover claim — "bottom" still owns the hover.
+    // suppressed its hover claim - "bottom" still owns the hover.
     try expectEqual(bottom_id, ctx.hovered_window_id);
 }
 
@@ -36274,7 +36274,7 @@ test "P5.4: no_inputs has the same passthrough effect as no_mouse_inputs" {
 }
 
 test "P5.4: passthrough window still RENDERS (only input is blocked)" {
-    // Sanity: visual chrome must be unaffected by the input flags —
+    // Sanity: visual chrome must be unaffected by the input flags -
     // the flagged window's draw cmds (bg, title, grip) should match
     // a non-flagged baseline. No regression of chrome rendering.
     var ctx: UiContext = .{
@@ -36311,12 +36311,12 @@ test "P5.4: passthrough window still RENDERS (only input is blocked)" {
     const w2: *Window = ctx.windows.get(hashStr(0, "vis")).?;
     const passthrough_cmds: usize = w2.draw_list.cmds.items.len;
 
-    // Identical cmd count — chrome rendering is independent of input.
+    // Identical cmd count - chrome rendering is independent of input.
     try expectEqual(baseline_cmds, passthrough_cmds);
 }
 
 // ============================================================================
-// — menu_bar + unsaved_document
+// - menu_bar + unsaved_document
 // ============================================================================
 
 test "P5.5a: WindowFlags defaults include menu_bar + unsaved_document as false" {
@@ -36400,7 +36400,7 @@ test "P5.5a: beginMenuBar returns true WITH the menu_bar flag" {
     }
 }
 
-test "P5.5a: unsaved_document marker draws — same chrome cmd count, different title text" {
+test "P5.5a: unsaved_document marker draws - same chrome cmd count, different title text" {
     // The marker is "{name} *" formatted into a stack buffer, then
     // drawn as ONE text cmd at the same position the plain title
     // would have used. Net effect: same number of chrome cmds as
@@ -36442,7 +36442,7 @@ test "P5.5a: unsaved_document marker draws — same chrome cmd count, different 
     const w2: *Window = ctx.windows.get(hashStr(0, "untitled")).?;
     const marker_cmds: usize = w2.draw_list.cmds.items.len;
 
-    // Same number of chrome cmds — marker just changes the title's
+    // Same number of chrome cmds - marker just changes the title's
     // string payload, not the cmd structure.
     try expectEqual(baseline_cmds, marker_cmds);
 
@@ -36455,7 +36455,7 @@ test "P5.5a: unsaved_document marker draws — same chrome cmd count, different 
 }
 
 // ============================================================================
-// — Horizontal scrollbar + accessors
+// - Horizontal scrollbar + accessors
 // ============================================================================
 
 test "P5.5b: WindowFlags defaults include horizontal_scrollbar as false" {
@@ -36505,12 +36505,12 @@ test "P5.5b: scroll_max_x stays 0 without the flag even on X overflow" {
             .initial_pos = .{ 50, 50 },
             .initial_size = .{ 100, 100 }, // small window
         }) orelse unreachable;
-        // Submit a wide widget — should overflow X.
+        // Submit a wide widget - should overflow X.
         ui.text("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", .{});
         h.close();
     }
     const w: *Window = ctx.windows.get(hashStr(0, "plain")).?;
-    // No flag → scroll_max_x clamped to 0 regardless of overflow.
+    // No flag -> scroll_max_x clamped to 0 regardless of overflow.
     try expectEqual(@as(f32, 0), w.scroll_max_x);
     try expectEqual(@as(f32, 0), w.scroll_x);
 }
@@ -36560,7 +36560,7 @@ test "P5.5b: wheel-X scrolls window with flag set, ignored without" {
     const font_dummy: text2d.FontCache = .{};
 
     // Frame 1: with horizontal_scrollbar set + wheel-X delta + mouse
-    // inside the window → scroll_x should advance.
+    // inside the window -> scroll_x should advance.
     const snap1: InputSnapshot = .{
         .mouse_pos = .{ 100, 100 },
         .mouse_wheel_x = 2.0,
@@ -36581,7 +36581,7 @@ test "P5.5b: wheel-X scrolls window with flag set, ignored without" {
     try expect(ctx.mouse_wheel_x_consumed);
 
     // Frame 2: same shape, NO flag. scroll_x must stay 0
-    // (wheel_x_consumed also stays false — no window claimed it).
+    // (wheel_x_consumed also stays false - no window claimed it).
     const snap2: InputSnapshot = .{
         .mouse_pos = .{ 100, 100 },
         .mouse_wheel_x = 2.0,
@@ -36655,7 +36655,7 @@ test "P5.5b: X + Y wheel consumption are independent" {
 
     // Both axes have nonzero deltas + hovered window opts into both
     // (horizontal_scrollbar set, no_scrollbar absent). Both should
-    // consume independently — neither blocks the other.
+    // consume independently - neither blocks the other.
     const snap: InputSnapshot = .{
         .mouse_pos = .{ 100, 100 },
         .mouse_wheel_x = 1.0,
@@ -36678,7 +36678,7 @@ test "P5.5b: X + Y wheel consumption are independent" {
 }
 
 // ============================================================================
-// P8.5 — shift-wheel pan + scroll_x persistence
+// P8.5 - shift-wheel pan + scroll_x persistence
 // ============================================================================
 
 test "P8.5: shift+wheel-y routes to scroll_x when horizontal_scrollbar set" {
@@ -36715,12 +36715,12 @@ test "P8.5: shift+wheel-y routes to scroll_x when horizontal_scrollbar set" {
         h.close();
     }
     const w: *Window = ctx.windows.get(hashStr(0, "pan")).?;
-    // wheel_y = -2.0 + shift held → scroll_x advances right
-    // (mirrors the wheel-y → scroll-y sign convention: scroll_x -=
+    // wheel_y = -2.0 + shift held -> scroll_x advances right
+    // (mirrors the wheel-y -> scroll-y sign convention: scroll_x -=
     // wheel_y * speed).  scroll_x = 0 initially, so a negative
     // wheel_y produces a positive scroll_x.
     try expect(w.scroll_x > 0);
-    // scroll_y must NOT advance — shift-pan consumed the wheel
+    // scroll_y must NOT advance - shift-pan consumed the wheel
     // before the normal Y-wheel handler could fire.
     try expectEqual(@as(f32, 0), w.scroll_y);
     // Both consumption flags get set so neither outer scope
@@ -36766,7 +36766,7 @@ test "P8.5: shift+wheel-y falls through to scroll_y when no h-scrollbar" {
     }
     const w: *Window = ctx.windows.get(hashStr(0, "noh")).?;
     // scroll_y advanced because shift-pan didn't fire (mirrors the
-    // normal wheel-y → scroll-y sign convention).
+    // normal wheel-y -> scroll-y sign convention).
     try expect(w.scroll_y > 0);
     try expectEqual(@as(f32, 0), w.scroll_x);
 }
@@ -37031,7 +37031,7 @@ test " editArrayList compiles + iterates over an empty list" {
     defer h.close();
     var list: ArrayList(i32) = .empty;
     defer list.deinit(std.testing.allocator);
-    // No clicks → no changes; returns false.
+    // No clicks -> no changes; returns false.
     try expect(!ui.editArrayList("nums", &list));
     try expectEqual(@as(usize, 0), list.items.len);
 }
@@ -37125,7 +37125,7 @@ test " editArrayList works with a struct element type" {
     const ui: Ui = ctx.beginFrameRaw(.{}, null, 800, 600, &gl_dummy, &shapes_dummy, &font_dummy);
     const h: WindowHandle = ui.window("host", .{}) orelse unreachable;
     defer h.close();
-    // No input → no change, but compile-time dispatch must work over
+    // No input -> no change, but compile-time dispatch must work over
     // the struct field types.
     const changed: bool = ui.editArrayList("items", &list);
     try expect(!changed);
@@ -37205,7 +37205,7 @@ test " styleEditor compiles + walks every Style field without panic" {
     defer h.close();
     // No input changes anything; just verify the comptime walk
     // succeeds for every Style field. If a new field is added with
-    // an unsupported type, the walk renders a "<unsupported …>"
+    // an unsupported type, the walk renders a "<unsupported ...>"
     // text line but doesn't crash.
     const changed: bool = ui.styleEditor();
     try expect(!changed);
@@ -37518,7 +37518,7 @@ test " Shift+Tab steps backward through the list" {
     const first_id: Id = ctx.frame_nav_items.items[0];
     const middle_id: Id = ctx.frame_nav_items.items[1];
 
-    // Focus middle, then Shift+Tab → back to first.
+    // Focus middle, then Shift+Tab -> back to first.
     ctx.nav_id = middle_id;
     {
         var shift_tab: InputSnapshot = keyEventSnapshot(.tab);
@@ -37781,11 +37781,11 @@ test "colorToU32: wire format matches ImDrawVert.col layout" {
 
 test "formatScalar: float and int use type-appropriate defaults" {
     var buf: [32]u8 = undefined;
-    // Float → 3 decimal places.
+    // Float -> 3 decimal places.
     const f_str = formatScalar(&buf, f32, 1.5, "");
     try expectEqualStrings("1.500", f_str);
 
-    // Int → no decimals.
+    // Int -> no decimals.
     const i_str = formatScalar(&buf, i32, -42, "");
     try expectEqualStrings("-42", i_str);
 }
@@ -37815,7 +37815,7 @@ test "drag clamping: out-of-range hits min/max" {
     try expectEqual(@as(f64, 0.0), clamp(@as(f64, -0.3), 0.0, 1.0));
 }
 
-test "radioButton ID disambiguation: same label, different value → different IDs" {
+test "radioButton ID disambiguation: same label, different value -> different IDs" {
     // A single radio group has multiple buttons sharing a label slot
     // (visible labels differ, but the ID derivation must include the
     // value so each button has its own active-id state).
@@ -37893,7 +37893,7 @@ test "Clipper.init: empty list completes immediately" {
 }
 
 test "Clipper: visible range covers cursor-aligned rows" {
-    // Window y=0, height=400, title_bar=20 + padding=8 → viewport
+    // Window y=0, height=400, title_bar=20 + padding=8 -> viewport
     // top = 28, bottom = 392. Cursor starts at 60 (so origin_y =
     // 60). Item height 20. Rows 0..N at y=60, 80, 100,...
     // First visible row: rows that intersect [28, 392]. Since
@@ -38038,7 +38038,7 @@ test "lineColToByte: column past line-end clamps to line-end" {
     // at line 0's end (byte 2 = position of the \n).
     const at_line0_end: usize = lineColToByte(buf, .{ .line = 0, .col = 99 });
     try expectEqual(@as(usize, 2), at_line0_end);
-    // Line 2 has 1 char (g). Asking for col 5 → byte 9 (end of buf).
+    // Line 2 has 1 char (g). Asking for col 5 -> byte 9 (end of buf).
     const at_line2_end: usize = lineColToByte(buf, .{ .line = 2, .col = 5 });
     try expectEqual(@as(usize, 9), at_line2_end);
 }
@@ -38187,7 +38187,7 @@ test "formatValue: unsigned int prints decimal" {
 test "formatValue: float prints with 3 decimals" {
     var buf: [16]u8 = undefined;
     try expectEqualSlices(u8, "1.234", formatValue(&buf, @as(f32, 1.234)));
-    // Round-up edge: 0.0005 → "0.001" (single rounding step at 3 dp).
+    // Round-up edge: 0.0005 -> "0.001" (single rounding step at 3 dp).
     try expectEqualSlices(u8, "0.000", formatValue(&buf, @as(f32, 0.0)));
 }
 
@@ -38213,7 +38213,7 @@ test "formatValue: comptime int" {
 
 test "formatValue: overflow returns empty slice (no crash)" {
     // 4-byte buffer; the number 12345 needs 5 bytes formatted ("12345").
-    // bufPrint errors → caller's empty-slice fallback fires. Display
+    // bufPrint errors -> caller's empty-slice fallback fires. Display
     // shows nothing rather than crashing the demo.
     var tiny: [4]u8 = undefined;
     const out = formatValue(&tiny, @as(i32, 12345));
@@ -38345,7 +38345,7 @@ test "SelectionBasicStorage.applyRequests: SetRange inclusive both ends" {
     };
     try sel.applyRequests(std.testing.allocator, &io);
 
-    // [2, 3, 4, 5] inclusive → size 4.
+    // [2, 3, 4, 5] inclusive -> size 4.
     try expectEqual(@as(usize, 4), sel.size());
     try expect(!sel.contains(1));
     try expect(sel.contains(2));
@@ -38377,7 +38377,7 @@ test "SelectionBasicStorage.applyRequests: SetRange unselect deletes" {
     };
     try sel.applyRequests(std.testing.allocator, &io);
 
-    // Started 10, unselected 5 in [3..7] → 5 remain.
+    // Started 10, unselected 5 in [3..7] -> 5 remain.
     try expectEqual(@as(usize, 5), sel.size());
     try expect(sel.contains(0));
     try expect(sel.contains(1));
@@ -38475,10 +38475,10 @@ test "SelectionBasicStorage.applyRequests: Ctrl-click toggle pattern (no clear)"
 //: MultiSelect Begin/End + click-emit integration tests
 // ============================================================================
 // These tests construct a UiContext, drive a single
-// beginMultiSelect → setNextItemSelectionUserData →
-// multiSelectItemFooter → endMultiSelect cycle directly (bypassing
+// beginMultiSelect -> setNextItemSelectionUserData ->
+// multiSelectItemFooter -> endMultiSelect cycle directly (bypassing
 // the full beginFrame plumbing), and assert the resulting request
-// list against the click → request truth table from the tutorial.
+// list against the click -> request truth table from the tutorial.
 // What's exercised:
 //   - Plain click: SetAll(false) + SetRange(item..item, true).
 //   - Ctrl-click on unselected: SetRange(item..item, true) only.
@@ -38509,7 +38509,7 @@ fn msTestSetup(ctx: *UiContext) *Window {
     return w;
 }
 
-test "MultiSelect: plain click → SetAll(false) + SetRange(item..item, true)" {
+test "MultiSelect: plain click -> SetAll(false) + SetRange(item..item, true)" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
@@ -38530,7 +38530,7 @@ test "MultiSelect: plain click → SetAll(false) + SetRange(item..item, true)" {
     try expectEqual(true, io.requests[1].set_range.selected);
 }
 
-test "MultiSelect: Ctrl-click on unselected → SetRange(item..item, true) only" {
+test "MultiSelect: Ctrl-click on unselected -> SetRange(item..item, true) only" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
@@ -38549,7 +38549,7 @@ test "MultiSelect: Ctrl-click on unselected → SetRange(item..item, true) only"
     try expectEqual(true, io.requests[0].set_range.selected);
 }
 
-test "MultiSelect: Ctrl-click on selected → SetRange(item..item, false) only (toggle off)" {
+test "MultiSelect: Ctrl-click on selected -> SetRange(item..item, false) only (toggle off)" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
@@ -38566,7 +38566,7 @@ test "MultiSelect: Ctrl-click on selected → SetRange(item..item, false) only (
     try expectEqual(false, io.requests[0].set_range.selected);
 }
 
-test "MultiSelect: Shift-click → SetAll(false) + SetRange(anchor..item, true)" {
+test "MultiSelect: Shift-click -> SetAll(false) + SetRange(anchor..item, true)" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
@@ -38597,7 +38597,7 @@ test "MultiSelect: Shift-click → SetAll(false) + SetRange(anchor..item, true)"
     try expectEqual(@as(i2, 1), io.requests[1].set_range.direction);
 }
 
-test "MultiSelect: Escape with clear_on_escape → SetAll(false) from Begin" {
+test "MultiSelect: Escape with clear_on_escape -> SetAll(false) from Begin" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
@@ -38638,7 +38638,7 @@ test "MultiSelect: Escape ignored when selection is empty" {
     _ = msTestSetup(&ctx);
     ctx.input.keys[@backingInt(KeyCode.escape)].pressed_this_frame = true;
 
-    // selection_size == 0 → no clear shortcut (imgui parity).
+    // selection_size == 0 -> no clear shortcut (imgui parity).
     const io: *const MultiSelectIO = beginMultiSelectImpl(&ctx, .{ .clear_on_escape = true }, 0, 10);
     try expectEqual(@as(usize, 0), io.requests.len);
     _ = endMultiSelectImpl(&ctx);
@@ -38649,7 +38649,7 @@ test "MultiSelect: clear_on_click_void emits SetAll(false) on void click" {
     defer ctx.deinit();
     _ = msTestSetup(&ctx);
     ctx.input.mouse_left_clicked = true;
-    // hovered_id stays 0 - nothing under the click → void.
+    // hovered_id stays 0 - nothing under the click -> void.
 
     _ = beginMultiSelectImpl(&ctx, .{ .clear_on_click_void = true }, 1, 10);
     // No items submitted this frame.
@@ -38666,7 +38666,7 @@ test "MultiSelect: no_auto_clear_on_reselect - re-tap on selected skips SetAll-c
 
     _ = beginMultiSelectImpl(&ctx, .{ .no_auto_clear_on_reselect = true }, 1, 10);
     ctx.next_item_selection_user_data = 2;
-    // Pass selected=true → re-tap on already-selected item.
+    // Pass selected=true -> re-tap on already-selected item.
     multiSelectItemFooter(&ctx, 999, true, true);
 
     const io: *const MultiSelectIO = endMultiSelectImpl(&ctx);
@@ -38710,8 +38710,8 @@ test "MultiSelect: no_range_select disables Shift behavior" {
 // directly, then drives `splitterImpl` with synthesized input state
 // across one or two frames and asserts the *split_pos behavior.
 // What's exercised:
-//   - Idle (no mouse interaction) → *split_pos unchanged.
-//   - Held drag → *split_pos changes by mouse delta.
+//   - Idle (no mouse interaction) -> *split_pos unchanged.
+//   - Held drag -> *split_pos changes by mouse delta.
 //   - Clamp against min1 (can't shrink first pane below it).
 //   - Clamp against min2 (can't shrink second pane below it).
 //   - Released (mouse_left_released) clears active_id.
@@ -38759,7 +38759,7 @@ test "Splitter: held drag mutates *split_pos by mouse delta (axis .x)" {
 
     var split_pos: f32 = 120;
 
-    // Cursor at (128, 8) → bar at x=128, w=4, center=130.
+    // Cursor at (128, 8) -> bar at x=128, w=4, center=130.
     w.layout.cursor_pos = .{ 128, 8 };
     ctx.input.mouse_pos = .{ 130, 100 };
     ctx.input.mouse_left_clicked = true;
@@ -38859,7 +38859,7 @@ test "Splitter: vertical (.y) axis drags along Y" {
 
     var split_pos: f32 = 200;
 
-    // Cursor at (8, 208) →.y bar at Y=208, h=4, center Y=210.
+    // Cursor at (8, 208) ->.y bar at Y=208, h=4, center Y=210.
     w.layout.cursor_pos = .{ 8, 208 };
     ctx.input.mouse_pos = .{ 100, 210 };
     ctx.input.mouse_left_clicked = true;
@@ -39132,7 +39132,7 @@ test "treeNodeGetOpen: queries stored state without rendering" {
     _ = splitterTestSetup(&ctx);
     const ui_ = Ui{ .ctx = &ctx };
 
-    // No state stored → false.
+    // No state stored -> false.
     try expectEqual(false, ui_.treeNodeGetOpen("folder"));
 
     // Open the node, then query - should report true.
@@ -39435,8 +39435,8 @@ test "5.5d.ii: dock-drag threshold gates dragging_window (null below, set above)
 // ============================================================================
 
 test "5.5d.iv: dockTargetZonesFor returns null for tiny leaves" {
-    // At font_size 12, the cross needs ~hs*5 ≈ 60+ px min dim.
-    // A 30×30 leaf is comfortably below threshold.
+    // At font_size 12, the cross needs ~hs*5 ~ 60+ px min dim.
+    // A 30x30 leaf is comfortably below threshold.
     try expectEqual(@as(?[5]Rectangle, null), dockTargetZonesFor(.{ 0, 0 }, .{ 30, 30 }, 12));
 }
 
@@ -39464,7 +39464,7 @@ test "5.5d.iv: hitTestDockTargets returns center for mouse on center zone" {
     leaf.size = .{ 400, 300 };
     try ctx.dock.dockspaces_this_frame.append(ctx.gpa, leaf_id);
 
-    // Mouse exactly at leaf center → center zone wins (score ~1.0).
+    // Mouse exactly at leaf center -> center zone wins (score ~1.0).
     const hit: DockTargetHit = hitTestDockTargets(&ctx, .{ 300, 250 }) orelse return error.MissedHit;
     try expectEqual(DockTargetKind.center, hit.kind);
     try expectEqual(leaf_id, hit.target_node);
@@ -39511,14 +39511,14 @@ test "5.5d.iv: hitTestDockTargets returns null when mouse is far from any zone" 
 
 test "5.5e: dockZoneScore peaks at center, decays smoothly" {
     const z: Rectangle = .{ .x = 100, .y = 100, .width = 40, .height = 40 };
-    // Mouse at zone center → score = 1.0
+    // Mouse at zone center -> score = 1.0
     try expectApproxEqAbs(@as(f32, 1.0), dockZoneScore(z, .{ 120, 120 }, 1.0), 0.001);
-    // Mouse at exactly pull_radius distance → score = 0
+    // Mouse at exactly pull_radius distance -> score = 0
     const diag_half = @sqrt(@as(f32, 40 * 40 + 40 * 40)) * 0.5; // ~28.28
     try expectApproxEqAbs(@as(f32, 0.0), dockZoneScore(z, .{ 120 + diag_half, 120 }, 1.0), 0.001);
-    // Mouse far away → score = 0
+    // Mouse far away -> score = 0
     try expectEqual(@as(f32, 0), dockZoneScore(z, .{ 1000, 1000 }, 1.0));
-    // Mouse halfway to pull radius → score ~0.5
+    // Mouse halfway to pull radius -> score ~0.5
     try expectApproxEqAbs(@as(f32, 0.5), dockZoneScore(z, .{ 120 + diag_half * 0.5, 120 }, 1.0), 0.01);
 }
 
@@ -39683,7 +39683,7 @@ test "5.5f: splitNode transfers leaf-affinity flags to inheritor" {
     };
 
     // Split: existing content goes to child_b (since dir=.right
-    // means new content on the right, existing on left → child_a
+    // means new content on the right, existing on left -> child_a
     // for left = first_child = true... wait, let me match the
     // existing convention). See Dir.isFirstChild and the
     // existing 5.5d test setup.
@@ -39906,7 +39906,7 @@ test "5.5i: splitter drag updates ratio" {
     ctx.input.mouse_pos = .{ initial_x + 200, 200 };
     _ = renderDockSplittersImpl(&ctx, root);
     // Ratio should have increased. Mouse at (initial_x + 200) +
-    // pivot adjustment gives ~ (avail * 0.3 + 200) / avail ≈ 0.55.
+    // pivot adjustment gives ~ (avail * 0.3 + 200) / avail ~ 0.55.
     const new_ratio: f32 = root_node.split.?.ratio;
     try expect(new_ratio > 0.30);
     try expect(new_ratio < 0.70);
@@ -39991,7 +39991,7 @@ test "5.5g: size_ref on child b locks its size, a absorbs remainder" {
     try expectApproxEqAbs(@as(f32, 300), b_node.size[0], 0.001);
 }
 
-test "5.5g: both locks set → falls back to ratio" {
+test "5.5g: both locks set -> falls back to ratio" {
     var dock_ctx: DockContext = .{};
     defer dock_ctx.deinit(std.testing.allocator);
 
@@ -40003,7 +40003,7 @@ test "5.5g: both locks set → falls back to ratio" {
     layoutSubtree(&dock_ctx, root, .{ 0, 0 }, .{ 1000, 400 });
     const root_node: *DockNode = dock_ctx.lookup(root).?;
     const a_node: *DockNode = dock_ctx.lookup(root_node.split.?.child_ids[0]).?;
-    // avail = 996, ratio 0.25 → a = 249.
+    // avail = 996, ratio 0.25 -> a = 249.
     try expectApproxEqAbs(@as(f32, 249), a_node.size[0], 0.001);
 }
 
@@ -40195,7 +40195,7 @@ test "5.5j: detachAndStartDrag uses w.size when no pre_dock stash" {
     ctx.input.mouse_pos = .{ 100, 50 };
     detachAndStartDrag(&ctx, w.id);
 
-    // No stash → keeps current (leaf-sized) size as the new
+    // No stash -> keeps current (leaf-sized) size as the new
     // floating size. Less ideal than the pre-dock-restore
     // case but doesn't crash.
     try expectEqual(@as(Vec2, .{ 800, 400 }), w.size);
@@ -40293,7 +40293,7 @@ test "5.5j: drag-reorder no-op when cursor over the dragged tab's own slot" {
     try expectEqual(b_wid, leaf.window_ids.items[1]);
 }
 
-test "5.5j: drag pulled Y > DETACH_Y_THRESHOLD out of strip → detach" {
+test "5.5j: drag pulled Y > DETACH_Y_THRESHOLD out of strip -> detach" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     const u = Ui{ .ctx = &ctx };
@@ -40312,7 +40312,7 @@ test "5.5j: drag pulled Y > DETACH_Y_THRESHOLD out of strip → detach" {
     const a_wid: Id = leaf.window_ids.items[0];
 
     // Dragging A. Cursor at Y=80 - well below the title-bar
-    // strip (height ≈ 26 px at default style.font_size=16).
+    // strip (height ~ 26 px at default style.font_size=16).
     // Should detach.
     ctx.active_id = hashStr(a_wid, "__tab_drag");
     ctx.active_id_press_screen = .{ 50, 10 };
@@ -40330,7 +40330,7 @@ test "5.5j: drag pulled Y > DETACH_Y_THRESHOLD out of strip → detach" {
     try expectEqual(@as(usize, 1), leaf.window_ids.items.len);
 }
 
-test "5.5j: small Y excursion within dead zone → no detach, no reorder" {
+test "5.5j: small Y excursion within dead zone -> no detach, no reorder" {
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
     const u = Ui{ .ctx = &ctx };
@@ -40374,7 +40374,7 @@ test "5.5j: small Y excursion within dead zone → no detach, no reorder" {
 
 // What this section owns: the dock tree data model and the
 // pure-CPU operations that mutate it. No drawing, no input
-// handling — those live alongside other widget code earlier in
+// handling - those live alongside other widget code earlier in
 // this file (dockSpace widget, drag-to-dock targets, splitter
 // drag, docked-window rendering all reside in the main widget
 // section above).
@@ -40382,7 +40382,7 @@ test "5.5j: small Y excursion within dead zone → no detach, no reorder" {
 
 // History: this content was its own file (`src/ui_dock.zig`) from
 // the 5.5a-5.5g arc that built the docking feature. Inlined back
-// here — keeping it separate cost ongoing navigation
+// here - keeping it separate cost ongoing navigation
 // for thin benefit, since the dock layer and the widget layer
 // touch each other constantly.
 //
@@ -40446,7 +40446,7 @@ pub const Dir = enum(u8) {
     }
 
     /// The split axis implied by an edge direction. Top/bottom
-    /// → vertical (stacked). Left/right → horizontal (side-by-side).
+    /// -> vertical (stacked). Left/right -> horizontal (side-by-side).
     /// Center isn't an edge - calling `splitAxis(.center)` is a
     /// programmer error; we return horizontal as a fallback rather
     /// than panicking so misuse degrades to wrong-but-not-crashing.
@@ -40989,9 +40989,9 @@ test "layoutSubtree: nested splits recurse correctly" {
 
     // Build:
     //   root (vertical split, ratio 0.5)
-    //     ├ a (top half)
-    //     └ b (bottom half)
-    //         └ split into [c (left), d (right)] horizontally at 0.5
+    //     + a (top half)
+    //     + b (bottom half)
+    //         + split into [c (left), d (right)] horizontally at 0.5
     const root: Id = try ctx.createLeaf(gpa, null);
     const r1: SplitResult = try splitNode(&ctx, gpa, root, .bottom, 0.5);
     const r2: SplitResult = try splitNode(&ctx, gpa, r1.b, .right, 0.5);
@@ -41125,18 +41125,18 @@ test "generation: bumps on mutation" {
 //
 
 // History: this content was its own file (`src/ui_persistence.zig`)
-// from the persistence arc. Inlined back here — same
+// from the persistence arc. Inlined back here - same
 // reasoning as ui_dock: the dense cross-references to
 // Window, DockContext, Style, TabBarState made the file boundary
 // pure navigation cost.
 //
 
 // Responsibilities:
-//   - `PersistedWindow` / `PersistedState` — on-the-wire shape
-//   - `serialize(gpa, ctx)` — walk windows, build snapshot, zon-stringify
-//   - `apply(gpa, ctx, text)` — parse zon, populate
+//   - `PersistedWindow` / `PersistedState` - on-the-wire shape
+//   - `serialize(gpa, ctx)` - walk windows, build snapshot, zon-stringify
+//   - `apply(gpa, ctx, text)` - parse zon, populate
 //     `ctx.pending_persistence` for next-frame consumption
-//   - `takeFor(ctx, title)` — pop a pending entry on first
+//   - `takeFor(ctx, title)` - pop a pending entry on first
 //     `openWindow` for that name
 //
 
@@ -41151,7 +41151,7 @@ test "generation: bumps on mutation" {
 //   - On non-additive change (rename, remove, semantic shift) bump
 //     `current_version`; mismatched payloads are silently discarded
 //   - Additive changes (new optional fields with defaults) need no
-//     version bump — zon parser skips unknown keys with
+//     version bump - zon parser skips unknown keys with
 //     `.ignore_unknown_fields = true` and defaults fill the rest
 // ============================================================================
 
@@ -41168,12 +41168,12 @@ inline fn bytesToColor(b: [4]u8) Color {
 }
 
 /// On-the-wire shape for `Style`. Mirrors every Color + numeric
-/// field on `Style` (skips `font: ?*const Font` — pointers can't
+/// field on `Style` (skips `font: ?*const Font` - pointers can't
 /// round-trip a localStorage save). Optional on `PersistedState`;
 /// apps that don't theme can leave it null and save no bytes.
 ///
 /// Each `Color` is stored as `[4]u8` (r, g, b, a) for compact.zon
-/// output — `Color = struct { r: u8, g: u8, b: u8, a: u8 }` would
+/// output - `Color = struct { r: u8, g: u8, b: u8, a: u8 }` would
 /// also work but produces a much chattier serialization.
 ///
 /// Versioning: when a new color slot is added to `Style`, give it
@@ -41182,7 +41182,7 @@ inline fn bytesToColor(b: [4]u8) Color {
 /// code) is handled by std.zon ignoring unknown fields when
 /// `.allow_unknown = true` is passed to `parseFromSlice`.
 pub const PersistedStyle = struct {
-    // ---- Colors (27 slots — order matches Style decl)
+    // ---- Colors (27 slots - order matches Style decl)
     text: [4]u8 = .{ 230, 230, 230, 255 },
     text_disabled: [4]u8 = .{ 128, 128, 128, 255 },
     window_bg: [4]u8 = .{ 15, 15, 15, 240 },
@@ -41270,7 +41270,7 @@ pub const PersistedStyle = struct {
     }
 
     /// Apply this persisted form back onto `target`. Preserves the
-    /// caller's `font: ?*const Font` — the pointer cannot round-trip,
+    /// caller's `font: ?*const Font` - the pointer cannot round-trip,
     /// so the caller's binding wins.
     pub fn applyTo(self: PersistedStyle, target: *Style) void {
         target.text = bytesToColor(self.text);
@@ -41368,7 +41368,7 @@ fn styleIsDefault(s: *const Style) bool {
 /// One persistable type's payload. `type_name` is `@typeName(T)`
 /// from the putState call site, captured at first-persist time.
 /// `payload` is a pre-stringified zon array of `{id, value}`
-/// tuples — pre-stringified because each T is type-erased at
+/// tuples - pre-stringified because each T is type-erased at
 /// this layer and we can't put heterogeneous values in one slice.
 /// The slot's `deserialize_fn` knows how to re-parse the array
 /// back into the typed inner map.
@@ -41471,7 +41471,7 @@ fn collectTabBarsFor(
 pub fn serialize(gpa: Allocator, ctx: *const UiContext) ![]u8 {
     // Stale window threshold - frames since last submission past
     // which we drop the window from the persisted state. 60 frames
-    // ≈ 1s at 60fps - comfortably more than any single-frame
+    // ~ 1s at 60fps - comfortably more than any single-frame
     // hiccup but conservatively short enough that closed dialogs
     // don't linger forever in storage.
     const STALE_FRAMES: u64 = 60;
@@ -41504,7 +41504,7 @@ pub fn serialize(gpa: Allocator, ctx: *const UiContext) ![]u8 {
 
         // P5.2: explicit caller opt-out. Windows with
         // `no_saved_settings` are excluded from the persistence
-        // payload entirely — they were never written. Use for
+        // payload entirely - they were never written. Use for
         // transient inspector windows, debug overlays, or any UI
         // element whose pos/size shouldn't survive sessions.
         if (w.flags.no_saved_settings) {
@@ -41529,7 +41529,7 @@ pub fn serialize(gpa: Allocator, ctx: *const UiContext) ![]u8 {
 
     // collect dock tree nodes. Walk
     // `ctx.dock.nodes`, build a `PersistedDockNode` per entry.
-    // For leaves, resolve `window_ids` → names (by reverse-
+    // For leaves, resolve `window_ids` -> names (by reverse-
     // lookup in `ctx.windows`). For splits, copy ratio/axis/
     // size_ref verbatim. Empty array if no docking is in use.
     var out_nodes: ArrayList(PersistedDockNode) = .empty;
@@ -41564,9 +41564,9 @@ pub fn serialize(gpa: Allocator, ctx: *const UiContext) ![]u8 {
                     .split_size_ref_b = s.size_ref[1] orelse -1,
                 });
             } else if (node.leaf) |leaf| {
-                // Resolve window_ids → names. Linear scan over
+                // Resolve window_ids -> names. Linear scan over
                 // ctx.windows for each id - leaves typically
-                // have ≤ ~10 docked windows so the cost is fine.
+                // have <= ~10 docked windows so the cost is fine.
                 var names: ArrayList([]const u8) = .empty;
                 errdefer names.deinit(gpa);
                 for (leaf.window_ids.items) |wid| {
@@ -41598,7 +41598,7 @@ pub fn serialize(gpa: Allocator, ctx: *const UiContext) ![]u8 {
     // Collect persistable extension state. Walk ext_storage slots
     // with `has_persist == true`, ask each slot's serialize_fn to
     // encode the typed inner map as a zon-text payload. Each
-    // payload owns its allocation — they're freed after stringify
+    // payload owns its allocation - they're freed after stringify
     // has copied them into the outer buffer.
     var out_ext: ArrayList(PersistedExtEntry) = .empty;
     defer out_ext.deinit(gpa);
@@ -41656,7 +41656,7 @@ pub fn serialize(gpa: Allocator, ctx: *const UiContext) ![]u8 {
 // ============================================================================
 
 /// Reverse-lookup a window by its user-given name. Linear scan
-/// over `ctx.windows`; typical window counts are ≤ 50, so cheap.
+/// over `ctx.windows`; typical window counts are <= 50, so cheap.
 /// Returns null when no match exists - caller treats as
 /// "window not submitted yet; degrade gracefully".
 fn findWindowIdByName(ctx: *const UiContext, name: []const u8) ?u32 {
@@ -42085,7 +42085,7 @@ test "takeFor: unknown title returns null without removing other entries" {
     try expectEqual(@as(usize, 1), ctx.pending_persistence.count());
 }
 
-test "roundtrip: serialize → apply produces matching pending state" {
+test "roundtrip: serialize -> apply produces matching pending state" {
     const gpa: Allocator = std.testing.allocator;
 
     // Source ctx with one window
@@ -42339,7 +42339,7 @@ test "5.5k: serialize captures dock tree shape" {
     try expect(std.mem.indexOf(u8, bytes, "View") != null);
 }
 
-test "5.5k: round-trip serialize → apply → tryRestoreDockTree rebuilds tree" {
+test "5.5k: round-trip serialize -> apply -> tryRestoreDockTree rebuilds tree" {
     const gpa: Allocator = std.testing.allocator;
 
     // Source ctx - build a tree and serialize.
@@ -42445,7 +42445,7 @@ test "P4.1: serialize skips style block when style == dark_default" {
     const gpa: Allocator = std.testing.allocator;
     var ctx: UiContext = testCtx(gpa);
     defer ctx.deinit();
-    // ctx.style starts as dark_default — fresh ctx.
+    // ctx.style starts as dark_default - fresh ctx.
 
     const bytes: []u8 = try serialize(gpa, &ctx);
     defer gpa.free(bytes);
@@ -42473,7 +42473,7 @@ test "P4.1: serialize emits PersistedStyle block when style differs" {
     try expect(std.mem.indexOf(u8, bytes, ".button = ") != null);
 }
 
-test "P4.1: serialize → apply round-trips a customized style" {
+test "P4.1: serialize -> apply round-trips a customized style" {
     const gpa: Allocator = std.testing.allocator;
     var src_ctx: UiContext = testCtx(gpa);
     defer src_ctx.deinit();
@@ -42538,7 +42538,7 @@ test "P4.1: apply preserves caller-bound font pointer" {
 
 test "P4.2: applyPreset(.light) swaps every color, preserves numerics" {
     var s: Style = Style.dark_default;
-    s.font_size = 20; // user choice — should survive
+    s.font_size = 20; // user choice - should survive
     s.window_padding = .{ 16, 16 };
     s.disabled_alpha = 0.42;
 
@@ -42576,14 +42576,14 @@ test "P4.2: applyPreset preserves font pointer" {
 }
 
 // ============================================================================
-// Screenshot — DrawList → raster → RGBA8 → PNG
+// Screenshot - DrawList -> raster -> RGBA8 -> PNG
 // ============================================================================
 //
 // Host-only debug + regression-test tool.  Walks every window's
 // `DrawList` in a `UiContext` post-`beginFrame`+widget-submission
 // state, replays the commands into a fresh `raster.Context` software
 // framebuffer, then encodes the buffer as a PNG.  Lets us inspect
-// UI layout WITHOUT running a real WebGL/wasm session — invaluable
+// UI layout WITHOUT running a real WebGL/wasm session - invaluable
 // for debugging layout bugs (where the visual position is wrong
 // but the state looks fine) and for snapshot-style regression
 // tests built on `snapshot()` below.
@@ -42592,14 +42592,14 @@ test "P4.2: applyPreset preserves font pointer" {
 // The canonical "looks fine in tests, broken on screen" failure
 // surfaced from a phone screenshot showing tab-bar widgets
 // visually overlapping while every TabBar unit test passed.  A
-// self-driven screenshot path closes that gap — we can take a
+// self-driven screenshot path closes that gap - we can take a
 // PNG mid-test, eyeball it (or assert over pixel rects), and
 // catch layout bugs at test time.
 //
 // Scope and limitations:
 //   - **Text**: rendered as a label-colored rectangle at the
 //     text's bounding rect.  No glyph rasterization on the raster
-//     side — that needs the font atlas uploaded as an raster
+//     side - that needs the font atlas uploaded as an raster
 //     texture and a textured-quad emit path per glyph.  For
 //     layout debugging, the box footprint is sufficient: you
 //     SEE where text was placed even if you can't READ it.
@@ -42614,18 +42614,18 @@ test "P4.2: applyPreset preserves font pointer" {
 //     thin filled quads (no GL_LINE_WIDTH semantics in raster).
 //
 // Public API:
-//   - `renderToBytes(gpa, ctx, w, h) ![]u8` — rasterize all
+//   - `renderToBytes(gpa, ctx, w, h) ![]u8` - rasterize all
 //     windows, return a freshly-allocated RGBA8 byte buffer.
-//   - `renderToPng(gpa, ctx, w, h, path) !void` — convenience
+//   - `renderToPng(gpa, ctx, w, h, path) !void` - convenience
 //     that also encodes to PNG and writes to disk.
-//   - `snapshot(gpa, ctx, w, h, ref_path) !PixelDiff` —
+//   - `snapshot(gpa, ctx, w, h, ref_path) !PixelDiff` -
 //     regression-test helper.  First run writes the baseline;
 //     subsequent runs diff against it.  Refresh a baseline by
 //     deleting the PNG.
-//   - `comparePixels(a, b, tolerance) PixelDiff` — generic
+//   - `comparePixels(a, b, tolerance) PixelDiff` - generic
 //     RGBA8 byte-compare with a per-channel tolerance.  Not
 //     UI-specific; useable on any same-size RGBA8 buffers.
-//   - `loadPng(gpa, path) !codecs.png.Image` — generic PNG
+//   - `loadPng(gpa, path) !codecs.png.Image` - generic PNG
 //     read.  Same disclaimer.
 
 /// Internal: draw a colored rectangle at the bbox where a text
@@ -42649,7 +42649,7 @@ fn drawTextBbox(
     const g8: u8 = @intCast((packed_col >> 8) & 0xFF);
     const b8: u8 = @intCast((packed_col >> 16) & 0xFF);
     const a8_full: u8 = @intCast((packed_col >> 24) & 0xFF);
-    // 2/3 of source alpha — readable but doesn't dominate.
+    // 2/3 of source alpha - readable but doesn't dominate.
     const a8: u8 = @intCast((@as(u32, a8_full) * 2) / 3);
     const est_w: f32 = float(s.len) * size * 0.5;
     sw.disable(.texture_2d);
@@ -42684,7 +42684,7 @@ pub fn renderToBytes(
     // Set up an ortho projection mapping pixel coords directly to
     // NDC.  ui widgets work in screen pixels (top-left origin,
     // y-down).  raster's NDC is standard GL (y-up) so we put `top`
-    // < `bottom` in the ortho call to flip — the y-down feel
+    // < `bottom` in the ortho call to flip - the y-down feel
     // matches what the rlgl path produces.
     sw.matrixMode(.projection);
     sw.loadIdentity();
@@ -42701,7 +42701,7 @@ pub fn renderToBytes(
     sw.enable(.blend);
     sw.blendFunc(.src_alpha, .one_minus_src_alpha);
 
-    // Synthetic WindowState — `DrawList.render` reads this for
+    // Synthetic WindowState - `DrawList.render` reads this for
     // DPR-aware scissor scaling.  On raster there's no DPR, so
     // screen_w == render_w (factor of 1).
     const ws: runtime.core.WindowState = .{
@@ -42729,14 +42729,14 @@ pub fn renderToBytes(
     // SAME `DrawList.render` the rlgl path uses (which is generic
     // over `gl: anytype`).  HashMap iteration order isn't
     // submission order, so overlapping windows may composite in
-    // arbitrary z-order — fine for layout debug.
+    // arbitrary z-order - fine for layout debug.
     // Two passes per window:
     //   1. Text-bbox placeholders.  `text2d.draw` short-
     //      circuits when `font_cache.font.texture.id == 0` (an
     //      unloaded font), so we'd see no text at all using the
     //      real render path.  Pre-emit faint rectangles at each
     //      text cmd's bbox so screenshots show WHERE text lives.
-    //   2. The real DrawList.render — paints rects, lines, scissor
+    //   2. The real DrawList.render - paints rects, lines, scissor
     //      stack, etc., and silently no-ops the text cmds.
     var it: std.AutoArrayHashMapUnmanaged(Id, *Window).Iterator = ctx.windows.iterator();
     while (it.next()) |entry| {
@@ -42753,7 +42753,7 @@ pub fn renderToBytes(
         win.draw_list.render(&sw, &ws, &shapes_state, &font_cache);
     }
 
-    // Foreground draw list — tooltips, popup overlays, AND the
+    // Foreground draw list - tooltips, popup overlays, AND the
     // deferred dockspace tab-bar emission.  Rendered AFTER every
     // window so overlays composite on top of regular content.
     // Text-bbox pass first, then the real renderer (same shape).
@@ -42858,8 +42858,8 @@ pub fn loadPng(
 }
 
 /// Snapshot test: rasterize `ctx`, compare against the PNG at
-/// `ref_path`.  On mismatch — OR when the reference doesn't yet
-/// exist — write the current render to `ref_path` and return the
+/// `ref_path`.  On mismatch - OR when the reference doesn't yet
+/// exist - write the current render to `ref_path` and return the
 /// diff so the caller can decide what to do.
 ///
 /// The "first run writes the baseline" behavior is intentional:
@@ -42899,7 +42899,7 @@ test "wantCaptureMouse: answers correctly when queried BEFORE this frame's windo
     // The natural way to write an update is: gate the scene input on
     // `!u.wantCaptureMouse()`, THEN draw the UI. That means the query happens
     // while `frame_windows` is still EMPTY. Hit-testing only that list made the
-    // query return false, so the pointer clicked straight through the panel —
+    // query return false, so the pointer clicked straight through the panel -
     // tapping a button also dragged the scene underneath it (seen on-device in
     // scissor_test; decals + zimrphysics2d_demo had the same latent bug).
     // The fix: `endFrame` snapshots each window's RECT, and `wantCaptureMouse`
@@ -42919,7 +42919,7 @@ test "wantCaptureMouse: answers correctly when queried BEFORE this frame's windo
     ctx.endFrameNoRender();
     try expectEqual(@as(usize, 1), ctx.prev_window_rects.len);
 
-    // Frame N+1 begins — `frame_windows` is cleared, nothing submitted yet.
+    // Frame N+1 begins - `frame_windows` is cleared, nothing submitted yet.
     var gl_dummy: Gl = .{};
     const shapes_dummy: shapes2d.ShapesTextureState = .{};
     const font_dummy: text2d.FontCache = .{};
@@ -42929,7 +42929,7 @@ test "wantCaptureMouse: answers correctly when queried BEFORE this frame's windo
     const u: Ui = .{ .ctx = &ctx };
 
     // Pointer INSIDE the panel, queried before any window is submitted: the UI
-    // must claim it. (Before the fix this returned false — the click-through.)
+    // must claim it. (Before the fix this returned false - the click-through.)
     ctx.input.mouse_pos = .{ 150, 90 };
     try expect(u.wantCaptureMouse());
 
@@ -42940,15 +42940,15 @@ test "wantCaptureMouse: answers correctly when queried BEFORE this frame's windo
 }
 
 test "setNextWindowSize: a zero component means auto-fit, not zero pixels" {
-    // ★ A REAL FIELD BUG, pinned.
+    // * A REAL FIELD BUG, pinned.
     //
     // `setNextWindowSize(.{ 380, 0 })` is the natural way to say "this wide, as tall as the
-    // content needs" — it is exactly what Dear ImGui's SetNextWindowSize means. Taking the
+    // content needs" - it is exactly what Dear ImGui's SetNextWindowSize means. Taking the
     // zero literally created a window ONE PIXEL tall with every control clipped away, which
     // looks like the UI failed to render rather than like a size request being honoured.
     //
     // Found on a phone, where the panel was simply absent. zimr's own runtime UI lint
-    // diagnosed it precisely — *content (216px) is >3x its viewport (1px)* — which is the
+    // diagnosed it precisely - *content (216px) is >3x its viewport (1px)* - which is the
     // only reason it took minutes rather than an evening.
     var ctx = UiContext.init(std.testing.allocator);
     defer ctx.deinit();
@@ -42964,7 +42964,7 @@ test "setNextWindowSize: a zero component means auto-fit, not zero pixels" {
     try expect(ctx.next_window_size_auto[0] == true);
     try expect(ctx.next_window_size_auto[1] == false);
 
-    // Both given: neither axis is auto, and the values are kept verbatim — a caller who
+    // Both given: neither axis is auto, and the values are kept verbatim - a caller who
     // asks for an exact size still gets one.
     u.setNextWindowSize(.{ 320, 240 }, .{});
     try expect(ctx.next_window_size_auto[0] == false);
@@ -42974,19 +42974,19 @@ test "setNextWindowSize: a zero component means auto-fit, not zero pixels" {
 }
 
 test "itemHoverable: a widget outside its window's bounds is not grabbable" {
-    // ★★ THE BUG THIS PINS: widgets hit-tested with a bare `pointInRect` against their own
-    // layout rect, with no clip. A slider scrolled out of its window — or laid out past the
-    // window's edge — kept that rect, so it stayed LIVE while not being DRAWN. Dragging in
+    // ** THE BUG THIS PINS: widgets hit-tested with a bare `pointInRect` against their own
+    // layout rect, with no clip. A slider scrolled out of its window - or laid out past the
+    // window's edge - kept that rect, so it stayed LIVE while not being DRAWN. Dragging in
     // empty space moved sliders that were nowhere on screen.
     //
     // The clip stack that already existed is a DRAW-TIME structure consulted during draw-list
     // replay. Interaction had none, which is exactly why the fault was invisible from the
     // rendering side: correctly not drawn, incorrectly still interactive.
-    // ★★ THIS TEST SETS `item_clip` BY HAND, AND THAT IS ITS LIMIT. It proves the PREDICATE is
+    // ** THIS TEST SETS `item_clip` BY HAND, AND THAT IS ITS LIMIT. It proves the PREDICATE is
     // right; it proves nothing about whether the predicate's input is ever populated. The
-    // first version of this fix set `item_clip` only on the window POP path — so every widget
-    // was submitted while it still held the previous window's rect, or null — and this test
-    // passed the whole time. ★ A test that constructs the state under test, rather than
+    // first version of this fix set `item_clip` only on the window POP path - so every widget
+    // was submitted while it still held the previous window's rect, or null - and this test
+    // passed the whole time. * A test that constructs the state under test, rather than
     // exercising the code that produces it, says nothing about the producer.
     // `refreshItemClip` is now called from BOTH push and pop for that reason.
     // A bare context: this test only exercises the hit-test predicate, so the allocator-backed
@@ -43002,7 +43002,7 @@ test "itemHoverable: a widget outside its window's bounds is not grabbable" {
     ctx.input.mouse_pos = .{ 150, 130 };
     try expect(itemHoverable(&ctx, inside));
 
-    // ★ The same widget, mouse still on it — but the widget now sits BELOW the window's
+    // * The same widget, mouse still on it - but the widget now sits BELOW the window's
     // bottom edge, where a scroll region would have clipped it away. Its own rect still
     // contains the mouse, which is precisely why the bare test said yes.
     const clipped: Rectangle = .{ .x = 120, .y = 400, .width = 100, .height = 20 };

@@ -1,4 +1,4 @@
-//! wgpu_smoke.zig — the wgpu wasm smoke test, ported from webtests/
+//! wgpu_smoke.zig - the wgpu wasm smoke test, ported from webtests/
 //! wgpu_smoke.ts (ZIG_BRIDGE_PLAN Phase 5b). Compiled to wasm32, transpiled
 //! to JS by our own c2js, and run by webtests/runner.mjs (`node runner.mjs
 //! wgpu_smoke.js [args]`). This is the DOGFOOD: the test logic is Zig through
@@ -7,15 +7,15 @@
 //!
 //! Behavior mirrors the TS exactly so PASS output is byte-identical:
 //!   - Single mode: --wasm=<path>  (default zig-out/wgpu/wgpu_bringup.wasm)
-//!   - Dir mode:    --web-dir=<dir> [--focus=a,b*] — smoke every *.wasm
+//!   - Dir mode:    --web-dir=<dir> [--focus=a,b*] - smoke every *.wasm
 //!   - --frames=N (default 10)
 //!   For each wasm: build the wgpu/wasi/dom/audio shim namespaces (runner
 //!   provides the shim bodies; we provide the NAME LISTS), instantiate,
 //!   require exports {memory,_initialize,update}, run _initialize + N
 //!   update(1/60) frames, then print:
-//!     "✓ PASS  <label>  <bytes> bytes, init N calls, ~X.X/frame"
+//!     "ok PASS  <label>  <bytes> bytes, init N calls, ~X.X/frame"
 //!     "    by type/frame: name=K  name=K  ..."  (top 10 by count)
-//!   Fail (missing export / undeclared import / instantiate) prints "✗ FAIL".
+//!   Fail (missing export / undeclared import / instantiate) prints "x FAIL".
 //!   Exit 0 iff all wasms pass.
 
 // ---- JS interop kernel (the same primitives the real bridge uses) --------
@@ -295,7 +295,7 @@ fn sutBytes(bytes: Handle) u32 {
 
 fn printFail(label: []const u8, reason: []const u8) void {
     // 640, not 256: `printClobberFail` hands us a ~360-byte reason, so a
-    // 256-byte line ALWAYS overflowed — and a bufPrint overflow here does not
+    // 256-byte line ALWAYS overflowed - and a bufPrint overflow here does not
     // reach the `catch`, it dies in c2js's miscompiled Io.Writer error path
     // ("ReferenceError: t19 is not defined"). Net effect: the clobber gate could
     // detect a clobber but never NAME one; you got a JS stack trace instead of
@@ -385,7 +385,7 @@ fn printByType(_: []const u8) void {
     print(out[0..w]);
 }
 
-// Resource types that have BOTH a create and a destroy — the leak-tracked set.
+// Resource types that have BOTH a create and a destroy - the leak-tracked set.
 // (Command/pass encoders are frame-transient and deliberately excluded.)
 const ResType = struct {
     name: []const u8,
@@ -483,7 +483,7 @@ var last_init_calls: u32 = 0;
 /// Scan the SUT's log for the runner's "!ASSERT " marker (pushed when the SUT
 /// logs a fired assertf). Copies the message (minus the marker) into `out` and
 /// returns it, or null if no assert fired. This is what turns a runtime assert
-/// into a smoke FAIL — the CI catch for the "forgot ensureFrame / bad phase"
+/// into a smoke FAIL - the CI catch for the "forgot ensureFrame / bad phase"
 /// class that otherwise only shows up as a black screen on a device.
 fn assertMsg(id_h: Handle, out: []u8) ?[]const u8 {
     const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
@@ -576,7 +576,7 @@ fn smoke(path: []const u8, label: []const u8) bool {
         if (hasExport(exports, "runnerReinit")) {
             // TWICE-LIFECYCLE: re-init -> re-tick -> re-deinit. The engine
             // persists (its lazy init is guarded), so a census that GROWS over
-            // the first teardown is a per-lifecycle leak — isolated from the
+            // the first teardown is a per-lifecycle leak - isolated from the
             // fixed engine baseline, which the single-deinit line can't separate.
             _ = js_call2(host(), "sutCall", 7, id_h, s("runnerReinit"));
             var rf: u32 = 0;
@@ -639,7 +639,7 @@ fn smoke(path: []const u8, label: []const u8) bool {
                 // freed everything its init allocated, live bytes return to b1; any
                 // growth b2 > b1 is precisely an allocation the example's deinit
                 // forgot to free (the CPU twin of a leaked GPU handle). This is the
-                // CountingAllocator's exact net-live accounting — zero fragmentation
+                // CountingAllocator's exact net-live accounting - zero fragmentation
                 // noise, so the comparison is strict.
                 if (b2 > b1) {
                     printFail(label, "CPU LEAK (managed): deinit did not free every allocation (net live bytes grew)");
@@ -649,7 +649,7 @@ fn smoke(path: []const u8, label: []const u8) bool {
         }
     }
 
-    // ── FULL ENGINE TEARDOWN: the memory-accounting proof ──────────────────
+    // -- FULL ENGINE TEARDOWN: the memory-accounting proof ------------------
     // The lifecycle probe above proves each EXAMPLE frees what it allocated.
     // This tears down the baseline that persists across lifecycles (3D + 2D
     // renderers, pipeline/bind-group caches, the depth target) and requires the
@@ -657,7 +657,7 @@ fn smoke(path: []const u8, label: []const u8) bool {
     // every GPU handle zimr allocates is accounted for.
     //
     // ENFORCED only for `.managed` examples: their deinit is complete, so the
-    // ONLY thing left after shutdown is the engine baseline — now fully freed.
+    // ONLY thing left after shutdown is the engine baseline - now fully freed.
     // An `.arena` example legitimately leaks its OWN handles (stub deinit), so
     // its shutdown residual is not an engine defect and is printed, not gated.
     if (hasExport(exports, "runnerShutdown")) {
@@ -686,7 +686,7 @@ fn smoke(path: []const u8, label: []const u8) bool {
 // ---- queue-timeline clobber detector --------------------------------------
 // WebGPU executes every queue.writeBuffer BEFORE the frame's encoder submit,
 // so the SAME (buffer, offset) written twice within one frame means only the
-// LAST value reaches ANY pass segment — including segments recorded before
+// LAST value reaches ANY pass segment - including segments recorded before
 // the second write. That silently corrupts per-segment uniforms (the zimr517
 // "duplicated grid" ortho bug). Structural fixes ring-buffer such writes
 // (renderer_2d's ortho ring, flushBatch's vertex ring); this scan makes the
@@ -788,7 +788,7 @@ fn printClobberFail(label: []const u8, c: *const ClobberScan) void {
     var buf: [512]u8 = undefined;
     var lbuf: [128]u8 = undefined;
     // Name the offending buffer from its creation label (empty if it was
-    // created without one — which is itself the signal: add a `.label` at that
+    // created without one - which is itself the signal: add a `.label` at that
     // createBuffer site so the next clobber names itself).
     const owner: []const u8 = lookupLabel(last_id, c.first_buf, &lbuf);
     const msg: []const u8 = bufPrint(

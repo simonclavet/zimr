@@ -1,20 +1,20 @@
-//! bone_socket — port of raylib's `models_bone_socket` with the real rigged
+//! bone_socket - port of raylib's `models_bone_socket` with the real rigged
 //! character. Loads the CC0 `greenman.glb` (a 12-joint HIERARCHICAL skeleton
 //! with 4 animations) and `greenman_sword.glb`, plays an animation, and rigidly
 //! sockets the sword to the `socket_hand_R` bone so it swings with the hand.
 //!
 //! This is the honest v1: CPU skinning, like `skinned_mesh`, but generalised
-//! from that flat 2-bone rig to a real one —
-//!   * FULL node hierarchy: each node's world = local · parent-world (walked
+//! from that flat 2-bone rig to a real one -
+//!   * FULL node hierarchy: each node's world = local * parent-world (walked
 //!     from the scene roots), not the unparented shortcut skinned_mesh used.
 //!   * FULL TRS animation: every clip animates translation + rotation + scale,
 //!     sampled per keyframe interval (linear for T/S, nlerp for R).
-//!   * NAMED socket: the sword follows `world[socket_hand_R]` — a bone found by
+//!   * NAMED socket: the sword follows `world[socket_hand_R]` - a bone found by
 //!     name, exactly as raylib does with `skeleton.bones[i].name`.
-//! The character deforms via Σ wₖ·(v·skinₖ); the sword (a rigid mesh) is just
+//! The character deforms via sum w_k*(v*skin_k); the sword (a rigid mesh) is just
 //! world[socket] applied to each vertex per frame. Matrix order follows zm's
 //! column-vector convention (see the `Mat` docs): build transforms with
-//! `composeN`/`compose`, which read in application order — a node's local is
+//! `composeN`/`compose`, which read in application order - a node's local is
 //! `composeN(scale, rotate, translate)`, a child's world is
 //! `compose(local, parentWorld)`, and a skin matrix is `compose(inverseBind, jointWorld)`.
 const std = @import("std");
@@ -183,7 +183,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             }
         }
     }
-    // Topological order: emit a node only after its parent (simple O(n²), n tiny).
+    // Topological order: emit a node only after its parent (simple O(n^2), n tiny).
     var order: [max_nodes]usize = undefined;
     var emitted: [max_nodes]bool = @splat(false);
     var count: usize = 0;
@@ -277,7 +277,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
-/// Normalized lerp between quaternions (nlerp — enough for these clips).
+/// Normalized lerp between quaternions (nlerp - enough for these clips).
 fn nlerp(a: Vec, b: Vec, alpha: f32) Vec {
     const qd: f32 = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
     const bb: Vec = if (qd < 0) -b else b;
@@ -355,7 +355,7 @@ fn update(f: *z.Frame, s: *State) void {
         world[ni] = if (p < 0) local else compose(local, world[@intCast(p)]);
     }
 
-    // ---- 3. skin the character: v' = Σ wₖ · (v · invBindₖ · worldₖ) ----
+    // ---- 3. skin the character: v' = sum w_k * (v * invBind_k * world_k) ----
     var skin_mat: [max_joints]Mat = undefined;
     for (0..s.joint_count) |ji| {
         skin_mat[ji] = compose(s.inverse_bind[ji], world[s.joint_nodes[ji]]);

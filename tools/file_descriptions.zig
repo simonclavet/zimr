@@ -1,8 +1,8 @@
-//! file_descriptions.zig — curated path -> description data for
+//! file_descriptions.zig - curated path -> description data for
 //! gen_files_md.zig (the file atlas).  GENERATED from the old
 //! scripts/gen_files_md.py dicts; edit descriptions here now.
 //! The right long-term home for a description is the file's own //!
-//! header — move entries out as files get touched.
+//! header - move entries out as files get touched.
 
 pub const Entry = struct { path: []const u8, text: []const u8 };
 

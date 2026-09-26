@@ -1,16 +1,16 @@
-// src/tests/character_walk_test.zig — regression guard for the CharacterVirtual
+// src/tests/character_walk_test.zig - regression guard for the CharacterVirtual
 // "walks in the air, freezes on landing" bug.
 //
 // `cvGetFirstContactForSweep` clamps a solved displacement to the first real
 // contact. It accepted ANY hit, including the floor the character is already
 // resting on: standing still on flat ground, a horizontal sweep hits that floor
-// at fraction 0 with normal (0,1,0) — perpendicular to the motion — and the
+// at fraction 0 with normal (0,1,0) - perpendicular to the motion - and the
 // whole step was multiplied by zero. The character moved normally while
 // airborne and stopped dead the instant it touched down, which reads as
 // "movement doesn't work" rather than as a collision bug.
 //
 // Jolt's GetFirstContactForSweep only treats a hit as blocking when its normal
-// OPPOSES the motion (`normal · displacement < 0`); this port had dropped that
+// OPPOSES the motion (`normal * displacement < 0`); this port had dropped that
 // check. Both halves are pinned here, because either one alone is easy to
 // satisfy wrongly: a character that walks but cannot be stopped is no better
 // than one that cannot walk.

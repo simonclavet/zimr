@@ -8,7 +8,7 @@
 //! later speed step; correctness first). `z.Compute` uploads the params anew before every
 //! unbatched dispatch, which is what lets one pipeline serve every layer of every network.
 //!
-//! ── LAYOUT ──
+//! -- LAYOUT --
 //!   params   per layer: W row-major [in, out], then b [out]
 //!   grads    laid out exactly like params
 //!   adam_m, adam_v   laid out exactly like params
@@ -64,7 +64,7 @@ pub const Params = extern struct {
     /// PPO's clip range epsilon (`ppo_mean_grad`, `ppo_logstd_grad`).
     clip: f32 = 0.2,
     _p2: u32 = 0,
-    // ── SAC (the squash / target / temperature kernels below) ──
+    // -- SAC (the squash / target / temperature kernels below) --
     /// A third acts offset (the second critic's output, an action's destination block).
     z_off: u32 = 0,
     /// acts offset of the pre-squash u (written forward, read backward).
@@ -87,7 +87,7 @@ pub const Params = extern struct {
     /// The bounds the actor's raw log-std is squashed into: min + half (1 + tanh(raw)).
     log_std_min: f32 = -5.0,
     log_std_max: f32 = 2.0,
-    // ── SuperTrack on the cartpole (the cp_ kernels) ──
+    // -- SuperTrack on the cartpole (the cp_ kernels) --
     /// 1: `dense_bwd_w` and `cp_track_bwd` ADD into their destination (gradients summed over
     /// unrolled steps); 0: they overwrite it.
     accumulate: u32 = 0,
@@ -102,7 +102,7 @@ pub const Params = extern struct {
     w_pole: f32 = 10.0,
     w_pole_rate: f32 = 0.1,
     w_action: f32 = 0.01,
-    // ── The latent model's gather (`lat_gather`): sizes, and where each resident region starts
+    // -- The latent model's gather (`lat_gather`): sizes, and where each resident region starts
     // in the activation buffer. Named for what they are rather than borrowing other kernels'
     // fields - twelve words, 48 bytes, so the struct keeps its 16-byte multiple.
     lat_features: u32 = 0,
@@ -291,7 +291,7 @@ pub fn mse_value(id: u32) void {
     b_loss[0] = sum / float(n);
 }
 
-// ── THE GAUSSIAN PPO HEAD ──
+// -- THE GAUSSIAN PPO HEAD --
 //
 // For a diagonal Gaussian policy (mean from the policy MLP at acts[y_off], one log-std per action
 // dimension at params[w_off]), PPO's clipped surrogate, averaged over the rows:
@@ -366,7 +366,7 @@ pub fn adam(id: u32) void {
     b_params[j] -= params.rate * m_hat / (sqrt(v_hat) + params.epsilon);
 }
 
-// ── SAC ──
+// -- SAC --
 //
 // The actor is a tanh-squashed Gaussian with ONE learned log-std per action dimension, bounded as
 // `log_std_min + half (1 + tanh(raw))` - exactly `robot_gym.SacAgent`'s parameterisation, so the
@@ -507,7 +507,7 @@ pub fn polyak(id: u32) void {
     b_params[j] = params.tau * b_params[params.v_off + id] + (1.0 - params.tau) * b_params[j];
 }
 
-// ── SUPERTRACK ON THE CARTPOLE ──
+// -- SUPERTRACK ON THE CARTPOLE --
 //
 // A state is four floats per row: cart, cart rate, pole angle, pole rate. The world model takes
 // [cart rate, pole angle, pole rate, force / max_force] and returns the two accelerations divided
@@ -633,7 +633,7 @@ pub fn add_block(id: u32) void {
     b_dacts[params.dy_off + id] += b_dacts[params.dx_off + id];
 }
 
-// ── THE LATENT WORLD MODEL'S TWO JOINS ──
+// -- THE LATENT WORLD MODEL'S TWO JOINS --
 //
 // The latent model (robot_latent.zig) steps as z' = z + Net([z | reference | action]). On the kit
 // the three inputs are one wide row - a block X_k of `rows` rows, `stride` floats apart, with z in
@@ -758,7 +758,7 @@ pub fn lat_gather(id: u32) void {
 /// bits (exact as floats), summed, centred and scaled by sqrt(3): mean 0, variance 1, bounded at
 /// +-3.46 (Irwin-Hall, rather than Box-Muller, whose log and cos GPUs may round differently). Plain
 /// Zig, so the CPU reference calls THIS function too - no copy to drift.
-// ──────── The resident data's layouts ────────
+// -------- The resident data's layouts --------
 //
 // Three parties have to agree on the shapes below, and only two of them exist today: the host packing
 // a record (`Resident.appendLatest`) and `lat_gather` reading one. The third arrives when the
@@ -857,7 +857,7 @@ pub fn lat_act_bwd(id: u32) void {
     b_dacts[params.dy_off + r * params.count + j] = params.lat_scale * d_action + params.lat_penalty * raw + smooth;
 }
 
-// ── SUPERTRACK, FUSED: ONE THREAD PER BATCH ROW RUNS THE WHOLE WINDOW ──
+// -- SUPERTRACK, FUSED: ONE THREAD PER BATCH ROW RUNS THE WHOLE WINDOW --
 //
 // The cp_ kernels above are one dispatch per layer operation: ~27 a window step, ~1,050 a
 // training iteration. These do the same arithmetic with ONE thread per batch row walking the
@@ -1262,7 +1262,7 @@ pub const kernels = [_][:0]const u8{
     "st_reduce",
 };
 
-// ★★★ THE EXPORT HOOK. Without it the SPIR-V compile of this file exports NOTHING: a 68-byte
+// *** THE EXPORT HOOK. Without it the SPIR-V compile of this file exports NOTHING: a 68-byte
 // module, an empty compute.wgsl for every entry, and `initGpu` failing on
 // `UniformBindingNotFound` - while the CPU twin, which calls the functions directly, passes every
 // test. zn_train has the same block; the kit was written without it.

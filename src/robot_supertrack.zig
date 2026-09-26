@@ -20,6 +20,7 @@
 //! has no abs), tanh instead of ELU, and small networks for a small system.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const zn = @import("zn");
 const gym = @import("robot_gym.zig");
@@ -151,7 +152,7 @@ pub const SuperTrack = struct {
     world: Net,
     /// `envs` rings of `per_env` records each, back to back.
     ///
-    /// ★ ONE SHARED RING WAS THE FIRST VERSION'S BUG: the cartpoles take turns recording, so
+    /// * ONE SHARED RING WAS THE FIRST VERSION'S BUG: the cartpoles take turns recording, so
     /// consecutive records were different cartpoles - a world-model "window" was nine states of
     /// nine cartpoles (its end check passed because record +8 is the same one a tick later), and
     /// a policy start's 1-step window never matched a segment, so the policy never trained.
@@ -160,14 +161,14 @@ pub const SuperTrack = struct {
     heads: []usize,
     lens: []usize,
     rng: std.Random.DefaultPrng,
-    // ── The world model's graph: a window of real states and forces, rolled out. ──
+    // -- The world model's graph: a window of real states and forces, rolled out. --
     wm_graph: Graph,
     wm_states: [][4]Var,
     wm_forces: []Var,
     wm_loss: Var,
     wm_vars: [6]Var,
     wm_adam: gym.AdamSet,
-    // ── The policy's graph: a start state and noise, rolled out through the world model. ──
+    // -- The policy's graph: a start state and noise, rolled out through the world model. --
     pi_graph: Graph,
     pi_start: Columns,
     pi_noise: []Var,
@@ -254,7 +255,7 @@ pub const SuperTrack = struct {
         pick_pole.data[1] = acc_scale;
         const zero_col: Tensor = try filled(arena, &.{ b, 1 }, 0.0);
 
-        // ── The world model's graph. ──
+        // -- The world model's graph. --
         st.wm_graph = .init(arena);
         st.wm_graph.useScratchAllocator(gpa);
         const wg: *Graph = &st.wm_graph;
@@ -282,7 +283,7 @@ pub const SuperTrack = struct {
         st.wm_loss = loss.?;
         st.wm_adam = try .init(arena, &st.world.tensors());
 
-        // ── The policy's graph: rolled out through the SAME world model weights. ──
+        // -- The policy's graph: rolled out through the SAME world model weights. --
         st.pi_graph = .init(arena);
         st.pi_graph.useScratchAllocator(gpa);
         const pg: *Graph = &st.pi_graph;
@@ -588,7 +589,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         pol_step: u32 = 0,
         wm_step: u32 = 0,
         arena_state: std.heap.ArenaAllocator,
-        // ── The FUSED path (st_ kernels): its own upload region, records, per-row gradients. ──
+        // -- The FUSED path (st_ kernels): its own upload region, records, per-row gradients. --
         f_p_start: u32,
         f_p_eps: u32,
         f_w_start: u32,
@@ -969,7 +970,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
             @memset(p.staging[p.zero..][0 .. r * 4], 0.0);
             // Only the policy step's own region (the zero target, starts, noise).
             p.pipe.uploadAt(.acts, 0, p.staging[0..p.w_start]);
-            // ONE submission for the whole window, ~900 dispatches (compute_host's recording, §8 E1).
+            // ONE submission for the whole window, ~900 dispatches (compute_host's recording, section 8 E1).
             p.pipe.beginRecording();
             for (0..n) |k| {
                 p.mlpFwd(p.pol, p.p_state[k], 1, p.p_h1[k], p.p_h2[k], p.p_o[k]);
@@ -1136,7 +1137,7 @@ pub fn evaluate(st: ?*SuperTrack, episodes: u32, seed: u64) f32 {
 }
 
 test "supertrack: supervised learning alone holds a real cartpole upright under pushes" {
-    // ★★★ SIMON'S QUESTION: can a world model learned by supervision, and a policy optimised by
+    // *** SIMON'S QUESTION: can a world model learned by supervision, and a policy optimised by
     // back-propagating a tracking loss through it, hold a REAL cartpole upright under pushes -
     // with no reward, no critic, no MPC and no PPO or SAC? Eight cartpoles gather data with the
     // current policy plus noise; each iteration trains the world model one step and the policy
@@ -1182,13 +1183,11 @@ fn runCartpole(options: Options, iterations: usize, every: usize) !f32 {
         next_segment += 1;
     }
     const baseline: f32 = evaluate(null, 10, 99);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  SuperTrack alone, real cartpole, a push every {d} steps (cap {d}):\n", .{
+    report.print("\n  SuperTrack alone, real cartpole, a push every {d} steps (cap {d}):\n", .{
         push_every,
         episode_cap,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    zero-force baseline: {d:.1} steps\n", .{baseline});
+    report.print("    zero-force baseline: {d:.1} steps\n", .{baseline});
     var samples: usize = 0;
     var wm_loss: f32 = 0;
     var pi_loss: f32 = 0;
@@ -1230,13 +1229,11 @@ fn runCartpole(options: Options, iterations: usize, every: usize) !f32 {
         train_ns += std.Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
         if (iteration % every == 0) {
             final_eval = evaluate(st, 10, 99);
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    iteration {d:>4} ({d:>6} samples): world loss {e:.2}, policy loss {d:.4}, " ++
+            report.print("    iteration {d:>4} ({d:>6} samples): world loss {e:.2}, policy loss {d:.4}, " ++
                 "REAL episodes {d:.1} steps\n", .{ iteration, samples, wm_loss, pi_loss, final_eval });
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    training: {d:.2} ms an iteration (batch {d}, windows {d}/{d})\n", .{
+    report.print("    training: {d:.2} ms an iteration (batch {d}, windows {d}/{d})\n", .{
         @as(f64, @floatFromInt(train_ns)) / 1.0e6 / @as(f64, @floatFromInt(iterations)),
         options.batch,
         options.wm_window,

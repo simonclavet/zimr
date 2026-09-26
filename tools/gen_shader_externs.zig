@@ -1,7 +1,7 @@
-//! tools/gen_shader_externs.zig — codegen library for the per-shader
+//! tools/gen_shader_externs.zig - codegen library for the per-shader
 //! The binding model this codegen implements (VS uniforms=group 0,
 //! samplers=group 1, FS uniforms=group 2) is documented centrally in
-//! src/zimr.zig (§3) — the single source of truth for the wgpu stack.
+//! src/zimr.zig (section 3) - the single source of truth for the wgpu stack.
 //!
 //! `*_extern.zig` files referenced by shader bodies.
 //!
@@ -10,7 +10,7 @@
 //! the iface schema.  Phase 2 derives them from the iface struct via
 //! comptime reflection.
 //!
-//! This file is a LIBRARY — `pub fn emit(comptime IfaceMod: type,
+//! This file is a LIBRARY - `pub fn emit(comptime IfaceMod: type,
 //! writer: anytype) !void` does the reflection.  The actual exe per
 //! shader is a tiny generated bootstrap built by `build.zig`:
 //!
@@ -22,7 +22,7 @@
 //!     }
 //!
 //! Each bootstrap exe gets the relevant iface wired as its own named
-//! module dep, so each one sees exactly ONE iface — no shared-file
+//! module dep, so each one sees exactly ONE iface - no shared-file
 //! conflict between ifaces (which doomed earlier aggregator attempts).
 //! This pattern scales naturally to external zimr users: their
 //! `addShader(body, .{ .iface = LazyPath })` call from their own
@@ -57,7 +57,7 @@ fn zigTypeForElem(comptime elem: anytype) []const u8 {
 /// permit runtime indexing into `@Vector`).
 ///
 /// Special case: matrices come through as `[16]f32` in the schema
-/// for readability — flat 16 floats — and get emitted as the
+/// for readability - flat 16 floats - and get emitted as the
 /// `[4]@Vector(4, f32)` shape that the SPIR-V backend expects for
 /// column-major matrices.
 ///
@@ -70,7 +70,7 @@ fn zigTypeForType(comptime T: type) []const u8 {
         f32 => "f32",
         i32 => "i32",
         u32 => "u32",
-        // Matrices: flat 16 floats in source schema → 4×vec4 in the
+        // Matrices: flat 16 floats in source schema -> 4xvec4 in the
         // generated extern (matches how SPIR-V sees a column-major
         // matrix).
         [16]f32 => "[4]@Vector(4, f32)",
@@ -87,8 +87,8 @@ fn zigTypeForType(comptime T: type) []const u8 {
             // Outer arrays: `[N]Inner` where Inner has its own emit
             // rule.  Runtime indexing into the resulting extern works
             // because the outer is still an array, not a vector.
-            //   [MAX_DIRECTIONAL_LIGHTS]@Vector(3, f32) → "[N]@Vector(3, f32)"
-            //   [MAX_POINT_LIGHTS]f32                   → "[N]f32"
+            //   [MAX_DIRECTIONAL_LIGHTS]@Vector(3, f32) -> "[N]@Vector(3, f32)"
+            //   [MAX_POINT_LIGHTS]f32                   -> "[N]f32"
             .array => |info| comptime blk: {
                 const inner: []const u8 = zigTypeForType(info.child);
                 break :blk std.fmt.comptimePrint("[{d}]{s}", .{ info.len, inner });
@@ -107,13 +107,13 @@ fn zigTypeForType(comptime T: type) []const u8 {
 /// locations); FS schemas declare `Inputs` (interpolated varyings,
 /// locations assigned by declaration order, matching the VS's
 /// `Outputs`).  Both stages may declare `Uniforms`, `Outputs`, and
-/// (FS only) `Samplers`.  Missing decls are skipped — this is what
+/// (FS only) `Samplers`.  Missing decls are skipped - this is what
 /// lets the same `emit` work for both stages.
 ///
 /// Emitted code is self-contained: no `@import` of `shadermath` etc.
 /// Vec types come through as `@Vector(N, f32)`; matrices as
-/// `[4]@Vector(4, f32)`.  The shader body — which imports
-/// `shadermath` for math helpers — sees the externs through the
+/// `[4]@Vector(4, f32)`.  The shader body - which imports
+/// `shadermath` for math helpers - sees the externs through the
 /// generated module's `pub` decls and treats them as the right types.
 /// This keeps the `*_extern` module a pure leaf (no module deps),
 /// which simplifies build.zig wiring.
@@ -125,10 +125,10 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // without those resources.  Reject at compile time with a message
     // pointing at the typo.
     //
-    // `Ubo` is recognized; `Ubos` is not (singular form on purpose —
+    // `Ubo` is recognized; `Ubos` is not (singular form on purpose -
     // there's exactly one UBO per shader for now).  Sub-types referenced
     // by the recognized decls (e.g. a `Helper` type used inside `Ubo`'s
-    // fields) are decl in the iface module too — they're ignored here
+    // fields) are decl in the iface module too - they're ignored here
     // because Zig's `@hasDecl` includes them, and there's no way to
     // distinguish "schema-section name" from "helper type name" by
     // shape alone.  The convention: schema-section names are
@@ -155,7 +155,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         // Walk every pub decl on the iface; flag any close-miss against
         // the recognized list.  Decls whose names don't resemble any
         // schema section (e.g. user-defined `Helper`, `MAX_LIGHTS`)
-        // are left alone — they may legitimately be local constants
+        // are left alone - they may legitimately be local constants
         // or helper types referenced by the schema.
         for (close_misses) |miss| {
             if (@hasDecl(IfaceMod, miss.wrong)) {
@@ -183,7 +183,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // WebGPU guarantees only 16 inter-stage shader variables (the `@location`
     // slots a VS `Outputs` / FS `Inputs` struct consumes, one per field). A
     // schema that forwards more would pass codegen and fail at *pipeline
-    // creation* on the device — a driver error far from the schema. Catch it
+    // creation* on the device - a driver error far from the schema. Catch it
     // here with a clear comptime error naming the offending stage instead.
     comptime {
         const max_inter_stage: u32 = 16;
@@ -315,7 +315,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // the extern is emitted with that exact name (the SPIR-V backend
     // name-magics it to the FragDepth builtin, same mechanism as
     // `position`) and it neither gets a Location decoration nor
-    // consumes a location index — color outputs after it keep their
+    // consumes a location index - color outputs after it keep their
     // slots.
     if (@hasDecl(IfaceMod, "Outputs")) {
         try writer.writeAll("// Stage outputs (location = field index; frag_depth = builtin).\n");
@@ -368,7 +368,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         inline for (info.field_names, info.field_types) |field_name, field_type| {
             // Sanity-check: the field type must be a Sampler2D-shaped
             // marker (has both `slot` AND `sampler_config` decls).
-            // Anything else is a schema error — most commonly:
+            // Anything else is a schema error - most commonly:
             //   - Typo'd marker: `Sample2D` instead of `Sampler2D`
             //   - Old DSL shape: `Sampler2D(.X)` without the `.{}` config arg
             //     (the marker is back-compat for the test path but won't
@@ -406,7 +406,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // visible to consumer code that does `shader_externs.Ubo`).
     // The `extern const u: Ubo addrspace(.uniform)` extern decl
     // lives INSIDE `_Spirv` (only valid on SPIR-V targets).  The
-    // `_binding_u: u32` const stays inside `_Spirv` too — only the
+    // `_binding_u: u32` const stays inside `_Spirv` too - only the
     // entry-point Wrapper needs to reference it, and that access
     // is already `_Spirv._binding_u`.
     //
@@ -423,7 +423,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // See `examples/mandelbrot_fs.zig` for the canonical pattern.
     if (@hasDecl(IfaceMod, "Ubo")) {
         // Build-time gate: reject a UBO whose WGSL uniform (std140) layout Tint/
-        // Dawn would refuse (e.g. `[N]f32` → `array<f32,N>` stride 4). Fails here
+        // Dawn would refuse (e.g. `[N]f32` -> `array<f32,N>` stride 4). Fails here
         // with a precise message instead of shipping bad WGSL to the device.
         shader_iface.assertValidUniform(IfaceMod.Ubo);
         // The SPIR-V-side wire mirror.  Zig 0.17.0-dev.1245 bans `@Vector`
@@ -432,7 +432,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         // C/extern layout, which is still legal on the SPIR-V target where
         // vectors have a defined representation.  `UboWire` lives inside
         // `_Spirv` so CPU targets never resolve its layout.  Field names and
-        // types match `Ubo` exactly — the entry wrapper copies field-by-field
+        // types match `Ubo` exactly - the entry wrapper copies field-by-field
         // (see the `.u = .{ ... }` construction below), and the host computes
         // the identical offsets via `shader_interface.wireOffsetOf`.
         try writer.writeAll("pub const UboWire = extern struct {\n");
@@ -482,7 +482,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
 
     // ---- Builtins: SPIR-V builtin inputs (no descriptor binding).  These
     //               are magic extern values (`std.spirv.vertex_index` etc.),
-    //               NOT comptime constants — so we can't `const`-alias them.
+    //               NOT comptime constants - so we can't `const`-alias them.
     //               The accessor method reads `std.spirv.<name>` directly; we
     //               only need to validate the schema here.
     if (@hasDecl(IfaceMod, "Builtins")) {
@@ -497,14 +497,14 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     //               shader body invokes at the top of main.  Replaces
     //               the hand-written `zm.location(&io.x, io._location_x)`
     //               and `zm.binding(&io.u, 0, io._binding_u)` calls
-    //               that used to live in every shader body — the
+    //               that used to live in every shader body - the
     //               codegen knows every needed decoration already.
     //               `noinline` so spirv-opt keeps the call shape stable
     //               (decorations attach to the variables, not the call).
     //
     // The function is unconditionally emitted (no `@hasDecl` guards).
     // A schema with no Inputs/Outputs/Samplers/Ubo produces a
-    // setup() with zero bodies — still callable, still no-op.  The
+    // setup() with zero bodies - still callable, still no-op.  The
     // empty case matters for probe shaders and depth-only passes.
     try writer.writeAll(
         \\// ---- setup() ----------------------------------------------
@@ -527,7 +527,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         \\
     );
 
-    // Vertex attributes → location.
+    // Vertex attributes -> location.
     if (@hasDecl(IfaceMod, "Attributes")) {
         const info = @typeInfo(IfaceMod.Attributes).@"struct";
         inline for (info.field_names) |field_name| {
@@ -537,7 +537,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // FS inputs → location.
+    // FS inputs -> location.
     if (@hasDecl(IfaceMod, "Inputs")) {
         const info = @typeInfo(IfaceMod.Inputs).@"struct";
         inline for (info.field_names) |field_name| {
@@ -547,7 +547,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // Stage outputs → location (frag_depth is a builtin: no location).
+    // Stage outputs -> location (frag_depth is a builtin: no location).
     if (@hasDecl(IfaceMod, "Outputs")) {
         const info = @typeInfo(IfaceMod.Outputs).@"struct";
         inline for (info.field_names) |field_name| {
@@ -560,24 +560,24 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // UBO → descriptor set + binding.
+    // UBO -> descriptor set + binding.
     if (@hasDecl(IfaceMod, "Ubo")) {
         // Stage-segregated, same scheme as loose Uniforms below: a VS
         // Ubo block lands in descriptor set 0, an FS Ubo block in set 2.
         // A two-stage pipeline that uses a Ubo block in BOTH stages then
         // never collides at (group,binding).  Stage is detected
-        // structurally — a VS schema declares `Attributes`.
+        // structurally - a VS schema declares `Attributes`.
         // Group from the SINGLE SOURCE OF TRUTH shared with the runtime layout
         // solver (shader_introspect.solveLayout via the same function), so the
         // emitted @group can never drift from the host bind groups.
         const ubo_set: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
         try writer.print("    zm_binding(&u, {d}, _binding_u);\n", .{ubo_set});
     }
-    // Loose `Uniforms` → descriptor set + binding, SEGREGATED BY STAGE.
+    // Loose `Uniforms` -> descriptor set + binding, SEGREGATED BY STAGE.
     //
     // The VS and FS are translated to WGSL as SEPARATE modules, each
     // numbering its uniforms from binding 0.  Without explicit
-    // decorations they COLLIDE when linked into one pipeline — e.g.
+    // decorations they COLLIDE when linked into one pipeline - e.g.
     // lambert's VS `mat_model` and FS `col_diffuse` both land at
     // group(0)/binding(1), which WebGPU rejects (one resource per
     // (group,binding) across stages).  The GL path never hit this
@@ -585,13 +585,13 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     //
     // Fix: give each STAGE its own descriptor set so the two uniform
     // spaces are physically disjoint and can never collide, for any
-    // shader.  Stage is detected structurally — a VS schema declares
+    // shader.  Stage is detected structurally - a VS schema declares
     // `Attributes`, an FS schema declares `Inputs` (verified across
     // every engine shader).  Convention:
-    //   - VS `Uniforms`  → set 0  (the vertex-stage uniform group)
-    //   - samplers       → set 1  (already, via the Samplers solver)
-    //   - FS `Uniforms`  → set 2  (the fragment-stage uniform group)
-    // Bindings run 0,1,2,… within each set in declaration order, which
+    //   - VS `Uniforms`  -> set 0  (the vertex-stage uniform group)
+    //   - samplers       -> set 1  (already, via the Samplers solver)
+    //   - FS `Uniforms`  -> set 2  (the fragment-stage uniform group)
+    // Bindings run 0,1,2,... within each set in declaration order, which
     // the host mirrors when building the per-group bind-group layout.
     if (@hasDecl(IfaceMod, "Uniforms")) {
         const uniform_set: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
@@ -608,16 +608,16 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // Sampler descriptor set + binding.  Reads each sampler field's
     // `sampler_config` from its marker type (set by the user via the
     // DSL).  When no override is set, falls back to "lowest unclaimed
-    // binding in group 1" — same algorithm as
+    // binding in group 1" - same algorithm as
     // `shader_introspect.solveLayout`, inlined here because the
     // codegen library has no host-side imports.  See
-    // `src/notes/finishing_new_gpu_foundations.md` turn 1 §C.
+    // `src/notes/finishing_new_gpu_foundations.md` turn 1 section C.
     if (@hasDecl(IfaceMod, "Samplers")) {
         const sinfo = @typeInfo(IfaceMod.Samplers).@"struct";
         // Pass 0: verify every field is a recognized sampler marker.
         // Without this, a typo like `texture0: Sample2D(.albedo, .{})`
         // (missing the `r`) would silently produce a non-marker type
-        // with no `sampler_config` decl — and `@field` would
+        // with no `sampler_config` decl - and `@field` would
         // @compileError with an obscure message far from the user's
         // typo.  Catch it loudly here with the field name + offending
         // type spelled out.
@@ -636,8 +636,8 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         // Pass 1: collect (group, binding) cells claimed by pinned/shared.
         // Emit a `zm_binding` decoration per sampler. The (group, binding)
         // assignment is delegated to the ONE shared authority in
-        // shader_interface — the SAME function shader_introspect.solveLayout
-        // (host bind-group layout) calls — so the emitted WGSL and the host
+        // shader_interface - the SAME function shader_introspect.solveLayout
+        // (host bind-group layout) calls - so the emitted WGSL and the host
         // layout can never drift. Each Sampler2D is a texture at N + a paired
         // sampler at N+1 (zspv_rewrite synthesizes the sampler half).
         const slots = shader_iface.solveSamplerSlots(IfaceMod.Samplers);
@@ -687,7 +687,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     try writer.writeAll("} else struct {};\n\n");
 
     // ---- Module-level Ubo type ----------------------------------
-    // Pure struct type — target-independent.  Consumers do
+    // Pure struct type - target-independent.  Consumers do
     // `shader_externs.Ubo` to get the type for `IoT(Ubo)` or for
     // their own typed UBO buffers.  PLAIN struct (Zig 1245 bans
     // vector fields in extern structs on CPU targets); the GPU wire
@@ -717,7 +717,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // emitted side-by-side from S1 through S5 of that plan.  After
     // S5 the old emission drops.
     //
-    // The new API is emitted UNCONDITIONALLY — every shader that
+    // The new API is emitted UNCONDITIONALLY - every shader that
     // wants to use it can adopt the new shape independently.  Shaders
     // not yet migrated keep using the old `extern var out_color`
     // module-scope decl + `setup()` pattern, and the new emissions
@@ -741,14 +741,14 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     //   - Calls `body(io)` and gets the returned Out.
     //   - Writes Out's fields back to the extern outputs.
     // On CPU targets (when `builtin.target.cpu.arch.isSpirV()` is
-    // false), installSpirvEntry is a no-op — the caller just runs
+    // false), installSpirvEntry is a no-op - the caller just runs
     // `main(io)` directly per pixel.
 
     // Emit `pub fn IoT(comptime UboType: type) type { return struct { ... } }`.
     //
     // KEY DESIGN: Io is a function-returning-a-type rather than a
     // direct struct.  This avoids io.zig needing to `@import("iface")`
-    // — which would put the iface file in BOTH the 'iface' module
+    // - which would put the iface file in BOTH the 'iface' module
     // (as io's dep) AND the example's 'root' module (which often
     // imports iface relatively for `LoadedShader(iface)`).  Zig 0.16
     // forbids one file being claimed by two modules.
@@ -756,7 +756,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // The shader source closes the loop by instantiating:
     //   const iface_mod = @import("mandelbrot_fs_io.zig");
     //   pub const Io = io_mod.IoT(iface_mod.Ubo);
-    // — relative imports of the iface from the shader source AND the
+    // - relative imports of the iface from the shader source AND the
     // example's CPU code share the SAME module (root), so the file-
     // in-two-modules rule isn't triggered.
     //
@@ -914,7 +914,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // Loose Uniforms — engine-managed + custom scalars.  These are
+    // Loose Uniforms - engine-managed + custom scalars.  These are
     // distinct from Ubo (a single uniform block).  In the GLSL output
     // they become individual `uniform` decls; in Io they become
     // top-level fields.
@@ -965,7 +965,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // ---- Declarations (must come AFTER all fields per Zig's
     // container layout rule).
     if (!@hasDecl(IfaceMod, "Ubo")) {
-        // No Ubo — UboType param is unused.  Emit a comptime discard
+        // No Ubo - UboType param is unused.  Emit a comptime discard
         // so Zig doesn't flag the param.  When Ubo IS present, the
         // `u: UboType` field above is the usage; emitting `_ = UboType`
         // anyway would trip the "pointless discard of function
@@ -976,12 +976,12 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
                 "        }\n",
         );
     }
-    // Sampler accessor methods — `pub fn texture0(self, uv) Vec`.
+    // Sampler accessor methods - `pub fn texture0(self, uv) Vec`.
     // Body is target-conditional via `comptime` if so the unused
     // branch doesn't have to compile.  SPIR-V calls the extern sample
     // op; CPU does a nearest-neighbor lookup against `self._<name>`.
     //
-    // No `_ = self;` in the SPIR-V branch — `self` IS used after the
+    // No `_ = self;` in the SPIR-V branch - `self` IS used after the
     // if (in the CPU return), and Zig considers that a use regardless
     // of comptime-dead status, so an explicit discard trips the
     // "pointless discard of function parameter" check.
@@ -997,7 +997,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
                     "        }}\n",
                 .{ field_name, field_name, field_name },
             );
-            // Explicit-LOD twin — legal in a VERTEX shader (no derivatives).
+            // Explicit-LOD twin - legal in a VERTEX shader (no derivatives).
             // CPU path ignores `lod` and samples the base level.
             try writer.print(
                 "        pub fn {s}Level(self: @This(), uv: @Vector(2, f32), lod: f32) @Vector(4, f32) {{\n" ++
@@ -1010,7 +1010,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // Storage-buffer accessor methods — `pub fn positions(self, i) Elem`.
+    // Storage-buffer accessor methods - `pub fn positions(self, i) Elem`.
     // On SPIR-V, `ssboLoad` the extern buffer; on CPU, index the
     // host-supplied slice field `_<name>`. (CPU path only needed if a
     // storage-fed shader is ever run through the software rasterizer; for
@@ -1032,7 +1032,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // Builtin accessor methods — `pub fn vertex_index(self) u32`.
+    // Builtin accessor methods - `pub fn vertex_index(self) u32`.
     // SPIR-V-only values; the CPU branch returns 0 (dispatcher drives
     // per-vertex/instance iteration itself, so the body's builtin reads
     // aren't used on CPU).
@@ -1060,12 +1060,12 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
 
     // Emit `pub const Out = struct { ... }`.
     //
-    // For VS shaders (detected by `@hasDecl("Attributes")` — vertex
+    // For VS shaders (detected by `@hasDecl("Attributes")` - vertex
     // shaders consume vertex attributes, FS consume varying inputs),
     // automatically emit a `position: @Vector(4, f32)` field.  This
     // is the clip-space output position the rasterizer needs.
     //
-    // On SPIR-V the codegen wires `out.position` → `position_out.*`
+    // On SPIR-V the codegen wires `out.position` -> `position_out.*`
     // (std.gpu's special-cased clip-space output).  On CPU the
     // dispatcher reads `out.position` directly to drive triangle
     // setup.  Single source of truth; the shader source writes one
@@ -1093,7 +1093,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // The function takes the body fn as an anytype: caller passes
     // `pub fn shaderMain(io: Foo) Bar` and the wrapper infers Io / Out
     // from the function's signature.  This keeps io.zig free of any
-    // mention of the iface module — Io and Out are owned by the
+    // mention of the iface module - Io and Out are owned by the
     // shader source's IoT(iface.Ubo) instantiation.
     try writer.writeAll(
         \\// installSpirvEntry: comptime-emit the SPIR-V `entry` wrapper.
@@ -1162,14 +1162,14 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         }
     }
     // OpDecorate calls for the Ubo block, SEGREGATED BY STAGE exactly
-    // like the loose Uniforms below (VS Ubo → set 0, FS Ubo → set 2;
+    // like the loose Uniforms below (VS Ubo -> set 0, FS Ubo -> set 2;
     // samplers own set 1).  This is the path installSpirvEntry actually
     // emits, so the descriptor set MUST be decided here to reach the
-    // SPIR-V — setup() is the legacy hand-call API.
+    // SPIR-V - setup() is the legacy hand-call API.
     if (@hasDecl(IfaceMod, "Ubo")) {
         // Group via the SINGLE SOURCE OF TRUTH (honors a schema's `ubo_group`
         // override, e.g. the decal FS pinning its projector UBO to group 1) so
-        // this — the path installSpirvEntry actually emits — can never drift
+        // this - the path installSpirvEntry actually emits - can never drift
         // from setup()/solveLayout.
         const ubo_set_e: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
         try writer.print("            zm_binding(&_Spirv.u, {d}, _Spirv._binding_u);\n", .{ubo_set_e});
@@ -1177,9 +1177,9 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // OpDecorate calls for loose `Uniforms`, SEGREGATED BY STAGE so the
     // VS and FS uniform spaces never collide when linked into one
     // WebGPU pipeline.  VS schemas declare `Attributes`, FS schemas
-    // declare `Inputs`; VS uniforms → set 0, FS uniforms → set 2
+    // declare `Inputs`; VS uniforms -> set 0, FS uniforms -> set 2
     // (samplers own set 1).  See the matching block in setup() for the
-    // full rationale — this is the path `installSpirvEntry` actually
+    // full rationale - this is the path `installSpirvEntry` actually
     // emits (setup() is the legacy hand-call API), so the decoration
     // MUST be here to reach the SPIR-V.
     if (@hasDecl(IfaceMod, "Uniforms")) {
@@ -1204,7 +1204,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // `src/notes/finishing_new_gpu_foundations.md` turn 1.
     //
     // The same field-type check from setup()'s emission also runs
-    // here — defensive duplication so a refactor that breaks the
+    // here - defensive duplication so a refactor that breaks the
     // setup() path still catches malformed Samplers schemas.
     if (@hasDecl(IfaceMod, "Samplers")) {
         const sinfo = @typeInfo(IfaceMod.Samplers).@"struct";
@@ -1219,7 +1219,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             }
         }
         // Same shared authority as the module-level branch and
-        // shader_introspect.solveLayout — one solver, zero drift.
+        // shader_introspect.solveLayout - one solver, zero drift.
         const slots_e = shader_iface.solveSamplerSlots(IfaceMod.Samplers);
         inline for (sinfo.field_names, 0..) |field_name, i| {
             try writer.print(
@@ -1266,7 +1266,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         // io-side `u: Ubo` extern is io's own duplicate Ubo type;
         // body's _IoT.u expects the iface's Ubo type (passed in to
         // IoT).  Those two extern structs are layout-identical but
-        // nominally distinct — Zig rejects whole-struct assignment.
+        // nominally distinct - Zig rejects whole-struct assignment.
         // Field-by-field via an anonymous-struct literal coerces to
         // the target's Ubo type with no copy at the SPIR-V level
         // (spirv-opt folds the constructor).
@@ -1292,7 +1292,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // Storage bindings: same as samplers — SPIR-V field type is `void`,
+    // Storage bindings: same as samplers - SPIR-V field type is `void`,
     // assign the empty value; the accessor's SPIR-V branch reaches into
     // `_Spirv.<name>` directly and never reads this field.
     if (@hasDecl(IfaceMod, "Storage")) {
@@ -1311,7 +1311,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     );
     // Write Out fields back to extern outputs.  When Outputs is
     // empty (e.g. shadow_vs has `pub const Outputs = struct {}`)
-    // AND this is not a VS (no Attributes → no auto-emitted
+    // AND this is not a VS (no Attributes -> no auto-emitted
     // `position` field), discard `out` to silence the unused-local
     // check.
     const has_outputs = @hasDecl(IfaceMod, "Outputs") and
@@ -1326,17 +1326,17 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
     }
-    // For VS shaders, wire out.position → std.gpu's position_out.*
+    // For VS shaders, wire out.position -> std.gpu's position_out.*
     // (the special-cased clip-space output the SPIR-V backend
-    // recognizes).  This decoupling — VS source writes a regular
-    // struct field, codegen handles the SPIR-V binding — keeps the
+    // recognizes).  This decoupling - VS source writes a regular
+    // struct field, codegen handles the SPIR-V binding - keeps the
     // shader body free of the `position_out.* = ...` magic and lets
     // the same field flow naturally to the CPU rasterizer.
     //
     // `position_out` has type `*addrspace(.output) @Vector(4, f32)`
     // (see `std/gpu.zig`).  Address-space-typed pointers don't cast
     // to plain pointers, so we just use the std.gpu decl directly
-    // — no intermediate local variable needed.  Access via _Spirv
+    // - no intermediate local variable needed.  Access via _Spirv
     // (the namespace wrapping all SPIR-V-only decls).
     if (is_vs) {
         try writer.writeAll(
@@ -1354,12 +1354,12 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         \\
     );
 
-    // The installSpirvEntry body references `_builtin` — we add the
+    // The installSpirvEntry body references `_builtin` - we add the
     // import below alongside the shadermath forwarding decls.
 
     // ---- Forwarding decls to keep the generated file dep-free ----
     // The setup() body and sampler accessors reference `zm_location`,
-    // `zm_binding`, `zm_zsample2d` — we forward those to `zm` (the
+    // `zm_binding`, `zm_zsample2d` - we forward those to `zm` (the
     // unified math module) via @import inline.  `_builtin` is now
     // declared in the prologue (so `_is_spirv` can reference it for
     // the `_Spirv` wrap), but `zm_*` forwarding still lives at the
@@ -1392,14 +1392,14 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
 // ---- Unit tests
 // These verify the emit logic against fixture ifaces inline.  Run
 // via `zig build test`.  Real round-trip verification (generated
-// extern file → spirv compile → identical GLSL) belongs in the main
+// extern file -> spirv compile -> identical GLSL) belongs in the main
 // build's smoke pass once the build.zig wiring lands.
 
 const ElemKindForTest = enum { vec2, vec3, vec4, ivec4, uvec4 };
 
 /// Test-only Attr stub.  Mirrors `shader_interface.Attr(elem, loc)`'s
 /// public shape (`element`, `location`) without depending on the real
-/// type — so this test file is self-contained.
+/// type - so this test file is self-contained.
 fn FakeAttr(comptime elem_kind: ElemKindForTest, comptime loc: u32) type {
     return struct {
         pub const element: ElemKindForTest = elem_kind;
@@ -1487,7 +1487,7 @@ test "emit handles FS schema (inputs + samplers + uniforms + outputs)" {
 }
 
 test "emit rejects unsupported types with a clear compileError" {
-    // Compile-time-only check — exercising this requires `@compileError`,
+    // Compile-time-only check - exercising this requires `@compileError`,
     // which we can't test at runtime.  Documented here as an
     // intentional invariant: `zigTypeForType(f64)` etc. fail the
     // build with a message naming the offending type.

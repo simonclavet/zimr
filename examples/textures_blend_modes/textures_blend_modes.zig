@@ -1,7 +1,7 @@
-//! textures_blend_modes — port of raylib [textures] example.
+//! textures_blend_modes - port of raylib [textures] example.
 //! Draws a cyberpunk-street background, then composites the foreground over it
 //! with a cycling blend mode (alpha / additive / multiply / premultiplied).
-//! SPACE or tap cycles the mode — exercises the engine's beginBlendMode.
+//! SPACE or tap cycles the mode - exercises the engine's beginBlendMode.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");

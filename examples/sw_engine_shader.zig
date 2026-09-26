@@ -1,10 +1,10 @@
-//! examples/sw_engine_shader.zig — render through zimr's ENGINE
+//! examples/sw_engine_shader.zig - render through zimr's ENGINE
 //! shader pair (default_shapes_vs + default_shapes_fs) on the CPU,
 //! producing a colored PNG.
 //!
 //! This is the headline proof that one Zig source IS the shader on
 //! both backends.  The same files in `src/shaders/default_shapes_*.zig`
-//! that compile to SPIR-V → WGSL and drive `Renderer2D`'s wgpu
+//! that compile to SPIR-V -> WGSL and drive `Renderer2D`'s wgpu
 //! pipeline ALSO compile natively on x86_64 and run pixel-by-pixel
 //! through `raster_shader.rasterizeTriangles`.  No transpiler, no
 //! two-files-kept-in-sync, no drift.
@@ -13,8 +13,8 @@
 //! standard vertex shape (position in screen pixels, tex_coord in
 //! [0,1], color as RGBA).  The view-projection UBO is an orthographic
 //! projection so positions are in screen-pixel units.  Textures use
-//! the same 1×1 white-pixel convention as the wgpu Renderer2D —
-//! untextured draws bind a 1×1 white TextureRef so `frag_color`
+//! the same 1x1 white-pixel convention as the wgpu Renderer2D -
+//! untextured draws bind a 1x1 white TextureRef so `frag_color`
 //! flows straight through unmodified.
 //!
 //! Run:
@@ -54,7 +54,7 @@ const Vertex = struct {
     color: [4]f32,
 };
 
-/// The engine's ortho top-left projection (screen pixels → clip space) —
+/// The engine's ortho top-left projection (screen pixels -> clip space) -
 /// the SAME function the wgpu side feeds into the engine UBO each frame.
 /// (A stale local copy lived here until GL-retirement P2; it had rotted
 /// to zm.Mat during math-unification while its caller kept [16]f32.)
@@ -70,9 +70,9 @@ fn monotonicNs() i128 {
 /// `main`: route ONE immediate-mode triangle through the SAME
 /// `default_shapes` pair + `rasterizeTriangles` the direct path uses.
 /// The vertex positions are ALREADY clip-space (raster transforms them at
-/// submission), so the VS is bypassed and `Out` is built directly —
+/// submission), so the VS is bypassed and `Out` is built directly -
 /// preserving the full vec4 position (matters for perspective 3D, not
-/// only W=1 2D).  Untextured: the 1×1 white-pixel convention, so
+/// only W=1 2D).  Untextured: the 1x1 white-pixel convention, so
 /// `frag_color` flows straight through.
 fn ffBridge(
     ctx_opaque: *anyopaque,
@@ -216,7 +216,7 @@ fn runBenchmark(gpa: Allocator) !void {
         benchScene(&ctx, @floatFromInt(wi));
     }
 
-    // Path A — fixed-function triangleKernel.
+    // Path A - fixed-function triangleKernel.
     ctx.ff_triangle = null;
     const a0: i128 = monotonicNs();
     var fa: u32 = 0;
@@ -225,7 +225,7 @@ fn runBenchmark(gpa: Allocator) !void {
     }
     const ns_a: i128 = monotonicNs() - a0;
 
-    // Path B — programmable rasterizeTriangles + real default_shapes_fs.
+    // Path B - programmable rasterizeTriangles + real default_shapes_fs.
     ctx.ff_triangle = ffBridgeBench;
     const b0: i128 = monotonicNs();
     var fb: u32 = 0;
@@ -256,18 +256,18 @@ pub fn main() !void {
     defer _ = gpa_impl.deinit();
     const gpa: Allocator = gpa_impl.allocator();
 
-    // 1. Set up the raster context — the SW framebuffer.
+    // 1. Set up the raster context - the SW framebuffer.
     var ctx: raster.Context = try .init(gpa, width, height);
     defer ctx.deinit(gpa);
     ctx.clearColor(.{ .r = 24, .g = 24, .b = 32, .a = 255 });
     ctx.clear(.{ .color = true });
 
-    // 2. Build the UBO — ortho projection so positions are in pixels.
+    // 2. Build the UBO - ortho projection so positions are in pixels.
     //    Same matrix the wgpu side feeds into the engine UBO each
     //    frame.  The VS multiplies vertex_position (vec2 in pixels)
     //    by this view_projection to produce clip-space vec4.
     // renderer_2d's matrix is the GPU-UBO byte layout ([16]f32); the typed
-    // shader IO wants zm.Mat ([4]@Vector(4,f32)) — same bytes, row-major.
+    // shader IO wants zm.Mat ([4]@Vector(4,f32)) - same bytes, row-major.
     const view_proj: Mat = @bitCast(orthoTopLeft(@floatFromInt(width), @floatFromInt(height)));
     const ubo: shader.Io = .{
         // vertex_* fields get overwritten per-vertex below.
@@ -277,7 +277,7 @@ pub fn main() !void {
         .u = .{ .view_projection = view_proj },
     };
 
-    // 3. Define three triangles — positions in SCREEN PIXELS.  The VS
+    // 3. Define three triangles - positions in SCREEN PIXELS.  The VS
     //    maps them through view_projection to clip space.  Winding:
     //    CCW in CLIP space (matching wgpu's default front-face rule).
     //    `rasterizeTriangles` now defaults to `.front_face = .ccw`
@@ -287,11 +287,11 @@ pub fn main() !void {
     const cy: f32 = float(height / 2);
     const vertices = [_]Vertex{
         // Triangle 1: big RGB-gradient central, CCW in clip space.
-        // After Y-flip to screen, this reads top → bot-left → bot-right.
+        // After Y-flip to screen, this reads top -> bot-left -> bot-right.
         .{ .pos = .{ cx, cy - 220 }, .uv = .{ 0.5, 1.0 }, .color = .{ 1.0, 0.2, 0.2, 1.0 } },
         .{ .pos = .{ cx - 200, cy + 120 }, .uv = .{ 0.0, 0.0 }, .color = .{ 0.2, 1.0, 0.2, 1.0 } },
         .{ .pos = .{ cx + 200, cy + 120 }, .uv = .{ 1.0, 0.0 }, .color = .{ 0.2, 0.2, 1.0, 1.0 } },
-        // Triangle 2: yellow→magenta→cyan, top-left flag
+        // Triangle 2: yellow->magenta->cyan, top-left flag
         .{ .pos = .{ 80, 80 }, .uv = .{ 0, 0 }, .color = .{ 1.0, 0.95, 0.2, 1.0 } },
         .{ .pos = .{ 80, 280 }, .uv = .{ 0, 1 }, .color = .{ 0.2, 0.9, 1.0, 1.0 } },
         .{ .pos = .{ 280, 180 }, .uv = .{ 1, 0.5 }, .color = .{ 0.95, 0.4, 0.95, 1.0 } },
@@ -302,7 +302,7 @@ pub fn main() !void {
     };
 
     // 4. Run the VS on each vertex.  Same `shaderMain(io) Out` call
-    //    pattern the wgpu wrapper would do on SPIR-V — but here we
+    //    pattern the wgpu wrapper would do on SPIR-V - but here we
     //    invoke it directly from native code.
     const t0: i128 = monotonicNs();
     var vs_outs: [vertices.len]shader.Out = undefined;
@@ -316,7 +316,7 @@ pub fn main() !void {
         vs_outs[i] = shader.shaderMain(io);
     }
 
-    // 5. Build a 1×1 white texture for the FS to sample.  Matches the
+    // 5. Build a 1x1 white texture for the FS to sample.  Matches the
     //    wgpu `createWhite1x1` convention so untextured draws produce
     //    the per-vertex color unmodified.
     const white_px = [_]u8{ 255, 255, 255, 255 };
@@ -329,7 +329,7 @@ pub fn main() !void {
     // 6. Set up the FS's base Io.  The varyings (frag_tex_coord,
     //    frag_color) will be written per-pixel by the rasterizer;
     //    the texture binding lives on the Io struct's `_texture0`
-    //    field (CPU-only field — on SPIR-V the field type is `void`).
+    //    field (CPU-only field - on SPIR-V the field type is `void`).
     const base_fs_io: shader_fs.Io = .{
         .frag_tex_coord = .{ 0, 0 },
         .frag_color = .{ 1, 1, 1, 1 },
@@ -357,7 +357,7 @@ pub fn main() !void {
 
     // ---- PROOF: the immediate-mode fixed-function path is the SAME
     //      rasteriser.  Re-draw the identical triangles through raster's
-    //      immediate-mode API + the `ff_triangle` hook (→ ffBridge →
+    //      immediate-mode API + the `ff_triangle` hook (-> ffBridge ->
     //      the SAME default_shapes pair), then diff against the direct
     //      path above.  Both now flow through `rasterizeTriangles`, so
     //      a match proves fixed-function and programmable drawing are
@@ -411,7 +411,7 @@ pub fn main() !void {
 
     const ms: f64 = float64(t1 - t0) / 1_000_000.0;
 
-    // 8. Encode framebuffer → PNG.
+    // 8. Encode framebuffer -> PNG.
     const fb_bytes: []const u8 = ctx.colorBufferBytes();
     const png_bytes: []u8 = try codecs.png.encode(gpa, fb_bytes, width, height);
     defer gpa.free(png_bytes);
@@ -445,7 +445,7 @@ pub fn main() !void {
 }
 
 // ---- Phase 2.5 Turn-1: rasteriser perf ground truth -----------------------
-// Renders the `sidebyside` scene (10 alpha-disc fans + a hexagon ≈ 246
+// Renders the `sidebyside` scene (10 alpha-disc fans + a hexagon ~ 246
 // triangles/frame, blend on) N times through the SAME immediate-mode driver,
 // differing ONLY in `ff_triangle`: `null` routes to the fixed-function
 // `triangleKernel`; `ffBridgeBench` routes to `rasterizeTriangles` + the REAL
@@ -456,5 +456,5 @@ pub fn main() !void {
 // Blend-aware bridge for the benchmark (the proof's `ffBridge` stays `.{}`):
 // reads the context's effective blend state and dispatches the matching
 // comptime `RasterizeOpts`, with `front_face = .none` (the 2D scene never
-// enables culling, matching `triangleKernel`) and a 1×1 white texture (the
-// scene is untextured — `default_shapes_fs` still samples, exactly as on GPU).
+// enables culling, matching `triangleKernel`) and a 1x1 white texture (the
+// scene is untextured - `default_shapes_fs` still samples, exactly as on GPU).

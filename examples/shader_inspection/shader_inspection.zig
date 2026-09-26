@@ -1,7 +1,7 @@
 // examples/shader_inspection/shader_inspection.zig
 //
 // Shader inspection: paste WGSL, see the bind-group layout it expects. This is
-// the read-out side of the custom-pipeline API — `z.material.reflectWgslBindings`
+// the read-out side of the custom-pipeline API - `z.material.reflectWgslBindings`
 // scans the source for every `@group(N) @binding(M) var ...` declaration and
 // classifies each as uniform / storage / texture / sampler / storage_texture.
 // The same data feeds `z.material.bindGroupLayout`, so what you see here is what
@@ -20,7 +20,7 @@ const bufPrint = std.fmt.bufPrint;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // A representative custom-pipeline shader: bindings across three groups and one
-// of every kind the reflector understands. (Entry points are stubs — only the
+// of every kind the reflector understands. (Entry points are stubs - only the
 // declarations matter for inspection.)
 const demo_wgsl =
     \\struct Camera { view: mat4x4<f32>, proj: mat4x4<f32> };

@@ -7,13 +7,13 @@
 //   RELEASE sustain_level -> silence, over release_ms
 //
 // The four sliders regenerate the Wave on the CPU, so the plot below is not an
-// illustration of the envelope — it IS the PCM that will be played. What you see
+// illustration of the envelope - it IS the PCM that will be played. What you see
 // is literally what you hear, which is the only way to be sure the envelope is
 // actually being applied rather than merely configured.
 //
 // No engine work needed: `composer.Envelope` already carries the full ADSR
 // (attack_ms / decay_ms / sustain_level / release_ms) and `tone()` multiplies it
-// into every sample. That shape is pinned by a host test in features_test.zig —
+// into every sample. That shape is pinned by a host test in features_test.zig -
 // tone generation is pure CPU, so it is checkable without a device or ears.
 //
 // Leak-clean (`.memory = .managed`): each regeneration releases the previous
@@ -52,7 +52,7 @@ const State = struct {
     release_ms: f32 = 320.0,
     freq_hz: f32 = 330.0,
 
-    /// Per-column peak |sample| of the generated PCM — the envelope, MEASURED off
+    /// Per-column peak |sample| of the generated PCM - the envelope, MEASURED off
     /// the wave rather than re-derived from the sliders.
     plot: [plot_cols]f32 = @splat(0),
     frames: u32 = 0,
@@ -81,7 +81,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 /// Rebuild the Wave from the current ADSR, upload it, and measure its envelope
-/// for the plot. The OLD sound is released first — regenerating on every slider
+/// for the plot. The OLD sound is released first - regenerating on every slider
 /// nudge would otherwise pile up buffers.
 fn regenerate(f: *z.Frame, s: *State) void {
     const w: z.Wave = z.composer.tone(&s.audio.waves, s.gpa, .{

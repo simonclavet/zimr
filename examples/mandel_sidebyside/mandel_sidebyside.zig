@@ -4,13 +4,13 @@
 // GPU at the same time, on one zoomable view.
 //   - LEFT of the (fixed, centered) divider: the mandelbrot_fs `shaderMain`
 //     dispatched PER PIXEL on the CPU (raster_shader.dispatchFragmentShader) into
-//     a LOW-RES software framebuffer (1/5 canvas res — chunky but fast), then
+//     a LOW-RES software framebuffer (1/5 canvas res - chunky but fast), then
 //     uploaded + blitted.
 //   - RIGHT of the divider: the EXACT SAME `shaderMain`, compiled to WGSL, run
 //     as a full-resolution GPU fullscreen pass.
 //
 // One shader. One iteration loop. Two execution targets, side by side. Pan by
-// dragging, zoom with the mouse wheel or a two-finger pinch — both halves track
+// dragging, zoom with the mouse wheel or a two-finger pinch - both halves track
 // the same (center, zoom) because they share one UBO.
 //
 // Build:      zig build wgpu-mandel-sidebyside
@@ -40,7 +40,7 @@ const width: u32 = 960;
 const height: u32 = 600;
 
 // Software side: 1/5 resolution. The CPU mandelbrot is expensive (width*height*max_iter
-// per frame, single wasm thread), so we render it small and upscale — the
+// per frame, single wasm thread), so we render it small and upscale - the
 // chunky result is the whole point of the comparison.
 // sw_w/sw_h are the INITIAL dims; `ensureCpuTarget` reshapes the buffer to
 // the live canvas aspect each frame at this constant pixel budget.
@@ -56,7 +56,7 @@ const initial_zoom: f32 = 1.0;
 // A third execution target alongside CPU (raster) and GPU (WGSL). The fractal here
 // is evaluated PER PIXEL at COMPILE TIME and baked into the binary as a const;
 // runtime just blits it. It uses the INITIAL view + resolution, so on load all
-// three renders are identical. It cannot pan — it is literally a const in the
+// three renders are identical. It cannot pan - it is literally a const in the
 // read-only data section. One shader source. Three execution targets.
 const corner_cols: usize = 64;
 const corner_rows: usize = 40;
@@ -90,7 +90,7 @@ const corner_image: [corner_rows * corner_cols]Color = blk: {
     break :blk img;
 };
 
-/// Raw RGBA8 view of the corner — uploaded ONCE to a small texture and
+/// Raw RGBA8 view of the corner - uploaded ONCE to a small texture and
 /// drawn as a single quad instead of a 2560-rect grid (the helmet's
 /// rect-grid version of this was the difference between 60 and 16 fps).
 const corner_bytes: [corner_rows * corner_cols * 4]u8 = blk: {
@@ -108,7 +108,7 @@ const corner_bytes: [corner_rows * corner_cols * 4]u8 = blk: {
 
 // No field defaults: initState constructs and returns a fully-specified State
 // (zimr_app.run takes initState by value-return, so a missing field is a
-// compile error — the "uninitialized/default-ignored" class can't happen).
+// compile error - the "uninitialized/default-ignored" class can't happen).
 const State = struct {
     gpu_shader: z.shader.LoadedShader(shader_io),
     sw: z.raster.Context,
@@ -161,7 +161,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         sw.colorBufferBytes(),
         "mandel_sbs_sw",
     );
-    // Every field set explicitly — no defaults to silently drop.
+    // Every field set explicitly - no defaults to silently drop.
     s.* = .{
         .gpu_shader = gpu_shader,
         .sw = sw,
@@ -190,7 +190,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 /// Map a screen pixel (logical px) to a complex-plane point for the CURRENT
-/// view — the inverse of the shader's pixel→complex mapping. Used to keep the
+/// view - the inverse of the shader's pixel->complex mapping. Used to keep the
 /// world point under the cursor/pinch-midpoint fixed across zoom.
 fn screenToComplex(
     p: Vec2,
@@ -206,7 +206,7 @@ fn screenToComplex(
     // corresponds to frag.y = (1 - p.y/sh_f), and the shader computes
     //   c.y = center.y - (frag.y*resH - halfH) * scale.
     // Substituting frag.y = 1 - p.y/sh_f gives c.y = center.y + (p.y - half)*scale
-    // — i.e. the Y term is PLUS here (the shader's own flip already accounts for
+    // - i.e. the Y term is PLUS here (the shader's own flip already accounts for
     // screen-down). Getting this wrong inverts pan; it must mirror the shader.
     return .{
         center[0] + (p[0] - 0.5 * sw_f) * scale,
@@ -229,7 +229,7 @@ fn handleInput(f: *z.Frame, s: *State) void {
         const scale: f32 = z.getGesturePinchScale(&s.gestures);
         const mid: Vec2 = z.getGesturePinchMid(&s.gestures);
         s.dragging = false; // pinch wins over drag
-        // scale is 1.0 on the first two-finger frame (no baseline yet) — skip.
+        // scale is 1.0 on the first two-finger frame (no baseline yet) - skip.
         if (scale > 0 and scale != 1.0) {
             // Zoom about the midpoint: keep the world point under `mid` fixed.
             const world_before: Vec2 = screenToComplex(mid, sw_f, sh_f, s.center, s.zoom);
@@ -263,7 +263,7 @@ fn handleInput(f: *z.Frame, s: *State) void {
         // Keep the world point grabbed at press (drag_anchor_world) under the
         // cursor: center = anchor - offset*scale on BOTH axes. (Both axes use
         // the same sign now that screenToComplex's Y term is +, matching the
-        // shader. X and Y symmetric — if they differ, one axis pans backwards.)
+        // shader. X and Y symmetric - if they differ, one axis pans backwards.)
         s.center = .{
             s.drag_anchor_world[0] - off[0] * scale,
             s.drag_anchor_world[1] - off[1] * scale,
@@ -312,7 +312,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // The app's coordinate space is f.window.screen_width/height (the contract;
     // see wgpu_app cssToLogical). In .responsive that's the LIVE size, which may
-    // differ from width/height — so read it live, never hardcode. Both halves + the
+    // differ from width/height - so read it live, never hardcode. Both halves + the
     // shader resolution use this same size.
     const vw: f32 = f.window.widthf();
     const vh: f32 = f.window.heightf();
@@ -348,7 +348,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- Composite: software (CPU) over the LEFT of the splitter.  The
     //      divider is a width FRACTION (rotation-stable) that follows the
-    //      pointer — helmet mechanics (t1168) — except while the UI owns
+    //      pointer - helmet mechanics (t1168) - except while the UI owns
     //      the mouse (panel drags must not sweep the split).
     const m_div: Vec2 = z.getMousePosition(f.input);
     const is_first_zero: bool = s.last_mouse[0] < 0 and m_div[0] == 0 and m_div[1] == 0;

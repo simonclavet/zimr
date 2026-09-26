@@ -1,7 +1,7 @@
 // Sentinel-terminated array whose element is an enum-tag typedef: `[N:sentinel]Enum`.
 // Its wrapper is `arr_Ns<id>_<enumTag>` with a non-primitive element. Pre-fix
 // isStructElemArrayTag rejected the `Ns<id>` sentinel count, so structTagOf DIVERTED
-// the wrapper to the scalar/string path — `t = arr` (a whole-array value) read the
+// the wrapper to the scalar/string path - `t = arr` (a whole-array value) read the
 // first 4 bytes as a single number and used it as a base address, so element reads
 // were garbage (0). Fix parses the count before the `s` marker there too; a
 // non-primitive element is then recognized as an array-of-aggregates (carrying the

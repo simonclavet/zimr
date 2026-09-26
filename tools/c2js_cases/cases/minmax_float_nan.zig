@@ -1,7 +1,7 @@
-// @min / @max with a NaN operand. Zig's @min/@max ignore NaN — they return the
+// @min / @max with a NaN operand. Zig's @min/@max ignore NaN - they return the
 // non-NaN operand (LLVM minnum/maxnum / C fmin/fmax semantics). The C backend
 // lowers these to zig_min_f64 / zig_max_f64, which were mapped to JS Math.min /
-// Math.max — and those return NaN if EITHER argument is NaN, so `@min(x, nan)`
+// Math.max - and those return NaN if EITHER argument is NaN, so `@min(x, nan)`
 // came back NaN instead of x. Fixed with NaN-ignoring __fmin/__fmax helpers.
 var sink: f64 = 0;
 fn rf(x: f64) f64 {

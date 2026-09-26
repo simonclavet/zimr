@@ -1,11 +1,11 @@
-//! src/shaders/fluid_discs_fs.zig — instanced SDF-disc FS body (IoT).
+//! src/shaders/fluid_discs_fs.zig - instanced SDF-disc FS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version. Draws a soft-edged disc inside
 //! the quad: distance from centre `r = length(corner)`, faded by `smoothstep`.
 //!
 //! The original WGSL `if (r > 1.0) { discard; }` is reproduced WITHOUT an OpKill:
 //! `smoothstep(0.8, 1.0, r)` saturates to 1 for r >= 1 (it clamps), so the edge
-//! term — and therefore the output alpha — is exactly 0 outside the inscribed
+//! term - and therefore the output alpha - is exactly 0 outside the inscribed
 //! disc. Under the pipeline's straight-alpha blend a 0-alpha fragment
 //! contributes nothing (identical to a discard), and the pass writes no depth
 //! (passive `.always`), so the discard has no other observable effect. The

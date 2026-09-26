@@ -1,4 +1,4 @@
-//! examples/mandelbrot_fs_io.zig — schema for the Mandelbrot
+//! examples/mandelbrot_fs_io.zig - schema for the Mandelbrot
 //! fragment shader.  Declares the data interface (Inputs, Outputs,
 //! Ubo) consumed by `mandelbrot_fs.zig` and shared with the CPU
 //! host `mandelbrot.zig` / `mandelbrot_split.zig`.
@@ -19,24 +19,24 @@ pub const Inputs = struct {
     // NOTE: this FS computes its own color from frag_tex_coord and does NOT
     // read a vertex color, so `frag_color` is intentionally NOT declared. (It
     // was previously here to mirror the 2D vertex format, but an FS must only
-    // declare the varyings it consumes — otherwise its @location inputs don't
+    // declare the varyings it consumes - otherwise its @location inputs don't
     // match a minimal fullscreen VS's outputs, and WebGPU rejects the pipeline.)
 };
 
-/// Stage output — the rendered fractal colour.
+/// Stage output - the rendered fractal colour.
 pub const Outputs = struct {
     out_color: Vec,
 };
 
 /// UBO layout.  std140 alignment rules: vec2 needs 8-byte alignment,
 /// the whole block must round to vec4 (16-byte) alignment.  Explicit
-/// `_padN` fields enforce the right offsets — the comptime check in
+/// `_padN` fields enforce the right offsets - the comptime check in
 /// `UniformBuffer(T)` catches "forgot trailing pad" drift via
 /// `@sizeOf(T) % 16 == 0`.
 pub const Ubo = struct {
     /// Complex-plane center the view is anchored at.
     center: Vec2,
-    /// View scale (1.0 → canvas height spans 4 units of imaginary axis).
+    /// View scale (1.0 -> canvas height spans 4 units of imaginary axis).
     zoom: f32,
     /// std140: vec2 needs 8-byte alignment, so we pad 4 bytes here
     /// before `resolution`.

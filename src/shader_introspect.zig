@@ -1,7 +1,7 @@
 //! lint:alias shader_introspect
 // src/shader_introspect.zig - comptime schema introspection.
 // WebGPU architecture is documented centrally in src/zimr.zig
-// (the module-level `//!` doc) — read that before changing wgpu code.
+// (the module-level `//!` doc) - read that before changing wgpu code.
 //
 //
 // Zimr's unfair advantage (D14).  Zig comptime lets us walk a
@@ -18,12 +18,12 @@
 //      array at comptime.  Zero runtime cost.
 //
 //   3. Sanity-check the schema against the transpiler's WGSL output
-//      (when the transpiler arrives — see `shader_compile.zig`).
+//      (when the transpiler arrives - see `shader_compile.zig`).
 //      If the schema says `time: f32` and the WGSL says `time: i32`,
 //      that's caught at compile time.
 //
-// Neither Mach nor raygpu can do this — they're written in C / C99.
-// We are the only library where the GPU↔CPU contract is type-checked
+// Neither Mach nor raygpu can do this - they're written in C / C99.
+// We are the only library where the GPU<->CPU contract is type-checked
 // at the source level.
 //
 // All functions here are `comptime` only.  No runtime helpers.
@@ -39,7 +39,7 @@ const expectEqualStrings = std.testing.expectEqualStrings;
 const wgpu = @import("wgpu.zig");
 
 // ============================================================================
-// SECTION 1 — UBO layout validation
+// SECTION 1 - UBO layout validation
 // ============================================================================
 //
 // WGSL uniform buffers follow a layout similar to GLSL std140:
@@ -87,7 +87,7 @@ pub fn validateUboLayoutComptime(comptime T: type) void {
         // Zig 1245 bans vector fields in extern structs on CPU targets, so
         // schema Ubos are PLAIN structs whose GPU bytes come from the wire
         // serializer.  An extern struct here would layout-error the moment a
-        // host constructs a value of it — reject it with the reason.
+        // host constructs a value of it - reject it with the reason.
         if (info.@"struct".layout == .@"extern") {
             @compileError("UBO type `" ++ @typeName(T) ++
                 "` must be a plain `struct` (extern structs can no longer " ++
@@ -111,7 +111,7 @@ pub fn validateUboLayoutComptime(comptime T: type) void {
             const fsize: usize = shader.wireFieldSize(field_type);
 
             // A field must not straddle a 16-byte boundary unless it is
-            // itself 16-aligned (vec4, mat4, vec runs) — the std140 rule the
+            // itself 16-aligned (vec4, mat4, vec runs) - the std140 rule the
             // engine's uniform blocks follow.
             const start_bucket: usize = off / 16;
             const end_bucket: usize = (off + fsize - 1) / 16;
@@ -128,10 +128,10 @@ pub fn validateUboLayoutComptime(comptime T: type) void {
 }
 
 /// Assert that a vertex shader's `Outputs` (the varyings it emits) match a
-/// fragment shader's `Inputs` (the varyings it reads) field-for-field — same
+/// fragment shader's `Inputs` (the varyings it reads) field-for-field - same
 /// names, same types, same declaration order. Both stages assign WGSL
 /// `@location` indices by field index (see tools/gen_shader_externs.zig), so an
-/// equal field list guarantees matching locations and a valid VS→FS link;
+/// equal field list guarantees matching locations and a valid VS->FS link;
 /// drift produces a pipeline that the GPU silently rejects at draw time (the
 /// turn-N6 mandelbrot bug: an FS `Inputs.frag_color` the VS never output).
 ///
@@ -144,13 +144,13 @@ pub fn validateUboLayoutComptime(comptime T: type) void {
 /// reads varyings).
 pub fn assertVaryingsMatch(comptime VsSchema: type, comptime FsSchema: type) void {
     // Zig 0.17: `return` can't escape a `comptime { }` block, so the body is
-    // no longer wrapped — both params are comptime, and every caller invokes
+    // no longer wrapped - both params are comptime, and every caller invokes
     // this in a comptime context, so the analysis still happens at comptime.
     {
         const vs_has = @hasDecl(VsSchema, "Outputs");
         const fs_has = @hasDecl(FsSchema, "Inputs");
 
-        // Neither side has varyings → trivially fine (e.g. a fullscreen pass
+        // Neither side has varyings -> trivially fine (e.g. a fullscreen pass
         // whose VS emits only the built-in clip position and whose FS reads no
         // interpolated inputs).
         if (!vs_has and !fs_has) {
@@ -196,7 +196,7 @@ pub fn assertVaryingsMatch(comptime VsSchema: type, comptime FsSchema: type) voi
 }
 
 // ============================================================================
-// SECTION 2 — bind group layout auto-generation
+// SECTION 2 - bind group layout auto-generation
 // ============================================================================
 
 pub const BindGroupLayoutEntry = struct {
@@ -319,31 +319,31 @@ pub fn autoStorageBindGroupLayout(comptime ShaderIo: type) []const BindGroupLayo
 }
 
 // ============================================================================
-// SECTION 3 — layout solver (turn 1 of finishing_new_gpu_foundations.md)
+// SECTION 3 - layout solver (turn 1 of finishing_new_gpu_foundations.md)
 // ============================================================================
 //
 // `solveLayout(SchemaT)` is a comptime function that walks a shader's
 // resources struct, reads each field's DSL marker config, and
-// produces a stable `ResolvedLayout` — the canonical
+// produces a stable `ResolvedLayout` - the canonical
 // `(group, binding)` assignment for every resource the shader uses.
 //
-// Rules (per the plan, §C of turn 1):
+// Rules (per the plan, section C of turn 1):
 //
 //   1. Pinned fields (`.pinned = .{group,binding}`) claim their
 //      cell first.  Solver never overrides them.
 //   2. Shared fields (`.shared = ...`) are pinned via a named
-//      external location — same mechanism, different intent.
+//      external location - same mechanism, different intent.
 //   3. Free fields (`.{}`) partition by kind:
-//        - UBO → group 0
-//        - Sampler2D / texture → group 1
-//        - Storage buffer (read-write) → group 2
+//        - UBO -> group 0
+//        - Sampler2D / texture -> group 1
+//        - Storage buffer (read-write) -> group 2
 //   4. Within a group, free fields take bindings in DECLARATION
 //      ORDER, skipping cells claimed by pinned fields.  A pinned
 //      field at (1, 5) makes free samplers take 0,1,2,3,4,6.
 //   5. Result is sorted by (group, binding) for stable emission.
 //
 // Stability: appending a new free field at the END never renumbers
-// existing fields.  Inserting in the middle can — and the comptime
+// existing fields.  Inserting in the middle can - and the comptime
 // dup-binding check catches collisions before the SPIR-V is built.
 //
 // The solver runs ONCE per schema, at comptime.  Result is a
@@ -353,7 +353,7 @@ pub fn autoStorageBindGroupLayout(comptime ShaderIo: type) []const BindGroupLayo
 pub const FieldKind = enum { ubo, sampler_2d, storage_buffer };
 
 /// One resolved binding's worth of information.  The solver produces
-/// `[]const ResolvedField` — one entry per resource (sampler, UBO,
+/// `[]const ResolvedField` - one entry per resource (sampler, UBO,
 /// storage buffer) in the schema.  Iteration order is
 /// declaration-order, NOT (group, binding)-sorted; iteration order
 /// has to match the user's struct so `Resources.init(.{...})` can
@@ -366,7 +366,7 @@ pub const ResolvedField = struct {
     /// What kind of resource this is.  Drives the codegen path and
     /// the bind-group-layout-entry shape.
     kind: FieldKind,
-    /// Final (group, binding) assignment — what lands on the
+    /// Final (group, binding) assignment - what lands on the
     /// SPIR-V variable as `OpDecorate DescriptorSet` / `Binding`,
     /// and what shows up in the WGSL as `@group(N) @binding(M)`.
     group: u32,
@@ -395,7 +395,7 @@ pub const ResolvedLayout = struct {
 
 /// Read a Sampler2D field's marker config and return the resolved
 /// override (if any).  Returns `null` when the marker has `.{}`
-/// defaults — solver picks the cell.
+/// defaults - solver picks the cell.
 fn readSamplerOverride(comptime SamplerT: type) ?struct { group: u32, binding: u32, origin: ResolvedField.Origin } {
     if (!@hasDecl(SamplerT, "sampler_config")) {
         return null;
@@ -411,7 +411,7 @@ fn readSamplerOverride(comptime SamplerT: type) ?struct { group: u32, binding: u
 }
 
 /// True if the schema declares `Samplers` with at least one field that has no
-/// `.pinned`/`.shared` override — i.e. a sampler that would take the default
+/// `.pinned`/`.shared` override - i.e. a sampler that would take the default
 /// group. Used by the up-front contention diagnostic in `solveLayout`.
 fn hasUnpinnedSampler(comptime SchemaT: type) bool {
     if (!@hasDecl(SchemaT, "Samplers")) {
@@ -434,7 +434,7 @@ fn hasUnpinnedSampler(comptime SchemaT: type) bool {
 ///
 /// **Comptime dup-binding check.**  After every assignment, scans
 /// for any other field already at the same `(group, binding)`.
-/// Collision triggers `@compileError` with both field names — the
+/// Collision triggers `@compileError` with both field names - the
 /// schema can't ship with a colliding layout.
 pub fn solveLayout(comptime SchemaT: type) ResolvedLayout {
     comptime {
@@ -447,12 +447,12 @@ pub fn solveLayout(comptime SchemaT: type) ResolvedLayout {
 
         // Per-group claimed-bindings bitmasks.  Bit N set = binding
         // N in this group is taken (by a pinned/shared field).
-        // 64 bits is plenty — WebGPU minimum is 8 bindings per group.
+        // 64 bits is plenty - WebGPU minimum is 8 bindings per group.
         var claimed_in_group: [4]u64 = .{ 0, 0, 0, 0 };
 
         // ---- Up-front group-contention diagnostic ----------------------------
         // The per-section claiming below catches (group, binding) collisions,
-        // but by whichever section claims last — so the error names a symptom.
+        // but by whichever section claims last - so the error names a symptom.
         // This block runs FIRST and names the actual cause for the one
         // non-obvious case: a schema that pins its UBO (via `ubo_group`) into a
         // group already spoken for by the default sampler or storage placement.
@@ -471,7 +471,7 @@ pub fn solveLayout(comptime SchemaT: type) ResolvedLayout {
             }
             // Storage binds in the UBO's group, right after the UBO. If
             // unpinned samplers ALSO default into that group, all three
-            // contend. (Storage-vs-UBO alone is fine — storage starts at
+            // contend. (Storage-vs-UBO alone is fine - storage starts at
             // binding 1.) Flag the sampler overlap specifically.
             if (@hasDecl(SchemaT, "Storage") and ug == shader.sampler_group and hasUnpinnedSampler(SchemaT)) {
                 @compileError(std.fmt.comptimePrint(
@@ -524,8 +524,8 @@ pub fn solveLayout(comptime SchemaT: type) ResolvedLayout {
                 }
 
                 // Assignment: delegate to the ONE shared solver in
-                // shader_interface — the SAME function the SPIR-V binding codegen
-                // (tools/gen_shader_externs.zig) calls — so the host layout and
+                // shader_interface - the SAME function the SPIR-V binding codegen
+                // (tools/gen_shader_externs.zig) calls - so the host layout and
                 // the emitted WGSL @group/@binding can never drift. Each slot is
                 // a texture+sampler PAIR: mark BOTH binding and binding+1 claimed
                 // so the later Ubo/Storage sections see the full occupancy.
@@ -555,7 +555,7 @@ pub fn solveLayout(comptime SchemaT: type) ResolvedLayout {
         // The UBO's group is STAGE-DEPENDENT, matching the codegen
         // (tools/gen_shader_externs.zig, documented at its top): a VS
         // schema (declares `Attributes`) emits its uniform at @group(0);
-        // an FS schema (declares `Inputs`) emits it at @group(2) — group
+        // an FS schema (declares `Inputs`) emits it at @group(2) - group
         // 1 is reserved for the material samplers. A lone Ubo schema with
         // neither marker defaults to group 0. This MUST agree with the
         // emitted WGSL or the pipeline layout mismatches and the GPU
@@ -589,7 +589,7 @@ pub fn solveLayout(comptime SchemaT: type) ResolvedLayout {
 
         // ---- Storage ----
         // Storage buffers: placement delegated to the ONE shared authority in
-        // shader_interface — the SAME function the SPIR-V codegen calls — so
+        // shader_interface - the SAME function the SPIR-V codegen calls - so
         // the host layout and the emitted WGSL @group/@binding can't drift.
         // (They bind in the stage's uniform group, at bindings after the Ubo.)
         if (@hasDecl(SchemaT, "Storage")) {
@@ -660,9 +660,9 @@ fn kindLabelWgsl(k: WgslBinding.Kind) []const u8 {
 ///
 /// This is exactly the drift that otherwise surfaces only on-device as Dawn's
 /// opaque "Binding type in the shader (sampler) doesn't match the type in the
-/// layout (texture)" at pipeline creation — the 6-texture PBR bug. Calling this
+/// layout (texture)" at pipeline creation - the 6-texture PBR bug. Calling this
 /// at pipeline-init time (or in a test with the embedded WGSL) turns that into a
-/// named cell. It only checks WGSL⊆host: a host entry the WGSL doesn't use is
+/// named cell. It only checks WGSLsubset ofhost: a host entry the WGSL doesn't use is
 /// allowed (WebGPU permits over-provisioned layouts, and Tint may drop unused
 /// bindings). Caller owns nothing; the function frees its own scratch.
 pub fn layoutWgslMismatch(
@@ -726,7 +726,7 @@ pub fn layoutWgslMismatch(
 }
 
 /// Verify the schema's UBO field names + types match what the WGSL
-/// transpiler emitted.  Currently a no-op stub — wired up once
+/// transpiler emitted.  Currently a no-op stub - wired up once
 /// `shader_compile.zig` has reflection data from the transpiler.  For the
 /// binding-location cross-check that IS implemented, see `layoutWgslMismatch`.
 pub fn validateSchemaMatchesWgsl(
@@ -740,7 +740,7 @@ pub fn validateSchemaMatchesWgsl(
 }
 
 // ============================================================================
-// SECTION 4 — WGSL binding reflection (the "shader inspection" surface)
+// SECTION 4 - WGSL binding reflection (the "shader inspection" surface)
 // ============================================================================
 // A small, pure-Zig scanner that pulls resource bindings out of WGSL source:
 // every `@group(N) @binding(M) var ...` global declaration, classified by
@@ -943,7 +943,7 @@ test "autoMaterialBindGroupLayout emits texture+sampler pair per Samplers field"
         };
     };
     const entries = comptime autoMaterialBindGroupLayout(Schema);
-    // 1 ubo + 2 samplers × (tex + sampler) = 5 entries
+    // 1 ubo + 2 samplers x (tex + sampler) = 5 entries
     try expectEqual(@as(usize, 5), entries.len);
     try expectEqual(@as(u32, 1), entries[1].binding);
     try expectEqual(@as(u32, 2), entries[2].binding);
@@ -990,7 +990,7 @@ test "solveLayout empty schema produces empty layout" {
     try expectEqual(@as(u8, 0), layout.groups_used);
 }
 
-test "solveLayout single sampler — default group/binding" {
+test "solveLayout single sampler - default group/binding" {
     const S = struct {
         pub const Samplers = struct {
             texture0: shader.Sampler2D(.albedo, .{}),
@@ -1010,7 +1010,7 @@ test "solveLayout single sampler — default group/binding" {
     try expectEqual(@as(u8, 0b0010), layout.groups_used);
 }
 
-test "solveLayout multiple samplers — each reserves a texture+sampler pair" {
+test "solveLayout multiple samplers - each reserves a texture+sampler pair" {
     const S = struct {
         pub const Samplers = struct {
             albedo: shader.Sampler2D(.albedo, .{}),
@@ -1023,7 +1023,7 @@ test "solveLayout multiple samplers — each reserves a texture+sampler pair" {
 
     // Each Sampler2D takes TWO bindings (texture at N, synthesized sampler at
     // N+1), so the texture bindings step by 2: 0, 2, 4. Without this the paired
-    // samplers (1, 3, 5) would collide with the next texture — the multi-texture
+    // samplers (1, 3, 5) would collide with the next texture - the multi-texture
     // PBR bug Dawn rejects.
     try expectEqual(@as(u32, 0), layout.fields[0].binding);
     try expectEqual(@as(u32, 2), layout.fields[1].binding);
@@ -1076,18 +1076,18 @@ test "solveLayout pinned + free skip claimed cells" {
     try expectEqual(@as(u32, 1), layout.fields[0].group);
     try expectEqual(@as(u32, 0), layout.fields[0].binding);
     try expectEqual(ResolvedField.Origin.pinned, layout.fields[0].origin);
-    // albedo: 0 and its sampler 1 are taken by the pin → texture (1, 2)
+    // albedo: 0 and its sampler 1 are taken by the pin -> texture (1, 2)
     try expectEqual(@as(u32, 1), layout.fields[1].group);
     try expectEqual(@as(u32, 2), layout.fields[1].binding);
-    // normal: next pair → texture (1, 4)
+    // normal: next pair -> texture (1, 4)
     try expectEqual(@as(u32, 1), layout.fields[2].group);
     try expectEqual(@as(u32, 4), layout.fields[2].binding);
 }
 
-test "solveLayout pinned in middle slot — free pairs fill around it" {
+test "solveLayout pinned in middle slot - free pairs fill around it" {
     // pin at (1, 2), which also reserves its sampler cell (1, 3). Each free
-    // sampler reserves a texture+sampler pair: free_a → (1, 0)+(1, 1); free_b
-    // can't use 2 or 3 so → (1, 4)+(1, 5); free_c → (1, 6)+(1, 7).
+    // sampler reserves a texture+sampler pair: free_a -> (1, 0)+(1, 1); free_b
+    // can't use 2 or 3 so -> (1, 4)+(1, 5); free_c -> (1, 6)+(1, 7).
     const S = struct {
         pub const Samplers = struct {
             free_a: shader.Sampler2D(.albedo, .{}),
@@ -1105,7 +1105,7 @@ test "solveLayout pinned in middle slot — free pairs fill around it" {
     // pinned_mid: (1, 2) by config
     try expectEqual(@as(u32, 2), layout.fields[2].binding);
     try expectEqual(ResolvedField.Origin.pinned, layout.fields[2].origin);
-    // free_c: next pair → (1, 6), sampler (1, 7)
+    // free_c: next pair -> (1, 6), sampler (1, 7)
     try expectEqual(@as(u32, 6), layout.fields[3].binding);
 }
 
@@ -1135,7 +1135,7 @@ test "assertVaryingsMatch: matching VS.Outputs / FS.Inputs compiles" {
         };
     };
     // If the fields drifted (name/type/order/count) this would be a
-    // @compileError and the test file would not build — so reaching here is
+    // @compileError and the test file would not build - so reaching here is
     // the assertion.
     assertVaryingsMatch(Vs, Fs);
 }
@@ -1212,7 +1212,7 @@ test "layoutWgslMismatch: interleaved WGSL matches the host layout" {
 test "layoutWgslMismatch: catches the block-scheme drift (device bug #3 shape)" {
     // The stale BLOCK layout that shipped in helmet_sw: textures packed @0,1,
     // samplers @2,3. Against the interleaved host layout, @group(1)@binding(1)
-    // is a texture in the WGSL but a sampler in the host layout — exactly what
+    // is a texture in the WGSL but a sampler in the host layout - exactly what
     // Dawn rejected. The cross-check must catch it HERE, at test time, and name
     // the cell + both types.
     const wgsl: []const u8 =

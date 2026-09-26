@@ -1,7 +1,7 @@
-//! audio_basic — port of the GL `audio_basic`: the first sound on the
+//! audio_basic - port of the GL `audio_basic`: the first sound on the
 //! wgpu backend. Synthesizes three short tones on the CPU with `composer.tone`
 //! (square/sine/triangle, with an attack/release envelope), uploads each to a
-//! GPU-side... no — to a Web Audio buffer via `sounds.loadFromWave`, and plays
+//! GPU-side... no - to a Web Audio buffer via `sounds.loadFromWave`, and plays
 //! them when you tap a pad or press 1/2/3. The audio path is backend-agnostic
 //! (Web Audio); the wgpu runner now hands the app an `f.audio_device`. Browsers
 //! start the AudioContext suspended, so the first tap also resumes it.

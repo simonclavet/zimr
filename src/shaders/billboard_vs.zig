@@ -1,4 +1,4 @@
-//! src/shaders/billboard_vs.zig — textured-3D / billboard VS body (IoT).
+//! src/shaders/billboard_vs.zig - textured-3D / billboard VS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version. Transforms the vertex position
 //! by the shared camera view-projection and passes uv + colour through to the

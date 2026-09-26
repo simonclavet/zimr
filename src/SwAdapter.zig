@@ -1,10 +1,10 @@
 //! lint:alias SwAdapter
-//! src/SwAdapter.zig — the raster (software rasterizer) renderer-trait adapter.
+//! src/SwAdapter.zig - the raster (software rasterizer) renderer-trait adapter.
 //!
 //! Wraps `*raster.Context` behind the `gl: anytype` renderer interface so the
 //! SAME scene-drawing code runs on the software rasterizer and on the GPU
 //! backends. Lives in its own file (NOT renderer_trait.zig) so it carries ZERO
-//! dependency on the GL backend (rlgl) — the WebGPU side imports this directly
+//! dependency on the GL backend (rlgl) - the WebGPU side imports this directly
 //! to drive the software half of the CPU|GPU side-by-side demo. renderer_trait.zig
 //! re-exports `SwAdapter` from here for the GL-side demos.
 
@@ -24,7 +24,7 @@ const Matrix = Mat;
 /// The file *is* the SwAdapter: `@import("SwAdapter.zig")` gives this struct.
 const SwAdapter = @This();
 
-/// Blend recipe shared across the renderer adapters. Minimal by design — the
+/// Blend recipe shared across the renderer adapters. Minimal by design - the
 /// demos only need standard alpha compositing; more recipes get added here when
 /// a real use appears. (Lifted out of renderer_trait.zig so it's backend-neutral.)
 pub const BlendMode = enum {

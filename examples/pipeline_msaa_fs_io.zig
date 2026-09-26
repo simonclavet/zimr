@@ -1,4 +1,4 @@
-//! examples/pipeline_msaa_fs_io.zig — typed interface for the pipeline_msaa
+//! examples/pipeline_msaa_fs_io.zig - typed interface for the pipeline_msaa
 //! fragment shader. No inputs (constant colour); the empty `Inputs` matches the
 //! empty VS `Outputs`.
 

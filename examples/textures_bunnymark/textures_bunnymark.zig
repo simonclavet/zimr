@@ -1,4 +1,4 @@
-//! textures_bunnymark — port of raylib [textures] example.
+//! textures_bunnymark - port of raylib [textures] example.
 //! Hold the mouse to spawn bunnies; each drifts and bounces off the edges.
 //! A stress test: thousands of drawTexture calls per frame.
 const std = @import("std");

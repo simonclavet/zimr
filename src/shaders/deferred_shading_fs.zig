@@ -1,4 +1,4 @@
-//! src/shaders/deferred_shading_fs.zig — deferred lighting fragment
+//! src/shaders/deferred_shading_fs.zig - deferred lighting fragment
 //! shader.
 //!
 //! The payoff of the whole G-buffer detour: light EVERY pixel exactly
@@ -6,8 +6,8 @@
 //! surface facts back out of the three maps, then run Blinn-Phong for
 //! four point lights with distance attenuation.
 //!
-//! Faithful to raylib's `deferred_shading.fs` — same ambient, same
-//! shininess, same attenuation curve — with one deliberate fix: raylib
+//! Faithful to raylib's `deferred_shading.fs` - same ambient, same
+//! shininess, same attenuation curve - with one deliberate fix: raylib
 //! dots the normal against the UN-normalized light vector, so its
 //! diffuse quietly scales with distance a second time before the
 //! attenuation term even runs.  We normalize.  (Their brightness
@@ -15,7 +15,7 @@
 //! ours are re-tuned for the honest math.)
 //!
 //! All four lights are evaluated with straight-line math and the
-//! contribution multiplied by the enabled flag — no per-light
+//! contribution multiplied by the enabled flag - no per-light
 //! branching, which keeps the control flow uniform (Tint cares) and is
 //! exactly what a GPU would have done with the branch anyway.
 //!
@@ -34,7 +34,7 @@ pub const Io = shader_externs.IoT(shader_io.Ubo);
 pub const Out = shader_externs.Out;
 pub const TextureRef = shader_externs.TextureRef;
 
-/// raylib's attenuation polynomial: 1/(1 + LINEAR*d + QUADRATIC*d²).
+/// raylib's attenuation polynomial: 1/(1 + LINEAR*d + QUADRATIC*d^2).
 const linear_falloff: f32 = 0.09;
 const quadratic_falloff: f32 = 0.032;
 /// Ambient floor so unlit geometry still reads as shape, not void.
@@ -68,7 +68,7 @@ pub fn shaderMain(io_in: Io) Out {
     inline for (0..shader_io.max_lights) |i| {
         const lp: Vec = io_in.u.light_pos[i];
         const lc: Vec = io_in.u.light_color[i];
-        const enabled: f32 = lc[3]; // 0 = off, 1 = on — multiplied in, no branch
+        const enabled: f32 = lc[3]; // 0 = off, 1 = on - multiplied in, no branch
 
         const to_light: Vec3 = .{
             lp[0] - world_pos[0],
@@ -78,7 +78,7 @@ pub fn shaderMain(io_in: Io) Out {
         const dist: f32 = @sqrt(@max(dot(to_light, to_light), 1.0e-8));
         const light_dir: Vec3 = to_light * @as(Vec3, @splat(1.0 / dist));
 
-        // Diffuse — with the NORMALIZED light direction (the raylib fix).
+        // Diffuse - with the NORMALIZED light direction (the raylib fix).
         const n_dot_l: f32 = @max(dot(normal, light_dir), 0.0);
 
         // Blinn-Phong specular: half-vector, gated by the material's
@@ -100,7 +100,7 @@ pub fn shaderMain(io_in: Io) Out {
     return out;
 }
 
-/// x^32 as five squarings — `pow` with a runtime exponent is a
+/// x^32 as five squarings - `pow` with a runtime exponent is a
 /// transcendental on some GPUs; the fixed raylib shininess of 32 is a
 /// power of two, so multiply it out.
 fn pow32(x: f32) f32 {

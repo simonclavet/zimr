@@ -1,10 +1,10 @@
-//! src/shaders/lambert_fs.zig — Lambert fragment shader body.
+//! src/shaders/lambert_fs.zig - Lambert fragment shader body.
 //!
 //! Lambertian diffuse + ambient with a single fixed directional light
 //! in world space.  Sample albedo from `texture0`, modulate by
 //! `lighting * col_diffuse`.  25% ambient floor preserves back-face
 //! visibility during rotation.  Hard-coded light direction
-//! (`normalize(vec3(0.4, 0.8, 0.5))`) — same convention as the prior
+//! (`normalize(vec3(0.4, 0.8, 0.5))`) - same convention as the prior
 //! GLSL version.
 //!
 //! Schema (Inputs / Samplers / Uniforms / Outputs) lives in

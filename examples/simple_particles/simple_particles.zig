@@ -1,7 +1,7 @@
-//! simple_particles — a three-type particle emitter ported to WebGPU. A ring
+//! simple_particles - a three-type particle emitter ported to WebGPU. A ring
 //! buffer of particles is emitted from a centre emitter; the active type cycles every
 //! few seconds: water (blue, falls under gravity), smoke (grey, rises, grows, fades),
-//! and fire (yellow→red, rises with a flicker wobble, shrinks). The GL original let you
+//! and fire (yellow->red, rises with a flicker wobble, shrinks). The GL original let you
 //! drag the emitter with the mouse; this runs itself. Viewport-relative under
 //! `.responsive`.
 const std = @import("std");

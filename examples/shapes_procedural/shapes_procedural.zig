@@ -2,12 +2,12 @@
 // MERGES raylib's `shapes_mouse_trail` and `shapes_recursive_tree` behind a UI
 // mode switch. They're both "draw a lot of primitives from a simple rule", they
 // share the same scaffolding, and folding them together means one wasm and one
-// device check instead of two — the build cost of a UI example is ~10s, so this
+// device check instead of two - the build cost of a UI example is ~10s, so this
 // is real savings, not tidiness.
 //
-//   TRAIL — a ring of recent pointer positions, drawn as circles that shrink and
+//   TRAIL - a ring of recent pointer positions, drawn as circles that shrink and
 //           fade with age. Drag anywhere below the panel.
-//   TREE  — a binary branch system grown ITERATIVELY (raylib's sample is called
+//   TREE  - a binary branch system grown ITERATIVELY (raylib's sample is called
 //           "recursive" but expands a queue, which is what keeps it bounded).
 //           Each branch spawns two children at +/-theta, each shorter by `decay`,
 //           until they're too short to matter. Angle / length / decay are live
@@ -37,7 +37,7 @@ const min_branch_len: f32 = 2.0;
 const Mode = enum { trail, tree };
 
 /// One segment of the tree. `angle` is measured from straight-up, so a child is
-/// just parent.angle +/- theta — no matrix stack needed.
+/// just parent.angle +/- theta - no matrix stack needed.
 const Branch = struct {
     start: Vec2,
     end: Vec2,
@@ -98,8 +98,8 @@ fn drawTrail(gl: *z.WgpuGl, s: *const State) void {
     gl.circle(s.trail[0], 8, .{ .color = c.raywhite });
 }
 
-/// Grow the tree breadth-first into a fixed buffer. Bounded two ways — a branch
-/// stops when it gets too short, and the buffer can't overflow — so a wild
+/// Grow the tree breadth-first into a fixed buffer. Bounded two ways - a branch
+/// stops when it gets too short, and the buffer can't overflow - so a wild
 /// slider setting can't hang the frame.
 fn drawTree(gl: *z.WgpuGl, s: *const State, root: Vec2) usize {
     var branches: [max_branches]Branch = undefined;

@@ -6,6 +6,7 @@
 //! 'zimr'"). `robot_gym` keeps only the generic `GpuPpoOn(M)`; this root instantiates it.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const zn = @import("zn");
 const gym = @import("robot_gym.zig");
@@ -26,7 +27,7 @@ const AdamSet = gym.AdamSet;
 const GpuPpo = gym.GpuPpoOn(zn_mlp);
 
 test "gpu learn: G1 - zn_mlp's kernels train a two-layer net exactly as zimrnum's graph does" {
-    // ★★★ THE PROOF THE GPU TRAINER STANDS ON, as `zimrnum_train` proved its XOR net: the same
+    // *** THE PROOF THE GPU TRAINER STANDS ON, as `zimrnum_train` proved its XOR net: the same
     // network (5 -> 16 tanh -> 1, batch 8, MSE) trained 20 Adam steps both ways from the same
     // weights - zimrnum's CPU graph with `zn.adamStep`, and `zn_mlp`'s kernels on their CPU
     // twin through `z.Compute(...).initCpu()`, dispatched in dependency order exactly as the
@@ -41,7 +42,7 @@ test "gpu learn: G1 - zn_mlp's kernels train a two-layer net exactly as zimrnum'
     var init_rng: std.Random.DefaultPrng = .init(11);
     const random: std.Random = init_rng.random();
 
-    // ── The CPU reference: zimrnum's graph, Adam. ──
+    // -- The CPU reference: zimrnum's graph, Adam. --
     var l1: Layer = try .init(arena, random, n_in, hidden, 1.0);
     var l2: Layer = try .init(arena, random, hidden, 1, 1.0);
     const x: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ rows, n_in });
@@ -63,7 +64,7 @@ test "gpu learn: G1 - zn_mlp's kernels train a two-layer net exactly as zimrnum'
     const loss: zn.Var = try graph.mseLoss(y, tv);
     var adam_cpu: AdamSet = try .init(arena, &.{ l1.w, l1.b, l2.w, l2.b });
 
-    // ── The kit, on its CPU twin: the same weights, the same data, at host offsets. ──
+    // -- The kit, on its CPU twin: the same weights, the same data, at host offsets. --
     const M = zn_mlp;
     var pipe: compute_host.Compute(M) = .initCpu();
     defer pipe.deinit();
@@ -146,8 +147,7 @@ test "gpu learn: G1 - zn_mlp's kernels train a two-layer net exactly as zimrnum'
     for (l2.w.data, 0..) |w, i| {
         worst_weight_gap = @max(worst_weight_gap, @abs(w - kit_params[w2_off + i]));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  G1 parity, 20 Adam steps: worst loss gap {e:.2}, worst weight gap {e:.2}\n", .{
+    report.print("\n  G1 parity, 20 Adam steps: worst loss gap {e:.2}, worst weight gap {e:.2}\n", .{
         worst_loss_gap,
         worst_weight_gap,
     });
@@ -242,8 +242,7 @@ test "gpu learn: D5 step 3a - cloning on the kit is the graph's, step for step; 
     for (start[ppo.log_std_off..ppo.param_count], kit[ppo.log_std_off..ppo.param_count]) |a, b| {
         untouched = untouched and a == b;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D5 3a: 10 clone steps - kit vs graph weights at most {e:.2} apart; loss {d:.4} -> {d:.4}; " ++
+    report.print("\n  D5 3a: 10 clone steps - kit vs graph weights at most {e:.2} apart; loss {d:.4} -> {d:.4}; " ++
         "log-std and value untouched: {}\n", .{ worst, first_loss, last_loss, untouched });
     try expect(worst < 1.0e-5);
     try expect(untouched);
@@ -251,7 +250,7 @@ test "gpu learn: D5 step 3a - cloning on the kit is the graph's, step for step; 
 }
 
 test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
-    // ★★ THE LEARNER THE CARTPOLE PAGE WILL RUN, proven before the page exists: PPO whose update
+    // ** THE LEARNER THE CARTPOLE PAGE WILL RUN, proven before the page exists: PPO whose update
     // is the zn_mlp kit (here its CPU twin - the same kernels a GPU runs), acting on the CPU.
     // zimrnum's continuous cartpole, task `.hold`, +-10 N, episodes capped at 500. 16 envs x 64
     // steps an iteration, GAE(0.99, 0.95), advantages normalised, 4 epochs of 256-row minibatches.
@@ -294,8 +293,7 @@ test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
     for (&order, 0..) |*o, i| {
         o.* = @intCast(i);
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  GPU PPO (CPU twin) on the cartpole hold (cap 500):\n", .{});
+    report.print("\n  GPU PPO (CPU twin) on the cartpole hold (cap 500):\n", .{});
     for (0..40) |iteration| {
         rollout.len = 0;
         var finished: u32 = 0;
@@ -355,8 +353,7 @@ test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
         _ = ppo.syncWeights();
         if (iteration % 5 == 4) {
             const mean_length: f32 = if (finished > 0) float(finished_steps) / float(finished) else 500.0;
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    iteration {d:>2} ({d:>5} samples): {d:>3} " ++
+            report.print("    iteration {d:>2} ({d:>5} samples): {d:>3} " ++
                 "episodes finished, mean length {d:>6.1}\n", .{
                 iteration + 1, (iteration + 1) * samples, finished, mean_length,
             });
@@ -368,7 +365,7 @@ test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
 const GpuSac = gym.GpuSacOn(zn_mlp);
 
 test "gpu learn: S2 - the kit's SAC update is SacAgent's, update for update" {
-    // ★★★ THE PROOF S2 STANDS ON, as G1's was for the layer kit: `SacAgent` (zimrnum's CPU
+    // *** THE PROOF S2 STANDS ON, as G1's was for the layer kit: `SacAgent` (zimrnum's CPU
     // graphs) and the kit's SAC (on its CPU twin, dispatched exactly as a GPU runs it), from the
     // same weights, fed the same batches and the same noise for 5 updates. Two action dimensions,
     // so the per-dimension paths are exercised; a raised learning rate, so the updates move the
@@ -419,8 +416,7 @@ test "gpu learn: S2 - the kit's SAC update is SacAgent's, update for update" {
     }
     const gpu: []const f32 = sac.readParams() orelse return error.NoReadback;
     const gaps: GpuSac.Gaps = sac.gapsTo(agent, gpu);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  S2 parity, 5 SAC updates: actor {e:.2}, log-std {e:.2}, log-alpha {e:.2}, " ++
+    report.print("\n  S2 parity, 5 SAC updates: actor {e:.2}, log-std {e:.2}, log-alpha {e:.2}, " ++
         "critics {e:.2}, targets {e:.2}\n", .{
         gaps.actor, gaps.log_std, gaps.log_alpha, gaps.critics, gaps.targets,
     });
@@ -434,8 +430,7 @@ test "gpu learn: S2 - the kit's SAC update is SacAgent's, update for update" {
     for (start[sac.q1[0]..][0..sac.critic_count], gpu[sac.q1[0]..][0..sac.critic_count]) |a, b| {
         moved_critics = @max(moved_critics, @abs(a - b));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  moved: actor {d:.4}, critics {d:.4}\n", .{ moved_actor, moved_critics });
+    report.print("  moved: actor {d:.4}, critics {d:.4}\n", .{ moved_actor, moved_critics });
     try expect(moved_actor > 1.0e-3 and moved_critics > 1.0e-3);
 }
 
@@ -444,7 +439,7 @@ const st_mod = @import("robot_supertrack.zig");
 const StKit = st_mod.SuperTrackKitOn(zn_mlp);
 
 test "gpu learn: SuperTrack on the kit is the graph's, step for step" {
-    // ★★★ AS S2 WAS FOR SAC: `robot_supertrack.SuperTrack` (zimrnum's graph) and the kit's
+    // *** AS S2 WAS FOR SAC: `robot_supertrack.SuperTrack` (zimrnum's graph) and the kit's
     // SuperTrack (its CPU twin, dispatched exactly as a GPU runs it), from the same weights, fed
     // the same windows, start states and noise for 4 iterations of (world step, policy step), at
     // a raised learning rate - both the per-layer path (~1,050 dispatches an iteration) and the
@@ -454,7 +449,7 @@ test "gpu learn: SuperTrack on the kit is the graph's, step for step" {
 }
 
 fn stParity(fused: bool) !void {
-    // ★★★ AS S2 WAS FOR SAC: `robot_supertrack.SuperTrack` (zimrnum's graph) and the kit's
+    // *** AS S2 WAS FOR SAC: `robot_supertrack.SuperTrack` (zimrnum's graph) and the kit's
     // SuperTrack (its CPU twin, dispatched exactly as a GPU runs it), from the same weights, fed
     // the same windows, start states and noise for 4 iterations of (world step, policy step), at
     // a raised learning rate. Both networks must agree - while their weights MOVE.
@@ -519,8 +514,7 @@ fn stParity(fused: bool) !void {
     for (start[kit.wm[0]..][0..kit.wm_count], now[kit.wm[0]..][0..kit.wm_count]) |a, c| {
         moved_world = @max(moved_world, @abs(a - c));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  SuperTrack kit parity ({s}), 4 iterations: policy {e:.2}, world {e:.2}; " ++
+    report.print("\n  SuperTrack kit parity ({s}), 4 iterations: policy {e:.2}, world {e:.2}; " ++
         "moved policy {d:.4}, world {d:.4}\n", .{
         if (fused) "fused" else "per-layer", gaps[0], gaps[1], moved_policy, moved_world,
     });
@@ -582,8 +576,7 @@ fn stCartpole(fused: bool) !void {
     var train_ns: i96 = 0;
     var trained: u32 = 0;
     var final_eval: f32 = 0.0;
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  SuperTrack on the kit's CPU twin ({s}), real cartpole (baseline {d:.1}):\n", .{
+    report.print("\n  SuperTrack on the kit's CPU twin ({s}), real cartpole (baseline {d:.1}):\n", .{
         if (fused) "fused" else "per-layer",
         baseline,
     });
@@ -626,13 +619,11 @@ fn stCartpole(fused: bool) !void {
         }
         if (iteration % 500 == 0) {
             final_eval = st_mod.evaluate(host, 10, 99);
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    iteration {d:>4}: REAL episodes {d:.1} steps\n", .{ iteration, final_eval });
+            report.print("    iteration {d:>4}: REAL episodes {d:.1} steps\n", .{ iteration, final_eval });
         }
     }
     const ms: f64 = float64(train_ns) / 1.0e6 / float64(@max(trained, 1));
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    the kit's CPU twin: {d:.2} ms an iteration " ++
+    report.print("    the kit's CPU twin: {d:.2} ms an iteration " ++
         "(world step + policy step, batch 32, windows 8/32)\n", .{ms});
     try expect(final_eval > baseline * 4.0);
 }
@@ -693,8 +684,7 @@ test "gpu learn: XOR on zn_train's CPU twin over long runs - does the loss stay 
                 converged += 1;
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{s}  XOR on the CPU twin, rate {d:.1}: {d} of 8 runs converged (< 0.01), " ++
+        report.print("{s}  XOR on the CPU twin, rate {d:.1}: {d} of 8 runs converged (< 0.01), " ++
             "{d} went non-finite\n", .{
             if (rate == 0.5) "\n" else "",
             rate,

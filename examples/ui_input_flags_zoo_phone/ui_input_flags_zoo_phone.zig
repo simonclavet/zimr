@@ -1,4 +1,4 @@
-// examples/ui_input_flags_zoo_phone.zig — bug-hunter phone example.
+// examples/ui_input_flags_zoo_phone.zig - bug-hunter phone example.
 //
 // Visual + interactive smoke test for every InputText flag added
 // in turns 439 (P9.1 char filters) and 440 (P9.2 behavior flags).
@@ -18,7 +18,7 @@
 // WEB-PATH wiring (4 new JS bindings, refactored showOverlayInput,
 // extended keydown listener in zimr.ts) has NO coverage outside
 // the JS bundle compiling.  This example exists to surface any
-// browser-side regressions the moment they appear — the same
+// browser-side regressions the moment they appear - the same
 // methodology that found 4 engine bugs in turn 437b.
 //
 // How to use:
@@ -66,7 +66,7 @@ const State = struct {
     buf_tabbed: [64]u8 = @splat(0),
     len_tabbed: usize = 0,
 
-    // Multiline buffers (turn 441b — textarea overlay).
+    // Multiline buffers (turn 441b - textarea overlay).
     buf_notes: [256]u8 = @splat(0),
     len_notes: usize = 0,
     buf_chat: [256]u8 = @splat(0),
@@ -74,7 +74,7 @@ const State = struct {
     buf_code: [256]u8 = @splat(0),
     len_code: usize = 0,
 
-    // "Last frame the widget returned true" — gets bumped on every
+    // "Last frame the widget returned true" - gets bumped on every
     // frame the function returns true, so the user can tell whether
     // the widget is reporting changes / commits as expected.
     last_true_search: u32 = 0,
@@ -89,12 +89,12 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
 }
 
-/// Escape `\n` → `\\n` and `\t` → `\\t` so a buffer with newlines
+/// Escape `\n` -> `\\n` and `\t` -> `\\t` so a buffer with newlines
 /// or tabs renders as a single line in the readout.  Without
 /// this, `{s}` formatting expands newlines into real line breaks,
 /// making the readout span multiple lines and overlap the next
 /// widget below (the layout system sized the readout for one
-/// line).  Caller provides scratch space ≥ 2× buffer length.
+/// line).  Caller provides scratch space >= 2x buffer length.
 fn escapeForReadout(in: []const u8, scratch: []u8) []const u8 {
     var w: usize = 0;
     for (in) |c| {
@@ -136,7 +136,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     @memcpy(s.buf_password[0..seed.len], seed);
     s.len_password = seed.len;
     // The read-only field has content the user can see but cannot
-    // edit — verifies the gate works.
+    // edit - verifies the gate works.
     const rseed: []const u8 = "id-7f3a";
     @memcpy(s.buf_readonly[0..rseed.len], rseed);
     s.len_readonly = rseed.len;
@@ -157,7 +157,7 @@ fn card(
     u.textColored(Color.hex(0x909090FF), "expect: {s}", .{expect});
     const changed: bool = u.inputText(label, buf, len, opts);
     // Readout: show what the buffer holds and its length.  This is
-    // what makes the example a bug-hunter — every keypress the user
+    // what makes the example a bug-hunter - every keypress the user
     // makes is reflected here, and any discrepancy with the
     // `expect:` line above is a bug.
     u.textColored(Color.hex(0x60D0FFFF), "buf=\"{s}\" len={d}", .{ buf[0..len.*], len.* });

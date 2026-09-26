@@ -1,11 +1,11 @@
 //! lint:alias memwatch
-//! MemWatch — a per-frame wasm-linear-memory growth watchdog.
+//! MemWatch - a per-frame wasm-linear-memory growth watchdog.
 //!
 //! Wasm linear memory only ever grows; an unbounded per-frame leak therefore
 //! marches silently into the ~2GB trap and kills the tab with no diagnostic.
 //! This is a smoke detector: sample `@wasmMemorySize` once per frame and shout
 //! (once, then throttled) when memory climbs well past where it last settled.
-//! It does not say *where* — it converts "silent death in 20s" into "something
+//! It does not say *where* - it converts "silent death in 20s" into "something
 //! is leaking, go look", which is the expensive half of the diagnosis.
 //!
 //! False positives are avoided without any manual hooks: a legitimate one-time
@@ -59,7 +59,7 @@ pub const MemWatch = struct {
         } else {
             self.plateau_frames += 1;
             if (self.plateau_frames >= plateau_needed) {
-                // Settled — treat the current high-water as legitimate so a
+                // Settled - treat the current high-water as legitimate so a
                 // one-time load doesn't read as a leak. Re-arm the throttle.
                 self.baseline_pages = self.high_water_pages;
                 self.next_warn_pages = self.baseline_pages + warn_margin_pages;
@@ -83,7 +83,7 @@ pub const MemWatch = struct {
 };
 
 /// An allocator shim that tracks NET live bytes through a backing allocator, for
-/// the smoke harness's per-lifecycle CPU-leak probe — the precise, fragmentation-
+/// the smoke harness's per-lifecycle CPU-leak probe - the precise, fragmentation-
 /// free twin of the GPU handle census.
 pub const CountingAllocator = struct {
     backing: std.mem.Allocator,

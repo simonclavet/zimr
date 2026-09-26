@@ -7,6 +7,7 @@
 //! the engine, which is how `robot_ppo_track` and its tests are arranged too.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const track = @import("robot_track.zig");
 const kit_mod = @import("robot_latent_kit.zig");
 /// The fleet on the baked get-up clip is a test-only helper, so it lives with the kit's tests.
@@ -65,8 +66,7 @@ test "robot_track_resident: the loop runs, the world model learns, and the simul
         }
         _ = round;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  resident loop, 12 rounds: world loss {d:.3} -> {d:.3}, {d} world and {d} policy updates\n", .{
+    report.print("\n  resident loop, 12 rounds: world loss {d:.3} -> {d:.3}, {d} world and {d} policy updates\n", .{
         first_loss,
         last_loss,
         learner.world_updates,
@@ -146,8 +146,7 @@ test "robot_track_resident: the mirror acts as the GPU's policy would" {
             largest = @max(largest, @abs(gpu));
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  mirror vs the kit's policy, {d} rows x {d} actions: " ++
+    report.print("\n  mirror vs the kit's policy, {d} rows x {d} actions: " ++
         "worst difference {e} (largest action {e})\n", .{
         kit.rows,
         actions,

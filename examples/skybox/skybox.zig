@@ -1,10 +1,10 @@
-//! skybox — a gradient skybox via the new `drawSkybox`, with a few solid 3D
+//! skybox - a gradient skybox via the new `drawSkybox`, with a few solid 3D
 //! objects in front. The skybox is a fullscreen far-plane pass: it unprojects
-//! each pixel to a world ray and lerps a vertical gradient (warm horizon → deep
+//! each pixel to a world ray and lerps a vertical gradient (warm horizon -> deep
 //! blue zenith), parked just inside the far plane so the 3D objects + grid draw
 //! over it. The camera orbits, so the gradient stays anchored to the world (you
 //! see the horizon line stay level as you turn). (The GL `skybox` used a
-//! procedural CUBEMAP; the wgpu skybox shaders are the gradient variant —
+//! procedural CUBEMAP; the wgpu skybox shaders are the gradient variant -
 //! cubemap support is future work.)
 const std = @import("std");
 const Allocator = std.mem.Allocator;

@@ -1,5 +1,5 @@
 //! lint:alias net_typed
-//! net_typed.zig — a small typed-message layer over a net Session.
+//! net_typed.zig - a small typed-message layer over a net Session.
 //!
 //! A message on the wire is [1-byte tag][z.serialize(payload)]: the tag says
 //! which kind of message it is, and z.serialize turns the payload struct into
@@ -21,7 +21,7 @@
 //!       else => {},
 //!   };
 //!
-//! Note: payload structs must give every field a default value — z.serialize
+//! Note: payload structs must give every field a default value - z.serialize
 //! fills omitted fields from the defaults on decode, which is what lets you add
 //! fields later without breaking peers still on the older message format.
 
@@ -79,7 +79,7 @@ pub fn tag(bytes: []const u8) ?u8 {
     return bytes[0];
 }
 
-/// The payload bytes of a received message — everything after the tag.
+/// The payload bytes of a received message - everything after the tag.
 pub fn payload(bytes: []const u8) []const u8 {
     if (bytes.len < 1) {
         return bytes[0..0];

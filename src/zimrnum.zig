@@ -29559,23 +29559,17 @@ test "zn and zm: the source is ASCII" {
     // wrong locale, a diff viewer, or a patch pasted through a chat window. `sigma` reads as
     // sigma everywhere; the character does not.
     //
-    // The check is on the whole file rather than on comments alone, because a rule with an
-    // exception needs a parser, and the exceptions here are four test names that are string
-    // literals. They are listed so the check is exact rather than approximate.
-    const allowed_non_ascii: usize = 4;
-    inline for (.{ @embedFile("zimrnum.zig"), @embedFile("zimrmath.zig") }, .{ "zimrnum", "zimrmath" }) |source, name| {
+    // zimrlint's `ascii-comments` and `ascii-test-names` now hold every file to this for
+    // comments and test names. These two go further - the WHOLE file, string literals
+    // included - because every kernel and every shader reaches them.
+    inline for (.{ @embedFile("zimrnum.zig"), @embedFile("zimrmath.zig") }) |source| {
         var offenders: usize = 0;
         for (source) |byte| {
             if (byte > 127) {
                 offenders += 1;
             }
         }
-        if (std.mem.eql(u8, name, "zimrnum")) {
-            try expectEqual(@as(usize, 0), offenders);
-        } else {
-            // zimrmath's remainder is entirely inside four `test "..."` names.
-            try expect(offenders <= allowed_non_ascii * 4);
-        }
+        try expectEqual(@as(usize, 0), offenders);
     }
 }
 

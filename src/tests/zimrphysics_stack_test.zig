@@ -1,4 +1,4 @@
-// src/tests/zimrphysics_stack_test.zig — regression guard for the box-stack
+// src/tests/zimrphysics_stack_test.zig - regression guard for the box-stack
 // interpenetration bug: the demo's `stack` scene collapsed as box-box face
 // manifolds degraded from 4 points to 1 under accumulated micro-tilt (the SAT
 // reclassified near-flat resting contacts as edge-edge and emitted a single
@@ -6,7 +6,7 @@
 // relative to the penetration normal, so a near-flat contact stays a
 // multi-point face manifold; collideBoxBox now does the same.
 //
-// This test rebuilds that exact scene (8 elongated boxes, alternating 90° yaw),
+// This test rebuilds that exact scene (8 elongated boxes, alternating 90 deg yaw),
 // disables sleeping so the solver must hold the stack every frame, runs 10 s,
 // and asserts the boxes never interpenetrate beyond the slop and never reorder.
 
@@ -47,7 +47,7 @@ test "stack scene: boxes rest without interpenetrating" {
         .motion_type = .static,
     });
 
-    // 8 elongated boxes, alternating 90° yaw (the demo's sceneStack)
+    // 8 elongated boxes, alternating 90 deg yaw (the demo's sceneStack)
     const box: zimrphysics.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.45, 0.45, 0.95),
         .convex_radius = 0.05,
@@ -189,7 +189,7 @@ test "hanging chain: off-COM rope links hold a heavy bob" {
                 const c: Vec = world.bodies.data[ids[k].index()].com_pos;
                 const d: Vec = c - p;
                 const s: f32 = @sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-                try expect(s < 1.5); // bounded — no runaway
+                try expect(s < 1.5); // bounded - no runaway
                 p = c;
             }
             try expect(world.bodies.data[bob.index()].com_pos[1] > -4.0); // chain holds, doesn't fall

@@ -1,7 +1,7 @@
 // examples/ui_widgets_data_types.zig - Phase 0b multi-component
 // widgets showcase.
 // Mirrors the "Widgets/Data Types" section of imgui's demo.  Shows
-// every (slider | drag | input) × (Float | Int) × (1 | 2 | 3 | 4)
+// every (slider | drag | input) x (Float | Int) x (1 | 2 | 3 | 4)
 // variant collapsed to the generic `anytype` surface:
 //     ui.slider("vec3", &my_vec3, .{ .min = 0, .max = 1 });
 //     ui.drag(  "vec2", &my_vec2, .{ .speed = 0.5 });

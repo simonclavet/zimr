@@ -10085,7 +10085,7 @@ test "complex constructor" {
     try expectEqual(@as(f32, 4), z[1]);
 }
 
-test "cmul: i² = -1" {
+test "cmul: i^2 = -1" {
     const ii: Complex = cmul(c_i, c_i);
     try expectEqual(@as(f32, -1), ii[0]);
     try expectEqual(@as(f32, 0), ii[1]);
@@ -10122,13 +10122,13 @@ test "cnorm2 / cabs: |3 + 4i| = 5" {
     try expectApproxEqAbs(@as(f32, 5), cabs(z), 1e-6);
 }
 
-test "carg: arg(1) = 0, arg(i) = π/2, arg(-1) = π" {
+test "carg: arg(1) = 0, arg(i) = pi/2, arg(-1) = pi" {
     try expectApproxEqAbs(@as(f32, 0), carg(c_one), 1e-6);
     try expectApproxEqAbs(@as(f32, pi / 2.0), carg(c_i), 1e-6);
     try expectApproxEqAbs(@as(f32, pi), carg(complex(-1, 0)), 1e-6);
 }
 
-test "cexp: exp(0) = 1, exp(iπ) = -1 (Euler)" {
+test "cexp: exp(0) = 1, exp(i pi) = -1 (Euler)" {
     const e0: Complex = cexp(c_zero);
     try expectApproxEqAbs(@as(f32, 1), e0[0], 1e-6);
     try expectApproxEqAbs(@as(f32, 0), e0[1], 1e-6);
@@ -10139,7 +10139,7 @@ test "cexp: exp(0) = 1, exp(iπ) = -1 (Euler)" {
     try expectApproxEqAbs(@as(f32, 0), ePi[1], 1e-6);
 }
 
-test "clog: log(1) = 0, log(e) = 1, log(-1) = iπ" {
+test "clog: log(1) = 0, log(e) = 1, log(-1) = i pi" {
     const l1: Complex = clog(c_one);
     try expectApproxEqAbs(@as(f32, 0), l1[0], 1e-6);
     try expectApproxEqAbs(@as(f32, 0), l1[1], 1e-6);

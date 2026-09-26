@@ -1,4 +1,4 @@
-//! langton_ant — Langton's Ant, the two-rule cellular automaton whose ant paints
+//! langton_ant - Langton's Ant, the two-rule cellular automaton whose ant paints
 //! chaos for ~10,000 steps and then, astonishingly, builds a repeating diagonal
 //! "highway" forever. The whole rule is four lines: on a white cell turn right, on
 //! a black cell turn left; flip the cell you leave; step forward one square.

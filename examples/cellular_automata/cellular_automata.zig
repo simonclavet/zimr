@@ -1,4 +1,4 @@
-//! cellular_automata — Wolfram's 1-D elementary cellular automata (Rule 30, 90, 110, …). Each row is
+//! cellular_automata - Wolfram's 1-D elementary cellular automata (Rule 30, 90, 110, ...). Each row is
 //! computed from the three cells above it: the 3-bit neighbourhood (0..7) indexes the 8-bit rule to
 //! decide the new cell. The grid is a CPU pixel buffer streamed to the GPU every frame via a
 //! CpuFramebuffer (update -> present), so it exercises the dynamic-texture-upload path. Tap a preset

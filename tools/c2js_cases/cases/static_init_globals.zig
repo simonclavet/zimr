@@ -5,7 +5,7 @@
 // pattern (so the `?T = null` static `is_null` flag must be honoured), writing a
 // nested payload field through `*(&(&opt->payload)->field)`, zero-init `bool`
 // globals used as one-shot flags, and writing the MIDDLE bool of a packed-bool
-// struct (byte-addressed — must not clobber its neighbours). run_test() returns
+// struct (byte-addressed - must not clobber its neighbours). run_test() returns
 // 0 on success; the harness also asserts the generated JS has zero markers.
 const S = struct { x: u32, y: u32 };
 const Flags = struct { a: bool, b: bool, c: bool };

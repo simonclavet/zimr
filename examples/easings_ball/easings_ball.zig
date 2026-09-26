@@ -1,11 +1,11 @@
 // examples/easings_ball.zig - three-stage ball animation that
 // showcases the elastic and cubic easing curves.
-// Port of raylib's `examples/shapes/shapes_easings_ball.c` (★2,
+// Port of raylib's `examples/shapes/shapes_easings_ball.c` (*2,
 // ~116 LOC).  Plays three eased animations back-to-back:
 //   Stage 0 - ball slides in from off-screen left, easing OUT.
 //             Curve: elasticOut (overshoots then settles).
 //             Duration: 120 frames (~2s at 60fps).
-//   Stage 1 - ball radius grows from 20 → 520, easing IN.
+//   Stage 1 - ball radius grows from 20 -> 520, easing IN.
 //             Curve: elasticIn (pulls back before the launch).
 //             Duration: 200 frames.
 //   Stage 2 - ball fades from RED to transparent against a GREEN
@@ -51,7 +51,7 @@ const stage2_duration: f32 = 200;
 const c = Color;
 
 const State = struct {
-    /// Owned shapes-texture state. id=1 → rlgl's internal 1x1 white pixel.
+    /// Owned shapes-texture state. id=1 -> rlgl's internal 1x1 white pixel.
     /// Owned default-font cache. Populated by `loadFontFromTtfBytes` below.
     font: z.Font,
     ui_host: z.UiHost,

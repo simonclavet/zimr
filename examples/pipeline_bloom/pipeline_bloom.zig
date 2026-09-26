@@ -1,4 +1,4 @@
-//! pipeline_bloom — a full multi-pass BLOOM effect, now entirely on the typed
+//! pipeline_bloom - a full multi-pass BLOOM effect, now entirely on the typed
 //! shader interface (no inline WGSL, no override constants). Five effect passes
 //! across three render textures:
 //!
@@ -9,15 +9,15 @@
 //!
 //! Every effect pass is a fullscreen shader authored in pure Zig
 //! (`examples/bloom_*.zig`) and compiled to WGSL by the build. Each pass's
-//! per-pass configuration — the bright threshold, the blur direction, the
-//! composite intensity — is a PER-PASS UBO rather than a WGSL `override`
+//! per-pass configuration - the bright threshold, the blur direction, the
+//! composite intensity - is a PER-PASS UBO rather than a WGSL `override`
 //! constant. That's the clean fit here (each value is set once at load) and it
 //! needs no spec-constant authoring. The two blur directions are two separate
 //! LoadedShaders with their `dir` baked in at load, which also sidesteps the
 //! "can't update a UBO between draws in one command buffer" hazard.
 //!
 //! The scene itself is drawn with the immediate 2D path (radial-gradient
-//! circles straight into rt_scene) — bright glowing cores on near-black, which
+//! circles straight into rt_scene) - bright glowing cores on near-black, which
 //! is what bloom actually wants: small very-bright regions against darkness.
 //!
 //! Build:  zig build pipeline-bloom
@@ -35,7 +35,7 @@ const clamp = zm.clamp;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 // The scene is a field of glowing orbs drawn straight into rt_scene with the
-// immediate 2D path (drawCircleGradient — a bright core fading to black, which
+// immediate 2D path (drawCircleGradient - a bright core fading to black, which
 // is exactly the shape of a light source). No scene shader / vertex buffer: the
 // engine's built-in 2D shape shader draws it, and the bloom chain does the rest.
 //
@@ -43,9 +43,9 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 // LUMINANCE clears `bright_thresh`, so it pops only where the scene has small,
 // very bright regions against darkness. A flat mid-bright triangle sits just
 // over the threshold everywhere and blooms as a dull uniform smear. Bright
-// cores on black give crisp, glowing halos — the whole point of the effect.
+// cores on black give crisp, glowing halos - the whole point of the effect.
 
-// Effect passes — the bloom shaders (examples/bloom_*.zig), wired into this
+// Effect passes - the bloom shaders (examples/bloom_*.zig), wired into this
 // example via the `.shaders` build list. The typed `_io` schemas are imported
 // directly; the `.wgsl` bodies are build artifacts embedded by basename.
 const fullscreen_vs_io = @import("bloom_fullscreen_vs_io.zig");
@@ -78,7 +78,7 @@ const Orb = struct {
     phase: f32, // starting angle
     pulse: f32, // radians/sec of the size/brightness pulse
     radius: f32, // base radius in RT pixels
-    color: Vec, // {r,g,b,_} in 0..1 — the halo tint
+    color: Vec, // {r,g,b,_} in 0..1 - the halo tint
 };
 
 const orbs = [_]Orb{
@@ -116,7 +116,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    // Three render textures (rgba8_unorm, no depth) — the scene, and the two
+    // Three render textures (rgba8_unorm, no depth) - the scene, and the two
     // ping-pong blur buffers.
     const rt_scene: z.RenderTexture = z.loadRenderTexture(f.gl, rt_size, rt_size);
     const rt_a: z.RenderTexture = z.loadRenderTexture(f.gl, rt_size, rt_size);
@@ -309,7 +309,7 @@ pub const app: z.AppSpec(State) = .{
     .init = initState,
     // .memory left default (arena): init builds a compute pipeline / multi-pass
     // chain (mipmap or bloom) whose intermediate handles aren't kept in State,
-    // so a full managed teardown needs added State fields — deferred.
+    // so a full managed teardown needs added State fields - deferred.
     .deinit = deinit,
     .update = update,
     // Scene + bright + blur passes render offscreen before the screen opens

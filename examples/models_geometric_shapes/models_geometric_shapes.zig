@@ -1,4 +1,4 @@
-//! models_geometric_shapes — raylib's [models] geometric-shapes sample, as a 3D
+//! models_geometric_shapes - raylib's [models] geometric-shapes sample, as a 3D
 //! gallery you spin with your finger.
 //!
 //! raylib lines up cube / sphere / cylinder / cone / torus / knot / plane, each
@@ -7,7 +7,7 @@
 //! really about SHOWING them off: a 2x4 grid of primitives on a grid floor, the
 //! shared `OrbitCamera` for orbit / pan / pinch-zoom (works with one finger on a
 //! phone), and a solid / wireframe / both toggle so you can see the actual
-//! triangles each generator emits — the whole point of a mesh-generator demo.
+//! triangles each generator emits - the whole point of a mesh-generator demo.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");

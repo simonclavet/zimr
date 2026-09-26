@@ -1,5 +1,5 @@
 //! lint:alias physics_common
-//! Shared, dimension-independent contract for the two physics engines — `zimrphysics`
+//! Shared, dimension-independent contract for the two physics engines - `zimrphysics`
 //! (3D / Jolt port) and `zimrphysics2d` (2D / Box2D v3 port). Defining the genuinely
 //! parallel parts here, and asserting the parallel surface at comptime, is what keeps the
 //! two engines feeling like one family rather than re-diverging over time: a developer who

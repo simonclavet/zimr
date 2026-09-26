@@ -1,8 +1,8 @@
-//! src/shaders/pbr_common_io.zig — constants + Interp varyings
+//! src/shaders/pbr_common_io.zig - constants + Interp varyings
 //!
 //! Binding model (which @group each uniform/sampler lands in) is the
-//! stage-segregated scheme documented in src/zimr.zig §3:
-//! VS uniforms→group 0, samplers→group 1, FS uniforms→group 2.
+//! stage-segregated scheme documented in src/zimr.zig section 3:
+//! VS uniforms->group 0, samplers->group 1, FS uniforms->group 2.
 //! shared by `pbr_vs_io` and `pbr_fs_io`.
 //!
 //! Phase 4a of `src/notes/typesafe_zig_shaders.md`.  Same "rename in
@@ -35,7 +35,7 @@ pub const max_point_lights: u32 = 4;
 /// Interpolated values that flow from `pbr_vs` to `pbr_fs`.  Order
 /// matters: the field index becomes the `layout(location = N)`
 /// decoration on both sides.  Rename or reorder here propagates to
-/// both stages — but it's still a SPIR-V layout break, so any
+/// both stages - but it's still a SPIR-V layout break, so any
 /// mismatch with currently-loaded shaders requires rebuilding both.
 pub const Interp = struct {
     frag_world_pos: Vec3,
@@ -47,7 +47,7 @@ pub const Interp = struct {
     /// `light_space_matrix * world_pos`.  Used by `computeShadow` to
     /// look up the depth comparison in the shadow map.
     frag_light_space_pos: Vec,
-    /// World-space tangent + handedness (xyz: direction, w: ±1).
+    /// World-space tangent + handedness (xyz: direction, w: +/-1).
     /// FS reconstructs bitangent as `cross(N, T) * w` for the TBN
     /// matrix that brings sampled normal-map vectors into world space.
     frag_world_tangent: Vec,

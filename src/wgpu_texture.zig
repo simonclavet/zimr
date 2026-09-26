@@ -1,16 +1,16 @@
 //! lint:alias wgpu_texture
 // src/wgpu_texture.zig - texture + render-texture lifetime wrappers.
 // WebGPU architecture is documented centrally in src/zimr.zig
-// (the module-level `//!` doc) — read that before changing wgpu code.
+// (the module-level `//!` doc) - read that before changing wgpu code.
 //
 //
 // Two flavours:
 //
-//   1. `WgpuTexture` — a 2D texture sourced from CPU-side pixel data
-//      or a 1×1 solid color (the "shapes-batch white pixel" pattern).
+//   1. `WgpuTexture` - a 2D texture sourced from CPU-side pixel data
+//      or a 1x1 solid color (the "shapes-batch white pixel" pattern).
 //      Owns its underlying texture + default view + default sampler.
 //
-//   2. `WgpuRenderTexture` — a render-target texture.  Used for
+//   2. `WgpuRenderTexture` - a render-target texture.  Used for
 //      offscreen rendering (`beginTextureMode` / `endTextureMode` in
 //      raylib).  Owns texture + view + (optional) depth attachment.
 //
@@ -28,7 +28,7 @@ const assert = zm.assert;
 const wgpu = @import("wgpu.zig");
 
 // ============================================================================
-// SECTION 1 — WgpuTexture
+// SECTION 1 - WgpuTexture
 // ============================================================================
 
 pub const WgpuTexture = struct {
@@ -57,7 +57,7 @@ pub const WgpuTexture = struct {
         desc: CreateFromPixelsDesc,
     ) WgpuTexture {
         // Sanity check: pixel buffer size should match the expected
-        // (width × height × bytes_per_pixel) — for RGBA8 that's 4.
+        // (width x height x bytes_per_pixel) - for RGBA8 that's 4.
         assert(desc.pixels.len == desc.width * desc.height * 4, @src());
 
         const tex: wgpu.TextureHandle = wgpu.createTexture(device, .{
@@ -91,11 +91,11 @@ pub const WgpuTexture = struct {
         };
     }
 
-    /// Like `createFromPixels`, but builds a full CPU mip chain (2×2 box
+    /// Like `createFromPixels`, but builds a full CPU mip chain (2x2 box
     /// downsample per level) and uploads every level. WebGPU has no
     /// `generateMipmap`, so we precompute the chain here. This keeps a glyph
     /// atlas crisp when MINIFIED (small on-screen text drawn from an oversampled
-    /// atlas): plain bilinear undersamples past 2× reduction and aliases; mip
+    /// atlas): plain bilinear undersamples past 2x reduction and aliases; mip
     /// selection picks a level close to the on-screen size.
     ///
     /// Filtering is BILINEAR within a level but NEAREST across levels
@@ -124,7 +124,7 @@ pub const WgpuTexture = struct {
 
         // Level 0 is the source pixels; each subsequent level is the previous
         // level box-downsampled by 2. `cur` owns the level being uploaded (level
-        // 0 borrows the caller's buffer; levels ≥1 are freshly allocated).
+        // 0 borrows the caller's buffer; levels >=1 are freshly allocated).
         wgpu.queueWriteTextureLevel(queue, tex, desc.width, desc.height, desc.width * 4, desc.pixels, 0);
         var cur: []const u8 = desc.pixels;
         var cur_owned: ?[]u8 = null;
@@ -164,7 +164,7 @@ pub const WgpuTexture = struct {
         };
     }
 
-    /// Full mip chain length for a `w`×`h` texture: floor(log2(max))+1.
+    /// Full mip chain length for a `w`x`h` texture: floor(log2(max))+1.
     fn mipLevelCount(w: u32, h: u32) u32 {
         var m: u32 = @max(w, h);
         var levels: u32 = 1;
@@ -174,7 +174,7 @@ pub const WgpuTexture = struct {
         return levels;
     }
 
-    /// 2×2 box-average `src` (sw×sh, RGBA8) into `dst` (dw×dh, RGBA8). When a
+    /// 2x2 box-average `src` (swxsh, RGBA8) into `dst` (dwxdh, RGBA8). When a
     /// dimension is odd the extra edge row/column is dropped (dw=sw/2 etc.),
     /// which is the standard mip reduction and imperceptible for a glyph atlas.
     fn boxDownsampleRgba8(
@@ -209,9 +209,9 @@ pub const WgpuTexture = struct {
         }
     }
 
-    /// Re-upload RGBA8 pixels into this texture IN PLACE — no new GPU texture/
+    /// Re-upload RGBA8 pixels into this texture IN PLACE - no new GPU texture/
     /// view/sampler, so it's cheap to call every frame (animated/streamed
-    /// content). The buffer must match width×height×4. raylib `UpdateTexture`.
+    /// content). The buffer must match widthxheightx4. raylib `UpdateTexture`.
     pub fn updatePixels(
         self: WgpuTexture,
         queue: wgpu.QueueHandle,
@@ -228,7 +228,7 @@ pub const WgpuTexture = struct {
         );
     }
 
-    /// The "shapes-batch white pixel" — a 1×1 fully-white texture used
+    /// The "shapes-batch white pixel" - a 1x1 fully-white texture used
     /// when drawing untextured shapes through the same pipeline as
     /// textured shapes.  Cheap (4 bytes uploaded once) and lets the
     /// fragment shader unconditionally multiply by texture color.
@@ -246,7 +246,7 @@ pub const WgpuTexture = struct {
     }
 
     /// A pre-filled checkerboard for debugging UV / texturing.
-    /// Pattern: 8×8 grid of 2-color squares.
+    /// Pattern: 8x8 grid of 2-color squares.
     pub fn createCheckerboard(
         device: wgpu.DeviceHandle,
         queue: wgpu.QueueHandle,
@@ -299,7 +299,7 @@ pub const WgpuTexture = struct {
 };
 
 // ============================================================================
-// SECTION 2 — WgpuRenderTexture
+// SECTION 2 - WgpuRenderTexture
 // ============================================================================
 
 pub const WgpuRenderTexture = struct {
@@ -458,7 +458,7 @@ pub const WgpuRenderTexture = struct {
 };
 
 // ============================================================================
-// SECTION 3 — bind group construction helpers
+// SECTION 3 - bind group construction helpers
 // ============================================================================
 
 /// Build a bind group entries blob for a (UBO, texture, sampler)
@@ -517,10 +517,10 @@ test "WgpuTexture.createCheckerboard produces correct pattern bytes" {
         }
     }
 
-    // Pixel (0,0) is in cell (0,0) → is_a=true → red
+    // Pixel (0,0) is in cell (0,0) -> is_a=true -> red
     try expectEqual(@as(u8, 0xff), pixels[0]);
     try expectEqual(@as(u8, 0x00), pixels[1]);
-    // Pixel (3,0) is in cell (1,0) → is_a=false → green
+    // Pixel (3,0) is in cell (1,0) -> is_a=false -> green
     try expectEqual(@as(u8, 0x00), pixels[3 * 4 + 0]);
     try expectEqual(@as(u8, 0xff), pixels[3 * 4 + 1]);
 }

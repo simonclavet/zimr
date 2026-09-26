@@ -1,5 +1,5 @@
 //! lint:alias wgpu_app
-//! src/wgpu_app.zig — the WebGPU `App` + `Frame` run-loop.
+//! src/wgpu_app.zig - the WebGPU `App` + `Frame` run-loop.
 //!
 //! This is the WebGPU counterpart to `zimr.AppBridge` + `zimr.Frame` (the GL
 //! path). It exists so a WebGPU example is written in the SAME shape as a GL
@@ -34,7 +34,7 @@
 //!
 //! v1 SCOPE (this is N3 in wgpu_new_beginnings.md)
 //!  * `Frame.gl` (the immediate-mode `WgpuGl` adapter that satisfies
-//!    `gl_iface`) is N4 — not here yet. This Frame carries the GPU handle
+//!    `gl_iface`) is N4 - not here yet. This Frame carries the GPU handle
 //!    (`f.gpu`), time, and window; examples drive `z.pbr3d` / `Renderer2D`
 //!    through `f.gpu` for now.
 //!  * `Frame.input` is a stub until input wiring lands (also N4-era): the
@@ -78,7 +78,7 @@ const assertUnreachable = zm.assertUnreachable;
 const renderer_2d = @import("renderer_2d.zig");
 const draw3d = @import("draw3d.zig");
 
-// S4: these were byte-identical reimplementations of draw3d's — now
+// S4: these were byte-identical reimplementations of draw3d's - now
 // re-exports (a re-export is not a redefinition under the dup-pub-fn rule).
 pub const genMeshCube = draw3d.genMeshCube;
 pub const genMeshTangents = draw3d.genMeshTangents;
@@ -93,7 +93,7 @@ const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is 
 pub const colorFromHSV = types.colorFromHSV;
 // The input state model is shared with the GL path (raylib-faithful: current/
 // previous buttons, drag tracking, wheel, char queue). It's pure data + state
-// logic — runtime.zig's dom externs are all at fn scope, so importing this
+// logic - runtime.zig's dom externs are all at fn scope, so importing this
 // namespace pulls no GL/WebGL surface into the wasm.
 const input = @import("runtime.zig").input;
 
@@ -104,7 +104,7 @@ pub const WgpuGl = @import("WgpuGl.zig");
 const PassState = gpu_iface.PassState;
 
 // ============================================================================
-// Config — mirrors zimr.Config's window shape so examples read the same.
+// Config - mirrors zimr.Config's window shape so examples read the same.
 // ============================================================================
 
 pub const ScaleMode = enum {
@@ -127,7 +127,7 @@ pub const WindowConfig = struct {
     title: []const u8 = "zimr",
     width: u32 = 800,
     height: u32 = 600,
-    /// `.responsive` (default) or `.fit` — see ScaleMode.
+    /// `.responsive` (default) or `.fit` - see ScaleMode.
     scale_mode: ScaleMode = .responsive,
     /// Depth-stencil format for the frame-owned depth attachment (GpuFrame
     /// owns + auto-resizes it). `null` = a 2D app with no depth pass.
@@ -144,16 +144,16 @@ pub const WindowConfig = struct {
 };
 
 /// Coarse per-frame phase used only for debug validation (gated by
-/// `zm.allow_assert`). It lets the renderer turn illegal call orderings —
+/// `zm.allow_assert`). It lets the renderer turn illegal call orderings -
 /// a 2D draw inside a 3D block, `endDrawing` with a 3D block still open,
-/// `endMode3D` with no matching `beginMode3D` — into an actionable `assertf`
+/// `endMode3D` with no matching `beginMode3D` - into an actionable `assertf`
 /// message instead of silent corruption. Compiled out of ship builds.
 pub const FramePhase = enum { idle, frame_2d, mode_3d };
 
 pub const Config = struct {
     window: WindowConfig = .{},
     /// Seed for `Frame.random`. Set it for a reproducible run; leave it null to
-    /// get a fresh seed each launch — from the host's crypto entropy in a real
+    /// get a fresh seed each launch - from the host's crypto entropy in a real
     /// browser, or a fixed constant on native/headless so tests stay stable.
     rng_seed: ?u64 = null,
 };
@@ -196,11 +196,11 @@ pub const TimeState = struct {
 };
 
 /// Read-only canvas/surface dimensions for the current frame. `screen_width`
-/// and `screen_height` are LOGICAL (CSS) pixels — the same space 2D drawing and
+/// and `screen_height` are LOGICAL (CSS) pixels - the same space 2D drawing and
 /// input coordinates use (logical px == CSS px in responsive mode). The GPU
-/// renders at backing resolution (CSS × devicePixelRatio); that's transparent
+/// renders at backing resolution (CSS x devicePixelRatio); that's transparent
 /// supersampling, handled by the frame/depth machinery, not exposed here.
-/// from the live surface — correct at any device-pixel-ratio or after resize.
+/// from the live surface - correct at any device-pixel-ratio or after resize.
 pub const WindowState = struct {
     screen_width: u32 = 0,
     screen_height: u32 = 0,
@@ -225,7 +225,7 @@ pub const WindowState = struct {
 };
 
 // ============================================================================
-// Frame — the per-tick parameter, mirroring zimr.Frame.
+// Frame - the per-tick parameter, mirroring zimr.Frame.
 // ============================================================================
 
 /// The per-frame parameter handed to `update`. Like the GL `Frame`, it has no
@@ -239,7 +239,7 @@ pub const Frame = struct {
     gpu: *GpuFrame,
     /// The 2D immediate-mode drawing context (the `gl: anytype` adapter that
     /// satisfies gl_iface). Use with `z.beginDrawing(f.gl)` / `z.rlBegin(f.gl)`
-    /// / `z.drawRectangle(f.gl, ...)` — the same free-function shape as the GL
+    /// / `z.drawRectangle(f.gl, ...)` - the same free-function shape as the GL
     /// path. Backed by the App's Renderer2D (lazily created on first
     /// beginDrawing).
     gl: *WgpuGl,
@@ -263,18 +263,18 @@ pub const Frame = struct {
 };
 
 // ============================================================================
-// App — owns the long-lived WebGPU resources + the typed update dispatch.
+// App - owns the long-lived WebGPU resources + the typed update dispatch.
 // ============================================================================
 
 /// Type-erased per-frame dispatch thunk (built by `run`, called by the
 /// `update` export). Mirrors `AppBridge.update_fn`.
 const UpdateThunk = *const fn (frame: *Frame, state: ?*anyopaque) void;
 
-/// A complete example/app as DATA — no globals, no `main`: its config plus the
+/// A complete example/app as DATA - no globals, no `main`: its config plus the
 /// three lifecycle fns over its `State`. A standalone build runs ONE of these
 /// full-screen via the generic runner (`src/wgpu_runner.zig`); the multi-app
 /// launcher (P3) holds many (type-erased) and ticks each into a rect. The
-/// example exposes `pub const app = z.AppSpec(State){ ... }` and nothing else —
+/// example exposes `pub const app = z.AppSpec(State){ ... }` and nothing else -
 /// the runner/launcher owns beginDrawing/clearBackground/endDrawing and the wasm
 /// entry. `update` draws into the Frame it's handed (its viewport): local
 /// coords, reads `f.window` for its size, paints its own background, and does
@@ -285,8 +285,8 @@ pub fn AppSpec(comptime StateT: type) type {
         config: Config,
         /// Construct the State in place: fill `s.* = .{...}` (still an exhaustive
         /// literal, so a forgotten field stays a compile error), then take stable
-        /// interior pointers — `&s.field`, cached sub-allocators, self-referential
-        /// wiring — which are valid forever because `s` is already at its final
+        /// interior pointers - `&s.field`, cached sub-allocators, self-referential
+        /// wiring - which are valid forever because `s` is already at its final
         /// address.
         init: fn (Allocator, *Frame, *StateT) anyerror!void,
         /// Free everything the init allocated through the allocator. Exercised by
@@ -299,7 +299,7 @@ pub fn AppSpec(comptime StateT: type) type {
         /// `update` in `beginDrawing`/`endDrawing` (opens the screen pass BEFORE
         /// update). When true, the example owns its own `beginDrawing`/
         /// `endDrawing` so it can render offscreen (RTT) BEFORE opening the
-        /// screen — required on tile-based mobile GPUs, where ending+reopening
+        /// screen - required on tile-based mobile GPUs, where ending+reopening
         /// the swapchain mid-frame causes frame-feedback tiling. Being rolled
         /// out to every example; once all are migrated this field and the
         /// runner's wrap are deleted (uniform explicit begin/endDrawing).
@@ -307,15 +307,15 @@ pub fn AppSpec(comptime StateT: type) type {
 
         /// Memory-management mode (leak_detection.md). `.managed` (default): the
         /// example must free EVERYTHING in `deinit`. The leak-test asserts both a
-        /// FLAT twice-lifecycle GPU-handle census AND — via a CountingAllocator
-        /// wrapping the example's gpa — that net live CPU bytes return to their
+        /// FLAT twice-lifecycle GPU-handle census AND - via a CountingAllocator
+        /// wrapping the example's gpa - that net live CPU bytes return to their
         /// pre-lifecycle baseline after `deinit` (b2 == b1), proving every
         /// individual allocation was freed, not just GPU handles. `.arena`: the
         /// example is handed the frame arena, `deinit` may be a stub, and there is
         /// no leak gate.
         ///
         /// POLICY: zimr's own examples ship with `.managed` and a leak-tight
-        /// `deinit` — they are the reference for how to release resources, so
+        /// `deinit` - they are the reference for how to release resources, so
         /// they must prove they leak nothing. `.arena` exists for EXTERNAL /
         /// embedding apps that deliberately opt out of leak checking (e.g. a
         /// throwaway prototype); an in-tree example should use it only if a
@@ -329,7 +329,7 @@ pub fn AppSpec(comptime StateT: type) type {
 /// (free everything, leak-checked); `.arena` is the opt-out for external apps.
 pub const MemoryMode = enum(u8) { arena, managed };
 
-/// Type-erased form of an `AppSpec(State)` — what a heterogeneous launcher list
+/// Type-erased form of an `AppSpec(State)` - what a heterogeneous launcher list
 /// holds. `init` constructs the State into a caller-provided slot of
 /// `state_size`/`state_align`. Produced by `eraseApp`.
 pub const AppVtable = struct {
@@ -342,8 +342,8 @@ pub const AppVtable = struct {
 };
 
 /// Construct a spec's State into a caller-provided, already-stable slot `sp`.
-/// Both entry paths — the single-app runner (via `App.run`) and the launcher
-/// (via `eraseApp`) — route through here. The user fills `sp` in place: its
+/// Both entry paths - the single-app runner (via `App.run`) and the launcher
+/// (via `eraseApp`) - route through here. The user fills `sp` in place: its
 /// address is final, so any interior pointer they take stays valid for the app's
 /// lifetime. `spec` is comptime, so the call folds away.
 pub fn initInto(
@@ -389,7 +389,7 @@ pub fn eraseApp(comptime spec: anytype) AppVtable {
 /// screen, for the multi-app `pushViewport`/`popViewport` pair. `rect` is the
 /// on-screen region (logical px) the child occupies. The child draws in a
 /// `logical_w x logical_h` space; with `scale_to_fit` that space is uniformly
-/// scaled + centered into `rect` (letterbox — the thumbnail case), otherwise it
+/// scaled + centered into `rect` (letterbox - the thumbnail case), otherwise it
 /// maps 1:1 and the caller sets `logical_w/h` to `rect`'s size (the reflow case).
 pub const Placement = struct {
     rect: types.Rectangle,
@@ -440,14 +440,14 @@ pub const App = struct {
     config: Config = .{},
 
     // 2D drawing state (for the `f.gl` immediate-mode path). The Renderer2D is
-    // created lazily on the first beginDrawing — a pure-3D app (pbr3d) never
+    // created lazily on the first beginDrawing - a pure-3D app (pbr3d) never
     // pays for it. `gl` + `pass` are the live per-frame drawing handles; `gl`
     // is handed to the user as `f.gl` and points at `renderer_2d` + `pass`.
     renderer_2d: ?Renderer2D = null,
     /// True once this frame's encoder (beginFrame) + Renderer2D exist.
     /// Set by `ensureFrame`, cleared at endFrame. Lets offscreen passes
     /// (beginTextureMode) create the encoder BEFORE beginDrawing opens the
-    /// screen — the offscreen-first ordering that avoids tile-based-GPU
+    /// screen - the offscreen-first ordering that avoids tile-based-GPU
     /// swapchain-teardown tiling.
     frame_begun: bool = false,
     /// Set by beginTextureMode/Raw = was a SCREEN pass open when RTT began.
@@ -456,7 +456,7 @@ pub const App = struct {
     rtt_reopen_screen: bool = false,
     pass: PassState = undefined,
     gl: WgpuGl = undefined,
-    /// Lazily-created vertex buffer for `drawFullscreenShader` — 3 Vertex2D
+    /// Lazily-created vertex buffer for `drawFullscreenShader` - 3 Vertex2D
     /// covering clip space. Shared across all fullscreen sampler shaders so they
     /// don't each hand-roll one. `.invalid` until first use.
     fullscreen_vbo: wgpu.BufferHandle = .invalid,
@@ -472,7 +472,7 @@ pub const App = struct {
     gpa: Allocator = undefined,
     counting: memwatch.CountingAllocator = undefined,
 
-    // Input state, advanced once per frame (current→previous) after the user's
+    // Input state, advanced once per frame (current->previous) after the user's
     // update. The JS bridge pushes events into it via the input_push_* exports.
     input_state: input.InputState = .{},
 
@@ -498,7 +498,7 @@ pub const App = struct {
     // 3D immediate-mode state. `cube3d` is built lazily on the first
     // beginMode3D (a pure-2D app never pays for it); it owns the dedicated 3D
     // pipeline + the per-frame primitive batch. The camera view-projection is
-    // written straight into its UBO at beginMode3D — no view state on the App.
+    // written straight into its UBO at beginMode3D - no view state on the App.
     cube3d: ?draw3d.Cube3D = null,
     /// Camera for the current beginMode3D scope, in the form pbr3d needs
     /// (view + proj + eye). Set by `beginMode3D` (from its Camera3D), cleared
@@ -507,7 +507,7 @@ pub const App = struct {
     /// immediate primitives and any pbr3d models.
     mode3d_cam: ?draw3d.pbr3d.Camera = null,
 
-    /// Logical size of the CURRENT render target — set between
+    /// Logical size of the CURRENT render target - set between
     /// begin/endTextureMode, null when targeting the backbuffer.  3D mode
     /// reads it so a camera rendered into an RTT gets the RTT's aspect
     /// instead of the window's (a half-width split-screen RTT must not
@@ -566,14 +566,14 @@ pub const App = struct {
         // FIRST, so init_fn receives a `*State` whose address is already final:
         // interior pointers it takes (`&s.field`, cached sub-allocators,
         // self-referential wiring like UiHost.ctx.frame_arena) stay valid for the
-        // app's whole lifetime — no move ever happens, so the release-only "stuck
-        // at initialising…" self-pointer bug cannot occur regardless of how the
+        // app's whole lifetime - no move ever happens, so the release-only "stuck
+        // at initialising..." self-pointer bug cannot occur regardless of how the
         // body is written. The in-place `s.* = .{...}` literal is still exhaustive
         // (Zig requires every no-default field set), so a forgotten field remains
-        // a COMPILE ERROR — the black-mandelbrot zoom=0 class stays impossible.
+        // a COMPILE ERROR - the black-mandelbrot zoom=0 class stays impossible.
         // The GPU device is live via the first Frame, so GPU handles get real
         // values too. (Legacy return-by-value inits reach here already wrapped in
-        // an in-place adapter — see `initInto`.)
+        // an in-place adapter - see `initInto`.)
         var init_frame: Frame = self.makeFrame();
         const state_ptr: *State = try gpa.create(State);
         errdefer gpa.destroy(state_ptr);
@@ -634,7 +634,7 @@ pub const App = struct {
     /// Single source of truth for the 2D-frame PHASE flag. Every place that
     /// opens a 2D pass (beginDrawing, reopen2DPass, beginTextureMode/Raw) and
     /// endMode3D routes through here, so "a 2D frame is open" and
-    /// "frame_phase == .frame_2d" can never disagree — the class of bug that let
+    /// "frame_phase == .frame_2d" can never disagree - the class of bug that let
     /// 3D-into-texture (beginMode3D inside an RT) assert after the offscreen-
     /// first change. beginMode3D sets .mode_3d directly (a sub-mode, not a frame).
     fn enterFrame2D(self: *App) void {
@@ -697,7 +697,7 @@ pub const App = struct {
         // IDENTICAL example body works standalone (opens the frame here) and as
         // a launcher child (no-op begin). The child draws into the runner's
         // pass; the runner's clear stands (a child cannot re-clear a load-op
-        // pass — see clearBackground). Mirrors the endDrawing no-op below.
+        // pass - see clearBackground). Mirrors the endDrawing no-op below.
         // A render pass is already open for this frame, so opening a SECOND one
         // here would double-begin the surface: the cryptic "recording in
         // CommandEncoder which is locked while RenderPassEncoder is open" ->
@@ -706,10 +706,10 @@ pub const App = struct {
         // frame + pass before ticking it (`child_tick_active`); (2) a redundant
         // beginDrawing in an app whose runner already opened the frame's pass, or
         // any second beginDrawing in one frame. Both reuse the open pass instead
-        // — so an example that (needlessly) calls beginDrawing renders correctly
+        // - so an example that (needlessly) calls beginDrawing renders correctly
         // rather than corrupting the frame. 2D frames use `clearViewport`; a
         // stray beginDrawing is now a safe no-op. (`clearBackground` still works:
-        // it ends the pass — clearing `drawing_active` — before reopening.)
+        // it ends the pass - clearing `drawing_active` - before reopening.)
         if (self.child_tick_active or self.drawing_active) {
             self.drawing_active = true;
             self.enterFrame2D();
@@ -723,13 +723,13 @@ pub const App = struct {
             // Attach depth when the window opted in (depth_format set). The 3D
             // immediate path batches into THIS single pass (no pass switch),
             // and the 2D pipelines carry a compare=always depth state to match.
-            // `fctx.depth_view` is .invalid when no depth target → depth-free.
+            // `fctx.depth_view` is .invalid when no depth target -> depth-free.
             .depth_view = self.gpu_frame.depth_view,
         });
         // Program the 2D view-projection to a top-left ortho at the LOGICAL
         // (CSS) size, so 2D coordinates are logical px and match input coords
         // (which arrive as CSS px). The GPU still renders at backing resolution
-        // (canvas.width = CSS × DPR) — that's just supersampling; the depth
+        // (canvas.width = CSS x DPR) - that's just supersampling; the depth
         // attachment tracks backing px via ensureDepth, independent of this.
         const size: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(self.gpu_frame.surface);
         const css_w: f32 = float(@max(size.width, 1));
@@ -754,13 +754,13 @@ pub const App = struct {
 
         self.pass.batch = &self.renderer_2d.?.shapes_batch;
         // (Per-frame VBO/IBO ring base is reset in ensureFrame, at true frame
-        // start, so offscreen-first RTT geometry isn't clobbered — see there.)
+        // start, so offscreen-first RTT geometry isn't clobbered - see there.)
         // Reset the gl handle to a fresh per-frame state (init applies the
         // field defaults: identity matrices, empty group, white color), then
         // restore the stable owner back-pointer.
         self.gl = WgpuGl.init(&self.renderer_2d, &self.pass);
         self.gl.owner = self;
-        // Backing render-target size — for scissor clamping (WebGPU rejects an
+        // Backing render-target size - for scissor clamping (WebGPU rejects an
         // oversized scissor rect; see WgpuGl.scissor/disable).
         const backing: wgpu.SurfaceSize = wgpu.getSurfaceSize(self.gpu_frame.surface);
         self.gl.render_w = backing.width;
@@ -775,12 +775,12 @@ pub const App = struct {
     fn endDrawing(self: *App) void {
         // Frame begin+end is owned by the RUNNER. In the launcher the active
         // example runs as a child (`child_tick_active`) and the runner closes
-        // the host frame exactly once — so a child's own `endDrawing` must be a
+        // the host frame exactly once - so a child's own `endDrawing` must be a
         // NO-OP, not a second present. This makes the IDENTICAL example body
         // correct whether it runs standalone (this call presents the frame) or
         // as a launcher child (the runner presents it). It replaces a per-frame
         // assert: rather than reporting the misuse every frame, the misuse is
-        // now impossible to hit — an example can freely call `endDrawing` and
+        // now impossible to hit - an example can freely call `endDrawing` and
         // it does the right thing for its context.
         if (self.child_tick_active) {
             return;
@@ -797,8 +797,8 @@ pub const App = struct {
         // Flush whatever the immediate-mode calls accumulated. Re-bind the 2D
         // pipeline + resources first: an app may have bound a CUSTOM pipeline
         // mid-frame (z.Pipeline, for a custom render pass that composes with the
-        // 2D layer). flushBatch deliberately does NOT bind a pipeline — that's
-        // the consumer's job — so without this restore the accumulated 2D batch
+        // 2D layer). flushBatch deliberately does NOT bind a pipeline - that's
+        // the consumer's job - so without this restore the accumulated 2D batch
         // (shapes/text) would be drawn through the app's foreign vertex layout,
         // misreading the vertices into garbage. bindForPass only sets the
         // pipeline + binds resources (it does not touch the batch), and the
@@ -823,7 +823,7 @@ fn profilerClock() f64 {
 }
 
 // ============================================================================
-// .fit scale-mode helpers — map a fixed design-size coordinate space into the
+// .fit scale-mode helpers - map a fixed design-size coordinate space into the
 // canvas with uniform scale + centering (letterbox/pillarbox), baked into the
 // ortho so no GPU viewport is needed.
 // ============================================================================
@@ -834,7 +834,7 @@ fn profilerClock() f64 {
 // In `.responsive` that equals the live CSS size; in `.fit` it's the fixed
 // design size, letterboxed into CSS. The browser delivers CSS px (mouse/touch);
 // the GPU wants backing px (scissor). These two functions are the ONLY bridge
-// between CSS and logical, and EVERY input + scissor path routes through them —
+// between CSS and logical, and EVERY input + scissor path routes through them -
 // so no path can disagree with another (the bug class where touch, mouse, and
 // scissor each forked their own transform and one was wrong/missing). Adding a
 // new input or clip API? Call these; don't re-derive the transform.
@@ -882,7 +882,7 @@ fn logicalToCss(
 }
 
 // ============================================================================
-// Public 2D drawing API — free functions taking `f.gl` (a `*WgpuGl`), mirroring
+// Public 2D drawing API - free functions taking `f.gl` (a `*WgpuGl`), mirroring
 // the GL path's `z.beginDrawing(f.gl)` / `z.rlBegin(f.gl)` shape so example
 // bodies read the same on both backends. beginDrawing/endDrawing recover the
 // owning App from `gl.owner`; the immediate-mode primitives just drive WgpuGl's
@@ -909,10 +909,10 @@ pub fn clearBackground(gl: *WgpuGl, color: Color) void {
     const app: *App = appOf(gl);
     // A launcher child must not re-clear: ending + reopening the pass here would
     // tear down the runner's single-frame lifecycle, and the pass clear is a
-    // fixed load-op anyway (it cannot be changed mid-pass). No-op for children —
+    // fixed load-op anyway (it cannot be changed mid-pass). No-op for children -
     // the runner's clear stands, and the child draws over it. Standalone
     // behavior is unchanged. (An example can freely call clearBackground and it
-    // does the right thing for its context — no launcher-specific edits.)
+    // does the right thing for its context - no launcher-specific edits.)
     if (app.child_tick_active) {
         return;
     }
@@ -926,7 +926,7 @@ pub fn clearBackground(gl: *WgpuGl, color: Color) void {
     }
     // raylib-style: callers pass a u8 Color (like every other draw call).
     // Convert to the 0..1 float clear the render pass wants. (Passing the u8
-    // values straight through as floats clamped to WHITE — the bug behind the
+    // values straight through as floats clamped to WHITE - the bug behind the
     // white background.)
     // lint:off scope-balance: engine frame primitive (frame closed by endDrawing elsewhere)
     _ = app.beginDrawing(.{
@@ -980,7 +980,7 @@ pub fn rlTexCoord2f(
 
 // ---- camera modes (raylib beginMode2D/3D): set up the matrix stack ----------
 // Use the unified zm cameras (Camera2D/Camera3D). Between beginMode and endMode,
-// `gl: anytype` 2D/3D draw code renders in the camera's space — the SAME calls
+// `gl: anytype` 2D/3D draw code renders in the camera's space - the SAME calls
 // the GL backend uses, so scene code is backend-agnostic.
 
 /// Enter 2D camera space: subsequent draws are transformed by `cam`.
@@ -1007,7 +1007,7 @@ pub fn endBlendMode(gl: *WgpuGl) void {
 }
 
 /// raylib's `BeginShaderMode`: everything drawn until `endShaderMode` goes through the user's
-/// fragment shader — ordinary `rect`/`circle`/`text`/`texture` draws, not a fullscreen quad.
+/// fragment shader - ordinary `rect`/`circle`/`text`/`texture` draws, not a fullscreen quad.
 ///
 /// `pipeline` comes from `z.loadShader2D`, which builds it against the engine's own shapes
 /// vertex stage and layout.
@@ -1036,7 +1036,7 @@ fn reopen2DPass(app: *App) void {
         // Re-attach the SAME depth target as the frame pass (beginDrawing). The
         // immediate-3D path batches into the current pass (no pass switch), and
         // when the window opted into depth the 2D pipelines also carry depth
-        // state — so the resumed pass must match. `.invalid` for a depth-less
+        // state - so the resumed pass must match. `.invalid` for a depth-less
         // 2D app keeps it depth-free. (Hardcoding null here broke any 3D / 2D
         // drawn after endTextureMode in a depth app: a depth-free pass vs a
         // depth-carrying pipeline.)
@@ -1062,8 +1062,8 @@ fn reopen2DPass(app: *App) void {
 }
 
 /// Like `beginMode3D` but drives the depth-tested 3D batch with a caller-built
-/// view-projection matrix (column-major, used as `M·v`) instead of deriving one
-/// from a `Camera3D`. Lets callers supply a custom (e.g. orthographic) camera —
+/// view-projection matrix (column-major, used as `M*v`) instead of deriving one
+/// from a `Camera3D`. Lets callers supply a custom (e.g. orthographic) camera -
 /// `plot3d.viewProjMatrix` uses this to align GPU geometry with its CPU axes.
 /// Single shared depth-tested pass: the batch flushes at `endMode3D`; 2D drawn
 /// afterwards (compare=always) composites on top.
@@ -1087,7 +1087,7 @@ pub fn beginMode3DMatrix(gl: *WgpuGl, view_proj: Mat) void {
     );
     // Commit anything the 2D immediate-mode path queued before this 3D block
     // (e.g. a full-screen background quad). Without this the 2D batch would
-    // flush at endDrawing — AFTER the immediate 3D draws — and paint over the
+    // flush at endDrawing - AFTER the immediate 3D draws - and paint over the
     // 3D. Flushing here lands that 2D BEHIND the 3D, which is what the call
     // order means.
     Backend.flushBatch(&app.pass);
@@ -1123,13 +1123,13 @@ pub fn beginMode3D(gl: *WgpuGl, cam: Camera3D) void {
     const z_near: f32 = 0.01;
     const z_far: f32 = 1000.0;
     const view: Mat = cam.viewMatrix();
-    // ★ `cam.projMatrix` HONOURS `cam.projection`; this used to build `perspectiveFovRh`
+    // * `cam.projMatrix` HONOURS `cam.projection`; this used to build `perspectiveFovRh`
     // unconditionally and silently ignore the field.
     //
     // That was an inconsistency rather than a missing feature: `Camera3D.projMatrix` and
     // `getScreenToWorldRayWithViewport` both already respected `projection`, and only this
     // entry point did not. An orthographic camera passed here became a PERSPECTIVE one whose
-    // `fovy_deg` was read as DEGREES — a shadow-map light with a half-extent of 4.0 turned into
+    // `fovy_deg` was read as DEGREES - a shadow-map light with a half-extent of 4.0 turned into
     // a 4-degree telephoto that saw a fraction of one surface. Nothing asserted, nothing
     // logged: it simply rendered flat and looked like the pass had not run.
     const proj: Mat = cam.projMatrix(aspect, z_near, z_far);
@@ -1138,7 +1138,7 @@ pub fn beginMode3D(gl: *WgpuGl, cam: Camera3D) void {
     // lint:off scope-balance: engine primitive (forwards to beginMode3DMatrix; closed by endMode3D)
     beginMode3DMatrix(gl, view_proj);
     // Record the camera in the form pbr3d needs so `drawModel3D` can draw a
-    // model in THIS scope with the same camera the immediate primitives use —
+    // model in THIS scope with the same camera the immediate primitives use -
     // one camera, specified once. (beginMode3DMatrix just cleared it to null.)
     const app3d: *App = appOf(gl);
     app3d.mode3d_cam = .{
@@ -1171,7 +1171,7 @@ const white3d: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
 /// Options for `drawCube` / `drawCubeWires`. `size` is per-axis (edge lengths);
 /// `rotation` is any rotation matrix (build it with `zm.matFromAxisAngle`,
-/// `zm.matFromRollPitchYaw`, …) — identity = axis-aligned.
+/// `zm.matFromRollPitchYaw`, ...) - identity = axis-aligned.
 pub const CubeDesc = struct {
     size: Vec = vec(1, 1, 1),
     rotation: Mat = identity(),
@@ -1203,7 +1203,7 @@ pub const PlaneDesc = struct {
 };
 
 /// Draw a lit solid cube centred at `center`. See `CubeDesc` (all fields
-/// defaulted — `.{}` is a unit white cube; set `.rotation` for an oriented one).
+/// defaulted - `.{}` is a unit white cube; set `.rotation` for an oriented one).
 pub fn drawCube(
     gl: *WgpuGl,
     center: Vec,
@@ -1337,9 +1337,9 @@ pub fn drawCubeTexture(
     }
 }
 
-/// Draw a camera-facing textured quad (billboard) at `pos`, `w`×`h`. `right` and
+/// Draw a camera-facing textured quad (billboard) at `pos`, `w`x`h`. `right` and
 /// `up` are the camera basis vectors (e.g. derived from the view matrix); the
-/// quad spans `pos ± right*w/2 ± up*h/2`.
+/// quad spans `pos +/- right*w/2 +/- up*h/2`.
 pub fn drawBillboard(
     gl: *WgpuGl,
     tex: WgpuTexture,
@@ -1358,7 +1358,7 @@ pub fn drawBillboard(
 
 /// Camera-facing textured quad framing a sprite-atlas cell. `uv_min`/`uv_max`
 /// are the normalized (0..1) source rect; `anchor` positions the quad in its
-/// plane in (w, h) units — {0.5, 0.5} centers on `pos`, {0.5, 0} plants its
+/// plane in (w, h) units - {0.5, 0.5} centers on `pos`, {0.5, 0} plants its
 /// bottom edge on `pos`. `right`/`up` are the camera basis (as for
 /// `drawBillboard`). Raylib parity: `DrawBillboardPro`.
 pub fn drawBillboardRec(
@@ -1434,10 +1434,10 @@ pub const DecalDesc = struct {
 };
 
 /// Paint a projected decal of `tex` onto decal-receiver `handle` (from
-/// `uploadDecalReceiver`). `projector` maps world → decal-box space — build it
+/// `uploadDecalReceiver`). `projector` maps world -> decal-box space - build it
 /// as `compose(lookAtRh(hit, hit + normal, up), rotationZ(spin))`. The receiver
 /// mesh is re-drawn with a fragment shader that discards everything outside the
-/// box, so only the surface patch under the projector is painted — no mesh
+/// box, so only the surface patch under the projector is painted - no mesh
 /// clipping, scales to any density. Call inside `beginMode3D`/`endMode3D`.
 pub fn drawDecal(
     gl: *WgpuGl,
@@ -1574,9 +1574,9 @@ pub fn drawModel(
 /// uploaded.
 pub fn uploadMeshGpu(gl: *WgpuGl, mesh: *types.Mesh) ?draw3d.MeshGpu {
     const app: *App = appOf(gl);
-    // ★ `cube3d` IS CREATED LAZILY, normally on the first `beginMode3D`. This is called at
+    // * `cube3d` IS CREATED LAZILY, normally on the first `beginMode3D`. This is called at
     // INIT, before any 3D block has run, so without this it returns null, nothing uploads, and
-    // every later pass draws nothing — a black screen and an empty shadow map, with no error.
+    // every later pass draws nothing - a black screen and an empty shadow map, with no error.
     // `uploadDecalReceiver` guards the same way for the same reason.
     if (app.cube3d == null) {
         app.cube3d = draw3d.Cube3D.init(app.gpa, &app.gpu_frame) catch null;
@@ -1588,7 +1588,7 @@ pub fn uploadMeshGpu(gl: *WgpuGl, mesh: *types.Mesh) ?draw3d.MeshGpu {
 }
 
 /// The vertex/index buffers backing an uploaded mesh, so a pass with its OWN pipeline can draw
-/// the same geometry the main pass draws — one upload, many passes.
+/// the same geometry the main pass draws - one upload, many passes.
 ///
 /// See `draw3d.Cube3D.gpuBuffers` for the vertex layout and the null case.
 pub fn meshGpuBuffers(gl: *WgpuGl, mesh: types.Mesh) ?draw3d.MeshGpu {
@@ -1601,9 +1601,9 @@ pub fn meshGpuBuffers(gl: *WgpuGl, mesh: types.Mesh) ?draw3d.MeshGpu {
 
 /// Push a mesh's current CPU positions and normals to its GPU buffer.
 ///
-/// ★ FOR MESHES DRAWN THROUGH THE RETAINED PATH ONLY. `drawModel` re-reads the CPU arrays
+/// * FOR MESHES DRAWN THROUGH THE RETAINED PATH ONLY. `drawModel` re-reads the CPU arrays
 /// every frame, so a dynamic mesh drawn that way needs nothing but `updateMeshBuffer`. The
-/// retained path (`drawMeshInstanced`) uploads ONCE and caches by `mesh.vaoId` — without this
+/// retained path (`drawMeshInstanced`) uploads ONCE and caches by `mesh.vaoId` - without this
 /// call a CPU-skinned character would show its bind pose forever.
 ///
 /// A no-op on a mesh that has never been uploaded, so calling it unconditionally after
@@ -1629,7 +1629,7 @@ pub fn drawModelWires(
     }
 }
 
-/// Draw `transforms.len` copies of `mesh` in ONE instanced GPU draw — each
+/// Draw `transforms.len` copies of `mesh` in ONE instanced GPU draw - each
 /// instance positioned by its column-major model matrix, all sharing `tint`.
 /// Unlike `drawModel` (which CPU-transforms into the immediate batch), this
 /// keeps the mesh GPU-resident and streams a per-instance buffer, so it scales
@@ -1780,7 +1780,7 @@ pub fn updateCamera(
 /// Restore the 2D renderer's pipeline + bind state IN-PLACE after a custom 3D
 /// batch (`beginMode3DMatrix`..`endMode3D`) flushed into the current pass, so
 /// subsequent 2D/UI composes on top of the 3D in the SAME pass. Unlike
-/// `reopenOverlayPass`, this does NOT end/reopen the render pass — on tile-based
+/// `reopenOverlayPass`, this does NOT end/reopen the render pass - on tile-based
 /// mobile GPUs a pass switch drops the just-drawn 3D content (the tile isn't
 /// reloaded), so single-pass restore is required to keep the 3D visible.
 pub fn restore2DState(gl: *WgpuGl) void {
@@ -1811,14 +1811,14 @@ pub fn endMode3D(gl: *WgpuGl) void {
     app.enterFrame2D();
 }
 
-/// Draw a pbr3d model inside a `beginMode3D`/`endMode3D` scope — the one door
+/// Draw a pbr3d model inside a `beginMode3D`/`endMode3D` scope - the one door
 /// for lit, textured models in the app's shared pass. The scope owns the
-/// 2D↔3D transition (beginMode3D flushed the 2D backdrop BEHIND the 3D;
+/// 2D<->3D transition (beginMode3D flushed the 2D backdrop BEHIND the 3D;
 /// endMode3D restores 2D after), so this call is just "draw the model": no
 /// manual flush, no restore, no writeback bookkeeping. The camera comes from
 /// beginMode3D (specified once, shared with the immediate primitives); pass
 /// only the light + model + transform. Immediate primitives (drawSphere,
-/// drawCube) and models may be freely interleaved in one scope — each flush
+/// drawCube) and models may be freely interleaved in one scope - each flush
 /// rebinds its own pipeline.
 pub fn drawModel3D(
     gl: *WgpuGl,
@@ -1858,10 +1858,10 @@ pub fn drawModel3D(
 // state (a target point + yaw/pitch/distance) and turns per-frame input into a
 // ready `Camera3D`. One shared idiom across mouse and touch:
 //
-//   * ORBIT  — one-finger drag, or LEFT-mouse drag.
-//   * PAN    — two-finger drag (average motion), or RIGHT/MIDDLE-mouse drag;
+//   * ORBIT  - one-finger drag, or LEFT-mouse drag.
+//   * PAN    - two-finger drag (average motion), or RIGHT/MIDDLE-mouse drag;
 //              moves the target across the camera's screen plane.
-//   * ZOOM   — two-finger pinch, or the mouse wheel; changes distance.
+//   * ZOOM   - two-finger pinch, or the mouse wheel; changes distance.
 //
 // Orbiting is gated on `!ui_wants_mouse` so grabbing a slider never spins the
 // scene. Call `update` once per frame and feed the result to `beginMode3D`.
@@ -1886,7 +1886,7 @@ fn gestureMode(f: *Frame, touches: i32) GestureMode {
 
 /// WHERE a gesture is, for the purpose of deciding which viewport owns it. A
 /// pinch has no single position, so it anchors at the MIDPOINT of the two
-/// fingers — which is exactly where the user thinks they are pinching.
+/// fingers - which is exactly where the user thinks they are pinching.
 fn gestureAnchor(f: *Frame, mode: GestureMode) Vec2 {
     if (mode == .multi) {
         const a: Vec2 = getTouchPosition(f.input, 0);
@@ -1896,7 +1896,7 @@ fn gestureAnchor(f: *Frame, mode: GestureMode) Vec2 {
     return getMousePosition(f.input);
 }
 
-/// A null region means "the whole screen" — the single-viewport default.
+/// A null region means "the whole screen" - the single-viewport default.
 fn regionHolds(region: ?types.Rectangle, p: Vec2) bool {
     const r: types.Rectangle = region orelse return true;
     return p[0] >= r.x and p[0] < r.x + r.width and
@@ -1924,7 +1924,7 @@ pub const OrbitOptions = struct {
     /// The VIEWPORT this camera steers (logical coords), or `null` for the whole
     /// screen. A gesture belongs to the region under its ANCHOR: the pointer for
     /// a mouse or one-finger drag, and the MIDPOINT OF THE TWO FINGERS for a
-    /// pinch / two-finger pan — a pinch has no single position, and the midpoint
+    /// pinch / two-finger pan - a pinch has no single position, and the midpoint
     /// is what the user perceives as "where" they are pinching. Ownership is
     /// LATCHED when the gesture starts, so a drag that wanders across a divider
     /// keeps steering the camera it began on. The wheel is not a gesture: it
@@ -2024,7 +2024,7 @@ pub const OrbitCamera = struct {
 
         if (touches >= 2) {
             // The two-finger path used to run even while the UI wanted the
-            // pointer — pinching ON a panel zoomed the scene behind it.
+            // pointer - pinching ON a panel zoomed the scene behind it.
             if (!blocked) {
                 self.handleTwoFinger(f, opts);
             } else {
@@ -2045,7 +2045,7 @@ pub const OrbitCamera = struct {
             }
         }
 
-        // Mouse wheel zoom (desktop). Not a gesture — there is nothing to latch,
+        // Mouse wheel zoom (desktop). Not a gesture - there is nothing to latch,
         // so it simply follows the pointer: the pane under the cursor zooms.
         const wheel: f32 = getMouseWheelMove(f.input);
         if (wheel != 0 and !ui_blocked and regionHolds(opts.region, getMousePosition(f.input))) {
@@ -2068,7 +2068,7 @@ pub const OrbitCamera = struct {
         const mid: Vec2 = .{ (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5 };
 
         if (self.prev_pinch > 0) {
-            // Pinch → zoom (fraction of travel), midpoint drift → pan.
+            // Pinch -> zoom (fraction of travel), midpoint drift -> pan.
             const dz: f32 = (self.prev_pinch - spread) / @max(self.prev_pinch, 1.0);
             self.applyZoom(dz, opts);
             self.applyPan(mid[0] - self.prev_pan[0], mid[1] - self.prev_pan[1], opts);
@@ -2084,7 +2084,7 @@ pub const OrbitCamera = struct {
         const left: bool = isMouseButtonDown(f.input, .left);
         const pan_btn: bool = isMouseButtonDown(f.input, .right) or isMouseButtonDown(f.input, .middle);
         if (left and !pan_btn) {
-            // Skip the first frame of the drag — its delta is a stale-position
+            // Skip the first frame of the drag - its delta is a stale-position
             // jump that pops the camera (worst on touch). Apply from frame 2.
             if (self.dragging) {
                 const d: Vec2 = getMouseDelta(f.input);
@@ -2108,8 +2108,8 @@ pub const OrbitCamera = struct {
 
     /// Move the target across the camera's screen plane by a pixel delta.
     fn applyPan(self: *OrbitCamera, dpx: f32, dpy: f32, opts: OrbitOptions) void {
-        // Camera basis: forward = target - eye, right = forward × up,
-        // screen-up = right × forward. Pan scales with distance so it tracks
+        // Camera basis: forward = target - eye, right = forward x up,
+        // screen-up = right x forward. Pan scales with distance so it tracks
         // the cursor at any zoom.
         const e: Vec = self.eye();
         var fwd: Vec = vec(self.target[0] - e[0], self.target[1] - e[1], self.target[2] - e[2]);
@@ -2117,7 +2117,7 @@ pub const OrbitCamera = struct {
         const right: Vec = normalize(cross(fwd, self.up));
         const scr_up: Vec = cross(right, fwd);
         const scale: f32 = opts.pan_sensitivity * self.distance;
-        // Drag right → scene moves right → target moves left (screen convention).
+        // Drag right -> scene moves right -> target moves left (screen convention).
         const kx: f32 = -dpx * scale;
         const ky: f32 = dpy * scale;
         self.target = vec(
@@ -2142,7 +2142,7 @@ pub const OrbitCamera = struct {
 /// Close the current render pass and reopen a fresh one over the same surface
 /// (colour LOADED, not cleared). Use after a custom render pass (e.g.
 /// `FluidDiscs.draw`) that leaves pass/pipeline state the 2D batch can't
-/// recover from on some drivers — the reopened pass restores the 2D renderer's
+/// recover from on some drivers - the reopened pass restores the 2D renderer's
 /// pipeline + bind groups + batch, so subsequent 2D drawing (and UI) composes
 /// correctly ON TOP of whatever the custom pass rendered.
 pub fn reopenOverlayPass(gl: *WgpuGl) void {
@@ -2163,7 +2163,7 @@ pub fn drawRectangleRec(
 /// Fill the CURRENT viewport (the area `f.window` reports) with `color`. The
 /// descriptor-app equivalent of `clearBackground`: a child can't clear the
 /// render pass (the runner/launcher owns that), so it paints its own background
-/// by filling its rect. Full-screen standalone OR a launcher cell — same call,
+/// by filling its rect. Full-screen standalone OR a launcher cell - same call,
 /// because `f.window` is whatever region the app was handed.
 pub fn clearViewport(f: *Frame, color: Color) void {
     drawRectangleRec(f.gl, .{ .x = 0, .y = 0, .width = f.window.widthf(), .height = f.window.heightf() }, color);
@@ -2980,7 +2980,7 @@ pub fn rlSetTexture(gl: *WgpuGl, tex: WgpuTexture) void {
 }
 
 /// Re-upload an Image's pixels into an existing GPU texture in place (raylib
-/// `UpdateTexture`). The Image dims must match `tex`. Cheap per-frame — no new
+/// `UpdateTexture`). The Image dims must match `tex`. Cheap per-frame - no new
 /// texture is created, so use this for animated/streamed content instead of
 /// re-running loadTextureFromImage (which churns GPU resources).
 pub fn updateTexture(gl: *WgpuGl, tex: WgpuTexture, image: types.Image) void {
@@ -3002,7 +3002,7 @@ pub fn loadRenderTexture(
     const app: *App = appOf(gl);
     // Match the window's depth state: when the app opted into a depth pass
     // (.depth_format set), the 2D pipelines carry depth state, so an RTT pass
-    // they draw into must also have a depth attachment — otherwise the pipeline
+    // they draw into must also have a depth attachment - otherwise the pipeline
     // is incompatible with the depth-less RTT pass. 2D apps get a color-only RTT.
     return WgpuRenderTexture.create(app.gpu_frame.device, .{
         .width = @intCast(width),
@@ -3014,7 +3014,7 @@ pub fn loadRenderTexture(
 }
 
 /// Like `loadRenderTexture`, but selects the color-sampler filter.
-/// `nearest_filter = true` gives point sampling — a low-res target stays CRISP
+/// `nearest_filter = true` gives point sampling - a low-res target stays CRISP
 /// when scaled up (pixel-art), matching raylib's default texture filter;
 /// `false` matches `loadRenderTexture` (bilinear).
 pub fn loadRenderTextureEx(
@@ -3036,7 +3036,7 @@ pub fn loadRenderTextureEx(
 
 /// Like `loadRenderTexture`, but the depth attachment is SAMPLEABLE
 /// (`depth32float` + `texture_binding`) so a later pass can read it as a
-/// `texture_depth_2d` — the foundation for depth-visualisation and shadow-map
+/// `texture_depth_2d` - the foundation for depth-visualisation and shadow-map
 /// passes (raylib `LoadRenderTextureDepthTex`). Get the depth as a bindable
 /// texture with `rt.asDepthTexture()`. Always carries a color attachment too.
 pub fn loadRenderTextureDepthTex(
@@ -3061,20 +3061,20 @@ pub fn unloadRenderTexture(gl: *WgpuGl, rt: *WgpuRenderTexture) void {
 }
 
 /// Sampler filtering for a registered texture (raylib's `TEXTURE_FILTER_*`).
-/// `.point` = nearest-neighbour: crisp, blocky when magnified — right for
+/// `.point` = nearest-neighbour: crisp, blocky when magnified - right for
 /// pixel-art and for text drawn at its baked size. `.bilinear` = smooth
-/// interpolation — right for photos, and for text scaled well off its baked size.
+/// interpolation - right for photos, and for text scaled well off its baked size.
 /// (raylib's TRILINEAR additionally needs mipmaps, which the 2D atlas path
 /// doesn't generate, so it isn't offered rather than being faked.)
 pub const TextureFilter = enum { point, bilinear };
 
 /// Change a texture's sampler filter after creation (raylib `SetTextureFilter`).
-/// Takes the texture ID the 2D renderer registered — e.g. `font.texture.id` for
+/// Takes the texture ID the 2D renderer registered - e.g. `font.texture.id` for
 /// a font atlas, or the id from `registerTexture`.
 ///
 /// Flushes the pending 2D batch first: the filter lives in the sampler, which is
 /// baked into the texture's bind group, so changing it destroys and rebuilds that
-/// bind group — and any geometry still staged against the old one would submit a
+/// bind group - and any geometry still staged against the old one would submit a
 /// destroyed handle.
 pub fn setTextureFilter(gl: *WgpuGl, texture_id: u32, filter: TextureFilter) void {
     const app: *App = appOf(gl);
@@ -3082,7 +3082,7 @@ pub fn setTextureFilter(gl: *WgpuGl, texture_id: u32, filter: TextureFilter) voi
         return;
     }
     // Only flush when a pass is actually open (calling this from `init`, before
-    // any frame, is the common case — there is nothing staged to flush yet).
+    // any frame, is the common case - there is nothing staged to flush yet).
     if (app.drawing_active) {
         gl.flushBeforeMaterialSwap();
     }
@@ -3091,7 +3091,7 @@ pub fn setTextureFilter(gl: *WgpuGl, texture_id: u32, filter: TextureFilter) voi
 
 /// Register a GPU texture (e.g. a render texture's `asTexture()`) with the 2D
 /// renderer and return a draw-list texture id usable with
-/// `DrawList.addTexturedQuad` / `ui.image`. Register ONCE and cache the id —
+/// `DrawList.addTexturedQuad` / `ui.image`. Register ONCE and cache the id -
 /// the renderer keeps the mapping for the texture's lifetime; calling per frame
 /// leaks ids. Lets a depth-tested 3D render texture be composited as a 2D image
 /// in the correct z-order (e.g. plot3d's GPU surface fill inside the plot pane).
@@ -3099,7 +3099,7 @@ pub fn registerTexture(gl: *WgpuGl, tex: WgpuTexture) u32 {
     const app: *App = appOf(gl);
     // Ensure the 2D renderer exists before registering. It is created lazily on
     // the first frame, but examples register textures in `init` (before any
-    // frame), where it is still null — loadFont ensures it the same way. Without
+    // frame), where it is still null - loadFont ensures it the same way. Without
     // this, registerTexture silently returned 0 (an invalid id), so every
     // `drawTexturePro`/`drawTextureNPatch` with a user texture drew nothing.
     if (app.renderer_2d == null) {
@@ -3111,7 +3111,7 @@ pub fn registerTexture(gl: *WgpuGl, tex: WgpuTexture) u32 {
 /// Redirect 2D drawing to the offscreen `rt`. Flushes the current pass, opens a fresh
 /// pass targeting the render texture, and sets the 2D ortho to the render texture's size.
 /// `clear` is explicit: a color clears the texture on entry; `null` PRESERVES last frame's
-/// contents (load) so you can accumulate — fade + draw for trails. Pair with
+/// contents (load) so you can accumulate - fade + draw for trails. Pair with
 /// `endTextureMode`. Call between begin/endDrawing.
 pub fn beginTextureMode(
     gl: *WgpuGl,
@@ -3136,7 +3136,7 @@ pub fn beginTextureMode(
     app.ensureFrame() catch return;
     // Offscreen-first (RTT before beginDrawing): no screen pass to tear down.
     app.rtt_reopen_screen = app.drawing_active;
-    // The offscreen pass IS an open 2D frame — set the phase so beginMode3D
+    // The offscreen pass IS an open 2D frame - set the phase so beginMode3D
     // (3D INTO a render texture) works whether or not the screen was open.
     app.enterFrame2D();
     if (app.drawing_active) {
@@ -3186,7 +3186,7 @@ pub fn endTextureMode(gl: *WgpuGl) void {
 }
 
 /// Open an offscreen render pass into `rt` WITHOUT binding the 2D renderer's
-/// pipeline — for callers that draw with their OWN render pipeline (a shadow,
+/// pipeline - for callers that draw with their OWN render pipeline (a shadow,
 /// depth, or postprocess pass) into a render texture of ANY color format.
 ///
 /// `beginTextureMode` hard-binds the rgba8 "shapes" pipeline, which WebGPU
@@ -3199,7 +3199,7 @@ pub fn beginTextureModeRaw(gl: *WgpuGl, rt: WgpuRenderTexture, clear: ?Color) vo
     app.ensureFrame() catch return;
     // Offscreen-first (RTT before beginDrawing): no screen pass to tear down.
     app.rtt_reopen_screen = app.drawing_active;
-    // The offscreen pass IS an open 2D frame — set the phase so beginMode3D
+    // The offscreen pass IS an open 2D frame - set the phase so beginMode3D
     // (3D INTO a render texture) works whether or not the screen was open.
     app.enterFrame2D();
     if (app.drawing_active) {
@@ -3222,7 +3222,7 @@ pub fn beginTextureModeRaw(gl: *WgpuGl, rt: WgpuRenderTexture, clear: ?Color) vo
 
 /// Close a `beginTextureModeRaw` pass and reopen the backbuffer pass (with the
 /// frame's depth target + the 2D renderer re-bound), like `endTextureMode` but
-/// skipping the 2D flush — a raw pass batches nothing.
+/// skipping the 2D flush - a raw pass batches nothing.
 pub fn endTextureModeRaw(gl: *WgpuGl) void {
     const app: *App = appOf(gl);
     app.target_size = null;
@@ -3238,11 +3238,11 @@ pub fn endTextureModeRaw(gl: *WgpuGl) void {
 }
 
 /// MRT sibling of `beginTextureModeRaw`: open ONE render pass writing to
-/// SEVERAL render textures at once — the fragment shader's `@location(N)`
+/// SEVERAL render textures at once - the fragment shader's `@location(N)`
 /// output lands in `rts[N]`.  This is the deferred G-buffer pass: three
 /// attachments filled by one geometry walk.
 ///
-/// Depth comes from `rts[0]` — create the FIRST render texture
+/// Depth comes from `rts[0]` - create the FIRST render texture
 /// `with_depth = true` and leave the rest color-only (one scene, one depth
 /// test; per-attachment depth buffers would be meaningless anyway).  All
 /// attachments share the clear color and must share dimensions (WebGPU
@@ -3412,7 +3412,7 @@ pub fn drawTextureRotated(
 // raytracer, a fractal computed on the CPU) and the WGPU backend. Allocate one
 // per source, `update` it with fresh RGBA8 bytes each frame, then `present` it
 // into a screen rectangle. This is the single abstraction the side-by-side demo
-// uses for its software half AND that the raytracer uses for its image — the
+// uses for its software half AND that the raytracer uses for its image - the
 // SAME helper, so the producing code never mentions GL or WGPU.
 //
 // Pattern (validated in mandel_sidebyside): create a copy_dst texture once,
@@ -3425,7 +3425,7 @@ pub const CpuFramebuffer = struct {
     /// A registered-texture id (distinct material bind group). We blit via
     /// setTexture(id), NOT bindTexture(tex): bindTexture rebuilds the SHARED
     /// material bind group (bind_groups[1]) in place, which the deferred shapes
-    /// batch also references — so a prior untextured draw (the GPU scene) would
+    /// batch also references - so a prior untextured draw (the GPU scene) would
     /// end up sampling THIS framebuffer at submit time (black-shapes bug). A
     /// registered id gets its own bind group handle, leaving the scene's intact.
     /// Registered lazily on first present (the Renderer2D doesn't exist until
@@ -3466,7 +3466,7 @@ pub const CpuFramebuffer = struct {
     }
 
     /// Blit the whole framebuffer into the screen rectangle (dx,dy,dw,dh) in
-    /// logical/design pixels — scaling as needed (nearest filter). Uses the
+    /// logical/design pixels - scaling as needed (nearest filter). Uses the
     /// Recreate the backing texture at a new size and (if already presented
     /// at least once) swap it into the 2D registry under the SAME id, so a
     /// rotation / canvas-resize doesn't accumulate registry slots.  `pixels`
@@ -3620,7 +3620,7 @@ pub const UiHost = struct {
         // Precondition: the UI is built INTO the open draw frame, so
         // beginDrawing MUST have run first. Calling begin() before
         // beginDrawing (or clearing after it) renders the UI into no
-        // pass — a silent blank window. Trap it with a clear message
+        // pass - a silent blank window. Trap it with a clear message
         // instead. Surfaces on the page via std_options = z.std_options.
         const app: *App = appOf(f.gl);
         assertf(
@@ -3637,7 +3637,7 @@ pub const UiHost = struct {
         // dims MUST be EXACTLY the ones WgpuGl uses for its own gl.scissor clamp,
         // or the clip lands in the wrong region (the recurring "scissored" bug).
         // begin() runs AFTER beginDrawing, so f.gl.render_w/h are already set to
-        // the backing size — read THOSE (single source of truth), never re-query
+        // the backing size - read THOSE (single source of truth), never re-query
         // the surface (which can drift across a resize between the two calls).
         const app_for_size: *App = app;
         const css_sz: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(app_for_size.gpu_frame.surface);
@@ -3719,7 +3719,7 @@ pub fn loadFont(
     ttf_bytes: []const u8,
     size: i32,
 ) !Font {
-    // ASCII 32..126 — the printable set the FPS counter / labels need.
+    // ASCII 32..126 - the printable set the FPS counter / labels need.
     var codepoints: [95]u21 = undefined;
     for (&codepoints, 0..) |*cp, k| {
         cp.* = @intCast(32 + k);
@@ -3730,12 +3730,12 @@ pub fn loadFont(
 /// Release a font COMPLETELY: free its CPU glyph/rec arrays AND its GPU atlas
 /// (texture + material bind group), recycling the registry slot.
 ///
-/// Use this when REPLACING a font while the app runs — e.g. re-baking it with
+/// Use this when REPLACING a font while the app runs - e.g. re-baking it with
 /// more codepoints. `z.unloadFont` frees only the CPU side, which is right at
 /// teardown (`deinit` has no `gl`, and the registry reset reclaims every
 /// engine-owned texture anyway) but wrong mid-run: each re-bake would register a
 /// NEW atlas and abandon the old one. After `max_registered_textures` (64) of
-/// those, `registerTexture` runs out of slots and hands back the white texture —
+/// those, `registerTexture` runs out of slots and hands back the white texture -
 /// and the text silently turns into solid blocks.
 ///
 /// The batch is flushed first when a pass is open, because staged geometry can
@@ -3753,7 +3753,7 @@ pub fn releaseFont(gl: *WgpuGl, gpa: Allocator, font: Font) void {
 
 /// Like `loadFont`, but bakes an EXPLICIT codepoint set instead of ASCII 32..126
 /// (raylib `LoadFontEx` with a `codepoints` array). This is how you get accented
-/// Latin, Greek, Cyrillic, CJK, arrows, box-drawing — anything outside ASCII.
+/// Latin, Greek, Cyrillic, CJK, arrows, box-drawing - anything outside ASCII.
 ///
 /// Only the codepoints you ask for are baked, so the atlas stays small: pass the
 /// ranges the app actually renders, not "all of Unicode". A codepoint the TTF
@@ -3775,24 +3775,24 @@ pub fn loadFontEx(
     const r: *Renderer2D = &app.renderer_2d.?;
 
     const tt: codecs.truetype.Font = try codecs.truetype.loadFontFromTtf(gpa, ttf_bytes);
-    // Bake the atlas at DEVICE pixels (logical size × devicePixelRatio), not logical
-    // size. The wgpu 2D path renders into the backing store (CSS × DPR); an atlas baked
-    // at logical size gets UPSCALED on a high-DPR phone → blurry text. Baking at
-    // size×DPR makes the atlas ~1:1 with the backing → sharp. baseSize tracks the bake
+    // Bake the atlas at DEVICE pixels (logical size x devicePixelRatio), not logical
+    // size. The wgpu 2D path renders into the backing store (CSS x DPR); an atlas baked
+    // at logical size gets UPSCALED on a high-DPR phone -> blurry text. Baking at
+    // sizexDPR makes the atlas ~1:1 with the backing -> sharp. baseSize tracks the bake
     // size, so drawText/measureText still produce LOGICAL sizes (the scale divides it
-    // back out) — transparent to callers, just crisper. DPR = backing/CSS surface size.
+    // back out) - transparent to callers, just crisper. DPR = backing/CSS surface size.
     //
     // OVERSAMPLE headroom: the atlas is frozen at load-time DPR and never re-baked, so
-    // any later MAGNIFICATION (entering browser fullscreen — a `.fit`-mode app scales its
-    // fixed design surface up to the whole monitor, ~2.4–3× on 1080p, more on 1440p/4K —
+    // any later MAGNIFICATION (entering browser fullscreen - a `.fit`-mode app scales its
+    // fixed design surface up to the whole monitor, ~2.4-3x on 1080p, more on 1440p/4K -
     // moving to a denser monitor, or drawing text bigger than `size`) samples a too-small
-    // atlas → blur. Baking 3× the currently-needed density gives that magnification
+    // atlas -> blur. Baking 3x the currently-needed density gives that magnification
     // headroom. This is only affordable because the atlas is MIPMAPPED (see
-    // createMipmappedFromPixels): without mips, a 3× atlas would badly alias small text on
+    // createMipmappedFromPixels): without mips, a 3x atlas would badly alias small text on
     // minification; with a mip chain the GPU picks a level near the on-screen size, so the
     // same atlas stays crisp whether the text is tiny (UI labels) or fullscreen-huge. The
     // multiplier is capped so a high-DPR phone doesn't blow the atlas up (memory is
-    // width×height + a ~33% mip tail, so it grows with the square of the multiplier).
+    // widthxheight + a ~33% mip tail, so it grows with the square of the multiplier).
     const oversample: f32 = 3.0;
     const css_sz: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(app.gpu_frame.surface);
     const back_sz: wgpu.SurfaceSize = wgpu.getSurfaceSize(app.gpu_frame.surface);
@@ -3800,7 +3800,7 @@ pub fn loadFontEx(
         float(back_sz.width) / float(css_sz.width)
     else
         1.0;
-    // clamp the TOTAL bake density (dpr × oversample) to [1, 4]: 3× headroom on a DPR-1
+    // clamp the TOTAL bake density (dpr x oversample) to [1, 4]: 3x headroom on a DPR-1
     // desktop (where fullscreen magnification bites hardest), still bounded on a DPR-3
     // phone. baseSize carries the real bake height, so the logical scale stays exact.
     const bake_mult: f32 = clamp(dpr * oversample, 1.0, 4.0);
@@ -3813,8 +3813,8 @@ pub fn loadFontEx(
     const ah: u32 = @intCast(atlas.image.height);
     const pixels: []const u8 = @as([*]const u8, @ptrCast(atlas.image.data.?))[0 .. aw * ah * 4];
     // Mipmapped, trilinear-sampled glyph atlas. The atlas is baked OVERSAMPLED
-    // (see `oversample` above), so at draw time it is almost always MINIFIED —
-    // and plain bilinear undersamples past ~2× reduction, which is what left the
+    // (see `oversample` above), so at draw time it is almost always MINIFIED -
+    // and plain bilinear undersamples past ~2x reduction, which is what left the
     // small on-screen/UI text aliased ("pixelated") even after switching off
     // NEAREST. A precomputed mip chain lets the GPU pick a level near the
     // on-screen size, so both tiny UI labels and large fullscreen text stay
@@ -3842,17 +3842,17 @@ pub fn loadFontEx(
     };
 }
 
-/// raylib's `LoadFontData(..., FONT_SDF, ...)` — bake a font as a SIGNED
+/// raylib's `LoadFontData(..., FONT_SDF, ...)` - bake a font as a SIGNED
 /// DISTANCE FIELD. Unlike the coverage atlas (`loadFont`/`loadFontEx`), an SDF
 /// atlas stays crisp when magnified far past its bake size, because a
-/// `smoothstep(0.5 ± w, alpha)` fragment shader reconstructs the edge from the
+/// `smoothstep(0.5 +/- w, alpha)` fragment shader reconstructs the edge from the
 /// distance instead of interpolating coverage (which blurs). Draw the returned
-/// font INSIDE `beginShaderMode(sdf_shader)` / `endShaderMode` — the shader
+/// font INSIDE `beginShaderMode(sdf_shader)` / `endShaderMode` - the shader
 /// (`src/shaders/text_sdf_fs.zig`) is the SDF twin of the shapes fragment stage.
 ///
-/// `sdf_size` is the atlas bake height in px (raylib uses ~16–64; larger =
+/// `sdf_size` is the atlas bake height in px (raylib uses ~16-64; larger =
 /// smoother field, bigger atlas). The atlas is baked at that size (no oversample
-/// — the SDF carries the scale) then converted with `image_mod.coverageToSdf`, and
+/// - the SDF carries the scale) then converted with `image_mod.coverageToSdf`, and
 /// uploaded LINEAR-filtered (bilinear interpolation of the distance is what
 /// makes the edge smooth). Free with `z.unloadFont` / `releaseFont` as usual.
 pub fn loadFontSdf(
@@ -3873,14 +3873,14 @@ pub fn loadFontSdf(
     }
 
     const tt: codecs.truetype.Font = try codecs.truetype.loadFontFromTtf(gpa, ttf_bytes);
-    // Bake the coverage atlas at the SDF size directly — no DPR/oversample: the
+    // Bake the coverage atlas at the SDF size directly - no DPR/oversample: the
     // distance field, not extra texels, is what buys magnification headroom.
     const atlas: text2d.FontAtlas = try text2d.bakeFontAtlas(gpa, &tt, sdf_size, &codepoints, 1);
     defer image_mod.unloadImage(gpa, atlas.image);
 
-    // Coverage → SDF, in place. Spread is the distance (px) mapped to the
-    // ±0.5 alpha range. It must stay near a glyph's stroke half-width (a few
-    // px) or the field compresses toward 0.5 and nothing renders solid — a
+    // Coverage -> SDF, in place. Spread is the distance (px) mapped to the
+    // +/-0.5 alpha range. It must stay near a glyph's stroke half-width (a few
+    // px) or the field compresses toward 0.5 and nothing renders solid - a
     // spread of size/8 was the bug that made SDF text mottle. ~size/18 keeps a
     // 64px bake's interior near ~0.8 and the background at 0, a clean split.
     const spread: f32 = @max(3.0, float(sdf_size) / 18.0);
@@ -3912,16 +3912,16 @@ pub fn loadFontSdf(
     };
 }
 
-/// raylib's `LoadFontFromImage` — build a Font from a BITMAP-FONT image
+/// raylib's `LoadFontFromImage` - build a Font from a BITMAP-FONT image
 /// (XNA style), where glyphs sit on a `key`-coloured background separated by
 /// key-coloured borders. Segments the image (via `image_mod.segmentSpriteFont`, a
 /// pure/unit-tested port of raylib's scan), replaces the key colour with
 /// transparent, uploads the cleaned image as a NEAREST-filtered atlas, and
-/// returns a Font whose glyphs carry `advanceX = 0` — the draw path advances by
+/// returns a Font whose glyphs carry `advanceX = 0` - the draw path advances by
 /// the rec width for image fonts, exactly like raylib's `DrawTextEx`.
 ///
 /// `first_char` is the codepoint of the FIRST glyph (raylib uses 32 = space);
-/// glyphs are numbered sequentially from there. `image` is NOT consumed — the
+/// glyphs are numbered sequentially from there. `image` is NOT consumed - the
 /// caller still owns and frees it (only the cleaned COPY is uploaded). Free the
 /// returned Font with `z.unloadFont` / `releaseFont` like any TTF font.
 pub fn loadFontFromImage(
@@ -4030,7 +4030,7 @@ pub fn drawText(
     text2d.drawWithFont(gl, 0, font, text, .{ x, y }, size, 0, color);
 }
 
-/// Measure `text` at `size` px → (width, height) in logical px.
+/// Measure `text` at `size` px -> (width, height) in logical px.
 pub fn measureText(
     font: Font,
     text: []const u8,
@@ -4039,7 +4039,7 @@ pub fn measureText(
     return text2d.measureWithFont(0, font, text, size, 0);
 }
 
-/// raylib's `MeasureTextEx` — measure with an explicit inter-glyph `spacing`
+/// raylib's `MeasureTextEx` - measure with an explicit inter-glyph `spacing`
 /// (the drawing side is `gl.text(pos, s, .{ .spacing = ... })`). Needed to
 /// centre a spacing-adjusted string.
 pub fn measureTextEx(
@@ -4052,7 +4052,7 @@ pub fn measureTextEx(
 }
 
 // ---- scissor / clip (N5g) ----
-// Restrict drawing to a rectangle (in logical coords — same space as
+// Restrict drawing to a rectangle (in logical coords - same space as
 // drawRectangle etc.). Flushes the batch first (the scissor is a pass-state
 // change, so prior geometry isn't retroactively clipped), converts logical ->
 // BACKING px (accounting for DPR and .fit letterbox), and sets the GPU scissor.
@@ -4088,7 +4088,7 @@ fn logicalToBacking(
     // then CLAMP to [0, backing] so release builds degrade gracefully (a
     // slightly-wrong clip) instead of a GPU crash + blank canvas.
     assert(px >= -0.5 and py >= -0.5 and
-        px + pw <= bw + 0.5 and py + ph <= bh + 0.5, @src()); // scissor out of render area — coord-space bug
+        px + pw <= bw + 0.5 and py + ph <= bh + 0.5, @src()); // scissor out of render area - coord-space bug
     if (px < 0) {
         pw += px;
         px = 0;
@@ -4123,7 +4123,7 @@ fn logicalToBacking(
 /// Map a child app into `placement` for one tick: set the modelview to
 /// translate(+scale) the child's LOCAL coords onto the parent screen, clip to
 /// the rect, and report the child's logical size via `f.window`. The per-frame
-/// projection ortho is UNCHANGED — the placement rides in the modelview (applied
+/// projection ortho is UNCHANGED - the placement rides in the modelview (applied
 /// per-vertex at emit time), so any number of children share one open render
 /// pass + one ortho with no UBO conflict. Pair with `popViewport`. This is the
 /// multi-app launcher's workhorse; an example body never calls it. Nestable (a
@@ -4172,7 +4172,7 @@ pub fn pushViewport(f: *Frame, placement: Placement) void {
 /// `f.window`, and the scissor (reset to the full surface). One-level/grid use
 /// is exact; nested-scissor INTERSECTION is a later refinement (a deeper child's
 /// clip currently widens back to the full surface until its own pushViewport
-/// reclips — fine for a flat grid).
+/// reclips - fine for a flat grid).
 pub fn popViewport(f: *Frame) void {
     const app: *App = appOf(f.gl);
     assertf(app.viewport_depth > 0, @src(), "popViewport without a matching pushViewport", .{});
@@ -4191,7 +4191,7 @@ pub const ChildId = usize;
 /// A multi-app launcher: holds N type-erased child apps, each with its OWN
 /// leak-checking allocator, and ticks/resets/removes them. A "launcher app"
 /// (itself an AppSpec) drives this from its `update` (see
-/// examples/gallery_all). No globals — everything lives in the Launcher
+/// examples/gallery_all). No globals - everything lives in the Launcher
 /// value + the Frame it is handed. Children are heap-allocated records so their
 /// per-child allocator never moves (an ArrayList realloc would dangle it).
 pub const Launcher = struct {
@@ -4204,8 +4204,8 @@ pub const Launcher = struct {
         gen: u32 = 0,
         vt: AppVtable,
         // DebugAllocator's `safety` defaults to runtime_safety: ON in debug, OFF
-        // in ReleaseSmall. That's exactly the policy we want — leak detection in
-        // debug only — so we DON'T override it. In release the per-child
+        // in ReleaseSmall. That's exactly the policy we want - leak detection in
+        // debug only - so we DON'T override it. In release the per-child
         // allocator is a thin passthrough and reset's leak check is a no-op.
         dbg: std.heap.DebugAllocator(.{}),
         state: []align(slot_align) u8,
@@ -4264,7 +4264,7 @@ pub const Launcher = struct {
 
     /// Add a child WITHOUT initializing it yet (lazy): allocate its State slot
     /// and record the vtable, but defer `init` until the child is first ticked.
-    /// Keeps boot light when hosting many heavy apps — only the shown app pays
+    /// Keeps boot light when hosting many heavy apps - only the shown app pays
     /// its init cost, on the frame it's first switched to. No Frame needed here.
     pub fn addDeferred(self: *Launcher, vt: AppVtable) !ChildId {
         assertf(
@@ -4318,13 +4318,13 @@ pub const Launcher = struct {
 
     /// Tick a child full-screen with NO viewport push: the child owns the whole
     /// frame exactly as standalone (it may clear and even call endDrawing). Used
-    /// by the launcher, which shows one example at a time full-screen — pairing a
+    /// by the launcher, which shows one example at a time full-screen - pairing a
     /// `pushViewport` with a child that ends the frame would pop a closed pass.
     pub fn tickFullscreen(self: *Launcher, f: *Frame, id: ChildId) void {
         const rec: *Rec = self.recs.items[id];
         // The child draws its scene + its own UI; the launcher composes the
         // switcher on top, and the runner closes the frame once. A child must NOT
-        // call endDrawing — that's asserted via child_tick_active in App.endDrawing.
+        // call endDrawing - that's asserted via child_tick_active in App.endDrawing.
         const app: *App = appOf(f.gl);
         const prev: bool = app.child_tick_active;
         app.child_tick_active = true;
@@ -4354,7 +4354,7 @@ pub const Launcher = struct {
         }
         rec.dbg = .{};
         // Release this child's registry entries (bind groups + engine-owned font
-        // atlas), reclaiming the ids — siblings in a shared registry are untouched.
+        // atlas), reclaiming the ids - siblings in a shared registry are untouched.
         if (appOf(f.gl).renderer_2d) |*r| {
             r.releaseOwner(rec.gen);
         }
@@ -4409,17 +4409,17 @@ pub fn bindFullscreenShader(
     Backend.flushBatch(&app.pass);
     loaded.bindForDraw(&app.pass);
     // The fullscreen triangle is drawn THROUGH the 2D shapes batch but under the
-    // pipeline we just bound — so that batch is now owned by THIS pipeline.
+    // pipeline we just bound - so that batch is now owned by THIS pipeline.
     // Record it, or the flush guard in `drawFullscreenTriangle` sees
     // current(fullscreen) != owner(stale 2D) and fires a false positive on a
     // correct draw. `drawFullscreenTriangle` calls `bindForPass` right after the
-    // triangle flush, which restores the 2D pipeline AND owner — so subsequent
+    // triangle flush, which restores the 2D pipeline AND owner - so subsequent
     // 2D drawing stays correctly owned and guarded (nothing is masked).
     app.pass.batch_owner_pipeline = app.pass.current_pipeline;
 }
 
 // The 2D batch reserves the same `@group` the DSL assigns material samplers
-// to — that's WHY the batch can clobber a fullscreen sampler shader, and why
+// to - that's WHY the batch can clobber a fullscreen sampler shader, and why
 // `assertFullscreenBatchSafe` keys on `batch_reserved_group`. Tie the two
 // numbers at compile time so they can never diverge and quietly defeat the
 // guard (e.g. samplers move groups but the batch doesn't).
@@ -4434,7 +4434,7 @@ comptime {
 /// Compile-time guard: `bindFullscreenShader` + `drawFullscreenTriangle` route
 /// the draw through the 2D shapes batch, whose flush re-binds `@group(N)` (N =
 /// `gpu_iface.batch_reserved_group`) to its texture atlas. A shader that uses
-/// that group — e.g. ANY texture sampler — would have its binding silently
+/// that group - e.g. ANY texture sampler - would have its binding silently
 /// clobbered and sample the atlas instead (the postprocess "bars" bug). This
 /// turns that footgun into a compile error pointing at the safe path. Cost:
 /// zero at runtime; it fires before anything ships.
@@ -4481,7 +4481,7 @@ pub fn drawFullscreenTriangle(gl: *WgpuGl) void {
     app.renderer_2d.?.bindForPass(&app.pass);
 }
 
-/// Fullscreen verts for `drawFullscreenShader` — one big clip-space triangle,
+/// Fullscreen verts for `drawFullscreenShader` - one big clip-space triangle,
 /// uv 0..2 (the 0..1 window is the inscribed region). Vertex2D layout, matching
 /// the default 2D vertex layout a `loadShaderVF` pipeline uses.
 const fullscreen_verts = [_]gpu_iface.Vertex2D{
@@ -4504,7 +4504,7 @@ fn ensureFullscreenVbo(app: *App) wgpu.BufferHandle {
 
 /// Draw a fullscreen triangle through a loaded shader's OWN pipeline + bind
 /// groups (its `Resources`), with a shared engine-owned fullscreen vertex
-/// buffer — NOT the 2D shapes batch. This is the correct path for ANY fullscreen
+/// buffer - NOT the 2D shapes batch. This is the correct path for ANY fullscreen
 /// shader that samples a texture: the batch binds its atlas at `@group(1)` on
 /// flush, which would clobber a shader's group-1 sampler. Works for UBO-only
 /// fullscreen shaders too (it's strictly safe), so it's the general fullscreen-
@@ -4519,7 +4519,7 @@ pub fn drawFullscreenShader(
     Backend.flushBatch(&app.pass);
     const vbo: wgpu.BufferHandle = ensureFullscreenVbo(app);
     // Bind the shader's pipeline + ALL its bind groups (its group-1 sampler
-    // survives — nothing touches the batch's group-1 binding after this).
+    // survives - nothing touches the batch's group-1 binding after this).
     loaded.bindForDraw(&app.pass);
     loaded.setVertex(&app.pass, 0, vbo, @sizeOf(@TypeOf(fullscreen_verts)));
     loaded.draw(&app.pass, 3, 1);
@@ -4529,7 +4529,7 @@ pub fn drawFullscreenShader(
     }
 }
 
-// `@import("root").zimr_app` — a single bridge pointer, not mutable app state.
+// `@import("root").zimr_app` - a single bridge pointer, not mutable app state.
 // (Audited the same way: it's a bridge handle, not user data.)
 // lint:off module-var: previous-frame timestamp for delta_time, owned by the frame driver
 var prev_frame_ms: f64 = 0;
@@ -4563,7 +4563,7 @@ pub export fn update(dt_seconds: f32) void {
         defer zu.end();
         thunk(&frame, app.state);
     }
-    // Advance input (current→previous) so just-pressed/released edge queries
+    // Advance input (current->previous) so just-pressed/released edge queries
     // work next frame, and clear the per-frame wheel/char deltas.
     {
         const zi: profiler.Zone = profiler.zoneNamed(@src(), "input.endFrame");
@@ -4576,9 +4576,9 @@ pub export fn update(dt_seconds: f32) void {
 }
 
 // ============================================================================
-// Input ingress — the wasm exports the JS bridge calls on DOM events. Each
+// Input ingress - the wasm exports the JS bridge calls on DOM events. Each
 // routes into the active App's input state. Coordinates arrive in LOGICAL
-// pixels (the bridge converts clientX/Y → canvas-local at the JS edge), the
+// pixels (the bridge converts clientX/Y -> canvas-local at the JS edge), the
 // same contract as the GL path. No-ops before App.run sets active_app.
 // ============================================================================
 
@@ -4594,9 +4594,9 @@ pub export fn input_push_mouse_move(x: f32, y: f32) void {
     input.pushMouseMove(&app.input_state, p[0], p[1]);
 }
 /// The JS `devicemotion` handler calls this with accelerationIncludingGravity
-/// (m/s², device natural frame) and screen.orientation.angle. Routes into the
+/// (m/s^2, device natural frame) and screen.orientation.angle. Routes into the
 /// active App's motion state; `z.getDeviceGravity(f.input)` reads it back. One
-/// channel is all we need — it already fuses gravity and motion (equivalence
+/// channel is all we need - it already fuses gravity and motion (equivalence
 /// principle), so there's no separate "linear acceleration" to plumb.
 pub export fn input_push_motion(ax: f32, ay: f32, az: f32, screen_angle: f32) void {
     const app: *App = active_app orelse return;
@@ -4639,7 +4639,7 @@ pub export fn zimr_input_push_touch_down(
 ) void {
     const app: *App = active_app orelse return;
     // Same CSS->logical mapping as the mouse, so touch and mouse agree in BOTH
-    // scale modes (previously touch skipped the .fit inverse — a latent gap).
+    // scale modes (previously touch skipped the .fit inverse - a latent gap).
     const p: [2]f32 = cssToLogical(app, x, y);
     input.pushTouchDown(&app.input_state, id, p[0], p[1]);
 }
@@ -4659,12 +4659,12 @@ pub export fn zimr_input_push_touch_up(id: i32) void {
 }
 
 // ============================================================================
-// Input query API — free functions over f.input, mirroring the GL path's
+// Input query API - free functions over f.input, mirroring the GL path's
 // `z.getMousePosition` / `z.isMouseButtonDown` shape so example bodies read the
 // same on both backends.
 // ============================================================================
 
-/// The effective gravity the fluid feels (canvas space, m/s², unnormalised;
+/// The effective gravity the fluid feels (canvas space, m/s^2, unnormalised;
 /// (0,9.8) when no sensor). Multiply by one gain. Tilt, shake, flat-float and
 /// free-fall all emerge from this single vector. See input.getDeviceGravity.
 pub fn getDeviceGravity(in: *const input.InputState) Vec2 {

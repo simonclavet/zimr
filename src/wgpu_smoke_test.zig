@@ -12,7 +12,7 @@
 //     from this file, so a `zig build-obj wgpu_smoke_test.zig`
 //     catches integration errors before they reach the browser.
 //
-// The test does NOT run in the host test harness — it would need a
+// The test does NOT run in the host test harness - it would need a
 // real GPU + JS bridge.  It compiles cleanly as a sanity check that
 // the API surfaces fit together.
 
@@ -25,7 +25,7 @@ const render_pass = wgpu.render_pass;
 const BindGroupCache = @import("BindGroupCache.zig");
 
 // ============================================================================
-// SECTION 1 — the hand-written WGSL triangle shader
+// SECTION 1 - the hand-written WGSL triangle shader
 // ============================================================================
 //
 // A red triangle.  Three vertices, hardcoded positions.  No vertex
@@ -63,7 +63,7 @@ pub const triangle_wgsl =
 ;
 
 // ============================================================================
-// SECTION 2 — the smoke-test app
+// SECTION 2 - the smoke-test app
 // ============================================================================
 //
 // This is what a user app would look like after the migration.  It
@@ -109,7 +109,7 @@ pub const App = struct {
 
     fn buildTrianglePipeline(self: *App, gpa: Allocator) !void {
         // The smoke test ships its own hand-written WGSL (no schema,
-        // no typed pipeline — just a fixed-shape triangle).  Goes
+        // no typed pipeline - just a fixed-shape triangle).  Goes
         // straight to `createShaderModuleWgsl`; the typed
         // `loadShader` path is exercised by the engine + user code,
         // not by the smoke harness.
@@ -120,7 +120,7 @@ pub const App = struct {
             "triangle",
         );
 
-        // No bind group layouts — the shader has no bindings.
+        // No bind group layouts - the shader has no bindings.
         // Build an empty pipeline layout.
         const pl_layout: wgpu.PipelineLayoutHandle = wgpu.createPipelineLayout(
             self.f.device,
@@ -172,7 +172,7 @@ pub const App = struct {
             .clear = .{ .r = 0.05, .g = 0.05, .b = 0.1, .a = 1.0 },
         });
 
-        // setPipeline + draw 3 vertices (raw render_pass calls — no
+        // setPipeline + draw 3 vertices (raw render_pass calls - no
         // dedup needed for this single-pipeline smoke test).
         Backend.setPipelineHandle(ps, self.triangle_pipeline);
         render_pass.draw(ps.pass, .{ .vertex_count = 3 });

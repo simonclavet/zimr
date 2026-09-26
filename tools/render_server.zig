@@ -1,10 +1,10 @@
 //! ============================================================================
-//! render_server.zig — the signaling server, packaged to deploy on a host
+//! render_server.zig - the signaling server, packaged to deploy on a host
 //! ============================================================================
 //!
 //! This is the deploy-friendly twin of tools/signal_server.zig. It does the
 //! exact same WebSocket signaling relay (rooms + JOIN/SIGNAL/WELCOME/JOINED/
-//! LEFT/FROM — see that file's header for the full protocol and design notes),
+//! LEFT/FROM - see that file's header for the full protocol and design notes),
 //! but it adds ONE thing: it also serves the net_ws_smoke standalone page over
 //! plain HTTP. That means a single deployment does everything:
 //!
@@ -23,7 +23,7 @@
 //!     gets the page back with a 200, so health checks pass too.
 //!
 //! Both demo pages are baked into the binary with @embedFile, so the whole
-//! server is a single self-contained executable — copy it onto a host and run
+//! server is a single self-contained executable - copy it onto a host and run
 //! it, no other files needed. (Rebuild the pages with `zig build
 //! net-rtc-smoke-standalone net-ws-smoke-standalone -Dmode=release` and copy
 //! the results to
@@ -61,7 +61,7 @@ const magic_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"; // per RFC 6455
 const default_port = "7777";
 const max_message_bytes: usize = 16 * 1024;
 const read_buffer_bytes: usize = max_message_bytes + 4096;
-const room_cap: usize = 8; // max peers per room — matches net_core's max_peers (the mesh cap)
+const room_cap: usize = 8; // max peers per room - matches net_core's max_peers (the mesh cap)
 
 const Peer = struct {
     id: u32,
@@ -306,7 +306,7 @@ fn handleSignal(io: Io, peer: *Peer, rest: []const u8) !void {
     }
 }
 
-// Relay game DATA between two peers whose direct P2P connection failed — the
+// Relay game DATA between two peers whose direct P2P connection failed - the
 // server-relay fallback. Identical to handleSignal but with a RELAYED prefix;
 // the tail ("<channel> <base64-payload>") is passed through opaquely. This is
 // what lets peers behind strict NATs still play, with no TURN server.
@@ -363,7 +363,7 @@ fn handleConnection(io: Io, stream: net.Stream) void {
     var stream_reader: net.Stream.Reader = stream.reader(io, read_buf);
     const reader: *Io.Reader = &stream_reader.interface;
 
-    // Read the HTTP request head first — every connection starts as HTTP.
+    // Read the HTTP request head first - every connection starts as HTTP.
     if (!readHttpHead(reader)) {
         return;
     }
@@ -374,7 +374,7 @@ fn handleConnection(io: Io, stream: net.Stream) void {
     const key: ?[]const u8 = findHeaderValue(head_all[0..head_end], "sec-websocket-key");
     if (key == null) {
         // Plain GET (a browser opening a page, or a health check): pick the page
-        // by path — /ws serves the signaling test, everything else the WebRTC one.
+        // by path - /ws serves the signaling test, everything else the WebRTC one.
         const path: []const u8 = requestPath(head_all[0..head_end]);
         const html: []const u8 = choosePage(path);
         serveHttp(io, stream, html) catch {}; // lint:off catch-suppression: client errors are normal

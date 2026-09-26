@@ -1,4 +1,4 @@
-//! examples/vertex_texture_test_fs.zig — emits the interpolated colour.
+//! examples/vertex_texture_test_fs.zig - emits the interpolated colour.
 const shader_io = @import("vertex_texture_test_fs_io.zig");
 const shader_externs = @import("vertex_texture_test_fs_externs");
 

@@ -1,10 +1,10 @@
-//! pipeline_mipmap — Phase 3 (`src/notes/webgpu_control.md`): mipmaps and
+//! pipeline_mipmap - Phase 3 (`src/notes/webgpu_control.md`): mipmaps and
 //! LOD selection. A texture is built with a full mip chain, and a COMPUTE
 //! shader paints each level a DISTINCT hue (level 0 red, climbing the spectrum
 //! to the 1x1 top). The texture is then drawn on a perspective ground plane:
 //! the GPU picks a mip level per pixel from the UV derivatives, so distance
 //! selects the level and the road shows the chain as colour bands receding to
-//! the horizon — you literally see which LOD is sampled where.
+//! the horizon - you literally see which LOD is sampled where.
 //!
 //! Plumbing added (additive): wgpu.TextureDesc.mip_level_count,
 //! wgpu.createTextureViewMip (a single-level view, used to bind each mip as a
@@ -193,7 +193,7 @@ fn fillMips(gpa: Allocator, f: *z.Frame, tex: z.wgpu.TextureHandle) !void {
         // destroying the mipmapped texture (in deinit) releases its per-level
         // views, so destroying `view` here too would double-free it. Freed with
         // the texture, not here. (NB: full `createTextureView` views are NOT
-        // auto-freed and still need an explicit destroy — see notes.)
+        // auto-freed and still need an explicit destroy - see notes.)
         z.wgpu.destroyBindGroup(bg);
     }
     // The compute pipeline + its layout were build-only for the whole fill.
@@ -306,7 +306,7 @@ pub const app: z.AppSpec(State) = .{
     .init = initState,
     // .memory left default (arena): init builds a compute pipeline / multi-pass
     // chain (mipmap or bloom) whose intermediate handles aren't kept in State,
-    // so a full managed teardown needs added State fields — deferred.
+    // so a full managed teardown needs added State fields - deferred.
     .deinit = deinit,
     .update = update,
 };

@@ -1,6 +1,6 @@
-//! zn_train — every kernel a two-layer network needs to train, sharing ONE buffer set.
+//! zn_train - every kernel a two-layer network needs to train, sharing ONE buffer set.
 //!
-//! ── ★★★ WHY ONE FILE AND ONE BUFFER SET ──
+//! -- *** WHY ONE FILE AND ONE BUFFER SET --
 //!
 //! The sweep's kernels each own their buffers, which is right for comparing operations one at a
 //! time. A training step is different: the output of `matmul` is the input of `add`, whose
@@ -8,14 +8,14 @@
 //! every arrow would be a readback and a re-upload. With one set, the whole step is a sequence
 //! of dispatches over data that never leaves the device, and only the loss comes back.
 //!
-//! ★★ EACH KERNEL IS ONE STAGE, NOT ONE OPERATION. `fwd_hidden` does the matmul, the bias add
+//! ** EACH KERNEL IS ONE STAGE, NOT ONE OPERATION. `fwd_hidden` does the matmul, the bias add
 //! and the tanh in a single thread per output element, because splitting them would triple the
-//! dispatches for no benefit — nothing between them needs a barrier. The backward kernels are
+//! dispatches for no benefit - nothing between them needs a barrier. The backward kernels are
 //! split where the thread geometry changes: `bwd_w2` has one thread per weight, `bwd_h` one per
 //! hidden activation.
 //!
-//! ★ Sizes are fixed at `max` and the live extents ride in the uniform, the same arrangement as
-//! the sweep's files. The CPU twin of every kernel here is valid — there are no barriers.
+//! * Sizes are fixed at `max` and the live extents ride in the uniform, the same arrangement as
+//! the sweep's files. The CPU twin of every kernel here is valid - there are no barriers.
 
 const k = @import("kompute");
 const zm = @import("zm");
@@ -32,22 +32,22 @@ pub const Params = extern struct {
     rate: f32,
     /// Which training step this dispatch belongs to. `loss_value` writes it beside the loss, so
     /// the host attributes a readback to the right step regardless of how many frames the queue
-    /// is behind — see the note on `loss_value`.
+    /// is behind - see the note on `loss_value`.
     step: u32 = 0,
     _p1: u32 = 0,
     _p2: u32 = 0,
 };
 
-/// ── ★★★ SIX BUFFERS, NOT FIFTEEN ──
+/// -- *** SIX BUFFERS, NOT FIFTEEN --
 ///
 /// The first version gave every tensor its own buffer and the host refused it: WebGPU guarantees
-/// EIGHT storage buffers per shader stage, and bindings past the eighth silently do not bind —
+/// EIGHT storage buffers per shader stage, and bindings past the eighth silently do not bind -
 /// writes to them are discarded with no error, and the kernel appears to run while computing
 /// garbage. So tensors are packed by role, with offsets from the uniform's geometry.
 ///
-/// ★★ The packing is also the better design. `params` and `grads` share one layout
+/// ** The packing is also the better design. `params` and `grads` share one layout
 /// (`w1 | b1 | w2 | b2`), so the SGD step is a single loop over one index with no branching on
-/// which parameter a thread owns — the four-way `if` the first version needed is gone.
+/// which parameter a thread owns - the four-way `if` the first version needed is gone.
 ///
 /// The last field is the output the host reads: the loss, one float.
 pub const Buffers = extern struct {
@@ -138,11 +138,11 @@ pub fn loss_grad(id: u32) void {
 
 /// The loss itself, for the host to read, WITH THE STEP IT BELONGS TO beside it.
 ///
-/// ── ★★★ THE GPU LABELS ITS OWN OUTPUT ──
+/// -- *** THE GPU LABELS ITS OWN OUTPUT --
 ///
 /// The first version assumed the readback lagged by exactly one frame and paired loss `i` with
-/// step `i`. On the device the GPU loss at "steps 1 and 2" was the same number, 3.4334915 —
-/// the CPU's step-3 loss, read twice — because the queue was three frames behind, not one, and
+/// step `i`. On the device the GPU loss at "steps 1 and 2" was the same number, 3.4334915 -
+/// the CPU's step-3 loss, read twice - because the queue was three frames behind, not one, and
 /// the pairing was attributing losses to steps they did not come from. Nothing was wrong with
 /// any kernel; the early-agreement check correctly failed anyway.
 ///
@@ -161,14 +161,14 @@ pub fn loss_value(id: u32) void {
         acc += d * d;
     }
     b_loss[0] = acc / float(total);
-    // ★ `step + 1`, so that a readback of the untouched buffer — all zeros, before any
-    // dispatch has landed — reads as "no step yet" rather than as step 0 with a loss of 0. On
+    // * `step + 1`, so that a readback of the untouched buffer - all zeros, before any
+    // dispatch has landed - reads as "no step yet" rather than as step 0 with a loss of 0. On
     // the device that zero readback arrived first and claimed step 0's slot; the real step-0
     // loss then arrived and was refused as already seen.
     b_loss[1] = @floatFromInt(params.step + 1);
 }
 
-/// `dw2 = hᵀ @ dy`, `db2 = sum over samples of dy`. One thread per weight of w2; the thread for
+/// `dw2 = h^T @ dy`, `db2 = sum over samples of dy`. One thread per weight of w2; the thread for
 /// weight (0, o) also owns db2[o], so no second dispatch is needed.
 pub fn bwd_w2(id: u32) void {
     if (id >= params.hidden * params.outputs) {
@@ -190,7 +190,7 @@ pub fn bwd_w2(id: u32) void {
     }
 }
 
-/// `dpre = (dy @ w2ᵀ) * (1 - h²)`: back through the second matmul and the tanh. One thread per
+/// `dpre = (dy @ w2^T) * (1 - h^2)`: back through the second matmul and the tanh. One thread per
 /// hidden activation.
 pub fn bwd_h(id: u32) void {
     if (id >= params.samples * params.hidden) {
@@ -207,7 +207,7 @@ pub fn bwd_h(id: u32) void {
     b_dact[offDpre() + id] = acc * (1.0 - hv * hv);
 }
 
-/// `dw1 = xᵀ @ dpre`, `db1 = sum over samples of dpre`. One thread per weight of w1.
+/// `dw1 = x^T @ dpre`, `db1 = sum over samples of dpre`. One thread per weight of w1.
 pub fn bwd_w1(id: u32) void {
     if (id >= params.inputs * params.hidden) {
         return;
@@ -236,7 +236,7 @@ pub fn step(id: u32) void {
     b_par[id] -= params.rate * b_grad[id];
 }
 
-// ★ One entry per line: see `zn_binary.kernels`.
+// * One entry per line: see `zn_binary.kernels`.
 pub const kernels = [_][:0]const u8{
     "fwd_hidden",
     "fwd_out",

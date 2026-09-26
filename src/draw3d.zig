@@ -1,5 +1,5 @@
 //! lint:alias draw3d
-//! draw3d — the 3D library: immediate-mode primitives + the retained-mesh
+//! draw3d - the 3D library: immediate-mode primitives + the retained-mesh
 //! API for the WebGPU backend, AND (since GL-retirement P5) the CPU
 //! model/mesh library merged in from drawing.models: mesh generators
 //! (plane/cone/cylinder/torus/knot/poly/tangents), collision + bounds +
@@ -137,7 +137,7 @@ pub const cube_indices = blk: {
 // ============================================================================
 
 /// One vertex in the dynamic batch: world-space position + world-space normal
-/// + colour. Stride 40 — position vec3 @0, normal vec3 @12, colour vec4 @24.
+/// + colour. Stride 40 - position vec3 @0, normal vec3 @12, colour vec4 @24.
 pub const BatchVertex = extern struct {
     pos: [3]f32,
     normal: [3]f32,
@@ -145,15 +145,15 @@ pub const BatchVertex = extern struct {
 };
 
 /// Capacity of the batch vertex buffer (vertices). 262144 verts / 36 per cube
-/// ≈ 7280 cubes, or ~227 spheres at 12×16 tessellation. Fixed (no grow): excess
+/// ~ 7280 cubes, or ~227 spheres at 12x16 tessellation. Fixed (no grow): excess
 /// primitives in a frame are dropped rather than reallocating mid-draw. Sized
 /// generously so dense immediate-mode scenes (e.g. the physics demo's Plinko
-/// board: ~50 pegs + ~50 balls = ~100 spheres ≈ 115K verts) render in full
+/// board: ~50 pegs + ~50 balls = ~100 spheres ~ 115K verts) render in full
 /// rather than silently truncating bodies past the budget.
 const batch_capacity: u32 = 262144;
 
 /// Normal assigned to line vertices. It equals the shader_runtime's fixed light
-/// direction (already unit-length), so n·l == 1 → full brightness: lines render
+/// direction (already unit-length), so n*l == 1 -> full brightness: lines render
 /// flat/unlit through the same lit cube3d shader_runtime, no shader_runtime branch needed.
 const line_normal: [3]f32 = .{ 0.36, 0.80, 0.48 };
 
@@ -171,7 +171,7 @@ pub const MeshVertex = extern struct {
 };
 
 /// Per-instance data, instance-step. `model` is column-major (matches zm.Mat
-/// and the four vec4 attributes the instanced VS reads at locations 2–5), stored
+/// and the four vec4 attributes the instanced VS reads at locations 2-5), stored
 /// as `[4][4]f32` so this stays an extern struct with a guaranteed layout on
 /// every target (Zig 1245 bans `@Vector` fields in extern structs on CPU); the
 /// bytes are identical to `[4]@Vector(4, f32)`. `color` rides at location 6.
@@ -181,7 +181,7 @@ pub const InstanceVertex = extern struct {
     color: [4]f32,
 };
 
-/// GPU buffers for one uploaded mesh, indexed by `Mesh.vaoId − 1` in the
+/// GPU buffers for one uploaded mesh, indexed by `Mesh.vaoId - 1` in the
 /// `mesh_gpu` registry (vaoId 0 = not yet uploaded). Built lazily on the first
 /// `drawMeshInstanced` (uploadMesh's signature carries no device).
 pub const MeshGpu = struct {
@@ -208,7 +208,7 @@ pub const CubeSchema = struct {
 };
 
 // WGSL emitted by the typed shader_runtime pipeline from `src/shaders/cube3d_vs.zig`
-// and `cube3d_fs.zig` (Zig → SPIR-V → spv2wgsl), wired into the zimr
+// and `cube3d_fs.zig` (Zig -> SPIR-V -> spv2wgsl), wired into the zimr
 // module by build.zig's engine-shader_runtime discovery loop.
 const cube_vs_wgsl = @embedFile("cube3d_vs.wgsl");
 const cube_fs_wgsl = @embedFile("cube3d_fs.wgsl");
@@ -218,7 +218,7 @@ const cube_fs_wgsl = @embedFile("cube3d_fs.wgsl");
 // pass as the solid cube batch. Group 0 reuses Cube3D's camera UBO (shared,
 // compatible layout); group 1 is a per-texture {texture, sampler} bind group.
 // WGSL is generated from typed pure-Zig shaders (src/shaders/billboard_{vs,fs}.zig,
-// entry-point `entry`) via the .zig→SPIR-V→spv2wgsl pipeline — the FS through the
+// entry-point `entry`) via the .zig->SPIR-V->spv2wgsl pipeline - the FS through the
 // sampler-rewrite path (zsample2d + zspv). No inline WGSL remains.
 const TexVertex = extern struct { pos: [3]f32, uv: [2]f32, color: [4]f32 };
 const TexDraw = struct {
@@ -230,7 +230,7 @@ const TexDraw = struct {
 const tex_capacity: usize = 8192;
 
 // ---- Shader-projected decals ----
-// Per-decal uniform (group 1): world→box projector + tint + packed params
+// Per-decal uniform (group 1): world->box projector + tint + packed params
 // (x = half box size, y = 1/decal_size). Three vec4-aligned members (std140).
 const DecalUbo = struct {
     projector: [4]Vec,
@@ -238,7 +238,7 @@ const DecalUbo = struct {
     params: Vec,
     // World-space direction the projector faces along (the surface normal at the
     // hit). The FS rejects fragments whose own normal faces away from this, so a
-    // decal only paints the surface facing the projector — never the far wall of
+    // decal only paints the surface facing the projector - never the far wall of
     // its box (e.g. the back of the sphere showing through the front).
     forward: Vec,
 };
@@ -272,9 +272,9 @@ const vp_ubo_stride: u64 = 256;
 const decal_ubo_stride: u32 = 256;
 
 // WGSL emitted by the typed shader_runtime pipeline from `src/shaders/billboard_vs.zig`
-// and `billboard_fs.zig` (pure-Zig `@SpirvType` → SPIR-V → spv2wgsl). The FS goes
-// through the proven sampler path — `zsample2d` + `zm.binding(&tex_sampler2d,1,0)`
-// + `zspv --rewrite-samplers-wgsl` → real `@group(1)@binding(0) texture_2d<f32>`
+// and `billboard_fs.zig` (pure-Zig `@SpirvType` -> SPIR-V -> spv2wgsl). The FS goes
+// through the proven sampler path - `zsample2d` + `zm.binding(&tex_sampler2d,1,0)`
+// + `zspv --rewrite-samplers-wgsl` -> real `@group(1)@binding(0) texture_2d<f32>`
 // and `@group(1)@binding(1) sampler`, matching the per-texture bind group below.
 // Auto-discovered + wired as anonymous imports by build.zig. Entry point `entry`.
 const billboard_vs_wgsl = @embedFile("billboard_vs.wgsl");
@@ -283,9 +283,9 @@ const billboard_fs_wgsl = @embedFile("billboard_fs.wgsl");
 // ---- Gradient skybox (drawSkybox) ----
 // A fullscreen-triangle pass that fills the far background with a vertical
 // gradient. The VS unprojects each NDC corner at z=1 through inverse_view_proj
-// to a world ray; the FS lerps sky_bottom→sky_top by the ray's Y. Clip z is
+// to a world ray; the FS lerps sky_bottom->sky_top by the ray's Y. Clip z is
 // parked at 0.999999 (just inside the far plane) so it draws over cleared depth
-// (1.0) but loses to any closer 3D — so it's always the background. One UBO at
+// (1.0) but loses to any closer 3D - so it's always the background. One UBO at
 // group 0, no vertex buffer (the VS uses @builtin(vertex_index)).
 const SkyboxSchema = struct {
     pub const Ubo = struct {
@@ -299,7 +299,7 @@ const SkyboxSchema = struct {
 };
 
 // WGSL emitted by the typed shader_runtime pipeline from `src/shaders/skybox_vs.zig`
-// and `skybox_fs.zig` (pure-Zig `@SpirvType` → SPIR-V → spv2wgsl), wired in as
+// and `skybox_fs.zig` (pure-Zig `@SpirvType` -> SPIR-V -> spv2wgsl), wired in as
 // anonymous imports by build.zig's shader_runtime auto-discovery loop. These shaders use
 // only runtime-bits resources (uniform + vertex_index builtin), so no sampler
 // rewrite is involved. Entry point is `entry` for both (see `.vs_entry_point`).
@@ -349,7 +349,7 @@ fn makePipeline(
 }
 
 /// Build the instanced 3D pipeline: depth-tested triangles, no cull, with TWO
-/// vertex buffers — the mesh (vertex step) and the per-instance data (instance
+/// vertex buffers - the mesh (vertex step) and the per-instance data (instance
 /// step). Shares the UBO bind-group layout via `pipeline_layout`.
 fn makeInstancedPipeline(
     gpa: Allocator,
@@ -409,12 +409,12 @@ fn rotateVec3(rot: Mat, v: [3]f32) [3]f32 {
 // ============================================================================
 // Retained mesh tier (Step 3a): generated meshes + Model wrapping. The draw
 // path (Cube3D.appendModel / appendModelWires below) CPU-transforms a mesh's
-// vertex arrays into the immediate batch each frame — correct and fast at the
+// vertex arrays into the immediate batch each frame - correct and fast at the
 // mesh sizes these examples use. GPU-resident buffers + a per-instance model
 // matrix (true instancing) arrive in Step 4 for high-count scenes.
 // ============================================================================
 
-/// Generate a box mesh of size width×height×length centred at the origin — 24
+/// Generate a box mesh of size widthxheightxlength centred at the origin - 24
 /// vertices (flat per-face normals), 36 indices. Mirrors raylib genMeshCube.
 pub fn genMeshCube(
     gpa: Allocator,
@@ -451,7 +451,7 @@ pub fn genMeshCube(
 // ===========================================================================
 // PARAMETRIC SHAPE SPINE (par_shapes-derived; the unifying core of zimr's shape
 // library). Every smooth primitive is a uv->xyz callback fed through
-// `parametricMesh`, which triangulates the unit (slices×stacks) grid, converts
+// `parametricMesh`, which triangulates the unit (slicesxstacks) grid, converts
 // par_shapes' Z-up convention to zimr Y-up (a proper +X quarter-turn, so winding
 // and outward normals are preserved), and welds seam/pole normals so shared
 // edges shade without a crease. Output is a raylib-shaped `types.Mesh` (u16
@@ -528,8 +528,8 @@ fn parametricWeldNormals(
     }
 }
 
-/// The parametric core: tessellate `uvFn` over a (slices×stacks) grid.
-/// `(slices+1)*(stacks+1)` must be < 65536 (u16 indices) — returns an empty mesh
+/// The parametric core: tessellate `uvFn` over a (slicesxstacks) grid.
+/// `(slices+1)*(stacks+1)` must be < 65536 (u16 indices) - returns an empty mesh
 /// otherwise.
 pub fn parametricMesh(
     gpa: Allocator,
@@ -895,7 +895,7 @@ pub fn meshScale(mesh: *types.Mesh, sx: f32, sy: f32, sz: f32) void {
     }
 }
 
-/// Flip winding (reverse each triangle) and negate normals — turns a mesh
+/// Flip winding (reverse each triangle) and negate normals - turns a mesh
 /// inside-out, e.g. to make an interior-facing shell.
 pub fn meshInvert(mesh: *types.Mesh) void {
     if (mesh.indices != null) {
@@ -978,14 +978,14 @@ const AxisAngleRotation = struct {
     one_minus_cosine: f32,
 
     /// Spin a single vector around the axis. This is Rodrigues' rotation
-    /// formula — it looks intimidating but it's just three terms added up:
-    ///   v' = v·cosθ  +  (axis × v)·sinθ  +  axis·(axis·v)·(1 − cosθ)
+    /// formula - it looks intimidating but it's just three terms added up:
+    ///   v' = v*cos theta  +  (axis x v)*sin theta  +  axis*(axis*v)*(1 - cos theta)
     /// (the part of v along the axis stays put; the perpendicular part swings).
     fn spin(self: AxisAngleRotation, vx: f32, vy: f32, vz: f32) [3]f32 {
         // how much of v points along the axis (this component doesn't move)
         const along_axis: f32 =
             self.unit_axis_x * vx + self.unit_axis_y * vy + self.unit_axis_z * vz;
-        // axis × v — the direction the vector swings toward
+        // axis x v - the direction the vector swings toward
         const swing_x: f32 = self.unit_axis_y * vz - self.unit_axis_z * vy;
         const swing_y: f32 = self.unit_axis_z * vx - self.unit_axis_x * vz;
         const swing_z: f32 = self.unit_axis_x * vy - self.unit_axis_y * vx;
@@ -998,10 +998,10 @@ const AxisAngleRotation = struct {
 };
 
 /// Rotate every vertex (and normal) in place around an arbitrary axis. The axis
-/// can be any length you like — we normalize it for you. `radians` is
+/// can be any length you like - we normalize it for you. `radians` is
 /// right-handed (counter-clockwise when you look down the axis toward the
 /// origin). Handy for orienting a part before merging: e.g. stand a Y-axis
-/// cylinder up along X by spinning it 90° around Z.
+/// cylinder up along X by spinning it 90 deg around Z.
 pub fn meshRotate(
     mesh: *types.Mesh,
     axis_x: f32,
@@ -1013,7 +1013,7 @@ pub fn meshRotate(
         return;
     }
     // A zero-length axis has no direction to spin around, so there's nothing to
-    // do — bail before we divide by ~0.
+    // do - bail before we divide by ~0.
     const axis_length: f32 = @sqrt(axis_x * axis_x + axis_y * axis_y + axis_z * axis_z);
     if (axis_length < 1e-8) {
         return;
@@ -1041,7 +1041,7 @@ pub fn meshRotate(
         mesh.vertices[base + 1] = spun_position[1];
         mesh.vertices[base + 2] = spun_position[2];
         // spin the normal the same way. A pure rotation keeps it unit-length,
-        // so — unlike scaling — we don't need to renormalize afterward.
+        // so - unlike scaling - we don't need to renormalize afterward.
         if (has_normals) {
             const spun_normal: [3]f32 = rotation.spin(
                 mesh.normals[base + 0],
@@ -1059,7 +1059,7 @@ pub fn meshRotate(
 /// It's a classic triangle fan: one vertex in the middle, then `slices` vertices
 /// marching around the rim, with a triangle stitched between the centre and each
 /// pair of neighbouring rim points. Perfect for capping the open end of a
-/// cylinder or cone — translate it up to the cap height, and flip it with
+/// cylinder or cone - translate it up to the cap height, and flip it with
 /// `meshInvert` if it needs to face the other way.
 pub fn genMeshDisk(
     gpa: Allocator,
@@ -1072,7 +1072,7 @@ pub fn genMeshDisk(
     }
     const rim_point_count: usize = @intCast(slices);
     // one centre vertex + one vertex per rim point. We deliberately DON'T add a
-    // duplicate seam vertex — the last triangle just wraps back to rim point 0.
+    // duplicate seam vertex - the last triangle just wraps back to rim point 0.
     const vertex_count: usize = rim_point_count + 1;
     const triangle_count: usize = rim_point_count;
     const positions: []f32 = try gpa.alloc(f32, vertex_count * 3);
@@ -1139,7 +1139,7 @@ pub fn genMeshDisk(
 /// Build a FLAT-shaded (faceted) mesh from shared corner positions + triangle
 /// indices. The trick: instead of sharing vertices between triangles, every
 /// triangle gets its OWN three vertices, all carrying that triangle's single
-/// face normal. That's what keeps a solid's edges crisp — sharing + smoothing
+/// face normal. That's what keeps a solid's edges crisp - sharing + smoothing
 /// would round them off, which is the last thing you want on a cube or an
 /// icosahedron. Also flips par_shapes' Z-up corners into zimr's Y-up.
 fn flatShadedFromFaces(
@@ -1175,7 +1175,7 @@ fn flatShadedFromFaces(
                 -corner_positions[source_index * 3 + 1], // par y -> zimr -z
             };
         }
-        // face normal = normalize((corner1 − corner0) × (corner2 − corner0))
+        // face normal = normalize((corner1 - corner0) x (corner2 - corner0))
         const edge1: [3]f32 = .{
             corner[1][0] - corner[0][0],
             corner[1][1] - corner[0][1],
@@ -1203,7 +1203,7 @@ fn flatShadedFromFaces(
             normals[out_vertex * 3 + 2] = face_normal[2];
             tex_coords[out_vertex * 2 + 0] = corner_uvs[which_corner][0];
             tex_coords[out_vertex * 2 + 1] = corner_uvs[which_corner][1];
-            indices[out_vertex] = @intCast(out_vertex); // sequential — nothing shared
+            indices[out_vertex] = @intCast(out_vertex); // sequential - nothing shared
         }
     }
     mesh.vertexCount = @intCast(vertex_count);
@@ -1215,7 +1215,7 @@ fn flatShadedFromFaces(
     return mesh;
 }
 
-/// A tetrahedron — 4 corners, 4 triangular faces. The simplest platonic solid.
+/// A tetrahedron - 4 corners, 4 triangular faces. The simplest platonic solid.
 pub fn genMeshTetrahedron(gpa: Allocator) Allocator.Error!types.Mesh {
     const corners = [_]f32{
         0.000,  1.333, 0.000,
@@ -1227,7 +1227,7 @@ pub fn genMeshTetrahedron(gpa: Allocator) Allocator.Error!types.Mesh {
     return flatShadedFromFaces(gpa, &corners, &faces);
 }
 
-/// An octahedron — 6 corners (the ±axis points), 8 triangular faces.
+/// An octahedron - 6 corners (the +/-axis points), 8 triangular faces.
 pub fn genMeshOctahedron(gpa: Allocator) Allocator.Error!types.Mesh {
     const corners = [_]f32{
         0.0,  0.0,  1.0,
@@ -1244,7 +1244,7 @@ pub fn genMeshOctahedron(gpa: Allocator) Allocator.Error!types.Mesh {
     return flatShadedFromFaces(gpa, &corners, &faces);
 }
 
-/// An icosahedron — 12 corners, 20 triangular faces. Also the seed the
+/// An icosahedron - 12 corners, 20 triangular faces. Also the seed the
 /// icosphere subdivides (future work).
 pub fn genMeshIcosahedron(gpa: Allocator) Allocator.Error!types.Mesh {
     const corners = [_]f32{
@@ -1270,7 +1270,7 @@ pub fn genMeshIcosahedron(gpa: Allocator) Allocator.Error!types.Mesh {
     return flatShadedFromFaces(gpa, &corners, &faces);
 }
 
-/// A dodecahedron — 20 corners, 12 pentagonal faces. par_shapes stores the
+/// A dodecahedron - 20 corners, 12 pentagonal faces. par_shapes stores the
 /// pentagons; we fan-triangulate each into 3 triangles here.
 pub fn genMeshDodecahedron(gpa: Allocator) Allocator.Error!types.Mesh {
     const corners = [_]f32{
@@ -1337,7 +1337,7 @@ pub fn genMeshDodecahedron(gpa: Allocator) Allocator.Error!types.Mesh {
 // ---- icosphere (geodesic sphere: subdivide the icosahedron) ----------------
 
 /// Find (or create) the midpoint vertex between two existing vertices, projected
-/// out onto the unit sphere. The cache — keyed by the edge, order-independent —
+/// out onto the unit sphere. The cache - keyed by the edge, order-independent -
 /// makes neighbouring triangles SHARE the midpoint they both introduce.
 /// Without it we'd get cracks between triangles and a pile of duplicate verts.
 fn icosphereMidpoint(
@@ -1370,11 +1370,11 @@ fn icosphereMidpoint(
     return new_index;
 }
 
-/// An icosphere — a sphere grown by repeatedly splitting an icosahedron's
+/// An icosphere - a sphere grown by repeatedly splitting an icosahedron's
 /// triangles into four and projecting every new vertex onto the sphere. Unlike
 /// the UV sphere it has nearly uniform triangles and no pinched poles, which
 /// makes it the better base for displacement (planets, rocks) and anything that
-/// subdivides further. `subdivisions` is clamped to 6 — past that we'd overflow
+/// subdivides further. `subdivisions` is clamped to 6 - past that we'd overflow
 /// the u16 index limit (level 6 is already ~41k vertices). Bonus: normals come
 /// for free, because on a unit sphere the outward normal at a point simply IS
 /// that point.
@@ -1449,7 +1449,7 @@ pub fn genMeshIcosphere(
         triangles = subdivided;
     }
 
-    // bake into a Mesh — normals = the unit positions, uv is a simple planar-ish
+    // bake into a Mesh - normals = the unit positions, uv is a simple planar-ish
     // projection (a proper spherical unwrap is future work)
     const vertex_count: usize = unit_positions.items.len;
     const triangle_count: usize = triangles.items.len;
@@ -1468,7 +1468,7 @@ pub fn genMeshIcosphere(
         positions[v * 3 + 0] = unit[0] * radius;
         positions[v * 3 + 1] = unit[1] * radius;
         positions[v * 3 + 2] = unit[2] * radius;
-        normals[v * 3 + 0] = unit[0]; // already unit length → already the normal
+        normals[v * 3 + 0] = unit[0]; // already unit length -> already the normal
         normals[v * 3 + 1] = unit[1];
         normals[v * 3 + 2] = unit[2];
         tex_coords[v * 2 + 0] = 0.5 + 0.5 * unit[0];
@@ -1491,7 +1491,7 @@ pub fn genMeshIcosphere(
 
 // ---- procedural rock (noise-displaced icosphere) ---------------------------
 
-// A small, cheap 3D value-noise — plenty good for lumpy rock displacement, and
+// A small, cheap 3D value-noise - plenty good for lumpy rock displacement, and
 // far lighter than porting par_shapes' embedded OpenSimplex. The idea: hash each
 // integer lattice point to a pseudo-random value, then trilinearly blend the
 // eight corners of whatever cell a sample lands in.
@@ -1506,7 +1506,7 @@ fn latticeHash3(ix: i32, iy: i32, iz: i32) f32 {
 }
 
 fn smoothFade(t: f32) f32 {
-    // smoothstep — eases the blend so neighbouring cells don't show hard seams
+    // smoothstep - eases the blend so neighbouring cells don't show hard seams
     return t * t * (3.0 - 2.0 * t);
 }
 
@@ -1539,7 +1539,7 @@ fn valueNoise3(px: f32, py: f32, pz: f32) f32 {
 
 fn fractalNoise3(px: f32, py: f32, pz: f32) f32 {
     // stack a few octaves (fractal Brownian motion) so the rock has big bulges
-    // AND fine crags — each octave doubles frequency and halves amplitude
+    // AND fine crags - each octave doubles frequency and halves amplitude
     var total: f32 = 0;
     var amplitude: f32 = 1.0;
     var frequency: f32 = 1.0;
@@ -1556,7 +1556,7 @@ fn fractalNoise3(px: f32, py: f32, pz: f32) f32 {
 
 /// A procedural rock: take an icosphere and shove each vertex in/out along its
 /// own direction by a fractal-noise amount. THIS is why the icosphere's uniform
-/// triangles matter — displace a UV sphere and the crowded poles stretch into a
+/// triangles matter - displace a UV sphere and the crowded poles stretch into a
 /// mess. `seed` picks which rock you get (it just samples the noise field in a
 /// different spot). Normals are recomputed from the bumpy surface afterward.
 pub fn genMeshRock(
@@ -1571,7 +1571,7 @@ pub fn genMeshRock(
     const vertex_count: usize = @intCast(mesh.vertexCount);
 
     // turn the seed into three decorrelated offsets so different seeds land in
-    // different, unrelated parts of the noise field (→ different rocks)
+    // different, unrelated parts of the noise field (-> different rocks)
     const seed_f: f32 = float(seed);
     const offset_x: f32 = @sin(seed_f * 12.9898 + 1.0) * 43.0;
     const offset_y: f32 = @sin(seed_f * 78.2330 + 2.0) * 57.0;
@@ -1597,7 +1597,7 @@ pub fn genMeshRock(
         mesh.vertices[vertex_index * 3 + 2] = dir_z * displaced_radius;
     }
 
-    // the old sphere normals are wrong now — rebuild them from the bumpy surface
+    // the old sphere normals are wrong now - rebuild them from the bumpy surface
     // (reusing the parametric weld, which gives a smooth boulder look)
     const positions: []f32 = mesh.vertices[0 .. vertex_count * 3];
     const triangle_count: usize = @intCast(mesh.triangleCount);
@@ -1612,7 +1612,7 @@ pub fn genMeshRock(
 /// "Unweld" a mesh: give every triangle its own three vertices (nothing shared)
 /// and compute one flat face normal for each. That's how you turn a smooth mesh
 /// faceted, or make a clean base for per-triangle edits. Result has
-/// 3×triangleCount vertices with sequential indices; source texcoords are kept.
+/// 3xtriangleCount vertices with sequential indices; source texcoords are kept.
 pub fn meshUnweld(gpa: Allocator, mesh: types.Mesh) Allocator.Error!types.Mesh {
     var result: types.Mesh = std.mem.zeroes(types.Mesh);
     if (mesh.vertices == null or mesh.indices == null) {
@@ -1733,7 +1733,7 @@ pub fn meshWeld(
             .{ 0, 0, 0 };
         const gop: @TypeOf(bucket_to_survivor).GetOrPutResult = try bucket_to_survivor.getOrPut(bucket);
         if (gop.found_existing) {
-            // fold this vertex into the survivor — sum normals so we can average
+            // fold this vertex into the survivor - sum normals so we can average
             const survivor: u16 = gop.value_ptr.*;
             kept_normals.items[survivor][0] += vertex_normal[0];
             kept_normals.items[survivor][1] += vertex_normal[1];
@@ -1788,7 +1788,7 @@ pub fn meshWeld(
     return result;
 }
 
-/// Drop triangles whose area is below `min_area` — the slivers and zero-area
+/// Drop triangles whose area is below `min_area` - the slivers and zero-area
 /// junk that can sneak in after a weld or from bad input. Vertices are copied
 /// as-is; only the index list shrinks to the survivors.
 pub fn meshRemoveDegenerate(
@@ -1873,11 +1873,11 @@ inline fn grayValue(c: Color) f32 {
     return (float(c.r) + float(c.g) + float(c.b)) / 3.0;
 }
 
-/// Wrap a single mesh in a Model with an identity transform (no materials — the
+/// Wrap a single mesh in a Model with an identity transform (no materials - the
 /// unlit draw path takes a tint). Mirrors raylib loadModelFromMesh.
-/// Heightmap image → triangle mesh (raylib `genMeshHeightmap`), ported from
+/// Heightmap image -> triangle mesh (raylib `genMeshHeightmap`), ported from
 /// the GL `drawing.zig` original for the wgpu retained-mesh path.  CPU
-/// arrays only — pair with `loadModelFromMesh` like every other wgpu-side
+/// arrays only - pair with `loadModelFromMesh` like every other wgpu-side
 /// mesh (no GL `uploadMesh` tail here; the wgpu draw path owns GPU
 /// buffers).  `size` = world extents `(x, max_height, z)`; per-vertex
 /// height comes from the pixel's grayscale.  Flat per-face normals, same
@@ -1902,7 +1902,7 @@ pub fn genMeshHeightmap(
     const mz: usize = @intCast(map_z);
     const pixels: [*]const Color = @ptrCast(@alignCast(data));
 
-    // (mx - 1) × (mz - 1) quads, each = 2 triangles = 6 vertices.
+    // (mx - 1) x (mz - 1) quads, each = 2 triangles = 6 vertices.
     const tri_count: usize = (mx - 1) * (mz - 1) * 2;
     const vertex_count: usize = tri_count * 3;
     const verts: []f32 = try gpa.alloc(f32, vertex_count * 3);
@@ -1992,14 +1992,14 @@ pub fn genMeshHeightmap(
     return mesh;
 }
 
-/// Cubicmap image → cube-walled maze mesh (raylib `GenMeshCubicmap`).
-/// Each WHITE pixel becomes a solid 1×1 cube column of height `size.y`;
+/// Cubicmap image -> cube-walled maze mesh (raylib `GenMeshCubicmap`).
+/// Each WHITE pixel becomes a solid 1x1 cube column of height `size.y`;
 /// BLACK pixels are empty (floor). Top and bottom faces are always
 /// emitted (so the map reads from above and below); each of the four
 /// side walls is emitted ONLY where the neighbor cell is empty (or the
-/// map edge) — walls shared between adjacent white cells are occluded
+/// map edge) - walls shared between adjacent white cells are occluded
 /// and skipped, which is what keeps the maze cheap. Per-face UVs index
-/// a 2×2 atlas: right/left/front/back in the top row, top/bottom in the
+/// a 2x2 atlas: right/left/front/back in the top row, top/bottom in the
 /// bottom row (raylib's `cubicmap_atlas.png` layout). RGBA8 only.
 pub fn genMeshCubicmap(
     gpa: Allocator,
@@ -2031,7 +2031,7 @@ pub fn genMeshCubicmap(
     const h2: f32 = cube_size[1]; // wall height (y)
     const h: f32 = cube_size[2]; // cell depth (z)
 
-    // 2×2 atlas sub-rects {x, y, w, h}, matching raylib's cubicmap_atlas.
+    // 2x2 atlas sub-rects {x, y, w, h}, matching raylib's cubicmap_atlas.
     // (`half` = 0.5 is the file-scope constant.)
     const right_uv = [4]f32{ 0.0, 0.0, half, half };
     const left_uv = [4]f32{ half, 0.0, half, half };
@@ -2173,8 +2173,8 @@ pub fn genMeshCubicmap(
 
     const used_verts: usize = v_off / 3; // 3 floats per vertex
     // The arrays were sized for the worst case (max_verts); shrink them to the
-    // ACTUAL vertex count so unloadMesh — which frees vertexCount-derived lengths
-    // — frees exactly what was allocated. Without this, the max/used difference is
+    // ACTUAL vertex count so unloadMesh - which frees vertexCount-derived lengths
+    // - frees exactly what was allocated. Without this, the max/used difference is
     // handed to free() with the wrong length and leaks (a real per-lifecycle CPU
     // leak the leak-test flags on cubicmap / first_person_maze).
     const vf: []f32 = gpa.realloc(verts, used_verts * 3) catch verts;
@@ -2250,7 +2250,7 @@ fn meshWorldNormal(n: [*c]f32, k: usize, xform: Mat) [3]f32 {
 }
 
 // ============================================================================
-// Cube3D — the immediate 3D batch: pipeline + dynamic vertex stream
+// Cube3D - the immediate 3D batch: pipeline + dynamic vertex stream
 // ============================================================================
 
 pub const Cube3D = struct {
@@ -2286,7 +2286,7 @@ pub const Cube3D = struct {
     tex_bind_cache: std.AutoHashMapUnmanaged(u64, wgpu.BindGroupHandle),
     // Shader-projected decals: a dedicated pipeline that re-draws a receiver
     // mesh (pos-only) and paints a projected decal texture onto the fragments
-    // inside the projector box — no mesh clipping, scales to any density.
+    // inside the projector box - no mesh clipping, scales to any density.
     // Group 0 = camera UBO (shared); group 1 = per-decal projector UBO (ring
     // slot, dynamic offset); group 2 = decal texture (reuses tex_bgl shape).
     decal_pipeline: wgpu.RenderPipelineHandle,
@@ -2294,7 +2294,7 @@ pub const Cube3D = struct {
     decal_proj_buffer: wgpu.BufferHandle,
     // One pre-built bind group per ring slot, each pointing at its slot's 256-B
     // window of decal_proj_buffer (the bridge's setBindGroup takes no dynamic
-    // offset, so we bake the offset into per-slot bind groups — the pbr3d-ring
+    // offset, so we bake the offset into per-slot bind groups - the pbr3d-ring
     // pattern). Bind slot `proj_cursor % decal_ring_len` for each decal.
     decal_proj_bgs: [decal_ring_len]wgpu.BindGroupHandle,
     decal_proj_cursor: u32,
@@ -2307,13 +2307,13 @@ pub const Cube3D = struct {
     // ---- The per-pass VIEW-PROJECTION ring (group 0) ----
     //
     // `Resources.writeUbo` writes ONE buffer at offset 0, and says so:
-    // "★ INVARIANT: at most ONE write per frame ★". Every `beginMode3D` writes
-    // the camera UBO — so the moment an app opens TWO 3D passes in a frame
+    // "* INVARIANT: at most ONE write per frame *". Every `beginMode3D` writes
+    // the camera UBO - so the moment an app opens TWO 3D passes in a frame
     // (split-screen, a minimap, a security camera, rendering 3D into a render
     // texture at all) that invariant breaks. `queue.writeBuffer` executes before
     // the frame's single submit, so ALL 3D passes then read the LAST camera:
     // both halves of a split screen silently render the same view. The smoke
-    // ClobberScan sees it, but nothing else does — it is invisible in the
+    // ClobberScan sees it, but nothing else does - it is invisible in the
     // sandbox and looks merely "wrong" on device.
     //
     // Same medicine as renderer_2d's ortho ring and the decal projector ring
@@ -2326,7 +2326,7 @@ pub const Cube3D = struct {
     vp_ring_bgs: [vp_ring_len]wgpu.BindGroupHandle,
     /// Slot holding the CURRENT pass's view-projection (what the flushes bind).
     vp_slot: u32,
-    /// Writes within the CURRENT encoder — a wrap inside one encoder would
+    /// Writes within the CURRENT encoder - a wrap inside one encoder would
     /// clobber a slot an already-recorded pass still points at, i.e. the very
     /// bug the ring exists to prevent. Reset structurally when the encoder
     /// handle changes (monotonic on both the bridge and the smoke mock), so no
@@ -2339,7 +2339,7 @@ pub const Cube3D = struct {
     // Same queue-timeline hazard, vertex data instead of uniforms: every stream
     // used to `queueWriteBuffer(..., offset 0, ...)` on each flush, so a second
     // 3D pass (or merely a second `drawMeshInstanced` in one frame) overwrote
-    // the bytes an already-recorded draw still points at — only the LAST write
+    // the bytes an already-recorded draw still points at - only the LAST write
     // survives to the submit. The 2D shapes batch fixed this years ago by
     // appending at a running offset (`gpu_iface.flushBatch`, `vbo_ring_vertices`);
     // the 3D streams never did. Each cursor is an ELEMENT count into its buffer,
@@ -2400,7 +2400,7 @@ pub const Cube3D = struct {
             .triangle_list,
             // No cull: with depth testing, back faces of a convex solid are
             // always occluded by front faces, so culling is just an
-            // optimization — dropping it makes mesh winding irrelevant
+            // optimization - dropping it makes mesh winding irrelevant
             // (sphere/cylinder generators can't render inside-out).
             .none,
             .less,
@@ -2597,7 +2597,7 @@ pub const Cube3D = struct {
             decal_layout,
             .triangle_list,
             // No cull: receiver meshes vary in winding (genMeshSphere is CW-
-            // outward, OBJ meshes are CCW), and .back would cull one of them —
+            // outward, OBJ meshes are CCW), and .back would cull one of them -
             // that's what hid decals on the sphere. The FS discards everything
             // outside the projector box, so back faces contribute nothing
             // visible anyway; no-cull is both correct and winding-agnostic.
@@ -2630,7 +2630,7 @@ pub const Cube3D = struct {
         }
 
         // Per-pass view-projection ring (see the field comment): one buffer, a
-        // 256-B window per slot, one pre-built bind group each — against the
+        // 256-B window per slot, one pre-built bind group each - against the
         // SAME group-0 layout the pipelines were built with, so binding a slot
         // is layout-identical to binding Resources' own group 0.
         const vp_ring_buffer: wgpu.BufferHandle = wgpu.createBuffer(device, .{
@@ -2661,7 +2661,7 @@ pub const Cube3D = struct {
         }
 
         // Every pipeline above is now built, and WebGPU has internalized the
-        // layouts + shader_runtime modules each one referenced — so the build-only
+        // layouts + shader_runtime modules each one referenced - so the build-only
         // intermediates can be released immediately (the pipelines keep working).
         // Only tex_pl/tex_vs/tex_fs are shared (tex_pipeline AND billboard_pipeline
         // use them), and both are built by now, so this is safe. The layout + three
@@ -2727,10 +2727,10 @@ pub const Cube3D = struct {
     }
 
     /// Begin a 3D frame: set the camera view-projection and clear the batch.
-    /// `view_proj` follows the cube_demo convention (proj × view, used as M*v).
+    /// `view_proj` follows the cube_demo convention (proj x view, used as M*v).
     /// Draw the gradient skybox into the current pass: a fullscreen triangle at
     /// the far plane. Call inside beginMode3D/endMode3D (it draws immediately,
-    /// before the batched solids/billboards flush — it's the background).
+    /// before the batched solids/billboards flush - it's the background).
     pub fn drawSkybox(
         self: *Cube3D,
         ps: anytype,
@@ -2923,7 +2923,7 @@ pub const Cube3D = struct {
     /// radii a plain cylinder. Wall normals are radial; cap normals are axial.
     /// The axis is arbitrary (an orthonormal basis is built from it), so this
     /// also serves capsule bodies and tilted shapes. Triangle winding is
-    /// irrelevant — the 3D pipeline is cull-`.none` and depth-sorted.
+    /// irrelevant - the 3D pipeline is cull-`.none` and depth-sorted.
     pub fn appendConeBetween(
         self: *Cube3D,
         p0: Vec,
@@ -3154,7 +3154,7 @@ pub const Cube3D = struct {
     ) void {
         const e1: Vec = p1 - p0;
         const e2: Vec = p2 - p0;
-        // Geometric normal = e1 × e2 (xyz lanes), normalized; degenerate → up.
+        // Geometric normal = e1 x e2 (xyz lanes), normalized; degenerate -> up.
         var nx: f32 = e1[1] * e2[2] - e1[2] * e2[1];
         var ny: f32 = e1[2] * e2[0] - e1[0] * e2[2];
         var nz: f32 = e1[0] * e2[1] - e1[1] * e2[0];
@@ -3287,7 +3287,7 @@ pub const Cube3D = struct {
     /// Upload one vertex stream and issue a single draw with the given
     /// pipeline. No-op when empty. The GPU buffer GROWS to fit the frame rather
     /// than truncating: a fixed cap used to silently drop every primitive past
-    /// the budget (the "bodies vanish past ~N spheres" bug — e.g. the Plinko
+    /// the budget (the "bodies vanish past ~N spheres" bug - e.g. the Plinko
     /// board's balls behind ~50 pegs). Growth happens in `batch_capacity`-vertex
     /// chunks and settles at the scene's high-water mark (recreation is rare).
     fn drawStream(
@@ -3320,7 +3320,7 @@ pub const Cube3D = struct {
         }
         // Backstop: after grow the buffer must hold the whole frame. If this ever
         // fires, the GPU refused a buffer large enough (past the device's max
-        // buffer size) — a loud panic beats a silently half-drawn scene.
+        // buffer size) - a loud panic beats a silently half-drawn scene.
         assertf(
             needed <= cap_ptr.*,
             @src(),
@@ -3392,7 +3392,7 @@ pub const Cube3D = struct {
         // Interleaved position (3f) + normal (3f) per vertex, de-indexed to a
         // triangle soup. The FS uses the normal to reject fragments whose
         // surface faces away from the projector (so a decal never paints the far
-        // wall of its box — e.g. the back of the sphere).
+        // wall of its box - e.g. the back of the sphere).
         const data: []f32 = self.gpa.alloc(f32, vcount * 6) catch return null;
         defer self.gpa.free(data);
 
@@ -3453,15 +3453,15 @@ pub const Cube3D = struct {
 
     /// Flush every PER-EXAMPLE 3D registration so the persistent engine `Cube3D`
     /// doesn't grow across example lifecycles (the twice-lifecycle leak probe and
-    /// the launcher's app-switch). The FIXED baseline built in `init` — all seven
+    /// the launcher's app-switch). The FIXED baseline built in `init` - all seven
     /// pipelines, their layouts/modules, the vp/decal ring buffers, and the fixed
-    /// UBO `Resources` — PERSISTS; only example-driven caches clear here:
-    ///   • tex_bind_cache: one bind group per example texture, keyed by the
+    /// UBO `Resources` - PERSISTS; only example-driven caches clear here:
+    ///   * tex_bind_cache: one bind group per example texture, keyed by the
     ///     texture-VIEW handle. That handle changes every lifecycle (a new texture
     ///     is loaded), so without this flush each run strands its predecessor's
-    ///     bind group — the exact `drawBillboard` +1 bind_group/lifecycle leak.
-    ///   • mesh_gpu: the vbo/ibo uploaded for each example mesh (instancing demos).
-    ///   • decal_receivers: per-example receiver geometry (folds in the call above).
+    ///     bind group - the exact `drawBillboard` +1 bind_group/lifecycle leak.
+    ///   * mesh_gpu: the vbo/ibo uploaded for each example mesh (instancing demos).
+    ///   * decal_receivers: per-example receiver geometry (folds in the call above).
     /// Mirrors `Renderer2D.resetRegistry`; called from `runnerDeinit`.
     pub fn resetRegistry(self: *Cube3D) void {
         var it: @TypeOf(self.tex_bind_cache).ValueIterator = self.tex_bind_cache.valueIterator();
@@ -3485,14 +3485,14 @@ pub const Cube3D = struct {
         self.resetDecalReceivers();
     }
 
-    /// Free EVERY GPU handle and heap allocation this Cube3D owns — the fixed
+    /// Free EVERY GPU handle and heap allocation this Cube3D owns - the fixed
     /// engine-baseline teardown. After this the create/destroy census returns to
     /// zero for the 3D subsystem; nothing is left for a JS-side device release to
     /// mop up. Call once at engine shutdown, after the final frame.
     ///
     /// All seven pipelines are built directly by `makePipeline` /
     /// `createRenderPipeline` (NOT the dedup `PipelineCache`), so this owns and
-    /// destroys them outright — there is no double-free with `PipelineCache.deinit`.
+    /// destroys them outright - there is no double-free with `PipelineCache.deinit`.
     pub fn deinit(self: *Cube3D) void {
         // Per-example caches first: destroy the bind groups / mesh buffers /
         // decal-receiver buffers they hold, then the collections' heap is freed
@@ -3554,8 +3554,8 @@ pub const Cube3D = struct {
     }
 
     /// Record a projected decal: paint `tex` onto receiver `handle` wherever
-    /// its fragments fall inside the projector box. `projector` maps world →
-    /// box space (the CPU-built `lookAt·rotZ`); `size` is the box world extent.
+    /// its fragments fall inside the projector box. `projector` maps world ->
+    /// box space (the CPU-built `lookAt*rotZ`); `size` is the box world extent.
     /// Writes the projector to a fresh ring slot and records the draw; the
     /// actual draw happens in `flushDecals` at the end of the 3D pass.
     pub fn drawDecal(
@@ -3698,7 +3698,7 @@ pub const Cube3D = struct {
         return bg;
     }
 
-    /// Append one textured quad (CCW p0→p3) with corner UVs (top-left origin).
+    /// Append one textured quad (CCW p0->p3) with corner UVs (top-left origin).
     fn appendTexQuad(
         self: *Cube3D,
         p0: [3]f32,
@@ -3777,7 +3777,7 @@ pub const Cube3D = struct {
         }) catch assertUnreachable(@src(), "OOM", .{});
     }
 
-    /// Draw a camera-facing textured quad at `pos`, `w`×`h`, using the camera's
+    /// Draw a camera-facing textured quad at `pos`, `w`x`h`, using the camera's
     /// `right`/`up` basis (caller supplies them, normalized).
     pub fn drawBillboard(
         self: *Cube3D,
@@ -3897,7 +3897,7 @@ pub const Cube3D = struct {
         }
         // depth_write=true uses the opaque `tex_pipeline` (test + write); false
         // uses `billboard_pipeline` (test-only), so many overlapping translucent
-        // triangles — e.g. stacked decals — blend by draw order instead of
+        // triangles - e.g. stacked decals - blend by draw order instead of
         // z-fighting each other at the same depth. Both still test against the
         // opaque scene, so the geometry is occluded correctly either way.
         const pipeline: wgpu.RenderPipelineHandle =
@@ -3912,8 +3912,8 @@ pub const Cube3D = struct {
 
     /// Upload a mesh to the GPU if it is not there yet, and return its buffers.
     ///
-    /// ★ THE UPLOAD IS LAZY AND ONLY `drawMeshInstanced` TRIGGERS IT. A caller that draws a
-    /// mesh EXCLUSIVELY through its own pipeline would therefore never get buffers at all —
+    /// * THE UPLOAD IS LAZY AND ONLY `drawMeshInstanced` TRIGGERS IT. A caller that draws a
+    /// mesh EXCLUSIVELY through its own pipeline would therefore never get buffers at all -
     /// `gpuBuffers` would return null forever, and the mesh would silently not render. This is
     /// the explicit door for that case.
     pub fn uploadMeshGpu(
@@ -3928,15 +3928,15 @@ pub const Cube3D = struct {
     /// The GPU buffers backing an uploaded mesh, for a pass that draws it with its OWN
     /// pipeline.
     ///
-    /// ★ WITHOUT THIS, MULTI-PASS RENDERING RE-UPLOADS THE GEOMETRY. `mesh_gpu` is private and
+    /// * WITHOUT THIS, MULTI-PASS RENDERING RE-UPLOADS THE GEOMETRY. `mesh_gpu` is private and
     /// `drawMeshInstanced` is the only way in, so a shadow or G-buffer pass wanting a custom
-    /// shader had no route to the vertices it just uploaded — it would have to keep a second
+    /// shader had no route to the vertices it just uploaded - it would have to keep a second
     /// copy, which is exactly the cost the retained path exists to avoid.
     ///
     /// The vertex layout is `MeshVertex`: 3 floats position then 3 floats normal, 24-byte
     /// stride, matching `gbuffer_vs`'s `Attr(.vec3, 0)` + `Attr(.vec3, 1)`. Indices are u16.
     ///
-    /// Null when the mesh has never been drawn — upload happens lazily on first draw, so call
+    /// Null when the mesh has never been drawn - upload happens lazily on first draw, so call
     /// this after at least one `drawMeshInstanced`.
     pub fn gpuBuffers(self: *const Cube3D, mesh: types.Mesh) ?MeshGpu {
         if (mesh.vaoId == 0) {
@@ -3951,10 +3951,10 @@ pub const Cube3D = struct {
 
     /// Re-upload an already-uploaded mesh's positions and normals to its VBO.
     ///
-    /// ★ THE RETAINED PATH ASSUMES STATIC GEOMETRY. `ensureMeshGpu` uploads once and caches by
+    /// * THE RETAINED PATH ASSUMES STATIC GEOMETRY. `ensureMeshGpu` uploads once and caches by
     /// `mesh.vaoId`, so a CPU-skinned character drawn through `drawMeshInstanced` would show
     /// its BIND POSE forever. `examples/dynamic_mesh` sidesteps this by using the IMMEDIATE
-    /// path (`updateMeshBuffer` + `drawModel`), which re-walks the CPU arrays every frame —
+    /// path (`updateMeshBuffer` + `drawModel`), which re-walks the CPU arrays every frame -
     /// fine for a 4-vertex quad, and ~68k triangles of CPU work per pass for a character.
     ///
     /// This closes the gap: the VBO is created with `copy_dst`, so refreshing it is one
@@ -4018,9 +4018,9 @@ pub const Cube3D = struct {
             .usage = .{ .vertex = true, .copy_dst = true },
             .label = "mesh_vbo",
         });
-        // ★ `createBufferInit`, NOT createBuffer + queueWriteBuffer.
+        // * `createBufferInit`, NOT createBuffer + queueWriteBuffer.
         //
-        // A u16 index buffer is a multiple of 4 bytes only when the index COUNT is even —
+        // A u16 index buffer is a multiple of 4 bytes only when the index COUNT is even -
         // and indices come in threes, so any mesh with an odd triangle count fails
         // `queueWriteBuffer`'s alignment rule outright. A real KUKA link has 2759 triangles;
         // 8277 indices is 16554 bytes, and WebGPU rejects it.
@@ -4064,7 +4064,7 @@ pub const Cube3D = struct {
         // APPEND, don't restart: every `drawMeshInstanced` in a frame shares this
         // buffer, and all of a frame's queue writes land before its single submit.
         // Writing at 0 each call meant TWO instanced meshes in one frame ended up
-        // both drawing the LAST call's transforms — no second pass required.
+        // both drawing the LAST call's transforms - no second pass required.
         const base: u32 = self.inst_cursor;
         const needed: u32 = base + count;
         if (needed > self.instance_capacity) {
@@ -4110,7 +4110,7 @@ pub const Cube3D = struct {
 };
 
 // ===========================================================================
-// CPU model/mesh library — MOVED from drawing.zig's `models` namespace
+// CPU model/mesh library - MOVED from drawing.zig's `models` namespace
 // (GL-retirement P5).  Mesh generators, collision/bounds/raycast math,
 // model + animation loading, CPU pose evaluation.  The GL halves of that
 // namespace (uploadMesh, the rlgl draw paths, GL material/skinned-shader_runtime
@@ -4207,12 +4207,12 @@ inline fn v3Normalize(v: Vec) Vec {
     return v3FromZm(safeNormalize3(v3ToZm(v), vec(0, 1, 0)));
 }
 
-/// Cross product `a × b`.
+/// Cross product `a x b`.
 inline fn v3Cross(a: Vec, b: Vec) Vec {
     return v3FromZm(cross(v3ToZm(a), v3ToZm(b)));
 }
 
-/// Dot product `a · b`.
+/// Dot product `a * b`.
 inline fn v3Dot(a: Vec, b: Vec) f32 {
     return dot3(v3ToZm(a), v3ToZm(b));
 }
@@ -4281,7 +4281,7 @@ pub const FlatMeshArrays = struct {
 
 /// Debug guard for the pbr3d front-face convention. A mesh fed to the pbr3d
 /// renderer (which culls `.back`) is FRONT-facing when a triangle's winding
-/// normal points OPPOSITE its per-vertex normals — the CW-outward convention
+/// normal points OPPOSITE its per-vertex normals - the CW-outward convention
 /// `genMeshSphere` follows. A generator wound the other way renders INVISIBLE
 /// from its normal-facing side: silently culled, NO device error, just a blank
 /// screen (exactly what hid the normal-map floor for three debug rounds). This
@@ -4333,7 +4333,7 @@ fn debugCheckPbrWinding( // lint:off unused-global: debug tooling, kept intentio
 /// top-left origin) into a world-space picking ray for `camera`.
 /// Unprojects the point on the near and far planes through the inverse
 /// view-projection and takes the direction between them.  Perspective
-/// only (projection 0) — the orthographic branch can join when an
+/// only (projection 0) - the orthographic branch can join when an
 /// example needs it.
 pub fn getScreenToWorldRay(
     position: Vec2,
@@ -4461,7 +4461,7 @@ pub fn getRayCollisionBox(ray_in: Ray, box: BoundingBox) RayCollision {
     return collision;
 }
 
-/// Ray-triangle intersection (Möller-Trumbore). Triangle vertices in CCW order.
+/// Ray-triangle intersection (Moller-Trumbore). Triangle vertices in CCW order.
 pub fn getRayCollisionTriangle(
     ray: Ray,
     p1: Vec,
@@ -4908,8 +4908,8 @@ pub fn genMeshPoly(
 /// Build zimr `Material` array from a parsed glTF document.  Each
 /// glTF material becomes one zimr Material, in order.
 /// For each material:
-///   - `base_color_factor` → `maps[DIFFUSE].color` (clamped to 0-255)
-///   - `base_color_texture.source` → resolve image bytes (from
+///   - `base_color_factor` -> `maps[DIFFUSE].color` (clamped to 0-255)
+///   - `base_color_texture.source` -> resolve image bytes (from
 ///     `bufferView` slice in BIN chunk, or `uri` data: URI), decode
 ///     PNG via `codecs.png.decode`, upload via `loadTextureFromImage`,
 ///     install at `maps[DIFFUSE].texture`
@@ -4941,12 +4941,12 @@ fn materialsFromGltf(
 
     for (data.materials, 0..) |gmat, i| {
         // GL-retirement P5: per-map GPU texture upload (loadGltfTexture)
-        // died with the GL backend — on the wgpu path the renderer binds
+        // died with the GL backend - on the wgpu path the renderer binds
         // textures itself (see gltf_textured).  Color factors below
         // are the CPU-side material content.
         var mat: Material = loadMaterialDefault(gpa) catch return errors.LoadError.OutOfMemory;
 
-        // baseColorFactor → DIFFUSE colour tint.  Clamp to 0-255.
+        // baseColorFactor -> DIFFUSE colour tint.  Clamp to 0-255.
         const bcf: Vec = gmat.base_color_factor;
         mat.maps[0].color = .{
             .r = @trunc(clamp(bcf[0] * 255.0, 0.0, 255.0)),
@@ -4955,8 +4955,8 @@ fn materialsFromGltf(
             .a = @trunc(clamp(bcf[3] * 255.0, 0.0, 255.0)),
         };
 
-        // baseColorTexture → DIFFUSE texture.  Resolve through:
-        //   material → texture index → image index → bytes
+        // baseColorTexture -> DIFFUSE texture.  Resolve through:
+        //   material -> texture index -> image index -> bytes
         // The whole resolve+decode+upload chain lives in a labeled
         // block so any decode/upload failure can early-exit via
         // `break :tex_block` and leave the material with just its
@@ -4966,21 +4966,21 @@ fn materialsFromGltf(
         //
         // glTF's PBR material model has up to five textures per
         // material:
-        //   1. baseColorTexture        → MaterialMapIndex.albedo
-        //   2. metallicRoughnessTexture → MaterialMapIndex.metalness
+        //   1. baseColorTexture        -> MaterialMapIndex.albedo
+        //   2. metallicRoughnessTexture -> MaterialMapIndex.metalness
         //                                 (B = metalness, G = roughness;
         //                                  shader_runtime samples once and uses
         //                                  both channels)
-        //   3. normalTexture           → MaterialMapIndex.normal
-        //   4. occlusionTexture        → MaterialMapIndex.occlusion
-        //   5. emissiveTexture         → MaterialMapIndex.emission
+        //   3. normalTexture           -> MaterialMapIndex.normal
+        //   4. occlusionTexture        -> MaterialMapIndex.occlusion
+        //   5. emissiveTexture         -> MaterialMapIndex.emission
         //
         // `loadGltfTexture` returns null on any failure (missing
-        // index, decode failure, upload failure) — the material
+        // index, decode failure, upload failure) - the material
         // just won't have that texture, and the shader_runtime falls back
         // to using the scalar factor alone for that slot.
 
-        // Scalar factors — multipliers for the corresponding
+        // Scalar factors - multipliers for the corresponding
         // textures (or used directly when no texture is bound).
         mat.maps[@backingInt(MaterialMapIndex.metalness)].value = gmat.metallic_factor;
         mat.maps[@backingInt(MaterialMapIndex.roughness)].value = gmat.roughness_factor;
@@ -5089,7 +5089,7 @@ pub fn unloadMesh(
 /// `mesh.normals`, `mesh.texcoords`.  Required input for normal-
 /// mapped shaders that read a tangent-space normal map and
 /// reconstruct the world-space normal.
-/// Allocates `mesh.tangents` as a flat array of `vertexCount × 4`
+/// Allocates `mesh.tangents` as a flat array of `vertexCount x 4`
 /// floats - three components for the tangent direction plus a
 /// fourth "handedness" value (`+1.0` or `-1.0`) that disambiguates
 /// the bitangent's sign.  If `mesh.tangents` is already populated
@@ -5230,7 +5230,7 @@ pub fn genMeshTangents(
         tangents[i * 4 + 1] = orthog[1];
         tangents[i * 4 + 2] = orthog[2];
         // Handedness: +1 / -1 depending on whether tan2's
-        // contribution agrees with N × T.  Used by the shader_runtime to
+        // contribution agrees with N x T.  Used by the shader_runtime to
         // reconstruct the bitangent without storing it explicitly.
         const cross_nt: Vec = v3Cross(normal, orthog);
         const handedness: f32 = if (v3Dot(cross_nt, tan2[i]) < 0.0) -1.0 else 1.0;
@@ -5283,7 +5283,7 @@ pub fn loadModelFromMemory(
     // Auto-fulfill vertex attributes for the PBR vertex schema.
     // PBR's `Attributes` declares `vertex_tangent`, so meshes
     // missing tangents but with normals + UVs get tangents
-    // generated.  glTF assets often ship without TANGENT — the
+    // generated.  glTF assets often ship without TANGENT - the
     // spec says renderers should compute them via mikktspace when
     // needed.  Must happen BEFORE uploadMesh so the tangent VBO
     // is created alongside the other vertex attributes.
@@ -5305,7 +5305,7 @@ pub fn loadModelFromMemory(
         }
     }
 
-    // GL-retirement P5: the GL uploadMesh (VBO/VAO creation) is gone —
+    // GL-retirement P5: the GL uploadMesh (VBO/VAO creation) is gone -
     // GPU residency on the wgpu path comes from loadModelFromMesh /
     // the retained-mesh API, which consume these CPU arrays.
 
@@ -5403,7 +5403,7 @@ pub fn unloadModel(
     // Skeleton - still libc-allocated by the not-yet-ported model
     // loaders (loadModel from glTF/OBJ/IQM/M3D).  These libc.free
     // calls are dead today because no loader produces skeleton data;
-    // they go live when ROADMAP §8 (zgltf adoption) lands and the
+    // they go live when ROADMAP section 8 (zgltf adoption) lands and the
     // loaders allocate via gpa.  At that point this whole block
     // becomes `allocator_mod.freeMany(gpa, ..., bone_count)` etc.
     if (model.skeleton.bones != null) {
@@ -5649,7 +5649,7 @@ pub fn loadModelAnimations(
 /// Build the world-space matrix for a single bone's transform.
 /// `Transform` has translation + rotation (quaternion) + scale.
 fn matrixFromTransform(t: types.Transform) Matrix {
-    // raylib uses Trs composition: scale → rotate → translate.
+    // raylib uses Trs composition: scale -> rotate -> translate.
     const scale_m: Mat = scaling(t.scale[0], t.scale[1], t.scale[2]);
     const rot_m: Mat = matFromQuat(t.rotation);
     const trans_m: Mat = translation(t.translation[0], t.translation[1], t.translation[2]);
@@ -5755,7 +5755,7 @@ pub fn unloadModelAnimations(
     }
 }
 
-/// Cross-fade two animations at given keyframes.  `blend ∈ [0, 1]`:
+/// Cross-fade two animations at given keyframes.  `blend in [0, 1]`:
 /// 0 = entirely animA at frameA, 1 = entirely animB at frameB.
 /// Per-bone:
 ///   - translation: linear lerp
@@ -5847,7 +5847,7 @@ pub fn updateModelAnimationBlend(
             model.meshes[mi].boneMatrices = model.boneMatrices;
         }
     }
-    // GL-retirement P5: GL skinned-shader_runtime tail removed — the CPU
+    // GL-retirement P5: GL skinned-shader_runtime tail removed - the CPU
     // pose above is the product.
 }
 
@@ -6054,7 +6054,7 @@ pub const pbr3d = struct {
     };
 
     /// A texture handed to `loadMesh` with EXPLICIT ownership. `.owned(tex)`
-    /// means the resulting `Model` frees `tex` on `deinit` (the common case —
+    /// means the resulting `Model` frees `tex` on `deinit` (the common case -
     /// one texture, one model). `.shared(tex)` means the caller keeps ownership
     /// and frees it ONCE itself, so the SAME texture can back several models
     /// without a double-free (e.g. one tiled floor texture under a "normal map
@@ -6137,7 +6137,7 @@ pub const pbr3d = struct {
         eye: [3]f32 = .{ 0, 0, 0 },
     };
 
-    /// CPU-side geometry in exactly the shape the PBR pipeline consumes —
+    /// CPU-side geometry in exactly the shape the PBR pipeline consumes -
     /// interleaved `Vertex` array + u16 indices.  Produced by `buildCpuMesh`;
     /// `loadGltf` uploads it to GPU buffers, and the software-rasterizer path
     /// feeds the same data through `pbr_vs.shaderMain` per vertex.
@@ -6153,7 +6153,7 @@ pub const pbr3d = struct {
 
     /// Interleave a parsed glTF's first mesh into `Vertex` records, synthesizing
     /// flat normals when the file omits NORMAL and Lengyel tangents always (the
-    /// helmet glb ships no TANGENT).  Pure CPU — no GPU handles touched — so the
+    /// helmet glb ships no TANGENT).  Pure CPU - no GPU handles touched - so the
     /// software-renderer half of a side-by-side gets byte-identical geometry to
     /// what `loadGltf` uploads.  Caller owns the result (`CpuMesh.deinit`).
     pub fn buildCpuMesh(gpa: Allocator, document: codecs.gltf.Data) !CpuMesh {
@@ -6239,7 +6239,7 @@ pub const pbr3d = struct {
     };
 
     // ============================================================================
-    // FsUbo — the shader_runtime's @group(2) @binding(0) uniform block, taken DIRECTLY
+    // FsUbo - the shader_runtime's @group(2) @binding(0) uniform block, taken DIRECTLY
     // from the schema (`src/shaders/pbr_fs_io.zig`).  This used to be a
     // hand-maintained byte-mirror with a "MUST agree" comment; pbr3d and the
     // io file live in the same module, so the mirror is gone and host-vs-WGSL
@@ -6255,12 +6255,12 @@ pub const pbr3d = struct {
     }
 
     // ============================================================================
-    // Material (group 1) sampler bindings — DERIVED FROM THE SCHEMA, the same way
+    // Material (group 1) sampler bindings - DERIVED FROM THE SCHEMA, the same way
     // the WGSL's `@group(1) @binding(N)` decorations are. Each `Sampler2D` field
     // in `pbr_fs_io.Samplers` becomes a texture at binding N and a paired sampler
     // at N+1 (the solver spaces them 2 apart). Hand-rolling "@0..5 textures,
     // @6..11 samplers" here silently drifted from the interleaved scheme the
-    // codegen emits — Dawn rejected the mismatch ("binding type in the shader_runtime
+    // codegen emits - Dawn rejected the mismatch ("binding type in the shader_runtime
     // (sampler) doesn't match the layout (texture)"). Deriving both the layout
     // and the bind group from `solveLayout` makes host-vs-WGSL drift impossible,
     // exactly like FsUbo above.
@@ -6319,7 +6319,7 @@ pub const pbr3d = struct {
         // group 0 (VS): five mat4 uniform buffers. group 2 (FS): one Ubo block.
         // These are RINGED across the frame: `draw()` advances `ubo_cursor` and
         // writes a fresh slot, so a frame that draws several models never writes
-        // the same buffer twice (the queue-timeline clobber — every writeBuffer
+        // the same buffer twice (the queue-timeline clobber - every writeBuffer
         // lands before any pass runs, so a reused buffer would corrupt the
         // earlier draw's pass). Mirrors renderer_2d's ortho ring. One slot =
         // five VS UBOs + one FS UBO + their two bind groups.
@@ -6456,7 +6456,7 @@ pub const pbr3d = struct {
             // ---- group 0 + group 2: N ring slots, each 5 VS mat4 UBOs + 1 FS
             // UBO + their bind groups. NOT seeded: `draw()` fully writes every
             // buffer of the slot it uses before binding it, so a seed here would
-            // be a dead write — and worse, since the launcher inits children
+            // be a dead write - and worse, since the launcher inits children
             // lazily inside update frame 0, a seed would land in the SAME frame
             // as the first draw's write and clobber it (the zimr534 hazard).
             // See the ring field docs. ----
@@ -6484,7 +6484,7 @@ pub const pbr3d = struct {
             const all_layouts: [3]wgpu.BindGroupLayoutHandle = .{ vs_layout, material_layout, fs_layout };
             self.pipeline_layout = wgpu.createPipelineLayout(device, all_layouts[0..], "pbr3d_pl");
             // The three group layouts were only needed to build the pipeline
-            // layout (which is self-contained once created) — release them.
+            // layout (which is self-contained once created) - release them.
             wgpu.destroyBindGroupLayout(vs_layout);
             wgpu.destroyBindGroupLayout(material_layout);
             wgpu.destroyBindGroupLayout(fs_layout);
@@ -6493,9 +6493,9 @@ pub const pbr3d = struct {
             // Debug-only safety net: independently reflect the embedded FS WGSL's
             // @group/@binding declarations and compare them, cell by cell, to the
             // host layout `solveLayout(PbrFsIo)` produced (the same authority
-            // `material_tex_bindings` uses). If they ever disagree — the exact
+            // `material_tex_bindings` uses). If they ever disagree - the exact
             // drift that shipped as Dawn's opaque "binding type in the shader_runtime
-            // doesn't match the layout" — this names the cell in the console at
+            // doesn't match the layout" - this names the cell in the console at
             // pipeline creation instead of leaving it to Dawn's cascade. Log-only
             // (never crashes) and compiled out of release builds.
             if (@import("builtin").mode == .debug) {
@@ -6675,7 +6675,7 @@ pub const pbr3d = struct {
 
         /// Build a drawable `Model` from a procedurally-generated `types.Mesh`
         /// (e.g. `genMeshSphere` + `genMeshTangents`) with CALLER-SUPPLIED PBR
-        /// maps — the non-glTF path for procedural geometry (the normal-map
+        /// maps - the non-glTF path for procedural geometry (the normal-map
         /// demo). Maps left null fall back to the renderer's neutral textures
         /// (white base, flat tangent-space normal). Read tangents from
         /// `mesh.tangents` if present (run `genMeshTangents` FIRST for correct
@@ -6729,7 +6729,7 @@ pub const pbr3d = struct {
 
             // Every material texture is OWNED by the Model (Model.deinit frees
             // all five slots). Unused slots therefore get FRESH 1x1 neutrals,
-            // never the renderer's shared fallbacks — aliasing those here would
+            // never the renderer's shared fallbacks - aliasing those here would
             // make Model.deinit double-free them against renderer.deinit. The
             // caller likewise transfers ownership of any base_color/normal it
             // passes, so a texture must not be shared across two loadMesh calls.
@@ -6751,7 +6751,7 @@ pub const pbr3d = struct {
                 .roughness_factor = opts.roughness_factor,
             };
             var model: pbr3d.Model = try self.uploadMeshMat(verts, idx, material);
-            // A `.shared` map is the caller's to free — clear its owned bit so
+            // A `.shared` map is the caller's to free - clear its owned bit so
             // Model.deinit skips it (the mr/occlusion/emissive neutrals above are
             // always this model's, so their default-true bits stand).
             model.owned_maps[0] = base_ref.owns;
@@ -6799,9 +6799,9 @@ pub const pbr3d = struct {
             // WebGPU requires writeBuffer sizes to be a multiple of 4. u16
             // indices hit that only when the count is even; an odd count (e.g.
             // the bunny's 208,353) gives 2-mod-4 bytes. Pad the buffer to an
-            // even index count — the extra slot is never drawn (index_count
+            // even index count - the extra slot is never drawn (index_count
             // below stays the real count).
-            // This site had its own hand-rolled padding — the bug was found here once and
+            // This site had its own hand-rolled padding - the bug was found here once and
             // fixed LOCALLY, which left the two identical sites above still broken. Folded
             // into `createBufferInit` so there is one implementation and no allocation.
             const index_bytes: u64 = wgpu.alignedBufferSize(indices.len * @sizeOf(u16));
@@ -6842,7 +6842,7 @@ pub const pbr3d = struct {
             // Ensure the frame carries a depth attachment matching the pipeline
             // (built with self.depth_format). Without this, a frame whose
             // depth_format was never set has no depth texture, so the pass opens
-            // depth-less and the pass/pipeline depth states mismatch — WebGPU
+            // depth-less and the pass/pipeline depth states mismatch - WebGPU
             // silently invalidates the pass (black). ensureDepth (in
             // Backend.beginFrame) creates the texture lazily and is idempotent.
             frame.depth_format = self.depth_format;
@@ -6907,8 +6907,8 @@ pub const pbr3d = struct {
             // Guard the whole class of the "3D draws but is invisible" bug: if a
             // 2D shapes batch is attached to this pass (i.e. we're drawing into
             // the app's shared screen pass, not pbr3d's own frame pass, where
-            // `batch` is null) it MUST be empty here. Any pending 2D — most
-            // commonly clearViewport's full-screen background quad — is BATCHED
+            // `batch` is null) it MUST be empty here. Any pending 2D - most
+            // commonly clearViewport's full-screen background quad - is BATCHED
             // and would flush at endDrawing, AFTER this immediate 3D draw, and
             // paint over it. beginMode3D flushes before drawing so this holds; if a
             // future path forgets, this fires headlessly instead of shipping a
@@ -6964,11 +6964,11 @@ pub const pbr3d = struct {
         }
 
         /// Draw a pbr3d model into an ALREADY-OPEN pass, WITHOUT touching the
-        /// 2D batch — the caller owns the 2D↔3D transition. Two callers:
-        /// `wgpu_app.drawModel3D` (the beginMode3D→endMode3D scope, which owns
-        /// the pre-flush AND restore for the shared screen pass — the preferred
+        /// 2D batch - the caller owns the 2D<->3D transition. Two callers:
+        /// `wgpu_app.drawModel3D` (the beginMode3D->endMode3D scope, which owns
+        /// the pre-flush AND restore for the shared screen pass - the preferred
         /// path), and a render texture (helmet_sw: `beginTextureMode` then
-        /// `drawIntoPass(f.gl.pass, …)` then `endTextureMode`, which owns its own
+        /// `drawIntoPass(f.gl.pass, ...)` then `endTextureMode`, which owns its own
         /// clear + teardown). Writes the mutated pass state back to `ps` so the
         /// app's PassState tracker stays honest: a stale tracker is what silently
         /// disabled the flushBatch layout guard and produced the "resources_bgl
@@ -7097,7 +7097,7 @@ pub const pbr3d = struct {
             };
 
             // Each map binds a texture view at material_tex_bindings[i] and its
-            // sampler at +1 — same schema-derived scheme as makeMaterialLayout
+            // sampler at +1 - same schema-derived scheme as makeMaterialLayout
             // and the WGSL.
             var entries: [12]gpu.BindGroupEntry = undefined;
             for (textures, 0..) |texture, i| {
@@ -7113,7 +7113,7 @@ pub const pbr3d = struct {
             const blob: []const u8 = try gpu.encodeBindGroupEntries(self.gpa, &entries);
             defer self.gpa.free(blob);
             const bg: wgpu.BindGroupHandle = wgpu.createBindGroup(self.device, layout, blob, "pbr3d_material_bg");
-            // The layout was only needed to build the bind group — release it.
+            // The layout was only needed to build the bind group - release it.
             wgpu.destroyBindGroupLayout(layout);
             return bg;
         }
@@ -7191,10 +7191,10 @@ pub const pbr3d = struct {
         }
     };
 
-    /// Walk texture-ref → image → buffer-view → bytes for `slot` and decode
+    /// Walk texture-ref -> image -> buffer-view -> bytes for `slot` and decode
     /// the embedded PNG/JPEG to RGBA8.  Returns null when the slot is unset,
     /// points at an external/undecodable image, or any index is out of range
-    /// — callers substitute their own neutral fallback.  Pure CPU; both the
+    /// - callers substitute their own neutral fallback.  Pure CPU; both the
     /// GPU upload path (`resolveMap`) and the software-renderer material
     /// loader call this, so the two halves of a side-by-side decode the
     /// SAME bytes.
@@ -7458,10 +7458,10 @@ pub const pbr3d = struct {
 // public `z.draw_points` shape unchanged.
 // ===========================================================================
 pub const draw_points = struct {
-    // draw_points.zig — `z.DrawPoints`: zero-copy instanced rendering of points read
+    // draw_points.zig - `z.DrawPoints`: zero-copy instanced rendering of points read
     // straight from a GPU storage buffer (the positions a compute kernel wrote). A
     // tiny instanced pipeline whose vertex shader_runtime reads `pos[instance_index]` from the
-    // buffer (`var<storage, read>` — vertex-stage storage is allowed read-only) and
+    // buffer (`var<storage, read>` - vertex-stage storage is allowed read-only) and
     // emits a screen-space quad. No CPU readback: the data never leaves the GPU.
     //
     //     var dp = try z.DrawPoints.init(f.gpu, gpa, dev, queue, fmt, pipe.storageBuffer().?, bytes);
@@ -7471,7 +7471,7 @@ pub const draw_points = struct {
     const WgpuGl = @import("WgpuGl.zig");
 
     // WGSL emitted from `src/shaders/points_vs.zig` + `points_fs.zig` (pure-Zig
-    // @SpirvType → SPIR-V → spv2wgsl), embedded by build.zig's shader_runtime
+    // @SpirvType -> SPIR-V -> spv2wgsl), embedded by build.zig's shader_runtime
     // auto-discovery loop. The storage buffer is read-only (spv2wgsl auto-emits
     // `var<storage, read>` for the vertex stage). Entry point is `entry` for both.
     const points_vs_wgsl = @embedFile("points_vs.wgsl");
@@ -7485,7 +7485,7 @@ pub const draw_points = struct {
     };
 
     // Merged binding schema for `Resources`: the UBO at group 0 binding 0 and
-    // the read-only position storage buffer at group 0 binding 1 — the same
+    // the read-only position storage buffer at group 0 binding 1 - the same
     // layout the VS shader_runtime (`points_vs_io.zig`) declares and emits. `Resources`
     // auto-generates the matching bind-group layout + bind group from this, so
     // the host no longer hand-writes them. (Attributes/Builtins live in the
@@ -7574,7 +7574,7 @@ pub const draw_points = struct {
         }
 
         /// Free the render pipeline + its `Resources` (UBO buffer + bind group +
-        /// layout). Does NOT touch `pos_buffer` — that's the caller's compute
+        /// layout). Does NOT touch `pos_buffer` - that's the caller's compute
         /// storage buffer, borrowed zero-copy and freed by the `Compute` pipeline.
         pub fn deinit(self: *DrawPoints) void {
             wgpu.destroyRenderPipeline(self.pipeline);
@@ -7612,7 +7612,7 @@ pub const draw_points = struct {
 
         /// Overwrite the bound position buffer with host-computed positions (e.g. the
         /// CPU backend's result) so the next `draw` renders them through the same
-        /// instanced path. GPU-compute callers never need this — the kernel writes the
+        /// instanced path. GPU-compute callers never need this - the kernel writes the
         /// buffer on-device (that's the zero-copy path). `pos_bytes` go to offset 0.
         pub fn uploadPositions(self: *DrawPoints, pos_bytes: []const u8) void {
             wgpu.queueWriteBuffer(self.queue, self.pos_buffer, 0, pos_bytes);
@@ -7620,21 +7620,21 @@ pub const draw_points = struct {
     };
 
     // ------------------------------------------------------------------------
-    // FluidDiscs — instanced SDF discs for pixel-space particle fields
+    // FluidDiscs - instanced SDF discs for pixel-space particle fields
     // (t1178, built for the GPU fluid). Same zero-copy idea as DrawPoints,
     // three upgrades: positions are in SIM PIXELS (a domain uniform maps to
     // NDC), each instance is a soft-edged SDF disc instead of a flat quad,
     // and colour is driven by a per-particle scalar (density) read from the
-    // SAME storage buffer via an element-index base — `positions` is bound as
+    // SAME storage buffer via an element-index base - `positions` is bound as
     // one big array<vec2<f32>> over the whole Buffers struct, so any vec2
     // field is reachable as `positions[base + ii]` with zero extra bindings
     // and zero offset-alignment constraints.
     // ------------------------------------------------------------------------
     // WGSL generated from typed pure-Zig shaders src/shaders/fluid_discs_{vs,fs}.zig
-    // (@SpirvType → SPIR-V → spv2wgsl; two read-only storage buffers in the VS).
+    // (@SpirvType -> SPIR-V -> spv2wgsl; two read-only storage buffers in the VS).
     // Auto-discovered + wired as anonymous imports by build.zig. Entry point
     // `entry` for both. The FS's original `if (r>1) discard` is reproduced by the
-    // smoothstep edge fade (alpha→0 outside the disc — see fluid_discs_fs.zig).
+    // smoothstep edge fade (alpha->0 outside the disc - see fluid_discs_fs.zig).
     const fluid_discs_vs_wgsl = @embedFile("fluid_discs_vs.wgsl");
     const fluid_discs_fs_wgsl = @embedFile("fluid_discs_fs.wgsl");
 
@@ -7653,7 +7653,7 @@ pub const draw_points = struct {
 
     // Merged binding schema for `Resources`: the UBO at group 0 binding 0 and
     // two read-only storage buffers (`positions` at binding 1, `density` at
-    // binding 2) — the same layout `fluid_discs_vs_io.zig` declares and emits.
+    // binding 2) - the same layout `fluid_discs_vs_io.zig` declares and emits.
     // `Resources` auto-generates the bind-group layout + bind group from this.
     const FluidSchema = struct {
         pub const Ubo = FluidUniforms;
@@ -7674,7 +7674,7 @@ pub const draw_points = struct {
 
     /// A region of a GPU buffer to bind: handle + byte offset + byte size.
     /// Offsets into storage bindings must respect the device's storage-buffer
-    /// offset alignment (256 by default) — field offsets in the kompute
+    /// offset alignment (256 by default) - field offsets in the kompute
     /// per-field layout and `Buffers`-shaped mirror buffers all satisfy it.
     pub const BufRegion = struct {
         handle: wgpu.BufferHandle,
@@ -7691,7 +7691,7 @@ pub const draw_points = struct {
 
         /// `buffer` is the compute storage buffer (whole Buffers struct,
         /// pos first); `buf_bytes` its full size; `dom_w/h` the sim domain
-        /// in pixels (the VS maps domain → NDC).
+        /// in pixels (the VS maps domain -> NDC).
         pub fn init(
             f: *gpu.GpuFrame,
             gpa: Allocator,
@@ -7752,7 +7752,7 @@ pub const draw_points = struct {
             );
             // Build-only handles: the pipeline retains its layout + modules
             // internally, so release the source handles now (one pipeline, no
-            // later rebuilds). Explicit ownership — no program-lifetime leak.
+            // later rebuilds). Explicit ownership - no program-lifetime leak.
             // Same discipline as compute_host's kernel build loop.
             wgpu.destroyShaderModule(vs_module);
             wgpu.destroyShaderModule(fs_module);
@@ -7769,7 +7769,7 @@ pub const draw_points = struct {
         /// Draw `count` discs into the active 2D pass (flush + restore, the
         /// DrawPoints pass discipline). `screen_w/h` are the render-target
         /// pixels; the disc radius is in SIM pixels and scales with the
-        /// domain→screen mapping.
+        /// domain->screen mapping.
         /// The aspect-fit mapping from sim pixels into the logical viewport:
         /// scale = min(logical/dom), centered. Shared by `draw` (forward) and
         /// `simFromLogical` (inverse, for input coordinates).
@@ -7876,7 +7876,7 @@ test "pbr3d material bindings are the schema-derived interleaved pairs" {
         try expectEqual(want, got);
     }
     // And every texture binding must leave its +1 sampler slot free of the next
-    // texture — i.e. strictly increasing by at least 2.
+    // texture - i.e. strictly increasing by at least 2.
     var prev: i64 = -2;
     for (pbr3d.material_tex_bindings) |b| {
         try expect(@as(i64, b) >= prev + 2);
@@ -7890,7 +7890,7 @@ test "pbr3d material bindings are the schema-derived interleaved pairs" {
 
 /// A parsed BVH turned into the engine's own animation types.
 ///
-/// `codecs.bvh` yields the FILE's structure — joints with per-joint channel lists and a flat
+/// `codecs.bvh` yields the FILE's structure - joints with per-joint channel lists and a flat
 /// motion matrix. This turns that into `ModelSkeleton` + `ModelAnimation`, which is what the
 /// rest of the engine already speaks: `ModelAnimation.keyframePoses[k]` is a
 /// `Transform[boneCount]`, i.e. exactly one local TRS per joint per frame. A mocap clip and a
@@ -7907,7 +7907,7 @@ pub const BvhSkeletalClip = struct {
     /// so a viewer must not assume either.
     frame_time: f32,
     /// Parallel to `skeleton.bones`: true where the joint is a BVH `End Site`. End sites carry
-    /// no channels and exist so the bone out to a fingertip can be drawn — a renderer usually
+    /// no channels and exist so the bone out to a fingertip can be drawn - a renderer usually
     /// wants to style them differently, and nothing in `BoneInfo` can express that.
     end_site: []bool,
 
@@ -7936,8 +7936,8 @@ pub const BvhSkeletalClip = struct {
 
 /// Copy `name` into a `BoneInfo.name` ([32]u8, NUL-terminated), warning when it does not fit.
 ///
-/// ★ TRUNCATION IS ONLY HALF THE PROBLEM. Cutting `mixamorig:LeftHandMiddle4_end` to 31 bytes
-/// is harmless right up until a SECOND name truncates to the same 31 bytes — at which point two
+/// * TRUNCATION IS ONLY HALF THE PROBLEM. Cutting `mixamorig:LeftHandMiddle4_end` to 31 bytes
+/// is harmless right up until a SECOND name truncates to the same 31 bytes - at which point two
 /// distinct joints share an identity and any later name-based retargeting silently binds the
 /// wrong one. So the caller checks for collisions separately; this only reports the overflow.
 fn bvhCopyBoneName(dst: *[32]u8, name: []const u8, index: usize) void {
@@ -7968,14 +7968,14 @@ fn bvhCopyBoneName(dst: *[32]u8, name: []const u8, index: usize) void {
 /// (ZYX vs XYZ) and about which joints carry position channels, so neither may be assumed.
 /// Scale every LENGTH a clip carries: each bone's rest offset and every frame's translation.
 ///
-/// ★ ROTATIONS ARE UNTOUCHED — scaling moves joints, it never reorients them. That is the same
+/// * ROTATIONS ARE UNTOUCHED - scaling moves joints, it never reorients them. That is the same
 /// property GMR relies on to fit a tall human's motion to a short robot, and it is why a scaled
 /// clip still reads as the same motion.
 ///
-/// ★★ A CLIP AND THE MESH IT DRIVES MUST SHARE A SCALE. Skinning composes the mesh, the bind
+/// ** A CLIP AND THE MESH IT DRIVES MUST SHARE A SCALE. Skinning composes the mesh, the bind
 /// pose and the animated pose; scaling one without the others produces a mesh that explodes or
 /// vanishes. `LoadFbxModelOptions.scale` handles all three for an FBX; a BVH clip loaded
-/// separately — as `geno_dance` does for the dance capture — needs this call to match.
+/// separately - as `geno_dance` does for the dance capture - needs this call to match.
 ///
 /// Use `0.01` for a centimetre capture, which is what BVH conventionally is, to reach the
 /// metres the rest of zimr and all of `robot.zig` speak.
@@ -7985,7 +7985,7 @@ pub fn scaleBvhSkeletalClip(clip: BvhSkeletalClip, scale: f32) void {
     }
     const k: Vec = @splat(scale);
     const n: usize = clip.boneCount();
-    // ★ `BoneInfo` carries only a name and a parent — the rest OFFSETS live in `bindPose`,
+    // * `BoneInfo` carries only a name and a parent - the rest OFFSETS live in `bindPose`,
     // which is where a bone's length actually is.
     if (clip.skeleton.bindPose) |bind| {
         for (bind[0..n]) |*t| {
@@ -8041,7 +8041,7 @@ pub fn loadBvhSkeletalClip(
     }
 
     // Bind pose: each joint at its OFFSET with identity rotation. This is the rest skeleton,
-    // and it is meaningful even for a file whose every joint has position channels — the
+    // and it is meaningful even for a file whose every joint has position channels - the
     // offsets are still what the up-axis heuristic reads.
     const bind: []types.Transform = gpa.alloc(types.Transform, bone_count) catch
         return errors.LoadError.OutOfMemory;
@@ -8118,7 +8118,7 @@ pub fn loadBvhSkeletalClip(
     };
 }
 
-/// Free a clip built by `loadBvhSkeletalClip`. Do NOT pass it to `unloadModel` — that frees
+/// Free a clip built by `loadBvhSkeletalClip`. Do NOT pass it to `unloadModel` - that frees
 /// through libc.
 pub fn unloadBvhSkeletalClip(gpa: Allocator, clip: BvhSkeletalClip) void {
     const bc: usize = clip.boneCount();
@@ -8151,16 +8151,16 @@ pub fn unloadBvhSkeletalClip(gpa: Allocator, clip: BvhSkeletalClip) void {
 /// both hold `boneCount` entries.
 /// Forward kinematics from EXPLICIT local rotations, using a skeleton's own rest offsets.
 ///
-/// ── ★★★ WHY THIS IS DIFFERENT FROM `bvhForwardKinematics` ──
+/// -- *** WHY THIS IS DIFFERENT FROM `bvhForwardKinematics` --
 ///
-/// That one reads a keyframe out of the clip, and on a BVH like `dance1` — where EVERY joint
-/// carries position channels — it uses each frame's stored TRANSLATION. That is right for
+/// That one reads a keyframe out of the clip, and on a BVH like `dance1` - where EVERY joint
+/// carries position channels - it uses each frame's stored TRANSLATION. That is right for
 /// playing a clip on its own skeleton and WRONG for a retarget: the source's translations
 /// encode the source's bone lengths, so using them would give the target the source's
 /// proportions and defeat the whole exercise.
 ///
-/// ★ Here every bone's offset comes from the TARGET's own rest pose, and only the ROOT takes a
-/// translation — the one the caller scaled with `codecs.bvh.scaleRootPosition`. The result is
+/// * Here every bone's offset comes from the TARGET's own rest pose, and only the ROOT takes a
+/// translation - the one the caller scaled with `codecs.bvh.scaleRootPosition`. The result is
 /// the source's motion on the target's body.
 pub fn bvhForwardKinematicsFromRotations(
     clip: BvhSkeletalClip,
@@ -8265,7 +8265,7 @@ test "bvh clip: a real capture keeps its golden FK values through the conversion
     defer gpa.free(rot);
     bvhForwardKinematics(clip, 0, pos, rot);
 
-    // Same numbers the codecs-level test asserts, now via the engine types — so a bug in the
+    // Same numbers the codecs-level test asserts, now via the engine types - so a bug in the
     // conversion cannot hide behind a correct parser.
     var hips: usize = 0;
     var head: usize = 0;
@@ -8326,7 +8326,7 @@ test "bvh clip: a long joint name is truncated to 31 bytes plus NUL" {
     defer gpa.free(src);
     var data: codecs.bvh.Data = try codecs.bvh.parse(gpa, src, null);
     defer data.deinit();
-    // codecs keeps the full name — the 32-byte limit belongs to the engine type, not the format.
+    // codecs keeps the full name - the 32-byte limit belongs to the engine type, not the format.
     try d3_expectEqualSlices(u8, "mixamorig:LeftHandMiddleJoint0", data.joints[0].name);
 
     const clip: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, data);
@@ -8338,20 +8338,20 @@ test "bvh clip: a long joint name is truncated to 31 bytes plus NUL" {
 }
 
 // ===========================================================================
-// FBX → Model: skeleton, mesh and skin in one object
+// FBX -> Model: skeleton, mesh and skin in one object
 // ===========================================================================
 
 /// A character loaded from a single FBX: geometry, skin weights, skeleton and clip.
 ///
-/// ── ★ WHY THIS ASSEMBLES RATHER THAN PARSES ──
+/// -- * WHY THIS ASSEMBLES RATHER THAN PARSES --
 ///
-/// Every piece already exists — `codecs.fbx.meshOf`, `codecs.fbx.skinOf`,
+/// Every piece already exists - `codecs.fbx.meshOf`, `codecs.fbx.skinOf`,
 /// `codecs.bvh.fromFbxWithMap`, `loadBvhSkeletalClip`. What was missing is the ONE place that
 /// guarantees they were built against the same skeleton numbering, because that is the failure
 /// nobody can diagnose from a screenshot: a mesh bound to the wrong bones deforms wrongly while
 /// the skeleton animates correctly, and looks like a broken rig.
 ///
-/// So the conversion happens once, here, and the map is threaded from it to the skin — never
+/// So the conversion happens once, here, and the map is threaded from it to the skin - never
 /// re-derived. `codecs.bvh.FbxConversion.joint_of_object` carries the contract.
 pub const FbxModel = struct {
     /// Meshes, skin weights and material slots. `boneMatrices` is left null until
@@ -8359,7 +8359,7 @@ pub const FbxModel = struct {
     model: Model,
     /// Skeleton plus the clip from the FBX's chosen take, in engine types.
     clip: BvhSkeletalClip,
-    /// ★ `inverse(bindWorld[j])` per joint, READ FROM THE FILE'S CLUSTERS — not derived from
+    /// * `inverse(bindWorld[j])` per joint, READ FROM THE FILE'S CLUSTERS - not derived from
     /// the rest pose. See `codecs.fbx.SkinData.inverse_bind`: a skin is bound at a specific
     /// moment recorded in `TransformLink`, and on `Geno.fbx` that pose is nowhere near the
     /// node hierarchy's current rest transform. Deriving it gave a correct torso with limbs
@@ -8367,7 +8367,7 @@ pub const FbxModel = struct {
     ///
     /// Owned by this struct; `unloadFbxModel` frees it.
     inverse_bind: []Mat,
-    /// The bind pose itself, per joint — `TransformLink` from the skin clusters.
+    /// The bind pose itself, per joint - `TransformLink` from the skin clusters.
     bind: []Mat,
 };
 
@@ -8376,7 +8376,7 @@ pub const FbxModel = struct {
 /// Accumulates each triangle's face normal onto its three vertices, then normalises. Mutates
 /// `mesh.normals` in place; the mesh must already have an allocated normals array.
 ///
-/// ── ★ WHEN THIS IS THE RIGHT THING, MEASURED ──
+/// -- * WHEN THIS IS THE RIGHT THING, MEASURED --
 ///
 /// A file's own normals are usually better than recomputed ones, because they encode hard
 /// edges that averaging destroys. But they can also be WRONG, and `Geno.fbx` is a real example:
@@ -8384,11 +8384,11 @@ pub const FbxModel = struct {
 ///     Geno.fbx       52.6% of triangles have a vertex normal opposing their winding
 ///     Drop_Kick.fbx   0.0%
 ///
-/// The winding is not the problem — recomputing from it gives a normal distribution matching
+/// The winding is not the problem - recomputing from it gives a normal distribution matching
 /// Drop_Kick's almost exactly, while the file's stored normals differ by 24 points. The stored
 /// normals are simply inconsistent, and they render as dark banding across the limbs.
 ///
-/// ★ So: default to the file's normals, and reach for this when a mesh bands. It is opt-in
+/// * So: default to the file's normals, and reach for this when a mesh bands. It is opt-in
 /// (`LoadFbxModelOptions.recompute_normals`) rather than automatic, because silently
 /// overwriting authored normals would smooth every hard edge in a hard-surface model.
 pub fn computeMeshNormals(mesh: Mesh) void {
@@ -8407,7 +8407,7 @@ pub fn computeMeshNormals(mesh: Mesh) void {
         const pc: Vec = vec(mesh.vertices[ic * 3], mesh.vertices[ic * 3 + 1], mesh.vertices[ic * 3 + 2]);
         const e1: Vec = pb - pa;
         const e2: Vec = pc - pa;
-        // Face normal, UNNORMALISED — its length is twice the triangle area, which weights big
+        // Face normal, UNNORMALISED - its length is twice the triangle area, which weights big
         // triangles more heavily. That is the standard and better-looking choice.
         const face: Vec = vec(
             e1[1] * e2[2] - e1[2] * e2[1],
@@ -8437,27 +8437,27 @@ pub fn computeMeshNormals(mesh: Mesh) void {
 
 /// Each joint's world ORIENTATION at bind, pulled from the skin clusters' `TransformLink`.
 ///
-/// ── ★★★ THIS IS THE FBX'S T-POSE, AND IT IS ALREADY IN THE FILE ──
+/// -- *** THIS IS THE FBX'S T-POSE, AND IT IS ALREADY IN THE FILE --
 ///
 /// Retargeting needs a reference pose whose orientations are TRUE, not inferred. Deriving one
 /// from bone directions fails on a rig like Mixamo's, whose offsets sit in ROTATED local joint
-/// frames: FK-ing them with identity rotations puts `LeftHand` at (4.6, 212.0, 0.7) — straight
+/// frames: FK-ing them with identity rotations puts `LeftHand` at (4.6, 212.0, 0.7) - straight
 /// up above the shoulder, which is not a pose at all.
 ///
-/// ★ `TransformLink` is the bone's GLOBAL transform at the moment the skin was bound, rotations
+/// * `TransformLink` is the bone's GLOBAL transform at the moment the skin was bound, rotations
 /// included. Its rotation block is exactly the reference orientation retargeting wants, and
-/// §11 already extracts it into `FbxModel.bind` for skinning.
+/// section 11 already extracts it into `FbxModel.bind` for skinning.
 ///
-/// ★ The translation is discarded here on purpose: a reference ORIENTATION is what aligns two
+/// * The translation is discarded here on purpose: a reference ORIENTATION is what aligns two
 /// rigs; their sizes are handled separately by `codecs.bvh.scaleRootPosition`.
 ///
-/// ★ A joint no cluster binds keeps an identity bind (see `codecs.fbx.SkinData.bind`) and so
-/// reports identity here — correct, because there is no evidence about it either way.
+/// * A joint no cluster binds keeps an identity bind (see `codecs.fbx.SkinData.bind`) and so
+/// reports identity here - correct, because there is no evidence about it either way.
 pub fn fbxBindOrientations(fbx_model: FbxModel, out_orientations: []Quat) void {
     const joint_count: usize = @min(fbx_model.bind.len, out_orientations.len);
     for (0..joint_count) |joint| {
         const bind_matrix: Mat = fbx_model.bind[joint];
-        // Rotation block only — rows 0..2, columns 0..2. Row 3 is the translation.
+        // Rotation block only - rows 0..2, columns 0..2. Row 3 is the translation.
         const rotation_only: Mat = .{
             .{ bind_matrix[0][0], bind_matrix[0][1], bind_matrix[0][2], 0 },
             .{ bind_matrix[1][0], bind_matrix[1][1], bind_matrix[1][2], 0 },
@@ -8470,8 +8470,8 @@ pub fn fbxBindOrientations(fbx_model: FbxModel, out_orientations: []Quat) void {
 
 /// Free everything `loadFbxModel` allocated.
 ///
-/// ★ THE SKELETON IS BORROWED, NOT OWNED. `model.skeleton` points at the SAME arrays `clip`
-/// owns, so `updateModelAnimation` and bone gizmos can reach them without a second copy — but
+/// * THE SKELETON IS BORROWED, NOT OWNED. `model.skeleton` points at the SAME arrays `clip`
+/// owns, so `updateModelAnimation` and bone gizmos can reach them without a second copy - but
 /// `unloadModel` frees skeleton arrays with **libc.free** (it predates the gpa-allocating
 /// loaders) while `loadBvhSkeletalClip` allocates them with the gpa. Letting both run crashes
 /// in teardown, which is how this was found: 60 frames rendered fine and the smoke died in
@@ -8486,26 +8486,26 @@ pub fn unloadFbxModel(gpa: Allocator, fbx_model: FbxModel) void {
 }
 
 pub const LoadFbxModelOptions = struct {
-    /// Resample rate for the animation. `null` reads it from the file's own key spacing —
+    /// Resample rate for the animation. `null` reads it from the file's own key spacing -
     /// captures here run at 60 and 120 fps and Mixamo at 30, so a hardcoded rate throws away
     /// most of some clips.
     fps: ?f32 = null,
     /// Uniform scale applied at LOAD to every length the file carries: mesh vertices, the bind
     /// matrices' translations, and the clip's joint offsets and root motion.
     ///
-    /// ★ ONE SCALE, THREE PLACES, AND ALL THREE OR NONE. Skinning composes the mesh, the bind
+    /// * ONE SCALE, THREE PLACES, AND ALL THREE OR NONE. Skinning composes the mesh, the bind
     /// pose and the animated pose; scaling two of them produces a mesh that explodes or
-    /// vanishes. That is §11's failure mode exactly, and it is why this lives in the loader
+    /// vanishes. That is section 11's failure mode exactly, and it is why this lives in the loader
     /// rather than at each call site.
     ///
-    /// ★ ROTATIONS ARE NOT TOUCHED. Scaling changes where things are, never which way they
-    /// face — the same property that lets GMR fit a tall human's motion to a short robot.
+    /// * ROTATIONS ARE NOT TOUCHED. Scaling changes where things are, never which way they
+    /// face - the same property that lets GMR fit a tall human's motion to a short robot.
     ///
     /// Use `0.01` to turn a centimetre file into metres, which is what the rest of zimr and
     /// all of `robot.zig` speak. Default 1.0 keeps a file in its authored units.
     scale: f32 = 1.0,
     /// Replace the file's normals with smooth ones from the winding. See `computeMeshNormals`
-    /// — `Geno.fbx` needs this (52.6% of its normals oppose their winding, rendering as dark
+    /// - `Geno.fbx` needs this (52.6% of its normals oppose their winding, rendering as dark
     /// banding); `Drop_Kick.fbx` does not.
     recompute_normals: bool = false,
     /// Which take to convert; `null` means the first take that actually has curves.
@@ -8514,7 +8514,7 @@ pub const LoadFbxModelOptions = struct {
 
 /// Load geometry + skin + skeleton + animation from FBX bytes.
 ///
-/// Returns `errors.LoadError.InvalidDimensions` when the file has no skeleton — a static mesh,
+/// Returns `errors.LoadError.InvalidDimensions` when the file has no skeleton - a static mesh,
 /// an optical-marker capture or a blend-shape rig. Those are legitimate FBX files that simply
 /// are not characters, so the caller should say so rather than showing one bone.
 pub fn loadFbxModel(
@@ -8567,11 +8567,11 @@ pub fn loadFbxModel(
         unloadMesh(gpa, m);
     };
 
-    // ── ★ THE BIND POSE COMES FROM THE SKIN CLUSTERS, NOT FROM FORWARD KINEMATICS ──
+    // -- * THE BIND POSE COMES FROM THE SKIN CLUSTERS, NOT FROM FORWARD KINEMATICS --
     //
     // Each `Cluster` records `TransformLink`: the bone's global transform at the moment the
     // skin was bound. That is a DIFFERENT POSE from the file's animation frame 0, and on
-    // `Geno.fbx` the difference is enormous — measured by taking, for each joint, the centroid
+    // `Geno.fbx` the difference is enormous - measured by taking, for each joint, the centroid
     // of the vertices it dominantly weights and comparing it to the candidate bind position:
     //
     //     bind from FK on frame 0        mean 35.0 units off, worst 55.5
@@ -8582,8 +8582,8 @@ pub fn loadFbxModel(
     // (its hand vertices centred near Y~95). Skinning an A-posed mesh with a T-posed bind tears
     // the limbs off, which is exactly what it did.
     //
-    // ★ THIS WAS TRIED AND WRONGLY REJECTED EARLIER. The evidence against it —
-    // `inverse(TransformLink) * bindWorldFromFk` deviating from the identity on all 96 joints —
+    // * THIS WAS TRIED AND WRONGLY REJECTED EARLIER. The evidence against it -
+    // `inverse(TransformLink) * bindWorldFromFk` deviating from the identity on all 96 joints -
     // was CORRECT AND EXPECTED: they are two genuinely different poses. It only looked like a
     // bug because two zm convention errors (`vec` instead of `pointVec`, and `mulMat`'s
     // argument order) were still corrupting the render at the time, so switching binds changed
@@ -8609,10 +8609,10 @@ pub fn loadFbxModel(
         defer gpa.free(bind_rotations);
         bvhForwardKinematics(clip, 0, bind_positions, bind_rotations);
         for (0..bone_count) |j| {
-            // ★ Built from the INVERSE TRS rather than by inverting a matrix: undo the
+            // * Built from the INVERSE TRS rather than by inverting a matrix: undo the
             // translation, then undo the rotation. `mulMat(a, b)` applies b first, so that
             // reads `mulMat(inverse-rotation, negative-translation)`. Composing the inverse
-            // directly needs no assumption about which row or column holds the translation —
+            // directly needs no assumption about which row or column holds the translation -
             // the very assumption that produced a mesh bound to transforms it never visits.
             inverse_bind[j] = mulMat(
                 matFromQuat(zm.conjugate(bind_rotations[j])),
@@ -8637,9 +8637,9 @@ pub fn loadFbxModel(
         ) catch return errors.LoadError.DecodeFailed;
         defer skin.deinit();
 
-        // ★ Bake the mesh NODE's world transform into the vertices. Control points are in
-        // node-local space; everything else here — the skeleton, the bind matrices, the
-        // animation — is in world space. See `codecs.fbx.globalTransform`.
+        // * Bake the mesh NODE's world transform into the vertices. Control points are in
+        // node-local space; everything else here - the skeleton, the bind matrices, the
+        // animation - is in world space. See `codecs.fbx.globalTransform`.
         const node_to_world: [16]f64 = if (codecs.fbx.modelOfGeometry(&scene, geometry)) |model_index|
             codecs.fbx.globalTransform(&scene, model_index)
         else
@@ -8649,8 +8649,8 @@ pub fn loadFbxModel(
             if (joint >= bone_count) {
                 break;
             }
-            // ★ The inverse bind maps a scaled vertex into bone space, so ONLY its translation
-            // row scales — the rotation block is unitless and must not.
+            // * The inverse bind maps a scaled vertex into bone space, so ONLY its translation
+            // row scales - the rotation block is unitless and must not.
             var flat: [16]f32 = flat_in;
             flat[12] *= opts.scale;
             flat[13] *= opts.scale;
@@ -8694,12 +8694,12 @@ pub fn loadFbxModel(
         built += 1;
     }
 
-    // ★★ THE CLIP SCALES TOO — mesh, bind AND ANIMATED POSE, all three or none.
+    // ** THE CLIP SCALES TOO - mesh, bind AND ANIMATED POSE, all three or none.
     //
     // Missing this shipped a bug: Geno survived because its motion came from an external BVH
-    // scaled separately, while the Mixamo character plays its OWN take and vanished — a metre
+    // scaled separately, while the Mixamo character plays its OWN take and vanished - a metre
     // bind driven by a centimetre animation displaces it a hundredfold, straight off-screen.
-    // ★ The two-scale test that was supposed to prevent exactly this checked mesh and bind and
+    // * The two-scale test that was supposed to prevent exactly this checked mesh and bind and
     // NOT the clip, while its own comment named all three. Writing the right words is not the
     // same as asserting them.
     scaleBvhSkeletalClip(clip, opts.scale);
@@ -8720,10 +8720,10 @@ pub fn loadFbxModel(
 
 /// Build the per-joint skin matrices for one keyframe of `clip`.
 ///
-/// ── ★ THE TWO zm CONVENTIONS THIS FUNCTION EXISTS TO GET RIGHT ──
+/// -- * THE TWO zm CONVENTIONS THIS FUNCTION EXISTS TO GET RIGHT --
 ///
 /// Both cost days when they were spread across call sites, and **both are invisible in a bind
-/// pose** — where the translations are zero and the composition is the identity — so a green
+/// pose** - where the translations are zero and the composition is the identity - so a green
 /// bind-pose test proves nothing about either.
 ///
 ///   1. **`mulMat(a, b)` APPLIES b FIRST, THEN a**, the opposite of reading it left to right
@@ -8736,7 +8736,7 @@ pub fn loadFbxModel(
 /// Both are pinned by the test `zm: mulMat and mulMatVec compose in the order the skinning path
 /// assumes`. Callers get them for free by using this function instead of hand-rolling the math.
 ///
-/// `inverse_bind` is `FbxModel.inverse_bind` — read from the skin clusters, NOT derived from
+/// `inverse_bind` is `FbxModel.inverse_bind` - read from the skin clusters, NOT derived from
 /// the rest pose; `codecs.fbx` documents why. `out_positions` / `out_rotations` are scratch the
 /// caller owns, and are left holding the sampled world pose, which is what a bone gizmo wants.
 pub fn poseSkinMatrices(
@@ -8752,9 +8752,9 @@ pub fn poseSkinMatrices(
     assert(inverse_bind.len >= n, @src());
     bvhForwardKinematics(clip, keyframe, out_positions, out_rotations);
     for (0..n) |j| {
-        // Rotate, then translate — hence translation on the LEFT (see convention 1).
+        // Rotate, then translate - hence translation on the LEFT (see convention 1).
         const world: Mat = mulMat(translationV(out_positions[j]), matFromQuat(out_rotations[j]));
-        // Inverse bind first, then the animated world — hence world on the LEFT.
+        // Inverse bind first, then the animated world - hence world on the LEFT.
         out_skin[j] = mulMat(world, inverse_bind[j]);
     }
 }
@@ -8762,24 +8762,24 @@ pub fn poseSkinMatrices(
 /// Deform one mesh's positions AND normals using skin matrices from `poseSkinMatrices`, then
 /// upload both.
 ///
-/// ── ★ WHY THIS TAKES SIX ARGUMENTS INSTEAD OF FOUR ──
+/// -- * WHY THIS TAKES SIX ARGUMENTS INSTEAD OF FOUR --
 ///
 /// It used to take positions only, and it silently left normals in the BIND POSE: the mesh
 /// deformed while its lighting stayed fixed to the rest pose. On a moving character that reads
-/// as shading which is wrong in some places and fine in others — the kind of thing that gets
+/// as shading which is wrong in some places and fine in others - the kind of thing that gets
 /// blamed on the asset's normal data, which is exactly what happened.
 ///
-/// ★★ THE FIX IS THE SIGNATURE, NOT A COMMENT. With normals absent from the parameter list,
-/// forgetting them was not an oversight a caller could make — it was UNREPRESENTABLE, and the
+/// ** THE FIX IS THE SIGNATURE, NOT A COMMENT. With normals absent from the parameter list,
+/// forgetting them was not an oversight a caller could make - it was UNREPRESENTABLE, and the
 /// omission lived in this function where no caller could see it. Requiring `base_normals` and
 /// `out_normals` means a caller cannot skin geometry without deciding what happens to its
 /// normals. A comment saying "remember to handle normals" would not have fired.
 ///
-/// ★ Backed by the test `skinning: a normal follows its bone's rotation, not just the
-/// position`, which was verified to FAIL when the bug is reintroduced — an invariant nobody has
+/// * Backed by the test `skinning: a normal follows its bone's rotation, not just the
+/// position`, which was verified to FAIL when the bug is reintroduced - an invariant nobody has
 /// watched fail is not known to be a guard.
 ///
-/// ★ `base_positions` MUST BE A SEPARATE COPY OF THE REST POSE, not `mesh.vertices`.
+/// * `base_positions` MUST BE A SEPARATE COPY OF THE REST POSE, not `mesh.vertices`.
 /// `updateMeshBuffer` writes into `mesh.vertices` itself, so reading the rest pose from there
 /// feeds each frame's output back in as the next frame's input: the figure inflates into a fan
 /// of triangles and keeps drifting even with playback PAUSED.
@@ -8800,7 +8800,7 @@ pub fn skinMeshCpu(
         return;
     }
     for (0..vertex_count) |v| {
-        // `pointVec`, NOT `vec` — see convention 2 on `poseSkinMatrices`.
+        // `pointVec`, NOT `vec` - see convention 2 on `poseSkinMatrices`.
         const rest: Vec = pointVec(
             base_positions[v * 3 + 0],
             base_positions[v * 3 + 1],
@@ -8826,7 +8826,7 @@ pub fn skinMeshCpu(
         out[v * 3 + 1] = p[1];
         out[v * 3 + 2] = p[2];
 
-        // ★ NORMALS MUST BE SKINNED TOO, and with `vec` — a DIRECTION, lane 3 = 0 — so the
+        // * NORMALS MUST BE SKINNED TOO, and with `vec` - a DIRECTION, lane 3 = 0 - so the
         // skin matrix's TRANSLATION is excluded. This is the same `vec`/`pointVec` distinction
         // that cost days on positions, used deliberately here: a position needs the
         // translation and a normal must not have it.
@@ -8867,8 +8867,8 @@ pub fn skinMeshCpu(
 
 /// Copy a parsed mesh into engine-owned arrays that `unloadMesh` can free.
 ///
-/// ★ `Mesh.indices` IS 16-BIT. Welding is what keeps a real character under 65535 — an
-/// unwelded `Beta_Surface` would be 84816 corner-vertices — but a big enough mesh still will
+/// * `Mesh.indices` IS 16-BIT. Welding is what keeps a real character under 65535 - an
+/// unwelded `Beta_Surface` would be 84816 corner-vertices - but a big enough mesh still will
 /// not fit, and silently wrapping the indices scrambles the geometry instead of failing. So the
 /// bound is checked here, where the narrowing actually happens.
 fn fbxMeshToEngine(
@@ -8970,7 +8970,7 @@ test "fbx model: Geno loads as a skinned Model in one call" {
     var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
     defer unloadFbxModel(gpa, loaded);
 
-    // ★ ONE CALL, and everything downstream sees ordinary engine types: a `Model` with a
+    // * ONE CALL, and everything downstream sees ordinary engine types: a `Model` with a
     // skinned `Mesh`, and a `ModelSkeleton` + `ModelAnimation` beside it. GenoView needs an
     // offline Maya export to reach this point because raylib cannot read FBX.
     try d3_expectEqual(@as(i32, 1), loaded.model.meshCount);
@@ -8988,7 +8988,7 @@ test "fbx model: Geno loads as a skinned Model in one call" {
     try d3_expectEqual(@as(usize, 96), loaded.clip.boneCount()); // 75 joints + 21 end sites
     try d3_expectEqualSlices(u8, "Hips", loaded.clip.boneName(0));
 
-    // ★ Every 16-bit index must address a real vertex. This is where the u32 -> u16 narrowing
+    // * Every 16-bit index must address a real vertex. This is where the u32 -> u16 narrowing
     // happens, and a wrapped index scrambles geometry rather than failing, so it is checked
     // rather than assumed.
     const index_count: usize = @intCast(mesh.triangleCount * 3);
@@ -9020,9 +9020,9 @@ test "fbx model: files that are not characters are refused, not half-loaded" {
     defer threaded.deinit();
     const io: std.Io = threaded.io();
 
-    // ★ An optical-marker capture and a blend-shape rig are perfectly valid FBX files that
+    // * An optical-marker capture and a blend-shape rig are perfectly valid FBX files that
     // are simply not characters. Reporting that beats rendering one bone and calling it a
-    // skeleton — which is what an earlier joint heuristic did for both of these.
+    // skeleton - which is what an earlier joint heuristic did for both of these.
     for ([_][]const u8{ "assets/subject2.fbx", "assets/metahuman.fbx" }) |path| {
         var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => continue,
@@ -9059,11 +9059,11 @@ test "fbx model: the skinned mesh lands on the skeleton, not around it" {
     var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
     defer unloadFbxModel(gpa, loaded);
 
-    // ★ THE TEST THAT WOULD HAVE CAUGHT "POSSESSED DR OCTOPUS".
+    // * THE TEST THAT WOULD HAVE CAUGHT "POSSESSED DR OCTOPUS".
     //
     // An earlier version DERIVED the inverse bind from the node hierarchy's rest pose, which
     // rendered a correct torso with limbs stretched into metre-long tentacles. The bind-pose
-    // identity check it shipped with passed anyway — because `inverse(X) * X == identity` for
+    // identity check it shipped with passed anyway - because `inverse(X) * X == identity` for
     // ANY X, so that check validates the inverse and the multiply order and NEVER the choice
     // of X.
     //
@@ -9113,19 +9113,19 @@ test "fbx model: the skinned mesh lands on the skeleton, not around it" {
     }
 
     // The mesh must SIT ON the skeleton, not beside or under it. Before the node transform
-    // was baked in, the character rendered 139 units underground at exactly the right size —
+    // was baked in, the character rendered 139 units underground at exactly the right size -
     // which no amount of staring at extents alone would have flagged.
     inline for (0..3) |c| {
         try d3_expect(mesh_lo[c] < bone_hi[c] and mesh_hi[c] > bone_lo[c]);
     }
 
-    // ★ ALL THREE AXES, TIGHTLY. Flesh extends past the joint centres by a hand's width, not
+    // * ALL THREE AXES, TIGHTLY. Flesh extends past the joint centres by a hand's width, not
     // a body length. Measured with the bind and the animation sharing one FK:
     //
     //     bones  (-89.3,  1.1, -9.6)..(90.4, 171.1, 15.0)
     //     mesh   (-59.7, -0.5,-16.2)..(59.7, 170.2, 11.9)
     //
-    // Every earlier bug blew one of these open — tentacles took X and Y past 10x, the missing
+    // Every earlier bug blew one of these open - tentacles took X and Y past 10x, the missing
     // node transform put Y 139 units under the floor, and mixing bind spaces spread Z to 104
     // against the skeleton's 25. A loose depth tolerance was carried here for exactly one
     // revision; it is gone now that the cause is fixed rather than tolerated.
@@ -9138,10 +9138,10 @@ test "fbx model: the skinned mesh lands on the skeleton, not around it" {
 }
 
 test "zm: matFromQuat and rotate agree about direction" {
-    // ★ THE DECISIVE CONVENTION CHECK. `bvhForwardKinematics` composes world rotations for use
+    // * THE DECISIVE CONVENTION CHECK. `bvhForwardKinematics` composes world rotations for use
     // with `zm.rotate`; the skinning path turns those same quaternions into matrices with
-    // `matFromQuat` and applies them with `mulMatVec`. If the two disagree — if one is the
-    // transpose of the other — then joint POSITIONS stay correct (they only ever go through
+    // `matFromQuat` and applies them with `mulMatVec`. If the two disagree - if one is the
+    // transpose of the other - then joint POSITIONS stay correct (they only ever go through
     // `rotate`) while every skin matrix carries an inverted rotation.
     //
     // That is invisible in a skeleton overlay, which draws positions and nothing else.
@@ -9190,7 +9190,7 @@ test "fbx model: the character skinned by a FOREIGN clip stays the size of that 
     const dance: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, dance_data);
     defer unloadBvhSkeletalClip(gpa, dance);
 
-    // ★ THE CHECK THE BIND-POSE ONE CANNOT MAKE. Posing the character with its OWN bind pose
+    // * THE CHECK THE BIND-POSE ONE CANNOT MAKE. Posing the character with its OWN bind pose
     // is identity by construction, so it passes whatever else is wrong. Driving it with a
     // DIFFERENT clip is where a real mismatch shows: if the dance's skeleton and the
     // character's bind disagree, the mesh inflates instead of moving.
@@ -9217,7 +9217,7 @@ test "fbx model: the character skinned by a FOREIGN clip stays the size of that 
     const skinned_normals: []f32 = try gpa.alloc(f32, vertex_count * 3);
     defer gpa.free(skinned_normals);
 
-    // Sample several frames — one lucky frame proves nothing about a clip.
+    // Sample several frames - one lucky frame proves nothing about a clip.
     const frames = [_]usize{ 0, 60, 200, 400 };
     for (frames) |k| {
         poseSkinMatrices(dance, loaded.inverse_bind, k, positions, rotations, skin);
@@ -9238,7 +9238,7 @@ test "fbx model: the character skinned by a FOREIGN clip stays the size of that 
                 mesh_hi[c] = @max(mesh_hi[c], skinned[v * 3 + c]);
             }
         }
-        // ★ THE ASSERTION THAT PINS BOTH CONVENTION BUGS AT ONCE. Measured on this clip:
+        // * THE ASSERTION THAT PINS BOTH CONVENTION BUGS AT ONCE. Measured on this clip:
         //
         //     frame   0  bones (98,-1,344)..(193,163,410)   mesh (74,0,338)..(202,209,420)
         //     frame 400  bones (-35,2,442)..(17,142,514)    mesh (-65,0,419)..(46,146,521)
@@ -9263,7 +9263,7 @@ test "fbx model: the character skinned by a FOREIGN clip stays the size of that 
 }
 
 test "zm: mulMat and mulMatVec compose in the order the skinning path assumes" {
-    // ★ THE CONVENTION THIS WHOLE PIPELINE RESTS ON, pinned down instead of assumed.
+    // * THE CONVENTION THIS WHOLE PIPELINE RESTS ON, pinned down instead of assumed.
     // `examples/skinned_mesh` writes `mulMat(rot, translation)` and calls it "rotate then
     // translate"; every skin matrix here is built the same way. If `mulMat(a, b)` actually
     // meant "b then a", positions would still look plausible while every composed transform
@@ -9272,12 +9272,12 @@ test "zm: mulMat and mulMatVec compose in the order the skinning path assumes" {
     const t: Mat = translationV(vec(10, 0, 0));
     const p: Vec = pointVec(1, 0, 0);
 
-    // ★★★ `zm.mulMat(a, b)` APPLIES **b FIRST, THEN a** — the opposite of what reading it
+    // *** `zm.mulMat(a, b)` APPLIES **b FIRST, THEN a** - the opposite of what reading it
     // left-to-right suggests, and the opposite of raylib's `MatrixMultiply`. Measured:
     // `mulMat(rotate90Z, translate10X)` moves (1,0,0) to (0,11,0), i.e. TRANSLATE then ROTATE.
     //
-    // Getting this backwards is invisible wherever the translation is zero — which is exactly
-    // a bind pose — and only appears once a clip moves the root.
+    // Getting this backwards is invisible wherever the translation is zero - which is exactly
+    // a bind pose - and only appears once a clip moves the root.
     const translate_then_rotate: Vec = mulMatVec(mulMat(r, t), p);
     try d3_expectApproxEqAbs(@as(f32, 0.0), translate_then_rotate[0], 1.0e-4);
     try d3_expectApproxEqAbs(@as(f32, 11.0), translate_then_rotate[1], 1.0e-4);
@@ -9287,8 +9287,8 @@ test "zm: mulMat and mulMatVec compose in the order the skinning path assumes" {
     try d3_expectApproxEqAbs(@as(f32, 10.0), rotate_then_translate[0], 1.0e-4);
     try d3_expectApproxEqAbs(@as(f32, 1.0), rotate_then_translate[1], 1.0e-4);
 
-    // ★ AND `vec` IS A DIRECTION: lane 3 is ZERO, so an affine translation has NO EFFECT on
-    // it. Using it for a vertex POSITION silently drops every translation — which is exactly
+    // * AND `vec` IS A DIRECTION: lane 3 is ZERO, so an affine translation has NO EFFECT on
+    // it. Using it for a vertex POSITION silently drops every translation - which is exactly
     // how a skinned character can pass a bind-pose test (where the translation is zero) and
     // then collapse toward the origin the moment a clip moves the root.
     const as_direction: Vec = mulMatVec(t, vec(1, 0, 0));
@@ -9311,7 +9311,7 @@ test "fbx model: the bind pose is the pose the MESH is in" {
     var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
     defer unloadFbxModel(gpa, loaded);
 
-    // ★★★ THE TEST THAT WOULD HAVE FOUND THIS ON DAY ONE, and the one every earlier check
+    // *** THE TEST THAT WOULD HAVE FOUND THIS ON DAY ONE, and the one every earlier check
     // missed. It asks a question about the WORLD rather than about matrix algebra:
     //
     //     if a joint's bind position is right, the vertices that joint dominantly weights
@@ -9322,10 +9322,10 @@ test "fbx model: the bind pose is the pose the MESH is in" {
     //     bind from FK on the file's frame 0    mean 35.0 units off, worst 55.5
     //     bind from the clusters' TransformLink mean  5.0 units off, worst 20.9
     //
-    // 5 units is flesh-radius around a bone. 35 is a limb length — Geno's frame 0 is a T-POSE
+    // 5 units is flesh-radius around a bone. 35 is a limb length - Geno's frame 0 is a T-POSE
     // (hand joints at Y~138, arms horizontal) while the MESH is modelled in an A-POSE (hand
-    // vertices centred near Y~95). Every previous test — bind-pose identity, bounding boxes,
-    // the convention checks — passed happily with the wrong pose, because none of them
+    // vertices centred near Y~95). Every previous test - bind-pose identity, bounding boxes,
+    // the convention checks - passed happily with the wrong pose, because none of them
     // compared the mesh against the skeleton POSITIONALLY.
     const mesh: Mesh = loaded.model.meshes[0];
     const vc: usize = @intCast(mesh.vertexCount);
@@ -9352,7 +9352,7 @@ test "fbx model: the bind pose is the pose the MESH is in" {
         if (best_w <= 0 or best >= n) {
             continue;
         }
-        // ★ No weight may land on an END SITE: they are drawing aids with no bind matrix.
+        // * No weight may land on an END SITE: they are drawing aids with no bind matrix.
         try d3_expect(!loaded.clip.end_site[best]);
         sum[best] += pointVec(
             mesh.vertices[v * 3 + 0],
@@ -9402,7 +9402,7 @@ test "fbx model: a second, unrelated rig loads and binds correctly too" {
     var loaded: FbxModel = try loadFbxModel(gpa, bytes, .{});
     defer unloadFbxModel(gpa, loaded);
 
-    // ★ A COMPLETELY DIFFERENT RIG: 65 `mixamorig:` joints against Geno's 75, TWO skinned
+    // * A COMPLETELY DIFFERENT RIG: 65 `mixamorig:` joints against Geno's 75, TWO skinned
     // meshes rather than one, and its own animation rather than a borrowed clip. Everything
     // the Geno path proved could still have been Geno-specific; this is the check that it is
     // not. It also exercises the multi-mesh path, which Geno never does.
@@ -9460,7 +9460,7 @@ test "fbx model: a second, unrelated rig loads and binds correctly too" {
         owned += 1;
         total += @sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
     }
-    // 4.1 measured — the same flesh-radius figure Geno scores, on a rig that shares nothing
+    // 4.1 measured - the same flesh-radius figure Geno scores, on a rig that shares nothing
     // with it. The bind logic is general, not tuned to one file.
     try d3_expect(owned > 30);
     try d3_expect(total / float(owned) < 12.0);
@@ -9478,9 +9478,9 @@ test "fbx model: recomputing normals fixes a mesh whose stored ones oppose their
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
 
-    // ★ MEASURED, NOT ASSUMED. `Geno.fbx` stores normals that oppose their triangle's winding
+    // * MEASURED, NOT ASSUMED. `Geno.fbx` stores normals that oppose their triangle's winding
     // on 52.6% of faces; `Drop_Kick.fbx` does so on 0.0%. That renders as dark banding across
-    // the limbs, and it is the ASSET, not the loader — but it IS fixable, which is worth
+    // the limbs, and it is the ASSET, not the loader - but it IS fixable, which is worth
     // knowing before writing it off.
     const as_authored: FbxModel = try loadFbxModel(gpa, bytes, .{});
     defer unloadFbxModel(gpa, as_authored);
@@ -9488,7 +9488,7 @@ test "fbx model: recomputing normals fixes a mesh whose stored ones oppose their
     defer unloadFbxModel(gpa, fixed);
 
     try d3_expect(countOpposedNormals(as_authored.model.meshes[0]) > 8000);
-    // Recomputed normals come FROM the winding, so essentially none can oppose it — but a
+    // Recomputed normals come FROM the winding, so essentially none can oppose it - but a
     // SMOOTH normal is the area-weighted average of a vertex's faces, so a sliver triangle can
     // still end up on the wrong side of its own tiny face. Measured: 1 of 18660. Assert "a
     // handful", not zero; demanding zero would be asserting that no mesh has slivers.
@@ -9558,11 +9558,11 @@ test "skinning: a normal follows its bone's rotation, not just the position" {
     const dance: BvhSkeletalClip = try loadBvhSkeletalClip(gpa, dd);
     defer unloadBvhSkeletalClip(gpa, dance);
 
-    // ★★★ THE TEST THAT WOULD HAVE CAUGHT "NORMALS ARE NEVER SKINNED".
+    // *** THE TEST THAT WOULD HAVE CAUGHT "NORMALS ARE NEVER SKINNED".
     //
     // `skinMeshCpu` wrote POSITIONS ONLY for its whole life. The mesh deformed while its
     // normals stayed in the bind pose, so lighting was frozen to the rest pose on a moving
-    // body — read on device as "shading that looks wrong in some places and fine in others".
+    // body - read on device as "shading that looks wrong in some places and fine in others".
     //
     // Nothing caught it: the bounding-box test, the centroid test and the foreign-clip test
     // are all about POSITIONS, and a bind-pose test is the identity for normals too.
@@ -9616,7 +9616,7 @@ test "skinning: a normal follows its bone's rotation, not just the position" {
         if (joint >= n) {
             continue;
         }
-        // `vec` — a DIRECTION, so the skin matrix's translation is excluded. Using `pointVec`
+        // `vec` - a DIRECTION, so the skin matrix's translation is excluded. Using `pointVec`
         // here would add the bone's world translation to a unit vector.
         const want: Vec = normalize3(mulMatVec(skin[joint], rn));
         inline for (0..3) |c| {
@@ -9627,7 +9627,7 @@ test "skinning: a normal follows its bone's rotation, not just the position" {
     // Guard the guard: if no vertex were fully bound to one bone, the loop above would assert
     // nothing at all and still pass.
     try d3_expect(checked > 100);
-    // And the mesh must actually be moving — a pose that happened to equal the bind would make
+    // And the mesh must actually be moving - a pose that happened to equal the bind would make
     // "normals unchanged" trivially true.
     try d3_expect(moved > vertex_count / 2);
 }
@@ -9644,7 +9644,7 @@ test "fbx model: load-time scale moves mesh and bind together, not one of them" 
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
 
-    // ★★ THE FAILURE THIS EXISTS TO CATCH: scaling the mesh but not the bind pose (or vice
+    // ** THE FAILURE THIS EXISTS TO CATCH: scaling the mesh but not the bind pose (or vice
     // versa). Skinning composes mesh, bind and animated pose; scale a subset and the character
     // explodes or vanishes. Loading the SAME file at two scales and comparing makes a partial
     // conversion arithmetic rather than visual.
@@ -9668,7 +9668,7 @@ test "fbx model: load-time scale moves mesh and bind together, not one of them" 
         }
     }
 
-    // ★ And the BIND POSE scales with it — its TRANSLATION only. The rotation block is
+    // * And the BIND POSE scales with it - its TRANSLATION only. The rotation block is
     // unitless: scaling it would shear the character rather than resize it.
     for (0..small.bind.len) |j| {
         inline for (0..3) |c| {
@@ -9681,7 +9681,7 @@ test "fbx model: load-time scale moves mesh and bind together, not one of them" 
         }
     }
 
-    // ★★★ AND THE CLIP — the third of the three, and the one this test originally MISSED.
+    // *** AND THE CLIP - the third of the three, and the one this test originally MISSED.
     // Its absence shipped a character that vanished: a metre bind driven by a centimetre
     // animation. Checking the pose the animation actually produces, rather than the arrays it
     // is stored in, is what makes this catch a partial conversion anywhere in the chain.
@@ -9708,7 +9708,7 @@ test "fbx model: load-time scale moves mesh and bind together, not one of them" 
         }
     }
 
-    // ★ Normals are DIRECTIONS and must stay unit length through a scale.
+    // * Normals are DIRECTIONS and must stay unit length through a scale.
     for (0..vertex_count) |v| {
         const nv: Vec = vec(
             small.model.meshes[0].normals[v * 3 + 0],

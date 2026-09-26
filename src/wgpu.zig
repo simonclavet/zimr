@@ -1,14 +1,14 @@
 //! lint:alias wgpu
 // src/wgpu.zig - WebGPU JS bridge: typed handles + extern decls + thin wrappers.
 // WebGPU architecture is documented centrally in src/zimr.zig
-// (the module-level `//!` doc) — read that before changing wgpu code.
+// (the module-level `//!` doc) - read that before changing wgpu code.
 //
 //
 // This module is the bottom-most layer of the WebGPU stack.  It does
 // three things:
 //
 //   1. Declares typed handle wrappers (BufferHandle, TextureHandle,
-//      etc.) — each is a distinct `enum(u32)` so the type system
+//      etc.) - each is a distinct `enum(u32)` so the type system
 //      catches "passed a texture where a buffer was expected" at
 //      compile time.  The 0 value is reserved as "null/invalid."
 //
@@ -31,7 +31,7 @@
 // Status: SCAFFOLDING.  The extern decls are committed; the TS side
 // `src/bridge.zig` is a stub.  Shader module creation from raw
 // WGSL works today; shader module creation from Zig source is blocked
-// on the SPIR-V → WGSL transpiler.
+// on the SPIR-V -> WGSL transpiler.
 
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
@@ -45,7 +45,7 @@ const builtin = @import("builtin");
 const is_wasm = builtin.target.cpu.arch.isWasm();
 
 // ============================================================================
-// SECTION 1 — typed handles
+// SECTION 1 - typed handles
 // ============================================================================
 
 /// Distinct `enum(u32)` per WebGPU object kind.  Passing a
@@ -76,7 +76,7 @@ pub inline fn isValid(handle: anytype) bool {
 }
 
 // ============================================================================
-// SECTION 2 — enums + packed flag types
+// SECTION 2 - enums + packed flag types
 // ============================================================================
 
 pub const TextureFormat = enum(u32) {
@@ -138,7 +138,7 @@ pub const PrimitiveTopology = enum(u32) {
 pub const CullMode = enum(u32) { none = 0, front = 1, back = 2 };
 
 pub const BlendMode = enum(u32) {
-    /// Disabled — fragment color overwrites destination.
+    /// Disabled - fragment color overwrites destination.
     none = 0,
     /// Standard alpha blend: src * src.a + dst * (1 - src.a).
     alpha = 1,
@@ -158,9 +158,9 @@ pub const DepthMode = enum(u32) {
     greater_equal = 4,
     equal = 5,
     always = 6,
-    /// Depth-test (less) but no depth-write — for transparent/sprite draws.
+    /// Depth-test (less) but no depth-write - for transparent/sprite draws.
     less_no_write = 7,
-    /// Depth-test (less-equal) but no depth-write — for projected decals that
+    /// Depth-test (less-equal) but no depth-write - for projected decals that
     /// lie exactly ON a surface that already wrote depth (equal passes) and must
     /// not re-write depth (so stacked decals don't z-fight each other).
     less_equal_no_write = 8,
@@ -182,8 +182,8 @@ pub const DepthMode = enum(u32) {
         };
     }
 
-    /// Whether this mode WRITES depth. PASSIVE modes — `none` (no attachment),
-    /// `always` (overlay / 2D `clearViewport`), and `less_no_write` (sprites) —
+    /// Whether this mode WRITES depth. PASSIVE modes - `none` (no attachment),
+    /// `always` (overlay / 2D `clearViewport`), and `less_no_write` (sprites) -
     /// must NOT write, or a passive full-screen draw stamps the depth buffer and
     /// rejects every later depth-tested 3D draw (the zimr345 black-screen bug).
     /// Like `depthCompare`, this is the authoritative value the encoder bakes
@@ -215,7 +215,7 @@ pub const IndexFormat = enum(u32) { uint16 = 0, uint32 = 1 };
 pub const ColorF32 = extern struct { r: f32, g: f32, b: f32, a: f32 };
 
 // ============================================================================
-// SECTION 3 — extern JS bridge declarations
+// SECTION 3 - extern JS bridge declarations
 // ============================================================================
 
 // All `js_` functions cross the wasm <-> JS boundary.  They take
@@ -485,7 +485,7 @@ extern "wgpu" fn js_compute_pass_dispatch_workgroups(
 extern "wgpu" fn js_compute_pass_end(pass: u32) void;
 
 // ============================================================================
-// SECTION 4 — Zig-friendly wrappers
+// SECTION 4 - Zig-friendly wrappers
 // ============================================================================
 
 /// Initialize the WebGPU device.  Returns an invalid handle on host
@@ -602,7 +602,7 @@ pub fn createBuffer(device: DeviceHandle, desc: BufferDesc) BufferHandle {
 // ---- GPU-handle leak canary (Phase 1b) --------------------------------------
 // Per-kind live count (created - destroyed), maintained by the create*/destroy*
 // wrappers below. Independent of the smoke mock, so it works in EVERY build
-// (device, launcher, standalone) — the backstop for device-only leaks the mock
+// (device, launcher, standalone) - the backstop for device-only leaks the mock
 // can't see. `handleBaseline` snapshots after engine init; `liveHandleReport`
 // formats the delta vs a baseline (non-zero only) for the launcher/leak-test to
 // log at teardown. NOT auto-logged at exit (engine resources are legitimately
@@ -619,7 +619,7 @@ pub const HandleKind = enum(u8) {
     shader_module,
     texture_view,
 };
-// A census indexed by HandleKind — sized to the enum automatically (no manual
+// A census indexed by HandleKind - sized to the enum automatically (no manual
 // count), and named via @tagName in the report (no parallel names array).
 pub const HandleCensus = std.enums.EnumArray(HandleKind, i64);
 // lint:off module-var: process-wide GPU-handle census for the leak canary
@@ -657,7 +657,7 @@ pub fn destroyBuffer(buffer: BufferHandle) void {
     js_buffer_destroy(@backingInt(buffer));
 }
 
-/// Fetch the adapter's vendor/architecture/device/description string —
+/// Fetch the adapter's vendor/architecture/device/description string -
 /// the on-device answer to "which WebGPU backend did this page get?"
 /// (t1178: Vulkan vs compat/GLES is the live coherency question).
 pub fn adapterInfo(buf: []u8) []const u8 {
@@ -702,17 +702,17 @@ pub fn queueWriteBuffer(
 
 /// Create a buffer and upload `bytes` into it, padding the allocation and the
 /// write up to the next multiple of 4 so WebGPU's `writeBuffer` alignment rule
-/// is always satisfied — even when `bytes.len` is odd (e.g. a u16 index buffer
-/// with an odd index count: 3·triangles·2 bytes ≡ 2 mod 4). Pad bytes are
+/// is always satisfied - even when `bytes.len` is odd (e.g. a u16 index buffer
+/// with an odd index count: 3*triangles*2 bytes == 2 mod 4). Pad bytes are
 /// zero and never referenced (draw counts use the real element count). No
-/// allocator needed: the aligned prefix is written directly and a ≤3-byte
+/// allocator needed: the aligned prefix is written directly and a <=3-byte
 /// tail is zero-extended into a 4-byte stack write. `usage` must include
 /// `copy_dst`.
 /// The buffer size `createBufferInit` will allocate for `bytes`: rounded up to the next
 /// multiple of four.
 ///
 /// Exposed so callers that must record the buffer's size cannot compute it differently from
-/// the function that creates it — the two disagreeing is how a padded buffer ends up with an
+/// the function that creates it - the two disagreeing is how a padded buffer ends up with an
 /// unpadded length recorded against it.
 pub fn alignedBufferSize(byte_count: usize) u64 {
     return (@as(u64, byte_count) + 3) & ~@as(u64, 3);
@@ -746,7 +746,7 @@ pub fn createBufferInit(
 
 /// Create a shader module from raw WGSL text.  This is the bottom of
 /// the shader pipeline; the typed-schema path produces WGSL via the
-/// SPIR-V → WGSL transpiler, then calls this function.  The raw-WGSL
+/// SPIR-V -> WGSL transpiler, then calls this function.  The raw-WGSL
 /// escape path calls this directly.
 pub fn createShaderModuleWgsl(
     device: DeviceHandle,
@@ -802,8 +802,8 @@ pub const BufferRead = enum(u32) { invalid = 0, _ };
 
 /// Start mapping+reading `size` bytes from `buf` (must be MAP_READ). Returns a
 /// handle to poll. The mapped buffer becomes readable once `poll` returns 1.
-/// Record a texture→buffer copy (the readback front half: pair the
-/// destination — a COPY_DST|MAP_READ staging buffer — with the
+/// Record a texture->buffer copy (the readback front half: pair the
+/// destination - a COPY_DST|MAP_READ staging buffer - with the
 /// `bufferRead*` poll family).  `bytes_per_row` MUST be 256-aligned per the
 /// WebGPU spec; callers pad rows and strip the padding after `readInto`.
 pub fn copyTextureToBuffer(
@@ -941,13 +941,13 @@ pub fn createPipelineLayout(
 }
 
 /// Create a render pipeline.  Descriptor passed as a pre-serialized
-/// blob — see `descriptor_encoder.encodeRenderPipelineDescriptor`.
+/// blob - see `descriptor_encoder.encodeRenderPipelineDescriptor`.
 ///
 /// Takes TWO shader modules: a vertex stage and a fragment stage.
 /// Pass the same handle twice when one WGSL source contains both
 /// stages (e.g., a hand-written file with `vs_main` and `fs_main`).
 /// Pass different handles when VS and FS come from separate WGSL
-/// files — the engine's typed shader pipeline produces this shape.
+/// files - the engine's typed shader pipeline produces this shape.
 /// The descriptor's `vs_entry_point` and `fs_entry_point` resolve
 /// against their respective modules.
 pub fn createRenderPipeline(
@@ -1044,7 +1044,7 @@ pub fn createTextureView(texture: TextureHandle) TextureViewHandle {
     return @fromBackingInt(@intCast(js_texture_create_view(@backingInt(texture))));
 }
 
-/// A view of a single mip level (base_mip_level = `base_mip`, count 1) — used to
+/// A view of a single mip level (base_mip_level = `base_mip`, count 1) - used to
 /// bind one mip level as a storage/render target. Default `createTextureView`
 /// views the whole chain for sampling.
 pub fn createTextureViewMip(
@@ -1201,11 +1201,11 @@ pub fn createSampler(device: DeviceHandle, desc: SamplerDesc) SamplerHandle {
 }
 
 // Render pass / compute pass helpers live in `render_pass.zig` and
-// `compute_pass.zig` respectively — they wrap the lower-level js_*
+// `compute_pass.zig` respectively - they wrap the lower-level js_*
 // calls above with state-tracking on the GpuFrame.
 
 // ============================================================================
-// SECTION 5 — sanity checks
+// SECTION 5 - sanity checks
 // ============================================================================
 
 comptime {
@@ -1242,7 +1242,7 @@ test "refAllDecls: every decl compiles (catches removed-API / non-generic breaka
 pub const render_pass = struct {
     // src/render_pass.zig - render pass lifecycle helpers.
     // WebGPU architecture is documented centrally in src/zimr.zig
-    // (the module-level `//!` doc) — read that before changing wgpu code.
+    // (the module-level `//!` doc) - read that before changing wgpu code.
     //
     //
     // A WebGPU render pass is bracketed: `encoder.beginRenderPass(desc)`
@@ -1252,20 +1252,20 @@ pub const render_pass = struct {
     //
     // This module provides:
     //
-    //   1. `beginRenderPass(...)` — convenience wrapper that constructs
+    //   1. `beginRenderPass(...)` - convenience wrapper that constructs
     //      the color-attachment descriptor and invokes the JS bridge.
     //
     //   2. State-tracked helpers (`setPipeline`, `setBindGroup`, `draw`,
     //      `drawIndexed`) that go through the typed handles and check
     //      pass validity in debug mode.
     //
-    //   3. `endRenderPass(...)` — explicit close.  Asserts the pass is
+    //   3. `endRenderPass(...)` - explicit close.  Asserts the pass is
     //      open and not in a nested state.
     //
     // State tracking: the active pass lives on a `PassState` value the
     // caller holds (see `gpu_iface.zig`).  These helpers take the raw
     // pass handle as an explicit parameter rather than reaching into any
-    // struct — keeps them usable in contexts where the PassState isn't
+    // struct - keeps them usable in contexts where the PassState isn't
     // in scope (e.g., low-level test code) and matches WebGPU's own
     // shape where the pass encoder is itself the receiver.
 
@@ -1308,7 +1308,7 @@ pub const render_pass = struct {
         wgpu_js.render_pass_end(@backingInt(pass));
     }
 
-    /// Begin an MRT render pass: `color_views` (up to 8 — WebGPU's
+    /// Begin an MRT render pass: `color_views` (up to 8 - WebGPU's
     /// maxColorAttachments floor) all cleared/loaded together, sharing one
     /// depth attachment.  The G-buffer pass of deferred rendering is the
     /// canonical caller: three attachments, one geometry walk.
@@ -1325,7 +1325,7 @@ pub const render_pass = struct {
     pub fn beginMrt(desc: BeginMrtDesc) RenderPassEncoderHandle {
         const load_op: LoadOp = if (desc.clear != null) LoadOp.clear else desc.load_op;
         const clear = desc.clear orelse ColorF32{ .r = 0, .g = 0, .b = 0, .a = 1 };
-        // Handles are enum(u32) — reinterpret the slice as the raw u32 array
+        // Handles are enum(u32) - reinterpret the slice as the raw u32 array
         // the bridge reads from wasm memory (max 8, on the stack).
         var raw: [8]u32 = undefined;
         const n: usize = @min(desc.color_views.len, raw.len);
@@ -1456,7 +1456,7 @@ pub const render_pass = struct {
     }
 
     // ============================================================================
-    // Internal — JS-bridge thunks
+    // Internal - JS-bridge thunks
     // ============================================================================
     //
     // We re-route through a `wgpu_js` namespace so this file can be
@@ -1703,7 +1703,7 @@ pub const render_pass = struct {
 pub const compute_pass = struct {
     // src/compute_pass.zig - compute pass lifecycle helpers.
     //
-    // Compute passes are simpler than render passes — no attachments, no
+    // Compute passes are simpler than render passes - no attachments, no
     // blend state, just a sequence of pipeline binds + dispatches.
     //
     // Key constraint: compute and render passes can't be open at the same
@@ -1807,30 +1807,30 @@ pub const storage_buffer = struct {
     // `StorageBuffer(T)` is a generic wrapper around a WebGPU buffer with
     // `storage` usage flag set.  Used in two main contexts:
     //
-    //   1. Compute shader I/O — read/write arrays of T, accessible to
+    //   1. Compute shader I/O - read/write arrays of T, accessible to
     //      compute kernels via `@group(N) @binding(M) var<storage,
     //      read_write> data: array<T>` in WGSL.
     //
-    //   2. Instanced rendering — vertex shader reads per-instance data
+    //   2. Instanced rendering - vertex shader reads per-instance data
     //      out of a storage buffer indexed by `vertex_index / 6` (for
     //      quad batches) or `instance_index` (for instanced draws).
     //
     // The wrapper carries the element count so callers can do safe
     // bounds-checked size queries.  GPU memory layout is std430-ish
-    // (WebGPU's storage layout) — vec2 is 8 bytes, vec3 is 16 bytes
+    // (WebGPU's storage layout) - vec2 is 8 bytes, vec3 is 16 bytes
     // (padded), vec4 is 16 bytes, structs follow the inner field alignment.
     //
     // Lifecycle:
-    //   1. `create(device, gpa, .{ .count = N, .usage = ... })` — allocate
+    //   1. `create(device, gpa, .{ .count = N, .usage = ... })` - allocate
     //      empty.
-    //   2. `createWithData(device, queue, gpa, .{ .data = ... })` —
+    //   2. `createWithData(device, queue, gpa, .{ .data = ... })` -
     //      allocate + initial-write in one call.
-    //   3. `write(queue, offset_elements, data)` — overwrite a range.
-    //   4. `binding()` — produce the metadata blob needed for bind-group
+    //   3. `write(queue, offset_elements, data)` - overwrite a range.
+    //   4. `binding()` - produce the metadata blob needed for bind-group
     //      construction.
-    //   5. `deinit()` — release the underlying GPU buffer.
+    //   5. `deinit()` - release the underlying GPU buffer.
     //
-    // This file does NOT depend on GpuFrame — callers pass device + queue
+    // This file does NOT depend on GpuFrame - callers pass device + queue
     // explicitly.  This keeps StorageBuffer testable without spinning up
     // a full frame.
 
@@ -1970,10 +1970,10 @@ pub const storage_buffer = struct {
 const expectTrue = std.testing.expect;
 
 test "alignedBufferSize rounds up to four, which is what queueWriteBuffer requires" {
-    // ★ THE SHAPE OF A REAL BUG, pinned.
+    // * THE SHAPE OF A REAL BUG, pinned.
     //
     // `queueWriteBuffer` requires a byte count that is a multiple of four. A u16 index
-    // buffer meets that only when the index COUNT is even — and indices come in threes, so
+    // buffer meets that only when the index COUNT is even - and indices come in threes, so
     // ANY mesh with an odd triangle count fails. A KUKA arm link has 2759 triangles: 8277
     // indices, 16554 bytes, rejected by WebGPU with an error that surfaces in the browser
     // rather than at the call site.
@@ -1987,7 +1987,7 @@ test "alignedBufferSize rounds up to four, which is what queueWriteBuffer requir
     // Already aligned: untouched.
     try expectTrue(alignedBufferSize(16) == 16);
     try expectTrue(alignedBufferSize(0) == 0);
-    // Every remainder rounds up, never down — a short buffer would be worse than an
+    // Every remainder rounds up, never down - a short buffer would be worse than an
     // unaligned one, since the tail of the data would simply be missing.
     for (1..64) |n| {
         const padded: u64 = alignedBufferSize(n);

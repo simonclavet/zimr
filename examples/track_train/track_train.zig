@@ -285,7 +285,7 @@ fn update(f: *z.Frame, s: *State) void {
     if (dt > 0 and dt < 1.0) {
         s.wall_seconds += dt;
     }
-    // ── ★★ NEVER LET GPU WORK OUTRUN THE GPU ──
+    // -- ** NEVER LET GPU WORK OUTRUN THE GPU --
     //
     // The count above follows the FRAME time, and the frame time only measures the CPU: a submitted
     // round costs it next to nothing while the GPU may need longer than a frame to run it. So on a

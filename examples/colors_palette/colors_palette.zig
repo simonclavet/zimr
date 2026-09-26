@@ -1,7 +1,7 @@
 // examples/colors_palette.zig - interactive grid of raylib's 21
 // named colour constants.
-// Port of raylib's `examples/shapes/shapes_colors_palette.c` (★2,
-// ~105 LOC).  Each colour gets a 100×100 swatch in a 7×3 grid;
+// Port of raylib's `examples/shapes/shapes_colors_palette.c` (*2,
+// ~105 LOC).  Each colour gets a 100x100 swatch in a 7x3 grid;
 // hovering reveals the colour name and a darker bottom strip.
 // Holding SPACE reveals all labels at once.
 // What this exercises:
@@ -82,7 +82,7 @@ fn pointInRect(p: Vec2, r: z.Rectangle) bool {
         p[1] >= r.y and p[1] <= (r.y + r.height);
 }
 
-/// Compute the rectangle for swatch index `i` in the 7×3 grid.
+/// Compute the rectangle for swatch index `i` in the 7x3 grid.
 fn swatchRect(i: usize) z.Rectangle {
     const col: f32 = float(i % cols);
     const row: f32 = float(i / cols);

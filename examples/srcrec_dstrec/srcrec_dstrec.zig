@@ -1,4 +1,4 @@
-//! srcrec_dstrec — the source-rectangle / destination-rectangle mapping. A 6-frame sprite sheet is
+//! srcrec_dstrec - the source-rectangle / destination-rectangle mapping. A 6-frame sprite sheet is
 //! generated procedurally into an Image and uploaded once; drawTextureRec then maps ONE frame's
 //! source sub-rect (normalised UVs frame/6 .. (frame+1)/6) onto a destination rectangle on screen,
 //! scaling it to fit. The sheet is shown small up top with the active frame boxed. Tap to cycle the

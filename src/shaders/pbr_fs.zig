@@ -1,12 +1,12 @@
-//! src/shaders/pbr_fs.zig — PBR fragment shader body.
+//! src/shaders/pbr_fs.zig - PBR fragment shader body.
 //!
 //! WebGPU architecture (esp. the stage-segregated binding model that
 //! places the samplers in group 1 and these FS uniforms in group 2)
-//! is documented centrally in src/zimr.zig — read that first.
+//! is documented centrally in src/zimr.zig - read that first.
 //!
 //! Standard typed-shader form (same as lambert_fs.zig): schema in
-//! `pbr_fs_io.zig`; `shaderMain(io) Out` runs on SPIR-V (→ WGSL/GLSL
-//! → GPU) AND wasm32 (→ CPU dispatch).  Cook-Torrance microfacet BRDF
+//! `pbr_fs_io.zig`; `shaderMain(io) Out` runs on SPIR-V (-> WGSL/GLSL
+//! -> GPU) AND wasm32 (-> CPU dispatch).  Cook-Torrance microfacet BRDF
 //! with GGX/Smith/Schlick approximations, directional + point lights,
 //! single-cascade shadow mapping on the first directional light,
 //! Reinhard tone-map + sRGB-ish gamma, optional fog.
@@ -30,7 +30,7 @@ const shader_externs = @import("pbr_fs_externs");
 
 pub const Io = shader_externs.IoT(shader_io.Ubo);
 pub const Out = shader_externs.Out;
-/// Single source of truth for the FS uniform block — host code (CPU
+/// Single source of truth for the FS uniform block - host code (CPU
 /// dispatch, side-by-side examples) constructs this directly instead
 /// of maintaining a byte-mirror.
 pub const Ubo = shader_io.Ubo;
@@ -47,7 +47,7 @@ const max_directional_lights: u32 = 2;
 const max_point_lights: u32 = 4;
 
 // ---- Cook-Torrance helpers ------------------------------------------
-// Graphics-literature names — see module doc comment.  These take all
+// Graphics-literature names - see module doc comment.  These take all
 // inputs as parameters (no extern/io access), so they port unchanged.
 
 // Truncate a stored vec4 uniform to the vec3 the lighting math uses.
@@ -124,7 +124,7 @@ fn brdf(
     return (diffuse_term + specular) * radiance * @as(Vec3, @splat(NdotL));
 }
 
-/// Light-space position → shadow-map texture coords ([0,1]).  Pure math
+/// Light-space position -> shadow-map texture coords ([0,1]).  Pure math
 /// (no sampling, no branches) so the shadow-map sample it feeds can be
 /// taken at the shader's uniform top.
 fn shadowProjCoords(io_in: Io) Vec3 {
@@ -140,9 +140,9 @@ fn shadowProjCoords(io_in: Io) Vec3 {
 
 /// 1.0 if fully lit, 0.0 if fully shadowed.  Slope-scaled bias
 /// suppresses acne on grazing surfaces; constant floor catches the
-/// flat-surface case where (1 - N·L) is zero.  Takes the light-space
+/// flat-surface case where (1 - N*L) is zero.  Takes the light-space
 /// `proj_coords` and the already-sampled `closest_depth` (sampled at the
-/// uniform top of `shaderMain`) — this function does NO texture sampling,
+/// uniform top of `shaderMain`) - this function does NO texture sampling,
 /// so it is safe to call from the per-light branch.
 fn computeShadow(
     io_in: Io,
@@ -186,7 +186,7 @@ pub fn shaderMain(io_in: Io) Out {
     // glTF packs both in one texture: B = metallic, G = roughness.
     const mr_sample: Vec = io_in.metallic_roughness(io_in.frag_tex_coord);
     const metallic: f32 = mr_sample[2] * io_in.u.metallic_factor;
-    // Roughness floor of 0.05 — pure-mirror GGX is numerically unstable.
+    // Roughness floor of 0.05 - pure-mirror GGX is numerically unstable.
     const roughness: f32 = @max(mr_sample[1] * io_in.u.roughness_factor, 0.05);
 
     // ---- Uniform vec3s are stored as vec4 in the Ubo (std140 wants
@@ -231,7 +231,7 @@ pub fn shaderMain(io_in: Io) Out {
     // sampled above; occlusion, emissive, and the shadow map are sampled
     // now, and their values threaded into the lighting/shadow math below
     // (computeShadow no longer samples).  Sampling an unused map / when
-    // shadows are off is harmless — the value is simply discarded.  This
+    // shadows are off is harmless - the value is simply discarded.  This
     // discipline is enforced by the `sampler-at-top` lint.
     const ao_sample: Vec = io_in.occlusion(io_in.frag_tex_coord);
     const e_sample: Vec = io_in.emissive(io_in.frag_tex_coord);

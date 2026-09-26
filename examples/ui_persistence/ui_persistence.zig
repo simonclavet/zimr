@@ -10,8 +10,8 @@
 // Auto-load on first beginFrame, auto-save every 60 frames.
 // Storage layout: `localStorage["zimr_ui_persistence_demo"]` holds
 // a `.zon`-encoded `PersistedState` (one entry per window).  See
-// `src/ui_persistence.zig` for the schema.  Open DevTools →
-// Application → Local Storage to inspect.
+// `src/ui_persistence.zig` for the schema.  Open DevTools ->
+// Application -> Local Storage to inspect.
 // What's NOT persisted today: widget values (counters, sliders),
 // collapsing-header open state, tab-bar selection.  Those land in
 // later sub-steps:
@@ -40,7 +40,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, @embedFile("atkinson_mono_ttf"), 22);
     s.* = .{ .ui_host = z.UiHost.init(gpa, font), .font = font };
-    // ★ The one line that turns persistence on.  Auto-load fires
+    // * The one line that turns persistence on.  Auto-load fires
     // on the next beginFrame; auto-save every 60 frames after.
     // Key is namespaced "zimr_" internally so it can't collide
     // with the host page's localStorage.

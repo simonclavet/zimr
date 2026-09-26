@@ -1,8 +1,8 @@
-//! ui_color_picker — port of the GL `ui_color_picker` onto the WebGPU UI
+//! ui_color_picker - port of the GL `ui_color_picker` onto the WebGPU UI
 //! host. Side-by-side bar + wheel `colorPicker` layouts, alpha toggles, a size
 //! slider, and an inline `colorEdit` comparison. The port swaps the GL
 //! `UiContext` (+ shapes_texture + font_cache) for `z.UiHost`; the widget body
-//! is unchanged — it's the same real `ui.zig` (Dear ImGui) Ui method set.
+//! is unchanged - it's the same real `ui.zig` (Dear ImGui) Ui method set.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -36,7 +36,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // Fill the whole struct first: still an exhaustive literal, so a forgotten
     // field is a compile error. `active_rgba` can't reference `s` yet (the struct
     // doesn't exist until this assignment completes), so it is placeholder-set
-    // here and wired on the next line — the one pattern a self-referential field
+    // here and wired on the next line - the one pattern a self-referential field
     // needs. `ui_host` holds a FrameArena; building it at its FINAL address means
     // its internal pointers are valid unconditionally, not just by RLS grace.
     s.* = .{ .ui_host = z.UiHost.init(gpa, font), .active_rgba = undefined, .font = font };
@@ -92,7 +92,7 @@ fn update(f: *z.Frame, s: *State) void {
         u.text("Inline colorEdit (per-channel 3-slider variant):", .{});
         _ = u.colorEdit("inline edit", &s.edit_rgb, .{});
 
-        // Reads through the pointer stored in init — proof it survived: it always
+        // Reads through the pointer stored in init - proof it survived: it always
         // mirrors the live bar_rgba above (edit the bar picker and watch it move).
         u.separator();
         u.text("active_rgba (via a stable pointer stored in init): R{d:.2} G{d:.2} B{d:.2}", .{

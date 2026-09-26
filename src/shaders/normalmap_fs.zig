@@ -1,14 +1,14 @@
-//! src/shaders/normalmap_fs.zig — the "what is a normal map" fragment shader.
+//! src/shaders/normalmap_fs.zig - the "what is a normal map" fragment shader.
 //!
 //! Port of raylib's examples/shaders/resources/shaders/glsl330/normalmap.fs.
 //! Deliberately NOT full PBR (that's `pbr_fs` / `pbr_demo`): this is the plain,
-//! legible version so a reader can see the whole technique at once —
+//! legible version so a reader can see the whole technique at once -
 //!   1. sample the tangent-space normal from the normal map,
 //!   2. rotate it into world space with the TBN frame the vertex shader built,
 //!   3. light it with one directional light: Lambert diffuse + Blinn-Phong
 //!      specular, plus a flat ambient term.
 //! When the bound normal map is flat (128,128,255) the sampled normal is
-//! (0,0,1) and N collapses to the geometric normal — i.e. the "normal map off"
+//! (0,0,1) and N collapses to the geometric normal - i.e. the "normal map off"
 //! comparison is just a different (flat) texture, no shader branch needed.
 //!
 //! Reuses `pbr_fs_io` so it shares the pbr3d bind-group layout (see that file).

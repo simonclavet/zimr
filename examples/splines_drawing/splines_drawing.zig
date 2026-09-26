@@ -1,4 +1,4 @@
-//! splines_drawing — four spline families over a shared set of draggable points:
+//! splines_drawing - four spline families over a shared set of draggable points:
 //! Linear, B-Spline (Basis), Catmull-Rom, and Cubic Bezier. Drag any point to reshape the curve;
 //! tap empty space to cycle the spline type. In Bezier mode the two control points per segment are
 //! derived automatically and shown with handle dots + tangent lines. The stroke breathes its

@@ -1,4 +1,4 @@
-//! ssao_fs — screen-space ambient occlusion from the G-buffer's world position and normal.
+//! ssao_fs - screen-space ambient occlusion from the G-buffer's world position and normal.
 //!
 //! Scalable Ambient Obscurance (McGuire, Mara, Luebke). For each pixel, sample a spiral of
 //! neighbours, and for each one ask how much it occludes the centre:
@@ -9,24 +9,24 @@
 //!     f   = max(radius*radius - vv, 0)
 //!     occ += f*f*f * max(vn / (0.001 + vv), 0)
 //!
-//! ★ THE CUBIC FALLOFF IS THE POINT. A linear one lets geometry that merely passes behind a
+//! * THE CUBIC FALLOFF IS THE POINT. A linear one lets geometry that merely passes behind a
 //! surface darken it; cubing makes occlusion vanish smoothly at the radius, so a distant wall
 //! contributes nothing and a nearby crease contributes strongly.
 //!
-//! ★ WORLD POSITIONS IN, VIEW-SPACE MATH. The G-buffer stores world position, but occlusion is
+//! * WORLD POSITIONS IN, VIEW-SPACE MATH. The G-buffer stores world position, but occlusion is
 //! computed after transforming into view space: `radius` then means a fixed distance from the
 //! camera rather than something that changes meaning as the scene moves.
 //!
-//! ★ THE ALPHA CHANNEL OF `g_world_pos` IS THE COVERAGE FLAG. Background pixels were never
+//! * THE ALPHA CHANNEL OF `g_world_pos` IS THE COVERAGE FLAG. Background pixels were never
 //! written by the G-buffer pass, so their position is garbage; they contribute nothing rather
 //! than occluding the sky.
 //!
-//! ── ★★ EVERY SAMPLE USES `...Level(uv, 0)`, NOT `...(uv)` ──
+//! -- ** EVERY SAMPLE USES `...Level(uv, 0)`, NOT `...(uv)` --
 //!
 //! WGSL rejects an IMPLICIT-LOD sample (`textureSample`) reached through non-uniform control
 //! flow: it needs screen-space derivatives, which are only defined when neighbouring lanes
 //! agree on the path taken. SSAO samples inside a loop by its very nature, so implicit LOD is
-//! not available to it — and `zimrlint`'s `sampler-in-branch` rule catches this at build time
+//! not available to it - and `zimrlint`'s `sampler-in-branch` rule catches this at build time
 //! rather than leaving it to a Tint error at runtime.
 //!
 //! `sampleLevel` lowers to `textureSampleLevel`, which takes an explicit LOD and therefore
@@ -58,7 +58,7 @@ fn xformPoint(m: [4]Vec, p: Vec) Vec {
     return m[0] * x + m[1] * y + m[2] * z + m[3];
 }
 
-/// Transform a world direction — no translation row.
+/// Transform a world direction - no translation row.
 fn xformDir(m: [4]Vec, d: Vec) Vec {
     const x: Vec = @splat(d[0]);
     const y: Vec = @splat(d[1]);
@@ -69,9 +69,9 @@ fn xformDir(m: [4]Vec, d: Vec) Vec {
 /// A cheap per-pixel hash, so neighbouring pixels start their spiral at different angles. Two
 /// pixels sharing a start angle sample the same neighbours and band together.
 ///
-/// ── ★★ WHY THE PIXEL COORDS ARE FOLDED FIRST ──
+/// -- ** WHY THE PIXEL COORDS ARE FOLDED FIRST --
 ///
-/// The obvious hash — `fract(px * py + px * 0.5)` — DIES AT SCALE. At 1024x1024, `px * py`
+/// The obvious hash - `fract(px * py + px * 0.5)` - DIES AT SCALE. At 1024x1024, `px * py`
 /// reaches ~1e6, where consecutive f32 values are ~0.06 apart. Taking `mod 1.0` of a number
 /// that coarse yields a handful of distinct results instead of a smooth spread, so whole
 /// regions share one start angle and the AO comes out in HORIZONTAL STREAKS rather than noise.
@@ -92,7 +92,7 @@ pub fn shaderMain(io_in: Io) Out {
     const uv: Vec2 = io_in.frag_uv;
 
     const centre_texel: Vec = io_in.g_world_posLevel(uv, 0.0);
-    // ★ COVERAGE AS A MULTIPLIER, NOT A BRANCH. The sky needs to come out fully open, but an
+    // * COVERAGE AS A MULTIPLIER, NOT A BRANCH. The sky needs to come out fully open, but an
     // early return would put the samples below under non-uniform control flow. Folding
     // coverage into the arithmetic keeps the whole shader branch-free.
     const covered: f32 = if (centre_texel[3] < 0.5) 0.0 else 1.0;
@@ -107,12 +107,12 @@ pub fn shaderMain(io_in: Io) Out {
 
     const centre_v: Vec = xformPoint(view, .{ centre_texel[0], centre_texel[1], centre_texel[2], 1 });
     const nrm_texel: Vec = io_in.g_world_normalLevel(uv, 0.0);
-    // ★ NO `*2-1` DECODE. `gbuffer_fs` writes the RAW world normal into an rgba16-FLOAT
-    // target, which stores negatives directly — there is no 0..1 encoding to undo. Decoding
+    // * NO `*2-1` DECODE. `gbuffer_fs` writes the RAW world normal into an rgba16-FLOAT
+    // target, which stores negatives directly - there is no 0..1 encoding to undo. Decoding
     // one anyway turned (0,1,0) into (-1,1,-1): every surface faced a direction it does not,
     // so the `vn` occlusion term was noise and the output was not AO at all.
     //
-    // ★ The unsigned encoding is what an rgba8 normal target WOULD need. Reading the target's
+    // * The unsigned encoding is what an rgba8 normal target WOULD need. Reading the target's
     // FORMAT before writing the decode would have settled it in one look.
     const centre_n: Vec = normalize(xformDir(view, .{
         nrm_texel[0],
@@ -127,7 +127,7 @@ pub fn shaderMain(io_in: Io) Out {
     const start: f32 = spiralStart(uv, 1.0 / @max(inv_w, 1.0e-6), 1.0 / @max(inv_h, 1.0e-6));
 
     var occlusion: f32 = 0.0;
-    // ★ `inline for`, NOT a runtime loop. The SPIR-V -> WGSL transpiler rejects the loop form
+    // * `inline for`, NOT a runtime loop. The SPIR-V -> WGSL transpiler rejects the loop form
     // here; unrolling at comptime emits straight-line code, which also removes the last trace
     // of non-uniform control flow around the samples. Nine iterations is small enough that the
     // unrolled shader stays reasonable.

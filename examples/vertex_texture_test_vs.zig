@@ -1,6 +1,6 @@
-//! examples/vertex_texture_test_vs.zig — the vertex shader that samples a
+//! examples/vertex_texture_test_vs.zig - the vertex shader that samples a
 //! texture IN THE VERTEX STAGE. `warpLevel` is the explicit-LOD accessor
-//! (→ textureSampleLevel), which needs no derivatives and is legal here.
+//! (-> textureSampleLevel), which needs no derivatives and is legal here.
 const zm = @import("zm");
 const Vec3 = zm.Vec3;
 const mulMatPoint = zm.mulMatPoint;

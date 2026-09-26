@@ -1,4 +1,4 @@
-//! textures_tiled_drawing — port of raylib [textures] example.
+//! textures_tiled_drawing - port of raylib [textures] example.
 //! Tiles a chosen sub-rectangle of patterns.png across a destination area with
 //! adjustable scale, rotation, and tint. drawTextureTiled is a faithful port of
 //! raylib's helper (single-tile / one-column / one-row / full-grid cases, with

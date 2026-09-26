@@ -1,17 +1,17 @@
-//! files_html — render `src/notes/files.md` (the per-file atlas) as a doc page.
+//! files_html - render `src/notes/files.md` (the per-file atlas) as a doc page.
 //!
 //! `zig build files-md` generates the markdown atlas; this turns it into
 //! `src/notes/files.html`, which then goes through `docfmt` like every other
 //! published page and so picks up the shared stylesheet automatically.
 //!
-//! It handles only the markdown that files.md actually contains — ATX headings,
+//! It handles only the markdown that files.md actually contains - ATX headings,
 //! fenced code, tables, lists, blockquote-free prose, `**bold**`, `*italic*`,
 //! `` `code` `` and autolinks.  That is deliberate: a general markdown engine is
 //! a large thing to own, and every construct it would add is one this document
 //! does not use.
 //!
 //! The mermaid fence in the atlas is emitted as a plain <pre> rather than being
-//! rendered.  Rendering it would mean shipping mermaid.js — runtime JS fetched
+//! rendered.  Rendering it would mean shipping mermaid.js - runtime JS fetched
 //! over the network, which is exactly what the docs just stopped doing.  The
 //! graph is readable as text; `zig build dag-png` is there when a picture is
 //! wanted.

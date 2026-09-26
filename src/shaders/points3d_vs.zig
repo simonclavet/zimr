@@ -1,8 +1,8 @@
-//! src/shaders/points3d_vs.zig — unlit 3D point-cloud vertex shader.
+//! src/shaders/points3d_vs.zig - unlit 3D point-cloud vertex shader.
 //!
 //! One job: project the point through the camera view-projection and
 //! hand its colour straight to the passthrough fragment stage
-//! (`cube3d_fs`).  Deliberately UNLIT — raylib's point rendering is
+//! (`cube3d_fs`).  Deliberately UNLIT - raylib's point rendering is
 //! full-bright, and a point has no meaningful normal to light anyway.
 //! Contrast with `cube3d_vs`, which folds a directional Lambert into
 //! the colour; that would uniformly dim a cloud by ~13% for nothing.

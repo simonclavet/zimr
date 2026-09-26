@@ -1,4 +1,4 @@
-//! src/shaders/points_vs.zig — instanced gradient points VS body (IoT).
+//! src/shaders/points_vs.zig - instanced gradient points VS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version to the typed IoT interface. Reads
 //! `io.positions(ii)` from a read-only storage buffer, `io.vertex_index()` /

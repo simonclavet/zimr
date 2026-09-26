@@ -1,10 +1,10 @@
-//! cube_sidebyside — the raycube_fs ray-traced cube on THREE execution
+//! cube_sidebyside - the raycube_fs ray-traced cube on THREE execution
 //! targets, side by side from ONE Zig shader:
 //!   - LEFT  : `raycube_fs.shaderMain` dispatched per pixel on the CPU (raster).
 //!   - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen
 //!             GPU pass.
 //!   - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime) and
-//!             baked into the binary as a const image — read-only, can't move.
+//!             baked into the binary as a const image - read-only, can't move.
 //! A vertical splitter follows the mouse X. The cube spins (u.time); the CPU and
 //! GPU halves are live, the comptime corner is frozen at the angle baked at build
 //! time. One ray-box intersector, three targets, pixel-for-pixel the same.
@@ -32,7 +32,7 @@ const trivial_vs_wgsl = @embedFile("trivial_vs.wgsl");
 const width: u32 = 800;
 const height: u32 = 450;
 
-// CPU side res — the ray-box cube is cheap (no path tracing), so 1/3 is fine.
+// CPU side res - the ray-box cube is cheap (no path tracing), so 1/3 is fine.
 // sw_w/sw_h are the INITIAL dims; `ensureCpuTarget` reshapes the buffer to
 // the live canvas aspect each frame at this constant pixel budget.
 const sw_w: u32 = width / 3;
@@ -49,7 +49,7 @@ const cam_target: Vec = vec(0, 0, 0);
 const cam_dist: f32 = 4.5; // fixed orbit radius
 
 /// Build the scene UBO. Orbit the camera around the (fixed) cube in spherical
-/// coords — eye = target + (yaw, pitch, dist) — exactly like the rt side-by-side.
+/// coords - eye = target + (yaw, pitch, dist) - exactly like the rt side-by-side.
 /// The cube itself never rotates; the eye moves around it. The CPU dispatch, the
 /// GPU pass, and the comptime bake all read this same camera basis.
 fn buildUbo(
@@ -106,7 +106,7 @@ const corner_image: [corner_rows * corner_cols]Color = blk: {
     break :blk img;
 };
 
-/// Raw RGBA8 view of the corner — uploaded ONCE to a small texture and
+/// Raw RGBA8 view of the corner - uploaded ONCE to a small texture and
 /// drawn as a single quad instead of a rect grid (the helmet's rect-grid
 /// version of this was the difference between 60 and 16 fps).
 const State = struct {
@@ -253,11 +253,11 @@ fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = f.window.widthf();
     const vh: f32 = f.window.heightf();
 
-    // Drag-delta orbit (with the latch → no first-touch pop). Wheel/pinch dolly.
+    // Drag-delta orbit (with the latch -> no first-touch pop). Wheel/pinch dolly.
     handleInput(f, s);
 
     // Splitter: a width FRACTION (rotation-stable) that follows the pointer
-    // whenever it reports a new position — helmet mechanics (t1168), with
+    // whenever it reports a new position - helmet mechanics (t1168), with
     // the guard ignoring the pre-input (0,0) report.
     const m: Vec2 = z.getMousePosition(f.input);
     const is_first_zero: bool = s.last_mouse[0] < 0 and m[0] == 0 and m[1] == 0;
@@ -267,7 +267,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
     const divider_x: f32 = s.divider_frac * vw;
 
-    // Shared UBO — both live halves read it, so they render the same view.
+    // Shared UBO - both live halves read it, so they render the same view.
     const ubo: shader_io.Ubo = buildUbo(s.cam_yaw, s.cam_pitch, s.cam_dist, vw, vh);
 
     // ---- CPU side: dispatch the SAME shaderMain per pixel into raster ---------

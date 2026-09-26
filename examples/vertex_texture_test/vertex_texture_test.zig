@@ -1,4 +1,4 @@
-//! vertex_texture_test — the end-to-end proof that zimr can sample a texture in
+//! vertex_texture_test - the end-to-end proof that zimr can sample a texture in
 //! the VERTEX stage.  A flat grid of triangles is warped in the vertex shader by
 //! reading a checkerboard texture (via the explicit-LOD `warpLevel` accessor) and
 //! offsetting each vertex.  A distorted grid (not a clean one) means vertex
@@ -40,7 +40,7 @@ fn scale2d(sx: f32, sy: f32) [4]Vec {
 
 fn deinit(gpa: Allocator, s: *State) void {
     // `.managed`: free every GPU resource we created plus the font (see the
-    // policy on AppSpec.memory — examples must be leak-tight).
+    // policy on AppSpec.memory - examples must be leak-tight).
     s.shader.deinit();
     s.warp.deinit();
     z.wgpu.destroyBuffer(s.vbo);
@@ -126,7 +126,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.clearViewport(f, .{ .r = 12, .g = 16, .b = 26, .a = 255 });
     const ps: *z.PassState = f.gl.pass;
     // The 2D immediate-mode batch reserves bind group 1 for its texture atlas
-    // (gpu_iface.batch_reserved_group) — the SAME group our vertex-visible
+    // (gpu_iface.batch_reserved_group) - the SAME group our vertex-visible
     // sampler occupies. `flushBatch` drains the batch but does NOT rebind the
     // pipeline (that's the consumer's job), so we bracket the custom draw:
     //   1. drain the pending clearViewport quad now, while the 2D pipeline is
@@ -134,7 +134,7 @@ fn update(f: *z.Frame, s: *State) void {
     //   2. after our draw, restore the 2D pipeline (+ its ortho group 0) so the
     //      text/caption material-swap flush below runs under the 2D pipeline
     //      instead of ours (which would set the atlas at group 1 against our
-    //      pipeline → the "resources_bgl does not match" validation error).
+    //      pipeline -> the "resources_bgl does not match" validation error).
     // This is the same bracketing draw3d.zig uses around its point/decal draws.
     f.gl.flushBeforeMaterialSwap();
     s.shader.bindForDraw(ps);

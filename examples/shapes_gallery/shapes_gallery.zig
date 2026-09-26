@@ -1,8 +1,8 @@
-//! shapes_gallery — visual check + showcase for the new parametric shape spine
+//! shapes_gallery - visual check + showcase for the new parametric shape spine
 //! and the mesh-ops toolkit. Renders the eight parametric primitives (sphere,
 //! hemisphere, cylinder, cone, torus, trefoil knot, plane, klein bottle) plus a
-//! COMPOSED shape — a dumbbell built from a cylinder + two spheres with
-//! `meshMerge` and `meshTranslate` — in a grid under an orbit camera. Lit by the
+//! COMPOSED shape - a dumbbell built from a cylinder + two spheres with
+//! `meshMerge` and `meshTranslate` - in a grid under an orbit camera. Lit by the
 //! immediate renderer's directional shade, so orientation, winding, and the
 //! welded seam normals are all visible.
 const std = @import("std");
@@ -42,7 +42,7 @@ const tints = [num][3]u8{
 /// Build a dumbbell = a cylinder bar + two end spheres, via mesh-ops.
 fn buildDumbbell(gpa: Allocator) !z.types.Mesh {
     var bar: z.types.Mesh = try z.genMeshCylinder(gpa, 0.16, 1.5, 20, 2);
-    z.meshTranslate(&bar, 0, -0.75, 0); // cylinder spans 0..height → centre it
+    z.meshTranslate(&bar, 0, -0.75, 0); // cylinder spans 0..height -> centre it
     var ball_a: z.types.Mesh = try z.genMeshSphere(gpa, 0.42, 20, 16);
     z.meshTranslate(&ball_a, 0, 0.75, 0);
     var ball_b: z.types.Mesh = try z.genMeshSphere(gpa, 0.42, 20, 16);

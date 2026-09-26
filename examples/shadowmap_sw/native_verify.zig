@@ -1,9 +1,9 @@
-//! native_verify — the shadow-map side-by-side's NATIVE gate.
+//! native_verify - the shadow-map side-by-side's NATIVE gate.
 //!
 //! Builds `scene.bakeCorner` twice from the SAME function:
-//!   1. at COMPTIME (the const below) — building this exe IS the corner's
+//!   1. at COMPTIME (the const below) - building this exe IS the corner's
 //!      compile-time-budget gate, and exactly what the wasm app embeds;
-//!   2. at RUNTIME in `main` — instant, and byte-compared against (1), a
+//!   2. at RUNTIME in `main` - instant, and byte-compared against (1), a
 //!      differential that pins the compiler's evaluation of the whole
 //!      two-pass render to the runtime evaluation of the same code.
 //!
@@ -23,7 +23,7 @@ const sm_res: usize = 8;
 const img_w: usize = 8;
 const img_h: usize = 8;
 
-/// The comptime bake — the same dimensions the wasm app's corner uses.
+/// The comptime bake - the same dimensions the wasm app's corner uses.
 const baked: scene.CornerBake(sm_res, img_w, img_h) = blk: {
     @setEvalBranchQuota(2_000_000_000);
     break :blk scene.bakeCorner(sm_res, img_w, img_h);

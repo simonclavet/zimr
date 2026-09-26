@@ -1,11 +1,11 @@
-//! native_verify — render the hybrid example's raymarched scene on the
+//! native_verify - render the hybrid example's raymarched scene on the
 //! CPU through the same `shaderMain` the wasm compiles to WGSL, dump
 //! `hybrid_verify.png`, and assert the three visual populations exist:
 //! sky, checkerboard floor (two distinct grays), and hot metaball
 //! pixels.  `zig build hybrid-render-verify`.
 //!
 //! (The CPU rasterizer reads the FS's `final_color` and ignores its
-//! `frag_depth` — depth agreement with raster geometry is exercised on
+//! `frag_depth` - depth agreement with raster geometry is exercised on
 //! the GPU; this harness verifies the marcher LOOKS right first.)
 
 const std = @import("std");

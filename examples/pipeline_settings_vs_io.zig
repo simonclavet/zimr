@@ -1,4 +1,4 @@
-//! examples/pipeline_settings_vs_io.zig — typed interface for the
+//! examples/pipeline_settings_vs_io.zig - typed interface for the
 //! pipeline_settings vertex shader. Companion to `pipeline_settings_vs.zig`.
 //!
 //! The fragment stage is the shared pass-through (`pipeline_uniforms_fs`), so
@@ -22,7 +22,7 @@ pub const Ubo = struct {
     p: Vec,
 };
 
-/// Varying to the fragment stage — the RGBA colour (matches the shared
+/// Varying to the fragment stage - the RGBA colour (matches the shared
 /// pass-through FS `Inputs.frag_color`).
 pub const Outputs = struct {
     frag_color: Vec,

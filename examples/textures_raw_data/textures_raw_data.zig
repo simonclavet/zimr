@@ -1,4 +1,4 @@
-//! textures_raw_data — port of raylib [textures] example.
+//! textures_raw_data - port of raylib [textures] example.
 //! Demonstrates building a GPU texture from a raw, hand-filled RGBA pixel
 //! buffer: we allocate width*height*4 bytes, write an orange/gold checkerboard
 //! into it, wrap it in an Image (pointer + dims + format), and upload. A second

@@ -1,5 +1,5 @@
 //! lint:alias jobs
-//! src/jobs.zig — run a PURE kernel off the main thread, on a Web Worker.
+//! src/jobs.zig - run a PURE kernel off the main thread, on a Web Worker.
 //!
 //! ===========================================================================
 //! WHAT THIS BUYS (measured on-device, not guessed)
@@ -7,7 +7,7 @@
 //! LATENCY, not throughput. The distinction shapes the entire design.
 //!
 //!   * THROUGHPUT IS A TRAP. Eight concurrent workers on a Pixel-class phone deliver
-//!     only ~3.4x aggregate, and a partitioned frame tops out near 2.7x — the
+//!     only ~3.4x aggregate, and a partitioned frame tops out near 2.7x - the
 //!     single-thread baseline runs on a BOOSTED prime core, and spreading out drops
 //!     every core's clock. Worse: a hot CPU throttles the GPU, so buying CPU
 //!     parallelism can cost you the thing a renderer actually cares about. Do not
@@ -16,12 +16,12 @@
 //!
 //!   * LATENCY IS THE WIN, and it is total. `codecs.png.encode` of a 1024x1024 image
 //!     takes ~240 ms in wasm on a phone. On the main thread that is a 233 ms FROZEN
-//!     FRAME — fourteen dropped frames, plainly visible. On a worker: 222 ms of encode
+//!     FRAME - fourteen dropped frames, plainly visible. On a worker: 222 ms of encode
 //!     and a worst frame gap of 17 ms. Nothing stalls. The job is not FASTER. It is
 //!     ELSEWHERE, and elsewhere is what you wanted.
 //!
 //! Good: image encode/decode, glTF/OBJ parse, mesh bake, navmesh, procgen, runtime
-//! shader transpile — anything one-shot and off the critical path.
+//! shader transpile - anything one-shot and off the critical path.
 //! Bad: per-frame rendering. That is what the GPU is for.
 //!
 //! ===========================================================================
@@ -38,14 +38,14 @@
 //!     }
 //!
 //! It is an ordinary Zig function: allocator first, as everywhere else in std, and a
-//! plain `std.Io.Writer` for output — so a kernel composes with anything that already
+//! plain `std.Io.Writer` for output - so a kernel composes with anything that already
 //! writes to a writer, and `try out.print(...)` just works.
 //!
 //! A kernel runs in a SEPARATE wasm instance with its OWN linear memory. It cannot see
 //! the app's globals even if it tries: purity is enforced by the address space, not by
 //! a lint rule someone forgets. And the build ASSERTS the kernel wasm imports nothing
 //! (see c2js `--kernel-wasm-embed`), so a kernel that reaches for the DOM is a build
-//! error naming the offending import — not a worker that dies in a thread nobody is
+//! error naming the offending import - not a worker that dies in a thread nobody is
 //! watching.
 //!
 //! Three good things follow:
@@ -53,7 +53,7 @@
 //!   1. KERNELS ARE ORDINARY FUNCTIONS, so they unit-test on the host with no browser,
 //!      no worker, no wasm and no mocking. See the tests at the bottom.
 //!   2. EACH KERNEL GETS ITS OWN WASM EXPORT, named `zimr_job_<name>`. There is no id,
-//!      no hash and no dispatch table, so a job cannot be routed to the wrong kernel —
+//!      no hash and no dispatch table, so a job cannot be routed to the wrong kernel -
 //!      not because a test checks for it, but because there is no mechanism by which it
 //!      could happen.
 //!   3. NOTHING IS PAID FOR UNLESS USED. The worker's buffers live inside
@@ -68,7 +68,7 @@
 //! and the job is already complete when you first `poll` it.
 //!
 //! So the API cannot fail, there is ONE code path, and an example that uses jobs works
-//! everywhere — where workers are unavailable it merely hitches, exactly as it would
+//! everywhere - where workers are unavailable it merely hitches, exactly as it would
 //! have if it had never used jobs at all. `parallel()` exists only so a demo can TELL
 //! the user why it hitched.
 
@@ -82,7 +82,7 @@ const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
 pub const Error = error{
-    /// The kernel returned an error. Its name is logged (see `logFailure`) — errors
+    /// The kernel returned an error. Its name is logged (see `logFailure`) - errors
     /// cannot cross a wasm boundary as values, so the app gets one error and the
     /// developer gets the name.
     KernelFailed,
@@ -99,7 +99,7 @@ pub const Error = error{
 ///
 /// It carries no kernel type, so it is one plain type rather than one per registry.
 /// Diagnostic scaffolding for the landing-frame stall. `pollInto` does exactly two things
-/// that cross into JS — ask the host whether the result is ready, and copy it out — and with
+/// that cross into JS - ask the host whether the result is ready, and copy it out - and with
 /// the allocation removed the frame STILL costs 93 ms for 2.7 MB (29 MB/s, when a
 /// `TypedArray.set` runs at gigabytes/sec). One of these two is lying about being cheap.
 pub var last_ready_ms: f32 = 0; // lint:off module-var: timing scaffold for the landing-frame stall
@@ -118,10 +118,10 @@ pub const Job = struct {
     /// This exists to make the two paths identical. A kernel that runs INLINE (no workers on
     /// this page) fails during `submit`, while a kernel on a WORKER fails later and surfaces
     /// at `poll`. Without this the app would have to handle failure in two different places,
-    /// and would have to know which world it was in to know where to look — which is exactly
+    /// and would have to know which world it was in to know where to look - which is exactly
     /// the knowledge the jobs system promises it will never need.
     ///
-    /// Now `submit` always returns a Job, and every failure — inline or remote — arrives at
+    /// Now `submit` always returns a Job, and every failure - inline or remote - arrives at
     /// `poll`. One code path, one place to look.
     pending_failure: ?Error = null,
 
@@ -129,19 +129,19 @@ pub const Job = struct {
     ///
     /// A fixed buffer, not an allocation: this is filled on the frame a failure lands, and a
     /// frame path must not allocate. 48 bytes holds every error name Zig can produce here with
-    /// room to spare, and a longer one is TRUNCATED rather than lost — a clipped name still
+    /// room to spare, and a longer one is TRUNCATED rather than lost - a clipped name still
     /// tells you more than `KernelFailed` ever did.
     error_name_buf: [48]u8 = @splat(0),
     error_name_len: u8 = 0,
 
     /// NON-BLOCKING. `null` while the kernel runs; the bytes when it is done; an error
-    /// if it failed. The slice is owned by the Job — `deinit` when finished with it.
+    /// if it failed. The slice is owned by the Job - `deinit` when finished with it.
     ///
     ///     if (try job.poll()) |png| { save(png); job.deinit(); }
     /// Collect the result INTO A BUFFER THE CALLER ALREADY OWNS.
     ///
     /// Prefer this in a frame loop. `poll()` allocates the result for you, which is tidy and
-    /// — measured on a phone, 2.7 MB PNG — costs **154 ms**, because a multi-megabyte request
+    /// - measured on a phone, 2.7 MB PNG - costs **154 ms**, because a multi-megabyte request
     /// grows the wasm linear memory and the browser copies the whole thing. The encode itself
     /// was off-thread and cost the frame 17 ms; collecting it cost nine times that. The
     /// worker gave the frame back and `poll` took it away again.
@@ -187,7 +187,7 @@ pub const Job = struct {
 
         const kernel_reported_failure: bool = result_length_or_status < 0;
         if (kernel_reported_failure) {
-            // Take the NAME before cancelling — `cancel` clears the host's record of it.
+            // Take the NAME before cancelling - `cancel` clears the host's record of it.
             self.captureErrorName();
             web.jobs.cancel(self.handle);
             self.handle = 0;
@@ -258,8 +258,8 @@ pub const Job = struct {
     /// Release the result, and give up on the job if it is still running.
     ///
     /// The cancel is the important half: a worker is still computing a result for an
-    /// abandoned job, and without telling the host to discard the reply, its buffer —
-    /// megabytes, for an image — is parked in the host for the life of the page.
+    /// abandoned job, and without telling the host to discard the reply, its buffer -
+    /// megabytes, for an image - is parked in the host for the life of the page.
     /// The failed kernel's error name, or "" if it did not fail.
     ///
     /// `error.KernelFailed` is a Zig error, and a Zig error cannot carry a payload. So the name
@@ -300,7 +300,7 @@ pub const Job = struct {
 };
 
 /// Is there a real worker pool, or will kernels run inline on the main thread?
-/// Behaviour is identical either way — this is for telling the USER why the frame
+/// Behaviour is identical either way - this is for telling the USER why the frame
 /// hitched, and for nothing else.
 pub fn parallel() bool {
     return web.jobs.available();
@@ -333,7 +333,7 @@ pub const Options = struct {
 ///
 /// It is explicit rather than reflected off a struct's decls because this Zig's
 /// `@typeInfo` no longer exposes `decls`. That turns out to be a feature: because the
-/// table is an ordinary comptime tuple, tables COMPOSE —
+/// table is an ordinary comptime tuple, tables COMPOSE -
 ///
 ///     jobs.Registry(four_ways.job_kernels ++ worker_png.job_kernels, .{})
 ///
@@ -346,7 +346,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
     return struct {
         /// The bounds this registry was built with, RE-EXPOSED so registries can COMPOSE.
         ///
-        /// A page carries ONE kernel wasm, but the launcher bundles many examples — so its
+        /// A page carries ONE kernel wasm, but the launcher bundles many examples - so its
         /// kernel wasm is built from the concatenated tables, and needs bounds that fit
         /// every member:
         ///
@@ -356,7 +356,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
         ///     })
         ///
         /// Without this the merged root would have to hard-code numbers that silently drift
-        /// from the registries they are supposed to cover — and a `max_input` too small does
+        /// from the registries they are supposed to cover - and a `max_input` too small does
         /// not fail loudly, it fails as `Error.InputTooLarge` on a phone.
         pub const max_input: usize = opts.max_input;
         pub const max_output: usize = opts.max_output;
@@ -395,14 +395,14 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
         /// `header` is type-checked against the kernel's own signature, so there is no
         /// byte-packing at the call site and a mismatch is a compile error.
         ///
-        /// If there is no worker pool — on the host, or in a sandboxed iframe where
-        /// `new Worker()` was refused — this runs the kernel INLINE through the same
+        /// If there is no worker pool - on the host, or in a sandboxed iframe where
+        /// `new Worker()` was refused - this runs the kernel INLINE through the same
         /// `invoke` the worker uses, and returns an already-finished Job. The caller
         /// cannot tell, and should not have to.
         /// N jobs, submitted together, collected as they finish.
         ///
-        /// The pool has ALWAYS been parallel — `pump()` walks every worker and hands each
-        /// free one a job off the queue — but until this existed, using it meant N `Job`
+        /// The pool has ALWAYS been parallel - `pump()` walks every worker and hands each
+        /// free one a job off the queue - but until this existed, using it meant N `Job`
         /// values, N `pollInto` calls and N done-flags open-coded in every app. So nobody
         /// did, and the pool ran one thread for its entire life.
         ///
@@ -414,12 +414,12 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
         ///   * `next(dst)` collects into a CALLER-OWNED buffer (`pollInto`, never `poll`).
         ///     Allocating on a landing frame cost 154 ms for 2.7 MB when we measured it, and
         ///     a Group lands many times a second.
-        ///   * `progress()` is free — the bookkeeping exists anyway.
+        ///   * `progress()` is free - the bookkeeping exists anyway.
         ///
         /// KNOWN LIMIT, stated before it bites someone: `submitAll` stages `header ++ payload`
         /// PER JOB, so a shared payload is copied N times. For a scene of a few hundred bytes
         /// that is nothing. For a job set sharing a 4 MB mesh it would be everything, and the
-        /// fix then is a payload the workers HOLD across jobs — not a bigger memcpy.
+        /// fix then is a payload the workers HOLD across jobs - not a bigger memcpy.
         pub fn Group(comptime kernel: anytype) type {
             return struct {
                 const Self = @This();
@@ -429,7 +429,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                     /// Index into the `headers` slice that `submitAll` was given. Results
                     /// arrive OUT OF ORDER, so this is how a caller knows what it just got.
                     index: usize,
-                    /// Valid until the next call to `next()` — the bytes live in the CALLER's
+                    /// Valid until the next call to `next()` - the bytes live in the CALLER's
                     /// buffer, which the next result will overwrite.
                     bytes: []const u8,
                 };
@@ -447,10 +447,10 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
 
                 /// The NAME of the last kernel that failed in this group, e.g. "ShortPayload".
                 /// Empty if nothing has failed. `next` returns `error.KernelFailed`, and a Zig
-                /// error cannot carry a payload — so the name rides here.
+                /// error cannot carry a payload - so the name rides here.
                 ///
                 /// The Group OWNS these bytes. It must: the name lives in the failed `Job`'s
-                /// own buffer, and `deinit` frees the job array — so handing out a slice into
+                /// own buffer, and `deinit` frees the job array - so handing out a slice into
                 /// it would dangle the instant the group was torn down. `rt_workers` stores the
                 /// name in its state and draws it every frame, which is precisely the shape
                 /// that turns a borrowed slice into a use-after-free you only see as garbage on
@@ -459,7 +459,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                 error_name_len: u8 = 0,
 
                 /// Submit one job per header. They queue; the pool feeds every free worker,
-                /// so N headers occupy min(N, pool_size) cores. `payload` is shared — each
+                /// so N headers occupy min(N, pool_size) cores. `payload` is shared - each
                 /// job gets its own copy of it (see KNOWN LIMIT above).
                 pub fn submitAll(
                     gpa: Allocator,
@@ -509,7 +509,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                 }
 
                 /// The next result that has FINISHED, copied into `dst`. `null` when nothing
-                /// new is ready this frame — which is the common case and costs one host poll
+                /// new is ready this frame - which is the common case and costs one host poll
                 /// per outstanding job.
                 ///
                 /// Call it in a `while` loop: several tiles can land in one frame.
@@ -528,7 +528,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                             // caller still wants them.
                             //
                             // Keep the NAME. Without it the app can only report
-                            // "KernelFailed", which on a phone — with no console to read — is
+                            // "KernelFailed", which on a phone - with no console to read - is
                             // the same as reporting nothing.
                             self.copyErrorNameFrom(this_job);
                             self.landed[job_index] = true;
@@ -610,14 +610,14 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             //
             // This used to be `gpa.alloc(total)` plus two memcpys, to hand the host one
             // contiguous `header ++ payload`. That was a MULTI-MEGABYTE ALLOCATION ON EVERY
-            // DISPATCH, in the frame path — the same mistake that cost `Job.poll` 154 ms on
+            // DISPATCH, in the frame path - the same mistake that cost `Job.poll` 154 ms on
             // the landing frame, still live here on the input side. And it bought nothing:
             // the host has to allocate a JS-owned buffer regardless (the one it TRANSFERS to
             // the worker), so it can join the two while it copies. Two copies of the payload
             // became one, and the allocation became zero.
             //
             // The worker still receives exactly the same bytes. `invoke` splits them back
-            // apart at `@sizeOf(H)`, on whichever side runs the kernel — see `runInline`.
+            // apart at `@sizeOf(H)`, on whichever side runs the kernel - see `runInline`.
             if (!web.jobs.available()) {
                 return runInline(gpa, name, kernel, header_bytes, payload);
             }
@@ -663,14 +663,14 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             defer gpa.free(output_buffer);
 
             var kernel_arena: std.heap.ArenaAllocator = .init(gpa);
-            defer kernel_arena.deinit(); // whatever the kernel allocated, gone — always
+            defer kernel_arena.deinit(); // whatever the kernel allocated, gone - always
 
             var output_writer: Writer = .fixed(output_buffer);
             kernel(kernel_arena.allocator(), header, payload, &output_writer) catch |err| {
                 logFailure(name, err);
 
                 // Do NOT propagate this out of `submit`. Park it on the Job, so it is
-                // delivered at `poll` — exactly where a WORKER's failure would arrive. The
+                // delivered at `poll` - exactly where a WORKER's failure would arrive. The
                 // app must not have to know which world it is running in to know where its
                 // errors will appear.
                 var failed_job: Job = .{ .gpa = gpa };
@@ -690,7 +690,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
         }
 
         /// Emit the wasm exports the KERNEL WASM exposes.
-        /// `comptime { registry.exportWorkerEntry(); }` — in the kernel root ONLY.
+        /// `comptime { registry.exportWorkerEntry(); }` - in the kernel root ONLY.
         ///
         /// The protocol:
         ///     ptr = zimr_job_alloc(n)     // JS asks for a buffer of exactly n bytes
@@ -705,12 +705,12 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
         ///
         /// Everything is allocated from `std.heap.wasm_allocator`, which grows the
         /// instance's linear memory on demand. Static buffers would have declared 41 MB
-        /// of initial memory PER WORKER — 164 MB for four, before a single job ran.
+        /// of initial memory PER WORKER - 164 MB for four, before a single job ran.
         /// This way an idle worker is ~1 MB and grows only to what a job needs; the
         /// arena is reused, so a stream of jobs settles at the high-water mark.
         /// The export names come from `jobs_worker.abi`, which is the SAME struct the
         /// worker's JS is generated from. They used to be string literals here AND string
-        /// literals over there, with nothing checking that the two agreed — rename one and
+        /// literals over there, with nothing checking that the two agreed - rename one and
         /// the worker fails silently, with no error and no result, forever.
         ///
         /// There is now exactly one spelling of each name in the whole engine.
@@ -774,7 +774,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                 }
                 // Reset, not free: a worker runs job after job, and retaining capacity
                 // means it stops growing once it has seen the biggest one. A kernel
-                // still cannot leak — everything it allocated is gone the moment the
+                // still cannot leak - everything it allocated is gone the moment the
                 // next job starts.
                 _ = arena.reset(.retain_capacity);
 
@@ -827,7 +827,7 @@ fn HeaderOf(comptime kernel: anytype) type {
 }
 
 /// Errors cannot cross a wasm boundary as values, so the app gets `KernelFailed` and
-/// the developer gets the NAME — on the page's log overlay, which is visible on a phone
+/// the developer gets the NAME - on the page's log overlay, which is visible on a phone
 /// with no devtools attached. Without this a failing kernel is a bare `-1` and you are
 /// guessing between OutOfMemory and InvalidPixelBufferSize.
 ///
@@ -873,14 +873,14 @@ fn validate(comptime kernels: anytype) void {
     }
 }
 
-/// A header is memcpy'd out of the APP's wasm and into the KERNEL's wasm — two separate
+/// A header is memcpy'd out of the APP's wasm and into the KERNEL's wasm - two separate
 /// compilations. So it must satisfy two things, and both are checked here rather than
 /// discovered as garbage inside a worker you cannot breakpoint.
 ///
 ///   1. NO POINTERS. An address from one instance's linear memory means nothing in
 ///      another's.
 ///   2. AN ABI-GUARANTEED LAYOUT. Zig's `auto` layout is explicitly unspecified and it
-///      really does reorder fields — `struct { a: u8, b: u32, c: u8 }` puts `b` at
+///      really does reorder fields - `struct { a: u8, b: u32, c: u8 }` puts `b` at
 ///      offset 0. It happens to be deterministic for the same compiler and target, so an
 ///      auto-layout header works TODAY by luck. `extern` is what the language provides
 ///      for bytes that cross a boundary, so require it. An anonymous literal still
@@ -902,7 +902,7 @@ fn assertPod(comptime T: type, comptime kernel: []const u8) void {
                 assertPod(ft, kernel);
             }
         },
-        // A union's payload is copied just as a struct's is — and a slice hidden in one
+        // A union's payload is copied just as a struct's is - and a slice hidden in one
         // used to sail straight through into a worker, where the pointer addressed
         // nothing.
         .@"union" => |un| {
@@ -923,7 +923,7 @@ fn assertPod(comptime T: type, comptime kernel: []const u8) void {
 }
 
 // ===========================================================================
-// TESTS — the ergonomic payoff, not an afterthought.
+// TESTS - the ergonomic payoff, not an afterthought.
 //
 // A kernel is an ordinary function and `submit` falls back to running it inline, so the
 // WHOLE system tests on the host: no browser, no worker, no wasm, no mocking. What is
@@ -981,14 +981,14 @@ const test_registry = Registry(.{
     .{ "boom", tkBoom },
 }, test_opts);
 
-test "jobs: a kernel is just a function — call it directly, no engine involved" {
+test "jobs: a kernel is just a function - call it directly, no engine involved" {
     var buf: [16]u8 = undefined;
     var out: Writer = .fixed(&buf);
     try tkRamp(testing.allocator, .{ .n = 4 }, &.{}, &out);
     try testing.expectEqualSlices(u8, &[_]u8{ 0, 2, 4, 6 }, out.buffered());
 }
 
-test "jobs: the output writer is bounded — an overrun is an error, not corruption" {
+test "jobs: the output writer is bounded - an overrun is an error, not corruption" {
     var buf: [3]u8 = undefined;
     var out: Writer = .fixed(&buf);
     try testing.expectError(error.WriteFailed, tkRamp(testing.allocator, .{ .n = 9 }, &.{}, &out));
@@ -1009,7 +1009,7 @@ test "jobs: payload round-trips, and a failing kernel surfaces as an error" {
     defer job.deinit();
     try testing.expectEqualStrings("hello zimr", (try job.poll()).?);
 
-    // A failing kernel now surfaces at POLL, never at SUBMIT — see the dedicated test below
+    // A failing kernel now surfaces at POLL, never at SUBMIT - see the dedicated test below
     // for why that matters.
     var boom: Job = try test_registry.submit(gpa, tkBoom, .{ .pad = 0 }, &.{});
     defer boom.deinit();
@@ -1017,7 +1017,7 @@ test "jobs: payload round-trips, and a failing kernel surfaces as an error" {
 }
 
 test "jobs: two kernels sharing a header TYPE still resolve to the right one" {
-    // tkEcho and tkBoom have IDENTICAL function types — same header, same signature. The
+    // tkEcho and tkBoom have IDENTICAL function types - same header, same signature. The
     // table lookup must therefore disambiguate by function IDENTITY, not by type. If it
     // did not, `echo` would silently run `boom`, and only in the worker, where you cannot
     // breakpoint it.
@@ -1025,7 +1025,7 @@ test "jobs: two kernels sharing a header TYPE still resolve to the right one" {
     var job: Job = try test_registry.submit(gpa, tkEcho, .{ .pad = 0 }, "distinct");
     defer job.deinit();
     try testing.expectEqualStrings("distinct", (try job.poll()).?);
-    // ...and tkBoom, submitted through the SAME registry, still blows up — proving the table
+    // ...and tkBoom, submitted through the SAME registry, still blows up - proving the table
     // resolved it by function identity and not by its (identical) type. Failures arrive at
     // POLL now, never at SUBMIT.
     var boom: Job = try test_registry.submit(gpa, tkBoom, .{ .pad = 0 }, &.{});
@@ -1036,7 +1036,7 @@ test "jobs: two kernels sharing a header TYPE still resolve to the right one" {
 test "jobs: a kernel that overruns its output is OutputTooLarge, not a corrupted result" {
     const gpa = testing.allocator;
     const tiny = Registry(.{.{ "ramp", tkRamp }}, .{ .max_input = 64, .max_output = 4 });
-    // Failures arrive at POLL now, never at SUBMIT — see "a failed kernel surfaces at POLL".
+    // Failures arrive at POLL now, never at SUBMIT - see "a failed kernel surfaces at POLL".
     var overrun: Job = try tiny.submit(gpa, tkRamp, .{ .n = 99 }, &.{});
     defer overrun.deinit();
     try testing.expectError(Error.OutputTooLarge, overrun.poll());
@@ -1050,7 +1050,7 @@ test "jobs: oversized input is rejected before it can corrupt anything" {
 
 test "jobs: a job dropped WITHOUT ever polling it leaks nothing" {
     var job: Job = try test_registry.submit(testing.allocator, tkEcho, .{ .pad = 0 }, "abandoned");
-    job.deinit(); // never polled — the result must still be released
+    job.deinit(); // never polled - the result must still be released
 }
 
 test "jobs: deinit is idempotent, and polling a retired job is not a use-after-free" {
@@ -1087,7 +1087,7 @@ test "jobs: invoke splits header from payload exactly, for worker and host alike
     @memcpy(staged[0..@sizeOf(Hdr)], std.mem.asBytes(&hdr));
     @memcpy(staged[@sizeOf(Hdr)..], "abcde");
 
-    // The kernel's allocator is an ARENA — that is the contract, and it is why a kernel
+    // The kernel's allocator is an ARENA - that is the contract, and it is why a kernel
     // contains no `defer free`. Hand `invoke` a raw allocator and the kernel's
     // allocations leak, exactly as testing.allocator caught when this test first did it.
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1096,7 +1096,7 @@ test "jobs: invoke splits header from payload exactly, for worker and host alike
     var buf: [16]u8 = undefined;
     var out: Writer = .fixed(&buf);
     try invoke(tkEcho, arena.allocator(), &staged, &out);
-    try testing.expectEqualStrings("abcde", out.buffered()); // payload only — header stripped
+    try testing.expectEqualStrings("abcde", out.buffered()); // payload only - header stripped
 }
 
 test "jobs.Group: every job lands exactly once, and each gets its OWN header" {
@@ -1109,13 +1109,13 @@ test "jobs.Group: every job lands exactly once, and each gets its OWN header" {
     var buf: [64]u8 = undefined;
     var seen: [4]bool = @splat(false);
 
-    // Drain. On the host every job runs inline, so all four land immediately — but the loop
+    // Drain. On the host every job runs inline, so all four land immediately - but the loop
     // is written the way an app must write it, because in a browser they land whenever the
     // workers finish, in whatever order they finish.
     var guard: u32 = 0;
     while (!g.complete() and guard < 100) : (guard += 1) {
         while (try g.next(&buf)) |landed| {
-            // The n-th job produced the n-th header's ramp — proof each job carried its own
+            // The n-th job produced the n-th header's ramp - proof each job carried its own
             // header, not the last one submitted. (A shared staging buffer would break this
             // silently, which is exactly the bug shape to guard against.)
             try testing.expectEqual(headers[landed.index].n, @as(u32, @intCast(landed.bytes.len)));
@@ -1170,7 +1170,7 @@ test "jobs: a failed kernel surfaces at POLL, inline or on a worker, and NAMES i
     // Two things at once, and both are about the app having exactly ONE failure path:
     //
     //   1. `submit` SUCCEEDS even though the kernel is going to fail. Inline, the kernel has
-    //      already run and blown up by this point — but propagating that out of `submit` would
+    //      already run and blown up by this point - but propagating that out of `submit` would
     //      mean an app must handle failure in one place when workers exist and a different
     //      place when they do not, and must know which world it is in to know where to look.
     //
@@ -1186,7 +1186,7 @@ test "jobs: a failed kernel surfaces at POLL, inline or on a worker, and NAMES i
 
 test "jobs.Group: the failed kernel's name OUTLIVES the group's jobs" {
     // A use-after-free that shipped for exactly one turn. `Group` used to hand out a slice into
-    // the failed Job's own buffer — and `deinit` frees the job array. `rt_workers` stores that
+    // the failed Job's own buffer - and `deinit` frees the job array. `rt_workers` stores that
     // name in its state and draws it every frame, so the slice dangled the moment the group was
     // torn down: garbage on a phone screen, and nothing in any test.
     //

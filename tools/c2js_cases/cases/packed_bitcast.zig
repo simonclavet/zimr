@@ -2,7 +2,7 @@
 // lowers to a single integer typedef (`typedef uintN_t bitpack__...;`) kept in a
 // heap slot. Whole-value ops (`n = @bitCast(p)`, `p = @bitCast(n)`, `p2 = p`) were
 // silently broken: a whole-value READ gave the slot offset while a STORE wrote a
-// stray JS scalar — the two never met. Field-level access always worked; this
+// stray JS scalar - the two never met. Field-level access always worked; this
 // guards both. Self-checks (returns 0 on success).
 const Pair = packed struct { lo: u16, hi: u16 }; // 32 bits: lo@0..15, hi@16..31
 const Bytes = packed struct { a: u8, b: u8, c: u8, d: u8 };

@@ -570,13 +570,13 @@ test "a failed connection falls back to relaying through the server" {
     mockFailAll();
     pump(&sessions, &logs, 8);
 
-    // Peers are NOT dropped — each side switches that peer to relay mode.
+    // Peers are NOT dropped - each side switches that peer to relay mode.
     try expect(logs[0].hasState(2, .relayed));
     try expect(logs[1].hasState(1, .relayed));
     try expect(!logs[0].has(.peer_left, 2));
     try expect(!logs[1].has(.peer_left, 1));
 
-    // And messages still flow — now bounced through the (mock) server relay.
+    // And messages still flow - now bounced through the (mock) server relay.
     a.broadcast(1, "relayed-msg");
     pump(&sessions, &logs, 8);
     const at_b: ?[]const u8 = logs[1].message(1, 1);
@@ -627,7 +627,7 @@ test "typed messages round-trip a serialized struct over the mesh" {
     pump(&sessions, &logs, 24);
     try expect(logs[0].hasChannel(2, 1));
 
-    // Send a structured, multi-field message (tag 7) — not hand-packed bytes.
+    // Send a structured, multi-field message (tag 7) - not hand-packed bytes.
     typed.broadcast(&a, 1, 7, Emote{ .kind = 3, .x = 1.5, .y = -2.25 });
     pump(&sessions, &logs, 8);
 
@@ -686,7 +686,7 @@ test "host is the lowest-id peer and migrates when it leaves" {
     try expect(a.hostId() == 1 and b.hostId() == 1 and c.hostId() == 1);
     try expect(logs[1].has(.host_changed, 1));
 
-    // A leaves — the host migrates to the next lowest id (B = 2).
+    // A leaves - the host migrates to the next lowest id (B = 2).
     a.disconnect();
     pump(&ptrs, &logs, 40);
     try expect(b.isHost());

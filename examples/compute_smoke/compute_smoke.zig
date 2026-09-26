@@ -1,4 +1,4 @@
-//! compute_smoke — the GPU compute round-trip, now driven by `z.Compute(M)`
+//! compute_smoke - the GPU compute round-trip, now driven by `z.Compute(M)`
 //! instead of hand-wired wgpu calls. Uploads [0,1,2,...,particle_count-1], runs the `double_it`
 //! kernel (out[i] = in[i]*2) on the GPU, reads it back, draws it as bars (a correct
 //! run = a doubled ascending staircase). Also runs a CPU-backend self-check at

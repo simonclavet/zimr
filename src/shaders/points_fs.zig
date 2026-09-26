@@ -1,4 +1,4 @@
-//! src/shaders/points_fs.zig — instanced points FS body (IoT).
+//! src/shaders/points_fs.zig - instanced points FS body (IoT).
 //! Pass-through: emits the interpolated colour. Schema in `points_fs_io.zig`.
 
 const shader_externs = @import("points_fs_externs");

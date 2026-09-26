@@ -1,5 +1,5 @@
-//! circle_sector_drawing — a filled circular sector (pie slice) with its outline. The
-//! swept angle rotates and breathes, the radius pulses, and — the point of the sample — the
+//! circle_sector_drawing - a filled circular sector (pie slice) with its outline. The
+//! swept angle rotates and breathes, the radius pulses, and - the point of the sample - the
 //! segment count oscillates from chunky (you can see the polygonal facets) to smooth. Tap to
 //! reveal the segment vertices as dots so the tessellation is literal. A panel echoes the
 //! live parameters and the MANUAL/AUTO segment mode. Ported from raylib

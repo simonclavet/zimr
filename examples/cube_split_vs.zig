@@ -1,8 +1,8 @@
-//! examples/cube_split_vs.zig — vertex shader for the cube_split demo.
+//! examples/cube_split_vs.zig - vertex shader for the cube_split demo.
 //!
 //! Standard vertex transform: project world-space position through
 //! the MVP matrix; pass UV through to the fragment shader.  Same
-//! source compiles for SPIR-V (→ GLSL → GPU) AND wasm32 (→ CPU
+//! source compiles for SPIR-V (-> GLSL -> GPU) AND wasm32 (-> CPU
 //! dispatch via `raster_shader.dispatchVertexShader`).
 //!
 //! Schema (Attributes / Ubo / Outputs) lives in `cube_split_vs_io.zig`.
@@ -22,7 +22,7 @@ pub fn shaderMain(io_in: Io) Out {
     // homogeneous Vec4 ready for the perspective divide that the
     // rasterizer (GPU or CPU) performs downstream.
     out.position = mulMatPoint(io_in.u.mvp, io_in.vertex_position);
-    // Pass the UV through unchanged — interpolation happens between
+    // Pass the UV through unchanged - interpolation happens between
     // here and the FS via per-fragment barycentric weights.
     out.frag_tex_coord = io_in.vertex_tex_coord;
     return out;

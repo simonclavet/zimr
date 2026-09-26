@@ -1,4 +1,4 @@
-//! src/shaders/effect_mask_fs_io.zig — two-source blend, with a mask.
+//! src/shaders/effect_mask_fs_io.zig - two-source blend, with a mask.
 //!
 //! The first effect in the family to read MORE THAN ONE texture, which is the
 //! whole point of it: raylib's `shaders_simple_mask` and `shaders_multi_sample2d`
@@ -33,10 +33,10 @@ pub const Samplers = struct {
 };
 
 /// `params` = {mode, divider, softness, 0}
-///   mode     — 0 = MASK (blend by the mask texture's luminance)
+///   mode     - 0 = MASK (blend by the mask texture's luminance)
 ///              1 = DIVIDER (hard split; `divider` is the split's x, in UV)
-///   divider  — the split position, 0..1, when mode = 1
-///   softness — width of the divider's feather, in UV. 0 gives raylib's hard cut.
+///   divider  - the split position, 0..1, when mode = 1
+///   softness - width of the divider's feather, in UV. 0 gives raylib's hard cut.
 pub const Ubo = struct {
     params: Vec = .{ 0, 0.5, 0.0, 0 },
 };

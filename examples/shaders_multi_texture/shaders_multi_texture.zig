@@ -1,22 +1,22 @@
 // examples/shaders_multi_texture.zig - one fragment shader, three textures.
 // MERGES raylib's `shaders_simple_mask` and `shaders_multi_sample2d`, because
 // they are the same shader wearing two hats: sample two sources, produce a blend
-// factor, mix. Only the factor differs —
+// factor, mix. Only the factor differs -
 //
 //   MASK     the blend factor is a third texture's luminance. Here the mask is
 //            LIVE (a radial gradient that follows your finger), which is strictly
 //            more convincing than raylib's static mask image: you can see the two
 //            sources swap under the spotlight as you drag it.
-//   DIVIDER  the blend factor is a position along x — a wipe between the two
+//   DIVIDER  the blend factor is a position along x - a wipe between the two
 //            sources at a draggable split. That is multi_sample2d.
 //
 // All three textures are RENDER TEXTURES generated at runtime (no assets):
-//   A  a live scene — bouncing discs on a dark field
+//   A  a live scene - bouncing discs on a dark field
 //   B  a procedural checkerboard
-//   M  the mask — a radial gradient drawn at the pointer
+//   M  the mask - a radial gradient drawn at the pointer
 //
 // ENGINE WORK this drove: `effects2d.Host` previously bound exactly ONE source
-// texture. It now takes `HostOptions{ .textures = N }` and binds N of them —
+// texture. It now takes `HostOptions{ .textures = N }` and binds N of them -
 // texture at @group(1) binding 2i, its sampler at 2i+1, which is precisely the
 // layout the shader DSL generates for N `Sampler2D` fields (verified against the
 // PBR shader's WGSL before writing a line of it).
@@ -88,7 +88,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .address_mode = .clamp_to_edge,
     });
 
-    // THREE sources — the reason effects2d grew a texture count.
+    // THREE sources - the reason effects2d grew a texture count.
     var fx_host: z.effects2d.Host = try z.effects2d.Host.init(
         gpa,
         f.gl,
@@ -183,7 +183,7 @@ fn ensureTargets(f: *z.Frame, s: *State) void {
     ) catch return;
 }
 
-/// Source A — bouncing discs.
+/// Source A - bouncing discs.
 fn drawSceneA(f: *z.Frame, s: *State, dt: f32) void {
     const w: f32 = float(s.rt_a.width);
     const h: f32 = float(s.rt_a.height);
@@ -205,7 +205,7 @@ fn drawSceneA(f: *z.Frame, s: *State, dt: f32) void {
     z.endTextureMode(f.gl);
 }
 
-/// Source B — a procedural checkerboard, drawn once per frame (cheap, and it keeps
+/// Source B - a procedural checkerboard, drawn once per frame (cheap, and it keeps
 /// the example free of any asset).
 fn drawSceneB(f: *z.Frame, s: *State, t: f32) void {
     const w: f32 = float(s.rt_b.width);
@@ -244,7 +244,7 @@ fn drawSceneB(f: *z.Frame, s: *State, t: f32) void {
     z.endTextureMode(f.gl);
 }
 
-/// Source M — the mask. Black everywhere, a white radial gradient at the pointer.
+/// Source M - the mask. Black everywhere, a white radial gradient at the pointer.
 /// The shader reads its LUMINANCE, so white = show B, black = show A.
 fn drawMask(f: *z.Frame, s: *State) void {
     z.beginTextureMode(f.gl, s.rt_mask, c.black);

@@ -1,10 +1,10 @@
-//! catch — an arm that reaches ahead into empty space, and one that chases.
+//! catch - an arm that reaches ahead into empty space, and one that chases.
 //!
 //! A ball is thrown across the workspace. Both arms must **catch** it: be at the right place, at
 //! the right moment, **moving with it**. The near one runs IK plus a PD to the interception; the
 //! far one plans.
 //!
-//! ── ★★★ WATCH THE RELATIVE SPEED, NOT THE DISTANCE ──
+//! -- *** WATCH THE RELATIVE SPEED, NOT THE DISTANCE --
 //!
 //! The servo is very good at the obvious metric and useless at the job:
 //!
@@ -16,24 +16,24 @@
 //! meets it at 5 to 7 m/s of relative speed and knocks it across the room. Position says it
 //! caught the ball. It did not.
 //!
-//! That distinction is why the acceptance test was written down before any code existed —
-//! `|relative speed| < 0.5 m/s` — and it is the only reason a controller that looks perfect is
+//! That distinction is why the acceptance test was written down before any code existed -
+//! `|relative speed| < 0.5 m/s` - and it is the only reason a controller that looks perfect is
 //! correctly scored at zero.
 //!
-//! ── ★★ THE ARM IS INVENTED, AND THAT IS THE POINT ──
+//! -- ** THE ARM IS INVENTED, AND THAT IS THE POINT --
 //!
 //! Five joints, 1.28 m reach, finite torque. It corresponds to no real robot because the target
 //! is a game in which characters are physically simulated robots, not sim2real. A URDF import
-//! would have arrived with **no actuators at all** — URDF has no concept of one — and nothing to
+//! would have arrived with **no actuators at all** - URDF has no concept of one - and nothing to
 //! plan with.
 //!
-//! ── ★ HONEST STATUS ──
+//! -- * HONEST STATUS --
 //!
 //! Neither controller catches yet by the full criterion. The planner is at 0.08 m and 1.4 m/s
 //! against bars of 0.05 and 0.5, and it got there through two library fixes that matter beyond
-//! this demo: the control box is now on by default (the plan was asking for 357 N·m against a
-//! ±260 limit and being silently clamped), and `Plan.setHorizon` lets the terminal cost land at
-//! the interception rather than 0.88 s past it — which alone was worth 6x in distance.
+//! this demo: the control box is now on by default (the plan was asking for 357 N*m against a
+//! +/-260 limit and being silently clamped), and `Plan.setHorizon` lets the terminal cost land at
+//! the interception rather than 0.88 s past it - which alone was worth 6x in distance.
 
 const std = @import("std");
 const common = @import("example_common");
@@ -100,7 +100,7 @@ const Keeper = struct {
     /// Closest approach so far, and the relative speed at that instant.
     best_gap: f32,
     best_relative: f32,
-    /// ── ★★★ WHERE THE DECISION WAS RESOLVED, KEPT SO IT CAN BE SHOWN ──
+    /// -- *** WHERE THE DECISION WAS RESOLVED, KEPT SO IT CAN BE SHOWN --
     ///
     /// The whole verdict turns on one instant lasting about 30 ms, and a demo that only draws
     /// the live frame throws it away before anyone can look. These hold the hand and the ball at
@@ -145,7 +145,7 @@ const State = struct {
     running: bool,
     /// Seconds since the last throw ended, for the auto-repeat.
     idle: f32,
-    /// ★ SLOW BY DEFAULT. The catch happens in about 30 ms of simulated time; at full speed the
+    /// * SLOW BY DEFAULT. The catch happens in about 30 ms of simulated time; at full speed the
     /// entire argument of the demo is over before the eye has found the ball.
     time_scale: f32,
 
@@ -203,8 +203,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.state_w = try gpa.alloc(f32, s.planner.plan.ndx);
     s.term_w = try gpa.alloc(f32, s.planner.plan.ndx);
     s.ctrl_w = try gpa.alloc(f32, s.model.nu);
-    // ★ POSITION AND VELOCITY BLOCKS SEPARATELY. `ndx` is nv positions THEN nv velocities, and
-    // the joint speeds that match 4.7 m/s of hand travel are large — one number for both lets
+    // * POSITION AND VELOCITY BLOCKS SEPARATELY. `ndx` is nv positions THEN nv velocities, and
+    // the joint speeds that match 4.7 m/s of hand travel are large - one number for both lets
     // the velocity term swamp everything else in the problem.
     for (0..s.model.nv) |i| {
         s.state_w[i] = 0.5;
@@ -230,7 +230,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0);
     s.sphere = try z.genMeshSphere(gpa, 1.0, 14, 12);
     s.transform = .{identity()};
-    // ★★★ THROW ON START, AND THAT IS A GATE AS MUCH AS A COURTESY. The smoke run executes 60
+    // *** THROW ON START, AND THAT IS A GATE AS MUCH AS A COURTESY. The smoke run executes 60
     // frames; with no ball in flight it never entered `optimize` at all, so the reference-length
     // assert that fires in the browser could not fire there. A demo that idles until clicked
     // has an automated check that verifies almost nothing.
@@ -272,7 +272,7 @@ fn resetArms(s: *State) void {
         k.best_relative = 0;
         k.meet_time = -1;
         k.trail_count = 0;
-        // ★ AND THE PLAN, NOT ONLY THE ARM. `optimize` warm-starts from `plan.ctrl`; leaving the
+        // * AND THE PLAN, NOT ONLY THE ARM. `optimize` warm-starts from `plan.ctrl`; leaving the
         // last throw's commands there means the first tick of the next one applies them.
         @memset(k.plan.ctrl, 0);
         k.plan.setHorizon(max_horizon);
@@ -282,7 +282,7 @@ fn resetArms(s: *State) void {
     s.idle = 0;
 }
 
-/// Scan the arc for the LATEST instant the arm can still reach — more time to prepare, and the
+/// Scan the arc for the LATEST instant the arm can still reach - more time to prepare, and the
 /// arm is not committed before it has to be. Reachability judged by `Ik.Result.reached` rather
 /// than a threshold invented for the occasion.
 fn planInterception(s: *State, k: *Keeper) void {
@@ -381,10 +381,10 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
 
     if (k.planned) {
         if (tick % 5 == 0) {
-            // ── ★★★ THE TERMINAL KNOT *IS* THE INTERCEPTION ──
+            // -- *** THE TERMINAL KNOT *IS* THE INTERCEPTION --
             //
-            // With a fixed 0.88 s horizon the terminal knot — carrying by far the largest weight,
-            // 60 against a running 0.5 — sat AFTER the ball had already hit the floor. The plan
+            // With a fixed 0.88 s horizon the terminal knot - carrying by far the largest weight,
+            // 60 against a running 0.5 - sat AFTER the ball had already hit the floor. The plan
             // was asked with maximum emphasis to be somewhere at a moment that no longer meant
             // anything, and no amount of iteration helped: a 6-to-60 sweep gave 0.4981, 0.4985,
             // 0.4964. Identical.
@@ -396,7 +396,7 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
             const arrive: u32 = @min(max_horizon, zm.floori(u32, left / sim_dt));
             k.plan.setHorizon(@max(2, arrive));
 
-            // ★ AND THE REFERENCE IS A TRAJECTORY, NOT A DESTINATION. Copied into every knot it
+            // * AND THE REFERENCE IS A TRAJECTORY, NOT A DESTINATION. Copied into every knot it
             // asks the arm to be at the target from knot zero, which is the rocket's first wrong
             // question. Smoothstepped from here to there gives every knot somewhere reachable.
             for (0..k.plan.horizon + 1) |step| {
@@ -414,17 +414,17 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
                     k.reference[step * nstate + m.nq + v] = if (near_end) k.meet_qvel[v] else 0;
                 }
             }
-            // ★★★ THE REFERENCE MUST BE EXACTLY `(horizon + 1) × nstate`, AND THE HORIZON MOVES.
+            // *** THE REFERENCE MUST BE EXACTLY `(horizon + 1) x nstate`, AND THE HORIZON MOVES.
             //
             // `setHorizon` shrinks the plan in place while the buffer stays allocated for the
             // maximum, so handing over the whole thing describes a longer plan than the one
-            // being solved — 2210 entries for a plan wanting 1880. The assert in `optimize` is
+            // being solved - 2210 entries for a plan wanting 1880. The assert in `optimize` is
             // right to refuse it: a reference and a horizon that disagree is exactly the
             // silent-misalignment class of bug that has cost this project several turns.
             //
-            // ★ AND IT ONLY SURFACED IN THE BROWSER, because the probe runs ReleaseFast where
+            // * AND IT ONLY SURFACED IN THE BROWSER, because the probe runs ReleaseFast where
             // `assertf` is compiled out. The debug wasm build caught it. The probe's numbers
-            // still stand — it filled and read the same prefix — but the demo had to be told.
+            // still stand - it filled and read the same prefix - but the demo had to be told.
             const wanted: usize = (k.plan.horizon + 1) * nstate;
             _ = mpc.optimize(m, &k.data, &k.plan, .{
                 .state = s.state_w,
@@ -436,9 +436,9 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
         @memcpy(k.data.ctrl, k.plan.ctrl[0..m.nu]);
         mpc.shift(&k.plan);
     } else {
-        // ★ THE HONEST BASELINE, AND IT IS NOT A STRAWMAN: it is handed the interception point
+        // * THE HONEST BASELINE, AND IT IS NOT A STRAWMAN: it is handed the interception point
         // AND the moment, and servos straight to them. What it cannot express is "be moving when
-        // you get there" — a PD driven to a fixed pose arrives and stops.
+        // you get there" - a PD driven to a fixed pose arrives and stops.
         (ctl.PoseHold{
             .target = k.meet_pose,
             .kp = 900,
@@ -468,8 +468,8 @@ fn update(f: *z.Frame, s: *State) void {
     defer s.ui_host.render(f);
     const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
 
-    // ★★★ PROFILING OFF ACROSS THE PLANNER. `optimize` at 220 knots with six iterations executes
-    // an enormous amount of instrumented code per frame, and each zone costs two timestamps —
+    // *** PROFILING OFF ACROSS THE PLANNER. `optimize` at 220 knots with six iterations executes
+    // an enormous amount of instrumented code per frame, and each zone costs two timestamps -
     // on wasm, two JS boundary crossings. Measured here: the smoke runner exhausted Node's
     // 2 GB heap before finishing sixty frames. The cartpole hit this exact wall and the fix is
     // the same: the instrument is priced for a frame that does a few things, and a frame that
@@ -478,7 +478,7 @@ fn update(f: *z.Frame, s: *State) void {
     profiler.freeze();
     defer if (!was_frozen) profiler.unfreeze();
 
-    // ★ AUTO-REPEAT, so the thing loops and can be WATCHED rather than clicked at. A demo whose
+    // * AUTO-REPEAT, so the thing loops and can be WATCHED rather than clicked at. A demo whose
     // interesting second requires a button press gets seen once.
     if (s.running and !s.in_flight) {
         s.idle += f.time.delta_time;
@@ -543,8 +543,8 @@ fn drawKeeper(s: *State, gl: *z.WgpuGl, k: *const Keeper, depth: f32) void {
         s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(size, size, size));
         z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (is_hand) hand_colour else link_colour);
     }
-    // ★ WHERE THIS ARM HAS DECIDED TO MEET THE BALL. Drawn, because the decision happens before
-    // the motion does and is otherwise invisible — the arm reaching into empty space and waiting
+    // * WHERE THIS ARM HAS DECIDED TO MEET THE BALL. Drawn, because the decision happens before
+    // the motion does and is otherwise invisible - the arm reaching into empty space and waiting
     // there IS the plan, made visible.
     if (k.meet_time > 0) {
         const meet: Vec = toRender(ballAt(s.ball_p0, s.ball_v0, k.meet_time), depth);
@@ -552,9 +552,9 @@ fn drawKeeper(s: *State, gl: *z.WgpuGl, k: *const Keeper, depth: f32) void {
         z.drawMeshInstanced(gl, &s.cube, &s.transform, meet_colour);
     }
 
-    // ★★ THE HAND'S PATH. A planner that reaches AHEAD and waits looks identical to one that
+    // ** THE HAND'S PATH. A planner that reaches AHEAD and waits looks identical to one that
     // chases, in any single frame. Over a whole throw the two paths are unmistakable.
-    // ★★★ `1..0` IS AN INTEGER UNDERFLOW, NOT AN EMPTY RANGE — and this is the SECOND time this
+    // *** `1..0` IS AN INTEGER UNDERFLOW, NOT AN EMPTY RANGE - and this is the SECOND time this
     // session, after the identical line in `examples/rocket`. It runs fine in release on the
     // host and traps instantly in the debug wasm smoke run, which is exactly what that gate is
     // for. Any `for (1..count)` over a buffer that can be empty needs this guard.
@@ -564,7 +564,7 @@ fn drawKeeper(s: *State, gl: *z.WgpuGl, k: *const Keeper, depth: f32) void {
         }
     }
 
-    // ── ★★★ THE VERDICT, HELD ──
+    // -- *** THE VERDICT, HELD --
     //
     // The whole thing turns on one instant of about 30 ms. Drawing only the live frame throws it
     // away before anyone can look at it, which is why this demo read as "did something happen?".
@@ -593,7 +593,7 @@ fn drawBall(s: *State, gl: *z.WgpuGl) void {
     if (s.flight <= 0) {
         return;
     }
-    // The predicted arc, as a ghost — what the planner knows and the eye does not.
+    // The predicted arc, as a ghost - what the planner knows and the eye does not.
     var previous: Vec = toRender(s.ball_p0, 0);
     var t: f32 = 0.05;
     while (t < 1.4) : (t += 0.05) {
@@ -606,7 +606,7 @@ fn drawBall(s: *State, gl: *z.WgpuGl) void {
         previous = here;
     }
     inline for ([_]f32{ -1.3, 1.3 }) |depth| {
-        // ★ THE BALL STAYS ON SCREEN AFTER THE THROW. It used to vanish the instant the flight
+        // * THE BALL STAYS ON SCREEN AFTER THE THROW. It used to vanish the instant the flight
         // ended, so the scene the viewer was left studying had no ball in it at all.
         const at: Vec = toRender(ballAt(s.ball_p0, s.ball_v0, s.flight), depth);
         s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(0.07, 0.07, 0.07));
@@ -618,10 +618,10 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     const captured: bool = u.wantCaptureMouse();
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
 
-    // ── ★ THE CONTROLS STAY SMALL AND THE PROSE LEAVES THE BOX ──
+    // -- * THE CONTROLS STAY SMALL AND THE PROSE LEAVES THE BOX --
     //
     // On a phone the panel had grown to most of the screen and the robots were a sliver at the
-    // bottom — which is backwards for a demo whose entire argument is something you WATCH. The
+    // bottom - which is backwards for a demo whose entire argument is something you WATCH. The
     // window now holds only what needs a widget; the explanation is drawn as a borderless
     // overlay below, where it costs no interactive area at all.
     const panel_w: f32 = if (narrow) @min(viewport_w - 16, 340.0) else @min(380.0, viewport_w * 0.32);
@@ -644,7 +644,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         _ = u.checkbox("run", &s.running);
     }
 
-    // ★ BORDERLESS, NON-INTERACTIVE, AND OUT OF THE WAY — the recipe `ui.zig` names for an
+    // * BORDERLESS, NON-INTERACTIVE, AND OUT OF THE WAY - the recipe `ui.zig` names for an
     // overlay. `no_inputs` matters as much as `no_background`: prose that silently eats taps is
     // worse than prose in a box.
     u.setNextWindowPos(.{ 8, viewport_h - 118 }, .{});

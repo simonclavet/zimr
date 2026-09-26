@@ -15,12 +15,12 @@
 
 const std = @import("std");
 const expect = std.testing.expect;
-// GL-retirement P5a: retargeted at the LIVE umbrella — the namespace
+// GL-retirement P5a: retargeted at the LIVE umbrella - the namespace
 // shape these tests guard is now zimr's.
 const z = @import("../zimr.zig");
 
 test "features: z.features re-export is reachable through public zimr namespace" {
-    // Comptime — exists at the right path.
+    // Comptime - exists at the right path.
     comptime {
         _ = z.features.persistence_to_disk;
         _ = z.features.canvas;
@@ -43,7 +43,7 @@ test "features: z.features re-export is reachable through public zimr namespace"
 //     z.todo(@src(), "from features_test: dedup gate works on repeated calls");
 // }
 
-test "features: example-author gate pattern — `if (z.features.X)` compiles both arms" {
+test "features: example-author gate pattern - `if (z.features.X)` compiles both arms" {
     // The whole point of the feature flags is to let example
     // files have code like `if (z.features.implot) { u.plotLine(...); }`
     // that COMPILES today even though implot doesn't ship until
@@ -63,13 +63,13 @@ test "features: example-author gate pattern — `if (z.features.X)` compiles bot
 // Render-texture sampler filter (pixel-art support).
 //
 // A render texture's color sampler used to be hardcoded bilinear, which blurs a
-// low-res target when it is scaled up — fatal for pixel-art (smooth_pixelperfect
+// low-res target when it is scaled up - fatal for pixel-art (smooth_pixelperfect
 // scales a 322x182 RT by 2.5x). `nearest_filter` selects point sampling.
 //
 // The visual difference is nearly invisible on a high-DPR phone, so DON'T rely
 // on eyeballing a screenshot: pin the mapping mechanically. The GPU sampler is
 // created from `SamplerDesc.mag/min_filter_linear`, which the wgpu bridge
-// forwards to JS as "linear" vs "nearest" — so asserting the desc IS asserting
+// forwards to JS as "linear" vs "nearest" - so asserting the desc IS asserting
 // the filter that reaches WebGPU. These tests run on the host (no GPU needed).
 test "render texture: nearest_filter selects a POINT sampler, default stays bilinear" {
     const wgpu_texture = @import("../wgpu_texture.zig");
@@ -95,7 +95,7 @@ test "render texture: nearest_filter selects a POINT sampler, default stays bili
     try expect(crisp.mag_filter_linear == false);
     try expect(crisp.min_filter_linear == false);
 
-    // The default (loadRenderTexture): bilinear, as before — the option is
+    // The default (loadRenderTexture): bilinear, as before - the option is
     // non-breaking for existing RT users (e.g. pipeline_rendertarget).
     const smooth: wgpu.SamplerDesc = samplerFor(.{ .width = 64, .height = 64 });
     try expect(smooth.mag_filter_linear == true);
@@ -116,7 +116,7 @@ test "render texture: the nearest/linear choice reaches SamplerDesc unchanged" {
         };
         try expect(sd.mag_filter_linear == !nearest_filter);
         try expect(sd.min_filter_linear == !nearest_filter);
-        // Both filters must agree — a mag/min mismatch is the classic
+        // Both filters must agree - a mag/min mismatch is the classic
         // "crisp when zoomed in, blurry when zoomed out" bug.
         try expect(sd.mag_filter_linear == sd.min_filter_linear);
     }
@@ -126,7 +126,7 @@ test "render texture: the nearest/linear choice reaches SamplerDesc unchanged" {
 // Audio: the bundled WAV must actually DECODE.
 //
 // The smoke harness stubs the audio device, so it can't tell a working decode
-// from a silent failure — `waves.loadFromMemory` returns an EMPTY wave on
+// from a silent failure - `waves.loadFromMemory` returns an EMPTY wave on
 // failure (raylib's contract) rather than erroring, so a broken asset would ship
 // as a UI reading "wav decode FAILED" and cost a device round-trip to discover.
 // The decoder is pure CPU, so pin it here instead.
@@ -149,7 +149,7 @@ test "audio: test_sine.wav decodes to real PCM" {
 // ---------------------------------------------------------------------------
 // Audio: the composer's ADSR must actually SHAPE the wave.
 //
-// This is checkable on the host because tone generation is pure CPU — no device,
+// This is checkable on the host because tone generation is pure CPU - no device,
 // no browser. Measuring the peak |sample| inside short windows recovers the
 // envelope: at 440 Hz a 20 ms window holds ~9 periods, so its max is the
 // envelope's value there. Without this the only "test" would be listening.
@@ -211,17 +211,17 @@ test "audio: composer ADSR shapes the tone (attack/sustain/release)" {
 // This exists because the failure was real: `step` was already in zimrmath as
 // `stepEdge`, a shader author went looking for `step`, did not find it, and
 // hand-rolled a duplicate. And `clamp` was invisible to `grep '^pub fn clamp'`
-// because it is declared `pub inline fn` — so even a careful grep lied.
+// because it is declared `pub inline fn` - so even a careful grep lied.
 //
 // The dead spellings (`mix`, `saturate`, `stepEdge`, `sin`, `cos`, `sincos`) are
 // NOT pub. They survive as PRIVATE, empty decls in zimrmath.zig whose doc comment
 // names the canonical spelling, so `zm.mix` fails with "not marked pub" and Zig
-// points you at that comment — discoverable, but not a second public name for the
+// points you at that comment - discoverable, but not a second public name for the
 // same operation.
 //
 // `sin`/`cos`/`sincos` joined that list for a DIFFERENT reason than the other
 // three. They were not badly spelled; they were UNDER-specified. Once `sinTurns`
-// existed alongside `sinRad`, a bare `sin` no longer names an operation — it names
+// existed alongside `sinRad`, a bare `sin` no longer names an operation - it names
 // two, and the caller cannot see which from the call site. So the canonical list
 // below pins `sinRad`/`cosRad`, and the bare spellings are pinned dead: a reader
 // who types `zm.sin` gets pointed at the pair and has to pick a unit.
@@ -250,7 +250,7 @@ test "zm: the GPU math vocabulary is reachable by its standard names" {
     }
 
     // ONE public spelling per operation. A dead spelling that becomes pub again
-    // is a second name for the same op — exactly the drift this file prevents.
+    // is a second name for the same op - exactly the drift this file prevents.
     const dead = [_][]const u8{ "mix", "saturate", "stepEdge", "sin", "cos", "sincos" };
     inline for (dead) |n| {
         if (@hasDecl(zm, n)) {
@@ -271,7 +271,7 @@ test "zm: the GPU math vocabulary is reachable by its standard names" {
     try expect(zm.clamp01(lo) == 0.0);
     try expect(zm.lerp(a, b, 0.25) == 2.5);
 
-    // clamp01 is vector-generic now — it absorbed saturate's body, so the case
+    // clamp01 is vector-generic now - it absorbed saturate's body, so the case
     // that used to need the other spelling is just clamp01.
     const v: zm.Vec = zm.clamp01(zm.f32x4(-0.5, 0.25, 1.5, 0.75));
     try expect(v[0] == 0.0);
@@ -280,7 +280,7 @@ test "zm: the GPU math vocabulary is reachable by its standard names" {
     // The DEAD spellings must NOT be visible from out here. They live on as
     // PRIVATE, empty decls in zimrmath.zig, so `zm.mix` fails with "not marked
     // pub" and Zig points at the decl, whose doc comment names the canonical
-    // spelling — discoverable, but not a second public name for the operation.
+    // spelling - discoverable, but not a second public name for the operation.
     // zimrmath.zig's own test pins that those private decls still exist; the
     // inline-for above pins that they never come back as pub.
     try expect(!@hasDecl(zm, "mix"));

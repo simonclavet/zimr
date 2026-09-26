@@ -1,7 +1,7 @@
 // examples/input_mouse.zig - ball-follows-cursor with all seven
 // mouse buttons mapped to different ball colours, plus cursor
 // visibility toggle.
-// Port of raylib's `examples/core/core_input_mouse.c` (★1,
+// Port of raylib's `examples/core/core_input_mouse.c` (*1,
 // ~81 LOC).  Validates that every distinct mouse button raylib
 // exposes (left/middle/right/side/extra/forward/back) is
 // distinguishable as a separate event, and that the OS cursor
@@ -21,13 +21,13 @@
 // What this exercises:
 //   - `z.isMouseButtonPressed` for all 7 button variants.
 //   - `z.showCursor` / `hideCursor` / `isCursorHidden`.
-//   - Mouse position bridge: `Vec2 → Vec2` via the inline
+//   - Mouse position bridge: `Vec2 -> Vec2` via the inline
 //     `.{ mp.x, mp.y }` pattern.
 // Controls:
 //   Mouse position      moves the ball
-//   Left click          ball → maroon
-//   Middle click        ball → lime
-//   Right click         ball → dark blue (default)
+//   Left click          ball -> maroon
+//   Middle click        ball -> lime
+//   Right click         ball -> dark blue (default)
 //   Side / back / etc.  see notes above; varies by hardware
 //   H                   toggle cursor visibility
 
@@ -82,11 +82,11 @@ fn update(f: *z.Frame, state: *State) void {
         }
     }
 
-    // ---- Mouse position → ball position ---------------------------------
+    // ---- Mouse position -> ball position ---------------------------------
     const mp: Vec2 = z.getMousePosition(f.input);
     state.pos = .{ mp[0], mp[1] };
 
-    // ---- Button → colour mapping.  Each is a rising-edge so the
+    // ---- Button -> colour mapping.  Each is a rising-edge so the
     // colour sticks until the next click.
     if (z.isMouseButtonPressed(f.input, .left)) {
         state.color = c.maroon;

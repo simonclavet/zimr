@@ -1,4 +1,4 @@
-//! textures_polygon_drawing — port of raylib [textures] example.
+//! textures_polygon_drawing - port of raylib [textures] example.
 //! Maps cat.png onto an irregular 10-sided polygon and spins it. zimr's textured
 //! triangle path (drawTexturedTriangles) lives in the 3D pipeline, so we view a
 //! flat z=0 triangle-fan through an ORTHOGRAPHIC camera looking straight down

@@ -1,15 +1,15 @@
-//! urdf.zig — read a URDF into a description zimr can build a robot from.
+//! urdf.zig - read a URDF into a description zimr can build a robot from.
 //!
 //! Sits between `codecs.xml`, which turns bytes into a tree, and `robot.zig`, which
 //! simulates. It owns exactly one job: the SEMANTICS and the CONVENTIONS. What a `<joint>`
 //! element means, which frame an axis lives in, and how URDF's world relates to zimr's.
 //!
-//! ── THE ARCHITECTURE, AND WHY IT IS THIS SHAPE ──
+//! -- THE ARCHITECTURE, AND WHY IT IS THIS SHAPE --
 //!
-//!     bytes → codecs.xml → urdf.parse → urdf.Robot → { emit Zig | build a Model }
+//!     bytes -> codecs.xml -> urdf.parse -> urdf.Robot -> { emit Zig | build a Model }
 //!
 //! One semantic pass producing one runtime value, with thin backends after it. The hard
-//! part — tree construction, frame conversion, unit handling — happens once and both
+//! part - tree construction, frame conversion, unit handling - happens once and both
 //! consumers inherit it. Writing a code generator and a runtime loader as separate parsers
 //! would mean two chances to get the conventions wrong and no way to test one against the
 //! other.
@@ -18,10 +18,10 @@
 //! zimr's conventions; the mapping onto `robot.ModelSpec` is the backend's business. That
 //! keeps this file testable on its own and keeps the engine free of file formats.
 //!
-//! ── WHAT IS SUPPORTED, AND WHAT IS REFUSED ──
+//! -- WHAT IS SUPPORTED, AND WHAT IS REFUSED --
 //!
 //! Links, joints (revolute, continuous, prismatic, fixed, floating), inertials, and
-//! primitive collision geometry. Meshes are recorded by filename but not loaded — that is
+//! primitive collision geometry. Meshes are recorded by filename but not loaded - that is
 //! Milestone 2.
 //!
 //! Everything else is an ERROR carrying the element that caused it. `planar` joints, xacro
@@ -57,7 +57,7 @@ pub const Error = error{
     BadName,
     /// A joint naming a link that does not exist.
     UnknownLink,
-    /// Zero roots, or more than one — a URDF must be a single tree.
+    /// Zero roots, or more than one - a URDF must be a single tree.
     NotATree,
     /// A joint chain that loops back on itself.
     CyclicTree,
@@ -77,18 +77,18 @@ pub const Diagnostic = struct {
     line: u32 = 0,
 };
 
-/// ★ URDF IS Z-UP; ZIMR IS Y-UP. This is the rotation between them, and applying it is a
+/// * URDF IS Z-UP; ZIMR IS Y-UP. This is the rotation between them, and applying it is a
 /// one-line operation for a reason worth understanding.
 ///
 /// A rigid rotation of the entire model leaves every body's pose RELATIVE TO ITS PARENT
-/// unchanged — only the root's pose relative to the world moves. So the whole axis
+/// unchanged - only the root's pose relative to the world moves. So the whole axis
 /// conversion is: rotate the root. Joint axes, inertia tensors and child transforms are all
 /// expressed in their own parent's frame and come along for free.
 ///
-/// The rotation is −90° about X, which sends `+Z → +Y` and `+Y → −Z`: what URDF calls up is
-/// what zimr calls up, and gravity along `−Y` is then correct without touching the model.
+/// The rotation is -90 deg about X, which sends `+Z -> +Y` and `+Y -> -Z`: what URDF calls up is
+/// what zimr calls up, and gravity along `-Y` is then correct without touching the model.
 ///
-/// §1.2 of the plan promised this conversion would live in the importer. This is it, and it
+/// section 1.2 of the plan promised this conversion would live in the importer. This is it, and it
 /// is four lines because the tree structure does the rest.
 pub const z_up_to_y_up: Quat = quatFromNormAxisAngle(vec(1, 0, 0), -pi * 0.5);
 
@@ -100,7 +100,7 @@ pub const JointKind = enum {
     /// A prismatic slider (URDF `prismatic`).
     slide,
     /// Welded to the parent. Contributes NO degrees of freedom, which in zimr's model is
-    /// simply a body with no joints — the same thing, expressed structurally.
+    /// simply a body with no joints - the same thing, expressed structurally.
     fixed,
     /// Six DOFs (URDF `floating`).
     free,
@@ -116,10 +116,10 @@ pub const Joint = struct {
     limit: ?[2]f32,
     /// `<dynamics damping=...>`.
     damping: f32,
-    /// `<mimic>`: this joint follows another as `multiplier · other + offset`.
+    /// `<mimic>`: this joint follows another as `multiplier * other + offset`.
     ///
-    /// Recorded rather than resolved, because in zimr's model a mimic is a FIXED TENDON —
-    /// exactly `TendonSpec` with coefficients `(1, −multiplier)`. Phase 8 built the
+    /// Recorded rather than resolved, because in zimr's model a mimic is a FIXED TENDON -
+    /// exactly `TendonSpec` with coefficients `(1, -multiplier)`. Phase 8 built the
     /// mechanism before this file existed; the backend just has to emit it.
     mimic: ?struct {
         joint: []const u8,
@@ -137,7 +137,7 @@ pub const Inertial = struct {
     ///
     /// URDF states the tensor in the `<inertial><origin>` frame, which may be ROTATED
     /// relative to the body. The rotation is applied here rather than being passed on, so
-    /// the engine's spec never needs an inertia orientation — §4i-bis identified that as a
+    /// the engine's spec never needs an inertia orientation - section 4i-bis identified that as a
     /// real gap and this is the cheaper half of the fix.
     full_inertia: [6]f32,
 };
@@ -155,8 +155,8 @@ pub const Shape = union(enum) {
 
 /// Load every `.mesh` shape and replace it with the `.hull` its vertices span.
 ///
-/// ★ THE FILE I/O IS THE CALLER'S. `urdf.zig` parses bytes and knows nothing about paths,
-/// virtual filesystems or asset bundles — which is what lets it be tested without a disk and
+/// * THE FILE I/O IS THE CALLER'S. `urdf.zig` parses bytes and knows nothing about paths,
+/// virtual filesystems or asset bundles - which is what lets it be tested without a disk and
 /// used from a build tool, a game and a browser alike. `load` is handed the filename exactly
 /// as the URDF wrote it and returns bytes or null.
 ///
@@ -240,8 +240,8 @@ pub const Body = struct {
     name: []const u8,
     /// Index into `Robot.bodies`, always LESS than this body's own index. Null for the root.
     parent: ?u32,
-    /// Pose relative to the parent's frame — which is exactly URDF's joint `<origin>`,
-    /// because URDF puts the parent→child transform on the joint and zimr puts it on the
+    /// Pose relative to the parent's frame - which is exactly URDF's joint `<origin>`,
+    /// because URDF puts the parent->child transform on the joint and zimr puts it on the
     /// body. The two conventions line up with no algebra.
     pos: Vec,
     rot: Quat,
@@ -327,7 +327,7 @@ const Reader = struct {
         joint: Joint,
         parent_name: []const u8,
         child_name: []const u8,
-        /// Resolved in `buildTree`, once. Everything downstream works in indices — the
+        /// Resolved in `buildTree`, once. Everything downstream works in indices - the
         /// names are kept only for error messages.
         parent: u32 = 0,
         child: u32 = 0,
@@ -358,7 +358,7 @@ const Reader = struct {
             } else if (std.mem.eql(u8, element.name, "joint")) {
                 try joints.append(self.arena, try self.readJoint(element));
             }
-            // Anything else at the top level — <material>, <transmission>, <gazebo> — is
+            // Anything else at the top level - <material>, <transmission>, <gazebo> - is
             // ignored on purpose. Those describe appearance, ROS plumbing or simulator
             // hints, none of which affect the mechanism. Silently skipping an element that
             // cannot change the robot is different from silently skipping one that can,
@@ -376,18 +376,18 @@ const Reader = struct {
     /// URDF gives a set of joints, each naming a parent and a child link; the root is the
     /// link that is never anybody's child. Two failure modes are checked rather than
     /// assumed, because both produce a plausible-looking half-robot if ignored: more than
-    /// one root (a forest — usually a typo in a link name) and a cycle.
+    /// one root (a forest - usually a typo in a link name) and a cycle.
     fn buildTree(
         self: *Reader,
         links: []RawLink,
         joints: []RawJoint,
         root_line: u32,
     ) Error![]Body {
-        // ★ DUPLICATE NAMES FIRST, before anything resolves a name to an index.
+        // * DUPLICATE NAMES FIRST, before anything resolves a name to an index.
         //
         // `findLink` returns the first match, so two links sharing a name would leave the
         // second unreachable while every joint naming it silently wired to the first. The
-        // result is a robot that imports "successfully" with the wrong topology — the exact
+        // result is a robot that imports "successfully" with the wrong topology - the exact
         // failure this whole file is arranged to prevent, and one urdfdom checks for too.
         for (links, 0..) |link, i| {
             for (links[i + 1 ..]) |other| {
@@ -405,7 +405,7 @@ const Reader = struct {
         }
 
         // Resolve names to indices ONCE and keep them. Linear scans are fine at these sizes
-        // — a large humanoid has fewer than a hundred links — but doing them repeatedly, or
+        // - a large humanoid has fewer than a hundred links - but doing them repeatedly, or
         // comparing names again later, is how a duplicate slips back in.
         for (joints, 0..) |*joint, joint_index| {
             joint.parent = try self.findLink(links, joint.parent_name, joint.line);
@@ -475,7 +475,7 @@ const Reader = struct {
                 .name = link.name,
                 .parent = null,
                 .pos = vec_zero,
-                // ★ The Z-up → Y-up conversion, in its entirety. Only the root carries it;
+                // * The Z-up -> Y-up conversion, in its entirety. Only the root carries it;
                 // every other body's pose is relative to its parent and is already correct
                 // in the rotated frame.
                 .rot = if (i == 0) z_up_to_y_up else quat_identity,
@@ -488,7 +488,7 @@ const Reader = struct {
                 body.parent = new_index[joint.parent];
                 body.pos = joint.pos;
                 body.rot = joint.rot;
-                // A fixed joint contributes no DOF, so it becomes a body with no joint —
+                // A fixed joint contributes no DOF, so it becomes a body with no joint -
                 // which is what a weld IS in generalized coordinates, not an approximation
                 // of one.
                 body.joint = if (joint.joint.kind == .fixed) null else joint.joint;
@@ -521,7 +521,7 @@ const Reader = struct {
         var geoms: std.ArrayListUnmanaged(Geom) = .empty;
         for (self.doc.childrenOf(element)) |*child| {
             // Only <collision> becomes a geom. <visual> describes appearance and would
-            // double the contact geometry if imported — real models give them different
+            // double the contact geometry if imported - real models give them different
             // shapes on purpose, a detailed mesh to look at and a crude hull to collide.
             if (!std.mem.eql(u8, child.name, "collision")) {
                 continue;
@@ -561,9 +561,9 @@ const Reader = struct {
 
         const pose: Pose = try self.readOrigin(element);
 
-        // ★ Rotate the tensor into the BODY frame if the inertial origin is rotated.
+        // * Rotate the tensor into the BODY frame if the inertial origin is rotated.
         //
-        // `I' = R·I·Rᵀ`. Doing it here means `robot.InertialSpec` never needs an
+        // `I' = R*I*R^T`. Doing it here means `robot.InertialSpec` never needs an
         // orientation field: the engine's spec stays minimal and the conversion lives with
         // the other conversions. The common case is an identity rotation and costs nothing.
         if (length3(pose.rot - quat_identity) < 1.0e-7 and @abs(pose.rot[3] - 1.0) < 1.0e-7) {
@@ -635,7 +635,7 @@ const Reader = struct {
             .free
         else
             // `planar` is the remaining URDF type. It is two translations and a rotation,
-            // expressible as three joints on one body — but silently expanding it would
+            // expressible as three joints on one body - but silently expanding it would
             // change the DOF count from what the file says, so it is refused until someone
             // has a model that needs it.
             return self.fail(Error.Unsupported, type_text, element.line);
@@ -652,7 +652,7 @@ const Reader = struct {
             // the default a reader would guess (zimr's own joints default to +Y).
             vec(1, 0, 0);
 
-        // ★ A limit whose bounds are absent must NOT default to zero. `[0, 0]` is a joint
+        // * A limit whose bounds are absent must NOT default to zero. `[0, 0]` is a joint
         // welded shut, and a robot whose every joint is locked looks like a physics bug
         // rather than an import one. URDF requires both bounds on revolute and prismatic
         // joints, so a missing one is a malformed file and is refused.
@@ -776,27 +776,27 @@ const Reader = struct {
 
 /// Reduce a mesh's vertices to a small set that spans the same convex hull.
 ///
-/// ── ★ WHY THIS EXISTS: 2.7 MB OF GENERATED SOURCE ──
+/// -- * WHY THIS EXISTS: 2.7 MB OF GENERATED SOURCE --
 ///
-/// A KUKA link's collision mesh is 3038 triangles — 9114 vertices, since STL repeats every
+/// A KUKA link's collision mesh is 3038 triangles - 9114 vertices, since STL repeats every
 /// shared corner. Emitted verbatim that is 347 KB of Zig per link and 2.7 MB for the arm,
 /// to describe a shape whose convex hull has perhaps eighty corners. The compiler would
 /// chew through it and the file would be unreadable.
 ///
-/// ── THE IDEA ──
+/// -- THE IDEA --
 ///
 /// Every vertex of a convex hull is the FARTHEST point of the cloud in some direction. So
 /// sampling many directions and keeping the extreme point in each recovers the hull's
-/// corners and discards everything interior — which is most of a mesh. What comes back is a
+/// corners and discards everything interior - which is most of a mesh. What comes back is a
 /// subset of the original points, so it can only under-approximate: no direction produces a
 /// point the cloud does not contain, and the hull of the subset is contained in the hull of
 /// the whole.
 ///
 /// Directions come from a Fibonacci sphere, which spreads points on a sphere far more evenly
-/// than latitude/longitude bands — those cluster at the poles and would resolve the top of a
+/// than latitude/longitude bands - those cluster at the poles and would resolve the top of a
 /// shape finely while missing detail around its equator.
 ///
-/// ── WHY A SINGLE HULL AT ALL ──
+/// -- WHY A SINGLE HULL AT ALL --
 ///
 /// A concave link becomes its convex hull, which is an over-approximation of the solid.
 /// That is not a shortcut relative to MuJoCo: **MuJoCo's collision system is convex-only and
@@ -816,8 +816,8 @@ pub fn hullPoints(
     var kept: std.ArrayListUnmanaged(Vec) = .empty;
     errdefer kept.deinit(gpa);
 
-    // ★ THE SIX AXES FIRST, then the spread. A Fibonacci spiral distributes directions
-    // evenly but hits no axis exactly, so the extreme point along ±X, ±Y, ±Z could be
+    // * THE SIX AXES FIRST, then the spread. A Fibonacci spiral distributes directions
+    // evenly but hits no axis exactly, so the extreme point along +/-X, +/-Y, +/-Z could be
     // missed by a fraction of a millimetre. That matters more than it sounds: the kept
     // points' bounding box becomes the geom's `bounds_half_extent`, which is what the
     // inertia is computed from. Seeding the axes makes the AABB EXACT rather than nearly
@@ -853,7 +853,7 @@ pub fn hullPoints(
             vertices[best * 3 + 2],
         );
         // Neighbouring directions usually pick the SAME corner, so most iterations add
-        // nothing — which is the mechanism working, not a waste.
+        // nothing - which is the mechanism working, not a waste.
         var already: bool = false;
         for (kept.items) |existing| {
             if (length3(existing - winner) < 1.0e-6) {
@@ -883,16 +883,16 @@ fn fibonacciDirection(i: u32, n: u32) Vec {
     return vec(radius * @cos(theta), y, radius * @sin(theta));
 }
 
-/// ★ URDF's roll-pitch-yaw, as a quaternion.
+/// * URDF's roll-pitch-yaw, as a quaternion.
 ///
 /// THE most dangerous conversion in this file: get the composition order wrong and every
-/// link is subtly rotated, which produces a robot of the right shape in the wrong pose —
+/// link is subtly rotated, which produces a robot of the right shape in the wrong pose -
 /// the failure that is hardest to see and easiest to ship.
 ///
 /// The order is FIXED-AXIS: roll about world X, then pitch about world Y, then yaw about
 /// world Z, which composes right to left as
 ///
-///     R = Rz(yaw) · Ry(pitch) · Rx(roll)
+///     R = Rz(yaw) * Ry(pitch) * Rx(roll)
 ///
 /// Confirmed against two independent implementations rather than derived from the spec's
 /// prose: `URDFLoader.js` builds a three.js Euler with order `'ZYX'`, and `tinyurdfparser`
@@ -904,7 +904,7 @@ pub fn quatFromRpy(rpy: Vec) Quat {
     return qmul(yaw, qmul(pitch, roll));
 }
 
-/// `I' = R·I·Rᵀ` on the packed six-component form.
+/// `I' = R*I*R^T` on the packed six-component form.
 ///
 /// The same operation `robot.Inertia.rotated` performs, repeated here so this file does not
 /// depend on the engine. It is six dot products; sharing it would cost a dependency worth
@@ -915,7 +915,7 @@ fn rotateInertia(packed_tensor: [6]f32, rot: Quat) [6]f32 {
         zm.rotate(rot, vec(0, 1, 0)),
         zm.rotate(rot, vec(0, 0, 1)),
     };
-    // Rows of R are columns of Rᵀ; `I'[a][b] = rowᵃ · (I · rowᵇ)`.
+    // Rows of R are columns of R^T; `I'[a][b] = row^a * (I * row^b)`.
     const rows = [3]Vec{
         vec(columns[0][0], columns[1][0], columns[2][0]),
         vec(columns[0][1], columns[1][1], columns[2][1]),
@@ -960,23 +960,23 @@ fn expectVec(want: Vec, got: Vec, tol: f32) !void {
     }
 }
 
-test "urdf: rpy composes as Rz(yaw)·Ry(pitch)·Rx(roll)" {
-    // ★ The conversion that decides whether every link is in the right pose. Checked by
-    // what the rotation DOES to basis vectors, not by comparing quaternion components —
+test "urdf: rpy composes as Rz(yaw)*Ry(pitch)*Rx(roll)" {
+    // * The conversion that decides whether every link is in the right pose. Checked by
+    // what the rotation DOES to basis vectors, not by comparing quaternion components -
     // components can agree with a wrong convention that happens to share a sign pattern,
     // where the mapping of axes cannot.
     const quarter: f32 = pi * 0.5;
 
-    // Roll alone: +90° about X sends +Y to +Z.
+    // Roll alone: +90 deg about X sends +Y to +Z.
     try expectVec(vec(0, 0, 1), zm.rotate(quatFromRpy(vec(quarter, 0, 0)), vec(0, 1, 0)), 1.0e-6);
-    // Pitch alone: +90° about Y sends +Z to +X.
+    // Pitch alone: +90 deg about Y sends +Z to +X.
     try expectVec(vec(1, 0, 0), zm.rotate(quatFromRpy(vec(0, quarter, 0)), vec(0, 0, 1)), 1.0e-6);
-    // Yaw alone: +90° about Z sends +X to +Y.
+    // Yaw alone: +90 deg about Z sends +X to +Y.
     try expectVec(vec(0, 1, 0), zm.rotate(quatFromRpy(vec(0, 0, quarter)), vec(1, 0, 0)), 1.0e-6);
 
-    // ★ The order, which is the part a wrong implementation gets wrong. Roll then yaw,
-    // both 90°: R = Rz·Rx. Applied to +Y, Rx sends it to +Z, then Rz leaves +Z alone.
-    // The other order (Rx·Rz) would send +Y to −X, so this single case separates them.
+    // * The order, which is the part a wrong implementation gets wrong. Roll then yaw,
+    // both 90 deg: R = Rz*Rx. Applied to +Y, Rx sends it to +Z, then Rz leaves +Z alone.
+    // The other order (Rx*Rz) would send +Y to -X, so this single case separates them.
     try expectVec(
         vec(0, 0, 1),
         zm.rotate(quatFromRpy(vec(quarter, 0, quarter)), vec(0, 1, 0)),
@@ -1035,8 +1035,8 @@ test "urdf: a two-link arm imports with the tree, poses and axes intact" {
     // URDF gives full box extents; zimr wants half.
     try expectVec(vec(0.1, 0.1, 0.05), base.geoms[0].shape.box, 1.0e-6);
 
-    // The child carries the JOINT's origin as its own pose — the convention that lines up
-    // without algebra — and the axis is untouched because both express it in the child.
+    // The child carries the JOINT's origin as its own pose - the convention that lines up
+    // without algebra - and the axis is untouched because both express it in the child.
     const upper: Body = robot.bodies[1];
     try expectEqual(@as(?u32, 0), upper.parent);
     try expectVec(vec(0, 0, 0.1), upper.pos, 1.0e-6);
@@ -1062,7 +1062,7 @@ test "urdf: a fixed joint becomes a body with no joint, not a special case" {
     var robot: Robot = try parse(std.testing.allocator, source, null);
     defer robot.deinit();
     const b: Body = robot.bodies[1];
-    // Attached, positioned, and carrying no degrees of freedom — which is what a weld IS in
+    // Attached, positioned, and carrying no degrees of freedom - which is what a weld IS in
     // generalized coordinates rather than an approximation of one.
     try expectEqual(@as(?u32, 0), b.parent);
     try expectVec(vec(0.3, 0, 0), b.pos, 1.0e-6);
@@ -1100,9 +1100,9 @@ test "urdf: a mimic joint is recorded, because it is a tendon" {
 }
 
 test "urdf: a rotated inertial origin rotates the tensor into the body frame" {
-    // ★ The gap §4i-bis found. URDF states the tensor in the `<inertial><origin>` frame;
-    // zimr's spec has no orientation field, so the rotation must be applied HERE. A 90°
-    // roll about X swaps the Y and Z moments — a check that fails loudly if the rotation is
+    // * The gap section 4i-bis found. URDF states the tensor in the `<inertial><origin>` frame;
+    // zimr's spec has no orientation field, so the rotation must be applied HERE. A 90 deg
+    // roll about X swaps the Y and Z moments - a check that fails loudly if the rotation is
     // skipped or applied transposed.
     const source: []const u8 =
         \\<robot name="tilted">
@@ -1169,8 +1169,8 @@ test "urdf: malformed topology is refused rather than half-imported" {
             ,
             .err = Error.Unsupported,
         },
-        // ★ Two links sharing a name. Without the check the second is unreachable and
-        // every joint naming it wires silently to the first — a robot that imports
+        // * Two links sharing a name. Without the check the second is unreachable and
+        // every joint naming it wires silently to the first - a robot that imports
         // "successfully" with the wrong topology.
         .{
             .source =
@@ -1192,7 +1192,7 @@ test "urdf: malformed topology is refused rather than half-imported" {
             ,
             .err = Error.BadName,
         },
-        // ★ A revolute joint with no <limit>. Defaulting the bounds to zero would weld it
+        // * A revolute joint with no <limit>. Defaulting the bounds to zero would weld it
         // shut, and a robot whose every joint is locked reads as a physics bug.
         .{
             .source =
@@ -1240,7 +1240,7 @@ test "urdf: malformed topology is refused rather than half-imported" {
 }
 
 test "hullPoints: a cube reduces to its eight corners, whatever the cloud" {
-    // ★ The property that makes the reduction safe: the extreme point in any direction is
+    // * The property that makes the reduction safe: the extreme point in any direction is
     // a corner, so a cube must come back as EXACTLY eight points however many interior or
     // face-centre vertices the mesh carried. Anything more means the deduplication is
     // broken; anything less means the sampling missed a corner.
@@ -1274,8 +1274,8 @@ test "hullPoints: a cube reduces to its eight corners, whatever the cloud" {
 }
 
 test "hullPoints: a real KUKA collision mesh reduces by two orders of magnitude" {
-    // ★ THE MEASUREMENT THAT JUSTIFIES THE WHOLE FUNCTION. 9114 vertices emitted verbatim
-    // would be 347 KB of generated Zig per link — 2.7 MB for the arm — to describe a shape
+    // * THE MEASUREMENT THAT JUSTIFIES THE WHOLE FUNCTION. 9114 vertices emitted verbatim
+    // would be 347 KB of generated Zig per link - 2.7 MB for the arm - to describe a shape
     // with well under a hundred corners.
     const gpa: Allocator = std.testing.allocator;
     const bytes: []const u8 = @embedFile("tests/fixtures/robot/meshes/link_0.stl");
@@ -1291,8 +1291,8 @@ test "hullPoints: a real KUKA collision mesh reduces by two orders of magnitude"
     try expect(points.len <= 128);
     try expect(points.len * 50 < mesh.positions.len / 3);
 
-    // ★ The reduction must not SHRINK the shape: the kept points are a subset of the
-    // original cloud, so their bounding box can only be contained in the original's — and
+    // * The reduction must not SHRINK the shape: the kept points are a subset of the
+    // original cloud, so their bounding box can only be contained in the original's - and
     // for a hull it should very nearly EQUAL it, since the extreme point along each axis is
     // always a hull vertex and the direction set includes directions close to each axis.
     var mesh_lo: Vec = splat(1e9);
@@ -1316,7 +1316,7 @@ test "hullPoints: a real KUKA collision mesh reduces by two orders of magnitude"
 }
 
 test "urdf: the real KUKA iiwa imports as a seven-DOF chain" {
-    // ★ The whole point. A file written by someone else, for a different toolchain,
+    // * The whole point. A file written by someone else, for a different toolchain,
     // describing a robot that exists.
     const source: []const u8 = @embedFile("tests/fixtures/robot/kuka_iiwa.urdf");
     var diagnostic: Diagnostic = .{};
@@ -1366,15 +1366,15 @@ test "urdf: the real KUKA iiwa imports as a seven-DOF chain" {
 }
 
 // =============================================================================
-// The emitter — urdf.Robot to Zig source
+// The emitter - urdf.Robot to Zig source
 //
-// ★ WHY GENERATE SOURCE RATHER THAN BUILD A MODEL AT RUNTIME.
+// * WHY GENERATE SOURCE RATHER THAN BUILD A MODEL AT RUNTIME.
 //
 // Three reasons, in order of weight. The generated model is COMPTIME-VALIDATED like any
 // hand-written one, so an import bug becomes a compile error naming the body rather than a
 // wrong number at runtime. No XML parser ships in the binary. And the output is a file that
-// can be READ AND DIFFED — which is how a convention regression gets noticed, and the reason
-// §4i-ter decided the generated file is checked in rather than treated as a build artifact.
+// can be READ AND DIFFED - which is how a convention regression gets noticed, and the reason
+// section 4i-ter decided the generated file is checked in rather than treated as a build artifact.
 //
 // A runtime path stays possible and is deliberately not foreclosed: `urdf.Robot` is the
 // single semantic representation and a runtime builder would consume the same value.
@@ -1382,12 +1382,12 @@ test "urdf: the real KUKA iiwa imports as a seven-DOF chain" {
 
 pub const EmitError = error{
     /// A `<mimic>` with a nonzero offset. A fixed tendon expresses
-    /// `q_follower = multiplier · q_driver` exactly but not the affine `+ offset`, so this
+    /// `q_follower = multiplier * q_driver` exactly but not the affine `+ offset`, so this
     /// is refused rather than silently dropped. Almost every real mimic has offset zero;
-    /// §1.1's rule says do not build the escape hatch until a model needs it.
+    /// section 1.1's rule says do not build the escape hatch until a model needs it.
     MimicOffsetUnsupported,
     /// A name that is not a valid Zig identifier. `Spec()` turns names into enum fields, so
-    /// a dash or a dot would produce source that does not compile — better to say so here,
+    /// a dash or a dot would produce source that does not compile - better to say so here,
     /// naming the offender, than to emit a file that fails mysteriously.
     NameNotAnIdentifier,
     OutOfMemory,
@@ -1445,7 +1445,7 @@ pub fn emitZig(
         try emitQuat(writer, body.rot);
         try writer.print(",\n", .{});
 
-        // A `fixed` URDF joint arrives here as no joint at all — a weld IS zero degrees of
+        // A `fixed` URDF joint arrives here as no joint at all - a weld IS zero degrees of
         // freedom, so there is nothing to emit.
         if (body.joint) |joint| {
             try writer.print("            .joints = &.{{.{{\n", .{});
@@ -1468,13 +1468,13 @@ pub fn emitZig(
             if (joint.damping != 0.0) {
                 try writer.print("                .damping = {d},\n", .{joint.damping});
             }
-            // ★ Armature, added by the importer rather than read from the file.
+            // * Armature, added by the importer rather than read from the file.
             //
             // URDF has no armature field: it describes the mechanism, not the gearbox. But
             // a real geared joint has rotor inertia, and without it a model with light
-            // distal links is badly conditioned — which shows up as a solver that will not
+            // distal links is badly conditioned - which shows up as a solver that will not
             // converge rather than as anything recognisable. A small fraction of the
-            // joint's own inertia is the rule §3b settled on, and stating it here beats
+            // joint's own inertia is the rule section 3b settled on, and stating it here beats
             // discovering it as instability.
             try writer.print("                .armature = {d},\n", .{default_armature});
             try writer.print("            }},}},\n", .{});
@@ -1495,15 +1495,15 @@ pub fn emitZig(
         var emitted_geoms: u32 = 0;
         for (body.geoms) |geom| {
             if (geom.shape == .mesh) {
-                continue; // unresolved; counted and reported by the caller — see `meshCount`
+                continue; // unresolved; counted and reported by the caller - see `meshCount`
             }
             if (emitted_geoms == 0) {
                 try writer.print("            .geoms = &.{{\n", .{});
             }
             emitted_geoms += 1;
-            // ★ ONE FIELD PER LINE, WITH TRAILING COMMAS. `zig fmt` collapses a struct
+            // * ONE FIELD PER LINE, WITH TRAILING COMMAS. `zig fmt` collapses a struct
             // literal onto one line whenever it can, and a hull geom's closing line then
-            // carries a bounds vector plus pos, rot and mass — 157 columns, over the 120
+            // carries a bounds vector plus pos, rot and mass - 157 columns, over the 120
             // the linter enforces on every file including generated ones. A trailing comma
             // is how you tell `zig fmt` to keep it broken.
             try writer.print("                .{{\n                    .shape = ", .{});
@@ -1542,10 +1542,10 @@ pub fn emitZig(
             try emitVec(writer, geom.pos);
             try writer.print(",\n                    .rot = ", .{});
             try emitQuat(writer, geom.rot);
-            // ★ Mass comes from the <inertial>, so the geom must not contribute any.
+            // * Mass comes from the <inertial>, so the geom must not contribute any.
             //
             // Without this the geom's density-derived mass would be ADDED to the stated
-            // one — a body silently several times too heavy. `InertialSpec` replaces the
+            // one - a body silently several times too heavy. `InertialSpec` replaces the
             // geom-derived properties entirely, so a zero here is belt and braces, but it
             // documents the intent at the point a reader would wonder.
             if (body.inertial != null) {
@@ -1571,9 +1571,9 @@ pub fn emitZig(
         }
     }
     if (mimics > 0) {
-        // ★ A mimic is a fixed tendon. `q_follower = multiplier · q_driver` rearranges to
-        // `q_follower − multiplier · q_driver = 0`, which is a tendon of length zero over
-        // the two joints with coefficients `(1, −multiplier)` — held exactly, for the cost
+        // * A mimic is a fixed tendon. `q_follower = multiplier * q_driver` rearranges to
+        // `q_follower - multiplier * q_driver = 0`, which is a tendon of length zero over
+        // the two joints with coefficients `(1, -multiplier)` - held exactly, for the cost
         // of a dot product, where an equality constraint would cost a solver row and hold
         // only approximately.
         try writer.print("    .tendons = &.{{\n", .{});
@@ -1605,7 +1605,7 @@ pub fn emitZig(
     , .{});
 }
 
-/// Half the extent of a point cloud's axis-aligned bounding box — the hull's stand-in for
+/// Half the extent of a point cloud's axis-aligned bounding box - the hull's stand-in for
 /// its true volume when computing mass properties. See `robot.GeomShape.hull`.
 fn boundsHalfExtent(points: []const Vec) Vec {
     var lo: Vec = points[0];
@@ -1618,7 +1618,7 @@ fn boundsHalfExtent(points: []const Vec) Vec {
 }
 
 /// How many mesh geoms were skipped. Reported by the tool so a silent omission becomes a
-/// visible one — §4i's rule is that an importer must never quietly drop something.
+/// visible one - section 4i's rule is that an importer must never quietly drop something.
 pub fn meshCount(robot: *const Robot) u32 {
     var count: u32 = 0;
     for (robot.bodies) |body| {
@@ -1654,8 +1654,8 @@ fn emitQuat(writer: *std.Io.Writer, q: Quat) EmitError!void {
 
 /// One float, as Zig source.
 ///
-/// ★ NEGATIVE ZERO IS THE TRAP. A rotation of exactly −90° produces components of `-0.0`,
-/// and `{d}` prints that as `-0` — which Zig rejects outright as an ambiguous integer
+/// * NEGATIVE ZERO IS THE TRAP. A rotation of exactly -90 deg produces components of `-0.0`,
+/// and `{d}` prints that as `-0` - which Zig rejects outright as an ambiguous integer
 /// literal, so the generated file does not compile at all. Loud, at least, but it fails at
 /// the far end of the pipeline from the cause.
 ///
@@ -1663,7 +1663,7 @@ fn emitQuat(writer: *std.Io.Writer, q: Quat) EmitError!void {
 /// every arithmetic sense that matters here, and the sign carries no information about a
 /// robot's geometry.
 ///
-/// The `.0` suffix on whole numbers is the other half — `1` is an integer literal and `1.0`
+/// The `.0` suffix on whole numbers is the other half - `1` is an integer literal and `1.0`
 /// a float one, and the difference matters when the value lands in a `@Vector(4, f32)`.
 fn emitFloat(writer: *std.Io.Writer, value: f32) EmitError!void {
     const cleaned: f32 = if (value == 0.0) 0.0 else value;

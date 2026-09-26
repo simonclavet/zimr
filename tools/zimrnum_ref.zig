@@ -1,4 +1,4 @@
-//! zimrnum_ref — regenerate the reference table in the zimrnum tutorial from the source.
+//! zimrnum_ref - regenerate the reference table in the zimrnum tutorial from the source.
 //!
 //! `src/zimrnum.zig` carries a test that compares the tutorial's reference table against its own
 //! public surface and fails the build if either has an entry the other lacks. That test is worth
@@ -9,7 +9,7 @@
 //!
 //! The tool reads every `pub fn` and `pub const` out of the source, pairs each with a note from
 //! the table below, and rewrites the rows between the reference table's header and its closing
-//! tag. The only way it can now fail is a declaration with no note — which it reports by name.
+//! tag. The only way it can now fail is a declaration with no note - which it reports by name.
 //!
 //! Zig rather than a script, for the reason `doc_sync.zig` states: tooling in this tree is Zig.
 //! The notes live in this file rather than beside it because a data file in a second format is a
@@ -32,8 +32,8 @@ const table_header: []const u8 =
 
 const Note = struct { name: []const u8, text: []const u8 };
 
-/// One line per public declaration. A name appearing twice in the source — `init` belongs to both
-/// `Rng` and `Ctx` — takes one note covering both, because the signature column already
+/// One line per public declaration. A name appearing twice in the source - `init` belongs to both
+/// `Rng` and `Ctx` - takes one note covering both, because the signature column already
 /// distinguishes them.
 const notes = [_]Note{
     .{ .name = "Error", .text = "One error set for the whole library." },
@@ -1402,7 +1402,7 @@ fn appendEscaped(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) !voi
     }
 }
 
-/// ── ★★★ GPU STATUS IS DERIVED FROM THE SWEEP, NOT DECLARED IN THE SOURCE ──
+/// -- *** GPU STATUS IS DERIVED FROM THE SWEEP, NOT DECLARED IN THE SOURCE --
 ///
 /// Every sweep `Case` names its kernel in `.entry` and calls one `zn.` function in its `cpu`
 /// body. Scanning those pairs answers "which functions have a kernel verified against them on a
@@ -1445,18 +1445,18 @@ fn kernelsFor(gpa: Allocator, sweep: []const u8, name: []const u8) !?[]const u8 
 
 /// Wrap every `<pre><code>` example in the prose with the source of the functions it names.
 ///
-/// ── ★★★ THE PLACEMENT IS DERIVED, NOT MARKED ──
+/// -- *** THE PLACEMENT IS DERIVED, NOT MARKED --
 ///
-/// Every example in the tutorial already names the functions it demonstrates — `zn.sqrt(...)`,
+/// Every example in the tutorial already names the functions it demonstrates - `zn.sqrt(...)`,
 /// `zn.qr(...)`. So the generator reads the example, collects those names, and emits a fold for
 /// each **immediately after the example**. No markers to place, none to keep matched, and none to
 /// go stale when prose moves: the fold follows the example that earned it because it is derived
 /// from the example's own text.
 ///
-/// ★★ THE EXAMPLES THEMSELVES ARE NOT TOUCHED. They stay exactly as written and stay visible —
+/// ** THE EXAMPLES THEMSELVES ARE NOT TOUCHED. They stay exactly as written and stay visible -
 /// the folds are added after them, collapsed, so the page reads as it did.
 ///
-/// ★ Idempotent: any previously generated block is stripped before the new ones are written, so
+/// * Idempotent: any previously generated block is stripped before the new ones are written, so
 /// running the tool twice gives the same file. A generator that appends is a generator that grows
 /// its output every build.
 fn insertSourceFolds(
@@ -1475,9 +1475,9 @@ fn insertSourceFolds(
         const end: usize = std.mem.indexOfPos(u8, doc, hit, close_tag) orelse {
             std.process.fatal("zimrnum_ref: a generated source block is not closed", .{});
         };
-        // ★ Back up over the newline emitted before the block, or each run leaves one more
+        // * Back up over the newline emitted before the block, or each run leaves one more
         // behind and the file grows by 52 blank lines a build. Caught by diffing two runs, which
-        // is the only check that can see it — a generator that is nearly idempotent looks
+        // is the only check that can see it - a generator that is nearly idempotent looks
         // idempotent until someone builds twice.
         var keep_to: usize = hit;
         if (keep_to > 0 and doc[keep_to - 1] == '\n') {
@@ -1494,7 +1494,7 @@ fn insertSourceFolds(
 
     var out: std.ArrayList(u8) = .empty;
     var cursor: usize = 0;
-    // ── `<pre><code` WITHOUT THE CLOSING `>` ──
+    // -- `<pre><code` WITHOUT THE CLOSING `>` --
     //
     // This was `"<pre><code>"`, an exact match, and then the docs restyling gave every block a
     // `class="zig"`. **148 of the tutorial's 241 example blocks silently stopped being checked**
@@ -1619,9 +1619,9 @@ fn insertSourceFolds(
                             );
                         }
 
-                        // ── TYPE SLOTS, now that the arity agrees ──
+                        // -- TYPE SLOTS, now that the arity agrees --
                         //
-                        // Only the `comptime …: type` positions are judged. A scalar type name
+                        // Only the `comptime ...: type` positions are judged. A scalar type name
                         // in a VALUE slot, or a literal in a TYPE slot, is wrong whatever the
                         // surrounding types resolve to - no type checker needed. Everything
                         // else is left alone deliberately: an identifier could name either.
@@ -1710,7 +1710,7 @@ const Extract = struct {
 };
 
 /// The scalar type names an argument can be spelled with. A bare one of these in a slot that is
-/// NOT `comptime …: type` is the mistake this catches; anything else - an identifier, a call,
+/// NOT `comptime ...: type` is the mistake this catches; anything else - an identifier, a call,
 /// `Tensor(f64)` - is left alone, because deciding those needs the compiler.
 const scalar_type_names = [_][]const u8{
     "f16",  "f32",   "f64",   "f80",  "f128",      "i8",  "i16", "i32",
@@ -1750,7 +1750,7 @@ fn isClearlyNotAType(text: []const u8) bool {
 
 /// Every top-level declaration in `path`, with its exact span.
 ///
-/// ── ★★★ THE COMPILER'S PARSER, NOT A BRACE COUNTER ──
+/// -- *** THE COMPILER'S PARSER, NOT A BRACE COUNTER --
 ///
 /// Slicing from `pub fn NAME(` to a matching `}` by counting braces is thirty lines and wrong:
 /// zimrnum contains `"{d}"` format strings and comments with braces, and a counter cannot tell
@@ -1758,11 +1758,11 @@ fn isClearlyNotAType(text: []const u8) bool {
 /// declaration's first and last token directly. **It is exact by construction rather than exact
 /// until someone writes an unusual string.**
 ///
-/// ★ The span starts at the first doc-comment token, so a fold shows the documentation with the
-/// code — which is most of what a reader wants and all of what makes the doc comment worth
+/// * The span starts at the first doc-comment token, so a fold shows the documentation with the
+/// code - which is most of what a reader wants and all of what makes the doc comment worth
 /// writing.
 ///
-/// ★ Tests are skipped: only `fn_decl` and the `const` forms are collected, and a `test` block is
+/// * Tests are skipped: only `fn_decl` and the `const` forms are collected, and a `test` block is
 /// neither.
 fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
     var ast: std.zig.Ast = try std.zig.Ast.parse(gpa, source, .{});
@@ -1819,7 +1819,7 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
             param_count = counted;
         }
 
-        // ── WHICH PARAMETERS ARE `comptime <name>: type` ──
+        // -- WHICH PARAMETERS ARE `comptime <name>: type` --
         //
         // Walked from the fn proto rather than the token stream used above, because the proto
         // hands back each parameter's type NODE and the answer is then exact: the type
@@ -1861,7 +1861,7 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
             end += 1;
         }
         const text: []const u8 = source[begin..@min(end + 1, source.len)];
-        // ★ The name comes from the DECLARATION line, not the first line of the span: the span
+        // * The name comes from the DECLARATION line, not the first line of the span: the span
         // begins at the doc comment, so its first line is prose.
         const decl_line: []const u8 = source[ast.tokenStart(first)..@min(ast.tokenStart(first) + 200, source.len)];
         const line_end: usize = std.mem.indexOfScalar(u8, decl_line, '\n') orelse decl_line.len;
@@ -1989,7 +1989,7 @@ pub fn main(init: std.process.Init) !void {
     const sweep: []u8 = try std.Io.Dir.cwd().readFileAlloc(init.io, sweep_path, gpa, limit);
     var with_kernel: usize = 0;
 
-    // ── ★★★ THE SOURCE FOLDS, BEFORE THE TABLE ──
+    // -- *** THE SOURCE FOLDS, BEFORE THE TABLE --
     //
     // The table splice searches for its header in `doc`, so the folds have to be in place first
     // or the second transform would be working on a stale string. Both are pure functions of the
@@ -2022,7 +2022,7 @@ pub fn main(init: std.process.Init) !void {
         try rows.appendSlice(gpa, "</code></td><td><code>");
         try appendEscaped(gpa, &rows, try declSignature(gpa, source, line_start));
         try rows.appendSlice(gpa, "</code></td><td>");
-        // ★ A METHOD IS NEITHER. `Graph.add` shares a name with the module-level `add` that has a
+        // * A METHOD IS NEITHER. `Graph.add` shares a name with the module-level `add` that has a
         // kernel, but the graph runs on the host; showing the kernel there would be a false
         // claim. Methods are marked as such and the lookup is skipped.
         const is_method: bool = line.len > 0 and line[0] == ' ';
@@ -2069,14 +2069,14 @@ pub fn main(init: std.process.Init) !void {
             .{ count, missing.items },
         );
     }
-    // ── ★★★ THE HEADING NUMBERS ARE CHECKED, BECAUSE NOTHING ELSE WAS CHECKING THEM ──
+    // -- *** THE HEADING NUMBERS ARE CHECKED, BECAUSE NOTHING ELSE WAS CHECKING THEM --
     //
     // Four separate `h2` sections had all numbered their subsections `14.x`: every time a section
     // was inserted the ones after it kept their old prefix, and the drift was invisible because
     // the reference-table test only compares declarations. **Fourteen headings were wrong before
     // anyone looked.** Numbering is the reader's map of the document, so it gets a gate.
     //
-    // ★ Every `h3` must carry its enclosing `h2`'s number and count up from 1 within it.
+    // * Every `h3` must carry its enclosing `h2`'s number and count up from 1 within it.
     {
         var section: usize = 0;
         var subsection: usize = 0;

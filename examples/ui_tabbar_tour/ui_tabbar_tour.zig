@@ -1,4 +1,4 @@
-//! ui_tabbar_tour — port of the GL `ui_tabbar_tour` onto the WebGPU UI host.
+//! ui_tabbar_tour - port of the GL `ui_tabbar_tour` onto the WebGPU UI host.
 //! A tour of the TabBar widget across three stacked bars: (1) closeable tabs with
 //! close-X + middle-click + per-tab id-isolated buttons, (2) leading/trailing pins
 //! + unsaved-document asterisk + bar-level middle-click suppression, (3) force-
@@ -19,19 +19,19 @@ const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
 
-    // Bar 1 — closeable tabs (open_ptr controls whether each renders).
+    // Bar 1 - closeable tabs (open_ptr controls whether each renders).
     tab_a: bool = true,
     tab_b: bool = true,
     tab_c: bool = true,
 
-    // Bar 2 — unsaved-document toggles.
+    // Bar 2 - unsaved-document toggles.
     doc1_unsaved: bool = true,
     doc2_unsaved: bool = false,
 
-    // Bar 3 — force-select demo.
+    // Bar 3 - force-select demo.
     force_select_b: bool = false,
 
-    // Per-tab click counters — prove id-stack isolation across tabs.
+    // Per-tab click counters - prove id-stack isolation across tabs.
     bar1_a_clicks: u32 = 0,
     bar1_b_clicks: u32 = 0,
     bar1_c_clicks: u32 = 0,
@@ -58,7 +58,7 @@ fn update(f: *z.Frame, s: *State) void {
     })) |w| {
         defer w.close();
 
-        // Bar 1 — closeable tabs (close-X + middle-click). Each tab owns a
+        // Bar 1 - closeable tabs (close-X + middle-click). Each tab owns a
         // "Click me" button that increments a separate counter -> id isolation.
         u.separatorText("Bar 1 - closeable tabs + middle-click");
         u.textWrapped("Click a tab to switch. Click the X (or middle-click the tab) to close it.", .{});
@@ -92,7 +92,7 @@ fn update(f: *z.Frame, s: *State) void {
             s.tab_c = true;
         }
 
-        // Bar 2 — leading/trailing pins + unsaved asterisk + bar-level
+        // Bar 2 - leading/trailing pins + unsaved asterisk + bar-level
         // middle-click suppression. doc1/doc2 are always-open (per-frame
         // dummy open_ptr); they demo the asterisk, not closing.
         u.separatorText("Bar 2 - leading/trailing + unsaved (*)");
@@ -121,7 +121,7 @@ fn update(f: *z.Frame, s: *State) void {
             }
         }
 
-        // Bar 3 — force-select via .set_selected + selected overline.
+        // Bar 3 - force-select via .set_selected + selected overline.
         u.separatorText("Bar 3 - force-select + overline");
         u.textWrapped("Tick the box to force-select 'Two'. The selected tab gets a 2px overline.", .{});
         _ = u.checkbox("force-select 'Two'", &s.force_select_b);

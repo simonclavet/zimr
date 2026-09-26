@@ -33,7 +33,7 @@ const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
 
-    // App-owned phase ticker — drives the ping-pong target for
+    // App-owned phase ticker - drives the ping-pong target for
     // the tween rows.  Not strictly needed (the tweens themselves
     // restart on `to` change), but it's how a real app would
     // produce the "bounce between two anchors" effect.
@@ -135,7 +135,7 @@ fn drawSpringRow(
         2,
     );
 
-    // Target marker — a thin vertical line at the slider value.
+    // Target marker - a thin vertical line at the slider value.
     const target_x: f32 = track_x0 + target;
     u.getForegroundDrawList().addLine(
         .{ target_x, track_y - 14 },

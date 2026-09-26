@@ -1,9 +1,9 @@
-//! composer_drum — port of the GL `composer_drum`: a tiny drum machine on
+//! composer_drum - port of the GL `composer_drum`: a tiny drum machine on
 //! the wgpu audio bridge. Synthesizes a kick (60Hz sine), snare (250Hz saw),
 //! and hat (4kHz triangle) with `composer.tone`, then bakes an 8-step pattern
 //! into ONE looping Wave via `composer.Sequence` (each drum added at its step's
 //! frame offset). Tap PLAY (or press SPACE) to play the loop; a step grid shows
-//! the pattern and a playhead sweeps it. All PCM — no streaming/OGG needed.
+//! the pattern and a playhead sweeps it. All PCM - no streaming/OGG needed.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -150,7 +150,7 @@ fn update(f: *z.Frame, state: *State) void {
     f.gl.text(.{ 16, 16 }, "8-step drum loop", .{ .size = 26, .color = c.white, .font = &state.font });
     f.gl.text(.{ 16, 50 }, "tap PLAY or press SPACE", .{ .size = 15, .color = c.slate_400, .font = &state.font });
 
-    // Playhead step (loops with the audio; ~60fps frame→ms approximation).
+    // Playhead step (loops with the audio; ~60fps frame->ms approximation).
     const elapsed_ms: usize = if (state.playing) (state.frame_count - state.play_started_at_frame) * 16 else 0;
     const cur_step: usize = if (state.playing)
         (elapsed_ms / step_ms) % steps_per_loop

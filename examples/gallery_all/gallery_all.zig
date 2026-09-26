@@ -1,4 +1,4 @@
-//! gallery_all — the multi-app LAUNCHER (P3). A descriptor-only app whose
+//! gallery_all - the multi-app LAUNCHER (P3). A descriptor-only app whose
 //! State holds a z.Launcher hosting four independent child apps in a 2x2 grid,
 //! each with its OWN leak-checking allocator. Tap a cell to reset that child
 //! (deinit -> leak-check -> re-init). Three cells use reflow placement (the
@@ -7,7 +7,7 @@
 //!
 //! The four children are tiny INLINE descriptor apps with DIFFERENT State types
 //! (proving type-erasure) and ZERO allocations (so reset's leak-check passes
-//! silently — a clean reset). Real, font/GPU-allocating examples (starfield, the
+//! silently - a clean reset). Real, font/GPU-allocating examples (starfield, the
 //! UI ones) drop into cells the same way once they have an unloadFont/teardown
 //! path; the launcher's leak check is what will flag a missing one.
 const std = @import("std");
@@ -143,7 +143,7 @@ const spinner_app: z.AppSpec(Spinner) = .{
 };
 
 // Orbit: drawn in a FIXED 300x300 design space, letterboxed into its cell via
-// scale_to_fit — so it shows the scaled placement path.
+// scale_to_fit - so it shows the scaled placement path.
 const orbit_design: f32 = 300;
 const Orbit = struct { t: f32 };
 fn orbitInit(gpa: Allocator, f: *z.Frame, s: *Orbit) !void {

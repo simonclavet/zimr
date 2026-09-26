@@ -1,14 +1,14 @@
-//! robot_pendulum — the first thing `src/robot.zig` can draw.
+//! robot_pendulum - the first thing `src/robot.zig` can draw.
 //!
 //! A double pendulum, simulated in GENERALIZED COORDINATES: the whole machine is two
 //! numbers (two hinge angles) plus their velocities. There are no constraints to enforce
-//! and nothing to converge — the links cannot come apart, because the freedom to come
+//! and nothing to converge - the links cannot come apart, because the freedom to come
 //! apart was never represented.
 //!
 //! It is a good first demo for a reason beyond being easy. A double pendulum is chaotic,
 //! so a mass matrix or a bias force that is subtly wrong does not produce a subtly wrong
 //! swing; it produces motion that is visibly not a pendulum. And with no damping and no
-//! contact, total mechanical energy must be conserved — so the HUD shows the drift, which
+//! contact, total mechanical energy must be conserved - so the HUD shows the drift, which
 //! is a live readout of how good the integrator is.
 //!
 //! Tap to re-throw from a new pose. The button switches integrator, which makes the point
@@ -47,7 +47,7 @@ const float = zm.float;
 const pi = zm.pi;
 const assertUnreachable = zm.assertUnreachable;
 
-/// The model. Two links hanging along −Y, hinged about Z, so the whole thing swings in the
+/// The model. Two links hanging along -Y, hinged about Z, so the whole thing swings in the
 /// screen plane and can be drawn in 2D without a camera.
 ///
 /// `damping = 0` is deliberate: a conserved quantity is only informative when it is
@@ -107,7 +107,7 @@ const State = struct {
     /// Ring buffer of tip positions, in world metres.
     trail: [trail_len]Vec2,
     trail_n: usize,
-    /// Simulated seconds since the last throw — the axis the drift should be read against.
+    /// Simulated seconds since the last throw - the axis the drift should be read against.
     elapsed: f32,
     /// Advances the fixed-timestep loop independently of frame rate.
     accumulator: f32,
@@ -120,7 +120,7 @@ const State = struct {
         self.data.setJointPos(&self.model, Pendulum.Joint.elbow, elbow);
         // `forward` so the energy baseline and the first frame's drawing both see a state
         // whose derived quantities are current. Without it `energy` would read a stale
-        // mass matrix — the imperative pipeline being imperative.
+        // mass matrix - the imperative pipeline being imperative.
         rbt.forward(&self.model, &self.data);
         self.energy0 = rbt.energy(&self.model, &self.data);
         self.trail_n = 0;
@@ -181,7 +181,7 @@ fn update(f: *z.Frame, s: *State) void {
     const pivot: Vec2 = vec2(0, 0);
     const elbow: Vec2 = vec2(s.data.body_xpos[bi_lower][0], s.data.body_xpos[bi_lower][1]);
     // The tip is the far end of the lower link, which is its body origin plus its own
-    // length along the link's local −Y. Asking the engine where a point on a body is, is
+    // length along the link's local -Y. Asking the engine where a point on a body is, is
     // exactly what a site would be for; for one point, this is cheaper than a site.
     const tip_local: Vec = vec(0, -2.0 * lower_half, 0);
     const tip_world: Vec = s.data.body_xpos[bi_lower] + rotate(s.data.body_xrot[bi_lower], tip_local);
@@ -219,7 +219,7 @@ fn update(f: *z.Frame, s: *State) void {
         0.0;
 
     var buf: [128]u8 = undefined;
-    // Only `.rk4` and `.euler` are reachable — the toggle below flips between those two. The
+    // Only `.rk4` and `.euler` are reachable - the toggle below flips between those two. The
     // other arms exist because this switch is EXHAUSTIVE ON PURPOSE: `.implicit` was added to
     // `rbt.Integrator` and broke this line, which is the behaviour we want. An `else` here
     // would have compiled and then shown the wrong name forever.

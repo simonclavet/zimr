@@ -1,19 +1,19 @@
-//! robot_physics.zig — where `robot.zig` meets `zimrphysics.zig`.
+//! robot_physics.zig - where `robot.zig` meets `zimrphysics.zig`.
 //!
 //! robot.zig has no collision detector and deliberately never will: it takes contacts as
 //! an input, exactly the way it takes controls. This file is the one place that knows how
 //! to get those contacts out of a zimrphysics world, and it is a SEPARATE FILE for a
-//! reason — robot.zig imports only zimrmath, so a batched GPU rollout or a headless
+//! reason - robot.zig imports only zimrmath, so a batched GPU rollout or a headless
 //! trajectory optimisation does not drag a 14k-line collision engine along with it.
 //!
-//! ── THE DESIGN, AND THE ALTERNATIVE THAT WAS REJECTED ──
+//! -- THE DESIGN, AND THE ALTERNATIVE THAT WAS REJECTED --
 //!
 //! A robot's links are registered as KINEMATIC bodies in a zimrphysics world, steered each
 //! step to wherever the robot's own kinematics put them, and the world's contact listener
 //! records the manifolds they generate.
 //!
-//! The obvious alternative — never touch the world, just query its broad phase for
-//! candidates near the robot's geoms and run narrow phase ourselves — is tempting because
+//! The obvious alternative - never touch the world, just query its broad phase for
+//! candidates near the robot's geoms and run narrow phase ourselves - is tempting because
 //! it duplicates no state and needs no body handles. It was rejected for one decisive
 //! reason: **zimrphysics's own solver would not see the robot at all.** A crate could not
 //! rest on an arm, because as far as the world is concerned the arm is not there. Since
@@ -22,10 +22,10 @@
 //! Kinematic bodies give the other direction for free. `moveKinematic` is Jolt's exact
 //! tracking: the proxy follows the robot precisely and PUSHES dynamic bodies it meets,
 //! with the world's own solver handling that side. Which is exactly the phase-7 one-way
-//! coupling the plan specifies — the robot moves the world, the world's push on the robot
+//! coupling the plan specifies - the robot moves the world, the world's push on the robot
 //! arrives as constraint rows, and the robot is immovable from the world's point of view.
 //!
-//! ── WHAT IS APPROXIMATE, STATED PLAINLY ──
+//! -- WHAT IS APPROXIMATE, STATED PLAINLY --
 //!
 //! The two solvers do not negotiate. zimrphysics resolves crate-vs-arm treating the arm as
 //! infinitely massive, and robot.zig resolves the same contact treating the crate as
@@ -68,14 +68,14 @@ const Event = struct {
     /// The tree body this contact touches. Always the `b` side of the robot contact, so
     /// the normal always points TOWARD it and a positive force pushes it away.
     robot_body: u32,
-    /// ★ THE OTHER SIDE, AS A TREE BODY when it is one — §4k's whole point.
+    /// * THE OTHER SIDE, AS A TREE BODY when it is one - section 4k's whole point.
     ///
     /// A crate that lives in the robot's own tree is not "external" to anything: a contact
     /// between an arm link and that crate is a contact between two bodies of ONE system, and
-    /// the solver builds the relative Jacobian `jac_b − jac_a` for it exactly as it does for
+    /// the solver builds the relative Jacobian `jac_b - jac_a` for it exactly as it does for
     /// two links of the same arm. Momentum is then conserved by construction.
     ///
-    /// `world_body` when the counterpart really is outside the tree — a static floor, or a
+    /// `world_body` when the counterpart really is outside the tree - a static floor, or a
     /// zimrphysics body the scene chose not to simulate in the tree. That case still works
     /// and is still the immovable approximation, which is CORRECT for static geometry and
     /// deliberate for everything else.
@@ -87,7 +87,7 @@ const Event = struct {
     position: Vec,
     /// World normal, already oriented to point at the robot link.
     normal: Vec,
-    /// Overlap along the normal, POSITIVE when interpenetrating — the opposite sign
+    /// Overlap along the normal, POSITIVE when interpenetrating - the opposite sign
     /// convention from `robot.Contact.distance`, which is negative when touching. Converted
     /// on the way out, once, here rather than at every use.
     depth: f32,
@@ -109,7 +109,7 @@ const SweptHit = struct {
     other: u32,
     position: Vec,
     normal: Vec,
-    /// Distance still to travel before the surface — positive, so the contact acts early.
+    /// Distance still to travel before the surface - positive, so the contact acts early.
     gap: f32,
 };
 
@@ -119,7 +119,7 @@ pub const Bridge = struct {
     proxy: []zimrphysics.BodyHandle,
     /// Which robot body each proxy belongs to, parallel to `proxy`.
     proxy_body: []u32,
-    /// Reverse lookup: zimrphysics body index → robot body, or `not_a_robot_body`.
+    /// Reverse lookup: zimrphysics body index -> robot body, or `not_a_robot_body`.
     /// A flat array rather than a hash map because it is read inside the contact callback,
     /// which runs per pair per step.
     world_to_robot: []u32,
@@ -127,18 +127,18 @@ pub const Bridge = struct {
     event_count: u32,
     /// Set by `teleported`, cleared by the next `sync`. See that function.
     skip_sweep_once: bool,
-    /// Swept contacts found this step — see `recordSweptContact`.
+    /// Swept contacts found this step - see `recordSweptContact`.
     swept: []SweptHit,
     swept_count: u32,
     /// The model's timestep, kept so `harvest` can size a speculative margin without being
-    /// handed the model — it is a constant of the model and never changes after `init`.
+    /// handed the model - it is a constant of the model and never changes after `init`.
     timestep: f32,
 
     /// How soft and how thick the flesh around every body is.
     ///
-    /// ── ★★ WHAT MAKES A CONTACT FEEL LIKE FLESH RATHER THAN BONE ──
+    /// -- ** WHAT MAKES A CONTACT FEEL LIKE FLESH RATHER THAN BONE --
     ///
-    /// Three separable properties, and the solver already implements all of them — this is
+    /// Three separable properties, and the solver already implements all of them - this is
     /// where they get chosen rather than hardcoded:
     ///
     ///   * **soft at first touch, stiff when compressed.** `Impedance` ramps the constraint's
@@ -148,16 +148,16 @@ pub const Bridge = struct {
     ///     impact goes into the contact instead of back into the body;
     ///   * **slow.** A longer `time_const_s` responds over milliseconds rather than instantly.
     ///
-    /// ★ THE DEFAULTS REPRODUCE WHAT WAS HARDCODED HERE — `2 × timestep` and MuJoCo's own
-    /// impedance defaults — so a caller that does not touch this sees exactly the old
+    /// * THE DEFAULTS REPRODUCE WHAT WAS HARDCODED HERE - `2 x timestep` and MuJoCo's own
+    /// impedance defaults - so a caller that does not touch this sees exactly the old
     /// behaviour. `flesh_thickness` at zero means the impedance ramp is left alone.
     flesh: Flesh,
 
-    /// The nearest ancestor reachable without crossing a joint — MuJoCo's `body_weldid`.
+    /// The nearest ancestor reachable without crossing a joint - MuJoCo's `body_weldid`.
     ///
-    /// ── ★★★ WHY CONTACT NEEDS THIS AT ALL ──
+    /// -- *** WHY CONTACT NEEDS THIS AT ALL --
     ///
-    /// Two links joined by a hinge OVERLAP near that hinge, always, by construction — that is
+    /// Two links joined by a hinge OVERLAP near that hinge, always, by construction - that is
     /// what a joint looks like geometrically. Reporting those overlaps as contacts gives a
     /// limb that fights itself the moment it folds: measured on a 4-DOF arm commanded to a
     /// perfectly reachable pose, the elbow settled **0.43 rad short with two contacts that
@@ -168,12 +168,12 @@ pub const Bridge = struct {
     /// the other's weld parent. Its `dsbl_filterparent` flag exists to turn it off, and
     /// essentially nothing does.
     ///
-    /// ★ WELD, NOT PARENT. A chain of jointless bodies is ONE rigid object however many links
+    /// * WELD, NOT PARENT. A chain of jointless bodies is ONE rigid object however many links
     /// it is written as, so the relation that matters is "same rigid piece, or adjacent rigid
     /// pieces" rather than "adjacent in the body list". Filtering on the raw parent would miss
     /// a decorative link sitting between two real ones.
     weld: []u32,
-    /// `weld[parent[weld[b]]]` for each body — the rigid piece the piece above it belongs to.
+    /// `weld[parent[weld[b]]]` for each body - the rigid piece the piece above it belongs to.
     /// Precomputed because the contact callback has no model to walk, and it is a constant of
     /// the topology anyway.
     weld_parent: []u32,
@@ -182,8 +182,8 @@ pub const Bridge = struct {
     excluded: []const [2]u32 = &.{},
     /// Whether a tree body is welded to the world, indexed by tree body.
     ///
-    /// ★ PRECOMPUTED, because it is asked on every contact of every step and the answer never
-    /// changes — it is a property of the model's topology. Walking to the root inside the
+    /// * PRECOMPUTED, because it is asked on every contact of every step and the answer never
+    /// changes - it is a property of the model's topology. Walking to the root inside the
     /// callback would put a tree traversal in the hottest loop the bridge has.
     rigid: []bool,
     /// Set when more contacts arrived in a step than `Options.max_contacts` allows, so the
@@ -196,19 +196,19 @@ pub const Bridge = struct {
     /// Register every geom of `model` as a kinematic body in `world`.
     ///
     /// The proxies start at the robot's current pose, so call this after the robot's
-    /// kinematics have been run at least once — otherwise they are all created at the
+    /// kinematics have been run at least once - otherwise they are all created at the
     /// origin and the first step sees a large spurious motion.
     /// Runtime-tunable contact feel. See `Bridge.flesh`.
     pub const Flesh = struct {
         /// How quickly a violated contact is corrected. Larger is softer.
         ///
-        /// Null takes `2 × timestep`, which is what this was before it could be set — MuJoCo's
+        /// Null takes `2 x timestep`, which is what this was before it could be set - MuJoCo's
         /// own default at its default rate.
         time_const_s: ?f32 = null,
         /// 1 is critically damped; above 1 absorbs rather than rebounds.
         damp_ratio: f32 = 1.0,
-        /// ★ THE "FAT" KNOB. The depth over which the contact stiffens from `soft_min` to full.
-        /// Zero leaves the solver's default impedance untouched — a hard surface. One centimetre
+        /// * THE "FAT" KNOB. The depth over which the contact stiffens from `soft_min` to full.
+        /// Zero leaves the solver's default impedance untouched - a hard surface. One centimetre
         /// is a plausible layer of skin and fat over a bone.
         thickness_m: f32 = 0,
         /// Impedance at first touch, when `thickness_m` is non-zero. Near zero means the
@@ -218,11 +218,11 @@ pub const Bridge = struct {
 
     /// The softness these settings imply, for one contact.
     ///
-    /// ★★ THE CALLER SUPPLIES ITS OWN DEFAULT, and that is not tidiness. The two contact
+    /// ** THE CALLER SUPPLIES ITS OWN DEFAULT, and that is not tidiness. The two contact
     /// producers had DIFFERENT defaults for good reasons: a swept contact is deliberately stiff
-    /// at `2 × timestep`, because it exists to stop something travelling fast, while a discrete
+    /// at `2 x timestep`, because it exists to stop something travelling fast, while a discrete
     /// one takes `Softness{}`'s 0.02. Unifying them on the swept value made every ordinary
-    /// contact five times stiffer and dropped a six-box stack by 3 cm — caught by the stack
+    /// contact five times stiffer and dropped a six-box stack by 3 cm - caught by the stack
     /// test, which is exactly the sort of thing a shared default quietly does.
     fn contactSoftness(self: *const Bridge, default_time_const: f32) rbt.Softness {
         return .{
@@ -252,13 +252,13 @@ pub const Bridge = struct {
     ) !Bridge {
         const count: usize = model.ngeom;
 
-        // ★★ ALLOCATED ONE AT A TIME WITH `errdefer`, not in a struct literal.
+        // ** ALLOCATED ONE AT A TIME WITH `errdefer`, not in a struct literal.
         //
-        // Five allocations and two more fallible calls follow — `addShape` and `createBody`,
+        // Five allocations and two more fallible calls follow - `addShape` and `createBody`,
         // either of which can fail on a full shape table. Inside a struct literal there is
         // nowhere to put an `errdefer`, so a failure at the third `alloc` leaked the first
         // two, and a failure in `createBody` leaked all five. Nothing observed it because the
-        // only trigger is OOM, and `std.testing.allocator` never sees the path — which is
+        // only trigger is OOM, and `std.testing.allocator` never sees the path - which is
         // exactly why it is worth fixing rather than arguing about.
         const proxy: []zimrphysics.BodyHandle = try gpa.alloc(zimrphysics.BodyHandle, count);
         errdefer gpa.free(proxy);
@@ -270,7 +270,7 @@ pub const Bridge = struct {
         errdefer gpa.free(events);
         const rigid: []bool = try gpa.alloc(bool, model.nbody);
         errdefer gpa.free(rigid);
-        // ★ COMPUTED PARENT-FIRST, so `weld[parent]` is already final when a child reads it.
+        // * COMPUTED PARENT-FIRST, so `weld[parent]` is already final when a child reads it.
         // `buildRuntime` guarantees that ordering, which is what makes one pass enough.
         const weld: []u32 = try gpa.alloc(u32, model.nbody);
         errdefer gpa.free(weld);
@@ -290,9 +290,9 @@ pub const Bridge = struct {
         const swept: []SweptHit = try gpa.alloc(SweptHit, model.ngeom);
         errdefer gpa.free(swept);
 
-        // ★ WELDED-TO-THE-WORLD, PRECOMPUTED. A body with no articulated DOF between it
+        // * WELDED-TO-THE-WORLD, PRECOMPUTED. A body with no articulated DOF between it
         // and the world cannot move, and a contact between two such bodies is not a
-        // constraint — it is a fact the solver can neither satisfy nor violate.
+        // constraint - it is a fact the solver can neither satisfy nor violate.
         //
         // `robot_3d`'s KUKA base sits 7 cm inside the floor and is welded there. Those
         // four rows appeared every step with an unfixable violation, consumed the whole
@@ -329,21 +329,21 @@ pub const Bridge = struct {
         };
         @memset(bridge.world_to_robot, not_a_robot_body);
 
-        // ★★ ONE GROUP PER ROOT, NOT ONE PER MODEL — and getting this wrong made a crate
+        // ** ONE GROUP PER ROOT, NOT ONE PER MODEL - and getting this wrong made a crate
         // tower fall through itself.
         //
         // zimrphysics never tests two bodies that share a nonzero `group_id`. A single group
         // for the whole model meant no pair of tree bodies was ever broad-phased against
         // another, which was a sound optimisation while `onContact` discarded robot-vs-robot
-        // pairs anyway. §4k changed that: a scene's CRATES are tree bodies now, and
+        // pairs anyway. section 4k changed that: a scene's CRATES are tree bodies now, and
         // crate-versus-crate is the ordinary case rather than exotic self-collision.
         //
         // The symptom was precise and easy to misread: contacts were reported (4 of them),
-        // the crates rested on the floor, and the tower still sank into itself — because
+        // the crates rested on the floor, and the tower still sank into itself - because
         // every reported contact was crate-0-versus-FLOOR and no crate ever saw another.
         //
         // Grouping by ROOT keeps what the optimisation was for. Bodies of one articulated
-        // chain share a root and still do not self-collide — which is what a robot wants by
+        // chain share a root and still do not self-collide - which is what a robot wants by
         // default, since adjacent links overlap at every joint. A free body is its own root,
         // so it collides with everything including other free bodies.
 
@@ -357,50 +357,50 @@ pub const Bridge = struct {
                 .rotation = pose.rot,
                 // KINEMATIC, not dynamic: the robot's own dynamics decide where this goes,
                 // and a dynamic proxy would also feel gravity and fight them.
-                // ★ THE PROXY CARRIES THE GEOM'S MATERIAL. Without this the detector has no idea
+                // * THE PROXY CARRIES THE GEOM'S MATERIAL. Without this the detector has no idea
                 // what the robot is made of, and every contact fell back to a constant.
                 .friction = model.geom_friction[geom],
                 .motion_type = .kinematic,
-                // ★ NOT A SENSOR, and now for a simpler reason than before.
+                // * NOT A SENSOR, and now for a simpler reason than before.
                 //
                 // A proxy exists so the detector can SEE the robot; it never needs to
                 // respond, because it is kinematic and zimrphysics cannot move it anyway.
                 // The sensor question mattered only while zimrphysics was also resolving
-                // robot-vs-dynamic pairs — and with the tree unified it no longer resolves
+                // robot-vs-dynamic pairs - and with the tree unified it no longer resolves
                 // them at all, because those bodies are not in its world as dynamics.
                 .is_sensor = false,
-                // ★ Without this the arm cannot touch the LEVEL. zimrphysics drops any pair
-                // where neither body has finite mass — static/kinematic included — because
+                // * Without this the arm cannot touch the LEVEL. zimrphysics drops any pair
+                // where neither body has finite mass - static/kinematic included - because
                 // its own solver could carry no impulse across it. Perfectly sound for
                 // zimrphysics; wrong for us, because robot.zig is the thing that carries
                 // that impulse. The flag says "report it anyway, the owner will act on it",
                 // and unlike `is_sensor` it leaves the proxy's push on dynamic bodies
                 // untouched.
                 .report_immovable_contacts = true,
-                // ★ All of one robot's proxies share a group, so they never pair with each
+                // * All of one robot's proxies share a group, so they never pair with each
                 // other. Two things make this necessary rather than tidy. `onContact`
-                // already discards robot-vs-robot pairs, so nothing was WRONG — but every
+                // already discards robot-vs-robot pairs, so nothing was WRONG - but every
                 // adjacent link whose geoms overlap was being broad-phased and
                 // narrow-phased each step for a result that is thrown away, and a humanoid
                 // has a lot of those. And `report_immovable_contacts` made it worse: before
                 // it, kinematic-vs-kinematic pairs were dropped by the immovable gate, so
                 // opting out of that gate is exactly what put this work back.
                 //
-                // ★★ AND THAT PREMISE WAS WRONG, WHICH IS WHY THIS IS NOW PER-LINK.
-                // `onContact` does NOT discard robot-vs-robot pairs — it discards WELDED
+                // ** AND THAT PREMISE WAS WRONG, WHICH IS WHY THIS IS NOW PER-LINK.
+                // `onContact` does NOT discard robot-vs-robot pairs - it discards WELDED
                 // and ADJACENT ones, via `sameOrAdjacentWeld`. Two shins are neither. A
                 // whole-robot group therefore threw away exactly the self-collisions a
                 // humanoid needs, and the legs passed through one another: measured, the
-                // shins sat 0.0315 m apart with radii near 0.05 each — a 7 cm overlap —
+                // shins sat 0.0315 m apart with radii near 0.05 each - a 7 cm overlap -
                 // reporting **zero** robot-vs-robot contacts where MuJoCo reported two.
                 //
                 // Per-link groups put those pairs back in the broad phase and leave the
                 // filtering to `sameOrAdjacentWeld`, which is what MuJoCo does: it filters
                 // by WELD RELATIONSHIP, not by membership of a body. The two-body contact
-                // Jacobian (`J_b − J_a`, both sides in the tree) that these rows need is
+                // Jacobian (`J_b - J_a`, both sides in the tree) that these rows need is
                 // already supported by `addContactRows`.
                 //
-                // ★ THE COST IS REAL AND WAS THE ORIGINAL MOTIVATION: adjacent links whose
+                // * THE COST IS REAL AND WAS THE ORIGINAL MOTIVATION: adjacent links whose
                 // geoms overlap at their shared joint are now broad- and narrow-phased each
                 // step for a result `onContact` throws away. Correctness first; if that
                 // shows up in a profile, the answer is a cheaper adjacency test in the
@@ -440,7 +440,7 @@ pub const Bridge = struct {
     /// touch a proxy, which is the worst kind of bug to leave behind.
     /// Tell the bridge the robot was MOVED rather than having travelled.
     ///
-    /// ── ★★★ A TELEPORT IS NOT MOTION, AND ONLY THE CALLER KNOWS ──
+    /// -- *** A TELEPORT IS NOT MOTION, AND ONLY THE CALLER KNOWS --
     ///
     /// `sync` cannot tell the difference by looking. It sees a proxy that was there and is now
     /// here, and every heuristic for "that was too far to be real" is a threshold that some
@@ -450,11 +450,11 @@ pub const Bridge = struct {
     /// ran and found the floor. Measured result: **47 contacts and velocity pinned at
     /// 100 m/s** on the first step after a reset.
     ///
-    /// So the caller says so. Anything that writes `qpos` directly — a keyframe, a reset
-    /// button, an editor drag, a scene reposition — calls this, and the next `sync` places the
+    /// So the caller says so. Anything that writes `qpos` directly - a keyframe, a reset
+    /// button, an editor drag, a scene reposition - calls this, and the next `sync` places the
     /// proxies without sweeping between the two poses.
     ///
-    /// ★ ONE STEP ONLY. The step after a teleport is ordinary motion again, and leaving the
+    /// * ONE STEP ONLY. The step after a teleport is ordinary motion again, and leaving the
     /// suppression on would quietly disable continuous collision for good.
     pub fn teleported(self: *Bridge) void {
         self.skip_sweep_once = true;
@@ -479,7 +479,7 @@ pub const Bridge = struct {
         if (weld_a == weld_b) {
             return true;
         }
-        // ★ NEITHER SIDE MAY BE THE WORLD. A body genuinely resting on the ground has the world
+        // * NEITHER SIDE MAY BE THE WORLD. A body genuinely resting on the ground has the world
         // as its weld parent, and filtering that would drop every floor contact there is.
         if (weld_a == rbt.world_body or weld_b == rbt.world_body) {
             return false;
@@ -533,11 +533,11 @@ pub const Bridge = struct {
         self: *Bridge,
         world: *zimrphysics.World,
         model: *const rbt.Model,
-        // ★ MUTABLE ONLY TO CLEAR `teleported`. Everything else read here is read-only, and
-        // the alternative — leaving the flag set — would suppress the sweep forever.
+        // * MUTABLE ONLY TO CLEAR `teleported`. Everything else read here is read-only, and
+        // the alternative - leaving the flag set - would suppress the sweep forever.
         data: *rbt.Data,
     ) !void {
-        // ★★ TELEPORT, DO NOT STEER — and the distinction cost several sessions.
+        // ** TELEPORT, DO NOT STEER - and the distinction cost several sessions.
         //
         // `moveKinematic` does not move a body. It sets a VELOCITY that will carry it to the
         // target over `dt`, so during the collision detection that follows, **the proxy is
@@ -547,16 +547,16 @@ pub const Bridge = struct {
         // For a body resting flat that lag is invisible, which is why every flat test
         // passed. For a box rocking on a corner it is fatal: the corner it is told about is
         // the one from last step, so the push arrives in the wrong place and the box rocks
-        // instead of tipping. MuJoCo has no such gap — `mj_forward` collides at exactly the
+        // instead of tipping. MuJoCo has no such gap - `mj_forward` collides at exactly the
         // `q` it then solves at.
         //
         // Steering was RIGHT while the bridge was a simulator: a kinematic body needs a
-        // velocity for its contacts with dynamic bodies to transfer momentum. §4k made the
-        // bridge a pure DETECTOR — the crates it once pushed are tree bodies now, and
-        // zimrphysics resolves nothing — so the velocity buys nothing and the lag is pure
+        // velocity for its contacts with dynamic bodies to transfer momentum. section 4k made the
+        // bridge a pure DETECTOR - the crates it once pushed are tree bodies now, and
+        // zimrphysics resolves nothing - so the velocity buys nothing and the lag is pure
         // cost. `setTransform` puts the proxy exactly where the tree says it is.
         self.swept_count = 0;
-        // ★ EITHER SIGNAL SUPPRESSES THE SWEEP: the data's own flag, set by whatever wrote
+        // * EITHER SIGNAL SUPPRESSES THE SWEEP: the data's own flag, set by whatever wrote
         // `pos` wholesale, or an explicit `teleported()` from a caller doing something the
         // engine has no name for. The first covers keyframes and state restores without anyone
         // having to remember; the second is the escape hatch.
@@ -566,18 +566,18 @@ pub const Bridge = struct {
         for (0..model.ngeom) |geom| {
             const pose: rbt.Pose = geomPose(model, data, @intCast(geom));
             const handle: zimrphysics.BodyIndex = self.proxy[geom].index();
-            // ★ READ WHERE IT WAS BEFORE MOVING IT. The proxy's current position IS last
-            // step's pose, so the sweep needs no extra bookkeeping — but only until
+            // * READ WHERE IT WAS BEFORE MOVING IT. The proxy's current position IS last
+            // step's pose, so the sweep needs no extra bookkeeping - but only until
             // `setTransform` overwrites it two lines down.
             if (sweeping) {
                 self.recordSweptContact(world, model, @intCast(geom), world.bodies.data[handle].com_pos, pose);
             }
             try world.setTransform(self.gpa, handle, pose.pos, pose.rot);
         }
-        // ── ★★★ SWEPT CONTACTS FOR ANYTHING OUTRUNNING ITS OWN SIZE ──
+        // -- *** SWEPT CONTACTS FOR ANYTHING OUTRUNNING ITS OWN SIZE --
         //
         // The discrete detector reports a contact for where a body IS. That is enough until a
-        // body crosses something thin in one step — and then the contact it reports is on the
+        // body crosses something thin in one step - and then the contact it reports is on the
         // far side, with a normal that pushes the body onward. Measured on a 0.05 m ball at a
         // 0.10 m wall: contact detected at every speed, ball decelerated 20 m/s to 1.32, and
         // still ejected out the back because its centre had passed the wall's mid-plane before
@@ -586,20 +586,20 @@ pub const Bridge = struct {
         //
         // So a fast geom is swept, and a hit becomes a contact for the moment of IMPACT rather
         // than for the pose it will illegally reach. The proxy still goes exactly where the
-        // tree says — placing it short instead was tried first and is worse, because the
+        // tree says - placing it short instead was tried first and is worse, because the
         // proxy freezes while the tree body flies on and the two describe different robots.
         // Events are collected during the step that follows, so clear now rather than
-        // after — clearing after would discard the very events we are about to read.
+        // after - clearing after would discard the very events we are about to read.
         self.event_count = 0;
         self.overflowed = false;
     }
 
     /// Sweep a fast-moving geom and remember where it would first hit something.
     ///
-    /// ── ★★ WHY A SWEPT CONTACT AND NOT A SWEPT POSITION ──
+    /// -- ** WHY A SWEPT CONTACT AND NOT A SWEPT POSITION --
     ///
     /// The obvious fix is to stop the proxy at the impact point. It does not work: the proxy
-    /// freezes while the tree body — which the robot's own solver integrates — flies on, so the
+    /// freezes while the tree body - which the robot's own solver integrates - flies on, so the
     /// two describe different robots and the contact is reported for a pose nothing is in.
     ///
     /// A contact is the right output because that is what this module produces. The sweep says
@@ -620,27 +620,27 @@ pub const Bridge = struct {
         const motion: Vec = pose.pos - from;
         const travel: f32 = length3(motion);
         const reach: f32 = ccdRadius(model.geom_shape[geom]);
-        // ★ `linear_cast_threshold` (0.75 of the shape's inner radius) is zimrphysics' own CCD
+        // * `linear_cast_threshold` (0.75 of the shape's inner radius) is zimrphysics' own CCD
         // trigger, reused rather than a second convention invented next door. Below it the
         // discrete detector already sees the contact on the correct side.
         if (reach <= 0 or travel < world.settings.linear_cast_threshold * reach) {
             return;
         }
 
-        // ── ★★★ AND A JUMP IS NOT MOTION ──
+        // -- *** AND A JUMP IS NOT MOTION --
         //
         // A proxy that moved several metres in one step did not travel there; something
         // TELEPORTED it. Applying a keyframe does exactly that, and so does a demo's reset
         // button, an editor drag, or a scene being repositioned.
         //
         // Swept against the whole line between the two poses, such a jump finds whatever
-        // happens to lie along it — geometry the robot was never near — and manufactures a
+        // happens to lie along it - geometry the robot was never near - and manufactures a
         // contact for it, at a gap of metres, with the stiff softness a swept contact carries.
         // The result is a robot that appears to explode the frame after being reset, which
         // reads as the reset being broken and is this.
         //
-        // ★ THE BOUND IS GENEROUS BECAUSE IT ONLY HAS TO SEPARATE THE TWO CASES. The fastest
-        // thing a demo throws is ~30 m/s, which at 500 Hz is 0.06 m — well under twenty radii
+        // * THE BOUND IS GENEROUS BECAUSE IT ONLY HAS TO SEPARATE THE TWO CASES. The fastest
+        // thing a demo throws is ~30 m/s, which at 500 Hz is 0.06 m - well under twenty radii
         // for anything but a pinhead. A reset moves metres. Nothing real lives in between.
         if (travel > max_swept_travel * reach) {
             return;
@@ -663,16 +663,16 @@ pub const Bridge = struct {
 
         const impact: zimrphysics.ShapeCastHit = hit orelse return;
 
-        // ── ★★★ THE SWEPT PATH MUST APPLY THE SAME FILTERS AS THE DISCRETE ONE ──
+        // -- *** THE SWEPT PATH MUST APPLY THE SAME FILTERS AS THE DISCRETE ONE --
         //
         // `onContact` drops pairs that cannot move relative to each other and pairs joined by a
         // joint. `recordSweptContact` pushes straight into `harvest` and bypassed both, so a
         // limb folding at speed generated exactly the self-contacts the filter exists to
-        // remove: measured on a 4-DOF arm, `wrist` against `right_finger` — a parent and its
-        // own child — pinning the elbow **0.43 rad short of a reachable pose**, with the
+        // remove: measured on a 4-DOF arm, `wrist` against `right_finger` - a parent and its
+        // own child - pinning the elbow **0.43 rad short of a reachable pose**, with the
         // contacts never clearing however long it ran.
         //
-        // ★ TWO PATHS TO THE SAME OUTPUT MUST SHARE THE SAME RULES. Adding a second producer
+        // * TWO PATHS TO THE SAME OUTPUT MUST SHARE THE SAME RULES. Adding a second producer
         // of contacts without giving it the first one's filters is the whole of this bug, and
         // it is worth stating because it will be true of the next producer too.
         const other: u32 = blk: {
@@ -707,13 +707,13 @@ pub const Bridge = struct {
             .friction = @sqrt(@max(0, mine_friction * other_friction)),
             .geom = geom,
             .robot_body = model.geom_body[geom],
-            // ★ STATIC GEOMETRY IS `world_body`, NOT `not_a_robot_body` — the latter is maxInt, a
+            // * STATIC GEOMETRY IS `world_body`, NOT `not_a_robot_body` - the latter is maxInt, a
             // sentinel for "no mapping", and pushing it in as a body index reads far off the end
             // of every per-body array. Resolved above, where the filters need it too.
             .other = other,
             .position = impact.point,
             .normal = impact.normal,
-            // How far along the step the surface is. Positive, so the contact engages EARLY —
+            // How far along the step the surface is. Positive, so the contact engages EARLY -
             // which is the whole point: a speculative contact decelerates rather than catches.
             .gap = impact.fraction * travel,
         };
@@ -724,14 +724,14 @@ pub const Bridge = struct {
     /// world has stepped and before the robot's `forward`.
     /// Turn this step's recorded contacts into the robot's contact inputs.
     ///
-    /// ★ NO LONGER NEEDS THE WORLD. It briefly took one, to look up how heavy the other
-    /// side of each contact was — the robot could not otherwise know. In a unified tree it
+    /// * NO LONGER NEEDS THE WORLD. It briefly took one, to look up how heavy the other
+    /// side of each contact was - the robot could not otherwise know. In a unified tree it
     /// does know: both bodies are in its own mass matrix, and the relative Jacobian carries
     /// them. What crosses this boundary is now purely GEOMETRY.
     pub fn harvest(self: *Bridge, data: *rbt.Data) void {
         data.clearContacts();
 
-        // ★ SWEPT CONTACTS FIRST, so they are never the rows dropped when a step overflows
+        // * SWEPT CONTACTS FIRST, so they are never the rows dropped when a step overflows
         // `max_contacts`. A contact that prevents a body leaving the world matters more than
         // one more row on a foot already resting on the floor.
         for (self.swept[0..self.swept_count]) |hit| {
@@ -741,22 +741,22 @@ pub const Bridge = struct {
                 .normal = hit.normal,
                 .tangent = frame,
                 .distance = hit.gap,
-                // ★★ THE REAL MATERIALS, NOT A CONSTANT. This read `0.5` on both axes, so a
+                // ** THE REAL MATERIALS, NOT A CONSTANT. This read `0.5` on both axes, so a
                 // body moving fast enough to be swept got rubber friction whatever its
-                // material said — ice gripped and a grippy foot slipped, but only above the
+                // material said - ice gripped and a grippy foot slipped, but only above the
                 // speed that triggers a sweep, which is a horrible thing to debug.
                 //
                 // The discrete path takes `event.friction`, already combined by the detector.
                 // A sweep produces no event, so the same combination is done here from the two
                 // bodies' own values, the geometric mean being what zimrphysics uses.
                 .friction = .{ hit.friction, hit.friction },
-                // ★ THE MARGIN COVERS THE WHOLE REMAINING TRAVEL, which is what makes this a
+                // * THE MARGIN COVERS THE WHOLE REMAINING TRAVEL, which is what makes this a
                 // speculative contact rather than a distant one the solver would ignore: a row
                 // only acts inside its margin, and the impact is exactly `gap` away.
                 .margin = hit.gap + max_speculative_margin,
-                // ★★ AND A SWEPT CONTACT IS STIFF, because it exists for ONE step.
+                // ** AND A SWEPT CONTACT IS STIFF, because it exists for ONE step.
                 //
-                // The default softness has a 0.02 s time constant — ten steps at 500 Hz —
+                // The default softness has a 0.02 s time constant - ten steps at 500 Hz -
                 // which is right for a foot settling and useless for an impact that must be
                 // arrested before the next frame. Measured with the default: a 20 m/s ball
                 // decelerated and still crossed, because the contact was gone by the time it
@@ -779,10 +779,10 @@ pub const Bridge = struct {
                 // separation, negative when touching.
                 .distance = -event.depth,
                 .friction = .{ event.friction, event.friction },
-                // ★★ THE MARGIN, AND LEAVING IT AT ZERO CAUSED A LIMIT CYCLE.
+                // ** THE MARGIN, AND LEAVING IT AT ZERO CAUSED A LIMIT CYCLE.
                 //
-                // zimrphysics reports every contact within its SPECULATIVE DISTANCE — 2 cm
-                // by default — so the robot receives pairs that are merely close, not yet
+                // zimrphysics reports every contact within its SPECULATIVE DISTANCE - 2 cm
+                // by default - so the robot receives pairs that are merely close, not yet
                 // touching. With `margin = 0` the robot discarded all of those: a row only
                 // existed once the shapes already overlapped.
                 //
@@ -790,36 +790,36 @@ pub const Bridge = struct {
                 // shallow overlap and stay. For a box balanced on a CORNER it is a limit
                 // cycle: it falls, penetrates, gets a large corrective push (60 solver
                 // iterations, the cap), separates, loses its rows entirely, falls again.
-                // **Measured: a corner-balanced crate never settled — tilt swinging between
-                // 0.7 and 2.6 rad with |ω| stuck at 1–2.7 rad/s, indefinitely.** Visible as
+                // **Measured: a corner-balanced crate never settled - tilt swinging between
+                // 0.7 and 2.6 rad with |omega| stuck at 1-2.7 rad/s, indefinitely.** Visible as
                 // boxes that dance on their corners.
                 //
                 // Matching the detector's own speculative distance means a contact begins to
                 // act as the gap closes, so the constraint DECELERATES the approach instead
                 // of catching it after the fact. That is precisely what the field is for,
                 // and what MuJoCo's own `margin` does.
-                // ★★ AND IT SCALES WITH HOW FAR THE BODY MOVES IN A STEP.
+                // ** AND IT SCALES WITH HOW FAR THE BODY MOVES IN A STEP.
                 //
                 // A fixed zero was correct for the settling case above and useless for a fast
                 // one. **Measured: a 0.05 m ball fired at a 0.1 m wall passes THROUGH at
-                // 20 m/s** — contact is reported, but only once the ball is already on the far
+                // 20 m/s** - contact is reported, but only once the ball is already on the far
                 // side, so the normal points the wrong way and the impulse helps it on its
                 // way. A thrown ball is 10-30 m/s, so this is squarely in the range the demos
                 // need.
                 //
                 // A margin is a distance at which a contact starts acting, so the useful size
-                // is the distance the pair can close before the next step: `|v_rel| · dt`.
+                // is the distance the pair can close before the next step: `|v_rel| * dt`.
                 // Below walking pace it is millimetres and nothing changes; at 20 m/s it is
                 // 4 cm and the constraint engages while the ball is still in front of the wall.
                 //
-                // ★ CAPPED, because an unbounded margin is a body that collides with things it
-                // will never reach — and an earlier attempt at a large fixed margin produced
+                // * CAPPED, because an unbounded margin is a body that collides with things it
+                // will never reach - and an earlier attempt at a large fixed margin produced
                 // 1.4 GN in the full scene.
                 .margin = speculativeMargin(data.cvel[event.robot_body].lin, self.timestep),
-                // ★ BOTH SIDES AS TREE BODIES where they are. `world_body` on the `a` side
-                // is now the SPECIAL case — static geometry — rather than the only case.
-                // ★★ THE SAME FLESH SETTINGS AS THE SWEPT PATH. This site had no `softness` or
-                // `impedance` field at all, so it silently took `Contact`'s struct defaults — and a
+                // * BOTH SIDES AS TREE BODIES where they are. `world_body` on the `a` side
+                // is now the SPECIAL case - static geometry - rather than the only case.
+                // ** THE SAME FLESH SETTINGS AS THE SWEPT PATH. This site had no `softness` or
+                // `impedance` field at all, so it silently took `Contact`'s struct defaults - and a
                 // knob wired into the other producer changed nothing, because the DISCRETE path is
                 // the one that makes almost every contact. Two producers, one of them updated: the
                 // same shape as the friction bug and the swept-filter bug before it.
@@ -835,7 +835,7 @@ pub const Bridge = struct {
 
 /// Contacts act from the moment they overlap, with no early-engagement margin.
 ///
-/// ── ★ MEASURED, AFTER A LONG DETOUR ──
+/// -- * MEASURED, AFTER A LONG DETOUR --
 ///
 /// A margin was added to fix boxes that danced on their corners, on the theory that a
 /// constraint needs a band in which to decelerate an approach. It did not work: 0.004 still
@@ -879,7 +879,7 @@ fn speculativeMargin(velocity: Vec, timestep: f32) f32 {
 }
 
 /// The world pose of one geom, from the robot's own kinematics. Returns `robot.Pose`
-/// rather than a fresh anonymous type — the concept already exists there and composing
+/// rather than a fresh anonymous type - the concept already exists there and composing
 /// poses is exactly what it is for.
 fn geomPose(model: *const rbt.Model, data: *const rbt.Data, geom: u32) rbt.Pose {
     const body: u32 = model.geom_body[geom];
@@ -895,19 +895,19 @@ fn addShape(
 ) !zimrphysics.ShapeId {
     return switch (shape) {
         .sphere => |s| world.shapes.add(gpa, .{ .sphere = .{ .radius = s.radius } }),
-        // zimrphysics boxes and cylinders carry a `convex_radius` — a small rounding used
+        // zimrphysics boxes and cylinders carry a `convex_radius` - a small rounding used
         // by GJK for numerical robustness. robot.zig's shapes have no such notion, so it
         // is set to the engine's own default rather than invented here.
         .box => |s| world.shapes.add(gpa, .{
             .box = .{ .half_extent = s.half_extent, .convex_radius = default_convex_radius },
         }),
-        // Both engines run their capsule along local Y, so this needs no rotation — a
+        // Both engines run their capsule along local Y, so this needs no rotation - a
         // coincidence worth noting, since MuJoCo's runs along Z and an importer must fix it.
         .capsule => |s| world.shapes.add(gpa, .{
             .capsule = .{ .half_height = s.half_height, .radius = s.radius },
         }),
-        // ★ The point cloud becomes a real convex hull HERE, in the engine that owns
-        // collision. robot.zig carries only the points — it has no hull builder and needs
+        // * The point cloud becomes a real convex hull HERE, in the engine that owns
+        // collision. robot.zig carries only the points - it has no hull builder and needs
         // none, since it never asks whether two shapes touch.
         //
         // This is what lets an imported robot collide with the world: real models describe
@@ -926,25 +926,25 @@ fn addShape(
 /// Two unit vectors completing a right-handed frame with `normal`.
 ///
 /// Built from whichever world axis is least aligned with the normal, so the construction
-/// never degenerates. It is NOT stable frame to frame — a normal that rotates slowly will
-/// make the tangents jump when the least-aligned axis changes — which matters only for
+/// never degenerates. It is NOT stable frame to frame - a normal that rotates slowly will
+/// make the tangents jump when the least-aligned axis changes - which matters only for
 /// warm starting, and warm starting is not implemented. When it is, this should instead
 /// carry the previous frame forward.
 fn tangentFrame(normal: Vec) [2]Vec {
     // Pick the world axis least aligned with the normal, so the cross product is
     // well conditioned.
     //
-    // ★ KNOWN WEAKNESS, recorded rather than hidden: this is DISCONTINUOUS. As a normal
+    // * KNOWN WEAKNESS, recorded rather than hidden: this is DISCONTINUOUS. As a normal
     // rotates and the smallest component changes which axis it is, the chosen helper jumps
-    // and the whole tangent frame rotates by ninety degrees. Nothing breaks — any frame
+    // and the whole tangent frame rotates by ninety degrees. Nothing breaks - any frame
     // orthogonal to the normal is a valid basis, and the pyramid still bounds the friction
-    // correctly — but two things suffer: the pyramid's mild anisotropy (friction is
+    // correctly - but two things suffer: the pyramid's mild anisotropy (friction is
     // stronger along the edges than the faces) rotates with it, and a future warm start
     // cannot reuse last step's tangential force because it no longer means the same
     // direction.
     //
     // The fix, when warm starting arrives, is to carry the tangent frame ON THE CONTACT
-    // across steps and re-orthogonalise it against the new normal — the same trick used
+    // across steps and re-orthogonalise it against the new normal - the same trick used
     // for a stable contact basis in every engine that warm-starts friction. `Contact`
     // already takes the tangents as an input for exactly this reason.
     const ax: f32 = @abs(normal[0]);
@@ -981,13 +981,13 @@ fn onContact(
         return;
     }
 
-    // ★★★ A PAIR THAT CANNOT MOVE APART IS NOISE, NOT A CONSTRAINT — and letting one
+    // *** A PAIR THAT CANNOT MOVE APART IS NOISE, NOT A CONSTRAINT - and letting one
     // through cost a very long hunt.
     //
     // The KUKA's base link is welded to the world: no joint, so no degree of freedom can
     // change the distance between it and static geometry. In `robot_3d` its collision hull
     // also sits **7 cm inside the floor**, permanently, from step zero. Nothing about that is
-    // visible — the base cannot move, so it simply stays there looking correct.
+    // visible - the base cannot move, so it simply stays there looking correct.
     //
     // But it produced four contact rows every step with an unfixable 7 cm violation, and the
     // solver spent its whole iteration budget on them. The effect landed on the ROWS THAT
@@ -1002,19 +1002,19 @@ fn onContact(
         return;
     }
 
-    // ★★ AND A LIMB DOES NOT COLLIDE WITH ITSELF ACROSS A JOINT. See `Bridge.weld`: two links
+    // ** AND A LIMB DOES NOT COLLIDE WITH ITSELF ACROSS A JOINT. See `Bridge.weld`: two links
     // joined by a hinge overlap near it by construction, and reporting that as contact gives an
     // arm that jams the moment it folds.
     if (self.sameOrAdjacentWeld(robot_a, robot_b)) {
         return;
     }
 
-    // ★★ BOTH SIDES IN THE TREE IS THE INTERESTING CASE NOW — §4k.
+    // ** BOTH SIDES IN THE TREE IS THE INTERESTING CASE NOW - section 4k.
     //
     // This used to `return`, with the comment "robot self-collision, which needs the
     // two-body contact Jacobian rather than the against-the-world one". Two things changed.
-    // The two-body Jacobian was always there — `addContactRows` has built `jac_b − jac_a`
-    // since phase 6 — and a scene's CRATES are now tree bodies too, so this pair is no
+    // The two-body Jacobian was always there - `addContactRows` has built `jac_b - jac_a`
+    // since phase 6 - and a scene's CRATES are now tree bodies too, so this pair is no
     // longer an exotic self-collision but the ordinary case of a robot touching the thing it
     // is meant to touch.
     //
@@ -1022,27 +1022,27 @@ fn onContact(
     // was silently dropped here and the arm swept through reporting nothing.
     //
     // Orient the normal to point at the `b` side, so a positive constraint force always
-    // pushes `body_b` away from `body_a`. zimrphysics reports the normal as A → B, and
+    // pushes `body_b` away from `body_a`. zimrphysics reports the normal as A -> B, and
     // `harvest` fills the robot contact in the same order.
     const robot_body: u32 = if (b_is_robot) robot_b else robot_a;
     const other_body: u32 = if (b_is_robot) robot_a else robot_b;
     const normal: Vec = if (b_is_robot) manifold.normal else -manifold.normal;
 
-    // ── ★★ THE TWO SURFACES, COMBINED ──
+    // -- ** THE TWO SURFACES, COMBINED --
     //
     // `settings.friction` is what the detector decided for this pair, and it is null unless
-    // something set it — which for a robot proxy against world geometry nothing does. Falling
+    // something set it - which for a robot proxy against world geometry nothing does. Falling
     // straight through to a constant is what discarded every model's material for several
     // sessions, and the symptom was nowhere near the cause: a limp humanoid crept sideways at
     // an accelerating rate because 0.5 could not hold what its joint springs were pushing.
     //
-    // ★ GEOMETRIC MEAN, `sqrt(a·b)` — what `zimrphysics` uses for its own pairs and what MuJoCo
+    // * GEOMETRIC MEAN, `sqrt(a*b)` - what `zimrphysics` uses for its own pairs and what MuJoCo
     // uses for its. An arithmetic mean would let one grippy surface rescue a frictionless one,
     // which is not how sliding works.
     const friction: f32 = settings.friction orelse blk: {
         const mu_a: f32 = world.bodies.data[body_a].friction;
         const mu_b: f32 = world.bodies.data[body_b].friction;
-        // A zero means "not set" rather than "perfectly slippery" — nothing in these models
+        // A zero means "not set" rather than "perfectly slippery" - nothing in these models
         // wants a frictionless surface, and treating it as one would be a silent trap.
         if (mu_a <= 0 or mu_b <= 0) {
             break :blk default_friction;
@@ -1055,12 +1055,12 @@ fn onContact(
             self.overflowed = true;
             return;
         }
-        // zimrphysics's own convention: overlap along A → B is `dot(a − b, normal)`.
+        // zimrphysics's own convention: overlap along A -> B is `dot(a - b, normal)`.
         const depth: f32 = dot3(point.point_on_a - point.point_on_b, manifold.normal);
         self.events[self.event_count] = .{
             .robot_body = robot_body,
             // The other side as a TREE body, or `world_body` when it is genuinely outside
-            // the tree. Recorded now, while both indices are in hand — recovering it later
+            // the tree. Recorded now, while both indices are in hand - recovering it later
             // would mean re-deriving which side was which.
             .other_body = if (other_body == Bridge.not_a_robot_body) rbt.world_body else other_body,
             .other = if (b_is_robot) body_a else body_b,
@@ -1069,19 +1069,19 @@ fn onContact(
             .normal = normal,
             .depth = depth,
             .friction = friction,
-            // ★★ THE BODY PAIR IS PART OF THE IDENTITY, and leaving it out was a real bug.
+            // ** THE BODY PAIR IS PART OF THE IDENTITY, and leaving it out was a real bug.
             //
-            // This packed sub-shape, feature id and point index — which IS unique within one
+            // This packed sub-shape, feature id and point index - which IS unique within one
             // pair, and identical across pairs. Five crates resting on the same floor
             // produce the same sub-shape (0), the same box-vs-box feature ids and the same
             // point indices, so all five contacts numbered themselves the same way.
             //
             // `constraintKey` is exact rather than hashed precisely so a collision cannot
-            // happen — and its own comment says a collision "would silently warm-start a row
+            // happen - and its own comment says a collision "would silently warm-start a row
             // from an unrelated force, a wrong answer that converges". That is what this
             // caused: the solver pulled one crate's force onto another every step and never
-            // settled. **Measured: five settled crates needed up to 60 PGS iterations — the
-            // cap — where a single crate needs one or two.** Visible as boxes that shiver in
+            // settled. **Measured: five settled crates needed up to 60 PGS iterations - the
+            // cap - where a single crate needs one or two.** Visible as boxes that shiver in
             // place instead of resting.
             //
             // The tree bodies are the right discriminator: they are stable across frames
@@ -1139,10 +1139,10 @@ test "bridge: a link resting on a floor produces a contact pointing UP at the li
     defer world.deinit(gpa);
 
     // A slab whose top surface sits just above the sphere's lowest point, so they overlap.
-    // The sphere hangs at y = −0.5 with radius 0.08, so its bottom is at −0.58.
+    // The sphere hangs at y = -0.5 with radius 0.08, so its bottom is at -0.58.
     //
-    // ★ DYNAMIC, not static, and that is a constraint rather than a preference.
-    // zimrphysics's broad phase skips any pair without a non-sleeping DYNAMIC body in it —
+    // * DYNAMIC, not static, and that is a constraint rather than a preference.
+    // zimrphysics's broad phase skips any pair without a non-sleeping DYNAMIC body in it -
     // static/kinematic is one of the combinations it explicitly drops, because neither
     // body could respond. So a kinematic proxy against STATIC level geometry produces no
     // pair, no manifold and no event at all. See the note on `Bridge`.
@@ -1152,7 +1152,7 @@ test "bridge: a link resting on a floor produces a contact pointing UP at the li
         });
     _ = try world.createBody(.{
         .shape = floor_shape,
-        .position = vec(0, -0.66, 0), // top face at −0.56, so 0.02 of overlap
+        .position = vec(0, -0.66, 0), // top face at -0.56, so 0.02 of overlap
         .rotation = zm.quat_identity,
         .motion_type = .dynamic,
     });
@@ -1206,11 +1206,11 @@ test "bridge: the contact actually holds the link up" {
     _ = try world.createBody(.{
         .shape = floor_shape,
         // STATIC, which is what a floor actually is. This used to need to be dynamic,
-        // because a kinematic proxy never paired with static geometry — and a dynamic
+        // because a kinematic proxy never paired with static geometry - and a dynamic
         // "floor" falls, so it had left the scene long before the pendulum swung down to
         // where it had been. `report_immovable_contacts` on the proxy removed the need for
         // the workaround, and the test now describes a real situation.
-        .position = vec(0, -0.66, 0), // top face at −0.56; the link's low point is −0.58
+        .position = vec(0, -0.66, 0), // top face at -0.56; the link's low point is -0.58
         .rotation = zm.quat_identity,
         .motion_type = .static,
     });
@@ -1236,7 +1236,7 @@ test "bridge: the contact actually holds the link up" {
     }
     rbt.forward(&model, &data);
 
-    // A contact really did happen — otherwise this test proves nothing about contacts.
+    // A contact really did happen - otherwise this test proves nothing about contacts.
     try expect(saw_contact);
     // And the state stayed finite, which a badly-signed normal would not.
     try expect(data.pos[0] == data.pos[0]); // NaN check without std.math
@@ -1245,10 +1245,10 @@ test "bridge: the contact actually holds the link up" {
 }
 
 test "bridge: a settled crate keeps reporting contacts after the sleep timer elapses" {
-    // ★ The blind spot this test exists to close. zimrphysics puts settled bodies to sleep
+    // * The blind spot this test exists to close. zimrphysics puts settled bodies to sleep
     // (`time_before_sleep` is half a second) and the narrow phase skips a pair whose islands
     // are all asleep. If a crate resting on a motionless arm went to sleep and stopped being
-    // reported, the arm would silently stop feeling its weight — a plausible scene with an
+    // reported, the arm would silently stop feeling its weight - a plausible scene with an
     // invisible failure, which is the worst combination.
     //
     // Reasoning says it is safe: `moveKinematic` calls `setLinearVelocity`, which wakes the
@@ -1278,13 +1278,13 @@ test "bridge: a settled crate keeps reporting contacts after the sleep timer ela
     var world: zimrphysics.World = try .init(gpa, 64);
     defer world.deinit(gpa);
 
-    // A crate sitting squarely on the table top, whose surface is at y = −0.25.
+    // A crate sitting squarely on the table top, whose surface is at y = -0.25.
     const crate_shape: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
         .box = .{ .half_extent = vec(0.1, 0.1, 0.1), .convex_radius = default_convex_radius },
     });
     const crate: zimrphysics.BodyHandle = try world.createBody(.{
         .shape = crate_shape,
-        .position = vec(0, -0.145, 0), // underside at −0.245: 5 mm of overlap
+        .position = vec(0, -0.145, 0), // underside at -0.245: 5 mm of overlap
         .rotation = zm.quat_identity,
         .motion_type = .dynamic,
     });
@@ -1297,7 +1297,7 @@ test "bridge: a settled crate keeps reporting contacts after the sleep timer ela
     const dt: f32 = model.opt.timestep;
     var contacts_early: u32 = 0;
     var contacts_late: u32 = 0;
-    // Two seconds — four times `time_before_sleep`. The robot is held still by cancelling
+    // Two seconds - four times `time_before_sleep`. The robot is held still by cancelling
     // gravity, which is the scene that would let everything settle and sleep.
     for (0..480) |tick| {
         try bridge.sync(&world, &model, &data);
@@ -1320,7 +1320,7 @@ test "bridge: a settled crate keeps reporting contacts after the sleep timer ela
     try expect(crate_pos[1] > -0.4);
     // It must have been in contact at the start, or the test is measuring nothing.
     try expect(contacts_early > 0);
-    // ★ And still be reported long after the sleep timer would have elapsed.
+    // * And still be reported long after the sleep timer would have elapsed.
     try expect(contacts_late > 0);
 }
 
@@ -1370,7 +1370,7 @@ test "bridge: pairs with no robot in them are ignored" {
 }
 
 /// An octahedron: the smallest point cloud that is unambiguously a volume rather than a
-/// plane, and whose extent is trivial to reason about — 0.1 m along every axis.
+/// plane, and whose extent is trivial to reason about - 0.1 m along every axis.
 const octahedron = [_]Vec{
     vec(0.1, 0, 0), vec(-0.1, 0, 0),
     vec(0, 0.1, 0), vec(0, -0.1, 0),
@@ -1378,11 +1378,11 @@ const octahedron = [_]Vec{
 };
 
 test "hull geoms collide, so an imported robot can touch the world" {
-    // ★★ THE END OF THE IMPORT PATH. A real URDF describes collision with meshes; the
+    // ** THE END OF THE IMPORT PATH. A real URDF describes collision with meshes; the
     // importer turns those into point clouds; `robot.zig` carries them without knowing what
     // a hull is; and THIS engine builds the hull and reports the contact.
     //
-    // Without this the KUKA can be simulated but passes through everything — which is a
+    // Without this the KUKA can be simulated but passes through everything - which is a
     // robot in the same sense that a hologram is.
     const gpa: Allocator = std.testing.allocator;
 
@@ -1429,7 +1429,7 @@ test "hull geoms collide, so an imported robot can touch the world" {
         .motion_type = .static,
     });
 
-    // The hull proxy must be built without error — that is already half the test, since a
+    // The hull proxy must be built without error - that is already half the test, since a
     // degenerate cloud or a missing case would fail here.
     var bridge: Bridge = try .init(gpa, &world, &model, &data, 8);
     defer bridge.deinit(&world);
@@ -1452,7 +1452,7 @@ test "hull geoms collide, so an imported robot can touch the world" {
 
     // It made contact, and it came to rest ON the floor rather than through it. The floor's
     // top is at -0.4 and the hull's half extent is 0.1, so a resting slide position puts the
-    // body centre near -0.3 — checked loosely, since the exact penetration is a function of
+    // body centre near -0.3 - checked loosely, since the exact penetration is a function of
     // both engines' softness.
     try expect(touched);
     try expect(data.pos[0] > -0.45);
@@ -1460,14 +1460,14 @@ test "hull geoms collide, so an imported robot can touch the world" {
 }
 
 test "bridge: a failed allocation partway through init leaks nothing" {
-    // ★★ THE ONLY WAY TO TEST AN ERROR PATH IS TO CAUSE THE ERROR. `Bridge.init` makes five
+    // ** THE ONLY WAY TO TEST AN ERROR PATH IS TO CAUSE THE ERROR. `Bridge.init` makes five
     // allocations and two more fallible calls; before this it built them inside a struct
     // literal, where there is nowhere to put an `errdefer`, so a failure at the third leaked
     // the first two.
     //
     // Nothing observed it: the only trigger is OOM, and no test ever went near the path.
-    // `FailingAllocator` goes near it deliberately — one run per allocation index, each
-    // failing at a different point — and `testing.allocator` underneath reports any block
+    // `FailingAllocator` goes near it deliberately - one run per allocation index, each
+    // failing at a different point - and `testing.allocator` underneath reports any block
     // that was not freed.
     const gpa: Allocator = std.testing.allocator;
     var model: rbt.Model = try rbt.Spec(.{
@@ -1497,19 +1497,19 @@ test "bridge: a failed allocation partway through init leaks nothing" {
         bridge.deinit(&world);
         break;
     }
-    // The loop must have terminated by succeeding, not by exhausting the range — otherwise
+    // The loop must have terminated by succeeding, not by exhausting the range - otherwise
     // the test proved nothing about the successful path.
     try expect(fail_at < 24);
 }
 
-test "★ a fast projectile is stopped, not passed through" {
-    // ★★★ THE CASE THAT NEEDED CONTINUOUS COLLISION. A 0.05 m ball fired at a 0.10 m wall used
-    // to arrive on the far side at every speed above about 10 m/s — and NOT because of
+test "* a fast projectile is stopped, not passed through" {
+    // *** THE CASE THAT NEEDED CONTINUOUS COLLISION. A 0.05 m ball fired at a 0.10 m wall used
+    // to arrive on the far side at every speed above about 10 m/s - and NOT because of
     // tunnelling in the usual sense. Measured before this existed: the contact was detected at
     // every speed and the solver decelerated the ball from 20 m/s to 1.32, but by then its
     // centre had passed the wall's mid-plane, the nearest exit face flipped, and a perfectly
-    // resolved contact ejected it out the back. Running at 8000 Hz — 2.5 mm per step, a
-    // twentieth of the ball's radius — did not help.
+    // resolved contact ejected it out the back. Running at 8000 Hz - 2.5 mm per step, a
+    // twentieth of the ball's radius - did not help.
     const gpa: Allocator = std.testing.allocator;
     const ball = [_]robot_scene.FreeBody{.{
         .name = "ball",
@@ -1528,7 +1528,7 @@ test "★ a fast projectile is stopped, not passed through" {
     var world: zimrphysics.World = try .init(gpa, 32);
     defer world.deinit(gpa);
     world.gravity = vec(0, -9.81, 0);
-    // A wall 0.10 m thick with its near face at z = 0 — thinner than the ball travels in a
+    // A wall 0.10 m thick with its near face at z = 0 - thinner than the ball travels in a
     // single step at the speeds below.
     const wall: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
         .box = .{ .half_extent = vec(2, 2, 0.05), .convex_radius = 0.01 },
@@ -1540,7 +1540,7 @@ test "★ a fast projectile is stopped, not passed through" {
     defer bridge.deinit(&world);
     bridge.listen(&world);
 
-    // 100 m/s is 0.2 m per step — four times the ball's diameter, and twice the wall's
+    // 100 m/s is 0.2 m per step - four times the ball's diameter, and twice the wall's
     // thickness. Nothing discrete can see this.
     data.vel[2] = 100.0;
     data.stage = .stale;
@@ -1554,14 +1554,14 @@ test "★ a fast projectile is stopped, not passed through" {
     }
     rbt.forward(&model, &data);
 
-    // ★ IT IS ON THE NEAR SIDE. Where exactly does not matter — it bounces and falls — but
+    // * IT IS ON THE NEAR SIDE. Where exactly does not matter - it bounces and falls - but
     // which side of the wall it ended up on is the whole question.
     try expect(data.body_xpos[1][2] < 0.0);
 }
 
-test "★ a keyframe teleport is detected without being announced" {
-    // ★★ THE POINT OF `Data.teleported`. `applyKeyframe` sets it, `sync` consumes it, and no
-    // caller has to remember anything — which matters because there were thirty-one places
+test "* a keyframe teleport is detected without being announced" {
+    // ** THE POINT OF `Data.teleported`. `applyKeyframe` sets it, `sync` consumes it, and no
+    // caller has to remember anything - which matters because there were thirty-one places
     // that write `pos` wholesale and any one of them forgetting reintroduces the explosion.
     //
     // This test deliberately never calls `Bridge.teleported()`. If the automatic path breaks,
@@ -1601,7 +1601,7 @@ test "★ a keyframe teleport is detected without being announced" {
         rbt.step(&model, &data);
     }
 
-    // ★ `reset` MOVES EVERYTHING AND SETS THE FLAG ITSELF. No `bridge.teleported()` here.
+    // * `reset` MOVES EVERYTHING AND SETS THE FLAG ITSELF. No `bridge.teleported()` here.
     data.reset(&model);
     data.pos[0] = 15.0;
     data.pos[2] = -9.0;
@@ -1616,7 +1616,7 @@ test "★ a keyframe teleport is detected without being announced" {
         @memset(data.applied_force, 0);
         rbt.step(&model, &data);
     }
-    // ★ AND IT IS CLEARED AFTER ONE SYNC, or continuous collision would be off for good.
+    // * AND IT IS CLEARED AFTER ONE SYNC, or continuous collision would be off for good.
     try expect(!data.teleported);
 
     var fastest: f32 = 0;
@@ -1626,9 +1626,9 @@ test "★ a keyframe teleport is detected without being announced" {
     try expect(fastest < 2.0);
 }
 
-test "★ a teleported body does not explode" {
-    // ★★★ THE REGRESSION SWEPT CONTACTS INTRODUCED. A proxy that moved several metres in one
-    // step did not travel there — something TELEPORTED it: a keyframe applied, a reset button,
+test "* a teleported body does not explode" {
+    // *** THE REGRESSION SWEPT CONTACTS INTRODUCED. A proxy that moved several metres in one
+    // step did not travel there - something TELEPORTED it: a keyframe applied, a reset button,
     // an editor drag. Swept against the whole line between the two poses, that jump finds
     // whatever lies along it and manufactures a contact at a gap of metres, carrying the stiff
     // softness a swept contact uses.
@@ -1674,7 +1674,7 @@ test "★ a teleported body does not explode" {
         rbt.step(&model, &data);
     }
 
-    // ★ NOW TELEPORT IT ACROSS THE WORLD — twelve metres in one step, which is what a reset
+    // * NOW TELEPORT IT ACROSS THE WORLD - twelve metres in one step, which is what a reset
     // looks like to the bridge.
     data.pos[0] = 12.0;
     data.pos[2] = -8.0;
@@ -1691,7 +1691,7 @@ test "★ a teleported body does not explode" {
         rbt.step(&model, &data);
     }
 
-    // ── ★ IT IS WHERE IT WAS PUT, AND NOT MOVING FAST ──
+    // -- * IT IS WHERE IT WAS PUT, AND NOT MOVING FAST --
     //
     // Gravity over twenty steps is 0.8 m/s, so anything above a couple of m/s is the sweep
     // inventing a contact rather than physics.
@@ -1705,9 +1705,9 @@ test "★ a teleported body does not explode" {
     try expectApproxEqAbs(@as(f32, -8.0), data.body_xpos[1][2], 0.05);
 }
 
-test "★ a limb does not collide with itself across a joint" {
-    // ★★★ MuJoCo'S PARENT FILTER, WHICH THIS ENGINE DID NOT HAVE. Two links joined by a hinge
-    // OVERLAP near that hinge by construction — that is what a joint looks like geometrically —
+test "* a limb does not collide with itself across a joint" {
+    // *** MuJoCo'S PARENT FILTER, WHICH THIS ENGINE DID NOT HAVE. Two links joined by a hinge
+    // OVERLAP near that hinge by construction - that is what a joint looks like geometrically -
     // so reporting the overlap as contact gives a limb that fights itself the moment it folds.
     //
     // Measured before this existed, on a 4-DOF arm commanded to a perfectly reachable pose:
@@ -1754,8 +1754,8 @@ test "★ a limb does not collide with itself across a joint" {
     defer bridge.deinit(&world);
     bridge.listen(&world);
 
-    // ★ FOLD THE ELBOW RIGHT BACK, so the two links lie alongside each other and overlap along
-    // their whole length — far more than any real joint would, to leave no doubt.
+    // * FOLD THE ELBOW RIGHT BACK, so the two links lie alongside each other and overlap along
+    // their whole length - far more than any real joint would, to leave no doubt.
     data.pos[1] = 2.9;
     data.stage = .stale;
     for (0..200) |_| {
@@ -1767,21 +1767,21 @@ test "★ a limb does not collide with itself across a joint" {
         rbt.step(&model, &data);
     }
 
-    // ── ★ NOT ONE CONTACT, and the elbow stayed where it was put ──
+    // -- * NOT ONE CONTACT, and the elbow stayed where it was put --
     try expectEqual(@as(u32, 0), data.contact_count);
     try expectApproxEqAbs(@as(f32, 2.9), data.pos[1], 0.01);
 }
 
-test "★★ Newton holds a stack that PGS drops" {
-    // ★★★ THE ACCEPTANCE TEST THE PLAN SET FOR NEWTON, and it is met by a wide margin.
+test "** Newton holds a stack that PGS drops" {
+    // *** THE ACCEPTANCE TEST THE PLAN SET FOR NEWTON, and it is met by a wide margin.
     //
     // Six boxes, 96 contact rows. Measured on a cold solve from the settled configuration:
     //
-    //     PGS      1 iter 26.7 · 5 iters 13.4 · 20 iters 4.83 · 100 iters 0.269   stack COLLAPSES
-    //     Newton   1 iter 0.0000004 · 2 iters 0.0000005 and converged              stack STANDS
+    //     PGS      1 iter 26.7 * 5 iters 13.4 * 20 iters 4.83 * 100 iters 0.269   stack COLLAPSES
+    //     Newton   1 iter 0.0000004 * 2 iters 0.0000005 and converged              stack STANDS
     //
     // PGS sweeps rows, so information travels one contact per sweep and a six-high stack needs
-    // six sweeps before the floor is felt at the top — with every later sweep undoing what the
+    // six sweeps before the floor is felt at the top - with every later sweep undoing what the
     // one before it fixed. Newton minimises the whole objective at once and does not care how
     // long the chain is.
     const gpa: Allocator = std.testing.allocator;
@@ -1835,27 +1835,27 @@ test "★★ Newton holds a stack that PGS drops" {
     }
     rbt.forward(&model, &data);
 
-    // ── ★ EVERY BOX WITHIN A CENTIMETRE OF WHERE IT BELONGS ──
+    // -- * EVERY BOX WITHIN A CENTIMETRE OF WHERE IT BELONGS --
     //
     // The tower is metastable, so this is checked after two seconds rather than twenty: a real
     // stack settles into slight asymmetry and eventually topples, and testing THAT would be
     // testing chance. Two seconds is long enough for a solver that cannot hold it to have
-    // dropped it — PGS puts the top box on the floor well inside that.
+    // dropped it - PGS puts the top box on the floor well inside that.
     for (0..box_count) |i| {
         const want: f32 = 0.05 + float(i) * 0.1;
         try expectApproxEqAbs(want, data.body_xpos[i + 1][1], 0.01);
     }
 
-    // ★ AND IT CONVERGED IN A HANDFUL OF ITERATIONS, not by exhausting the cap.
+    // * AND IT CONVERGED IN A HANDFUL OF ITERATIONS, not by exhausting the cap.
     try expect(data.solver_iterations < 10);
 }
 
-test "★ a swept contact uses the real materials, not a constant" {
-    // ★★ FOUND BY READING THE TWO CONTACT PRODUCERS SIDE BY SIDE. The discrete path takes
+test "* a swept contact uses the real materials, not a constant" {
+    // ** FOUND BY READING THE TWO CONTACT PRODUCERS SIDE BY SIDE. The discrete path takes
     // `event.friction`, already combined by the detector. The swept path had `0.5` written in,
     // so a body moving fast enough to be swept got rubber friction whatever its material said.
     //
-    // ★ AND THE FAILURE ONLY APPEARS ABOVE THE SWEEP THRESHOLD, which is a horrible thing to
+    // * AND THE FAILURE ONLY APPEARS ABOVE THE SWEEP THRESHOLD, which is a horrible thing to
     // debug: the same model slides correctly when nudged and grips wrongly when thrown.
     const gpa: Allocator = std.testing.allocator;
     const puck = [_]robot_scene.FreeBody{.{
@@ -1878,8 +1878,8 @@ test "★ a swept contact uses the real materials, not a constant" {
     const wall: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
         .box = .{ .half_extent = vec(0.05, 2, 2), .convex_radius = 0.01 },
     });
-    // ★ AN ALMOST FRICTIONLESS WALL. With the constant, a swept contact against this reported
-    // 0.5 — ten times what the material states.
+    // * AN ALMOST FRICTIONLESS WALL. With the constant, a swept contact against this reported
+    // 0.5 - ten times what the material states.
     const slippery: zimrphysics.BodyHandle = try world.createBody(.{
         .shape = wall,
         .position = vec(1.0, 0, 0),
@@ -1911,33 +1911,33 @@ test "★ a swept contact uses the real materials, not a constant" {
         rbt.step(&model, &data);
     }
 
-    // ★ THE PUCK'S OWN FRICTION TIMES THE WALL'S, GEOMETRICALLY — the combination zimrphysics
+    // * THE PUCK'S OWN FRICTION TIMES THE WALL'S, GEOMETRICALLY - the combination zimrphysics
     // uses itself. What matters is that it is nowhere near the 0.5 that used to be hardcoded.
     try expect(swept_friction >= 0);
     try expect(swept_friction < 0.2);
 }
 
-test "★★ the solver's FORCES match MuJoCo, not just its behaviour" {
-    // ★★★ THE ORACLE THAT WAS MISSING. An audit of what is checked against MuJoCo found
+test "** the solver's FORCES match MuJoCo, not just its behaviour" {
+    // *** THE ORACLE THAT WAS MISSING. An audit of what is checked against MuJoCo found
     // forward kinematics, mass, inertia, sensors and equalities all verified against its own
-    // numbers — and the SOLVER verified only by behaviour: robots stand, stacks stand, heights
+    // numbers - and the SOLVER verified only by behaviour: robots stand, stacks stand, heights
     // roughly agree.
     //
     // **That is a weak oracle.** Many wrong solvers make a robot stand. A constraint force that
     // is 10% high still supports a box; it shows up later as a foot that bounces, a grip that
     // crushes, or a policy that learns to exploit a contact model no real robot has.
     //
-    // ── ★ THE CASE IS CHOSEN SO THE ANSWER IS KNOWN WITHOUT EITHER ENGINE ──
+    // -- * THE CASE IS CHOSEN SO THE ANSWER IS KNOWN WITHOUT EITHER ENGINE --
     //
-    // A 2 kg box resting on a plane. At rest the constraint must carry exactly its weight —
-    // `m·g = 19.62 N` — so this checks both engines against PHYSICS, and each other for the
+    // A 2 kg box resting on a plane. At rest the constraint must carry exactly its weight -
+    // `m*g = 19.62 N` - so this checks both engines against PHYSICS, and each other for the
     // parts physics does not pin down.
     //
     //     MuJoCo (Newton, 200 iterations, tol 1e-12):  z 0.099892   qfrc_constraint[2] 19.62
     //     ours, PGS:                                   z 0.099878   qfrc_constraint[2] 19.620
     //     ours, Newton:                                z 0.099878   qfrc_constraint[2] 19.620
     //
-    // Sixteen rows in every case — four contact points, four pyramid edges each — and the
+    // Sixteen rows in every case - four contact points, four pyramid edges each - and the
     // resting depth agrees to 1.4e-5, which is the softness constant doing the same thing in
     // both.
     const gpa: Allocator = std.testing.allocator;
@@ -1991,17 +1991,17 @@ test "★★ the solver's FORCES match MuJoCo, not just its behaviour" {
         }
         rbt.forward(&model, &data);
 
-        // ★ THE FORCE IS THE WEIGHT. Not approximately the weight — a resting body is a
+        // * THE FORCE IS THE WEIGHT. Not approximately the weight - a resting body is a
         // statically determinate problem and there is one right answer.
         try expectApproxEqAbs(@as(f32, 19.62), data.constraint_joint_force[1], 0.02);
 
-        // ★ AND NOTHING SIDEWAYS. A friction pyramid that is not symmetric about the normal
-        // leaves a residual tangential force, which a resting box would slowly slide under —
+        // * AND NOTHING SIDEWAYS. A friction pyramid that is not symmetric about the normal
+        // leaves a residual tangential force, which a resting box would slowly slide under -
         // slowly enough that no behavioural test would see it inside a few seconds.
         try expectApproxEqAbs(@as(f32, 0), data.constraint_joint_force[0], 0.02);
         try expectApproxEqAbs(@as(f32, 0), data.constraint_joint_force[2], 0.02);
 
-        // Sixteen rows: four contact points, four pyramid edges each — the same count MuJoCo
+        // Sixteen rows: four contact points, four pyramid edges each - the same count MuJoCo
         // reports, so the two are solving the same problem and not merely reaching similar
         // answers from different ones.
         try expectEqual(@as(u32, 16), data.constraint_count);
@@ -2011,9 +2011,9 @@ test "★★ the solver's FORCES match MuJoCo, not just its behaviour" {
     }
 }
 
-test "★★ a ragdoll comes to rest under Newton, and keeps twitching under PGS" {
-    // ★★★ THE SOLVER DIFFERENCE IN A REAL SCENE, not a synthetic stack. A 27-DOF humanoid
-    // dropped on its side with NO control at all — the hardest thing a contact solver is
+test "** a ragdoll comes to rest under Newton, and keeps twitching under PGS" {
+    // *** THE SOLVER DIFFERENCE IN A REAL SCENE, not a synthetic stack. A 27-DOF humanoid
+    // dropped on its side with NO control at all - the hardest thing a contact solver is
     // routinely asked to do, because a limp body has no actuator holding anything and every
     // joint is free to be pushed by every contact.
     //
@@ -2022,11 +2022,11 @@ test "★★ a ragdoll comes to rest under Newton, and keeps twitching under PGS
     //     from 1.2 m   PGS: settled |v| 2.67   Newton: 0.41
     //     from 2.5 m   PGS: settled |v| 1.39   Newton: 0.24
     //
-    // ★ BOTH REACH THE SAME POSE — pelvis at z 0.177 either way — so this is not PGS getting
+    // * BOTH REACH THE SAME POSE - pelvis at z 0.177 either way - so this is not PGS getting
     // the answer wrong. It is PGS not getting all the way there: 15 coupled rows, linear
     // convergence, and a residual that reads on screen as a body that will not stop twitching.
     //
-    // ★★ AND THIS IS WHY THE `algorithm` OPTION EXISTS. PGS is the default and 1.86x faster on
+    // ** AND THIS IS WHY THE `algorithm` OPTION EXISTS. PGS is the default and 1.86x faster on
     // a Go1 holding its pose, where there are sixteen rows and little coupling. A ragdoll is
     // the other regime, and picking per scene is the whole point of having both.
     const gpa: Allocator = std.testing.allocator;
@@ -2062,7 +2062,7 @@ test "★★ a ragdoll comes to rest under Newton, and keeps twitching under PGS
     });
 
     _ = robot_mjcf.applyKeyframe(model, &data, robot.keyframes[0]);
-    // Dropped from 1.2 m and tipped, so it lands on its side rather than its feet — a body
+    // Dropped from 1.2 m and tipped, so it lands on its side rather than its feet - a body
     // that lands upright makes far fewer contacts and proves far less.
     data.pos[2] = 1.2;
     const tipped: Quat = quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
@@ -2094,21 +2094,21 @@ test "★★ a ragdoll comes to rest under Newton, and keeps twitching under PGS
         fastest = @max(fastest, @abs(data.vel[i]));
     }
 
-    // ── ★★★ THIS BAR MOVED WHEN FRICTION WAS FIXED, AND THAT IS THE INTERESTING PART ──
+    // -- *** THIS BAR MOVED WHEN FRICTION WAS FIXED, AND THAT IS THE INTERESTING PART --
     //
     // Written against a hardcoded mu = 0.5 it asserted `< 1.0` and measured 0.41. With the
     // model's real friction reaching the contacts, the same drop measures **higher**, around
-    // 2.0 — because a body that cannot SLIDE puts the energy its joint springs supply into its
+    // 2.0 - because a body that cannot SLIDE puts the energy its joint springs supply into its
     // JOINTS instead. More grip, more twitching. The physics is more right and the number is
     // worse, which is exactly the sort of thing a test bar tuned to a bug will hide.
     //
-    // ★ AND A KNOWN GAP REMAINS. MuJoCo on this same model and drop holds max joint |v| at
-    // 0.014-0.134; ours runs 0.67-1.94. Damping, stiffness and armature all import correctly —
-    // `dof_armature` matches MuJoCo's 0.2100 exactly — so the parameters are right and the
+    // * AND A KNOWN GAP REMAINS. MuJoCo on this same model and drop holds max joint |v| at
+    // 0.014-0.134; ours runs 0.67-1.94. Damping, stiffness and armature all import correctly -
+    // `dof_armature` matches MuJoCo's 0.2100 exactly - so the parameters are right and the
     // dissipation is not. The bar below is set where the engine actually is, not where it
     // should be, so that CLOSING that gap shows up as this test needing a tighter bar.
     try expect(fastest < 4.0);
-    // ★ AND IT LANDED RATHER THAN SANK OR EXPLODED — a body resting on its side puts its
+    // * AND IT LANDED RATHER THAN SANK OR EXPLODED - a body resting on its side puts its
     // pelvis a little above the floor, not at it and not below.
     try expect(data.body_xpos[1][2] > 0.05);
     try expect(data.body_xpos[1][2] < 0.5);
@@ -2117,15 +2117,15 @@ test "★★ a ragdoll comes to rest under Newton, and keeps twitching under PGS
     try expect(peak_contacts >= 8);
 }
 
-test "★★ a model's friction reaches its contacts" {
-    // ★★★ A CHAIN THAT WAS BROKEN IN THREE PLACES AT ONCE, and every one of them was silent.
+test "** a model's friction reaches its contacts" {
+    // *** A CHAIN THAT WAS BROKEN IN THREE PLACES AT ONCE, and every one of them was silent.
     // MJCF stated `friction=".7"`, `robot_mjcf` discarded it with a comment saying so, `Model`
     // had nowhere to put it, the proxy body was created without it, and `onContact` fell
     // through to a hardcoded 0.5. Five links, and a broken one anywhere gives the same
     // symptom: every contact in every model behaving identically whatever the model says.
     //
-    // ★ THE SYMPTOM WAS NOWHERE NEAR THE CAUSE. A limp humanoid on the ground crept sideways at
-    // an ACCELERATING rate — 0.109 m over 25 s against MuJoCo's 0.071 and falling — because 0.5
+    // * THE SYMPTOM WAS NOWHERE NEAR THE CAUSE. A limp humanoid on the ground crept sideways at
+    // an ACCELERATING rate - 0.109 m over 25 s against MuJoCo's 0.071 and falling - because 0.5
     // could not hold what its joint springs were pushing. With the chain repaired the same drop
     // measures **0.0705 m against MuJoCo's 0.071**.
     //
@@ -2185,8 +2185,8 @@ test "★★ a model's friction reaches its contacts" {
     }
 
     try expect(data.contact_count > 0);
-    // ★ LINKS 2-5: the proxy carries it, the detector sees both bodies, and the contact gets
-    // their GEOMETRIC mean — `sqrt(0.9 x 0.7) = 0.7937`, which is what zimrphysics uses for its
+    // * LINKS 2-5: the proxy carries it, the detector sees both bodies, and the contact gets
+    // their GEOMETRIC mean - `sqrt(0.9 x 0.7) = 0.7937`, which is what zimrphysics uses for its
     // own pairs and what MuJoCo uses for its. Under the old code this read exactly 0.5, and
     // asserting on that number is what makes the regression impossible to reintroduce quietly.
     const want: f32 = @sqrt(floor_mu * grippy);
@@ -2196,10 +2196,10 @@ test "★★ a model's friction reaches its contacts" {
     }
 }
 
-test "★ THE GATE: a Unitree Go1 stands still for 30 seconds" {
-    // ★★★ PHASE C TURN 11, and the thing the whole roadmap turns on. A quadruped that will
-    // not stand still fails for SOLVER reasons rather than modelling ones — contact softness,
-    // friction and the warm start all show up here first — so everything after this is
+test "* THE GATE: a Unitree Go1 stands still for 30 seconds" {
+    // *** PHASE C TURN 11, and the thing the whole roadmap turns on. A quadruped that will
+    // not stand still fails for SOLVER reasons rather than modelling ones - contact softness,
+    // friction and the warm start all show up here first - so everything after this is
     // guesswork until it holds.
     //
     // A real robot, imported from Menagerie's MJCF, held at its own `home` keyframe by plain
@@ -2211,7 +2211,7 @@ test "★ THE GATE: a Unitree Go1 stands still for 30 seconds" {
     var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
     defer robot.deinit();
 
-    // ★ MJCF IS Z-UP, so the world's gravity has to be too. Handing a Z-up robot a Y-up
+    // * MJCF IS Z-UP, so the world's gravity has to be too. Handing a Z-up robot a Y-up
     // gravity gives a machine that falls sideways, which looks like a controller problem.
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, .{
         .max_contacts = 128,
@@ -2251,19 +2251,19 @@ test "★ THE GATE: a Unitree Go1 stands still for 30 seconds" {
         try zimrphysics.step(&world, dt);
         bridge.harvest(&data);
 
-        // ★ PLAIN PD IN TORQUE SPACE, clamped to the joint's rating, plus gravity
+        // * PLAIN PD IN TORQUE SPACE, clamped to the joint's rating, plus gravity
         // compensation ON THE ACTUATED DOFs ONLY.
         //
         // Two mistakes were made here first and both are worth keeping:
         //
-        //   * **Computed torque cannot command a floating base.** `τ = M·a*` solves for
+        //   * **Computed torque cannot command a floating base.** `tau = M*a*` solves for
         //     accelerations the trunk has no motor to produce; zeroing those rows afterwards
         //     leaves the legs making up a difference they were never asked for, and the robot
         //     folds to a third of its height while looking like a tuning problem.
         //   * **Gravity compensation on the free joint makes the robot fly.** `bias_force`
         //     covers every DOF including the trunk's six; adding all of it cancels the
         //     machine's own weight, and it rises at a steady 2.4 m/s. A trunk has no motor,
-        //     so it must feel its weight — the same rule the crates taught.
+        //     so it must feel its weight - the same rule the crates taught.
         @memset(data.applied_force, 0);
         for (0..model.njnt) |j| {
             if (model.jnt_type[j] != .hinge) {
@@ -2278,16 +2278,16 @@ test "★ THE GATE: a Unitree Go1 stands still for 30 seconds" {
     }
     rbt.forward(model, &data);
 
-    // ── ★ IT IS STILL STANDING, and still ──
+    // -- * IT IS STILL STANDING, and still --
     const trunk: u32 = imported.bodyIndex("trunk").?;
-    // ★ A RANGE, NOT A TARGET — and the reason is worth recording.
+    // * A RANGE, NOT A TARGET - and the reason is worth recording.
     //
-    // This asserted `0.27 ± 0.03`, calibrated when two geometry bugs were still present: the
-    // capsules were rotated 90° from MJCF's axis, and every foot's `pos` came from a CLASS
+    // This asserted `0.27 +/- 0.03`, calibrated when two geometry bugs were still present: the
+    // capsules were rotated 90 deg from MJCF's axis, and every foot's `pos` came from a CLASS
     // and was being dropped, so the robot stood on its shins. Both are fixed, the feet are
     // now the lowest geometry as they should be, and it settles higher.
     //
-    // Which number is right cannot be re-derived here — MuJoCo needs the Menagerie mesh
+    // Which number is right cannot be re-derived here - MuJoCo needs the Menagerie mesh
     // assets to load this model and they are not checked in. So the test asserts what it can
     // actually justify: **the robot is standing on its legs**, somewhere between a deep
     // crouch and full extension, rather than a precise height whose reference was measured

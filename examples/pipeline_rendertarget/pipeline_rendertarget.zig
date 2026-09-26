@@ -1,9 +1,9 @@
-//! pipeline_rendertarget — render a CUSTOM PIPELINE into an offscreen
-//! RenderTexture, then composite that texture to the screen many times —
+//! pipeline_rendertarget - render a CUSTOM PIPELINE into an offscreen
+//! RenderTexture, then composite that texture to the screen many times -
 //! "render once, reuse many". The foundation for post-processing and MSAA.
 //!
 //! No hand-written WGSL. The custom shader is the same pos+colour+transform
-//! shader as pipeline_uniforms (REUSED — this example's lesson is the offscreen
+//! shader as pipeline_uniforms (REUSED - this example's lesson is the offscreen
 //! render + composite, not the shader). The triangle is drawn once into the RT,
 //! then `drawTextureRec` stamps `rt.asTexture()` across a grid. The texture
 //! sampling is the ENGINE's 2D path, not a custom sampler.

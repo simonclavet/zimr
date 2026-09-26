@@ -1,4 +1,4 @@
-//! gen_files_md.zig — generate src/notes/files.md, the per-file atlas.
+//! gen_files_md.zig - generate src/notes/files.md, the per-file atlas.
 //!
 //! Zig port of scripts/gen_files_md.py.  Walks the tree, computes per-file
 //! line/fn/test counts + deps + dependents (naive scans, matching the old
@@ -652,7 +652,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Order the "src (core)" section bottom-up by DAG level (then name) — the
+    // Order the "src (core)" section bottom-up by DAG level (then name) - the
     // suggested reading order from the topography block.
     if (area_map.get("src (core)")) |core_list| {
         std.mem.sort([]const u8, core_list.items, LvlCtx{ .map = &level_of }, lvlLess);
@@ -731,7 +731,7 @@ pub fn main(init: std.process.Init) !void {
         try chunks.append(gpa, try std.mem.join(gpa, "", tb.items));
     }
 
-    // Dependency graph (Mermaid) — the transitive reduction, so the diagram
+    // Dependency graph (Mermaid) - the transitive reduction, so the diagram
     // shows only direct/covering edges instead of the full 212-edge hairball.
     {
         var mb: ArrayList([]const u8) = .empty;

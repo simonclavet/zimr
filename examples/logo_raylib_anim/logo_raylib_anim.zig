@@ -1,4 +1,4 @@
-//! logo_raylib_anim — the framed-square logo, assembled live by a little state machine: a box
+//! logo_raylib_anim - the framed-square logo, assembled live by a little state machine: a box
 //! blinks, the top+left bars grow, then the bottom+right bars close the frame, the letters type in
 //! one by one, and the whole thing fades out before looping. Rebadged "zimr" and inverted for the
 //! dark theme. Auto-loops; tap to replay immediately (raylib uses the R key).

@@ -1,7 +1,7 @@
 // @byteSwap / @bitReverse on a 64-bit value. Pre-fix the __byteswap/__bitreverse
 // JS runtime helpers used Number arithmetic (Math.floor(x / Math.pow(256, k)),
 // r * 256, ...), so calling them with a BigInt (any u64) threw "Cannot mix BigInt
-// and other types" — they never branched on width the way __clz/__ctz/__popcount
+// and other types" - they never branched on width the way __clz/__ctz/__popcount
 // do. References are built from BigInt-safe shifts/masks (explicit byte moves for
 // the swap, a bit loop for the reverse) so a wrong value is caught, not just the
 // crash.

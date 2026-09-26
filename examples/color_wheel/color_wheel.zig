@@ -1,4 +1,4 @@
-//! color_wheel — an HSV colour wheel drawn as a fan of triangles (rim = full-saturation hue,
+//! color_wheel - an HSV colour wheel drawn as a fan of triangles (rim = full-saturation hue,
 //! hub = the value/grey), with a draggable picker and a value slider. Drag inside the wheel to pick
 //! a hue+saturation; drag the bar to set value. The selected colour shows as a swatch with its hex.
 //! A port of raylib's rlgl colour wheel (its rlBegin/rlColor/rlVertex fan -> drawTriangleGradient).

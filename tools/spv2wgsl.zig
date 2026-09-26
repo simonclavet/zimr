@@ -1,5 +1,5 @@
-//! tools/spv2wgsl.zig — CLI wrapper around `src/spv2wgsl.zig`'s
-//! SPIR-V → WGSL translator.  Built once by `tools/build.zig`,
+//! tools/spv2wgsl.zig - CLI wrapper around `src/spv2wgsl.zig`'s
+//! SPIR-V -> WGSL translator.  Built once by `tools/build.zig`,
 //! invoked from `src/shader_codegen.zig`'s `addShaderWgsl` step as part
 //! of the WGSL shader pipeline (parallel to `spirv-cross` in the
 //! GLSL pipeline).
@@ -16,11 +16,11 @@
 //!   spv2wgsl --strict <input.spv> <output.wgsl>   # fail on any `// ERROR:` marker
 //!
 //! Exit codes:
-//!   0 — success
-//!   2 — usage error
-//!   3 — input is not valid SPIR-V (magic mismatch / malformed)
-//!   4 — translation failed (panic surfaced as an error in the underlying lib)
-//!   5 — `--strict` and the output contains a `// ERROR:` marker
+//!   0 - success
+//!   2 - usage error
+//!   3 - input is not valid SPIR-V (magic mismatch / malformed)
+//!   4 - translation failed (panic surfaced as an error in the underlying lib)
+//!   5 - `--strict` and the output contains a `// ERROR:` marker
 //!       (i.e. a combined-sampler shader or other source-level issue
 //!       the translator can't fix; engine shaders must always pass --strict)
 
@@ -83,14 +83,14 @@ fn cmdCheck(
         },
         error.OutOfMemory => return err,
         // The recursive walker (Phase 3b) introduces `anyerror` into the
-        // error set — defensively handle any other error by reporting
+        // error set - defensively handle any other error by reporting
         // and exiting non-zero.
         else => {
             try printErrorLine(io, "spv2wgsl: {s}: {s}", .{ input_path, @errorName(err) });
             std.process.exit(3);
         },
     };
-    // Quick stat — confirms work was done; aids casual debugging.
+    // Quick stat - confirms work was done; aids casual debugging.
     var stdout_buf: [256]u8 = undefined;
     var stdout_w: std.Io.File.Writer = std.Io.File.stdout().writer(io, &stdout_buf);
     stdout_w.interface.print(
@@ -110,7 +110,7 @@ const TranslateOpts = struct {
     strict: bool,
 };
 
-/// Translate `input.spv` → `output.wgsl`.  On failure, write nothing
+/// Translate `input.spv` -> `output.wgsl`.  On failure, write nothing
 /// (don't leave a half-written file on disk) and exit with a non-zero
 /// status code.
 fn cmdTranslate(
@@ -159,7 +159,7 @@ fn cmdTranslate(
     if (opts.strict) {
         // Scan for `// ERROR:` markers emitted by handlers that
         // can't translate something (e.g. combined samplers).  These
-        // are grep-friendly intentionally — the shader transpiles
+        // are grep-friendly intentionally - the shader transpiles
         // but is unusable; the source must be fixed.
         var line_no: usize = 1;
         var error_count: usize = 0;
@@ -180,7 +180,7 @@ fn cmdTranslate(
         }
     }
 
-    // Write the output atomically — write-and-rename is what we'd want
+    // Write the output atomically - write-and-rename is what we'd want
     // in production, but for build-step idempotency the bare write is
     // adequate (the build cache invalidates on input change).
     try std.Io.Dir.cwd().writeFile(io, .{
@@ -218,14 +218,14 @@ pub fn main(init: std.process.Init) !void {
     // RULE: never reorder, overwrite or compact an array whose elements are
     // owned allocations freed by index.  Build a borrowed view instead.
     var pos_list: ArrayList([]const u8) = .empty;
-    defer pos_list.deinit(gpa); // borrowed pointers — nothing to free
+    defer pos_list.deinit(gpa); // borrowed pointers - nothing to free
 
     // Optional `--entry=NAME` selects ONE OpEntryPoint from a multi-kernel
-    // module (kompute installKernel ×N); without it, last entry wins.
+    // module (kompute installKernel xN); without it, last entry wins.
     var entry: ?[]const u8 = null;
 
     for (args_list.items, 0..) |arg, i| {
-        // Optional leading `--walker=…` flag.  DEPRECATED no-op since F5
+        // Optional leading `--walker=...` flag.  DEPRECATED no-op since F5
         // deleted the legacy walker: the structured-IR path is the only
         // driver.  We still ACCEPT and ignore it so existing callers
         // (`scripts/naga-validate-tint.sh`, `shader_codegen.zig`'s `-Dwalker`)

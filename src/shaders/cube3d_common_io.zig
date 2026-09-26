@@ -1,8 +1,8 @@
-//! src/shaders/cube3d_common_io.zig — Interp varyings shared by
+//! src/shaders/cube3d_common_io.zig - Interp varyings shared by
 //! `cube3d_vs` and `cube3d_fs`.
 //!
 //! The cube carries per-face normals (four identical-normal corners per
-//! face), so per-vertex lighting in the VS is exactly flat shading — there is
+//! face), so per-vertex lighting in the VS is exactly flat shading - there is
 //! no within-face gradient to lose by not doing it per fragment. The VS folds
 //! the directional-light term into a single pre-lit colour and the FS just
 //! emits it, keeping the fragment stage a trivial pass-through (and the whole

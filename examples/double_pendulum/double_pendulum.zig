@@ -1,6 +1,6 @@
-//! double_pendulum — the classic chaotic double pendulum, ported to WebGPU.
-//! Two pendulums start 1e-3 rad apart in θ₂; identical at first, they diverge into
-//! completely different trajectories — the canonical demo of sensitive dependence on
+//! double_pendulum - the classic chaotic double pendulum, ported to WebGPU.
+//! Two pendulums start 1e-3 rad apart in theta_2; identical at first, they diverge into
+//! completely different trajectories - the canonical demo of sensitive dependence on
 //! initial conditions. Each leaves a fading trail: a CPU ring buffer of recent rod-2
 //! tip positions drawn as alpha-graded segments. (The GL original used a render
 //! texture; the wgpu backend doesn't expose render textures yet, so the ring buffer
@@ -8,7 +8,7 @@
 //!
 //! Scale mode is `.responsive` (fill the canvas the host gives us, any aspect), so the
 //! layout is derived from the LIVE viewport (`f.window.widthf()/heightf()`) every
-//! frame — never a hardcoded design size. The render scale is decoupled from the
+//! frame - never a hardcoded design size. The render scale is decoupled from the
 //! physics units, so the dynamics are identical regardless of canvas size.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -26,7 +26,7 @@ const simulation_steps: i32 = 30;
 const length_scaler: f32 = 0.1;
 const trail_len: usize = 360;
 
-// Physics parameters (dynamics units — render scale is separate, see Layout).
+// Physics parameters (dynamics units - render scale is separate, see Layout).
 const l1: f32 = 15.0;
 const l2: f32 = 15.0;
 const m1: f32 = 0.2;

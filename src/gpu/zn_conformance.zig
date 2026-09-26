@@ -50,7 +50,7 @@ pub const learning_rate: f32 = 0.1;
 pub const layernorm_epsilon: f32 = 1.0e-5;
 
 /// Bounds for the `clamp` row, chosen to sit INSIDE the noise field's range so the row exercises
-/// both branches — a clamp whose bounds enclose the data clamps nothing and tests nothing.
+/// both branches - a clamp whose bounds enclose the data clamps nothing and tests nothing.
 /// Slope for `leaky relu` and alpha for `elu`. 0.25 rather than PyTorch's 0.01 so the negative
 /// branch is clearly visible in the heatmap instead of being a rounding-sized sliver.
 pub const elu_alpha: f32 = 0.25;
@@ -68,7 +68,7 @@ pub const clamp_lo: f32 = -0.5;
 pub const clamp_hi: f32 = 0.5;
 
 /// The re-run button's size. Its POSITION follows the layout and is stored on the `State` when
-/// the frame draws it, so the hit test and the drawing cannot drift apart — a button drawn in one
+/// the frame draws it, so the hit test and the drawing cannot drift apart - a button drawn in one
 /// place and pressed in another is the classic version of this bug, and a hardcoded `y = 4` had
 /// it sitting on top of the summary line before this was measured.
 pub const Tn = zn.Tensor(f32);
@@ -78,25 +78,25 @@ pub const Kind = enum { binary, unary, matmul };
 
 /// One row of the sweep: everything that differs between kernels, in one place.
 ///
-/// ── ★★★ ONE TABLE INSTEAD OF FOUR PARALLEL SWITCHES ──
+/// -- *** ONE TABLE INSTEAD OF FOUR PARALLEL SWITCHES --
 ///
 /// Adding a kernel used to mean eight edits: an enum variant, an arm in `next`, one in `label`,
 /// one in `tolerance`, one in `isUnary`, one in `buildFields`, one in the dispatch, and a slot in
 /// two hand-written array literals. Eight chances to add a row that reports the wrong reference,
 /// which is exactly the bug that produced `FAIL add worst 23.9` earlier.
 ///
-/// Now it is ONE `Case` here plus the kernel itself plus `build.zig`'s entry — and the drift gate
+/// Now it is ONE `Case` here plus the kernel itself plus `build.zig`'s entry - and the drift gate
 /// catches the last of those. The `cpu` field carries the reference implementation inline, so a
 /// row's GPU entry and its oracle are written on the same line and cannot drift apart.
 pub const Case = struct {
     label: []const u8,
     /// Absolute allowance. Zero where both sides do the same flops in the same order.
     tol: f32,
-    /// ── ★★★ AN ALLOWANCE THAT SCALES WITH THE ROW'S MAGNITUDE ──
+    /// -- *** AN ALLOWANCE THAT SCALES WITH THE ROW'S MAGNITUDE --
     ///
     /// An absolute bar of zero is only ever right when the output is O(1) or the operation is
     /// exact. `div` is neither: measured, its outputs peak at 102.5, where **one ULP of f32 is
-    /// 1.22e-5** — and the device's worst deviation was **1.9e-6, six times SMALLER than a single
+    /// 1.22e-5** - and the device's worst deviation was **1.9e-6, six times SMALLER than a single
     /// ULP at that magnitude**. The kernel was correct; the bar was wrong.
     ///
     /// So a row may also allow `ulps` units in the last place OF ITS OWN PEAK VALUE. That is a
@@ -109,34 +109,34 @@ pub const Case = struct {
     /// The zimrnum implementation this row is checked against. Unary rows ignore `b`.
     cpu: *const fn (out: Tn, a: Tn, b: Tn) anyerror!void,
     /// How many threads to dispatch. Defaults to one per element, which is right for everything
-    /// elementwise — but a ROW-WISE kernel wants one per row, and dispatching 4096 threads for
+    /// elementwise - but a ROW-WISE kernel wants one per row, and dispatching 4096 threads for
     /// 64 rows would have 4032 of them return immediately from the guard. Making it explicit
     /// keeps the launch geometry next to the kernel it belongs to.
     threads: u32 = count,
-    /// ── ★★★ HOW MANY OUTPUTS THIS ROW ACTUALLY PRODUCES ──
+    /// -- *** HOW MANY OUTPUTS THIS ROW ACTUALLY PRODUCES --
     ///
     /// A REDUCTION does not fill the output buffer. `sum_axis0` writes 64 values and `sum_all`
     /// writes one; comparing all 4096 would be comparing whatever the previous dispatch left
     /// behind, and the row would fail for a reason having nothing to do with the kernel.
     ///
-    /// ★ Defaulting to one per element leaves every elementwise row untouched and makes the
+    /// * Defaulting to one per element leaves every elementwise row untouched and makes the
     /// reduction rows state their own shape rather than the harness guessing it.
     out_len: u32 = count,
-    /// ── ★★★ WHICH INPUT THIS ROW IS ENTITLED TO ──
+    /// -- *** WHICH INPUT THIS ROW IS ENTITLED TO --
     ///
-    /// `sqrt` and `log` are **undefined** below zero in WGSL — not NaN, undefined — so an
+    /// `sqrt` and `log` are **undefined** below zero in WGSL - not NaN, undefined - so an
     /// implementation may return NaN, an infinity, zero or anything else. Measured on device:
     /// both rows reported `inf`, because the CPU produced NaN and the GPU did not agree. That is
     /// not a defect in either; it is a comparison of two undefined results, and it says nothing.
     ///
-    /// ★ So a row may ask for the POSITIVE field instead — `|noise| + 0.5`, strictly above zero
+    /// * So a row may ask for the POSITIVE field instead - `|noise| + 0.5`, strictly above zero
     /// so `log` is defined too. That is what a caller does: check the domain before calling. The
     /// row then tests the OPERATION rather than two implementations' undefined behaviour.
     /// Which field this row's input comes from.
     ///
-    /// ★ `unit` was added when `atanh` failed on the device with a worst of **inf**: `atanh` is
-    /// ±infinity at ±1 and NaN beyond, so on the noise field BOTH sides return inf and their
-    /// difference is NaN — which is not ≤ any bar. The row was asking a question with no finite
+    /// * `unit` was added when `atanh` failed on the device with a worst of **inf**: `atanh` is
+    /// +/-infinity at +/-1 and NaN beyond, so on the noise field BOTH sides return inf and their
+    /// difference is NaN - which is not <= any bar. The row was asking a question with no finite
     /// answer, and the fix is a field the function is defined on rather than a wider tolerance.
     /// `tiny` was added when `zm.tanh` turned out to be 1.0 relative error at f32 NEAR ZERO and
     /// the sweep had never noticed: a normal(0,1) field has no values small enough for
@@ -340,8 +340,8 @@ pub const cases = [_]Case{
             return zn.div(f32, o, a, b);
         }
     }.f },
-    // ★★ The bias add. `a` is the field; `b` is read with a row stride of ZERO on the GPU, so
-    // its first row is stretched down — and the CPU oracle stretches the same row with
+    // ** The bias add. `a` is the field; `b` is read with a row stride of ZERO on the GPU, so
+    // its first row is stretched down - and the CPU oracle stretches the same row with
     // `broadcastTo`. The two representations of broadcasting, checked against each other.
     .{ .label = "bcast add (bias)", .tol = 0, .kind = .binary, .entry = "bcast_add", .cpu = struct {
         fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
@@ -476,17 +476,17 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                // ★ Against the COMPENSATED sum, deliberately. The kernel accumulates plainly, so
+                // * Against the COMPENSATED sum, deliberately. The kernel accumulates plainly, so
                 // this row measures how far a plain 4096-term accumulation drifts from the exact
-                // answer — the number that justifies `sumAll`'s default.
+                // answer - the number that justifies `sumAll`'s default.
                 o.data[0] = zn.sumAll(f32, a);
             }
         }.f,
     },
     .{
-        // ★★ The same answer as `sum all (scalar)` by a different route: 64 lanes and a 6-level
+        // ** The same answer as `sum all (scalar)` by a different route: 64 lanes and a 6-level
         // shared-memory tree instead of one thread. Both are compared against `zn.sumAll`, so a
-        // barrier mistake or a race shows up as this row disagreeing with the one above it —
+        // barrier mistake or a race shows up as this row disagreeing with the one above it -
         // which is the check a CPU oracle structurally cannot make.
         .label = "sum all (tree)",
         .tol = 0,
@@ -518,10 +518,10 @@ pub const cases = [_]Case{
         }.f,
     },
     .{
-        // ★ Tolerance 0, and that is not optimism: a maximum is a SELECTION, not an
+        // * Tolerance 0, and that is not optimism: a maximum is a SELECTION, not an
         // accumulation. Every candidate is a value that already exists in the input, so both
         // sides must return the same bits or one of them is comparing wrongly. A nonzero bar
-        // here would hide a real defect rather than absorb rounding — there is no rounding.
+        // here would hide a real defect rather than absorb rounding - there is no rounding.
         .label = "max all",
         .tol = 0,
         .kind = .unary,
@@ -535,7 +535,7 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // ── ★★★ TOLERANCES CHOSEN PER OPERATION, NOT PER BATCH ──
+    // -- *** TOLERANCES CHOSEN PER OPERATION, NOT PER BATCH --
     //
     // `floor`, `ceil`, `sign`, `minimum` and `maximum` are all SELECTIONS or exact roundings:
     // every result already exists, or is an integer both sides reach identically. Zero is the
@@ -644,12 +644,12 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // ★★ `reciprocal` takes the POSITIVE input, not the noise. 1/x is defined at every non-zero
+    // ** `reciprocal` takes the POSITIVE input, not the noise. 1/x is defined at every non-zero
     // real, but the noise field can come arbitrarily close to zero, and a quotient near 1e30 has
-    // a ULP of 1e23 — a bar that would accept anything. The positive field bounds the output at
+    // a ULP of 1e23 - a bar that would accept anything. The positive field bounds the output at
     // 2, so the row measures the division rather than the luck of the draw.
     //
-    // ★ `trunc` and `round` are exact on both sides: they return integers both backends reach
+    // * `trunc` and `round` are exact on both sides: they return integers both backends reach
     // identically, so zero is the only defensible bar.
     .{
         .label = "reciprocal",
@@ -716,16 +716,16 @@ pub const cases = [_]Case{
         }.f,
     },
     .{
-        // ── ★★★ 16 ULP, AND zm's OWN COMMENT IS THE JUSTIFICATION ──
+        // -- *** 16 ULP, AND zm's OWN COMMENT IS THE JUSTIFICATION --
         //
-        // `zm.atan2Rad` is `std.math.atan2` on the host — exact, a hundred lines — and a
+        // `zm.atan2Rad` is `std.math.atan2` on the host - exact, a hundred lines - and a
         // **DirectXMath-derived polynomial** on the GPU. The two backends run deliberately
         // different algorithms, so the agreement is bounded by the polynomial's accuracy, not by
         // rounding. Measured on device: **9.6 ULP**, against 1.5 for `sin` and 1.6 for `cos`,
         // whose GPU path is a much closer approximation.
         //
-        // ★★ My first bar was 4 ULP, guessed by analogy with the other transcendentals, and the
-        // device rejected it. **The number came from the implementation, not from the pattern** —
+        // ** My first bar was 4 ULP, guessed by analogy with the other transcendentals, and the
+        // device rejected it. **The number came from the implementation, not from the pattern** -
         // 16 covers the measured value with margin without hiding a real regression.
         .label = "atan2",
         .tol = 0,
@@ -750,7 +750,7 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // ★ All five have a tolerance of ZERO. The masks return literal 0 or 1; `clamp` is two
+    // * All five have a tolerance of ZERO. The masks return literal 0 or 1; `clamp` is two
     // selections; and `lerp` is exact at both endpoints and a single fused expression between
     // them, evaluated identically on both sides. Nothing here rounds, so nothing needs a bar.
     .{
@@ -809,9 +809,9 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // ★★ `leaky relu` has a tolerance of ZERO: both branches are a compare and a single multiply,
+    // ** `leaky relu` has a tolerance of ZERO: both branches are a compare and a single multiply,
     // exact on both sides. `elu` and `softplus` get 2 ULP for their `exp`, and `mse loss` gets 64
-    // because the kernel accumulates 4096 terms plainly against a compensated reference — the
+    // because the kernel accumulates 4096 terms plainly against a compensated reference - the
     // same drift `sum all (scalar)` reports.
     .{
         .label = "softplus",
@@ -892,7 +892,7 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // ★ `max axis0`, `min axis0` and `argmax axis0` are SELECTIONS: tolerance zero. `mean axis0`
+    // * `max axis0`, `min axis0` and `argmax axis0` are SELECTIONS: tolerance zero. `mean axis0`
     // is a 64-term plain accumulation against a compensated reference, so it gets the same bar
     // as `sum axis0`. `cumsum` accumulates up to 64 terms per row, where the last element has
     // seen every rounding before it.
@@ -976,7 +976,7 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // ★★ THE THREE LOSSES NOW COMPARE PLAIN AGAINST COMPENSATED, like `mse loss`: the kernel
+    // ** THE THREE LOSSES NOW COMPARE PLAIN AGAINST COMPENSATED, like `mse loss`: the kernel
     // accumulates 4096 terms plainly and `zn` uses `CompensatedSum`. The drift is the measured cost of
     // the plain form, and 64 ULP covers it. `max pool` is a selection: zero. `avg pool` is four
     // terms and `conv2d` nine, so both get a small bar; `variance axis0` is two 64-term passes.
@@ -1185,7 +1185,7 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // ★★ THE THREE ROWS THE THIRD BUFFER UNBLOCKED. Each was host-only for want of a binding,
+    // ** THE THREE ROWS THE THIRD BUFFER UNBLOCKED. Each was host-only for want of a binding,
     // not for any reason of algorithm.
     .{
         .label = "where",
@@ -1195,7 +1195,7 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 // The mask the kernel reads from `c` is `greater(a, b)`, built the same way here.
-                // ★ The scratch lives INSIDE the closure, as a static local. A module-level
+                // * The scratch lives INSIDE the closure, as a static local. A module-level
                 // mutable would be shared between rows that run in sequence and read fine, right
                 // up until two of them ran concurrently.
                 const Scratch = struct {
@@ -1273,8 +1273,8 @@ pub const cases = [_]Case{
     .{
         .label = "asinh",
         .tol = 0,
-        // ★ 8 rather than 4: the device measured 1.43e-6 against a 9.4e-7 bar, which is 4.8 ULP.
-        // `asinh` is three roundings deep — a square root, an add and a log — so the bar was set
+        // * 8 rather than 4: the device measured 1.43e-6 against a 9.4e-7 bar, which is 4.8 ULP.
+        // `asinh` is three roundings deep - a square root, an add and a log - so the bar was set
         // from a guess and is now set from the measurement.
         .ulps = 8,
         .kind = .unary,
@@ -1729,8 +1729,8 @@ pub const cases = [_]Case{
 
 /// The worst absolute disagreement, and the largest reference magnitude, over the pair.
 ///
-/// ★★★ A NON-FINITE DISAGREEMENT CANNOT BE SKIPPED. `@abs(inf - inf)` is NaN, and `NaN > worst`
-/// is FALSE — so the obvious loop silently ignores exactly the elements most likely to be wrong.
+/// *** A NON-FINITE DISAGREEMENT CANNOT BE SKIPPED. `@abs(inf - inf)` is NaN, and `NaN > worst`
+/// is FALSE - so the obvious loop silently ignores exactly the elements most likely to be wrong.
 /// The `div` row proves this is not hypothetical: the ramp crosses zero, so a whole column
 /// divides by zero and every one of those comparisons was being dropped. A GPU returning NaN
 /// where the CPU returned infinity would have passed. Now a mismatch in FINITENESS is reported
@@ -1749,7 +1749,7 @@ pub fn compare(gpu: []const f32, cpu: []const f32) Comparison {
             peak = @abs(c);
         }
         if (isFinite(g) != isFinite(c)) {
-            // ★★ RECORDED, NOT RETURNED. Returning here left `peak` holding whatever had
+            // ** RECORDED, NOT RETURNED. Returning here left `peak` holding whatever had
             // accumulated before the first disagreement, so a failing row displayed a bar of 0
             // and no reader could tell what it had been judged against. The scan always
             // completes now.
@@ -1757,8 +1757,8 @@ pub fn compare(gpu: []const f32, cpu: []const f32) Comparison {
             continue;
         }
         if (!isFinite(g)) {
-            // ★★★ TWO NaNs ARE AGREEMENT. `NaN != NaN` is true, so the obvious `g != c` reports
-            // a mismatch whenever BOTH sides correctly produce NaN — which is every partial
+            // *** TWO NaNs ARE AGREEMENT. `NaN != NaN` is true, so the obvious `g != c` reports
+            // a mismatch whenever BOTH sides correctly produce NaN - which is every partial
             // function on an out-of-domain input. Matching infinities agree; anything else does
             // not.
             const both_nan: bool = (g != g) and (c != c);

@@ -1,4 +1,4 @@
-//! textures_screen_buffer — port of raylib [textures] example.
+//! textures_screen_buffer - port of raylib [textures] example.
 //! A classic palette-cycling fire effect rendered entirely on the CPU: an
 //! 8-bit index buffer is seeded along the bottom row and propagated upward with
 //! random horizontal drift and decay each frame, mapped through a 256-entry HSV

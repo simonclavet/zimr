@@ -8,7 +8,7 @@
 //!
 //! This root imports every one of them, so `test-fast` compiles the union once and runs each
 //! test once, and the per-file roots drop out of `test-fast` while keeping their `zn-` steps.
-//! ★ The imports below ARE the list: build.zig reads this file to decide which roots it stands
+//! * The imports below ARE the list: build.zig reads this file to decide which roots it stands
 //! in for, so a robot file that is not imported here stays a `test-fast` member of its own.
 
 const std = @import("std");
@@ -38,7 +38,6 @@ pub const robot_ppo_track = @import("robot_ppo_track.zig");
 /// Its proofs, outside the zimr module for the same reason as `gpu_learn_tests`.
 pub const robot_ppo_track_tests = @import("robot_ppo_track_tests.zig");
 pub const robot_mocap_tutorial = @import("robot_mocap_tutorial.zig");
-pub const robot_supertrack = @import("robot_supertrack.zig");
 pub const robot_urdf = @import("robot_urdf.zig");
 pub const mjcf = @import("mjcf.zig");
 pub const urdf = @import("urdf.zig");

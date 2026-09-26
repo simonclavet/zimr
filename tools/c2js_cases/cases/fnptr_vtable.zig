@@ -1,6 +1,6 @@
 // Vtable-style struct with multiple function-pointer fields, one of which is
 // reassigned. Mixes several indirect calls through distinct fields plus a
-// mutable-field store — the general shape behind interface/dispatch objects.
+// mutable-field store - the general shape behind interface/dispatch objects.
 const VT = struct { area: *const fn (i32) i32, perim: *const fn (i32) i32 };
 fn sqArea(s: i32) i32 {
     return s * s;

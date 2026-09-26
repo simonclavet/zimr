@@ -1,7 +1,7 @@
-//! platonic_solids — the four platonic solids the shape library gained, shown
+//! platonic_solids - the four platonic solids the shape library gained, shown
 //! in a row: tetrahedron, octahedron, dodecahedron, icosahedron. They're built
 //! FLAT-shaded (each face carries its own normal), so you should see crisp,
-//! faceted faces with sharp edges — not the rounded look you'd get from smooth
+//! faceted faces with sharp edges - not the rounded look you'd get from smooth
 //! normals. They slowly spin so you can appreciate the geometry.
 const std = @import("std");
 const Allocator = std.mem.Allocator;

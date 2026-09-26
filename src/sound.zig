@@ -53,7 +53,7 @@ const AudioStream = types.AudioStream;
 // stubbed.  This lets host tests exercise the wrapper logic
 // without a browser.
 
-/// Spectrum analysis — a WebAudio `AnalyserNode` tapped off the master bus.
+/// Spectrum analysis - a WebAudio `AnalyserNode` tapped off the master bus.
 ///
 /// It is a TAP, not an insert: the master output already reaches the speakers, and
 /// the analyser just receives a copy, so attaching one cannot change what you
@@ -75,7 +75,7 @@ pub const analyser = struct {
     }
 
     /// Fill `out` with the live magnitude spectrum (0..255 per bin). Returns how
-    /// many bins were written — 0 if there is no analyser, which is also what the
+    /// many bins were written - 0 if there is no analyser, which is also what the
     /// native (non-wasm) host does, so callers must handle a silent result.
     pub fn read(
         device: *const audio_device.AudioDeviceState,
@@ -411,7 +411,7 @@ pub const waves = struct {
         }
         // toFloat32Stereo always emits 2 channels - for raylib
         // parity we need to either passthrough (already stereo) or
-        // duplicate (mono → stereo would change the channel count
+        // duplicate (mono -> stereo would change the channel count
         // semantically).  Easier path: walk the bytes ourselves
         // using the same per-bit-depth normalization.
         const cw: codecs.audio.CanonicalWave = codecs.audio.canonicalFromWave(wave);
@@ -604,7 +604,7 @@ pub const waves = struct {
         try expect(!isValid(w));
     }
 
-    test "format: 22050 mono 16-bit → 44100 stereo 16-bit" {
+    test "format: 22050 mono 16-bit -> 44100 stereo 16-bit" {
         const ta: Allocator = std.testing.allocator;
         var ws: AllocTable = .{};
         var w: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
@@ -613,7 +613,7 @@ pub const waves = struct {
         try expectEqual(@as(u32, 44100), w.sampleRate);
         try expectEqual(@as(u32, 2), w.channels);
         try expectEqual(@as(u32, 16), w.sampleSize);
-        // 11025 source frames at 22050 Hz, doubled → 22050 frames at 44100 Hz.
+        // 11025 source frames at 22050 Hz, doubled -> 22050 frames at 44100 Hz.
         try expectEqual(@as(u32, 22050), w.frameCount);
     }
 
@@ -713,7 +713,7 @@ pub const composer = struct {
     pub const default_channels: u32 = 1;
 
     /// Available waveform shapes.  Each is a closed-form function
-    /// of phase ∈ [0, 1).
+    /// of phase in [0, 1).
     pub const Shape = enum {
         sine,
         square,
@@ -769,14 +769,14 @@ pub const composer = struct {
                 float(sample_rate);
             const release_start: f32 = total_ms - self.release_ms;
 
-            // Attack: 0 → 1 over attack_ms.
+            // Attack: 0 -> 1 over attack_ms.
             if (t_ms < self.attack_ms) {
                 if (self.attack_ms == 0.0) {
                     return 1.0;
                 }
                 return t_ms / self.attack_ms;
             }
-            // Decay: 1 → sustain_level over decay_ms after attack.
+            // Decay: 1 -> sustain_level over decay_ms after attack.
             if (t_ms < self.attack_ms + self.decay_ms) {
                 if (self.decay_ms == 0.0) {
                     return self.sustain_level;
@@ -784,7 +784,7 @@ pub const composer = struct {
                 const phase: f32 = (t_ms - self.attack_ms) / self.decay_ms;
                 return 1.0 + phase * (self.sustain_level - 1.0);
             }
-            // Release: sustain_level → 0 over release_ms before end.
+            // Release: sustain_level -> 0 over release_ms before end.
             if (t_ms >= release_start) {
                 if (self.release_ms == 0.0) {
                     return 0.0;
@@ -1026,7 +1026,7 @@ pub const composer = struct {
         try expectApproxEqAbs(@as(f32, -1.0), Shape.sine.sample(0.75), 0.001);
     }
 
-    test "Shape.sample: square ±1" {
+    test "Shape.sample: square +/-1" {
         try expectEqual(@as(f32, 1.0), Shape.square.sample(0.0));
         try expectEqual(@as(f32, 1.0), Shape.square.sample(0.499));
         try expectEqual(@as(f32, -1.0), Shape.square.sample(0.5));
@@ -1038,13 +1038,13 @@ pub const composer = struct {
         try expectApproxEqAbs(@as(f32, 1.0), Shape.triangle.sample(0.5), 0.001);
     }
 
-    test "Envelope.gainAt: rectangular (all zero) → unity" {
+    test "Envelope.gainAt: rectangular (all zero) -> unity" {
         const env: Envelope = .{};
         try expectApproxEqAbs(@as(f32, 1.0), env.gainAt(0, 100, 44100), 0.001);
         try expectApproxEqAbs(@as(f32, 1.0), env.gainAt(50, 100, 44100), 0.001);
     }
 
-    test "Envelope.gainAt: 10 ms attack ramps 0 → 1" {
+    test "Envelope.gainAt: 10 ms attack ramps 0 -> 1" {
         const env: Envelope = .{ .attack_ms = 10.0 };
         // At 5 ms (frame 220 of 44100 Hz) we should be at 0.5.
         try expectApproxEqAbs(@as(f32, 0.5), env.gainAt(220, 4410, 44100), 0.05);
@@ -1073,10 +1073,10 @@ pub const composer = struct {
         const ptr: [*]const u8 = @ptrCast(w.data.?);
         const first: i16 = std.mem.readInt(i16, ptr[0..2], .little);
         try expectEqual(@as(i16, 0), first);
-        // Last frame: 4410 - 1 = 4409 → byte offset 8818.
+        // Last frame: 4410 - 1 = 4409 -> byte offset 8818.
         const last_off: usize = (w.frameCount - 1) * 2;
         const last: i16 = std.mem.readInt(i16, ptr[last_off..][0..2], .little);
-        // With release ramp, the last frame is at gain = 0, so output ≈ 0.
+        // With release ramp, the last frame is at gain = 0, so output ~ 0.
         try expect(@abs(last) < 100);
     }
 
@@ -1121,8 +1121,8 @@ pub const composer = struct {
     test "Sequence: overlapping placements sum samples" {
         const ta: Allocator = std.testing.allocator;
         var ws: waves.AllocTable = .{};
-        // Two short, identical waves at the same offset → sum is
-        // ~2× each sample, clipped at i16 range.
+        // Two short, identical waves at the same offset -> sum is
+        // ~2x each sample, clipped at i16 range.
         const t1: Wave = try tone(&ws, ta, .{ .frequency_hz = 440.0, .duration_ms = 50 });
         defer waves.unload(&ws, t1);
         const t2: Wave = try tone(&ws, ta, .{ .frequency_hz = 440.0, .duration_ms = 50 });
@@ -1747,8 +1747,8 @@ pub const streams = struct {
         const frames: [480 * 2]f32 = @splat(0.0);
         update(&st, s, &frames);
         // On host getCurrentTime returns 0; head_time = 0 + 0.030
-        // + chunk_duration ≈ 0.040.  isProcessed: head - now <= 0.030
-        // → false on this exact clock, so we don't assert true.
+        // + chunk_duration ~ 0.040.  isProcessed: head - now <= 0.030
+        // -> false on this exact clock, so we don't assert true.
         // Instead just confirm the call doesn't panic.
         _ = isProcessed(&st, s);
     }
@@ -1972,7 +1972,7 @@ pub const music = struct {
         const fmt: codecs.audio.Format = codecs.audio.Format.detect(bytes) orelse return error.UnknownAudioFormat;
         switch (fmt) {
             .wav => {
-                // Sync path: decode → upload → table entry.
+                // Sync path: decode -> upload -> table entry.
                 const w: Wave = try waves.loadFromMemory(waves_state, gpa, ".wav", bytes);
                 defer waves.unload(waves_state, w);
 
@@ -2108,7 +2108,7 @@ pub const music = struct {
         e.buffer_id = buf_id;
         e.loaded = true;
         // `duration_s` was set up-front from the Ogg-container sniff
-        // (see loadFromMemory → .ogg branch).  Web Audio doesn't
+        // (see loadFromMemory -> .ogg branch).  Web Audio doesn't
         // expose AudioBuffer.duration through our minimal bridge,
         // and the sniffed value is exact for non-truncated files
         // so we keep it as-is rather than re-querying.
@@ -2502,7 +2502,7 @@ pub const music = struct {
         var mt: MusicTable = .{};
         const m: Music = try loadFromMemory(&mt, &dev, &ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&mt, m);
-        // 11025 frames × resample 22050→48000 → 24000 frames at 48k = 0.5 s
+        // 11025 frames x resample 22050->48000 -> 24000 frames at 48k = 0.5 s
         try expectApproxEqAbs(@as(f32, 0.5), getTimeLength(&mt, m), 0.05);
     }
 
@@ -2570,7 +2570,7 @@ pub const music = struct {
         var ws: waves.AllocTable = .{};
         var mt: MusicTable = .{};
         // Just enough OggS magic to pass Format.detect, but no
-        // valid Vorbis ID packet → sniff returns null.
+        // valid Vorbis ID packet -> sniff returns null.
         const garbage_ogg = "OggS\x00\x02" ++ @as([60]u8, @splat(0));
         const m: Music = try loadFromMemory(&mt, &dev, &ws, ta, ".ogg", garbage_ogg);
         defer unload(&mt, m);
@@ -2592,7 +2592,7 @@ pub const music = struct {
         defer unload(&mt, m);
         const slot: u32 = musicSlot(&mt, m).?;
 
-        // Seek a stopped track.  No source_id → should just record offset.
+        // Seek a stopped track.  No source_id -> should just record offset.
         seek(&mt, m, 0.25);
         try expectApproxEqAbs(@as(f64, 0.25), mt.get(slot).?.play_offset, 0.001);
         // getTimePlayed reports the seeked-to position even while stopped.
@@ -2652,7 +2652,7 @@ pub const sounds = struct {
         /// the sound is still loading.
         decode_id: web.audio.DecodeId = 0,
         /// Whether the sound finished its sync-load path (WAV) or
-        /// its async-decode path (OGG → BufferId).  Distinct from
+        /// its async-decode path (OGG -> BufferId).  Distinct from
         /// `buffer_id != 0` so host tests (where buffer_id is
         /// always 0) work correctly.
         loaded: bool = false,
@@ -2734,7 +2734,7 @@ pub const sounds = struct {
         if (!waves.isValid(wave)) {
             return .{};
         }
-        // Convert Wave → CanonicalWave → f32 stereo at the device's rate.
+        // Convert Wave -> CanonicalWave -> f32 stereo at the device's rate.
         const cw: codecs.audio.CanonicalWave = codecs.audio.canonicalFromWave(wave);
         const stereo_f32: []f32 = try codecs.audio.wav.toFloat32Stereo(gpa, cw);
         defer gpa.free(stereo_f32);
@@ -2814,7 +2814,7 @@ pub const sounds = struct {
         const fmt: codecs.audio.Format = codecs.audio.Format.detect(bytes) orelse return error.UnknownAudioFormat;
         switch (fmt) {
             .wav => {
-                // Sync path: decode → loadFromWave.
+                // Sync path: decode -> loadFromWave.
                 const w: Wave = try waves.loadFromMemory(waves_state, gpa, ".wav", bytes);
                 defer waves.unload(waves_state, w);
                 return try loadFromWave(state, device, gpa, w);
@@ -3125,7 +3125,7 @@ pub const sounds = struct {
         try expect(!isValid(&sd, s));
     }
 
-    test "loadFromWave: WAV → Sound on host" {
+    test "loadFromWave: WAV -> Sound on host" {
         const ta: Allocator = std.testing.allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
@@ -3321,7 +3321,7 @@ comptime {
 //   - OGG: async decode via `decodeAudioData`; same looped
 //     AudioBufferSourceNode after decode.  Decoded once,
 //     played from the resulting AudioBuffer - same RAM cost
-//     as WAV after decode but ~10× smaller download.
+//     as WAV after decode but ~10x smaller download.
 // For TRUE streaming (decode-as-played, low RAM), the recommended
 // pattern is `HTMLAudioElement` + `MediaElementAudioSourceNode`
 // - but that requires a DOM bridge to construct `<audio>`
@@ -3420,10 +3420,10 @@ comptime {
 // `f.audio_device` (Frame ref into Runtime).
 // As Phase C migrates each audio family, its table joins this
 // bundle:
-//   .music   ✅  Phase C1
-//   .sounds  ✅  Phase C2
-//   .streams ✅  Phase C3
-//   .waves   ✅  Phase C4
+//   .music   ok  Phase C1
+//   .sounds  ok  Phase C2
+//   .streams ok  Phase C3
+//   .waves   ok  Phase C4
 
 pub const AudioState = struct {
     music: music.MusicTable = .{},

@@ -1,4 +1,4 @@
-//! src/shaders/lit_shadow_fs.zig — shadow-mapped Lambert fragment shader.
+//! src/shaders/lit_shadow_fs.zig - shadow-mapped Lambert fragment shader.
 //!
 //! Lambertian diffuse + ambient with a single directional light, gated
 //! by a hard shadow test against the light-view depth map. The depth map
@@ -7,7 +7,7 @@
 //! suppresses acne; a constant floor catches flat surfaces. Fragments
 //! outside the light frustum are treated as lit (no hard cutoff edge).
 //!
-//! The shadow map is sampled ONCE at the top (uniform control flow — Tint
+//! The shadow map is sampled ONCE at the top (uniform control flow - Tint
 //! requires texture samples outside non-uniform branches), then the
 //! branch only compares scalars.
 //!
@@ -25,7 +25,7 @@ pub const Out = shader_externs.Out;
 pub const TextureRef = shader_externs.TextureRef;
 
 /// Perspective-divide the light-space position and remap NDC xy/z from
-/// [-1,1] to [0,1] — matching the depth map's stored `ndc_z*0.5+0.5`.
+/// [-1,1] to [0,1] - matching the depth map's stored `ndc_z*0.5+0.5`.
 fn shadowProjCoords(io_in: Io) Vec3 {
     const inv_w: f32 = 1.0 / io_in.frag_light_space_pos[3];
     var proj: Vec3 = .{
@@ -36,7 +36,7 @@ fn shadowProjCoords(io_in: Io) Vec3 {
     proj = proj * @as(Vec3, @splat(0.5)) + @as(Vec3, @splat(0.5));
     // WebGPU render-texture origin is top-left, but NDC +y is up, so the
     // shadow map is stored y-flipped relative to the projected coordinate.
-    // Flip v for the texel lookup (z stays — it's the depth we compare).
+    // Flip v for the texel lookup (z stays - it's the depth we compare).
     proj[1] = 1.0 - proj[1];
     return proj;
 }
@@ -59,7 +59,7 @@ pub fn shaderMain(io_in: Io) Out {
     // Slope-scaled bias from the UNIFORMS (`params` = {slope, floor}): the
     // right bias depends on the depth map's precision, which differs per
     // backend (GPU rgba16_float vs CPU/comptime rgba8), so it's per-draw
-    // DATA rather than a baked constant — the same shader body serves all
+    // DATA rather than a baked constant - the same shader body serves all
     // three backends and each supplies the slack its own map deserves.
     const bias: f32 = @max(io_in.u.params[0] * (1.0 - n_dot_l), io_in.u.params[1]);
 

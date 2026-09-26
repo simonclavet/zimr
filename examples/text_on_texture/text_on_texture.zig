@@ -1,7 +1,7 @@
-//! text_on_texture — port of the GL `text_on_texture`, on the new textured-3D
+//! text_on_texture - port of the GL `text_on_texture`, on the new textured-3D
 //! path. Each frame it renders a 2D "sign" (a coloured panel + text) into an
 //! offscreen render texture via beginTextureMode/endTextureMode, then maps that
-//! render texture onto a rotating 3D cube with drawCubeTexture — so the cube's
+//! render texture onto a rotating 3D cube with drawCubeTexture - so the cube's
 //! faces display live-rendered text. A grid + a couple of solid markers give the
 //! scene depth. Combines two subsystems: render-to-texture (RenderTexture) and
 //! the textured-3D pipeline.

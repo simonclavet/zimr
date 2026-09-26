@@ -4,22 +4,22 @@
 // In raylib-style 2D rendering, the same texture is drawn dozens or
 // hundreds of times per frame.  Each draw needs a bind group that
 // references the texture view + sampler.  Creating a bind group on
-// every draw is wasteful — cache them by texture handle.
+// every draw is wasteful - cache them by texture handle.
 //
 // Convention follows D6 (hierarchical bind groups):
 //
-//   - Group 0 — per-frame globals (view-projection, time, screen size).
+//   - Group 0 - per-frame globals (view-projection, time, screen size).
 //     One bind group per frame; created at `beginDrawing`.
 //
-//   - Group 1 — per-material (texture view + sampler + material UBO
+//   - Group 1 - per-material (texture view + sampler + material UBO
 //     if present).  Cached here, keyed by `(texture, sampler, ubo)`
 //     tuple.  In the 2D fast path, sampler and UBO are constants, so
 //     the key reduces to just the texture handle.
 //
-//   - Group 2 — per-draw (instance data, transform-not-in-storage).
+//   - Group 2 - per-draw (instance data, transform-not-in-storage).
 //     Rare; not cached.
 //
-//   - Group 3 — storage buffers (compute, instanced).  Constructed
+//   - Group 3 - storage buffers (compute, instanced).  Constructed
 //     on shader load, lives for the shader's lifetime.
 //
 // This file caches Group 1 only.  Other groups are managed at their
@@ -36,7 +36,7 @@ const wgpu = @import("wgpu.zig");
 const BindGroupCache = @This();
 
 /// Cache key for Group 1 bind groups.  For the simple 2D path where
-/// the sampler + material UBO are fixed, only `texture` varies — but
+/// the sampler + material UBO are fixed, only `texture` varies - but
 /// we key on the full tuple so the cache is reusable for custom
 /// pipelines too.
 pub const Key = struct {
@@ -76,7 +76,7 @@ pub fn init(gpa: Allocator, device: wgpu.DeviceHandle) BindGroupCache {
 }
 
 pub fn deinit(self: *BindGroupCache) void {
-    // Destroy every cached bind group before freeing the map storage — each key
+    // Destroy every cached bind group before freeing the map storage - each key
     // maps to a distinct handle, so one destroy per value. Lets the shutdown
     // census reach zero instead of leaning on JS-side device release.
     var it: @TypeOf(self.entries).ValueIterator = self.entries.valueIterator();
@@ -107,7 +107,7 @@ pub fn getOrBuild(
 }
 
 /// Drop the entry for a given key.  Called when a texture is
-/// unloaded — the bind group references the texture view and
+/// unloaded - the bind group references the texture view and
 /// becomes invalid the moment the texture is destroyed.
 pub fn invalidateForTexture(self: *BindGroupCache, tex_view: wgpu.TextureViewHandle) void {
     var to_remove: ArrayList(Key) = .empty;

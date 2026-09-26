@@ -1,8 +1,8 @@
 // examples/ui_log_viewer.zig - Phase A1 + Phase 1.1 of the imgui-parity arc.
 // Phone-readable from the start: canvas uses `.scale = .responsive` so
 // it tracks the browser viewport, font_size is bumped to 16 (vs the
-// 10-px bitmap default), and frame_padding is 10×8 so buttons hit the
-// ~44-px touch-target sweet spot.  Window sized 380×840 to fit a phone
+// 10-px bitmap default), and frame_padding is 10x8 so buttons hit the
+// ~44-px touch-target sweet spot.  Window sized 380x840 to fit a phone
 // portrait viewport; desktop users see it as a floating panel.
 // Phase A1 features (already shipping):
 //   - `setScrollHereY(1.0)` - auto-scroll-to-bottom when new
@@ -19,7 +19,7 @@
 //   - `textLinkOpenURL("[?]", url)` - clickable link on each ERROR
 //     line that opens imgui's source on github (placeholder for "log
 //     line takes you to docs about that error").  Hover tooltips show
-//     the URL; right-click → "Copy link" works on desktop (phone
+//     the URL; right-click -> "Copy link" works on desktop (phone
 //     long-press support arrives with step 2.2).
 //   - `invisibleButton("help-toggle", .{ 0, 36 })` - a 36-px hidden
 //     hit zone at the bottom of the window that toggles a help text on
@@ -105,7 +105,7 @@ const State = struct {
 
     // Substring filter - phase 1.2 demo.  Persistent across frames so
     // the user's typed query survives the auto-emission redraw.
-    // Empty by default → passFilter says "yes" to everything.
+    // Empty by default -> passFilter says "yes" to everything.
     filter: ui.TextFilter = .{},
     // Count of lines that pass the filter this frame.  Recomputed
     // inside the line-rendering loop; surfaced in the Status section
@@ -199,7 +199,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // frame_padding so buttons read as real touch targets.
     // **Both halves of the wiring matter.**  Setting `style.font_size = 16`
     // without `style.font = &loaded_ttf` leaves the UI rendering against
-    // the size-10 bitmap fallback (`style.font = null`) at scale 1.6×
+    // the size-10 bitmap fallback (`style.font = null`) at scale 1.6x
     // which the bitmap path doesn't handle, so widgets render blank.
     // `loadFontFromTtfBytes` populates the cache; we have to point Style at it.
 
@@ -277,7 +277,7 @@ fn update(f: *z.Frame, s: *State) void {
         //.  Two columns
         // are predictable - same width slot every row.
         // Row 1: auto-scroll  |  paused
-        // Row 2: Add 1        |  Add 100   ← Add 1 added
+        // Row 2: Add 1        |  Add 100   <- Add 1 added
         //                                    (phones can't press SPACE)
         // Row 3: Clear        |  Copy
         // Row 4: Top          |  Bot
@@ -407,7 +407,7 @@ fn update(f: *z.Frame, s: *State) void {
         // ---- Help band (invisibleButton demo) --------------------------
         // 36-px-tall hidden hit zone (bigger than before for phone
         // thumbs) with a textDisabled hint above pointing at it.  Tap
-        // → toggles `show_help`.  Demonstrates invisibleButton without
+        // -> toggles `show_help`.  Demonstrates invisibleButton without
         // needing a "draw your own visuals on top via cursor-rewind"
         // trick (setCursorScreenPos lands in step 4.2; this version
         // just stacks hint + zone vertically).

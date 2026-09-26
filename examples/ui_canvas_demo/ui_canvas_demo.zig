@@ -1,6 +1,6 @@
 // examples/ui_canvas_demo.zig
 //
-// Reference implementation of a CANVAS-BASED widget — a minimal
+// Reference implementation of a CANVAS-BASED widget - a minimal
 // node editor built on the canvas widget primitives.  Three
 // draggable boxes connected by bezier lines, with pan + zoom.
 //
@@ -16,7 +16,7 @@
 // Drag a node: left-click + drag on a node body.
 //
 // All node positions, pan/zoom state, and drag-in-progress state
-// live in plain struct fields on `State` — Q2's `getState` isn't
+// live in plain struct fields on `State` - Q2's `getState` isn't
 // needed here because the example owns its data outright (this
 // is a "user app" not a "library extension").
 //
@@ -135,8 +135,8 @@ fn update(f: *z.Frame, s: *State) void {
                     lm_screen[1] - world_y * s.zoom,
                 };
             }
-            // Middle-drag pan: deferred — would track mouse delta
-            // each frame while middle button held.  See §13 backlog.
+            // Middle-drag pan: deferred - would track mouse delta
+            // each frame while middle button held.  See section 13 backlog.
         }
 
         // Apply the canvas transform once for the whole frame.

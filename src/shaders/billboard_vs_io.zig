@@ -1,4 +1,4 @@
-//! src/shaders/billboard_vs_io.zig — typed interface for the textured-3D /
+//! src/shaders/billboard_vs_io.zig - typed interface for the textured-3D /
 //! billboard vertex shader. Reads the shared Cube3D camera UBO (only the
 //! view-projection), passes the three vertex attributes through to the
 //! fragment stage. Body in `billboard_vs.zig`.
@@ -22,5 +22,5 @@ pub const Ubo = struct {
     vp: [4]Vec align(16),
 };
 
-/// Varyings to the fragment stage — interpolated uv + vertex colour.
+/// Varyings to the fragment stage - interpolated uv + vertex colour.
 pub const Outputs = common.Interp;

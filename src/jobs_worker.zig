@@ -1,12 +1,12 @@
-//! src/jobs_worker.zig — THE WEB WORKER, WRITTEN IN ZIG.
+//! src/jobs_worker.zig - THE WEB WORKER, WRITTEN IN ZIG.
 //!
 //! ===========================================================================================
 //! IF YOU KNOW ZIG BUT HAVE NEVER TOUCHED JAVASCRIPT, START HERE
 //! ===========================================================================================
 //!
 //! WHAT A WORKER IS.
-//! A browser runs your whole page on ONE thread. Anything slow you do on that thread — encoding
-//! a PNG, tracing a ray — freezes the entire user interface for as long as it runs. A *Web
+//! A browser runs your whole page on ONE thread. Anything slow you do on that thread - encoding
+//! a PNG, tracing a ray - freezes the entire user interface for as long as it runs. A *Web
 //! Worker* is a second operating-system thread with its own, completely separate memory. It
 //! cannot touch the page, the canvas, or the GPU. The only thing it can do is: receive a
 //! message, compute, send a message back. Think of it as a child process you talk to over a
@@ -22,8 +22,8 @@
 //!         --( c2js --worker-js-embed )-->  window.ZIMR_WORKER_JS, inside the page
 //!
 //! and `bridge.zig` hands that string to the browser as the worker's program. So the code below
-//! IS the worker. It merely gets translated on the way. (`src/bridge.zig` — the entire browser
-//! side of zimr — is built by the exact same path. This is the established road, not a new one.)
+//! IS the worker. It merely gets translated on the way. (`src/bridge.zig` - the entire browser
+//! side of zimr - is built by the exact same path. This is the established road, not a new one.)
 //!
 //! HOW ZIG TOUCHES A BROWSER OBJECT.
 //! A JavaScript object cannot live inside Zig's memory, so we never hold one. We hold a
@@ -43,7 +43,7 @@
 //! You are writing JavaScript's semantics in Zig's syntax, with Zig's type checker on top of it.
 //!
 //! WHAT A CALLBACK IS.
-//! The browser never calls `main()`. It calls YOU — later, when a message arrives — by invoking
+//! The browser never calls `main()`. It calls YOU - later, when a message arrives - by invoking
 //! whatever function you stored in the global variable named `onmessage`. `asJsFunction()` wraps
 //! a Zig function so the runtime is able to invoke it. That is this file's entire control flow:
 //! register one callback, then get called.
@@ -56,29 +56,29 @@
 //! literal. It was the ONLY hand-written JavaScript in the whole engine, and it produced the two
 //! worst bugs the jobs system has ever had.
 //!
-//!   BUG ONE — THE ABI WAS SPELLED TWICE.
+//!   BUG ONE - THE ABI WAS SPELLED TWICE.
 //!   `jobs.zig` wrote `@export(&Worker.alloc, .{ .name = "zimr_job_alloc" })`.
 //!   The JavaScript wrote `exports.zimr_job_alloc(n)`.
 //!   Two string literals, in two languages, and NOTHING checked that they agreed. Rename one and
 //!   the worker fails SILENTLY: no error, no result, just a job that never comes back, forever.
 //!   Every one of those names now lives in `src/jobs_abi.zig`, and all three sides read it.
 //!
-//!   BUG TWO — THE HANDLER WAS `async`, AND THAT WAS A LIVE, SHIPPED BUG.
+//!   BUG TWO - THE HANDLER WAS `async`, AND THAT WAS A LIVE, SHIPPED BUG.
 //!   The old JavaScript did `await WebAssembly.instantiate(...)`. In JavaScript, `await` YIELDS:
 //!   the function pauses, and the browser is then free to deliver the NEXT message, which
 //!   re-enters this same handler while the kernel's exports are still unset. A job that arrived
-//!   inside that window threw an exception inside the worker and was never heard from again — no
+//!   inside that window threw an exception inside the worker and was never heard from again - no
 //!   error, no result, nothing to grep for.
 //!
 //!   `worker_png` never hit it, because it submits ONE job, many frames after the pool boots.
-//!   `rt_workers` submits SIXTEEN jobs on its very first frame — the same frame the pool spawns —
+//!   `rt_workers` submits SIXTEEN jobs on its very first frame - the same frame the pool spawns -
 //!   and hit it every single time. Sixteen tiles dispatched. Zero returned. Silence.
 //!
 //!   In Zig there is no `await` to reach for. `instantiateKernelWasm` below is an ordinary
 //!   blocking function call. The bug is not defended against; it is UNWRITABLE.
 
 // ===========================================================================================
-// SECTION 1 — THE c2js INTEROP KERNEL
+// SECTION 1 - THE c2js INTEROP KERNEL
 //
 // c2js emits a JavaScript implementation of every `extern fn` below, into every program it
 // translates. These are the only way Zig code can reach the browser, and they are the same
@@ -90,11 +90,11 @@
 
 /// An index into the c2js runtime's table of live JavaScript objects.
 ///
-/// Zig never holds a JavaScript object — it cannot; a JS object does not live in linear memory.
+/// Zig never holds a JavaScript object - it cannot; a JS object does not live in linear memory.
 /// It holds one of these integers and asks the runtime to act on the object it names.
 pub const JsHandle = u32;
 
-/// The handle of `globalThis` — in a worker, the object that owns `onmessage` and `postMessage`.
+/// The handle of `globalThis` - in a worker, the object that owns `onmessage` and `postMessage`.
 extern fn js_global() JsHandle;
 
 /// `object[property_name]` -> a JavaScript value.
@@ -190,14 +190,14 @@ extern fn js_strict_eq(left: JsHandle, right: JsHandle) u32;
 /// Wrap a Zig function pointer so the JavaScript runtime is able to call it.
 extern fn js_func(zig_function_pointer: *const anyopaque) JsHandle;
 
-/// `[]` — a new, empty JavaScript array.
+/// `[]` - a new, empty JavaScript array.
 extern fn js_array() JsHandle;
 
 /// `array.push(value)`
 extern fn js_push(array: JsHandle, value: JsHandle) JsHandle;
 
 // ===========================================================================================
-// SECTION 2 — A JAVASCRIPT VALUE, AS SEEN FROM ZIG
+// SECTION 2 - A JAVASCRIPT VALUE, AS SEEN FROM ZIG
 // ===========================================================================================
 
 /// One JavaScript value, held by handle.
@@ -292,7 +292,7 @@ const JsValue = struct {
         @compileError("jobs_worker: callMethod takes at most 2 arguments; this file needs no more");
     }
 
-    /// `new self(...arguments)` — JavaScript's constructor call, e.g. `new Uint8Array(b, p, n)`.
+    /// `new self(...arguments)` - JavaScript's constructor call, e.g. `new Uint8Array(b, p, n)`.
     fn construct(self: JsValue, arguments: anytype) JsValue {
         const argument_count: usize = arguments.len;
 
@@ -332,7 +332,7 @@ const JsValue = struct {
         @compileError("jobs_worker: construct takes 0, 1, 2 or 3 arguments");
     }
 
-    /// JavaScript's `if (self)`. Note that `null`, `undefined`, `0` and `""` are all FALSY —
+    /// JavaScript's `if (self)`. Note that `null`, `undefined`, `0` and `""` are all FALSY -
     /// which is why a missing kernel export can be detected simply by asking whether it is
     /// truthy.
     fn isTruthy(self: JsValue) bool {
@@ -345,10 +345,10 @@ const JsValue = struct {
         return js_strict_eq(self.handle, other.handle) != 0;
     }
 
-    /// `Number(self)` — and ONLY ever on a value you already know is a number.
+    /// `Number(self)` - and ONLY ever on a value you already know is a number.
     ///
     /// DO NOT POINT THIS AT A BUFFER. `Number(some_typed_array)` coerces via `toString()`,
-    /// which builds a string of every element separated by commas — for a 2.7 MB result that is
+    /// which builds a string of every element separated by commas - for a 2.7 MB result that is
     /// 2.7 million integers, about ten megabytes of text, parsed to NaN and thrown away.
     /// `bridge.zig` did exactly that once, on the frame each result landed. It cost 95 ms per
     /// frame and made the entire jobs system look like it did not work.
@@ -357,7 +357,7 @@ const JsValue = struct {
     }
 };
 
-/// `globalThis` — inside a worker, the object that owns `onmessage` and `postMessage`.
+/// `globalThis` - inside a worker, the object that owns `onmessage` and `postMessage`.
 fn globalScope() JsValue {
     return .{ .handle = js_global() };
 }
@@ -373,13 +373,13 @@ fn asJsString(string: []const u8) JsValue {
     return .{ .handle = js_str(string.ptr, string_length) };
 }
 
-/// `{}` — a fresh, empty JavaScript object. Every reply this worker sends is built from one.
+/// `{}` - a fresh, empty JavaScript object. Every reply this worker sends is built from one.
 fn newEmptyJsObject() JsValue {
     const object_constructor: JsValue = globalScope().getProperty("Object");
     return object_constructor.construct(.{});
 }
 
-/// `[]` — a fresh, empty JavaScript array.
+/// `[]` - a fresh, empty JavaScript array.
 fn newEmptyJsArray() JsValue {
     return .{ .handle = js_array() };
 }
@@ -395,13 +395,13 @@ fn asJsFunction(zig_function_pointer: *const anyopaque) JsValue {
 }
 
 // ===========================================================================================
-// SECTION 3 — THE PROTOCOL
+// SECTION 3 - THE PROTOCOL
 //
 // These names are NOT defined here. They live in `src/jobs_abi.zig`, which all three sides of
 // the system read: `jobs.zig` (which becomes the kernel wasm and EXPORTS them), this file
 // (which becomes the worker and CALLS them), and `tools/c2js.zig` (which VERIFIES them).
 //
-// Three separate compilations that never link against one another — and exactly one spelling
+// Three separate compilations that never link against one another - and exactly one spelling
 // of each name between them.
 // ===========================================================================================
 
@@ -411,7 +411,7 @@ const message_tags = jobs_abi.msg;
 const worker_error_names = jobs_abi.worker_errors;
 
 // ===========================================================================================
-// SECTION 4 — THE WORKER ITSELF
+// SECTION 4 - THE WORKER ITSELF
 // ===========================================================================================
 
 /// The kernel wasm's exports table, once we have instantiated it. Zero means "not yet".
@@ -436,7 +436,7 @@ export fn start() void {
 /// Notice what is absent: no loop, no waiting, no locks, no shared state. A worker handles one
 /// message at a time, start to finish, and `bridge.zig` guarantees it never has two jobs in
 /// flight on one worker (see `busy_with` there). So this can be perfectly ordinary, blocking,
-/// sequential code — which is precisely why it is able to be Zig.
+/// sequential code - which is precisely why it is able to be Zig.
 fn handleMessageFromHost(event_handle: JsHandle) callconv(.c) void {
     const event_object: JsValue = .{ .handle = event_handle };
     const message_object: JsValue = event_object.getProperty("data");
@@ -459,24 +459,24 @@ fn handleMessageFromHost(event_handle: JsHandle) callconv(.c) void {
 ///
 /// THE WHOLE POINT OF THIS FUNCTION IS THAT IT BLOCKS.
 ///
-/// The JavaScript version called `WebAssembly.instantiate`, which returns a PROMISE — a value
-/// that is not ready yet — and then `await`ed it. `await` YIELDS: this function would pause, the
+/// The JavaScript version called `WebAssembly.instantiate`, which returns a PROMISE - a value
+/// that is not ready yet - and then `await`ed it. `await` YIELDS: this function would pause, the
 /// browser would deliver the next queued message, and the handler would re-enter with
 /// `kernel_wasm_exports_handle` still zero. Sixteen path-tracing tiles submitted on a single
 /// frame all landed in that window, threw, and vanished without a trace.
 ///
 /// `WebAssembly.Module` and `WebAssembly.Instance` are CONSTRUCTORS. They do not yield. And a
-/// worker is permitted to compile synchronously — the four-kilobyte synchronous-compile limit
+/// worker is permitted to compile synchronously - the four-kilobyte synchronous-compile limit
 /// applies only to the page's main thread, not to us. So this runs to completion before the next
 /// message is so much as looked at.
 fn instantiateKernelWasm(kernel_wasm_bytes: JsValue) void {
     const web_assembly_namespace: JsValue = globalScope().getProperty("WebAssembly");
 
-    // `new WebAssembly.Module(bytes)` — compile the wasm.
+    // `new WebAssembly.Module(bytes)` - compile the wasm.
     const module_constructor: JsValue = web_assembly_namespace.getProperty("Module");
     const compiled_module: JsValue = module_constructor.construct(.{kernel_wasm_bytes});
 
-    // `new WebAssembly.Instance(module, {})` — link it.
+    // `new WebAssembly.Instance(module, {})` - link it.
     //
     // An EMPTY object is a COMPLETE import object here, because a job kernel has ZERO imports.
     // That is not luck: `tools/c2js.zig` refuses to embed a kernel wasm whose import section is
@@ -495,7 +495,7 @@ fn instantiateKernelWasm(kernel_wasm_bytes: JsValue) void {
     // `postMessage({ t: "ready" })`.
     //
     // The host will not dispatch a job to us until it has seen this. It used to THROW THIS
-    // MESSAGE AWAY — the reply carries no job handle, so it fell through a `handle >= 1` guard
+    // MESSAGE AWAY - the reply carries no job handle, so it fell through a `handle >= 1` guard
     // in `onWorkerMessage` and vanished. Nothing knew when a worker had finished instantiating,
     // so the dispatcher would hand a job to a worker that could not yet run one.
     const ready_reply: JsValue = newEmptyJsObject();
@@ -524,7 +524,7 @@ fn runOneJob(message_object: JsValue) void {
     // `kernel_exports["zimr_job_" + message.kernel]`. Every kernel is its own wasm export, so
     // there is no id and no dispatch table, and a job physically cannot reach the wrong kernel.
     //
-    // `Reflect.get(object, key)` is JavaScript's read-a-property-by-dynamic-key — the `obj[key]`
+    // `Reflect.get(object, key)` is JavaScript's read-a-property-by-dynamic-key - the `obj[key]`
     // form, spelled as a function call so that it can cross the interop boundary.
     const requested_kernel_name: JsValue = message_object.getProperty("kernel");
     const export_name_prefix: JsValue = asJsString(jobs_abi.kernel_prefix);
@@ -560,7 +560,7 @@ fn runOneJob(message_object: JsValue) void {
     // Read `.buffer` AFTER the allocation, deliberately.
     //
     // Allocating may have GROWN the kernel's wasm memory, and growing a wasm memory DETACHES the
-    // old ArrayBuffer — every view taken before the call is now dead. It does not throw; it reads
+    // old ArrayBuffer - every view taken before the call is now dead. It does not throw; it reads
     // as zero bytes and says nothing. This is the classic wasm-in-JavaScript bug, and it is why
     // `.buffer` is fetched fresh at every single use in this file.
     const uint8_array_constructor: JsValue = globalScope().getProperty("Uint8Array");
@@ -595,7 +595,7 @@ fn runOneJob(message_object: JsValue) void {
     // ---- 4. copy the result back OUT ----------------------------------------------------------
     const result_pointer: f64 = kernel_exports.callMethod(jobs_abi.out_ptr, .{}).asNumber();
 
-    // `.buffer` again, freshly — for exactly the reason given in step 2. The kernel just ran, and
+    // `.buffer` again, freshly - for exactly the reason given in step 2. The kernel just ran, and
     // running it may have grown its memory.
     const kernel_memory_after_run: JsValue = kernel_exports.getProperty(jobs_abi.memory);
     const buffer_after_run: JsValue = kernel_memory_after_run.getProperty("buffer");
@@ -629,7 +629,7 @@ fn runOneJob(message_object: JsValue) void {
 
     // The second argument to postMessage is the TRANSFER LIST. Naming a buffer there moves its
     // ownership to the host instead of copying it: O(1), however many megabytes it holds. The
-    // buffer is detached on our side afterwards, which is fine — we are done with it.
+    // buffer is detached on our side afterwards, which is fine - we are done with it.
     const transfer_list: JsValue = newEmptyJsArray();
     pushOntoJsArray(transfer_list, result_buffer);
 
@@ -642,7 +642,7 @@ fn replyWithKernelError(job_handle: f64, kernel_exports: JsValue) void {
     const error_name_pointer: f64 = kernel_exports.callMethod(jobs_abi.err_ptr, .{}).asNumber();
     const error_name_length: f64 = kernel_exports.callMethod(jobs_abi.err_len, .{}).asNumber();
 
-    // `.buffer` fresh, once more — the kernel ran, so its memory may have grown.
+    // `.buffer` fresh, once more - the kernel ran, so its memory may have grown.
     const kernel_memory: JsValue = kernel_exports.getProperty(jobs_abi.memory);
     const kernel_memory_buffer: JsValue = kernel_memory.getProperty("buffer");
 

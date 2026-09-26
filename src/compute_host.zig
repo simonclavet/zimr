@@ -1,9 +1,9 @@
-//! compute_host.zig — `z.Compute(M)`: run a kompute kernel module `M` on the CPU
+//! compute_host.zig - `z.Compute(M)`: run a kompute kernel module `M` on the CPU
 //! (a plain `for id` loop calling the kernel) OR the GPU (a WGSL compute dispatch),
 //! chosen at runtime via `.backend`. Same kernel source, same results.
 //!
 //! The footgun this erases: buffer + bind-layout sizes come from
-//! `@sizeOf(M.Buffers)` / `@sizeOf(M.Params)` (comptime, off the schema) — never
+//! `@sizeOf(M.Buffers)` / `@sizeOf(M.Params)` (comptime, off the schema) - never
 //! hand-sized. A single storage buffer holds the whole `Buffers` struct; per-field
 //! upload/read use `@offsetOf`. See `src/notes/tutorials/gpu-compute-tutorial.md`.
 //!
@@ -37,16 +37,16 @@ const assertUnreachable = zm.assertUnreachable;
 
 /// Where a kompute kernel runs. The SAME kernel source, on any of them.
 ///
-///   .cpu    — a plain `for id` loop, right here. Synchronous; the answer is in `M.g.B`
+///   .cpu    - a plain `for id` loop, right here. Synchronous; the answer is in `M.g.B`
 ///             the moment `run` returns. It also BLOCKS the frame for as long as it takes.
 ///
-///   .worker — the SAME plain `for id` loop, in a Web Worker. Not faster; ELSEWHERE.
+///   .worker - the SAME plain `for id` loop, in a Web Worker. Not faster; ELSEWHERE.
 ///             This exists so a device with no GPU gets a compute fallback that does not
-///             freeze the frame — which is the whole point of `zimr.jobs`, applied to
+///             freeze the frame - which is the whole point of `zimr.jobs`, applied to
 ///             kompute. It is asynchronous, so `readLatest` returns null until the job
 ///             lands, exactly as the GPU arm already does.
 ///
-///   .gpu     — a WGSL compute dispatch. Asynchronous, ~1 frame of readback latency.
+///   .gpu     - a WGSL compute dispatch. Asynchronous, ~1 frame of readback latency.
 ///
 /// The three are interchangeable in CODE, not in COST. Read `.worker`'s doc on `run`
 /// before reaching for it: it copies the entire `Buffers` to the worker and back on every
@@ -57,7 +57,7 @@ pub const Backend = enum { cpu, worker, gpu };
 /// params by value.
 ///
 /// `extern` because these bytes are memcpy'd out of the app's wasm and into the kernel's
-/// — two SEPARATE compilations — and Zig's auto layout is free to reorder fields.
+/// - two SEPARATE compilations - and Zig's auto layout is free to reorder fields.
 /// (`M.Params` is already extern: the GPU needs it for the std140 uniform.)
 pub fn JobHeader(comptime M: type) type {
     return extern struct {
@@ -70,12 +70,12 @@ fn JobKernelFn(comptime M: type) type {
     return fn (Allocator, JobHeader(M), []const u8, *std.Io.Writer) anyerror!void;
 }
 
-/// Turn a kompute kernel into a JOB kernel — the adapter that makes `.worker` cost an
+/// Turn a kompute kernel into a JOB kernel - the adapter that makes `.worker` cost an
 /// adapter rather than a rewrite.
 ///
 /// Look at the loop: it is byte-for-byte the `.cpu` arm of `run` below. The only
 /// difference is WHERE it executes. It works because a worker instantiates its own copy
-/// of the kernel wasm, so `M.g.B` in there is that worker's private memory — the module
+/// of the kernel wasm, so `M.g.B` in there is that worker's private memory - the module
 /// globals kompute uses on the CPU are exactly what a worker needs, for free.
 pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M) {
     return struct {
@@ -93,14 +93,14 @@ pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M)
             //
             // In a real worker this is nearly pointless: `M.g.B` there is that worker's
             // own private memory and nobody can observe it. But when there is no worker
-            // pool — the host, or a sandboxed iframe that refused `new Worker()` —
+            // pool - the host, or a sandboxed iframe that refused `new Worker()` -
             // `zimr.jobs` runs this kernel INLINE, in the APP's address space, where
             // `M.g.B` is the app's own globals. Without the restore, a `.worker` dispatch
             // would silently trample them, and the backend would behave one way in Chrome
             // and another in an iframe. A bug that only appears where you cannot attach a
             // debugger is the worst kind there is, so pay two memcpys and have neither.
             //
-            // Heap, via the job's arena — never `const saved = M.g.B`, which would put a
+            // Heap, via the job's arena - never `const saved = M.g.B`, which would put a
             // possibly-megabyte struct on the wasm shadow stack.
             const saved: *M.Buffers = try gpa.create(M.Buffers);
             @memcpy(std.mem.asBytes(saved), std.mem.asBytes(&M.g.B));
@@ -128,7 +128,7 @@ pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M)
 
 /// One job kernel per name in `M.kernels`, as a table `jobs.Registry` can take.
 ///
-/// NOTE — this is an ARRAY, and that limits composition. A page carries ONE kernel wasm, so
+/// NOTE - this is an ARRAY, and that limits composition. A page carries ONE kernel wasm, so
 /// the launcher's would have to be built from the CONCATENATED tables of every example on it:
 ///
 ///     jobs.Registry(worker_png.job_kernels ++ four_ways.job_kernels, .{ ... })
@@ -138,7 +138,7 @@ pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M)
 /// concatenate, but this Zig (0.17.0-dev.1282) has no `@Type` and no `std.meta.Tuple`, and
 /// `@Struct` with numeric field names yields a struct that does not support indexing. So the
 /// composition SIMPLIFICATION the review claimed is not available today, and the launcher
-/// ships without a kernel wasm — its jobs run inline, which is correct but hitchy.
+/// ships without a kernel wasm - its jobs run inline, which is correct but hitchy.
 ///
 /// The name-keyed exports still make the merge the RIGHT design (a merged wasm exports a
 /// superset of the names; nobody renumbers anything). Only the Zig to express it is missing.
@@ -150,7 +150,7 @@ pub fn komputeTable(comptime M: type) [M.kernels.len]struct { []const u8, JobKer
     return table;
 }
 
-/// The job registry for a kompute module — DERIVED, so an example that wants the
+/// The job registry for a kompute module - DERIVED, so an example that wants the
 /// `.worker` backend configures nothing.
 ///
 /// The bounds are exact rather than guessed: a job carries the header plus the whole
@@ -171,7 +171,7 @@ pub fn komputeRegistry(comptime M: type) type {
 /// conformant device grants at least this many storage buffers to a compute
 /// stage (it's the spec default limit). A kernel that binds more than this may
 /// run on a beefy desktop GPU but will fail to create its pipeline on a stock
-/// device — so the per-kernel bind groups assert each kernel stays within it.
+/// device - so the per-kernel bind groups assert each kernel stays within it.
 /// This is what lets us delete the old `maxStorageBuffersPerShaderStage` raise:
 /// instead of asking the device for more, we make each kernel need fewer.
 const max_portable_storage_buffers: u32 = 8;
@@ -200,7 +200,7 @@ fn wgslRefsName(line: []const u8, name: []const u8) bool {
     return false;
 }
 
-/// The variable name in a `... var<...> NAME: TYPE;` binding decl — the
+/// The variable name in a `... var<...> NAME: TYPE;` binding decl - the
 /// identifier immediately before the first `:`. Name-agnostic on purpose: it
 /// returns whatever the decl actually says (`kbuf_grid_counts`, `arr`, `P`),
 /// so the cross-check below cannot be fooled by a buffer that lost its
@@ -223,7 +223,7 @@ fn wgslDeclName(line: []const u8) ?[]const u8 {
 /// when the layout covers every used binding.
 ///
 /// This is deliberately NOT the `kbuf_<field>` usage scan that builds the
-/// layout — it keys on each binding's declared var name and matches by binding
+/// layout - it keys on each binding's declared var name and matches by binding
 /// NUMBER, so a disagreement between the two is precisely the host<->WGSL drift
 /// that otherwise surfaces only as Dawn's opaque "Binding doesn't exist"
 /// cascade at pipeline creation. Catching it here names the kernel + binding.
@@ -278,7 +278,7 @@ pub fn Compute(comptime M: type) type {
         // A WGSL uniform block is std140-laid-out: its size is rounded up to a
         // multiple of 16 bytes on the GPU. If the host's Params isn't already a
         // multiple of 16, the host and shader disagree on the struct's size and
-        // every field past the mismatch reads garbage on-device — a miserable,
+        // every field past the mismatch reads garbage on-device - a miserable,
         // silent bug. Catch it at build time and say exactly how to fix it.
         if (@sizeOf(M.Params) % 16 != 0) {
             @compileError(std.fmt.comptimePrint(
@@ -301,14 +301,14 @@ pub fn Compute(comptime M: type) type {
         params: Params = undefined,
         /// Element count for slicing variable-length fields on READBACK (e.g.
         /// `num_particles`). Set once after init. This is no longer the dispatch
-        /// width — that's the explicit `n` in `run(name, n)`. readLatest clamps to
+        /// width - that's the explicit `n` in `run(name, n)`. readLatest clamps to
         /// `@min(element_count, field.len)`, so fixed-size fields (grid_counts,
         /// cell_start) still slice to their own length, not the particle count.
         element_count: u32 = 0,
         gpu: ?Gpu = null,
         worker: ?Worker = null,
 
-        /// The `.worker` backend's state — deliberately the same shape as `Gpu`'s.
+        /// The `.worker` backend's state - deliberately the same shape as `Gpu`'s.
         ///
         /// The MIRROR is the important part, and it is the reason a `.cpu` pipe and a
         /// `.worker` pipe do not stomp each other. `M.g.B` is a module-level SINGLETON
@@ -334,14 +334,14 @@ pub fn Compute(comptime M: type) type {
             staging: wgpu.BufferHandle,
             /// One compute pipeline per installed kernel, parallel to
             /// `kernel_names`. Heap-sized to the kernel count, so there is no
-            /// fixed cap to overflow — the old fixed array's overflow assert
+            /// fixed cap to overflow - the old fixed array's overflow assert
             /// could constant-fold to a trap and DCE this whole registry in
             /// ReleaseSmall (the shaders silently vanished); that footgun is gone.
             pipelines: []wgpu.ComputePipelineHandle,
             kernel_names: [][]const u8,
             /// One bind group PER KERNEL, parallel to `pipelines`. Each binds
             /// only the fields its kernel uses (+ the uniform), so a kernel that
-            /// touches one buffer doesn't drag in all ten — the change that keeps
+            /// touches one buffer doesn't drag in all ten - the change that keeps
             /// every kernel under the portable storage-buffer limit. `run` sets
             /// the bind group for the kernel it's dispatching (in a batch, that
             /// means per dispatch, since adjacent kernels differ).
@@ -358,12 +358,12 @@ pub fn Compute(comptime M: type) type {
             /// one compute pass instead of submitting a fresh encoder per call.
             /// WebGPU guarantees a storage write from dispatch N is visible to
             /// dispatch N+1 within a single pass, so this is equivalent to
-            /// per-dispatch submits — it just collapses a frame's many submits
+            /// per-dispatch submits - it just collapses a frame's many submits
             /// into one.
             batch_enc: wgpu.CommandEncoderHandle = .invalid,
             batch_pass: wgpu.ComputePassEncoderHandle = .invalid,
             /// The Params recorded at `beginBatch`. `endBatch` asserts
-            /// `self.params` still equals this — the uniform is written ONCE at
+            /// `self.params` still equals this - the uniform is written ONCE at
             /// beginBatch, so params changed afterward never reach the GPU; this
             /// catches that silent-stale trap by name.
             batch_params: Params = undefined,
@@ -374,7 +374,7 @@ pub fn Compute(comptime M: type) type {
             /// clobber (queue timeline keeps only the last write). Deduping keeps
             /// a single write while preserving the per-dispatch submit barriers.
             uniform_synced: ?Params = null,
-            /// ── RECORDING (`beginRecording` .. `submitRecording`) ──
+            /// -- RECORDING (`beginRecording` .. `submitRecording`) --
             /// The open encoder every recorded dispatch goes into; the params TABLE (a GPU buffer
             /// its slots are uploaded to in ONE write, and copied from into `uniform` before each
             /// dispatch, on the GPU timeline); its CPU side; and the slots used.
@@ -414,8 +414,8 @@ pub fn Compute(comptime M: type) type {
             read_count: usize = 0,
             /// Heap-allocated CPU readback buffer (the whole Buffers struct).
             /// Heap, NOT inline-by-value: Buffers can be megabytes (20k particles
-            /// here ≈ 1.3 MB), and an inline field makes the whole Compute value
-            /// that large — a by-value `initGpu` return then overflows the wasm
+            /// here ~ 1.3 MB), and an inline field makes the whole Compute value
+            /// that large - a by-value `initGpu` return then overflows the wasm
             /// shadow stack in debug (release elides the copy, so it only crashes
             /// in debug). Allocated in initGpu, freed in deinit.
             mirror: *Buffers,
@@ -426,7 +426,7 @@ pub fn Compute(comptime M: type) type {
         }
 
         /// CPU backend: zero GPU resources, instant. The kernel module's globals
-        /// (`M.g.B` / `M.g.P`) ARE the storage — upload writes them, run loops.
+        /// (`M.g.B` / `M.g.P`) ARE the storage - upload writes them, run loops.
         pub fn initCpu() Self {
             return .{ .backend = .cpu };
         }
@@ -435,8 +435,8 @@ pub fn Compute(comptime M: type) type {
         /// frame. Needs an allocator (the GPU path does too) for the readback mirror and
         /// the job's payload.
         ///
-        /// Where workers are unavailable — on the host, or in a sandboxed iframe that
-        /// refuses `new Worker()` — `zimr.jobs` runs the kernel INLINE instead, so this
+        /// Where workers are unavailable - on the host, or in a sandboxed iframe that
+        /// refuses `new Worker()` - `zimr.jobs` runs the kernel INLINE instead, so this
         /// backend still produces the right answer everywhere. It just blocks, exactly as
         /// `.cpu` would have.
         pub fn initWorker(gpa: Allocator) !Self {
@@ -542,7 +542,7 @@ pub fn Compute(comptime M: type) type {
 
             // WEBGPU'S STORAGE-BUFFER CEILING. `maxStorageBuffersPerShaderStage` has a
             // GUARANTEED FLOOR OF 8, and one binding is used by the uniform, so a kompute
-            // module gets at most 8 storage buffers — one per `Buffers` field.
+            // module gets at most 8 storage buffers - one per `Buffers` field.
             //
             // Go over it and NOTHING COMPLAINS. No validation error, no console warning: the
             // bindings past the limit simply do not take, and every write a kernel makes to
@@ -551,7 +551,7 @@ pub fn Compute(comptime M: type) type {
             //
             // It cost a very long hunt. `fluid_sort` declares TEN buffers (pos, prev, vel,
             // delta, density, grid_counts, cell_start, pos2, vel2, prev2) while its twin
-            // `fluid_gpu` declares exactly EIGHT — so one fluid worked and the other filled
+            // `fluid_gpu` declares exactly EIGHT - so one fluid worked and the other filled
             // its box, with identical physics, identical parameters, and every kernel
             // reading correctly in isolation. The counting sort, the neighbour walk and the
             // density arithmetic all verified BIT-EXACT on device against brute force, and
@@ -576,7 +576,7 @@ pub fn Compute(comptime M: type) type {
             assertf(@sizeOf(Buffers) > 0, @src(), "initGpu: Buffers has zero size", .{});
             const buf_bytes: u32 = @sizeOf(Buffers);
             // Per-field storage buffers (t1178): one buffer + one binding per
-            // Buffers field — the megastruct single-binding shape corrupted
+            // Buffers field - the megastruct single-binding shape corrupted
             // on Adreno. Binding numbers come from the kernels' own WGSL
             // headers (parsed below), so host and shader agree by definition.
             var field_bufs: [field_count]wgpu.BufferHandle = undefined;
@@ -587,7 +587,7 @@ pub fn Compute(comptime M: type) type {
                     .label = "kbuf_" ++ fname,
                 });
             }
-            // ★ A FAILED INIT MUST NOT LEAK THEM. Everything below can fail (a kernel whose WGSL
+            // * A FAILED INIT MUST NOT LEAK THEM. Everything below can fail (a kernel whose WGSL
             // declares no bindings fails `parseBindings`), and the caller never gets a `Self` to
             // deinit - the smoke runner's lifecycle check saw exactly these, buffer+7 per cycle.
             errdefer for (field_bufs) |fb| {
@@ -612,7 +612,7 @@ pub fn Compute(comptime M: type) type {
             // stock WebGPU device guarantees only 8 storage buffers per shader
             // stage, but a pipeline like the sort declares 10 Buffers fields. The
             // old shared mega-bind-group bound all 10 to every kernel, so every
-            // pipeline tripped the limit — which we papered over by RAISING the
+            // pipeline tripped the limit - which we papered over by RAISING the
             // device's `maxStorageBuffersPerShaderStage` (a band-aid that fails on
             // any device that won't grant the raise).
             //
@@ -621,8 +621,8 @@ pub fn Compute(comptime M: type) type {
             // storage vars may be omitted. Each kernel's WGSL declares all fields
             // (the kompute module aliases them all at module scope) but its body
             // references only some, so `usedFields` parses the body and we bind
-            // just that subset: clearGrid → {uniform, grid_counts} = 1 storage;
-            // density → ~5; none over 8. Result: the sort runs on a stock device
+            // just that subset: clearGrid -> {uniform, grid_counts} = 1 storage;
+            // density -> ~5; none over 8. Result: the sort runs on a stock device
             // with no limit-raising, and a kernel that WOULD exceed the budget
             // trips a named assert here instead of a silent pipeline failure.
             const pipelines: []wgpu.ComputePipelineHandle = try gpa.alloc(wgpu.ComputePipelineHandle, kernels.len);
@@ -640,11 +640,11 @@ pub fn Compute(comptime M: type) type {
                 );
                 const used: [field_count]bool = usedFields(k.wgsl);
                 // Build this kernel's layout + bind-group entries together: the
-                // uniform first (always present — the Params block any kernel may
+                // uniform first (always present - the Params block any kernel may
                 // read), then one entry per USED field at its global binding
                 // number. `n` is the dense count we actually fill; the binding
                 // NUMBERS can be sparse (e.g. {0, 1, 5}) and WebGPU is fine with
-                // that — we just don't emit slots for fields this kernel skips.
+                // that - we just don't emit slots for fields this kernel skips.
                 var layout_entries: [field_count + 1]shader_introspect.BindGroupLayoutEntry = undefined;
                 var bg_entries: [field_count + 1]gpu.BindGroupEntry = undefined;
                 layout_entries[0] = .{
@@ -734,7 +734,7 @@ pub fn Compute(comptime M: type) type {
                 kernel_used[i] = used;
                 kernel_last_n[i] = 0;
                 // Build-only: the pipeline + bind group are built, so their source
-                // layout + module are no longer needed — release them per kernel.
+                // layout + module are no longer needed - release them per kernel.
                 wgpu.destroyBindGroupLayout(bgl);
                 wgpu.destroyPipelineLayout(pipeline_layout);
                 wgpu.destroyShaderModule(module);
@@ -763,7 +763,7 @@ pub fn Compute(comptime M: type) type {
 
         /// Upload `data` into buffer `field`. CPU: memcpy into the module global.
         /// GPU: `queueWriteBuffer` at the field's `@offsetOf` in the storage buffer.
-        /// The Buffers field names, in declaration order — the per-field
+        /// The Buffers field names, in declaration order - the per-field
         /// buffer table is indexed by this order everywhere (t1178 refactor).
         const buffer_field_names = @typeInfo(Buffers).@"struct".field_names;
         const field_count: usize = buffer_field_names.len;
@@ -793,7 +793,7 @@ pub fn Compute(comptime M: type) type {
         /// names nest: `kbuf_pos` is a prefix of `kbuf_pos2`, so a plain
         /// substring search would mark `pos` used on a line that only mentions
         /// `pos2`. A real match has a non-identifier char (or the string edge) on
-        /// both sides — so `kbuf_pos` matches `kbuf_pos[i]` but not `kbuf_pos2`.
+        /// both sides - so `kbuf_pos` matches `kbuf_pos[i]` but not `kbuf_pos2`.
         fn refsIdent(line: []const u8, ident: []const u8) bool {
             var start: usize = 0;
             while (std.mem.indexOfPos(u8, line, start, ident)) |pos| {
@@ -814,7 +814,7 @@ pub fn Compute(comptime M: type) type {
         /// declaration (declaration lines carry `@binding(`, and every kernel's
         /// WGSL declares ALL fields because the kompute module aliases them all
         /// at module scope). The per-kernel bind group needs exactly the fields
-        /// the entry statically uses (WebGPU spec) — which is precisely the set
+        /// the entry statically uses (WebGPU spec) - which is precisely the set
         /// referenced in the body. Example: clearGrid's body is only
         /// `atomicStore(&kbuf_grid_counts[..], 0u)`, so this returns {grid_counts}
         /// and clearGrid binds 1 storage buffer instead of all 10.
@@ -912,7 +912,7 @@ pub fn Compute(comptime M: type) type {
 
         /// `upload` at an ELEMENT offset into the field, not at its start.
         ///
-        /// ★ Two steps in one frame that upload their inputs to DISJOINT ranges of one field stay
+        /// * Two steps in one frame that upload their inputs to DISJOINT ranges of one field stay
         /// correct under any model of the queue - including one where every write in a frame lands
         /// before the frame's submission, as with a renderer's single frame encoder, where two writes
         /// to the same (buffer, offset) clobber each other. SuperTrack's world and policy steps each
@@ -966,16 +966,16 @@ pub fn Compute(comptime M: type) type {
                     @memcpy(dst[0..data.len], data);
                 },
                 // A `.worker` pipe OWNS ITS STATE. It stages into its own mirror, ships that
-                // mirror, and reads the answer back into it — it never touches `M.g.B` in
+                // mirror, and reads the answer back into it - it never touches `M.g.B` in
                 // this address space at all.
                 //
                 // It used to share `.cpu`'s arm, on the reasoning that "the payload is
                 // literally `asBytes(&M.g.B)`, so the staging area and the CPU's buffers are
-                // the same memory — nothing to duplicate". That is true, and it is the bug:
+                // the same memory - nothing to duplicate". That is true, and it is the bug:
                 // `M.g.B` is a MODULE-LEVEL SINGLETON. A `.cpu` pipe's `run()` writes its
                 // results there, and the next `.worker` dispatch would then ship those
                 // results as its INPUT. Two live pipes on one module silently contaminate
-                // each other — and `four_ways` exists precisely to run `.cpu`, `.worker` and
+                // each other - and `four_ways` exists precisely to run `.cpu`, `.worker` and
                 // `.gpu` side by side.
                 //
                 // The mirror was already allocated for the readback. Using it for input as
@@ -1001,7 +1001,7 @@ pub fn Compute(comptime M: type) type {
         /// compute pass until `endBatch` submits it.
         ///
         /// Pass this batch's `Params` HERE. They're written to the uniform once,
-        /// and every batched dispatch shares them — the uniform is NOT re-written
+        /// and every batched dispatch shares them - the uniform is NOT re-written
         /// per dispatch (that's the point of batching). So setting `self.params`
         /// AFTER beginBatch would be silently ignored on the GPU; taking params
         /// as an argument makes you compute them first, and `endBatch` asserts
@@ -1029,7 +1029,7 @@ pub fn Compute(comptime M: type) type {
         /// and carries on in a new one.
         const recording_slots: u32 = 2048;
 
-        /// ── MANY DISPATCHES, ONE SUBMISSION, EACH WITH ITS OWN PARAMS ──
+        /// -- MANY DISPATCHES, ONE SUBMISSION, EACH WITH ITS OWN PARAMS --
         ///
         /// Until `submitRecording`, every `run` is RECORDED rather than submitted: its params go
         /// into a slot of a params table, a copy of that slot into the uniform is encoded before
@@ -1041,7 +1041,7 @@ pub fn Compute(comptime M: type) type {
         /// Pipelines, bind groups and WGSL are untouched: the uniform is still the uniform,
         /// filled on the GPU timeline instead.
         ///
-        /// ★ Upload a recording's inputs BEFORE `beginRecording`, or at least before the dispatches
+        /// * Upload a recording's inputs BEFORE `beginRecording`, or at least before the dispatches
         /// that read them: a `writeBuffer` issued mid-recording lands before the WHOLE recording
         /// executes, not between its dispatches. On the CPU and worker backends `run` executes
         /// at once, as always - the same results, so every CPU-twin check covers this path.
@@ -1093,7 +1093,7 @@ pub fn Compute(comptime M: type) type {
             const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.rec_enc);
             submitDispatch(gp, cmd);
             gp.rec_enc = .invalid;
-            // ★ The next recording continues AFTER these slots. Restarting at slot 0 made two
+            // * The next recording continues AFTER these slots. Restarting at slot 0 made two
             // recordings in a frame (SuperTrack's world and policy steps) write the table's same
             // bytes twice: correct by WebGPU's queue ordering (each write lands before the
             // submission after it), but a clobber under the smoke runner's frame model, and
@@ -1127,7 +1127,7 @@ pub fn Compute(comptime M: type) type {
             assertf(gp.batch_enc != .invalid, @src(), "endBatch: no batch is open", .{});
             // The uniform was written once at beginBatch; if params changed since,
             // those changes never reached the GPU (batched dispatches don't
-            // re-upload). That's a silent-stale bug — flag it by name.
+            // re-upload). That's a silent-stale bug - flag it by name.
             assertf(
                 meta.eql(self.params, gp.batch_params),
                 @src(),
@@ -1144,7 +1144,7 @@ pub fn Compute(comptime M: type) type {
 
         /// Log a human-readable summary of the compiled pipeline: per kernel, its
         /// workgroup size, the buffer fields it actually binds (with their binding
-        /// numbers), and the last dispatch width it ran at. A debugging aid — call
+        /// numbers), and the last dispatch width it ran at. A debugging aid - call
         /// it after init (or after a frame) to SEE what got wired, instead of
         /// decoding the wasm. Example line:
         ///   clearGrid  wg=256  binds:[P@0 grid_counts@1]  last n=1024
@@ -1186,14 +1186,14 @@ pub fn Compute(comptime M: type) type {
         }
 
         /// Run kernel `name` over exactly `n` invocations. `n` is the dispatch
-        /// width FOR THIS CALL — explicit, because a multi-kernel pipeline mixes
+        /// width FOR THIS CALL - explicit, because a multi-kernel pipeline mixes
         /// widths (clearGrid over grid_cells, the particle kernels over
         /// num_particles, prefixSum over 1). Passing it per call kills the old
         /// footgun of a mutable `pipe.count` you had to re-set between kernels:
         /// forget, and a kernel silently dispatched the PREVIOUS kernel's width.
         ///   CPU: a plain `for id in 0..n` loop calling the kernel (the dual-shape
         ///        source runs as ordinary Zig).
-        ///   GPU: dispatch `ceil(n / config.workgroup)` workgroups — into the open
+        ///   GPU: dispatch `ceil(n / config.workgroup)` workgroups - into the open
         ///        batch pass if one is active, else a fresh single-dispatch submit.
         /// Readback is unaffected by `n`; it slices by `element_count` (set once).
         pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
@@ -1211,11 +1211,11 @@ pub fn Compute(comptime M: type) type {
                     M.g.P = self.params;
                     var id: u32 = 0;
                     while (id < n) : (id += 1) {
-                        // ★★ A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
+                        // ** A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
                         // signature is the discriminator, so a file can mix both forms and
                         // neither has to declare which it is. Without this the CPU driver only
                         // spoke the `Ctx` dialect, and `installKernelLean` compiled but could
-                        // never be run on the host — half a merge.
+                        // never be run on the host - half a merge.
                         // Compared as a TYPE rather than through `@typeInfo`: on
                         // 0.17.0-dev.1980 `Type.Fn` no longer carries `.params`, and a direct
                         // comparison needs no reflection to survive.
@@ -1231,7 +1231,7 @@ pub fn Compute(comptime M: type) type {
                 // they are the price of not freezing the frame:
                 //
                 //   1. It is ASYNCHRONOUS. `readLatest` returns null until the job lands
-                //      — as the GPU arm already does, so an app written for `.gpu` needs
+                //      - as the GPU arm already does, so an app written for `.gpu` needs
                 //      no change.
                 //   2. It runs ONE JOB AT A TIME. A `run` issued while a job is still out
                 //      is DROPPED, because two jobs would both write back into the same
@@ -1242,7 +1242,7 @@ pub fn Compute(comptime M: type) type {
                 //      is what `.gpu` is for.
                 .worker => {
                     // Gated on `kernels` so a module that never opts in pays NOTHING for
-                    // this arm — an untaken comptime `if` is never analyzed, so none of
+                    // this arm - an untaken comptime `if` is never analyzed, so none of
                     // the jobs machinery is linked. Selecting `.worker` requires
                     // `initWorker`, which is a compile error without it.
                     if (comptime @hasDecl(M, "kernels")) {
@@ -1251,7 +1251,7 @@ pub fn Compute(comptime M: type) type {
                             return;
                         });
                         if (wk.job.inFlight()) {
-                            return; // still working on the last one — see (2) above
+                            return; // still working on the last one - see (2) above
                         }
                         wk.job = komputeRegistry(M).submit(
                             wk.gpa,
@@ -1268,7 +1268,7 @@ pub fn Compute(comptime M: type) type {
                     const gp: *Gpu = &self.gpu.?;
                     const workgroups: u32 = (n + M.config.workgroup - 1) / M.config.workgroup;
                     // Find this kernel's slot so we get BOTH its pipeline and its
-                    // own bind group — each kernel binds a different subset of the
+                    // own bind group - each kernel binds a different subset of the
                     // buffers now, so the two always travel together.
                     const ki: usize = blk: {
                         for (gp.kernel_names, 0..) |kn, idx| {
@@ -1312,7 +1312,7 @@ pub fn Compute(comptime M: type) type {
                     if (gp.batch_enc != .invalid) {
                         // Open batch: encode into the shared pass. Params were
                         // written once at beginBatch (all batched dispatches share
-                        // them). The bind group is set PER DISPATCH now — adjacent
+                        // them). The bind group is set PER DISPATCH now - adjacent
                         // kernels bind different buffer subsets, so it can't be
                         // hoisted to beginBatch the way the old shared one was.
                         compute_pass.setPipeline(gp.batch_pass, pipeline);
@@ -1339,7 +1339,7 @@ pub fn Compute(comptime M: type) type {
         }
 
         /// Read buffer `field` back. CPU: the live slice (zero latency). GPU:
-        /// frame-delayed — returns LAST frame's mapped data and kicks off this
+        /// frame-delayed - returns LAST frame's mapped data and kicks off this
         /// frame's copy, never stalling (null until the first readback completes).
         /// What `readGeneration` reports.
         ///
@@ -1440,9 +1440,9 @@ pub fn Compute(comptime M: type) type {
         }
 
         pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
-            // Variable-count fields (pos/vel/…) are sized to capacity and slice to
+            // Variable-count fields (pos/vel/...) are sized to capacity and slice to
             // the live `element_count`; fixed fields (grid_counts, cell_start) must
-            // slice to THEIR OWN array length, never the particle count — else
+            // slice to THEIR OWN array length, never the particle count - else
             // grid_counts (grid_cells long) overruns the next field. Clamp to the
             // lesser of the two.
             const arr_len: usize = @field(M.g.B, @tagName(field)).len;
@@ -1451,7 +1451,7 @@ pub fn Compute(comptime M: type) type {
                 .cpu => {
                     return @field(M.g.B, @tagName(field))[0..n];
                 },
-                // Same contract as the GPU arm: null until it lands, then the data —
+                // Same contract as the GPU arm: null until it lands, then the data -
                 // out of our OWN mirror, never out of `M.g.B`, so a `.cpu` pipe on the
                 // same module keeps its answer.
                 .worker => {
@@ -1500,7 +1500,7 @@ pub fn Compute(comptime M: type) type {
                         // submits a COPY, not a dispatch. Counting it would make the mirror
                         // appear to reflect work that was never run.
                         gp.copy_at = gp.submitted;
-                        // ★★ ONLY WHAT `readLatest` CAN RETURN: each field's first
+                        // ** ONLY WHAT `readLatest` CAN RETURN: each field's first
                         // `element_count` elements, packed back to back. This copied every field
                         // WHOLE - 7 MiB a readback for the zn_mlp kit's 1 MiB fields, mapped and
                         // copied into wasm memory up to 60 times a second, to return 6 KB of
@@ -1540,7 +1540,7 @@ pub fn Compute(comptime M: type) type {
 
 test "Compute .worker runs the SAME kernel and gets the SAME answer" {
     // The claim of the .worker backend, checked on the host: one kernel source, two
-    // backends, identical results. No browser and no wasm needed — with no worker pool,
+    // backends, identical results. No browser and no wasm needed - with no worker pool,
     // `zimr.jobs` runs the kernel inline through the very same `invoke` a real worker
     // calls, so this exercises the actual adapter and not a mock of it.
     const M = struct {
@@ -1592,11 +1592,11 @@ test "Compute .worker runs the SAME kernel and gets the SAME answer" {
     }
 }
 
-test "Compute .worker OWNS its state — two live pipes on one module cannot contaminate each other" {
+test "Compute .worker OWNS its state - two live pipes on one module cannot contaminate each other" {
     // The property that makes the inline fallback HONEST.
     //
     // In a real worker, `M.g.B` is that worker's private memory. On the inline path there
-    // is no worker, so the kernel runs in the app's own address space — and without the
+    // is no worker, so the kernel runs in the app's own address space - and without the
     // snapshot/restore in `komputeKernel` it would trample the app's globals. The backend
     // would then behave one way in Chrome and another in a sandboxed iframe. This test is
     // the reason that restore exists.
@@ -1635,7 +1635,7 @@ test "Compute .worker OWNS its state — two live pipes on one module cannot con
     wk.upload(.data, &[_]u32{ 10, 20, 30, 40 });
     wk.run("bump", 4);
 
-    // It computed over ITS OWN input — not the CPU pipe's {101..104}.
+    // It computed over ITS OWN input - not the CPU pipe's {101..104}.
     //
     // This test used to assert the OPPOSITE: it dispatched the worker with no upload at
     // all and expected {201..204}, i.e. it expected the worker to pick up whatever the CPU
@@ -1652,7 +1652,7 @@ test "Compute .worker OWNS its state — two live pipes on one module cannot con
 
 test "Compute CPU backend runs a kernel as a plain loop" {
     // A self-contained kompute-shaped module (no kompute/zm import needed for the
-    // CPU path — the DSL only generates this shape; here we hand-roll it).
+    // CPU path - the DSL only generates this shape; here we hand-roll it).
     const M = struct {
         pub const config = .{ .max = 1024, .workgroup = 64 };
         pub const Buffers = extern struct { data: [1024]f32 };
@@ -1682,7 +1682,7 @@ test "Compute CPU backend runs a kernel as a plain loop" {
     // Exercise describe() here too: it's a generic method, so Zig only
     // type-checks its body when it's actually called. Invoking it on the CPU
     // backend analyzes the whole function (both backend branches) and keeps it
-    // from silently rotting — a green build otherwise wouldn't cover it.
+    // from silently rotting - a green build otherwise wouldn't cover it.
     pipe.describe();
     const out: []const f32 = pipe.readLatest(.data).?;
     try expectEqualSlices(f32, &[_]f32{ 2, 4, 6, 8, 10 }, out);
@@ -1731,7 +1731,7 @@ test "Compute CPU backend: multi-buffer gravity step (pos + vel)" {
 
 test "unboundUsedBinding flags a used-but-unbound binding (the `arr` regression shape)" {
     // The atomic grid buffer is named `arr` and used in the body, but the host
-    // layout (built by the kbuf_ scan) only carries binding 0 — so binding 1 is
+    // layout (built by the kbuf_ scan) only carries binding 0 - so binding 1 is
     // unbound. This is exactly the drift that produced Dawn's "Binding doesn't
     // exist" before the spv2wgsl naming fix; the cross-check must catch it.
     const wgsl: []const u8 =
@@ -1753,7 +1753,7 @@ test "unboundUsedBinding passes when the layout covers every used binding" {
     ;
     try expect(unboundUsedBinding(ok, &.{ 0, 1 }) == null);
     // A binding the kernel DECLARES but never references need not be in the
-    // layout (per the WebGPU "statically used" rule) — must not false-fire.
+    // layout (per the WebGPU "statically used" rule) - must not false-fire.
     const unused: []const u8 =
         \\@group(0) @binding(0) var<uniform> P: S8;
         \\@group(0) @binding(5) var<storage, read_write> kbuf_spare: array<u32>;

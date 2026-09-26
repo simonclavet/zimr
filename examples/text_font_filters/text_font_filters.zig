@@ -7,14 +7,14 @@
 //   .bilinear - smooths between texels. Softer, but degrades gracefully when the
 //               drawn size is well away from the baked size.
 //
-// The atlas is never re-baked — only the sampler changes — which is the point:
+// The atlas is never re-baked - only the sampler changes - which is the point:
 // the filter is a property of how you READ the texture, not of the glyphs.
 //
 // Controls are UI BUTTONS + a SLIDER (not keys), so the whole example is
 // testable by tapping on a phone.
 //
 // What this exercises (the engine work this drove):
-//   - `z.setTextureFilter(gl, texture_id, .point | .bilinear)` — newly added
+//   - `z.setTextureFilter(gl, texture_id, .point | .bilinear)` - newly added
 //     (raylib SetTextureFilter). Swaps the sampler and rebuilds that texture's
 //     material bind group; previously a texture's filter was fixed at creation.
 //
@@ -27,7 +27,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-// Atkinson Hyperlegible Mono — the Braille Institute's legibility font.
+// Atkinson Hyperlegible Mono - the Braille Institute's legibility font.
 // Distinct letterforms (slashed zero, unambiguous I/l/1), and a deliberate
 // break from raylib's look. Latin-only content, so its cmap is plenty:
 // ASCII + Latin-1 accented in full. (It has NO Cyrillic and almost no Greek,
@@ -109,7 +109,7 @@ fn update(f: *z.Frame, s: *State) void {
         });
     }
 
-    // The magnified specimen — this is where the filter shows. Drawn BEFORE
+    // The magnified specimen - this is where the filter shows. Drawn BEFORE
     // ui_host.render so the UI panel composites on top.
     f.gl.text(
         .{ 20, 250 },
@@ -117,7 +117,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = s.draw_size, .color = c.black, .font = &s.demo_font },
     );
 
-    // The same string AT the baked size — the reference. Both filters look
+    // The same string AT the baked size - the reference. Both filters look
     // near-identical here, which is why the magnified line above is the one to
     // judge.
     f.gl.text(

@@ -84,7 +84,7 @@ pub fn sineOut(t: f32) f32 {
 }
 
 pub fn sineInOut(t: f32) f32 {
-    // -(cos(π·t) - 1) / 2: full half-cosine, slow→fast→slow.
+    // -(cos(pi*t) - 1) / 2: full half-cosine, slow->fast->slow.
     // A HALF turn across the ease, so it starts and ends flat.
     return -(cosTurns(t * 0.5) - 1.0) / 2.0;
 }
@@ -115,7 +115,7 @@ pub fn circInOut(t: f32) f32 {
 }
 
 // ============================================================================
-// Quad (t²)
+// Quad (t^2)
 // ============================================================================
 // Simplest polynomial easing.  Cheap to compute; widely used as
 // a default "ease" for UI animations.
@@ -125,7 +125,7 @@ pub fn quadIn(t: f32) f32 {
 }
 
 pub fn quadOut(t: f32) f32 {
-    // Reflected parabola: -t·(t - 2) = 1 - (1 - t)².
+    // Reflected parabola: -t*(t - 2) = 1 - (1 - t)^2.
     return -t * (t - 2.0);
 }
 
@@ -133,15 +133,15 @@ pub fn quadInOut(t: f32) f32 {
     if (t < 0.5) {
         return 2.0 * t * t;
     }
-    // 1 - 2·(1-t)² hits 1 at t=1 with zero derivative.
+    // 1 - 2*(1-t)^2 hits 1 at t=1 with zero derivative.
     const x: f32 = 1.0 - t;
     return 1.0 - 2.0 * x * x;
 }
 
 // ============================================================================
-// Cubic (t³)
+// Cubic (t^3)
 // ============================================================================
-// Stronger ease than quad - t³ pulls the curve harder into both
+// Stronger ease than quad - t^3 pulls the curve harder into both
 // ends.  Good for "settling" motions where you want a clearly
 // non-linear feel without overshoot.
 
@@ -216,12 +216,12 @@ const back_s: f32 = 1.70158;
 const back_s_io: f32 = 1.70158 * 1.525;
 
 pub fn backIn(t: f32) f32 {
-    // (s+1)·t³ - s·t².  Goes briefly negative around t ≈ 0.15.
+    // (s+1)*t^3 - s*t^2.  Goes briefly negative around t ~ 0.15.
     return t * t * ((back_s + 1.0) * t - back_s);
 }
 
 pub fn backOut(t: f32) f32 {
-    // Reflection of backIn - overshoots past 1.0 around t ≈ 0.85
+    // Reflection of backIn - overshoots past 1.0 around t ~ 0.85
     // before settling to 1.0 at t=1.
     const x: f32 = t - 1.0;
     return x * x * ((back_s + 1.0) * x + back_s) + 1.0;
@@ -244,14 +244,14 @@ pub fn backInOut(t: f32) f32 {
 // numbers come from solving for "parabolas that touch a unit
 // height at four progressively-narrower intervals", yielding the
 // constant `n = 7.5625`.
-// Each segment is `n · x² + offset` for some local x.  The
+// Each segment is `n * x^2 + offset` for some local x.  The
 // boundary points are 1/d, 2/d, 2.5/d, where d = 2.75; these
 // are tuned so each segment's tail matches the next segment's
 // head at the boundary.  The 0.984375 = 63/64 at the final
 // segment's high point ensures the last "bounce" doesn't quite
 // reach 1.0 (mimicking energy loss in a real bounce - though it
 // does reach exactly 1.0 at t=1 because the curve's right edge
-// is `n · 0² + 1.0`).
+// is `n * 0^2 + 1.0`).
 
 pub fn bounceOut(t: f32) f32 {
     const n: f32 = 7.5625;
@@ -291,9 +291,9 @@ pub fn bounceInOut(t: f32) f32 {
 // stretched rubber band - oscillates multiple times before
 // settling, with the amplitude decaying exponentially.
 // Penner's defaults:
-//   amplitude = 1, period p = 0.3 (×1.5 for InOut to compensate
+//   amplitude = 1, period p = 0.3 (x1.5 for InOut to compensate
 //   for the half-and-half stitch).
-// The exponential decay term is `pow(2, ±10·t)` - the same
+// The exponential decay term is `pow(2, +/-10*t)` - the same
 // "snap" as expo, modulated by a sine of period p.  Endpoint
 // guards (t==0/t==1) keep the curve exact at the boundaries
 // since the formula itself is only asymptotically correct there.
@@ -414,23 +414,23 @@ test "easings: known formula values match raylib's reasings.h at t=0.5" {
     try expectApproxEqAbs(@as(f32, 0.75), quadOut(0.5), eps_endpoint);
     try expectApproxEqAbs(@as(f32, 0.125), cubicIn(0.5), eps_endpoint);
     try expectApproxEqAbs(@as(f32, 0.875), cubicOut(0.5), eps_endpoint);
-    // sineIn(0.5) = 1 - cos(π/4) = 1 - √2/2 ≈ 0.2929
+    // sineIn(0.5) = 1 - cos(pi/4) = 1 - sqrt2/2 ~ 0.2929
     try expectApproxEqAbs(@as(f32, 0.29289), sineIn(0.5), eps_loose);
-    // sineOut(0.5) = sin(π/4) = √2/2 ≈ 0.7071
+    // sineOut(0.5) = sin(pi/4) = sqrt2/2 ~ 0.7071
     try expectApproxEqAbs(@as(f32, 0.70711), sineOut(0.5), eps_loose);
-    // circOut(0.5) = sqrt(1 - 0.25) = √0.75 ≈ 0.8660
+    // circOut(0.5) = sqrt(1 - 0.25) = sqrt0.75 ~ 0.8660
     try expectApproxEqAbs(@as(f32, 0.86603), circOut(0.5), eps_loose);
 }
 
 test "easings: back functions overshoot but stay bounded" {
-    // backOut at t≈0.85 overshoots above 1.0 - verify it does
+    // backOut at t~0.85 overshoots above 1.0 - verify it does
     // overshoot but stays in [-0.2, 1.2] (well within sane
     // bounds; the actual maximum is ~1.1).
     const max_obs: f32 = backOut(0.85);
     try expect(max_obs > 1.0);
     try expect(max_obs < 1.2);
 
-    // backIn at t≈0.15 goes briefly negative - verify.
+    // backIn at t~0.15 goes briefly negative - verify.
     const min_obs: f32 = backIn(0.15);
     try expect(min_obs < 0.0);
     try expect(min_obs > -0.2);

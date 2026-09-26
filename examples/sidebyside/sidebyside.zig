@@ -9,7 +9,7 @@
 //   - A vertical splitter follows the mouse X.
 //
 // The whole point: the scene-drawing code is written ONCE as `fn(gl: anytype)`
-// and runs unchanged on both backends — raster (software) and WgpuGl (GPU) both
+// and runs unchanged on both backends - raster (software) and WgpuGl (GPU) both
 // satisfy the same renderer trait (gl_iface). Move the splitter and you're
 // looking at the exact same geometry, software on one side and hardware on the
 // other, pixel-for-pixel.
@@ -26,8 +26,8 @@ const Vec2 = zm.Vec2;
 
 // Fixed-function shader pair used by the CPU side's `ff_triangle` bridge
 // (`ffBridge` below): the immediate-mode triangles render through this
-// exact pair on `raster_shader.rasterizeTriangles` — the same shader the GPU
-// side runs — so the two halves match through one rasteriser, no drift.
+// exact pair on `raster_shader.rasterizeTriangles` - the same shader the GPU
+// side runs - so the two halves match through one rasteriser, no drift.
 const ff_vs = z.default_shapes.vs;
 const ff_fs = z.default_shapes.fs;
 const clamp = zm.clamp;
@@ -39,13 +39,13 @@ const width: u32 = 960;
 const height: u32 = 600;
 
 // The software side renders at a LOWER resolution (this is the visible point of
-// the comparison — software is cheaper at low res, hardware is crisp at full
+// the comparison - software is cheaper at low res, hardware is crisp at full
 // res). Upscaled with nearest filtering so the chunky pixels read clearly.
 const sw_w: u32 = width / 3;
 const sw_h: u32 = height / 3;
 
 const State = struct {
-    // The software rasterizer + its CPU→GPU framebuffer bridge.
+    // The software rasterizer + its CPU->GPU framebuffer bridge.
     sw: z.raster.Context,
     sw_fb: z.CpuFramebuffer,
 
@@ -78,12 +78,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
-/// Fixed-function `ff_triangle` hook (Phase 2 — one rasteriser): route
+/// Fixed-function `ff_triangle` hook (Phase 2 - one rasteriser): route
 /// each immediate-mode triangle of the CPU side through the SAME
 /// `default_shapes` pair + `raster_shader.rasterizeTriangles` the GPU side
 /// runs.  raster has already transformed the positions to clip space, so
 /// the VS is bypassed and `Out` is built directly (preserving the full
-/// vec4).  This 2D scene is untextured (a white 1×1 → `frag_color` flows
+/// vec4).  This 2D scene is untextured (a white 1x1 -> `frag_color` flows
 /// straight through) with no depth and no cull; only blend varies, and it
 /// follows the context so the alpha discs composite exactly as the
 /// fixed-function `triangleKernel` path did.
@@ -109,7 +109,7 @@ fn ffBridge(
     const connect: fn (ff_vs.Out, *ff_fs.Io) void = z.autoConnect(ff_vs.Out, ff_fs.Io);
     // This 2D scene has no depth and no cull; only blend varies (the
     // alpha discs).  Route through the shared runtime-opts core so the
-    // composite matches the fixed-function path exactly — no opts logic
+    // composite matches the fixed-function path exactly - no opts logic
     // duplicated here.
     z.raster_shader.rasterizeWithRuntimeOpts(
         ff_vs,
@@ -125,7 +125,7 @@ fn ffBridge(
     );
 }
 
-/// Tiny HSV→RGB (h,s,v in 0..1) for cheerful palette cycling.
+/// Tiny HSV->RGB (h,s,v in 0..1) for cheerful palette cycling.
 fn hsv(h: f32, s: f32, v: f32) [3]u8 {
     const i: f32 = @floor(h * 6.0);
     const f: f32 = h * 6.0 - i;
@@ -148,7 +148,7 @@ fn hsv(h: f32, s: f32, v: f32) [3]u8 {
     };
 }
 
-/// Filled circle via a triangle fan — works on any `gl: anytype`.
+/// Filled circle via a triangle fan - works on any `gl: anytype`.
 fn fillCircle(
     gl: anytype,
     cx: f32,
@@ -188,7 +188,7 @@ fn drawScene(gl: anytype, t: f32) void {
     const cx: f32 = float(width) * 0.5;
     const cy: f32 = float(height) * 0.5;
 
-    // A ring of orbiting discs, each pulsing — drawn as filled triangle fans.
+    // A ring of orbiting discs, each pulsing - drawn as filled triangle fans.
     const n_orbit: u32 = 10;
     var i: u32 = 0;
     while (i < n_orbit) : (i += 1) {
@@ -240,10 +240,10 @@ fn update(f: *z.Frame, s: *State) void {
 
     // ---- GPU SIDE: run the SAME scene on WgpuGl, full resolution ------------
     drawScene(f.gl, s.t);
-    // Commit the GPU scene NOW — before the blit binds the framebuffer texture.
+    // Commit the GPU scene NOW - before the blit binds the framebuffer texture.
     // (The shapes batch defers draws; if we let the scene stay staged until the
     // blit's bindTexture swaps the material bind group, the scene's draw would
-    // sample the framebuffer instead of its vertex colors → a black right half.)
+    // sample the framebuffer instead of its vertex colors -> a black right half.)
     f.gl.flushBeforeMaterialSwap();
 
     // Composite the software image over the LEFT of the divider.
@@ -265,7 +265,7 @@ fn update(f: *z.Frame, s: *State) void {
 }
 
 // ---- The shared scene: written ONCE, runs on raster AND WgpuGl ---------------
-// `gl: anytype` — the only requirement is that gl satisfies the renderer trait.
+// `gl: anytype` - the only requirement is that gl satisfies the renderer trait.
 // A 2D scene (no depth buffer needed): a field of orbiting, pulsing rings +
 // a rotating polygon. Identical geometry on both backends; across the splitter
 // you see the SAME shapes, software-rasterized (chunky) on the left and
@@ -281,7 +281,7 @@ pub const app: z.AppSpec(State) = .{
             .scale_mode = .fit,
             // No window depth attachment: the WgpuGl path draws everything
             // through the 2D "shapes" pipeline, which has no depth-stencil state
-            // — a depth attachment on the pass would mismatch it (GPU
+            // - a depth attachment on the pass would mismatch it (GPU
             // validation error). The cube's gl.enable(.depth_test) is a no-op on
             // the GPU side; faces are drawn in array order. (A future depth-aware
             // WgpuGl 3D path can re-enable this.)

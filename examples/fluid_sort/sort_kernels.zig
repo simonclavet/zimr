@@ -1,10 +1,10 @@
-//! sort_kernels.zig — the GPU fluid with a SPATIAL COUNTING SORT (t1178).
+//! sort_kernels.zig - the GPU fluid with a SPATIAL COUNTING SORT (t1178).
 //! Same Clavet double-density-relaxation SPH as fluid_gpu, but the
 //! neighbour grid is a counting sort instead of per-cell slot arrays:
-//!   clearGrid → countGrid → prefixSum → scatter → copyback
+//!   clearGrid -> countGrid -> prefixSum -> scatter -> copyback
 //! reorders pos/vel/prev into CELL ORDER each frame, so the density / force /
 //! viscosity neighbour loops read CONTIGUOUS memory (b_pos[cell_start[c]..[c+1]])
-//! and coalesce across the warp — the win the random b_pos[grid_data[..]] gather
+//! and coalesce across the warp - the win the random b_pos[grid_data[..]] gather
 //! could never give. There is no max_per_cell cap either (ranges are exact), so
 //! dense regions never drop neighbours. Particles are indistinguishable, so the
 //! sorted order simply BECOMES the canonical order for the next frame (no
@@ -12,9 +12,9 @@
 //! zeroes it after reading the counts into cell_start).
 //!
 //! Per-substep order:
-//!   gravityMouse → viscosity (STALE sort) → predict
-//!   → clearGrid → countGrid → prefixSum → scatter → copyback (FRESH sort)
-//!   → density → force → applyAndFinalize
+//!   gravityMouse -> viscosity (STALE sort) -> predict
+//!   -> clearGrid -> countGrid -> prefixSum -> scatter -> copyback (FRESH sort)
+//!   -> density -> force -> applyAndFinalize
 const k = @import("kompute");
 const zm = @import("zm");
 const float = zm.float;
@@ -30,7 +30,7 @@ const expectEqual = std.testing.expectEqual;
 
 /// MATCHED TO `fluid_gpu` so the two are directly comparable: same particle count, same
 /// interaction radius, same domain, same spawn, same physics constants. The ONLY thing
-/// that differs between the demos is the neighbour-finding strategy — a counting sort that
+/// that differs between the demos is the neighbour-finding strategy - a counting sort that
 /// reorders particles into cell order (here) versus per-cell bucket lists (fluid_gpu).
 pub const num_particles: u32 = 20000;
 pub const domain_w: f32 = 900.0;
@@ -56,7 +56,7 @@ pub const Buffers = struct {
     prev: [num_particles]Vec2,
     vel: [num_particles]Vec2,
     delta: [num_particles]Vec2,
-    /// (ρ, ρ_near) per particle — also read by the renderer for colour.
+    /// (rho, rho_near) per particle - also read by the renderer for colour.
     density: [num_particles]Vec2,
     /// Per-cell particle count (atomic). countGrid accumulates it; prefixSum
     /// consumes it into cell_start and ZEROES it so scatter can reuse it as the
@@ -65,12 +65,12 @@ pub const Buffers = struct {
     /// Exclusive prefix sum of grid_counts, +1 sentinel: cell c's particles
     /// occupy sorted slots [cell_start[c], cell_start[c+1]); cell_start[cells]=N.
     cell_start: [grid_cells + 1]u32,
-    /// Scatter scratch — scatter writes the cell-sorted pos/vel/prev here, then
+    /// Scatter scratch - scatter writes the cell-sorted pos/vel/prev here, then
     /// copyback copies them back so pos/vel/prev are canonical (= sorted).
     /// ONE scratch buffer for the counting sort's reorder, holding pos, vel and prev
     /// back-to-back: `[0..N)` = pos2, `[N..2N)` = vel2, `[2N..3N)` = prev2.
     ///
-    /// This used to be THREE separate buffers, which put the module at TEN — and WebGPU
+    /// This used to be THREE separate buffers, which put the module at TEN - and WebGPU
     /// guarantees only EIGHT storage buffers per shader stage. Bindings past the eighth
     /// silently do not bind: the writes vanish with no error and the kernel runs on happily,
     /// which is exactly how this fluid came to fill its box while its twin `fluid_gpu`
@@ -83,7 +83,7 @@ pub const Buffers = struct {
     scratch: [3 * num_particles + 16]Vec2,
 };
 
-/// Scalar-field uniform (array pads break uniform layout). 16 × 4B = 64B.
+/// Scalar-field uniform (array pads break uniform layout). 16 x 4B = 64B.
 pub const Params = extern struct {
     count: u32,
     dt: f32,
@@ -109,7 +109,7 @@ pub const Params = extern struct {
     wall_normal_damp: f32 = 0,
     wall_tangent_damp: f32 = 0,
     // std140 padding: 19 scalar fields = 76 B; a WGSL uniform block rounds its
-    // size up to a 16-B multiple → 80 B. One trailing pad gets us there. (The
+    // size up to a 16-B multiple -> 80 B. One trailing pad gets us there. (The
     // Compute(M) `@sizeOf(Params) % 16` comptime check enforces this.)
     _pad0: f32 = 0,
 };
@@ -146,7 +146,7 @@ pub fn clearGrid(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid 
 }
 
 /// Per PARTICLE: count this particle into its cell (the counting pass). The
-/// atomicAdd result is unused — we only want the final per-cell totals.
+/// atomicAdd result is unused - we only want the final per-cell totals.
 pub fn countGrid(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
@@ -159,7 +159,7 @@ pub fn countGrid(c: k.Ctx(@This())) void {
 /// SINGLE invocation (dispatch count = 1): serial exclusive prefix sum of
 /// grid_counts into cell_start, zeroing grid_counts as we go so scatter can
 /// reuse it as the per-cell write cursor. cell count (~1.3k) is tiny next to N.
-/// ⚠️ BROKEN ON GPU — spv2wgsl mis-structurizes this loop. See `src/notes/claude.md`.
+/// !! BROKEN ON GPU - spv2wgsl mis-structurizes this loop. See `src/notes/claude.md`.
 ///
 /// This is the ONLY kernel in the tree with a real runtime loop (every other neighbour
 /// walk is an `inline for` and unrolls), and it is the only one that trips the bug.
@@ -175,7 +175,7 @@ pub fn countGrid(c: k.Ctx(@This())) void {
 /// those zeros back into `pos`. That is the whole "fluid stuck in the corner" bug.
 ///
 /// Neither `@setRuntimeSafety(false)` nor changing the loop form (while-with-continue-
-/// expression vs manual increment) changes it — both still emit 2 unassigned phis. The
+/// expression vs manual increment) changes it - both still emit 2 unassigned phis. The
 /// fix belongs in spv2wgsl's phi/default-exit handling (`applyDefaultToShortestExit`).
 pub fn prefixSum(c: k.Ctx(@This())) void {
     if (c.id != 0) {
@@ -210,7 +210,7 @@ pub fn scatter(c: k.Ctx(@This())) void {
 }
 
 /// Per PARTICLE: copy the cell-sorted scratch back so pos/vel/prev ARE the
-/// sorted order — the canonical arrays for the rest of this frame and the next.
+/// sorted order - the canonical arrays for the rest of this frame and the next.
 pub fn copyback(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
@@ -244,10 +244,10 @@ pub fn gravityMouse(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-flu
 
 /// Per particle: collision-style viscosity (t1178). Acts ONLY on approaching
 /// pairs (closing speed u > 0); the impulse is QUADRATIC in u, then CLAMPED so
-/// it can at most bring the pair's radial motion to rest (u' = u − imp ≥ 0):
-/// never a bounce, strictly dissipative, ½ each. Weight 1 inside h/2, linear to
+/// it can at most bring the pair's radial motion to rest (u' = u - imp >= 0):
+/// never a bounce, strictly dissipative, 1/2 each. Weight 1 inside h/2, linear to
 /// 0 at h. Reads the STALE sort (last frame's cell_start + the still-sorted
-/// pos) — it runs before predict and the reorder.
+/// pos) - it runs before predict and the reorder.
 pub fn viscosity(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
     const i: u32 = c.id;
     if (i >= c.params.count) {
@@ -273,7 +273,7 @@ pub fn viscosity(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid 
             }
             const cell: u32 = unx + uny * c.params.n_cols;
             const start: u32 = b_cell_start[cell];
-            // Capped to match `fluid_gpu` — see the note in `density`.
+            // Capped to match `fluid_gpu` - see the note in `density`.
             const end_raw: u32 = b_cell_start[cell + 1];
             const end: u32 = if (end_raw - start > max_per_cell) start + max_per_cell else end_raw;
             var kk: u32 = start;
@@ -302,7 +302,7 @@ pub fn viscosity(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid 
     b_vel[i] = my_vel;
 }
 
-/// Per particle: save prev, advance by vel·dt (the prediction half of Clavet's
+/// Per particle: save prev, advance by vel*dt (the prediction half of Clavet's
 /// prediction-relaxation).
 pub fn predict(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
     const i: u32 = c.id;
@@ -314,7 +314,7 @@ pub fn predict(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid va
     b_pos[i] = p + b_vel[i] * splat2(c.params.dt);
 }
 
-/// Per particle: ρ = Σ(1−q)², ρ_near = Σ(1−q)³ over the 3×3 neighbourhood,
+/// Per particle: rho = sum(1-q)^2, rho_near = sum(1-q)^3 over the 3x3 neighbourhood,
 /// iterating each cell's CONTIGUOUS sorted range [cell_start[c], cell_start[c+1]).
 pub fn density(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
     const i: u32 = c.id;
@@ -344,7 +344,7 @@ pub fn density(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid va
             const start: u32 = b_cell_start[cell];
             // CAP THE CELL, exactly as `fluid_gpu` does. Its bucket lists hold at most
             // `max_per_cell` indices and silently drop the overflow, so it never sees more
-            // than 64 neighbours from one cell. This walk used to read the WHOLE range —
+            // than 64 neighbours from one cell. This walk used to read the WHOLE range -
             // and with cellmax running 74..97 that is ~30 extra neighbours per dense cell
             // that the twin never counts. rho comes out systematically higher from the SAME
             // configuration, and `rest_density = 15.39` was tuned against the capped number.
@@ -402,7 +402,7 @@ pub fn force(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid vari
             }
             const cell: u32 = unx + uny * c.params.n_cols;
             const start: u32 = b_cell_start[cell];
-            // Capped to match `fluid_gpu` — see the note in `density`.
+            // Capped to match `fluid_gpu` - see the note in `density`.
             const end_raw: u32 = b_cell_start[cell + 1];
             const end: u32 = if (end_raw - start > max_per_cell) start + max_per_cell else end_raw;
             var kk: u32 = start;
@@ -421,13 +421,13 @@ pub fn force(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid vari
                     dir = rel * splat2(1.0 / dist);
                 } else {
                     // Co-location fallback (particles at ~the same point). THE BUG
-                    // this replaces: a FIXED ±x axis whose sign was `i < kk`. But i,
-                    // kk are sorted SLOTS, and the sort key is cell = cx + cy·n_cols,
+                    // this replaces: a FIXED +/-x axis whose sign was `i < kk`. But i,
+                    // kk are sorted SLOTS, and the sort key is cell = cx + cy*n_cols,
                     // so slot grows with ROW (cy). For a vertically-stacked
-                    // coincident pair the lower row always has the lower slot →
-                    // always pushed −x, upper row +x. That is a systematic shear
-                    // (vₓ grows with y) which funnels particles into the (0,0) and
-                    // (W,H) corners — the bottom-left / top-right ejections. Fix:
+                    // coincident pair the lower row always has the lower slot ->
+                    // always pushed -x, upper row +x. That is a systematic shear
+                    // (v_x grows with y) which funnels particles into the (0,0) and
+                    // (W,H) corners - the bottom-left / top-right ejections. Fix:
                     // pick a pair-CONSISTENT pseudo-random direction (seed is
                     // symmetric in i,kk), signed by `i < kk` so it stays
                     // antisymmetric (momentum-conserving) but has NO axis bias.
@@ -446,12 +446,12 @@ pub fn force(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid vari
             }
         }
     }
-    // NO CORRECTION CLAMP — `fluid_gpu` has none, and this is meant to be its twin.
+    // NO CORRECTION CLAMP - `fluid_gpu` has none, and this is meant to be its twin.
     //
     // There WAS one here (|corr| bounded to h/2), added to stop a rho_near spike in a
     // corner flinging a particle across the domain. But it also silently changes the
     // pressure solve wherever the correction is large, which is exactly where the fluid
-    // is deciding how to compress — and with `h` raised from 10 to 22 the clamp bites in
+    // is deciding how to compress - and with `h` raised from 10 to 22 the clamp bites in
     // places it never used to. Two demos cannot be compared while one of them quietly
     // truncates its own pressure. The wall clamp and the 40 px/s speed cap in
     // `applyAndFinalize` already bound the runaway this was guarding against.
@@ -460,7 +460,7 @@ pub fn force(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid vari
 
 /// Per particle: derive velocity from the PHYSICS step, then resolve the domain
 /// boundary. Velocity is taken BEFORE any boundary position edit (so clamps/pushes
-/// can't pump energy in — the corner-jet fix), then a wall contact removes a
+/// can't pump energy in - the corner-jet fix), then a wall contact removes a
 /// tunable proportion of the normal and tangential velocity (diagnostic knobs).
 pub fn applyAndFinalize(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted-fluid variant, separate binary
     const i: u32 = c.id;
@@ -473,18 +473,18 @@ pub fn applyAndFinalize(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted
     // POSITION FIRST, VELOCITY FROM THE FINAL POSITION.
     //
     // This is position-based dynamics: the walls are CONSTRAINTS, so the velocity has to be
-    // derived from the position that survives them — `v = (p_final - p_prev) / dt`. It used
+    // derived from the position that survives them - `v = (p_final - p_prev) / dt`. It used
     // to be taken from `p_phys`, BEFORE the wall band and the clamp. That made the wall band
     // a free teleport: it shoved a particle inward every substep and left its velocity
     // untouched, so the particle paid nothing for the displacement. An energy pump running
     // along all four walls. The fluid inflated until it filled the box (rho 11.5 against a
-    // rest density of 15.39) and flung particles clean through the boundary — `cellmax 97`
+    // rest density of 15.39) and flung particles clean through the boundary - `cellmax 97`
     // against an average of 16.7, because `cellOf` clamps every out-of-bounds particle into
     // cell 0. `fluid_gpu`, which computes v after its clamp, showed none of it (cap 0).
     var p: Vec2 = b_pos[i] + b_delta[i];
     // (Re-added) soft inward repulsion over a margin band. POSITION-ONLY: it
-    // edits p, never v — and since predict makes next frame's b_pos = b_prev +
-    // vel·dt, the b_prev cancels in the velocity formula, so this can never pump.
+    // edits p, never v - and since predict makes next frame's b_pos = b_prev +
+    // vel*dt, the b_prev cancels in the velocity formula, so this can never pump.
     const band: f32 = c.params.h;
     const push: f32 = 0.25;
     if (p[0] < band) {
@@ -497,7 +497,7 @@ pub fn applyAndFinalize(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted
     } else if (p[1] > c.params.dom_h - band) {
         p[1] -= (p[1] - (c.params.dom_h - band)) * push;
     }
-    // Hard clamp + per-axis jitter (different x/y bases → 2D scatter, not a
+    // Hard clamp + per-axis jitter (different x/y bases -> 2D scatter, not a
     // diagonal line). Position-only.
     const margin: f32 = 1.5;
     const jx: f32 = float(i % 7) * 0.4;
@@ -521,7 +521,7 @@ pub fn applyAndFinalize(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted
         p[1] = hi_y;
     }
     // Wall-contact damping (the experiment): remove a proportion of the into-wall
-    // NORMAL velocity and the along-wall TANGENTIAL velocity. keep = 1 − damp.
+    // NORMAL velocity and the along-wall TANGENTIAL velocity. keep = 1 - damp.
     // The constraint has been applied; NOW the velocity follows from the motion the particle
     // actually made. A particle stopped by a wall gets a small v here by construction, so
     // the explicit damping below only shapes what the constraint already resolved.
@@ -564,7 +564,7 @@ pub fn applyAndFinalize(c: k.Ctx(@This())) void { // lint:off dup-pub-fn: sorted
 /// order. This single list drives BOTH sides of the dual-shape build:
 ///   - GPU: `installKernels(@This())` (below) exports one SPIR-V entry per name.
 ///   - host: `fluid_sort.zig` loops this list to `@embedFile` each kernel's
-///     generated WGSL and hand it to `Compute(fk).initGpu` — no hand-kept array.
+///     generated WGSL and hand it to `Compute(fk).initGpu` - no hand-kept array.
 /// So a typo or a missing kernel surfaces as a compile error (a `@embedFile` of
 /// a `<name>_wgsl` module the build never generated), never a silent runtime
 /// "kernel not registered". Add a kernel = add its fn above + its name here.
@@ -589,7 +589,7 @@ pub const kernels = [_][:0]const u8{
 /// ECHO THE UNIFORM BACK OUT, exactly as the shader reads it.
 ///
 /// Only THREE of the 20 Params fields have ever been verified to arrive (`count`, `n_cols`,
-/// `n_rows`) — and one of those was silently arriving as ZERO for who knows how long, from a
+/// `n_rows`) - and one of those was silently arriving as ZERO for who knows how long, from a
 /// whole-struct copy out of the uniform address space that dropped a member. Nothing has
 /// ever checked the other seventeen. A single wrong `h`, `r0` or `dt` would produce exactly
 /// what we are looking at: a fluid whose kernels are all provably correct and which still
@@ -616,10 +616,10 @@ comptime {
 }
 
 // CPU oracle for the counting sort. The CPU twin runs the REAL @atomicRmw, so
-// this verifies the whole sort pipeline (count → prefix → scatter → copyback)
+// this verifies the whole sort pipeline (count -> prefix -> scatter -> copyback)
 // independent of the GPU: every particle must land in its own cell's contiguous
 // range, the ranges must tile [0, N), and density computed over the sorted grid
-// must match a brute-force O(N²) density (the 3×3 of h-sized cells contains
+// must match a brute-force O(N^2) density (the 3x3 of h-sized cells contains
 // every neighbour within h).
 test "counting sort: every particle in its cell range; density matches brute force" {
     const N: u32 = 2000;

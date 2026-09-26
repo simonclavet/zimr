@@ -1,4 +1,4 @@
-//! textures_mouse_painting — port of raylib [textures] example.
+//! textures_mouse_painting - port of raylib [textures] example.
 //! Paint onto a persistent render-texture canvas with the mouse and pick from a
 //! color palette. The canvas ACCUMULATES: the paint pass reopens it with a null
 //! clear (LOAD), so strokes build up frame to frame. Offscreen-first: the paint

@@ -56,7 +56,7 @@ test "leak: gen/full-transform-chain/free - 25 iterations" {
     const ta: Allocator = std.testing.allocator;
     var i: usize = 0;
     while (i < 25) : (i += 1) {
-        // Build a 32×32 image, run it through 5 different transforms,
+        // Build a 32x32 image, run it through 5 different transforms,
         // then free.  Any errdefer or freeImageData mismatch leaks.
         var img: Image = try image.genImageColor(ta, 32, 32, .{ .r = 50, .g = 100, .b = 150, .a = 255 });
         try image.imageResize(ta, &img, 64, 64);
@@ -139,7 +139,7 @@ test "leak: gen/free mesh - 25 iterations across mesh types" {
     // genMesh* internally calls uploadMesh which needs GPU.  On host
     // uploadMesh's wasm_fwd stubs no-op, so the upload doesn't actually
     // happen but the CPU-side per-attribute arrays are allocated.
-    // unloadMesh frees those CPU arrays.  This proves the gen→unload
+    // unloadMesh frees those CPU arrays.  This proves the gen->unload
     // pair is balanced.
     var i: usize = 0;
     while (i < 25) : (i += 1) {
@@ -149,7 +149,7 @@ test "leak: gen/free mesh - 25 iterations across mesh types" {
         const sphere: types.Mesh = try draw3d.genMeshSphere(ta, 0.5, 8, 8);
         draw3d.unloadMesh(ta, sphere);
 
-        // genMeshTangents allocates a 4×vc float array and stores
+        // genMeshTangents allocates a 4xvc float array and stores
         // it on mesh.tangents.  unloadMesh must free it via the
         // same allocator.
         var sphere_with_tangents: types.Mesh = try draw3d.genMeshSphere(ta, 0.5, 8, 8);

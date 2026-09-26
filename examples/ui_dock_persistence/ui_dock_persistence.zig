@@ -43,7 +43,7 @@ const State = struct {
 
     // Layout-build gate.  Set to true after the first successful
     // dockBuilder pass.  Reset when the user clicks "Clear layout
-    // and restart" — next frame rebuilds defaults from scratch.
+    // and restart" - next frame rebuilds defaults from scratch.
     layout_built: bool = false,
     root: ui.Id = 0,
 
@@ -62,7 +62,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{ .ui_host = z.UiHost.init(gpa, font), .font = font };
 
     // The key under which our state is persisted.  The JS layer
-    // adds a "zimr_" prefix → localStorage key becomes
+    // adds a "zimr_" prefix -> localStorage key becomes
     // "zimr_dock_persistence_demo".
     s.ui_host.ctx.persistence_key = "dock_persistence_demo";
 }

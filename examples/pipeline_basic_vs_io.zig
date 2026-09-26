@@ -1,8 +1,8 @@
-//! examples/pipeline_basic_vs_io.zig — typed interface for the pipeline_basic
+//! examples/pipeline_basic_vs_io.zig - typed interface for the pipeline_basic
 //! vertex shader. Companion to `pipeline_basic_vs.zig`.
 //!
 //! The vertex layout is DECLARED here as typed `Attributes`; the example's
-//! vertex buffer mirrors it. No Ubo, no Samplers — the purest geometry shape.
+//! vertex buffer mirrors it. No Ubo, no Samplers - the purest geometry shape.
 //! `Outputs` must match `pipeline_basic_fs_io.Inputs` field-for-field.
 
 const zm = @import("zm");

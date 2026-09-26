@@ -1,4 +1,4 @@
-//! dashed_line — a dashed line whose endpoint follows the pointer (drag to aim; when
+//! dashed_line - a dashed line whose endpoint follows the pointer (drag to aim; when
 //! idle the endpoint orbits so the demo stays alive). The dash and gap lengths breathe on
 //! sines so the dashing is visibly parametric, and a tap cycles the line colour (it also
 //! auto-advances). A translucent panel reads back the live dash/space values. Ported from
@@ -35,7 +35,7 @@ const State = struct {
     end: Vec2 = .{ 0, 0 },
 };
 
-/// Walk a→b in dash+gap periods, drawing one thick segment per period. The final dash is
+/// Walk a->b in dash+gap periods, drawing one thick segment per period. The final dash is
 /// clamped to the segment end so the line never overshoots.
 fn drawDashedLine(
     gl: *z.WgpuGl,

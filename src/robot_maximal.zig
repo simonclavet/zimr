@@ -1,31 +1,32 @@
-//! robot_maximal.zig — the same robot, rebuilt in maximal coordinates.
+//! robot_maximal.zig - the same robot, rebuilt in maximal coordinates.
 //!
 //! `robot.zig` simulates an articulated body in REDUCED coordinates: the joint angles are the
 //! state, so a joint cannot come apart. This file takes the very same built `rbt.Model` and
-//! rebuilds it as `zimrphysics` rigid bodies held together by joint constraints — the way a game
-//! engine builds a ragdoll — so the two can be compared on ONE model. It is Stage 0 of
+//! rebuilds it as `zimrphysics` rigid bodies held together by joint constraints - the way a game
+//! engine builds a ragdoll - so the two can be compared on ONE model. It is Stage 0 of
 //! `src/notes/ragdoll_compare_plan.md`, and the tests at the bottom are that stage's gate.
 //!
-//! ── WHAT THE CONVERSION DOES ──
+//! -- WHAT THE CONVERSION DOES --
 //!
-//!   * One rigid body per JOINTED robot body. A body with no joint — the humanoid's head and
-//!     hands — is welded, so its geoms join its nearest jointed ancestor's compound.
+//!   * One rigid body per JOINTED robot body. A body with no joint - the humanoid's head and
+//!     hands - is welded, so its geoms join its nearest jointed ancestor's compound.
 //!   * Each body's shape is a compound of its geoms, posed as they are at `qpos0`, at density
 //!     1000: MJCF's inertia-from-geoms default. Mass, centre of mass and inertia therefore come
-//!     out of the same geometry on both sides — which the first test checks rather than trusts.
+//!     out of the same geometry on both sides - which the first test checks rather than trusts.
 //!   * One joint per jointed body below the root, chosen by how many hinges it carries: one
 //!     hinge is a limited revolute joint, which is exact; two or three become one swing-twist
 //!     joint, which is not (see `Variant.game`).
 //!
-//! ── WHAT IT CANNOT EXPRESS, STATED PLAINLY ──
+//! -- WHAT IT CANNOT EXPRESS, STATED PLAINLY --
 //!
-//! Armature, tendons, and joint stiffness and damping have no maximal counterpart here — the
+//! Armature, tendons, and joint stiffness and damping have no maximal counterpart here - the
 //! plan's "limp" baseline removes them from the reduced side too (`limpReduced`). Hinges that
 //! stack on one body with DIFFERENT pivots, like the humanoid's ankles 4 cm apart, become one
 //! pivot at the first hinge's: the massless link between them is exactly what maximal
 //! coordinates cannot hold.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
 const zm = @import("zm");
 const rbt = @import("robot.zig");
@@ -58,7 +59,7 @@ pub const density: f32 = 1000.0;
 pub const no_part: u32 = zm.maxInt(u32);
 
 pub const Variant = enum {
-    /// Swing-twist wherever a body carries two or three hinges — how game ragdolls are built
+    /// Swing-twist wherever a body carries two or three hinges - how game ragdolls are built
     /// (Jolt's `RagdollSettings`). The first hinge is the twist, with its exact range; the second
     /// is the plane swing and a third the normal swing, each a SYMMETRIC half-cone wide enough
     /// for that hinge's range, and a missing third is locked. MJCF's hinges compose in sequence,
@@ -73,7 +74,7 @@ pub const TwistHinge = enum {
     /// swing-twist decomposition puts its twist, so its exact range ends up limiting the wrong angle.
     first,
     /// The last hinge MJCF lists. MJCF composes a body's hinges in order, R = R0 R1 R2, so the
-    /// last is applied in the child's own frame — which is where a swing-twist decomposition puts
+    /// last is applied in the child's own frame - which is where a swing-twist decomposition puts
     /// its twist (q = swing * twist). The swings are then the earlier hinges, and the hip's
     /// -150..20 flexion is a twist with its exact range instead of a 150 degree swing cone.
     last,
@@ -83,14 +84,14 @@ pub const Options = struct {
     variant: Variant = .game,
     twist_hinge: TwistHinge = .last,
     friction: f32 = 0.7,
-    /// Every part shares this group, so the ragdoll does not collide with itself — the reduced
+    /// Every part shares this group, so the ragdoll does not collide with itself - the reduced
     /// side's `Bridge` does the same, one group per root. Zero turns self-collision on.
     group_id: u32 = 1,
     /// zimrphysics' own defaults are 0.05 each. robot.zig has no body damping, so neither does
     /// the fair comparison.
     linear_damping: f32 = 0.0,
     angular_damping: f32 = 0.0,
-    /// zimrphysics caps spin at 0.25·π·60 ≈ 47 rad/s by default; robot.zig's cap is its
+    /// zimrphysics caps spin at 0.25*pi*60 ~ 47 rad/s by default; robot.zig's cap is its
     /// `max_velocity`, 100.
     max_angular_speed: f32 = 100.0,
     /// robot.zig's dynamics include every gyroscopic term; zimrphysics' default leaves them out.
@@ -127,7 +128,7 @@ pub const Joint = struct {
 
 /// A joint drive: a spring toward a target, stated as a FREQUENCY. zimrphysics' motors solve it
 /// inside the constraint solver, and a frequency-stated spring behaves the same whatever the
-/// limb weighs — a hand and a thigh settle equally fast, with no per-joint gain tuning.
+/// limb weighs - a hand and a thigh settle equally fast, with no per-joint gain tuning.
 pub const Drive = struct {
     frequency: f32,
     damping: f32 = 1.0,
@@ -138,14 +139,14 @@ pub const Drive = struct {
 };
 
 /// The acceleration a critically damped (for `damping` 1) spring of `frequency` Hz asks of one
-/// joint over a step of `dt`, evaluated IMPLICITLY — at the end of the step.
+/// joint over a step of `dt`, evaluated IMPLICITLY - at the end of the step.
 ///
-/// ★★★ WHY IMPLICIT. The explicit spring a = w²e - 2ζwv, stepped by semi-implicit Euler, is
-/// stable only while h² + 4ζh < 4 with h = w·dt: for ζ = 1, h < 2√2 - 2 ≈ 0.83, which at 60 Hz
-/// caps the spring at w ≈ 50 rad/s — 7.9 Hz. Asking for the spring at the END of the step,
-///     a = w²(e - dt·v - dt²·a) - 2ζw(v + dt·a),
+/// *** WHY IMPLICIT. The explicit spring a = w^2e - 2 zeta wv, stepped by semi-implicit Euler, is
+/// stable only while h^2 + 4 zeta h < 4 with h = w*dt: for zeta = 1, h < 2sqrt2 - 2 ~ 0.83, which at 60 Hz
+/// caps the spring at w ~ 50 rad/s - 7.9 Hz. Asking for the spring at the END of the step,
+///     a = w^2(e - dt*v - dt^2*a) - 2 zeta w(v + dt*a),
 /// and solving for a gives the line below: backward Euler, stable for EVERY frequency. Stiffness
-/// then degrades gracefully toward "reach the target in a step or two" instead of blowing up —
+/// then degrades gracefully toward "reach the target in a step or two" instead of blowing up -
 /// the same idea as Tan et al.'s stable PD, and the reason Jolt's frequency-stated springs
 /// (zimrphysics' motors) are stable at any setting. Feed the result to inverse dynamics.
 pub fn stableSpringAccel(
@@ -164,7 +165,7 @@ pub fn stableSpringAccel(
 /// The same spring, damped toward a MOVING target's velocity instead of zero - velocity feedforward.
 ///
 /// Ask for the end-of-step spring as above, but let the damping act on the velocity RELATIVE to the
-/// target's: `a = w²(e - dt·v - dt²·a) - 2ζw(v + dt·a - target_vel)`. The position part is unchanged -
+/// target's: `a = w^2(e - dt*v - dt^2*a) - 2 zeta w(v + dt*a - target_vel)`. The position part is unchanged -
 /// `err` already points at where the target will BE at the end of the step, so the body's own motion is all
 /// that needs predicting - and solving gives the line below. With `target_vel` zero it is
 /// `stableSpringAccel` exactly. Why it matters: critically damped at 20 Hz, the zero-velocity spring keeps
@@ -185,15 +186,15 @@ pub fn stableSpringAccelToward(
 }
 
 /// Joint torques that give a FLOATING-base model the joint accelerations `accel` asks for
-/// (root entries ignored), with the root free to respond — floating-base inverse dynamics.
+/// (root entries ignored), with the root free to respond - floating-base inverse dynamics.
 ///
-/// ★★★ WHY NOT JUST THE JOINT ROWS OF M a + c. Those assume the root does not accelerate: they
-/// are fixed-base torques. On a free body the root DOES accelerate — every joint torque pushes
-/// back on it — and applying fixed-base torques to it threw the falling humanoid off at the
+/// *** WHY NOT JUST THE JOINT ROWS OF M a + c. Those assume the root does not accelerate: they
+/// are fixed-base torques. On a free body the root DOES accelerate - every joint torque pushes
+/// back on it - and applying fixed-base torques to it threw the falling humanoid off at the
 /// velocity cap at every frequency tried. The root has no actuator, so its rows must be zero:
 ///     M_rr a_r + M_rj a_j + c_r = 0   ->   a_r = -M_rr^-1 (c_r + M_rj a_j)
-/// and the torques are the joint rows of M a + c with that a_r. Contacts are left out — they
-/// are unknown until the step solves them — so this is exact in flight and an approximation
+/// and the torques are the joint rows of M a + c with that a_r. Contacts are left out - they
+/// are unknown until the step solves them - so this is exact in flight and an approximation
 /// in contact. `d` must be forward-current with `rbt.biasForce` done; the root must be joint 0,
 /// a free joint (6 DOFs from 0). `dense` holds nv*nv, `full` nv, and `out` receives nv torques.
 pub fn floatingBaseTorques(
@@ -294,7 +295,7 @@ pub const Ragdoll = struct {
         return self.handles[part].index();
     }
 
-    /// The world pose of a part's robot-body frame — what `rbt.Data.body_xpos`/`body_xrot`
+    /// The world pose of a part's robot-body frame - what `rbt.Data.body_xpos`/`body_xrot`
     /// would say for the same body.
     pub fn bodyFrame(
         self: *const Ragdoll,
@@ -377,7 +378,7 @@ pub const Ragdoll = struct {
     /// Pose the ragdoll like the reduced model's `d`, at rest: every part takes its robot body's
     /// ROTATION, and its position follows down the tree through the maximal pivots.
     ///
-    /// ★★ POSITIONS BY MAXIMAL KINEMATICS, NOT COPIED. Copying each body's reduced position put
+    /// ** POSITIONS BY MAXIMAL KINEMATICS, NOT COPIED. Copying each body's reduced position put
     /// the feet where the ankles' two pivots put them, 2 cm from where the one maximal pivot can;
     /// the solver's first step then yanked that gap shut through the whole leg, up to 0.37 rad
     /// at every leg joint at once. Placed this way every joint starts exactly closed, and the
@@ -439,7 +440,7 @@ pub const Ragdoll = struct {
         return weighted / splat(total);
     }
 
-    /// Fastest linear or angular speed of any part — the "has it come to rest" number.
+    /// Fastest linear or angular speed of any part - the "has it come to rest" number.
     pub fn peakSpeed(self: *const Ragdoll, world: *const zimrphysics.World) f32 {
         var fastest: f32 = 0.0;
         for (0..self.partCount()) |part| {
@@ -453,7 +454,7 @@ pub const Ragdoll = struct {
 
 /// Rebuild `m` in `world` as rigid bodies and joints, posed as `d` holds (`d` current).
 ///
-/// ── ★★★ ANY POSE: THE RAGDOLL IS MADE AT qpos0, THEN POSED ──
+/// -- *** ANY POSE: THE RAGDOLL IS MADE AT qpos0, THEN POSED --
 ///
 /// A zimrphysics joint measures from its orientation AT CREATION: a revolute joint's zero angle is
 /// the pose it was built in, and so are a swing-twist joint's frames - while `driveToPose` hands a
@@ -492,7 +493,7 @@ fn buildAtRest(
     const at: *const rbt.Data = &rest;
     const body_count: usize = m.nbody;
 
-    // ── Which robot bodies get a part: every body carrying a joint. ──
+    // -- Which robot bodies get a part: every body carrying a joint. --
     const jointed: []bool = try gpa.alloc(bool, body_count);
     defer gpa.free(jointed);
     @memset(jointed, false);
@@ -534,7 +535,7 @@ fn buildAtRest(
     const com_local: []Vec = try gpa.alloc(Vec, part_count);
     errdefer gpa.free(com_local);
 
-    // ── One compound per part, from every geom of the bodies that make it up. ──
+    // -- One compound per part, from every geom of the bodies that make it up. --
     var children: std.ArrayList(zimrphysics.CompoundChild) = .empty;
     defer children.deinit(gpa);
     for (0..part_count) |part| {
@@ -585,7 +586,7 @@ fn buildAtRest(
         });
     }
 
-    // ── One joint per part below the root, from the hinges its robot body carries. ──
+    // -- One joint per part below the root, from the hinges its robot body carries. --
     var joint_list: std.ArrayList(Joint) = .empty;
     defer joint_list.deinit(gpa);
     for (0..part_count) |part| {
@@ -661,7 +662,7 @@ fn buildAtRest(
                         .twist_axis = rotate(child_rot, m.jnt_axis[twist]),
                         .plane_axis = rotate(child_rot, m.jnt_axis[plane]),
                         .swing_type = .pyramid,
-                        // ★ Jolt's cones bound the swing WITHIN the plane each names, so the cone for
+                        // * Jolt's cones bound the swing WITHIN the plane each names, so the cone for
                         // rotation ABOUT the plane axis is `normal_half_cone`, and about the normal
                         // axis `plane_half_cone`. Reading the names the other way round locked every
                         // 2-hinge body's first hinge and gave the hip the wrong cone per axis.
@@ -767,7 +768,7 @@ const Humanoid = struct {
         return loadWith(gpa, h, false, test_timestep);
     }
 
-    /// `fixed_base`: the torso WELDED to the world instead of floating on a free joint — the
+    /// `fixed_base`: the torso WELDED to the world instead of floating on a free joint - the
     /// honest way to pin a root. Snapping a floating root back after each step leaves the body
     /// free-falling within the step, and a free-falling body's joints carry no gravity load.
     fn loadWith(gpa: Allocator, h: *Humanoid, fixed_base: bool, timestep: f32) !void {
@@ -851,7 +852,7 @@ fn applyTensor(inertia: rbt.Inertia, v: Vec) Vec {
 }
 
 test "robot_maximal: the maximal humanoid has the reduced one's mass, centre of mass and inertia" {
-    // ★★ THE FAIRNESS CONTRACT'S FIRST LINE, CHECKED. Both engines take mass properties from
+    // ** THE FAIRNESS CONTRACT'S FIRST LINE, CHECKED. Both engines take mass properties from
     // the same geoms at the same density, but by different code: robot_mjcf's inertia-from-geoms
     // and zimrphysics' compound builder. If they disagreed, every later comparison would be
     // comparing two different humanoids.
@@ -925,13 +926,11 @@ test "robot_maximal: the maximal humanoid has the reduced one's mass, centre of 
             mismatch = @max(mismatch, length3(reduced - maximal));
         }
         worst_inertia = @max(worst_inertia, mismatch / largest);
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  part {d:>2} (robot body {d:>2}): mass {d:.4} kg, inertia mismatch {e:.2} of {d:.5}\n", .{
+        report.print("  part {d:>2} (robot body {d:>2}): mass {d:.4} kg, inertia mismatch {e:.2} of {d:.5}\n", .{
             part, ragdoll.robot_body[part], mass, mismatch / largest, largest,
         });
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print(
+    report.print(
         "\n  robot_maximal: total mass reduced {d:.4} kg, maximal {d:.4} kg; worst part: " ++
             "mass {e:.2} (relative), COM {e:.2} m, inertia {e:.2} (relative)\n",
         .{ total_reduced, total_maximal, worst_mass, worst_com, worst_inertia },
@@ -984,8 +983,7 @@ test "robot_maximal: every part's frame reads back as the reduced forward kinema
             worst_split = @max(worst_split, gap);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print(
+    report.print(
         "\n  robot_maximal: rotation readback worst {e:.2}; worst part position vs the reduced FK " ++
             "{d:.1} mm (the feet, below the split-pivot ankles); joints apart: shared {e:.2} m, split {e:.2} m\n",
         .{ worst, worst_position * 1000.0, worst_shared, worst_split },
@@ -1008,8 +1006,7 @@ test "robot_maximal: every part's frame reads back as the reduced forward kinema
         const alignment: f32 = @min(1.0, @abs(@reduce(.Add, before[i] * after)));
         const push: f32 = 2.0 * acosRad(alignment);
         if (push > 1.0e-4) {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("    at the drop pose, joint {d:>2} (robot body {d:>2}, {d} hinges) pushed {d:.4} rad\n", .{
+            report.print("    at the drop pose, joint {d:>2} (robot body {d:>2}, {d} hinges) pushed {d:.4} rad\n", .{
                 i, ragdoll.robot_body[joint.child], joint.hinge_count, push,
             });
         }
@@ -1047,8 +1044,7 @@ test "robot_maximal: both humanoids fall like one point mass" {
     const drop: f32 = 9.81 * test_timestep * test_timestep * n * (n + 1.0) / 2.0;
     const fell_reduced: f32 = start_reduced[2] - h.centerOfMass()[2];
     const fell_maximal: f32 = start_maximal[2] - ragdoll.centerOfMass(&world)[2];
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print(
+    report.print(
         "\n  robot_maximal: free fall over {d} steps: expected {d:.5} m, reduced {d:.5}, maximal {d:.5}\n",
         .{ steps, drop, fell_reduced, fell_maximal },
     );
@@ -1087,14 +1083,14 @@ const MaximalRun = struct {
 const drop_steps: u32 = 3000;
 
 test "robot_maximal: the drop - both humanoids land, and the maximal joints stay together" {
-    // ★★★ THE COMPARISON'S FIRST NUMBERS: the same limp humanoid, the same tipped drop, the same
+    // *** THE COMPARISON'S FIRST NUMBERS: the same limp humanoid, the same tipped drop, the same
     // floor and timestep, in both engines, six simulated seconds each. The maximal side runs in
     // a few configurations, because its first run did not come to rest and a single number
     // would not say why. The asserts are the sanity bar; the printed table is what the plan's
     // journal records.
     const gpa: Allocator = std.testing.allocator;
 
-    // ── The reduced side, once. ──
+    // -- The reduced side, once. --
     var reduced_height: f32 = 0.0;
     var reduced_speed: f32 = 0.0;
     var reduced_contacts: u32 = 0;
@@ -1125,15 +1121,14 @@ test "robot_maximal: the drop - both humanoids land, and the maximal joints stay
         }
         reduced_height = h.data.body_xpos[1][2];
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print(
+    report.print(
         "\n  robot_maximal drop, 6 s at 1/500, limp: REDUCED torso {d:.3} m, settled speed {d:.3}, " ++
             "peak contacts {d}\n",
         .{ reduced_height, reduced_speed, reduced_contacts },
     );
     try expect(reduced_height > 0.05 and reduced_height < 0.5);
 
-    // ── The maximal side, per configuration. The first is the fairness contract's. ──
+    // -- The maximal side, per configuration. The first is the fairness contract's. --
     const runs = [_]MaximalRun{
         .{ .gyroscopic = true, .velocity_steps = 10 },
         .{ .gyroscopic = true, .velocity_steps = 10, .swing_twist_limits = false },
@@ -1164,8 +1159,7 @@ test "robot_maximal: the drop - both humanoids land, and the maximal joints stay
             peak_error = @max(peak_error, ragdoll.jointError(&world));
         }
         const height: f32 = ragdoll.bodyFrame(&world, ragdoll.part_of_body[1]).pos[2];
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print(
+        report.print(
             "  MAXIMAL gyro {} vsteps {d:>2} limits {} swing-twist limits {} " ++
                 "slack {d:.2}: torso {d:.3} m, settled speed {d:.3}, " ++
                 "joint error start {d:.1} mm, peak {d:.1} mm, final {d:.1} mm\n",
@@ -1185,11 +1179,11 @@ test "robot_maximal: the drop - both humanoids land, and the maximal joints stay
         // Landed on the floor, every configuration: neither sank through it nor was thrown off.
         try expect(height > 0.05 and height < 0.5);
         if (run.limits) {
-            // ★★ THE OPEN STAGE 0 ITEM, WITH ITS BAR SET WHERE THE ENGINE IS. With the game-style
+            // ** THE OPEN STAGE 0 ITEM, WITH ITS BAR SET WHERE THE ENGINE IS. With the game-style
             // limits the ragdoll never settles and its joints open by up to 19 cm, identically
             // across solver settings, while the same ragdoll WITHOUT limits settles to exactly
-            // zero error. So the limits fight the pose — the squat keyframe decomposes into
-            // swing-twist angles outside the cones — and closing that shows up as this bar
+            // zero error. So the limits fight the pose - the squat keyframe decomposes into
+            // swing-twist angles outside the cones - and closing that shows up as this bar
             // needing to come down to the limits-off one.
             try expect(peak_error < 0.25);
         } else {
@@ -1212,7 +1206,7 @@ fn relativeRotation(
 }
 
 test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit inside the maximal limit?" {
-    // ★★ ONE HINGE AT A TIME, so a push can only come from that hinge's own joint. Everything
+    // ** ONE HINGE AT A TIME, so a push can only come from that hinge's own joint. Everything
     // else stays at qpos0 (where the ankles' two pivots coincide too), gravity is off, nothing
     // moves - unless the maximal limit disagrees with the MJCF range about THIS angle. Each
     // limited hinge is probed near both ends of its range, 10% in from each; an asymmetric
@@ -1234,8 +1228,7 @@ test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit insid
         defer ragdoll.deinit();
         var pushed: u32 = 0;
         var probes: u32 = 0;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  robot_maximal one-hinge probes, twist on the {t} hinge:\n", .{choice});
+        report.print("\n  robot_maximal one-hinge probes, twist on the {t} hinge:\n", .{choice});
         for (0..m.njnt) |j| {
             const range: ?[2]f32 = m.jnt_range[j];
             const is_limited_hinge: bool = m.jnt_type[j] == .hinge and range != null;
@@ -1267,16 +1260,14 @@ test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit insid
                 probes += 1;
                 if (push > pushed_threshold) {
                     pushed += 1;
-                    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                    std.debug.print("    hinge {d:>2} (body {d:>2}, {d} hinges) at {d:>6.3} rad " ++
+                    report.print("    hinge {d:>2} (body {d:>2}, {d} hinges) at {d:>6.3} rad " ++
                         "of [{d:.3}, {d:.3}]: pushed {d:.5} rad\n", .{
                         j, m.jnt_body[j], joint.hinge_count, angle, r[0], r[1], push,
                     });
                 }
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    {d} of {d} probes pushed\n", .{ pushed, probes });
+        report.print("    {d} of {d} probes pushed\n", .{ pushed, probes });
     }
 }
 
@@ -1296,7 +1287,7 @@ const PoseMethod = union(enum) {
     reduced_implicit_ct: struct { frequency: f32 },
     /// robot.zig, the cheap middle ground: PD whose gains are scaled per joint by the mass
     /// matrix's DIAGONAL (kp = M_ii w^2, kv = 2 M_ii w), plus the exact gravity + Coriolis torque.
-    /// No full M solve — each joint is its own critically damped spring of this frequency.
+    /// No full M solve - each joint is its own critically damped spring of this frequency.
     reduced_diagonal: struct { frequency: f32 },
     /// zimrphysics: joint position motors at this frequency, solved inside the constraint solver.
     maximal_motors: struct { frequency: f32, limits: bool = true },
@@ -1311,7 +1302,7 @@ const PoseRun = struct {
 
 /// Worst joint rotation error, in degrees: for each joint the angle between the child's
 /// rotation relative to its parent now and in the target. Same definition for both engines.
-/// Null when a body's rotation is no longer finite — the run diverged.
+/// Null when a body's rotation is no longer finite - the run diverged.
 pub fn worstJointErrorDeg(
     ragdoll: *const Ragdoll,
     now_rots: []const Quat,
@@ -1324,7 +1315,7 @@ pub fn worstJointErrorDeg(
         const now: Quat = qmul(conjugate(now_rots[parent_body]), now_rots[child_body]);
         const want: Quat = qmul(conjugate(target.body_xrot[parent_body]), target.body_xrot[child_body]);
         const alignment: f32 = @abs(@reduce(.Add, now * want));
-        // ★ A diverged body has NaN rotations, and `@max` DROPS a NaN operand — so a blown-up
+        // * A diverged body has NaN rotations, and `@max` DROPS a NaN operand - so a blown-up
         // run would report whatever finite joint was left, as a steady number. Say so instead.
         if (!isFinite(alignment)) {
             return null;
@@ -1369,7 +1360,7 @@ fn stepReducedFixed(
             .reduced_diagonal => |dg| {
                 const omega: f32 = 2.0 * pi * dg.frequency;
                 // M_vv measured through inverse dynamics (M e_v = ID(e_v) - c): the diagonal that
-                // `rbt.massDiagonal` reads directly disagreed with it on this model — see the test.
+                // `rbt.massDiagonal` reads directly disagreed with it on this model - see the test.
                 @memset(a_des, 0);
                 a_des[v] = 1.0;
                 rbt.inverseDynamics(m, d, a_des, torque);
@@ -1403,11 +1394,11 @@ const PoseRate = struct {
 };
 
 test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, their own best tools" {
-    // ★★★ THE QUESTION THE ANIM-FOLLOWING PLAN IS STUCK ON, asked of both models at once: given
+    // *** THE QUESTION THE ANIM-FOLLOWING PLAN IS STUCK ON, asked of both models at once: given
     // a target pose, how close does each get, how fast, and with what? Two scenarios: HOLD the
     // rest pose (servo ladder rung 2) and REACH the squat from rest. The torso is WELDED to the
     // world in both models (a first version snapped a floating root back each step, which
-    // leaves the joints weightless within the step), gravity on, no floor — so the controller
+    // leaves the joints weightless within the step), gravity on, no floor - so the controller
     // is all that is measured. Printed per method: worst joint error at 0.5, 1 and 2 s, and the
     // worst over the last half second. At 500 Hz AND at 60 Hz: at 60 Hz the explicit spring's
     // stability bound (7.9 Hz, see `stableSpringAccel`) is straddled on purpose.
@@ -1456,8 +1447,7 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
         const steps: u32 = 2 * rate.steps_per_second;
         const checkpoints = [_]u32{ steps / 4, steps / 2, steps };
         for ([_]bool{ false, true }) |reach_squat| {
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("\n  {d} Hz, {s}, fixed base, gravity on (worst joint error, deg: " ++
+            report.print("\n  {d} Hz, {s}, fixed base, gravity on (worst joint error, deg: " ++
                 "0.5 s / 1 s / 2 s / last 0.5 s max)\n", .{
                 rate.steps_per_second,
                 if (reach_squat) "REACH the squat from rest" else "HOLD the rest pose",
@@ -1530,13 +1520,11 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
                     }
                 }
                 if (diverged_at > 0) {
-                    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                    std.debug.print("    {s:<40} DIVERGED (NaN) at step {d}\n", .{ run.label, diverged_at });
+                    report.print("    {s:<40} DIVERGED (NaN) at step {d}\n", .{ run.label, diverged_at });
                     try expect(run.may_diverge);
                     continue;
                 }
-                // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                std.debug.print("    {s:<40} {d:>7.2} {d:>7.2} {d:>7.2}   {d:>7.2}\n", .{
+                report.print("    {s:<40} {d:>7.2} {d:>7.2} {d:>7.2}   {d:>7.2}\n", .{
                     run.label, at[0], at[1], at[2], steady,
                 });
             }
@@ -1557,7 +1545,7 @@ const FallingHold = struct {
 };
 
 test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, both engines" {
-    // ★★★ WHERE A POSE HOLD HAS TO LIVE FOR REAL USE: a FREE root, the floor, and one physics
+    // *** WHERE A POSE HOLD HAS TO LIVE FOR REAL USE: a FREE root, the floor, and one physics
     // step per 60 Hz frame. The limp tipped drop again, but each side tries to hold the squat
     // the whole way down: the reduced side with implicit computed torque on its hinges (a free
     // root has no motor; contacts carry it), the maximal side with its joint motors. Printed:
@@ -1566,7 +1554,7 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
     const dt: f32 = 1.0 / 60.0;
     const steps: u32 = 180; // 3 s
     const configs = [_]FallingHold{
-        // Frequency 0 is LIMP: no controller on either side — the 60 Hz baseline. Limits OFF
+        // Frequency 0 is LIMP: no controller on either side - the 60 Hz baseline. Limits OFF
         // is the case a phone showed shaking at 24 m/s while this test settles it to 0.00.
         .{ .frequency = 0, .floating_base = true, .maximal_limits = true },
         .{ .frequency = 0, .floating_base = true, .maximal_limits = false },
@@ -1683,8 +1671,7 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
         for (0..m.nv) |i| {
             reduced_speed = @max(reduced_speed, @abs(h.data.vel[i]));
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print(
+        report.print(
             "\n  falling hold, 60 Hz, {d} Hz spring: REDUCED ({s}) error {d:.1} deg, speed {d:.2}, " ++
                 "torso {d:.2} m\n      MAXIMAL (limits {} gyro {} vsteps {d} " ++
                 "torque {d:.0}) error {d:.1} deg, speed {d:.2}, " ++
@@ -1719,9 +1706,9 @@ const FreeScenario = struct {
 };
 
 test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, then free fall" {
-    // ★★ SPLITTING THE MAXIMAL MOTORS' FAILURE. They reach the squat with the torso welded to
+    // ** SPLITTING THE MAXIMAL MOTORS' FAILURE. They reach the squat with the torso welded to
     // the world and fail with a free body on the floor. Between those two: a free body with NO
-    // floor — first without gravity (only the motors act: a free-floating chain driving its own
+    // floor - first without gravity (only the motors act: a free-floating chain driving its own
     // shape), then in free fall. Start at rest, target the squat, 60 Hz, 10 Hz springs, limits
     // off (so the Stage 0 limit mismatch is not in the way). The reduced side runs the same
     // scenarios with implicit CT through floating-base ID, which is exact without contacts.
@@ -1820,8 +1807,7 @@ test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, t
                     maximal_at[c] = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
                 }
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("\n  free body, {s}, 60 Hz, 10 Hz spring (deg at 0.5 / 1 / 2 s):\n" ++
+            report.print("\n  free body, {s}, 60 Hz, 10 Hz spring (deg at 0.5 / 1 / 2 s):\n" ++
                 "    reduced implicit CT, floating base  {d:>7.2} {d:>7.2} {d:>7.2}\n" ++
                 "    maximal motors, gyroscopic {}     {d:>7.2} {d:>7.2} " ++
                 "{d:>7.2}   peak gap {d:.1} mm, speed {d:.2}\n", .{
@@ -1852,9 +1838,9 @@ const FloorDrive = struct {
 };
 
 test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what makes them hold" {
-    // ★★ THE MAXIMAL FAILURE IS CONTACT: its motors hold the squat in flight (slowly) and blow up
+    // ** THE MAXIMAL FAILURE IS CONTACT: its motors hold the squat in flight (slowly) and blow up
     // on the floor. The standard game-engine answers, one at a time: a softer drive, more
-    // damping, a torque limit, and SUBSTEPS — several physics steps per 60 Hz frame, which on a
+    // damping, a torque limit, and SUBSTEPS - several physics steps per 60 Hz frame, which on a
     // phone cost about what one reduced step does (194 vs 735 us/step, measured on device).
     // The tipped squat drop, holding the squat, 3 s, limits off.
     const gpa: Allocator = std.testing.allocator;
@@ -1872,8 +1858,7 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
         .{ .label = "10 Hz, HINGE motors only", .swing_twist = false },
         .{ .label = "20 Hz, HINGE motors only", .frequency = 20, .swing_twist = false },
     };
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  maximal motors holding the squat through the tipped drop, 60 Hz frames, 3 s:\n", .{});
+    report.print("\n  maximal motors holding the squat through the tipped drop, 60 Hz frames, 3 s:\n", .{});
     for (drives) |drive| {
         var h: Humanoid = undefined;
         try Humanoid.loadWith(gpa, &h, false, frame_dt);
@@ -1915,18 +1900,17 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
             rots[b] = ragdoll.robotBodyFrame(&world, b).rot;
         }
         const err: f32 = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    {s:<30} error {d:>6.1} deg   last-second peak speed {d:>6.2}   peak gap {d:>6.1} mm\n", .{
+        report.print("    {s:<30} error {d:>6.1} deg   last-second peak speed {d:>6.2}   peak gap {d:>6.1} mm\n", .{
             drive.label, err, peak_speed_late, peak_gap * 1000.0,
         });
     }
 }
 
 test "robot_maximal: standing - can each engine hold the standing pose on the floor at 60 Hz" {
-    // ★★★ THE DANCE'S FIRST FRAME IS SOMEONE STANDING, so a free-root pose hold on the floor is a
-    // BALANCE question before it is a pose question — the squat tests never asked it, because
+    // *** THE DANCE'S FIRST FRAME IS SOMEONE STANDING, so a free-root pose hold on the floor is a
+    // BALANCE question before it is a pose question - the squat tests never asked it, because
     // that ragdoll was lying on its side. This asks it with no retarget in the way: hold the
-    // model's own standing pose (qpos0), torso free, feet on the floor, 60 Hz, for 10 s — then
+    // model's own standing pose (qpos0), torso free, feet on the floor, 60 Hz, for 10 s - then
     // again after a shove at the torso. A pose hold with no balance control is a stiff statue;
     // a statue stands while its centre of mass stays over its feet, and the shove says how
     // far that is from falling. Printed: seconds upright (torso above 0.8 m), worst joint error.
@@ -2021,8 +2005,7 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
             rots[b] = ragdoll.robotBodyFrame(&world_maximal, b).rot;
         }
         const maximal_error: f32 = worstJointErrorDeg(&ragdoll, rots, &target) orelse -1.0;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("\n  standing, 60 Hz, shove {d:.1} m/s: REDUCED (implicit CT 20 Hz) upright {d:.2} s, " ++
+        report.print("\n  standing, 60 Hz, shove {d:.1} m/s: REDUCED (implicit CT 20 Hz) upright {d:.2} s, " ++
             "joint error {d:.1} deg; MAXIMAL (motors 20 Hz) upright {d:.2} s, joint error {d:.1} deg\n", .{
             shove, reduced_upright, reduced_error, maximal_upright, maximal_error,
         });
@@ -2032,7 +2015,8 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
 test "robot_maximal: massDiagonal against the mass matrix measured through inverse dynamics" {
     // The inertia-scaled PD froze at its start error when it took M_ii from `rbt.massDiagonal`,
     // and moved normally with M_ii measured as (M e_i)_i = ID(e_i)_i - c_i. This compares the
-    // two on both humanoids (floating and fixed-base) and prints every DOF that disagrees.
+    // two on both humanoids (floating and fixed-base), prints every DOF that disagrees, and fails
+    // if any does - it printed "0 of 27" and "0 of 21" for a long time without asserting it.
     const gpa: Allocator = std.testing.allocator;
     for ([_]bool{ false, true }) |fixed_base| {
         var h: Humanoid = undefined;
@@ -2054,15 +2038,14 @@ test "robot_maximal: massDiagonal against the mass matrix measured through inver
             const read: f32 = rbt.massDiagonal(m, &h.data, @intCast(i));
             if (@abs(measured - read) > 1.0e-4 * @max(1.0, @abs(measured))) {
                 disagreements += 1;
-                // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-                std.debug.print("    {s} dof {d:>2}: M_ii measured {d:.5}, massDiagonal {d:.5}\n", .{
+                report.print("    {s} dof {d:>2}: M_ii measured {d:.5}, massDiagonal {d:.5}\n", .{
                     if (fixed_base) "fixed-base" else "floating", i, measured, read,
                 });
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  massDiagonal, {s} humanoid: {d} of {d} DOFs disagree\n", .{
+        report.print("  massDiagonal, {s} humanoid: {d} of {d} DOFs disagree\n", .{
             if (fixed_base) "fixed-base" else "floating", disagreements, m.nv,
         });
+        try expect(disagreements == 0);
     }
 }

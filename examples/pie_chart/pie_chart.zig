@@ -1,4 +1,4 @@
-//! pie_chart — a live pie chart of N slices whose values breathe, so the
+//! pie_chart - a live pie chart of N slices whose values breathe, so the
 //! wedges continuously re-proportion. Each slice is an HSV-spread colour; the
 //! slice under the pointer pops outward and is read out by name; a percentage
 //! label rides each wedge at its mid-angle. Tap toggles a donut hole. Ported
@@ -52,7 +52,7 @@ fn update(f: *z.Frame, s: *State) void {
     const center: Vec2 = .{ w * 0.5, h * 0.5 };
     const radius: f32 = @min(w, h) * 0.36;
 
-    // Per-slice animated values → sweeps. Computed once so the draw pass and the
+    // Per-slice animated values -> sweeps. Computed once so the draw pass and the
     // hover test agree on the moving slice boundaries.
     var values: [n_slices]f32 = undefined;
     var total: f32 = 0;
@@ -63,7 +63,7 @@ fn update(f: *z.Frame, s: *State) void {
         total += values[i];
     }
 
-    // Which slice is the pointer over? atan2 → degrees in [0,360), then walk the
+    // Which slice is the pointer over? atan2 -> degrees in [0,360), then walk the
     // sweeps. -1 when outside the disc.
     const pointer: Vec2 = z.getMousePosition(f.input);
     const dx: f32 = pointer[0] - center[0];

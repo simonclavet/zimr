@@ -46,7 +46,7 @@ const mulMat = zm.mulMat;
 /// libc, which `zig test` on Windows doesn't link by default
 /// ("libc must be explicitly specified" compile error).  We pick the
 /// right backend per OS so consumers don't have to:
-///   - **Linux / macOS / BSD**: POSIX `clock_gettime(MONOTONIC, …)`.
+///   - **Linux / macOS / BSD**: POSIX `clock_gettime(MONOTONIC, ...)`.
 ///     Symbol is `extern "c"`, but those targets link libc by
 ///     default for `zig test`, so it Just Works.
 ///   - **Windows**: `RtlQueryPerformanceCounter` /
@@ -126,7 +126,7 @@ pub const core = struct {
         /// pixels; the GL drawing buffer is `screen_width * dpr`.
         screen_width: i32 = 800,
         screen_height: i32 = 450,
-        /// Render target size - equals (screen × DPR) for the default
+        /// Render target size - equals (screen x DPR) for the default
         /// framebuffer; updated by `BeginTextureMode` to match the FBO.
         render_width: i32 = 800,
         render_height: i32 = 450,
@@ -135,13 +135,13 @@ pub const core = struct {
         ///
         ///     css_x = logical_x * fit_scale + fit_off_x
         ///
-        /// Identity in `.responsive`, where logical IS CSS — which is exactly why the clip
+        /// Identity in `.responsive`, where logical IS CSS - which is exactly why the clip
         /// path got away with ignoring it for so long. Under `.fit` the design space (say
         /// 800x450) is letterboxed into the real CSS box, so a landscape phone is
         /// height-limited and `fit_off_x` is large: a scissor rect that skips it lands
         /// visibly shifted sideways.
         ///
-        /// DERIVED ONCE, in `wgpu_app` (`fitScaleOffset`), and pushed here — the same way
+        /// DERIVED ONCE, in `wgpu_app` (`fitScaleOffset`), and pushed here - the same way
         /// `render_width`/`render_height` are. Nothing downstream may re-derive it. The engine
         /// has already paid for that lesson: `logicalToCss`/`cssToLogical` exist precisely
         /// because touch, mouse and scissor each grew their own copy of this transform and one
@@ -158,7 +158,7 @@ pub const core = struct {
         /// `isWindowFocused` doesn't lock the user out of input on day one.
         focused: bool = true,
         /// Letterboxed canvas viewport rect (CSS pixels) + logical
-        /// dims.  Single source of truth for the wasm↔CSS coord
+        /// dims.  Single source of truth for the wasm<->CSS coord
         /// conversion: glViewport on the rendering side, mouse/touch
         /// input on the receiving side, DOM overlay placement on the
         /// publishing side.  Recomputed on every canvas size change
@@ -179,7 +179,7 @@ pub const core = struct {
 
         /// CSS-pixel dimensions of the viewport (the drawn region).
         /// Equals canvas CSS dims in `.responsive`; equals
-        /// `logical × fit_scale` in `.fit`.
+        /// `logical x fit_scale` in `.fit`.
         width_css: i32 = 0,
         height_css: i32 = 0,
 
@@ -191,7 +191,7 @@ pub const core = struct {
         width_logical: i32 = 0,
         height_logical: i32 = 0,
 
-        /// CSS event coords → logical pixels.  Used by the JS input
+        /// CSS event coords -> logical pixels.  Used by the JS input
         /// bridge to enforce the "all input is logical" contract.
         /// Coords from events that landed in a letterbox bar fall
         /// outside the 0..logical range - hit-tests against widget
@@ -483,7 +483,7 @@ pub const core = struct {
         return window.render_height;
     }
 
-    /// Canvas size in BACKING pixels (= logical × DPR), packed as
+    /// Canvas size in BACKING pixels (= logical x DPR), packed as
     /// `[2]f32` for direct push into a `setShaderValue(..., .vec2)`
     /// call.  Backing pixels are the units of `gl_FragCoord.xy` in
     /// GLSL, so this is the right value for a `u_resolution`-style
@@ -491,7 +491,7 @@ pub const core = struct {
     ///
     /// For Zig-shader-pipeline shaders that use
     /// `frag_tex_coord * u_resolution` (no `gl_FragCoord`), any
-    /// consistent unit works — logical px (`getScreenWidth` /
+    /// consistent unit works - logical px (`getScreenWidth` /
     /// `getScreenHeight`) is simpler in that case.  See
     /// `examples/mandelbrot.zig` for that style and
     /// `examples/shader_uniforms.zig` for the `gl_FragCoord` style.
@@ -889,7 +889,7 @@ pub const core = struct {
     /// Internal RNG state.  Seeded with raylib's default value so the first
     /// `getRandomValue()` call without an explicit seed returns a stable
     /// stream - useful for reproducible demos / fuzz seeds.
-    var rng_state: u32 = 0xDEADBEEF; // lint:off module-var: raylib parity — process-global RNG
+    var rng_state: u32 = 0xDEADBEEF; // lint:off module-var: raylib parity - process-global RNG
 
     /// Set the RNG seed.  A seed of 0 is replaced with 1 (xorshift's only
     /// degenerate state - leaving it at 0 means every output stays 0).
@@ -1143,7 +1143,7 @@ pub const core = struct {
         _testSetNowFn(&fakeNow);
         initTimer(&t, &f);
 
-        // Simulate 200 frames at 16ms each → 62.5 fps target.
+        // Simulate 200 frames at 16ms each -> 62.5 fps target.
         var i: usize = 0;
         while (i < 200) : (i += 1) {
             setFakeNow(float64(i + 1) * 16);
@@ -1549,7 +1549,7 @@ pub const input = struct {
         /// Per-button position recorded at the rising-edge of press.
         /// Used by the drag helpers (`isMouseDragging`,
         /// `getMouseDragDelta`).  Set by `pushMouseButtonDown` on
-        /// transition 0→1; reset to the current position by
+        /// transition 0->1; reset to the current position by
         /// `resetMouseDragDelta` (so subsequent deltas are relative
         /// to the call point rather than the original press).  Reads
         /// are meaningless unless `current_button[i]` is also held,
@@ -1630,17 +1630,17 @@ pub const input = struct {
     /// `var STATE` + thin `pub export fn` shims at the end of this
     /// namespace.  That's the only place the global is touched.
     /// Phone motion sensor, fed by the `devicemotion` JS event through the
-    /// `input_push_motion` export. ONE vector: accelerationIncludingGravity, m/s²,
+    /// `input_push_motion` export. ONE vector: accelerationIncludingGravity, m/s^2,
     /// in the device's NATURAL/portrait frame (x right, y up, z out of screen).
     /// By the equivalence principle this is the only thing the accelerometer
-    /// actually measures (proper acceleration) — it already fuses gravity AND
+    /// actually measures (proper acceleration) - it already fuses gravity AND
     /// motion, so the effective gravity the fluid feels is simply its negation.
     /// No separate "linear acceleration" channel is needed: tilt, shake, and
     /// free-fall all fall out of this one vector. Stored RAW (no smoothing) for
     /// zero input lag. `screen_angle` is `screen.orientation.angle` (0/90/180/270)
     /// for rotating the device frame into the (maybe landscape) canvas. `ok`
     /// flips true on the first real sample. NOTE: data only arrives on https/
-    /// localhost origins — file:// and content:// fire the event but deliver
+    /// localhost origins - file:// and content:// fire the event but deliver
     /// nulls, so `ok` stays false and readers fall back to plain down.
     pub const Motion = struct {
         accel_x: f32 = 0,
@@ -1663,7 +1663,7 @@ pub const input = struct {
     // helpers below take an explicit state pointer.  The matching
     // `pub export fn input_push_*` shims that JS event handlers call
     // live in `runtime_assembly.zig`, where they reach `app.?.input`
-    // without forcing a `runtime → runtime_assembly` back-edge.
+    // without forcing a `runtime -> runtime_assembly` back-edge.
     // Bounds checks are deliberate - JS can hand us anything.  Out-of-
     // range keycodes are silently dropped rather than panicking.
     // ===========================================================================
@@ -1748,9 +1748,9 @@ pub const input = struct {
         state.mouse.current_position[1] = y;
     }
 
-    /// Feed one accelerometer sample (accelerationIncludingGravity, m/s²) plus
-    /// the screen orientation angle. Stored RAW — no smoothing — so the response
-    /// has zero lag. Raw sensor noise (~0.1–0.3 m/s²) is tiny next to the ~9.8
+    /// Feed one accelerometer sample (accelerationIncludingGravity, m/s^2) plus
+    /// the screen orientation angle. Stored RAW - no smoothing - so the response
+    /// has zero lag. Raw sensor noise (~0.1-0.3 m/s^2) is tiny next to the ~9.8
     /// gravity signal, so it doesn't visibly jitter; the fluid's own dynamics
     /// absorb the rest.
     pub fn pushMotion(
@@ -1973,8 +1973,8 @@ pub const input = struct {
 
     /// Map a `KeyboardKey` to its display name.  Returns null for unknown
     /// keys.  Names follow JS `KeyboardEvent.code` / W3C UI Events
-    /// convention (e.g. `KEY_F1` → "F1", `KEY_LEFT_BRACKET` → "BracketLeft",
-    /// `KEY_KP_0` → "Numpad0"), which is the natural choice in a browser
+    /// convention (e.g. `KEY_F1` -> "F1", `KEY_LEFT_BRACKET` -> "BracketLeft",
+    /// `KEY_KP_0` -> "Numpad0"), which is the natural choice in a browser
     /// runtime - matches what the user actually sees in
     /// devtools when they inspect a keypress event.
     /// Letters and digits return their character form ("A", "5") for
@@ -2154,7 +2154,7 @@ pub const input = struct {
     /// Map a device-natural-frame screen-plane vector (x right, y UP) into canvas
     /// space (x right, y DOWN), accounting for screen orientation (0/90/180/270).
     /// This is the once-per-device-calibrated part; getDeviceGravity builds on it.
-    /// The angle is always a 90° step, so rotate exactly (no trig, no std.math.pi).
+    /// The angle is always a 90 deg step, so rotate exactly (no trig, no std.math.pi).
     fn deviceVecToCanvas(vx: f32, vy: f32, screen_angle: f32) Vec2 {
         const steps: i32 = @round(screen_angle / 90.0);
         const q: u32 = @intCast(@mod(steps, 4));
@@ -2180,25 +2180,25 @@ pub const input = struct {
     }
 
     /// The EFFECTIVE GRAVITY the fluid feels, in canvas space (x right, y down),
-    /// in m/s², UNNORMALISED — the caller scales it by one gain. This is the whole
+    /// in m/s^2, UNNORMALISED - the caller scales it by one gain. This is the whole
     /// feature in a single vector, via Einstein's equivalence principle: an
     /// accelerometer measures proper acceleration (gravity and motion fused into
     /// ONE vector), and the body force in the phone's frame is exactly its
     /// negation. So everything emerges from this:
-    ///   • held still, upright → ≈ (0, 9.8): normal downward gravity.
-    ///   • tilted              → in-plane part shrinks with tilt angle, points
+    ///   * held still, upright -> ~ (0, 9.8): normal downward gravity.
+    ///   * tilted              -> in-plane part shrinks with tilt angle, points
     ///                            downhill (real strength, not arcade full-power).
-    ///   • flat on a table     → in-plane part ≈ 0 → the fluid FLOATS (zero-g).
-    ///   • shaken              → the vector swings transiently → slosh.
-    ///   • in free-fall        → magnitude → 0 → weightless.
-    /// No sensor yet (e.g. desktop) → (0, 9.8) so gravity still works normally.
+    ///   * flat on a table     -> in-plane part ~ 0 -> the fluid FLOATS (zero-g).
+    ///   * shaken              -> the vector swings transiently -> slosh.
+    ///   * in free-fall        -> magnitude -> 0 -> weightless.
+    /// No sensor yet (e.g. desktop) -> (0, 9.8) so gravity still works normally.
     pub fn getDeviceGravity(state: *const InputState) Vec2 {
         const m: Motion = state.motion;
         if (!m.ok) {
-            return .{ 0, 9.8 }; // no accelerometer → plain 1g down
+            return .{ 0, 9.8 }; // no accelerometer -> plain 1g down
         }
-        // Effective gravity = −(proper acceleration), mapped to canvas. Taking
-        // only x,y drops the z component — that's exactly WHY a flat phone floats:
+        // Effective gravity = -(proper acceleration), mapped to canvas. Taking
+        // only x,y drops the z component - that's exactly WHY a flat phone floats:
         // its gravity points along z, out of the screen plane, contributing none.
         return deviceVecToCanvas(-m.accel_x, -m.accel_y, m.screen_angle);
     }
@@ -2208,9 +2208,9 @@ pub const input = struct {
     /// uniforms compared against `gl_FragCoord`.
     ///
     /// `getMousePosition` returns logical (CSS) pixels with browser-space
-    /// Y (origin at top) — the units the rest of the draw API expects.
+    /// Y (origin at top) - the units the rest of the draw API expects.
     /// `gl_FragCoord` in GLSL is in backing pixels with Y up, so mixing
-    /// the two silently works on desktop (DPR=1, height ≈ logical) but
+    /// the two silently works on desktop (DPR=1, height ~ logical) but
     /// is off by a factor of DPR on phones.  Use this helper to keep
     /// shader-uniform math unit-clean.
     pub fn getShaderMouse(
@@ -2306,7 +2306,7 @@ pub const input = struct {
         return @intCast(state.touch.count);
     }
 
-    test "touch: single finger down → count=1, getTouch returns coords" {
+    test "touch: single finger down -> count=1, getTouch returns coords" {
         var state: InputState = .{};
 
         pushTouchDown(&state, 42, 100.5, 200.5);
@@ -2432,7 +2432,7 @@ pub const input = struct {
         button: @import("types.zig").GamepadButton,
     ) bool {
         if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
-            return true; // out-of-range → up
+            return true; // out-of-range -> up
         }
         return state.gamepad.current_button[@intCast(gamepad)][@intCast(@backingInt(button))] == 0;
     }
@@ -2705,8 +2705,8 @@ pub const input = struct {
     /// distinguish a click (small movement) from a drag (significant
     /// movement) - typical pattern: `if (isMouseDragging(state, .left, -1))
     /// continueDragOp(getMouseDragDelta(state, .left, -1))`.
-    /// Threshold uses L∞ (Chebyshev) distance - same shape as imgui's,
-    /// matching dx² + dy² > t² with a single comparison on |Δ| max.
+    /// Threshold uses Linf (Chebyshev) distance - same shape as imgui's,
+    /// matching dx^2 + dy^2 > t^2 with a single comparison on |delta| max.
     pub fn isMouseDragging(
         state: *InputState,
         button: @import("types.zig").MouseButton,
@@ -2919,13 +2919,13 @@ pub const input = struct {
         _testKeyDown(&state, KEY_A);
 
         // Before endFrame: previous is still 0, current is 1.
-        // isKeyPressed = previous == 0 && current == 1 → true.
+        // isKeyPressed = previous == 0 && current == 1 -> true.
         try expect(isKeyPressed(&state, K_A));
         try expect(isKeyDown(&state, K_A));
         try expect(!isKeyReleased(&state, K_A));
         try expect(!isKeyUp(&state, K_A));
 
-        // After endFrame promotes current → previous, isKeyPressed should
+        // After endFrame promotes current -> previous, isKeyPressed should
         // go false because the rising edge has been "consumed".
         _testEndFrame(&state);
         try expect(!isKeyPressed(&state, K_A));
@@ -2938,7 +2938,7 @@ pub const input = struct {
         _testEndFrame(&state); // Now both prev and current are 1.
 
         _testKeyUp(&state, KEY_A);
-        // previous == 1, current == 0 → released.
+        // previous == 1, current == 0 -> released.
         try expect(isKeyReleased(&state, K_A));
         try expect(!isKeyDown(&state, K_A));
         try expect(isKeyUp(&state, K_A));
@@ -3267,7 +3267,7 @@ pub const input = struct {
 
     test "B1 fix: drag stays engaged after reset, even with sub-threshold move" {
         // Reproducer for the slow-touch-drag bug.  Without sticky
-        // drag_started, reset → sub-threshold move would zero the
+        // drag_started, reset -> sub-threshold move would zero the
         // delta, freezing the handle mid-drag.
         var state: InputState = .{};
         pushMouseMove(&state, 0, 0);
@@ -3402,7 +3402,7 @@ pub const input = struct {
     // timeline.
     // ===========================================================================
 
-    test "press → hold many frames → release: exactly one Pressed, one Released" {
+    test "press -> hold many frames -> release: exactly one Pressed, one Released" {
         var state: InputState = .{};
 
         var pressed_count: usize = 0;
@@ -3528,7 +3528,7 @@ pub const input = struct {
         try expect(!isGamepadButtonDown(&state, -1, .left_face_up));
         try expect(!isGamepadButtonPressed(&state, -1, .left_face_up));
         try expect(!isGamepadButtonReleased(&state, -1, .left_face_up));
-        try expect(isGamepadButtonUp(&state, -1, .left_face_up)); // out-of-range → up
+        try expect(isGamepadButtonUp(&state, -1, .left_face_up)); // out-of-range -> up
         try expect(getGamepadAxisMovement(&state, -1, .left_x) == 0);
         try expect(getGamepadAxisCount(&state, -1) == 0);
         try expect(getGamepadName(&state, -1) == null);
@@ -3632,7 +3632,7 @@ pub const gestures = struct {
         /// two-finger move. The view-agnostic primitive zoom consumers
         /// need; pair with `mid`.
         scale: f32 = 1,
-        /// Screen-space midpoint of the two fingers — the focal point to
+        /// Screen-space midpoint of the two fingers - the focal point to
         /// keep fixed under a pinch.
         mid: Vec2 = .{ 0, 0 },
         /// Frame-to-frame motion of that midpoint (current centroid minus
@@ -3980,13 +3980,13 @@ pub const gestures = struct {
     /// frame's. >1 = fingers spreading (magnify / zoom in), <1 = closing.
     /// 1.0 when there is no continuous two-finger gesture, so callers can
     /// apply it unconditionally (a 1.0 factor is a no-op). The "apply to
-    /// my view" step is the caller's — data ranges, a center+zoom camera,
+    /// my view" step is the caller's - data ranges, a center+zoom camera,
     /// a 3D camera distance, etc.
     pub fn getGesturePinchScale(state: *const GesturesState) f32 {
         return state.pinch.scale;
     }
 
-    /// Screen-space midpoint of the two fingers — the focal point to keep
+    /// Screen-space midpoint of the two fingers - the focal point to keep
     /// fixed while zooming. Valid while two fingers are down.
     pub fn getGesturePinchMid(state: *const GesturesState) Vec2 {
         return state.pinch.mid;
@@ -4013,7 +4013,7 @@ pub const gestures = struct {
         update(&state, &input_state, &time);
         try expectEqual(Gesture.tap, getGestureDetected(&state));
 
-        // Frame 2: finger lifts (escalates from tap → hold first,
+        // Frame 2: finger lifts (escalates from tap -> hold first,
         // but with finger gone, count drops to 0 so up event fires).
         input_mod.pushTouchUp(&input_state, 1);
         update(&state, &input_state, &time);
@@ -4053,7 +4053,7 @@ pub const gestures = struct {
         update(&state, &input_state, &time);
         input_mod.pushTouchDown(&input_state, 2, 150, 50);
         update(&state, &input_state, &time);
-        // Two-finger down → HOLD.
+        // Two-finger down -> HOLD.
         try expectEqual(Gesture.hold, getGestureDetected(&state));
     }
 
@@ -4065,7 +4065,7 @@ pub const gestures = struct {
         setGesturesEnabled(&state, @intCast(@backingInt(Gesture.pinch_in) | @backingInt(Gesture.pinch_out)));
         input_mod.pushTouchDown(&input_state, 1, 50, 50);
         update(&state, &input_state, &time);
-        // TAP isn't in the enabled mask → getGestureDetected returns NONE.
+        // TAP isn't in the enabled mask -> getGestureDetected returns NONE.
         try expectEqual(Gesture.none, getGestureDetected(&state));
         // But isGestureDetected for TAP also returns false (correct).
         try expect(!isGestureDetected(&state, Gesture.tap));
@@ -4127,7 +4127,7 @@ pub const effects = struct {
 
             /// Wallclock ms since page load (wasm) or process start (host).
             /// Monotonic.  raylib doesn't expose this; useful for logs and
-            /// "loading for N seconds…" UI.
+            /// "loading for N seconds..." UI.
             pub fn wallMs(self: Clock) f64 {
                 return self.vtable.wallMs(self.userdata);
             }
@@ -4574,7 +4574,7 @@ pub const effects = struct {
             try expect(a2 == b2);
         }
 
-        test "Seeded: same seed → same value sequence" {
+        test "Seeded: same seed -> same value sequence" {
             var a = Seeded.init(12345);
             var b = Seeded.init(12345);
             var i: usize = 0;
@@ -4583,7 +4583,7 @@ pub const effects = struct {
             }
         }
 
-        test "Seeded: different seeds → different sequences" {
+        test "Seeded: different seeds -> different sequences" {
             var a = Seeded.init(1);
             var b = Seeded.init(2);
             var diffs: usize = 0;
@@ -5126,7 +5126,7 @@ pub const effects = struct {
             const log: Logger = outer.logger();
 
             log.info("hi", .{});
-            // Outer wraps inner wraps cap → "outer: inner: hi" reading
+            // Outer wraps inner wraps cap -> "outer: inner: hi" reading
             // outside-in.
             try expect(eql(u8, cap.lines.items[0].msg, "outer: inner: hi"));
         }
@@ -5214,7 +5214,7 @@ pub const effects = struct {
 
             /// Milliseconds elapsed since `loadFileData(handle)`, or null if
             /// the handle is unknown.  raylib doesn't have this; useful for
-            /// "loading for N seconds…" UI or to time out slow loads.
+            /// "loading for N seconds..." UI or to time out slow loads.
             pub fn elapsedMs(self: Loader, h: Handle) ?f64 {
                 return self.vtable.elapsedMs(self.userdata, h);
             }
@@ -5527,14 +5527,14 @@ pub const effects = struct {
             try expect(l.loadFileData("foo.png") == 0);
         }
 
-        test "Browser: elapsedMs(unknown) → null" {
+        test "Browser: elapsedMs(unknown) -> null" {
             var b = Browser.init();
             const l: Loader = b.loader();
             try expect(l.elapsedMs(0) == null);
             try expect(l.elapsedMs(999) == null);
         }
 
-        test "Mock: unknown URL → not_found on poll" {
+        test "Mock: unknown URL -> not_found on poll" {
             const ta: Allocator = std.testing.allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
@@ -5544,7 +5544,7 @@ pub const effects = struct {
             try expect(l.pollFileData(h) == .not_found);
         }
 
-        test "Mock: put + load + poll → ok with bytes" {
+        test "Mock: put + load + poll -> ok with bytes" {
             const ta: Allocator = std.testing.allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
@@ -5650,7 +5650,7 @@ pub const effects = struct {
             try expect(st.err_msg == null);
         }
 
-        test "Integration: missing asset → 404 path" {
+        test "Integration: missing asset -> 404 path" {
             const ta: Allocator = std.testing.allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
@@ -5687,7 +5687,7 @@ pub const effects = struct {
             }
         }
 
-        test "Scoped: missing-after-prefix → not_found" {
+        test "Scoped: missing-after-prefix -> not_found" {
             const ta: Allocator = std.testing.allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
@@ -5772,7 +5772,7 @@ pub const camera = struct {
     // *compute* in this namespace goes through it, via the thin `v3*`
     // bridge helpers below (they convert the `Vec` storage struct
     // to/from the `Vec` compute type at the boundary).  No `zimrmath`
-    // dependency remains; `Vec` storage→`@Vector` conversion
+    // dependency remains; `Vec` storage->`@Vector` conversion
     // happens in `v3ToZm`/`v3FromZm`, and `add`/`sub`/`scale` use the
     // `Vec` struct's own methods.
     const sqrt1_2 = zm.sqrt1_2;
@@ -5792,7 +5792,7 @@ pub const camera = struct {
     // than the `Vec` struct's own methods (the bespoke struct API
     // is what the zmath arc is eliminating).  If a storage-to-storage
     // op ever proves a measured perf problem, the fix is a dedicated
-    // `arrayAdd`/`arrayDot`/… in `math.zig` - added then, proven by a
+    // `arrayAdd`/`arrayDot`/... in `math.zig` - added then, proven by a
     // benchmark, not speculatively.  When Z4b flips `Vec` to
     // `[3]f32`, these bridges' bodies collapse to direct loads.
 
@@ -5819,7 +5819,7 @@ pub const camera = struct {
     inline fn v3Normalize(v: Vec) Vec {
         return v3FromZm(normalize3(v3ToZm(v)));
     }
-    /// Cross product `a × b`.
+    /// Cross product `a x b`.
     inline fn v3Cross(a: Vec, b: Vec) Vec {
         return v3FromZm(cross(v3ToZm(a), v3ToZm(b)));
     }
@@ -5970,7 +5970,7 @@ pub const camera = struct {
             cam.up,
         );
 
-        // World → clip.  Inline the 4×4 transform - the `v3Transform`
+        // World -> clip.  Inline the 4x4 transform - the `v3Transform`
         // bridge assumes w=1 and drops the result's w.  We need w back
         // to do the perspective divide.
         const v_pos: Vec = vector4MatrixTransform(
@@ -5979,12 +5979,12 @@ pub const camera = struct {
         );
         const clip_pos: Vec = vector4MatrixTransform(v_pos, proj);
 
-        // Perspective divide → NDC ([-1, 1]).  Guard against w=0.
+        // Perspective divide -> NDC ([-1, 1]).  Guard against w=0.
         const inv_w: f32 = if (clip_pos.w != 0) 1.0 / clip_pos.w else 0;
         const ndc_x: f32 = clip_pos[0] * inv_w;
         const ndc_y: f32 = clip_pos[1] * inv_w;
 
-        // NDC → screen pixels.  GL convention: NDC y up, screen y down.
+        // NDC -> screen pixels.  GL convention: NDC y up, screen y down.
         return .{ (ndc_x + 1.0) * 0.5 * w, (1.0 - ndc_y) * 0.5 * h };
     }
 
@@ -5995,7 +5995,7 @@ pub const camera = struct {
         return .{ transformed[0], transformed[1] };
     }
 
-    /// Inverse: screen-space pixel → world-space point under a Camera2D.
+    /// Inverse: screen-space pixel -> world-space point under a Camera2D.
     pub fn getScreenToWorld2D(position: Vec2, cam: Camera2D) Vec2 {
         const m: zm.Mat = zm.inverse(getCameraMatrix2D(cam));
         const transformed: Vec = v3Transform(vec(position[0], position[1], 0), m);
@@ -6025,7 +6025,7 @@ pub const camera = struct {
         const h: f32 = float(height);
         const aspect: f32 = if (h > 0) w / h else 1.0;
 
-        // Pixel → NDC.  Note y is flipped (raylib convention: top-left
+        // Pixel -> NDC.  Note y is flipped (raylib convention: top-left
         // origin in screen space, bottom-left origin in NDC).
         const ndc_x: f32 = (2.0 * position[0]) / w - 1.0;
         const ndc_y: f32 = 1.0 - (2.0 * position[1]) / h;
@@ -6061,7 +6061,7 @@ pub const camera = struct {
             );
         }
 
-        // Unproject near and far points (z=0 → near, z=1 → far).
+        // Unproject near and far points (z=0 -> near, z=1 -> far).
         const near_pt: Vec = v3Unproject(vec(ndc_x, ndc_y, 0.0), proj, view);
         const far_pt: Vec = v3Unproject(vec(ndc_x, ndc_y, 1.0), proj, view);
 
@@ -6082,7 +6082,7 @@ pub const camera = struct {
     // Internal helpers
     // ===========================================================================
 
-    /// 4-component vector × column-major Matrix transform.  The
+    /// 4-component vector x column-major Matrix transform.  The
     /// `v3Transform` bridge drops the w component; this preserves it
     /// for projection-divide math.
     inline fn vector4MatrixTransform(v: Vec, m: Matrix) Vec {
@@ -6486,7 +6486,7 @@ pub const camera = struct {
         try expect(closeTest(m[3][1], -50));
     }
 
-    test "world↔screen 2D round trip: identity camera" {
+    test "world<->screen 2D round trip: identity camera" {
         const c: Camera2D = .{
             .offset = .{ 0, 0 },
             .target = .{ 0, 0 },
@@ -6503,7 +6503,7 @@ pub const camera = struct {
         try expect(closeTest(back[1], 17));
     }
 
-    test "world↔screen 2D round trip: zoomed + offset camera" {
+    test "world<->screen 2D round trip: zoomed + offset camera" {
         const c: Camera2D = .{
             .offset = .{ 400, 300 },
             .target = .{ 0, 0 },
@@ -6527,7 +6527,7 @@ pub const camera = struct {
         }
     }
 
-    test "world↔screen 2D round trip: rotated camera" {
+    test "world<->screen 2D round trip: rotated camera" {
         const c: Camera2D = .{
             .offset = .{ 0, 0 },
             .target = .{ 0, 0 },

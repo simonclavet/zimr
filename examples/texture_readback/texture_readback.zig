@@ -1,22 +1,22 @@
-//! texture_readback — port of the GL `texture_readback`: prove the
-//! GPU→CPU pixel path end-to-end.
+//! texture_readback - port of the GL `texture_readback`: prove the
+//! GPU->CPU pixel path end-to-end.
 //!
-//!   1. Render an animated scene into a 256×256 RenderTexture.
+//!   1. Render an animated scene into a 256x256 RenderTexture.
 //!   2. `wgpu.copyTextureToBuffer` (NEW bridge op, t1171) copies the RTT
 //!      into a MAP_READ staging buffer on its own encoder+submit.
 //!   3. The poll-based `bufferRead*` family (the compute path's readback
 //!      machinery) maps it without ever stalling a frame.
 //!   4. The bytes re-upload into a `CpuFramebuffer` and draw NEXT to the
-//!      live RTT — the two panels must match (one async step apart).
+//!      live RTT - the two panels must match (one async step apart).
 //!
 //! The GL original's `loadImageFromTexture` was synchronous (glReadPixels);
 //! WebGPU mapping is async by spec, so the wgpu shape is a frame-delayed
-//! state machine: copy → poll → read → re-upload → repeat.  The readback
-//! panel therefore trails the live panel by the round-trip latency — watch
+//! state machine: copy -> poll -> read -> re-upload -> repeat.  The readback
+//! panel therefore trails the live panel by the round-trip latency - watch
 //! the orbiting dot lag a step; that lag IS the demo being honest.
 //!
-//! 256×256 is chosen so `width * 4 = 1024` bytes/row is already 256-aligned
-//! (the WebGPU `bytesPerRow` rule) — no row padding to strip.
+//! 256x256 is chosen so `width * 4 = 1024` bytes/row is already 256-aligned
+//! (the WebGPU `bytesPerRow` rule) - no row padding to strip.
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
@@ -39,7 +39,7 @@ const State = struct {
     rt: z.RenderTexture = .{},
     /// MAP_READ|COPY_DST staging buffer the texture copies into.
     staging: z.wgpu.BufferHandle,
-    /// In-flight poll handle; .invalid = no read pending → start one.
+    /// In-flight poll handle; .invalid = no read pending -> start one.
     read: z.wgpu.BufferRead = .invalid,
     /// CPU destination + the texture it re-uploads into.
     pixels: []u8,
@@ -79,9 +79,9 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
-/// Advance the copy→map→read state machine by at most one step per frame.
+/// Advance the copy->map->read state machine by at most one step per frame.
 /// Submission order makes this read LAST frame's RTT (the copy encoder
-/// submits before the frame's own encoder) — exactly the one-step lag the
+/// submits before the frame's own encoder) - exactly the one-step lag the
 /// header describes.
 fn pumpReadback(f: *z.Frame, s: *State) void {
     if (s.read != .invalid) {

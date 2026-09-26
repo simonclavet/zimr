@@ -1,4 +1,4 @@
-//! pipeline_array — Phase 3 (`src/notes/webgpu_control.md`): 2D texture
+//! pipeline_array - Phase 3 (`src/notes/webgpu_control.md`): 2D texture
 //! arrays. One texture holds four layers, each painted a distinct pattern by a
 //! COMPUTE shader (a `texture_storage_2d_array`, one dispatch with z = layers).
 //! A single render pipeline then samples a `texture_2d_array`: the layer index
@@ -266,7 +266,7 @@ pub const app: z.AppSpec(State) = .{
     .init = initState,
     // .memory left default (arena): init builds a compute pipeline / multi-pass
     // chain (mipmap or bloom) whose intermediate handles aren't kept in State,
-    // so a full managed teardown needs added State fields — deferred.
+    // so a full managed teardown needs added State fields - deferred.
     .deinit = deinit,
     .update = update,
 };

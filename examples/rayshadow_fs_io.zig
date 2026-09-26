@@ -1,7 +1,7 @@
-//! examples/rayshadow_fs_io.zig — schema for the ray-traced hard-shadow shader.
+//! examples/rayshadow_fs_io.zig - schema for the ray-traced hard-shadow shader.
 //!
 //! The SAME `shaderMain` (rayshadow_fs.zig) compiles to WGSL (GPU), to native
-//! Zig (the raster software dispatcher), and runs at comptime (baked corner) —
+//! Zig (the raster software dispatcher), and runs at comptime (baked corner) -
 //! one shader, three execution targets. It ray-traces a ground plane + two
 //! boxes lit by one directional light, casting HARD SHADOWS via a shadow ray
 //! (no shadow map: the shadow test is a second ray-scene intersection, which is

@@ -1,4 +1,4 @@
-//! zimrphysics2d_demo — a box2d-style testbed for the `zimrphysics2d` engine.
+//! zimrphysics2d_demo - a box2d-style testbed for the `zimrphysics2d` engine.
 //!
 //! The world is the single source of truth: each frame we step the solver on a fixed
 //! timestep, then hand the whole world to `phys.draw`, which fires the DebugDraw
@@ -6,7 +6,7 @@
 //! list. A small control window switches scenes, pauses, zooms, and toggles the
 //! joint / AABB / contact decoration layers.
 //!
-//! Drawing path rationale: see render.zig. One DebugDraw→DrawList adapter covers
+//! Drawing path rationale: see render.zig. One DebugDraw->DrawList adapter covers
 //! every shape/joint/contact the engine emits, so scenes never write rendering code.
 
 const std = @import("std");
@@ -47,7 +47,7 @@ const snapshot_restore_step: u32 = 200;
 
 // -- Pointer dragging: box2d v3.1's mouse-pick, a soft motor joint between the
 // picked body and a movable anchor. The anchor *owns* the joint, so releasing is
-// just destroyBody(anchor) — the joint is torn down with it.
+// just destroyBody(anchor) - the joint is torn down with it.
 
 /// An active drag. `anchor` is a static body parked at the pointer; the motor joint
 /// (held by the anchor) pulls the picked body's grabbed point toward it.
@@ -57,7 +57,7 @@ const Drag = struct {
     grab_local: Vec2, // grabbed point in the picked body's local frame
 };
 
-/// World point → a body's local frame (inverse rigid transform: R(-θ)·(w − p)).
+/// World point -> a body's local frame (inverse rigid transform: R(-theta)*(w - p)).
 fn invTransformPoint(xf: Transform2, w: Vec2) Vec2 {
     const dx: f32 = w[0] - xf.p[0];
     const dy: f32 = w[1] - xf.p[1];
@@ -188,7 +188,7 @@ fn endDrag(s: *State) void {
 
 /// Wraps a child allocator and tracks live bytes of everything allocated through it. Both the
 /// physics world AND the UI host are routed through it, so the "heap" HUD line is the demo's whole
-/// tracked Zig-heap footprint — no per-subsystem blind spot (the UI path being untracked is what
+/// tracked Zig-heap footprint - no per-subsystem blind spot (the UI path being untracked is what
 /// let the zimr404 frame-arena leak hide). The "wasm total" HUD line is the ground-truth global
 /// (every page, incl. untracked GPU/interop); a climb there with this flat localises a leak.
 /// Heap-allocated (initState) so its self-pointer stays stable regardless of where State lives.
@@ -431,7 +431,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.perf_substeps = steps_run;
     }
 
-    // Draw the world under the UI via the DebugDraw→DrawList adapter.
+    // Draw the world under the UI via the DebugDraw->DrawList adapter.
     const draw_t0: f64 = z.wgpu.nowMs();
     const bg: ui.DrawListHandle = u.getBackgroundDrawList();
     var ctx: render.DrawCtx = .{ .dl = bg, .cam = s.cam };
@@ -477,7 +477,7 @@ fn update(f: *z.Frame, s: *State) void {
     })) |win| {
         defer win.close();
         u.text("Scene {d}/{d}", .{ s.current_scene + 1, scenes.list.len });
-        // Live perf readout — the device is the only honest profiler for the wasm build.
+        // Live perf readout - the device is the only honest profiler for the wasm build.
         const fps: f32 = if (s.perf_frame_ms > 0.01) 1000.0 / s.perf_frame_ms else 0;
         u.text("{d:.0} fps  {d:.1} ms/frame", .{ fps, s.perf_frame_ms });
         u.text("phys {d:.1} ms x{d}  draw {d:.1} ms", .{ s.perf_phys_ms, s.perf_substeps, s.perf_draw_ms });
@@ -487,7 +487,7 @@ fn update(f: *z.Frame, s: *State) void {
             s.world.active.items.len,
         });
         // Per-phase step breakdown from the profiler (mean ms/step over the ~2s window). Shows
-        // where the physics step actually spends its time — broadphase vs narrowphase vs solve etc.
+        // where the physics step actually spends its time - broadphase vs narrowphase vs solve etc.
         if (z.profiler.enabled) {
             var stats: [256]z.profiler.SrcStat = undefined;
             const n: usize = z.profiler.aggregate(&stats);
@@ -503,11 +503,11 @@ fn update(f: *z.Frame, s: *State) void {
                 u.text("  {s} {d:.1} ms", .{ name[4..], mean_ms });
             }
         }
-        // Memory + broadphase structure sizes — to catch a leak (monotonic climb at constant
+        // Memory + broadphase structure sizes - to catch a leak (monotonic climb at constant
         // body count). tree-node counts only grow when the tree genuinely needs more nodes; for a
         // fixed body count they should plateau near 2N. pairs = live contact pairs in the set.
         u.text("heap {d} KB  peak {d} KB", .{ s.mem.bytes / 1024, s.mem.peak / 1024 });
-        // Total wasm linear memory (everything, not just the world) — climbs toward the cap if
+        // Total wasm linear memory (everything, not just the world) - climbs toward the cap if
         // something outside the tracked world allocator (UI / render / GPU staging) is leaking.
         if (comptime builtin.target.cpu.arch == .wasm32) {
             u.text("wasm total {d} MB", .{@as(usize, @wasmMemorySize(0)) * 64 / 1024});
@@ -578,7 +578,7 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    // Big on-screen control pad for interactive scenes — a separate window anchored to the
+    // Big on-screen control pad for interactive scenes - a separate window anchored to the
     // bottom-centre of the canvas (outside the main panel) so it's thumb-reachable on a phone.
     if (scenes.list[s.current_scene].control != null) {
         const screen_w: f32 = f.window.widthf();

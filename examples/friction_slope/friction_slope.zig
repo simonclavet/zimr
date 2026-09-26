@@ -1,25 +1,25 @@
-//! friction_slope — does the engine's friction match Coulomb's law?
+//! friction_slope - does the engine's friction match Coulomb's law?
 //!
-//! ── ★★★ A DEMO WITH A CLOSED-FORM ANSWER ──
+//! -- *** A DEMO WITH A CLOSED-FORM ANSWER --
 //!
-//! A body resting on a slope holds when **tan(θ) < μ** and slides beyond. That is not a
+//! A body resting on a slope holds when **tan(theta) < mu** and slides beyond. That is not a
 //! judgement call or a tuning target; it is a line on the chart, and the engine either lands on
 //! it or does not. The predicted threshold is drawn as a marker on the angle slider, so the
 //! question "is the friction right?" is answered by looking at where the sliding starts.
 //!
-//! ── ★★ WHY THIS EXISTS ──
+//! -- ** WHY THIS EXISTS --
 //!
 //! `examples/quadruped` slides about a metre in twenty seconds while standing perfectly still,
-//! with the measured tangential demand at only **0.20 of the friction cone** — the feet creep
+//! with the measured tangential demand at only **0.20 of the friction cone** - the feet creep
 //! with four fifths of the grip unused. That says the sliding is not Coulomb slip. But it does
 //! not say whether the Coulomb LIMIT is right, and those are different faults with different
 //! fixes:
 //!
-//!   * **the limit is wrong** → the robot would slip at angles well below `atan(μ)`;
-//!   * **the limit is right and the solver creeps** → it holds to the predicted angle, but drifts
+//!   * **the limit is wrong** -> the robot would slip at angles well below `atan(mu)`;
+//!   * **the limit is right and the solver creeps** -> it holds to the predicted angle, but drifts
 //!     slowly at every angle below it.
 //!
-//! ★ THE SLOPE SEPARATES THEM, and nothing else measured so far does.
+//! * THE SLOPE SEPARATES THEM, and nothing else measured so far does.
 
 const std = @import("std");
 const common = @import("example_common");
@@ -84,7 +84,7 @@ const State = struct {
     start_pos: Vec,
     slid: f32,
     elapsed: f32,
-    /// Peak |tangential| / (mu * normal) seen since the reset — the cone occupancy.
+    /// Peak |tangential| / (mu * normal) seen since the reset - the cone occupancy.
     cone_worst: f32,
 
     running: bool,
@@ -159,7 +159,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn restart(s: *State) void {
     const m: *rbt.Model = &s.imported.model;
 
-    // ── ★ THE SLOPE IS THE GROUND ROTATED, NOT GRAVITY TILTED ──
+    // -- * THE SLOPE IS THE GROUND ROTATED, NOT GRAVITY TILTED --
     //
     // Tilting gravity would give the same free-body diagram and a much easier contact problem:
     // the normal would stay aligned with the box's face. Rotating the GROUND is the honest
@@ -168,8 +168,8 @@ fn restart(s: *State) void {
     body.rot = zm.quatFromAxisAngle(vec(0, 1, 0), s.slope);
     body.com_pos = zm.rotate(body.rot, vec(0, 0, -0.5));
 
-    // ★ FRICTION ON THE GROUND BODY. Contact friction combines the two bodies' values, so the
-    // slider has to move one of them and the robot's feet keep theirs — which is what a real
+    // * FRICTION ON THE GROUND BODY. Contact friction combines the two bodies' values, so the
+    // slider has to move one of them and the robot's feet keep theirs - which is what a real
     // surface change looks like.
     body.friction = s.friction;
 
@@ -239,7 +239,7 @@ fn update(f: *z.Frame, s: *State) void {
             rbt.step(m, &s.data);
             s.elapsed += sim_dt;
 
-            // ★★ CONE OCCUPANCY, the number that separates "the limit is wrong" from "the solver
+            // ** CONE OCCUPANCY, the number that separates "the limit is wrong" from "the solver
             // creeps". A body sliding at 0.2 of its cone is not being held back by friction.
             for (0..s.data.contact_count) |c| {
                 const base: usize = c * rbt.rows_per_contact;
@@ -275,26 +275,26 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     const body: *const zp.Body = &s.world.bodies.data[s.ground.index()];
     const centre: Vec = zm.zUpToYUpPoint(body.com_pos);
     s.transform[0] = mulMat(
-        // ── ★★★ THE RENDER AXIS IS DERIVED, NOT GUESSED ──
+        // -- *** THE RENDER AXIS IS DERIVED, NOT GUESSED --
         //
         // The solver tilts the ground about **Y in its Z-up frame**:
         //
-        //     x' =  x·cosθ + z·sinθ
-        //     z' = -x·sinθ + z·cosθ
+        //     x' =  x*cos theta + z*sin theta
+        //     z' = -x*sin theta + z*cos theta
         //
         // The render swizzle is `(x,y,z)_zup -> (x,z,y)_yup`, so substituting:
         //
-        //     x_r' =  x_r·cosθ + y_r·sinθ
-        //     y_r' = -x_r·sinθ + y_r·cosθ
+        //     x_r' =  x_r*cos theta + y_r*sin theta
+        //     y_r' = -x_r*sin theta + y_r*cos theta
         //     z_r' =  z_r
         //
-        // ★ THAT IS A ROTATION IN THE RENDER x–y PLANE — **about render Z**, not X. I guessed X
+        // * THAT IS A ROTATION IN THE RENDER x-y PLANE - **about render Z**, not X. I guessed X
         // and the ground drew tilted the wrong way while the robot, whose base quaternion is set
         // in solver space, banked correctly. **The robot was right and the floor was wrong**,
         // which reads as the robot leaning the wrong way.
         //
-        // ★★ AND THE SIGN FOLLOWS THE SAME WAY: `rotationZ(φ)` gives `x' = x·cosφ - y·sinφ`, so
-        // matching the substitution above needs `φ = -θ`. A frame conversion is two lines of
+        // ** AND THE SIGN FOLLOWS THE SAME WAY: `rotationZ(phi)` gives `x' = x*cos phi - y*sin phi`, so
+        // matching the substitution above needs `phi = -theta`. A frame conversion is two lines of
         // algebra; guessing it is two turns of looking at pictures.
         mulMat(zm.rotationZ(-s.slope), scaling(16, 1, 16)),
         translation(centre[0], centre[1], centre[2]),
@@ -311,7 +311,7 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
         z.drawMeshInstanced(gl, &s.sphere, &s.transform, robot_colour);
     }
 
-    // ★ WHERE IT STARTED, so the slide is visible rather than only reported.
+    // * WHERE IT STARTED, so the slide is visible rather than only reported.
     const from: Vec = zm.zUpToYUpPoint(s.start_pos);
     const now: Vec = zm.zUpToYUpPoint(s.data.body_xpos[1]);
     const holding: bool = s.slid < 0.05;
@@ -335,9 +335,9 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         }
         _ = u.slider("friction mu", &s.friction, .{ .min = 0.05, .max = 1.5, .fmt = "{d:.2}" });
 
-        // ── ★★★ THE PREDICTION, STATED BEFORE THE RESULT ──
+        // -- *** THE PREDICTION, STATED BEFORE THE RESULT --
         //
-        // Coulomb says a resting body holds while tan(θ) < μ. That threshold is arithmetic, not
+        // Coulomb says a resting body holds while tan(theta) < mu. That threshold is arithmetic, not
         // opinion, so the demo can mark it and let the engine be judged against it.
         const threshold: f32 = atanRad(s.friction) * 180.0 / pi;
         u.separator();
@@ -354,8 +354,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         u.separator();
         u.text("after {d:.1} s:  slid {d:.4} m", .{ s.elapsed, s.slid });
         u.text("  peak cone occupancy {d:.2}", .{s.cone_worst});
-        // ★★ THE DIAGNOSIS THE DEMO EXISTS TO MAKE. Sliding while the cone is far from full means
-        // friction is not what is failing — the solver is letting contacts drift inside their
+        // ** THE DIAGNOSIS THE DEMO EXISTS TO MAKE. Sliding while the cone is far from full means
+        // friction is not what is failing - the solver is letting contacts drift inside their
         // own limit. Sliding WITH a full cone is ordinary Coulomb slip and entirely correct.
         if (s.slid > 0.05 and s.cone_worst < 0.8 and degrees < threshold - 1.0) {
             u.text("  SLIDING BELOW THE THRESHOLD, cone not full:", .{});

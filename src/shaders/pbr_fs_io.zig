@@ -1,25 +1,25 @@
-//! src/shaders/pbr_fs_io.zig — typed interface for the PBR
+//! src/shaders/pbr_fs_io.zig - typed interface for the PBR
 //!
 //! Binding model (which @group each uniform/sampler lands in) is the
-//! stage-segregated scheme documented in src/zimr.zig §3:
-//! VS uniforms→group 0, samplers→group 1, FS uniforms→group 2.
+//! stage-segregated scheme documented in src/zimr.zig section 3:
+//! VS uniforms->group 0, samplers->group 1, FS uniforms->group 2.
 //! fragment shader.  Companion to `pbr_fs.zig`.
 //!
 //! Describes the fragment shader's external boundary:
 //!   - Inputs: 6 interpolated values from VS (= `common.Interp`).
-//!   - Samplers: 6 texture bindings — base color, metallic-roughness,
+//!   - Samplers: 6 texture bindings - base color, metallic-roughness,
 //!     normal, occlusion, emissive, shadow map.
 //!   - Uniforms: PBR factors (col_diffuse, metallic, roughness,
 //!     emissive, view_pos, ambient), directional + point light
 //!     arrays sized by `common.MAX_*_LIGHTS`, fog params, shadow
 //!     gate flag.
-//!   - Outputs: `out_color` (vec4 — RGB color + alpha).
+//!   - Outputs: `out_color` (vec4 - RGB color + alpha).
 //!
 //! Sampler slot bindings here drive the schema-driven sampler
 //! auto-binding in `shader_runtime.loadShader` (Phase 1).  Once
 //! Phase 4b lands the damaged_helmet migration, `drawMesh`'s
 //! texture-binding loop will look up slot indices from this struct
-//! rather than the hardcoded `SHADER_LOC_MAP_*` table — and the
+//! rather than the hardcoded `SHADER_LOC_MAP_*` table - and the
 //! friendly-name fallback in `loadShaderFromMemory` becomes deletable.
 //!
 //! Phase 4a of `src/notes/typesafe_zig_shaders.md`.
@@ -30,7 +30,7 @@ const shader = @import("shader_interface");
 const common = @import("pbr_common_io.zig");
 
 /// Interpolated inputs from `pbr_vs`.  Field order MUST match
-/// `pbr_vs_io.Outputs` (= `common.Interp` for both stages →
+/// `pbr_vs_io.Outputs` (= `common.Interp` for both stages ->
 /// trivially enforced).
 pub const Inputs = common.Interp;
 
@@ -40,7 +40,7 @@ pub const Inputs = common.Interp;
 /// shadow map, which is engine-managed.
 pub const Samplers = struct {
     /// Base color (albedo).  Naming follows the legacy raylib
-    /// `texture0` convention — strips to `uniform sampler2D texture0`
+    /// `texture0` convention - strips to `uniform sampler2D texture0`
     /// in the cross-compiled GLSL.
     texture0: shader.Sampler2D(.albedo, .{}),
     metallic_roughness: shader.Sampler2D(.metalness, .{}),
@@ -48,7 +48,7 @@ pub const Samplers = struct {
     occlusion: shader.Sampler2D(.occlusion, .{}),
     emissive: shader.Sampler2D(.emission, .{}),
     /// Depth-in-red shadow map.  Bound at a fixed slot (`.cubemap`
-    /// — chosen because it's an unused enum value in the glTF
+    /// - chosen because it's an unused enum value in the glTF
     /// metallic-roughness pipeline, not because it's a cubemap) so
     /// that the shadow-pass setup in `render.zig` can pre-bind the
     /// shadow texture without colliding with material slots.
@@ -119,7 +119,7 @@ pub const Ubo = struct {
     shadow_enabled: i32 = 0,
 };
 
-/// Stage output.  Single attachment — the rendered color buffer.
+/// Stage output.  Single attachment - the rendered color buffer.
 pub const Outputs = struct {
     out_color: Vec,
 };

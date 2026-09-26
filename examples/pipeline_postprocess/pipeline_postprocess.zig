@@ -1,4 +1,4 @@
-//! pipeline_postprocess — a pass whose INPUT is a previous pass's output.
+//! pipeline_postprocess - a pass whose INPUT is a previous pass's output.
 //! Render a spinning gradient triangle into a RenderTexture, then a FULLSCREEN
 //! shader SAMPLES that texture and applies a screen-space effect (chromatic
 //! aberration + vignette). The post-processing / bloom foundation.
@@ -8,7 +8,7 @@
 //!     transform + gradient) rendered into the RT.
 //!   - Post pass = the fullscreen `trivial_vs` + `postprocess_post_fs`,
 //!     which declares a `scene` sampler. That sampler is the FIRST texture bound
-//!     through `z.shader.loadShaderVF` — the unified `Resources` machinery
+//!     through `z.shader.loadShaderVF` - the unified `Resources` machinery
 //!     builds its bind group; no hand-built pipeline. The texture is supplied by
 //!     name: `.textures = .{ .scene = rt.asTexture() }`.
 //!
@@ -61,7 +61,7 @@ const vertices = [_]Vertex{
     .{ .x = 0.7, .y = -0.6, .r = 0.3, .g = 0.4, .b = 1.0 },
 };
 
-/// transform = scale(sx, sy) · rotateZ(angle), in zm row convention so the
+/// transform = scale(sx, sy) * rotateZ(angle), in zm row convention so the
 /// shader's `mulMatPoint` matches WGSL `m * vec4(p, 1)`.
 fn transform2d(angle: f32, sx: f32, sy: f32) zm.Mat {
     return mulMat(scaling(sx, sy, 1.0), rotationZ(angle));
@@ -93,7 +93,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     const rt: z.RenderTexture = z.loadRenderTexture(f.gl, rt_size, rt_size);
 
-    // Scene shader (renders into the RT — pin to the RT's rgba8/no-depth pass).
+    // Scene shader (renders into the RT - pin to the RT's rgba8/no-depth pass).
     const scene: z.shader.LoadedShader(scene_vs_io) = try z.shader.loadShaderVF(scene_vs_io, scene_fs_io, .{
         .f = f.gpu,
         .gpa = gpa,
@@ -107,7 +107,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     // Post shader: fullscreen, samples the RT. The `scene` sampler is bound by
-    // name from the schema's `Samplers` — the new unified texture path.
+    // name from the schema's `Samplers` - the new unified texture path.
     const post: z.shader.LoadedShader(post_fs_io) = try z.shader.loadShaderVF(post_vs_io, post_fs_io, .{
         .f = f.gpu,
         .gpa = gpa,
@@ -149,7 +149,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // 2) Post pass: the fullscreen sampler shader reads the RT into the
     //    backbuffer. drawFullscreenShader routes through the post shader's OWN
-    //    pipeline + bind groups (group-1 RT sampler intact), NOT the 2D batch —
+    //    pipeline + bind groups (group-1 RT sampler intact), NOT the 2D batch -
     //    so the batch's atlas can't clobber the sampler.
     z.drawFullscreenShader(f.gl, post_fs_io, &s.post);
 
@@ -173,7 +173,7 @@ pub const app: z.AppSpec(State) = .{
     .init = initState,
     // .memory left default (arena): per-lifecycle teardown is balanced (scene +
     // post + vbo + rt all freed), but the shutdown proof flags 1 residual buffer
-    // from the LoadedShader/rt-sampling path that isn't reachable from State —
+    // from the LoadedShader/rt-sampling path that isn't reachable from State -
     // deferred rather than guess at an engine-owned handle.
     .deinit = deinit,
     .update = update,

@@ -2,7 +2,7 @@
 // Five new helpers in one screen:
 //   - inputTextWithHint: placeholder text in dimmed color when empty
 //   - sliderAngle: radians stored, degrees displayed/dragged
-//   - beginItemTooltip / endItemTooltip: hover→tooltip shorthand
+//   - beginItemTooltip / endItemTooltip: hover->tooltip shorthand
 //   - calcTextSize: public text measurement for custom layouts
 //   - setKeyboardFocusHere: programmatic focus on the next widget
 

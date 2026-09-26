@@ -1,8 +1,8 @@
-//! src/shaders/gbuffer_fs.zig — G-buffer fragment shader body.
+//! src/shaders/gbuffer_fs.zig - G-buffer fragment shader body.
 //!
 //! Deferred pass 1's fragment stage doesn't light anything.  It's a
 //! stenographer: write down where the surface is, which way it faces,
-//! and what it's made of — three outputs, three textures, done.  Pass 2
+//! and what it's made of - three outputs, three textures, done.  Pass 2
 //! (`deferred_shading_fs`) reads those textures and does ALL the
 //! lighting exactly once per screen pixel, no matter how much geometry
 //! overdrew here.
@@ -24,7 +24,7 @@ pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
     // Location 0: world position, straight through.  (raylib stores
-    // positions too — with the same "reconstruct-from-depth would be
+    // positions too - with the same "reconstruct-from-depth would be
     // better" caveat.  Storing is the simple, readable version; the
     // reconstruction trick can be its own example someday.)
     out.g_world_pos = .{
@@ -34,7 +34,7 @@ pub fn shaderMain(io_in: Io) Out {
         1.0,
     };
 
-    // Location 1: world normal, re-normalized — interpolating between
+    // Location 1: world normal, re-normalized - interpolating between
     // per-vertex normals shortens the vector across the triangle, and
     // the lighting pass wants honest unit vectors for its dot products.
     const n: Vec3 = normalize(io_in.frag_world_normal);

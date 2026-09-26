@@ -1,10 +1,10 @@
-//! text_strings_management — raylib's [text] strings-management sample, reimagined
+//! text_strings_management - raylib's [text] strings-management sample, reimagined
 //! as a hands-on playground for the string ops themselves.
 //!
 //! raylib's version demos TextSubtext / TextSplit / TextJoin by turning a
 //! sentence into draggable "text particles" you slice and glue. We keep that
 //! spirit but lean into what's fun on a phone: every word is a chip you can drag
-//! with a finger, and the two gestures ARE the two headline operations —
+//! with a finger, and the two gestures ARE the two headline operations -
 //!
 //!   * TAP a chip            -> SHATTER it into one chip per character  (a split)
 //!   * DROP a chip onto       -> GLUE the two chips into one, text joined (a join)
@@ -12,7 +12,7 @@
 //!
 //! The HUD rebuilds the whole sentence live by joining every chip left-to-right,
 //! so you can watch the string come apart and go back together. No engine feature
-//! needed — just text, rects, and touch; the "string library" is plain Zig slices.
+//! needed - just text, rects, and touch; the "string library" is plain Zig slices.
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
@@ -181,7 +181,7 @@ fn chipAt(s: *State, p: Vec2) ?usize {
     return null;
 }
 
-/// A chip (other than `gi`) whose rect overlaps `gi`'s — the glue target.
+/// A chip (other than `gi`) whose rect overlaps `gi`'s - the glue target.
 fn overlapTarget(s: *State, gi: usize) ?usize {
     const g: Rect = chipRect(s, &s.chips[gi]);
     var i: usize = 0;
@@ -245,7 +245,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     const ptr: Vec2 = z.getMousePosition(f.input);
     const pressed: bool = z.isMouseButtonPressed(f.input, .left);
-    // Raw held-state + press origin — the phone-safe way (delta accumulation
+    // Raw held-state + press origin - the phone-safe way (delta accumulation
     // jumps on touch because the pre-touch pointer is stale). Follow the finger
     // absolutely: chip.pos = finger - grab_offset. Same recipe as ui_phone_gestures.
     const down: bool = f.input.mouse.current_button[0] != 0;

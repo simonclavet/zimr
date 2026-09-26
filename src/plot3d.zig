@@ -1,6 +1,6 @@
 //! lint:alias plot3d
 //! lint:off scope-balance: ImPlot3D provider/wrapper - begin*/end* here are forwarders, not paired usage.
-//! implot3d.zig — a single-file, pure-Zig port of ImPlot3D v0.5 WIP
+//! implot3d.zig - a single-file, pure-Zig port of ImPlot3D v0.5 WIP
 //! (https://github.com/brenocq/implot3d, MIT, (c) 2024-2025 Breno Cunha
 //!  Queiroz; Zig port 2026).
 //!
@@ -41,13 +41,13 @@
 //! the 2D port used for its f32 Point/Range/PlotRect.
 //!
 //! ---- DOCUMENTED DEVIATIONS (first draft) ----------------------------------
-//!   · Painter's-algorithm CPU triangle sort replicated in DrawList3D; no GPU
+//!   * Painter's-algorithm CPU triangle sort replicated in DrawList3D; no GPU
 //!     depth buffer. Triangle buffer is allocated from the frame allocator.
-//!   · AA thick-line texture path dropped -> plain polylines.
-//!   · Mesh-image / textured quads: no perspective-correct per-fragment UVs;
+//!   * AA thick-line texture path dropped -> plain polylines.
+//!   * Mesh-image / textured quads: no perspective-correct per-fragment UVs;
 //!     approximated via addTexturedQuad per cell.
-//!   · Vertical text -> horizontal fallback.
-//!   · No GPU mesh upload; PlotMesh projects + sorts on the CPU.
+//!   * Vertical text -> horizontal fallback.
+//!   * No GPU mesh upload; PlotMesh projects + sorts on the CPU.
 
 const std = @import("std");
 const ArrayList = std.ArrayList;
@@ -76,7 +76,7 @@ const splat2 = zm.splat2;
 /// 2D screen-space vector (f32). Native @Vector ops; components [0]/[1].
 const Vec2 = zm.Vec2;
 
-// Color constructors — return zm.Color, the engine-wide color type (u8 RGBA).
+// Color constructors - return zm.Color, the engine-wide color type (u8 RGBA).
 // "Auto" colors are expressed as `?Color` = `null` (deduced from the colormap /
 // ui style), matching plot.zig and the rest of zimr. The packed wire form is
 // `zm.ColorU32` via `Color.toWire()` / `Color.fromWire()`; blend math uses
@@ -109,15 +109,15 @@ pub const auto: i32 = -1;
 /// frame gracefully instead of crashing. Route every such fallible append
 /// through here so the policy is one deliberate, greppable decision rather than
 /// scattered silent `catch {}`s. (One-time/persistent allocations are NOT
-/// routed here — those propagate their errors.)
+/// routed here - those propagate their errors.)
 inline fn dropFrameOnOom(result: anytype) void {
     result catch {}; // lint:off catch-suppression: deliberate frame-drop policy
 }
 
 //=============================================================================
-// [SECTION] Geometry — 3D points & quaternions via zimrmath (zm)
+// [SECTION] Geometry - 3D points & quaternions via zimrmath (zm)
 //
-// A 3D point/vector is `zm.Vec` — a 4-wide `@Vector(4, f32)` with xyz used and
+// A 3D point/vector is `zm.Vec` - a 4-wide `@Vector(4, f32)` with xyz used and
 // the w lane carried as 0. This is the representation zm's 3D ops (cross,
 // dot3, length3, normalize3) and the whole quaternion API are built around, so
 // projection and rotation stay conversion-free and SIMD-aligned. Components are
@@ -146,7 +146,7 @@ const splat = zm.splat;
 pub const Point3 = Vec;
 /// Rotation quaternion (x y z w = [0..3]).
 const Quat = zm.Quat;
-/// Inclusive 1D interval — axis range, fit extents, zoom/limit constraints.
+/// Inclusive 1D interval - axis range, fit extents, zoom/limit constraints.
 // lint:off no-qualified-zm: generic instantiation forms the public alias; cannot bind
 const Range = zm.Range(f32);
 
@@ -159,7 +159,7 @@ pub inline fn point3IsNan(p: Point3) bool {
     return p[0] != p[0] or p[1] != p[1] or p[2] != p[2];
 }
 /// Quaternion from elevation + azimuth (radians). Composes
-/// `elevation ∘ (-90° about X) ∘ azimuth` (applied right-to-left, so azimuth
+/// `elevation o (-90 deg about X) o azimuth` (applied right-to-left, so azimuth
 /// first). `qmul` is Hamilton order (`qmul(a, b) == a * b`), so that maps to
 /// `qmul(qmul(el, zero), az)`.
 pub fn quatFromElAz(elevation_turns: f32, azimuth_turns: f32) Quat {
@@ -172,7 +172,7 @@ pub fn quatFromElAz(elevation_turns: f32, azimuth_turns: f32) Quat {
 }
 
 //=============================================================================
-// [SECTION] Box / Plane / Ray — plot-domain aggregates over zm.Vec
+// [SECTION] Box / Plane / Ray - plot-domain aggregates over zm.Vec
 //=============================================================================
 
 /// Axis-aligned bounding box in plot space.
@@ -502,7 +502,7 @@ pub const AxisFlags = packed struct(u32) {
 };
 
 //=============================================================================
-// [SECTION] PixRect — pixel-space rectangle (min/max Vec2)
+// [SECTION] PixRect - pixel-space rectangle (min/max Vec2)
 //=============================================================================
 
 pub const PixRect = struct {
@@ -548,7 +548,7 @@ pub const PixRect = struct {
 };
 
 //=============================================================================
-// [SECTION] im — the ui/imgui compatibility shim
+// [SECTION] im - the ui/imgui compatibility shim
 //
 // implot3d (like the 2D port) is written against an ImGui-shaped API. This
 // shim maps that vocabulary onto zimr's `ui` (command-recording DrawList +
@@ -2007,7 +2007,7 @@ pub const Context = struct {
     }
 
     /// The ui shim bound to this context's frame handle. `const im: Im = ctx.im();`
-    /// then `im.addLine(...)` etc. — the explicit, global-free replacement for
+    /// then `im.addLine(...)` etc. - the explicit, global-free replacement for
     /// the old module-level `im` namespace.
     pub fn im(self: *Context) Im {
         return .{ .h = self.handle(), .ctx = self };
@@ -2085,7 +2085,7 @@ pub fn getStyleColorName(idx: Col) [:0]const u8 {
 
 // Simple style-color override stack (LIFO). Mirrors implot.zig's behavior:
 // pushStyleColor temporarily overrides a Col; popStyleColor restores it. The
-// stack itself lives on the Context (Context.style_color_stack) — no globals.
+// stack itself lives on the Context (Context.style_color_stack) - no globals.
 
 pub fn pushStyleColor(ctx: *Context, idx: Col, col: Color) void {
     const style: *Style = getStyle(ctx);
@@ -2108,23 +2108,23 @@ pub fn popStyleColor(ctx: *Context, count: usize) void {
 }
 
 //=============================================================================
-// [SECTION] DrawList3D — CPU painter's-algorithm triangle batch
+// [SECTION] DrawList3D - CPU painter's-algorithm triangle batch
 //
 // ImPlot3D batches projected triangles with a per-triangle Z, then sorts them
 // far->near and flushes to the ImGui DrawList. zimr's ui.DrawList has no raw
 // vertex buffer, so we accumulate (a, b, c, col, z) tuples here and emit
 // addTriangleFilled per triangle in sorted order on flush(). Lines/markers/
 // text are drawn directly to the 2D DrawList by the renderers (they don't need
-// z-sorting against the fills in practice — upstream draws them after the
+// z-sorting against the fills in practice - upstream draws them after the
 // sorted tris too).
 //=============================================================================
 
 //=============================================================================
-// [SECTION] Spec — per-item styling (replaces SetNext*Style)
+// [SECTION] Spec - per-item styling (replaces SetNext*Style)
 //=============================================================================
 
 //=============================================================================
-// [SECTION] Pool — keyed object pool (mirrors the 2D port's ImPool)
+// [SECTION] Pool - keyed object pool (mirrors the 2D port's ImPool)
 //=============================================================================
 
 //=============================================================================
@@ -2353,7 +2353,7 @@ pub fn pixelsToPlotRayXY(ctx: *Context, x: f32, y: f32) Ray {
 }
 
 /// Shared builder: column-major ortho VP mapping NDC-cube points to clip for a
-/// `target_w`×`target_h` viewport with the plot centered at `center` (in that
+/// `target_w`x`target_h` viewport with the plot centered at `center` (in that
 /// target's pixel space). See `viewProjMatrix` / `viewProjMatrixRT`.
 fn viewProjMatrixCentered(
     plot: *const Plot3D,
@@ -2375,14 +2375,14 @@ fn viewProjMatrixCentered(
     const zhalf: f32 = 0.5 * @sqrt(nx * nx + ny * ny + nz * nz) * 1.01 + 1e-4;
     const kz: f32 = 0.5 / zhalf;
     return .{
-        .{ sx * ex[0], sy * ex[1], -kz * ex[2], 0 }, // col0 (← ndc.x)
-        .{ sx * ey[0], sy * ey[1], -kz * ey[2], 0 }, // col1 (← ndc.y)
-        .{ sx * ez[0], sy * ez[1], -kz * ez[2], 0 }, // col2 (← ndc.z)
-        .{ cx, cy, 0.5, 1 }, // col3 (← w=1)
+        .{ sx * ex[0], sy * ex[1], -kz * ex[2], 0 }, // col0 (<- ndc.x)
+        .{ sx * ey[0], sy * ey[1], -kz * ey[2], 0 }, // col1 (<- ndc.y)
+        .{ sx * ez[0], sy * ez[1], -kz * ez[2], 0 }, // col2 (<- ndc.z)
+        .{ cx, cy, 0.5, 1 }, // col3 (<- w=1)
     };
 }
 
-/// Build a column-vector view-projection matrix (`clip = VP · vec4(ndc, 1)`)
+/// Build a column-vector view-projection matrix (`clip = VP * vec4(ndc, 1)`)
 /// that maps NDC-cube points into clip space so that, when GPU geometry is
 /// rendered into a viewport set to the plot rect (with the WebGPU depth range
 /// [0,1]), it lands pixel-for-pixel on the CPU axes overlay produced by
@@ -2391,20 +2391,20 @@ fn viewProjMatrixCentered(
 /// so the two can be composited (GPU fills under the CPU box/labels overlay).
 ///
 /// The rotation is taken straight from `rotate()` applied to the basis vectors,
-/// so it matches the CPU path *by construction* — no quaternion-vs-matrix
+/// so it matches the CPU path *by construction* - no quaternion-vs-matrix
 /// convention coupling. The projection is orthographic (constant `getViewScale`,
 /// no perspective divide), so `w = 1` and depth is linear in the rotated z.
 /// Returns a `zm.Mat` (`[4]Vec`, one `Vec` per row).
 /// Build the view-projection matrix that drives a depth-tested GPU 3D pass
 /// (`draw3d` / `beginFrame3D`) so its geometry lands pixel-for-pixel on the CPU
 /// axes overlay (`ndcToPixels`). `target_w`/`target_h` are the render target
-/// (framebuffer) size in pixels — the single shared 3D pass uses the full
-/// framebuffer viewport, so the framebuffer→clip mapping is folded into the
+/// (framebuffer) size in pixels - the single shared 3D pass uses the full
+/// framebuffer viewport, so the framebuffer->clip mapping is folded into the
 /// matrix rather than set via a per-plot viewport.
 ///
 /// Result is a `zm.Mat` in zm's COLUMN-MAJOR convention (each `Mat[i]` is a
 /// column), so `zm.mulMatVec(vp, v)` / the WGSL `vp * vec4(p,1)` compute the
-/// intended `M·v` — the same convention the cube/models demos use. The rotation
+/// intended `M*v` - the same convention the cube/models demos use. The rotation
 /// columns are taken straight from `rotate()` on the basis vectors, so the
 /// orientation matches the CPU path by construction. Orthographic (`w == 1`),
 /// WebGPU depth range [0,1].
@@ -3173,7 +3173,7 @@ fn renderTicksAndLabels(
             // Walk the edge that leaves `range_min` along THIS axis only; the other two
             // coordinates stay pinned at their minimum.
             //
-            // ★ THE SWITCH IS LOAD-BEARING, NOT VERBOSITY. `Point3` is `@Vector(4, f32)`, and a
+            // * THE SWITCH IS LOAD-BEARING, NOT VERBOSITY. `Point3` is `@Vector(4, f32)`, and a
             // vector index must be COMPTIME-KNOWN - `tick_point[a]` with a runtime `a` is
             // `error: vector index not comptime known`. The switch gives each arm a literal
             // index. Anyone "simplifying" this back to `tick_point[a]` gets a compile error, but
@@ -3200,7 +3200,7 @@ fn renderTicksAndLabels(
         }
         // The axis name, at the MIDDLE of that axis's own edge.
         //
-        // ★ This previously read `var p = range_max; ... _ = &p;` - every axis drew its label at
+        // * This previously read `var p = range_max; ... _ = &p;` - every axis drew its label at
         // the same `range_max` corner, so all three names stacked on one point and only the last
         // was readable. The `_ = &p` was there to stop the compiler complaining that a `var`
         // which is never written should be `const`, which is a fair signal that the line meant
@@ -3264,7 +3264,7 @@ const box_edges = [12][2]usize{
     .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 }, // verticals
 };
 
-/// Distance from point `p` to segment `a`–`b` (screen space).
+/// Distance from point `p` to segment `a`-`b` (screen space).
 fn distPointSegment(p: Vec2, a: Vec2, b: Vec2) f32 {
     const abx: f32 = b[0] - a[0];
     const aby: f32 = b[1] - a[1];
@@ -4475,7 +4475,7 @@ pub fn plotSurface(
                     // belong to the neighbouring cells, which is what keeps every interior edge
                     // from being stroked twice.
                     //
-                    // ★ CONSEQUENCE: the far boundary is not stroked at all. No cell has
+                    // * CONSEQUENCE: the far boundary is not stroked at all. No cell has
                     // `yi == y_count - 1` or `xi == x_count - 1` as its origin, so the last row's
                     // horizontal edges and the last column's vertical edges are missing, and the
                     // wireframe is open on two sides. Left as-is rather than fixed blind, because
@@ -4546,7 +4546,7 @@ pub fn plotMesh(
 // ---- Text ----
 
 /// Draw text at a plot-space position (angle in radians; horizontal-only on
-/// this backend — DEVIATION: rotation falls back to horizontal).
+/// this backend - DEVIATION: rotation falls back to horizontal).
 pub fn plotText(
     ctx: *Context,
     text: []const u8,
@@ -4961,10 +4961,10 @@ test "viewProjMatrixRT maps NDC to plot-rect-local pixels (RTT compositing)" {
     };
     for (samples) |s| {
         const clip: Point3 = mulMatVec(m, .{ s[0], s[1], s[2], 1 });
-        // RT viewport = the plot rect, so map clip → RT-local pixels …
+        // RT viewport = the plot rect, so map clip -> RT-local pixels ...
         const px_rt: f32 = (clip[0] * 0.5 + 0.5) * rw;
         const py_rt: f32 = (0.5 - clip[1] * 0.5) * rh;
-        // … which must equal the framebuffer pixel minus the plot-rect origin.
+        // ... which must equal the framebuffer pixel minus the plot-rect origin.
         const ref: Vec2 = ndcToPixels(plot, s);
         try expectApproxEqAbs(ref[0] - plot.plot_rect.min[0], px_rt, 1e-2);
         try expectApproxEqAbs(ref[1] - plot.plot_rect.min[1], py_rt, 1e-2);
@@ -4985,6 +4985,6 @@ test "hoveredAxis picks the box axis nearest the cursor" {
     try expectEqual(@as(i32, 1), hoveredAxis(&corners, .{ 11, 3 }, 30.0));
     // On the midpoint of vertical edge {0,4} (z-axis, group 2).
     try expectEqual(@as(i32, 2), hoveredAxis(&corners, .{ 1.5, -2.5 }, 30.0));
-    // Far from every edge → none.
+    // Far from every edge -> none.
     try expectEqual(@as(i32, -1), hoveredAxis(&corners, .{ 500, 500 }, 30.0));
 }

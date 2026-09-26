@@ -1,9 +1,9 @@
-//! scene.zig — THE shared scene of the shadow-map side-by-side.
+//! scene.zig - THE shared scene of the shadow-map side-by-side.
 //!
 //! Everything the three renderers must agree on lives in this one file:
 //!
 //!   * the GEOMETRY (floor quad, unit cube, and the bunny's placement frame),
-//!   * the ANIMATION (orbiting light, spinning objects — pure functions of t),
+//!   * the ANIMATION (orbiting light, spinning objects - pure functions of t),
 //!   * the UNIFORM BLOCKS (built with the engine shaders' own `Ubo` types, so
 //!     every backend reads bit-identical uniform layouts), and
 //!   * the SOFTWARE TWO-PASS RENDER (vertex loops + per-object draws through
@@ -13,7 +13,7 @@
 //! and runs the same four shader FILES via their WGSL build artifacts.  The
 //! CPU half calls `drawDepth`/`drawLit` per object over a `raster.Context`.
 //! The comptime corner calls `bakeCorner`, whose per-object draws go through
-//! `rasterizeToTarget` — same clear-once-draw-N pass shape, evaluated by the
+//! `rasterizeToTarget` - same clear-once-draw-N pass shape, evaluated by the
 //! Zig compiler.  One scene, one animation, one shader source; three
 //! executors.
 
@@ -35,12 +35,12 @@ const scaling = zm.scaling;
 const translation = zm.translation;
 const vec = zm.vec;
 
-/// The engine shadow-shader quartet — the SAME four files the GPU compiles
+/// The engine shadow-shader quartet - the SAME four files the GPU compiles
 /// to WGSL, imported as callable Zig for the software targets.
 pub const shadow = z.shadow_shaders;
 
 // ============================================================================
-// Geometry — position + normal, stride 24; shared verbatim with the GPU
+// Geometry - position + normal, stride 24; shared verbatim with the GPU
 // vertex buffers (the app uploads these very arrays).
 // ============================================================================
 
@@ -60,7 +60,7 @@ pub const floor_verts = [_]SceneVertex{
 };
 pub const floor_indices = [_]u32{ 0, 1, 2, 0, 2, 3 };
 
-/// Unit-ish cube (half-extent `cs`) with FLAT per-face normals — shadow
+/// Unit-ish cube (half-extent `cs`) with FLAT per-face normals - shadow
 /// mapping wants honest face normals.  Placements scale it per axis.
 pub const cs: f32 = 0.7;
 pub const cube_verts = [_]SceneVertex{
@@ -99,7 +99,7 @@ pub const cube_indices = [_]u32{
 };
 
 // ============================================================================
-// Staging + animation — pure functions of time, shared by all three
+// Staging + animation - pure functions of time, shared by all three
 // renderers (the corner freezes them at `corner_time`).
 // ============================================================================
 
@@ -128,7 +128,7 @@ pub fn baseColor(o: Object) [4]f32 {
     };
 }
 
-/// The bunny's normalization frame — computed from whichever bunny mesh a
+/// The bunny's normalization frame - computed from whichever bunny mesh a
 /// backend renders (the FULL 69k-tri OBJ live, the baked proxy at comptime),
 /// so the same placement math seats both identically.
 pub const BunnyFrame = struct {
@@ -158,7 +158,7 @@ fn spinAngle(o: Object, t: f32) f32 {
     };
 }
 
-/// Model matrix: place ∘ spin ∘ scale (cubes scale the unit cube to their
+/// Model matrix: place o spin o scale (cubes scale the unit cube to their
 /// half-extents; the bunny additionally re-centers its mesh frame first).
 pub fn modelMatrix(o: Object, t: f32, bunny: BunnyFrame) Mat {
     const spin: Mat = rotationY(spinAngle(o, t));
@@ -180,7 +180,7 @@ pub fn modelMatrix(o: Object, t: f32, bunny: BunnyFrame) Mat {
     }
 }
 
-/// Normal matrix — the spin rotation alone.  Correct here even for the
+/// Normal matrix - the spin rotation alone.  Correct here even for the
 /// non-uniformly scaled cubes: their face normals are axis-aligned, and a
 /// diagonal scale preserves axis directions, so only the rotation matters.
 pub fn normalMatrix(o: Object, t: f32) Mat {
@@ -214,13 +214,13 @@ pub fn lightRig(t: f32) LightRig {
 }
 
 // ============================================================================
-// Uniform blocks — built with the SHADERS' OWN Ubo types, so all three
+// Uniform blocks - built with the SHADERS' OWN Ubo types, so all three
 // backends read bit-identical layouts (the GPU uploads these structs
 // verbatim; the software targets pass them straight into `shaderMain`).
 // ============================================================================
 
-/// 8-bit shadow-map bias for the SOFTWARE targets (their map is rgba8 —
-/// 256 depth levels — so the compare needs ~8× the slack of the GPU's
+/// 8-bit shadow-map bias for the SOFTWARE targets (their map is rgba8 -
+/// 256 depth levels - so the compare needs ~8x the slack of the GPU's
 /// rgba16_float map, whose bias is the Ubo default).  Same shader; the
 /// precision difference is data.
 pub const soft_bias: Vec = .{ 0.018, 0.010, 0, 0 };
@@ -257,11 +257,11 @@ pub fn litFsUbo(o: Object, to_light: Vec, bias: Vec) shadow.lit_fs.Io {
 }
 
 // ============================================================================
-// Software passes — the vertex loops + per-object draws every software
+// Software passes - the vertex loops + per-object draws every software
 // target shares.  `drawDepth`/`drawLit` render one object into a runtime
 // `raster.Context` (the live CPU half); `bakeCorner` runs the SAME loops
 // through `rasterizeToTarget` so the whole two-pass render happens at
-// comptime.  Both are "clear once, draw N objects" — a GPU pass in shape.
+// comptime.  Both are "clear once, draw N objects" - a GPU pass in shape.
 // ============================================================================
 
 pub fn runDepthVs(
@@ -339,12 +339,12 @@ pub fn drawLit(
 }
 
 // ============================================================================
-// The comptime corner — the whole two-pass shadow render as a pure function
+// The comptime corner - the whole two-pass shadow render as a pure function
 // the COMPILER evaluates.  Same placements, same animation functions (frozen
 // at `corner_time`), same Ubo builders, same engine shaders; the bunny is the
 // build-baked decimated proxy (`mesh_bake` OBJ path) because 69k triangles
 // is past any sane comptime budget while ~700 reads as THE bunny at inset
-// size.  Runtime-callable too — `native_verify.zig` uses that to pin the
+// size.  Runtime-callable too - `native_verify.zig` uses that to pin the
 // comptime bake byte-for-byte against a runtime evaluation of this very
 // function.
 // ============================================================================
@@ -363,7 +363,7 @@ pub fn bakeCorner(
     comptime w: usize,
     comptime h: usize,
 ) CornerBake(sm_res, w, h) {
-    // ---- the proxy bunny, flattened + measured (u16 → u32, [N][3] → flat) --
+    // ---- the proxy bunny, flattened + measured (u16 -> u32, [N][3] -> flat) --
     var bunny_verts: [proxy.vertex_count]SceneVertex = undefined;
     var mn: [3]f32 = .{ 1.0e30, 1.0e30, 1.0e30 };
     var mx: [3]f32 = .{ -1.0e30, -1.0e30, -1.0e30 };
@@ -439,7 +439,7 @@ pub fn bakeCorner(
                 .pixels = &bake.shadow_map,
                 .width = sm_res,
                 .height = sm_res,
-                .linear = false, // nearest — depth comparisons must not blend texels
+                .linear = false, // nearest - depth comparisons must not blend texels
             };
             runLitVs(g.verts, vs_io, lit_outs[0..g.verts.len]);
             z.raster_shader.rasterizeToTarget(
@@ -461,7 +461,7 @@ pub fn bakeCorner(
     return bake;
 }
 
-/// One object's geometry — a named pair so every renderer's object loop
+/// One object's geometry - a named pair so every renderer's object loop
 /// reads the same way.
 pub const Geometry = struct {
     verts: []const SceneVertex,

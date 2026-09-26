@@ -1,10 +1,10 @@
-//! orthographic_projection — raylib's `models_orthographic_projection`.
+//! orthographic_projection - raylib's `models_orthographic_projection`.
 //!
 //! One scene of solid + wireframe primitives, drawn twice ways: press
 //! SPACE (or tap the toggle) to swap the camera between a normal
 //! PERSPECTIVE projection and an ORTHOGRAPHIC one. Perspective makes
 //! far things smaller (vanishing point); orthographic keeps every depth
-//! the same size (parallel lines stay parallel) — the difference is
+//! the same size (parallel lines stay parallel) - the difference is
 //! obvious the instant you flip it, which is the whole point of the
 //! example.
 //!

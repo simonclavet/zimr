@@ -1,12 +1,12 @@
 //! lint:alias plot_ui
-//! plot_ui.zig — the `ui.zig` adapter for `plot.zig`.
+//! plot_ui.zig - the `ui.zig` adapter for `plot.zig`.
 //!
 //! Two pieces:
-//!   1. `DrawListSink` — records the (backend-agnostic) plot core's
+//!   1. `DrawListSink` - records the (backend-agnostic) plot core's
 //!      primitives into a `ui.DrawList`. The in-engine counterpart to
 //!      `plot.zig`'s host-only `SvgSink`; same duck-typed method set, so
 //!      the core neither knows nor cares which it is drawing into.
-//!   2. `show` — a one-call interactive plot widget for use inside a zimr
+//!   2. `show` - a one-call interactive plot widget for use inside a zimr
 //!      frame: reserves a rect, auto-fits to the data on first frame,
 //!      handles drag-to-pan and wheel-zoom-around-cursor, then draws the
 //!      frame, the series, and the decorations.
@@ -32,7 +32,7 @@ const DataRange = Range(f64);
 const assertf = zm.assertf;
 
 // ============================================================================
-// [SECTION] DrawListSink — plot core -> ui.DrawList
+// [SECTION] DrawListSink - plot core -> ui.DrawList
 // ============================================================================
 
 pub const DrawListSink = struct {
@@ -382,7 +382,7 @@ pub const Options = struct {
     /// x_log). The transform stays linear.
     x_time: bool = false,
     y_log: bool = false,
-    /// Symmetric-log scales (linear within ±linthresh, log beyond). Override
+    /// Symmetric-log scales (linear within +/-linthresh, log beyond). Override
     /// x_log / y_log.
     x_symlog: bool = false,
     y_symlog: bool = false,
@@ -419,7 +419,7 @@ pub const Options = struct {
     selection: ?*SelectRect = null,
     /// When true, a drag rubber-bands a box and, on release, zooms the view to
     /// that region (ImPlot's default box-zoom). Double-tap re-fits. No
-    /// `selection` pointer needed — the box is tracked in PlotState.
+    /// `selection` pointer needed - the box is tracked in PlotState.
     box_zoom: bool = false,
     /// Optional axis labels (x, left y, right y2).
     x_label: ?[]const u8 = null,
@@ -1010,7 +1010,7 @@ fn drawReadout(
 ) void {
     const touch_count: i32 = u.getTouchPointCount();
     if (touch_count >= 2) {
-        return; // pinching — no readout
+        return; // pinching - no readout
     }
     if (!hovered and touch_count != 1) {
         return;

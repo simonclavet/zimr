@@ -1,13 +1,13 @@
-//! examples/rt_workers/rt_workers.zig — a path tracer, rendered across the worker pool.
+//! examples/rt_workers/rt_workers.zig - a path tracer, rendered across the worker pool.
 //!
-//! THE POINT: the pool has always been parallel — `pump()` hands every free worker a job off
-//! the queue — but until `jobs.Group` existed, using it meant N Job values, N polls and N
+//! THE POINT: the pool has always been parallel - `pump()` hands every free worker a job off
+//! the queue - but until `jobs.Group` existed, using it meant N Job values, N polls and N
 //! done-flags open-coded in every app. So nobody did, and the pool ran ONE thread for its
 //! entire life. This is the first thing that uses it.
 //!
 //! What you are looking at:
 //!
-//!   * Tiles pop in AS THEY LAND, out of order. That is not a presentation trick — it is what
+//!   * Tiles pop in AS THEY LAND, out of order. That is not a presentation trick - it is what
 //!     out-of-order completion actually looks like, and `Group.next()` hands them over in
 //!     whatever order the workers finish.
 //!   * The dot keeps spinning. It is the only part of this that cannot be faked, and in
@@ -16,7 +16,7 @@
 //!     is the same; the dot stops dead.
 //!
 //! What this is NOT: a speedup benchmark. The pool takes half your cores and never more than
-//! four, ON PURPOSE — it exists to give the frame back, not to chase throughput (bridge.zig
+//! four, ON PURPOSE - it exists to give the frame back, not to chase throughput (bridge.zig
 //! measured 8 workers at only ~3.4x aggregate, and a hot CPU throttles the GPU). Selling a
 //! multiplier would be selling a number the engine deliberately declined to optimise.
 const std = @import("std");
@@ -84,7 +84,7 @@ const State = struct {
     /// The result buffer, allocated ONCE from the registry's own bound. Handing this to
     /// `Group.next` every frame is what keeps the landing frame free: `poll()` would allocate
     /// on the frame a tile arrives, and we measured what that costs (154 ms for 2.7 MB).
-    /// Asking `registry.max_output` rather than typing a number means it cannot drift — a
+    /// Asking `registry.max_output` rather than typing a number means it cannot drift - a
     /// hand-typed constant that is too small fails as `OutputTooLarge`, on a phone.
     tile_buf: []u8,
 
@@ -95,7 +95,7 @@ const State = struct {
     bounces: u32 = 6,
     seed: u32 = 1,
 
-    /// The engine's orbit camera — the same one `rt_sidebyside` uses. ONE call gives drag to
+    /// The engine's orbit camera - the same one `rt_sidebyside` uses. ONE call gives drag to
     /// orbit, pinch to zoom and two-finger pan, and it already handles the things a
     /// hand-rolled version gets wrong: touch as well as mouse, and skipping the first drag
     /// frame so the camera does not POP by the pointer's initial delta.
@@ -113,7 +113,7 @@ const State = struct {
     /// PROGRESSIVE REFINEMENT, and it is the whole reason this works on a phone.
     ///
     /// A path trace cannot be realtime. So while you drag we render at `preview_spp` (a
-    /// couple of samples — noisy, instant, good enough to aim with), and the moment you let
+    /// couple of samples - noisy, instant, good enough to aim with), and the moment you let
     /// go we re-render at full quality. Both go through the pool, so the frame never stalls
     /// either way and the dot never stops.
     ///
@@ -125,7 +125,7 @@ const State = struct {
 
     /// Whatever went wrong, ON SCREEN. `std.log.err` goes to a console the phone-only
     /// developer cannot see, so an example that only logs its failures is an example that
-    /// fails silently — which is how this shipped rendering a black rectangle.
+    /// fails silently - which is how this shipped rendering a black rectangle.
     err_msg: []const u8 = "",
     submitted: u32 = 0,
 
@@ -155,7 +155,7 @@ const Basis = struct {
 };
 
 /// The orbit camera, as an eye plus an orthonormal basis. Computed ONCE per render, on the
-/// host — the kernel does no trigonometry at all (see the note on `tracer.Tile`).
+/// host - the kernel does no trigonometry at all (see the note on `tracer.Tile`).
 ///
 /// `OrbitCamera` works in `Vec` (4-wide); the tracer works in Vec3. The conversion happens
 /// exactly here, once, rather than being sprinkled through the kernel.
@@ -207,7 +207,7 @@ fn tileHeaders(s: *const State, buf: []Group.H, tiles: u32, spp: u32) []Group.H 
 }
 
 /// Blit a landed band into the framebuffer. `index` is the tile's position in the header
-/// slice we submitted — which is how an out-of-order result still knows where it belongs.
+/// slice we submitted - which is how an out-of-order result still knows where it belongs.
 fn blitTile(s: *State, index: usize, bytes: []const u8) void {
     const rows: u32 = (rt_h + n_tiles - 1) / n_tiles;
     const y0: u32 = @as(u32, @intCast(index)) * rows;
@@ -244,7 +244,7 @@ fn startRender(s: *State, use_workers: bool, spp: u32) void {
 
     if (use_workers) {
         // ONE line submits every tile. The pool's `pump()` then hands one to each free worker,
-        // and re-pumps as each finishes — so N tiles occupy min(N, pool_size) cores without
+        // and re-pumps as each finishes - so N tiles occupy min(N, pool_size) cores without
         // this example knowing anything about how many cores there are.
         const submitted_group: Group = Group.submitAll(s.gpa, headers, payload) catch |submit_error| {
             s.err_msg = @errorName(submit_error);
@@ -258,7 +258,7 @@ fn startRender(s: *State, use_workers: bool, spp: u32) void {
     }
 
     // The bad way, kept on purpose: the SAME kernel, run inline, right here. The image comes
-    // out identical — the tracer is deterministic, and there is a test that says so — and the
+    // out identical - the tracer is deterministic, and there is a test that says so - and the
     // frame simply does not happen while it runs.
     var arena: std.heap.ArenaAllocator = .init(s.gpa);
     defer arena.deinit();
@@ -320,16 +320,16 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     // ---- collect whatever landed THIS FRAME -------------------------------------------
-    // Several tiles can arrive in one frame, and they arrive OUT OF ORDER — whichever worker
+    // Several tiles can arrive in one frame, and they arrive OUT OF ORDER - whichever worker
     // finished first. `index` is how a band still knows where it belongs.
     if (s.group) |*tile_group| {
         // Drain everything that finished THIS FRAME. Several tiles can land in one frame, and
-        // they land OUT OF ORDER — whichever worker got there first. `landed.index` is the
+        // they land OUT OF ORDER - whichever worker got there first. `landed.index` is the
         // position in the header slice we submitted, which is how an out-of-order band still
         // knows which scanlines it belongs to.
         while (true) {
             const landed_tile_or_null: ?Group.Landed = tile_group.next(s.tile_buf) catch |tile_error| {
-                // A tile whose kernel failed. Report it ON SCREEN — `std.log.err` writes to a
+                // A tile whose kernel failed. Report it ON SCREEN - `std.log.err` writes to a
                 // console a phone-only developer cannot read, and an example that only logs
                 // its failures is an example that fails silently.
                 //
@@ -394,7 +394,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // A path trace cannot be realtime, so the render is driven by CHANGE, not by frames.
     //
-    // While the camera is moving we render at `preview_spp` — noisy, instant, good enough to
+    // While the camera is moving we render at `preview_spp` - noisy, instant, good enough to
     // aim with. When it stops, we re-render at full quality. Both go through the pool, so the
     // frame never stalls either way and the dot never stops.
     //
@@ -415,7 +415,7 @@ fn update(f: *z.Frame, s: *State) void {
             startRender(s, true, preview_spp);
         }
     } else if (s.preview and s.group == null) {
-        // Held still for a few frames after a preview — go to full quality. The delay stops a
+        // Held still for a few frames after a preview - go to full quality. The delay stops a
         // twitchy finger from kicking off a 24 spp render it is about to invalidate.
         s.settled_frames += 1;
         if (s.settled_frames > 6) {
@@ -475,7 +475,7 @@ fn update(f: *z.Frame, s: *State) void {
             n_tiles,
         });
 
-        // THE number. Not "how fast" — "did it cost you the frame".
+        // THE number. Not "how fast" - "did it cost you the frame".
         var buf: [96]u8 = undefined;
         const bad: bool = s.worst_gap_ms > 34.0;
         const txt: []const u8 = bufPrint(

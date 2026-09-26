@@ -1,20 +1,20 @@
 //! lint:alias plot_core
-//! plot_core.zig — machinery shared by implot.zig and implot3d.zig.
+//! plot_core.zig - machinery shared by implot.zig and implot3d.zig.
 //!
 //! Depends only on `zm` (zimrmath) and `ui`; knows nothing about either
 //! plotting library's internals, so it is safe to import from both and could
 //! later move into ui.zig wholesale.
 //!
 //! What lives here:
-//!   · Color           — the canonical concrete color (= zm.Color), plus the
+//!   * Color           - the canonical concrete color (= zm.Color), plus the
 //!                        conversion helpers both libraries need. zm.Color is
 //!                        the single pivot between float color math and the
 //!                        packed draw-list wire format, so all packing goes
 //!                        through it (no hand-rolled bit twiddling).
-//!   · colormap key tables — the 16 built-in colormaps' key colors, as packed
+//!   * colormap key tables - the 16 built-in colormaps' key colors, as packed
 //!                        wire-format u32s (byte-identical in both libs before).
-//!   · Range           — an [min,max] f32 interval with the common helpers.
-//!   · niceNum / orderOfMagnitude — the shared tick-spacing math.
+//!   * Range           - an [min,max] f32 interval with the common helpers.
+//!   * niceNum / orderOfMagnitude - the shared tick-spacing math.
 //!
 //! What deliberately stays per-library: the Cond/Marker/Scale/Location enums
 //! (their backing integer types differ between 2D and 3D, so sharing them

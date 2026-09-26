@@ -1,4 +1,4 @@
-//! snake — the classic. Steer the snake around a grid, eat the dots to grow, and
+//! snake - the classic. Steer the snake around a grid, eat the dots to grow, and
 //! don't run into a wall or your own tail. Every dot eaten adds a segment and a
 //! little speed, so the game tightens as your score climbs.
 //!

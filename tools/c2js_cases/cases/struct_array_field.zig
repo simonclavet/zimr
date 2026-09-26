@@ -1,8 +1,8 @@
 //! Runtime-indexed array-typed struct *fields* (`s.vals[i]` where `vals: [N]T`).
 //! In the Zig C-backend such a field is a nested array-wrapper struct
 //! (`struct { T array[N]; }`), so the access lowers to `&s.vals.array[i]`. The
-//! transpiler must (a) size/align the field as that nested struct — so a field
-//! AFTER it lands at the right offset — and (b) resolve the `.array[i]` chain to
+//! transpiler must (a) size/align the field as that nested struct - so a field
+//! AFTER it lands at the right offset - and (b) resolve the `.array[i]` chain to
 //! a strided element address instead of indexing a number. Covers global and
 //! local structs, constant and runtime indices, scalar/f32/byte elements,
 //! several array fields, an array-of-structs field, field writes, and a

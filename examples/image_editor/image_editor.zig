@@ -1,7 +1,7 @@
-//! image_editor — port of the GL `image_editor`: a tour of the CPU image
-//! API now living in src/image.zig. A 32×32 PNG is decoded once
-//! (`loadImageFromMemory`), then `imageCopy`'d four ways and edited —
-//! `imageBlurGaussian`, `imageColorInvert`, `imageRotateCW` — each uploaded to
+//! image_editor - port of the GL `image_editor`: a tour of the CPU image
+//! API now living in src/image.zig. A 32x32 PNG is decoded once
+//! (`loadImageFromMemory`), then `imageCopy`'d four ways and edited -
+//! `imageBlurGaussian`, `imageColorInvert`, `imageRotateCW` - each uploaded to
 //! its own GPU texture (`loadTextureFromImage`). A fifth "live" panel keeps a
 //! CPU buffer around, rewrites its pixels every frame (a brightness wave over a
 //! diagonal gradient), and pushes them with `updateTexture` (in-place, no new
@@ -94,7 +94,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.scratch.deinit();
 }
 
-/// Draw `tex` as a `size×size` quad at (x,y) via rl-immediate, + a caption.
+/// Draw `tex` as a `sizexsize` quad at (x,y) via rl-immediate, + a caption.
 fn drawPanel(
     f: *z.Frame,
     font: z.Font,
@@ -131,7 +131,7 @@ fn update(f: *z.Frame, state: *State) void {
     const t: f32 = f.time.time;
 
     // Live panel: rewrite the CPU pixels (brightness wave over a diagonal
-    // gradient) and re-upload in place with updateTexture — no new texture.
+    // gradient) and re-upload in place with updateTexture - no new texture.
     if (state.live_image.data) |data| {
         const wave: f32 = 0.7 + 0.3 * @sin(t * 2.0);
         const w: usize = @intCast(state.live_image.width);

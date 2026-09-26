@@ -1,7 +1,7 @@
-//! math_sine_cosine — unit-circle visualisation of sine & cosine, ported to WebGPU.
+//! math_sine_cosine - unit-circle visualisation of sine & cosine, ported to WebGPU.
 //! A point sweeps the unit circle (auto-advancing angle); the right triangle's legs ARE
 //! cos (horizontal, blue) and sin (vertical, red). A sector arc marks the swept angle,
-//! dashed lines mark the axes, and two wave traces below plot sin/cos over 0–360° with a
+//! dashed lines mark the axes, and two wave traces below plot sin/cos over 0-360 deg with a
 //! moving marker. Exercises the new drawSplineLinear / drawLineDashed /
 //! drawCircleSectorLines primitives. Self-running, viewport-relative under `.responsive`.
 const std = @import("std");

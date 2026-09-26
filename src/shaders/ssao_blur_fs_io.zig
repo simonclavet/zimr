@@ -1,12 +1,12 @@
-//! ssao_blur_fs_io — typed schema for the SSAO bilateral blur.
+//! ssao_blur_fs_io - typed schema for the SSAO bilateral blur.
 //!
 //! One axis per pass; run it twice (horizontal, then vertical) ping-ponging between two
 //! targets. Separable, so 2 x 7 taps buys the same reach as 49.
 //!
-//! ── ★ WHY THIS IS NOT `bloom_blur_fs` ──
+//! -- * WHY THIS IS NOT `bloom_blur_fs` --
 //!
 //! A bloom blur is a plain weighted average: every neighbour contributes by distance alone.
-//! Doing that to an occlusion buffer BLEEDS AO ACROSS SILHOUETTES — a dark crease behind a
+//! Doing that to an occlusion buffer BLEEDS AO ACROSS SILHOUETTES - a dark crease behind a
 //! character smears onto the character, and the ground picks up shading from the figure
 //! standing on it.
 //!
@@ -24,7 +24,7 @@ const Vec = zm.Vec;
 pub const Inputs = common.Interp;
 
 /// The AO texture being blurred, plus the two G-buffer channels that define an edge. All three
-/// want NEAREST filtering — a filtered position or normal describes no real surface.
+/// want NEAREST filtering - a filtered position or normal describes no real surface.
 pub const Samplers = struct {
     src: shader.Sampler2D(.albedo, .{}),
     g_world_pos: shader.Sampler2D(.normal, .{}),

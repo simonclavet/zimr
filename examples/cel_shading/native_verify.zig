@@ -1,9 +1,9 @@
-//! native_verify — render the cel_shading example's ACTUAL look on the
+//! native_verify - render the cel_shading example's ACTUAL look on the
 //! CPU, no GPU required.
 //!
 //! Both passes run the same `shaderMain`s the wasm app compiles to WGSL:
 //! the inverted hull (`outline_hull_vs` + `depth_fs`, back faces only)
-//! and the toon pass (`gbuffer_vs` + `cel_fs`, front faces only) — two
+//! and the toon pass (`gbuffer_vs` + `cel_fs`, front faces only) - two
 //! `rasterizeToTarget` draws into one buffer, exactly the GPU pass
 //! shape.  Dumps `cel_verify.png` for eyeballing and asserts the three
 //! tonal populations exist: paper-bright background, full-brightness top
@@ -62,7 +62,7 @@ pub fn main() !void {
     const projection: Mat = perspectiveFovRh(0.8, float(img_w) / float(img_h), 0.1, 100.0);
     const mvp: Mat = mulMat(mulMat(projection, view), model);
 
-    // Sun roughly camera-side (the photogenic frame — most bands visible).
+    // Sun roughly camera-side (the photogenic frame - most bands visible).
     const sun: [3]f32 = .{ 0.55, 1.0, 0.75 };
 
     // ---- vertex loops through the real shaders ----
@@ -106,7 +106,7 @@ pub fn main() !void {
         &indices,
         ink_io,
         connect_ink,
-        .{ .front_face = .cw, .depth_test = true }, // BACK faces only — the hull trick
+        .{ .front_face = .cw, .depth_test = true }, // BACK faces only - the hull trick
         &img,
         &depth,
     );
@@ -141,7 +141,7 @@ pub fn main() !void {
         if (lum > 240) {
             paper += 1;
         } else if (lum > 130 and lum < 200) {
-            bright_band += 1; // full-brightness orange ≈ lum 170
+            bright_band += 1; // full-brightness orange ~ lum 170
         } else if (lum < 25) {
             ink_px += 1;
         }

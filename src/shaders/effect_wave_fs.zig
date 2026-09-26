@@ -1,9 +1,9 @@
-//! src/shaders/effect_wave_fs.zig — animated sinusoidal UV distortion,
+//! src/shaders/effect_wave_fs.zig - animated sinusoidal UV distortion,
 //! raylib's `wave.fs` ported (their `shaders_texture_waves`).
 //!
 //! Each axis of the sample coordinate gets a traveling sine offset
-//! driven by the OTHER axis — x sways by a cosine of y, y by a sine of
-//! x — so the image ripples like fabric instead of just sliding.
+//! driven by the OTHER axis - x sways by a cosine of y, y by a sine of
+//! x - so the image ripples like fabric instead of just sliding.
 //! Frequencies/amplitudes/speeds and even the magic 750 divisor are
 //! raylib's numbers verbatim; amplitude is expressed in source PIXELS
 //! (hence the size uniform), which keeps the wobble constant when the

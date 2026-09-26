@@ -1,9 +1,9 @@
-//! The counting sort, stripped to nothing but the sort — no physics.
+//! The counting sort, stripped to nothing but the sort - no physics.
 //!
 //! Same five kernels as `fluid_sort`, same shapes, same control flow. Small enough that the
 //! correct answer can be written down by hand, so `sort_smoke` can check every stage against
 //! ground truth on BOTH backends. kompute runs this exact source as plain Zig on `.cpu` and
-//! as SPIR-V→WGSL on `.gpu`, so a disagreement between them convicts the toolchain and an
+//! as SPIR-V->WGSL on `.gpu`, so a disagreement between them convicts the toolchain and an
 //! agreement convicts the algorithm. Nothing else in the tree can make that distinction.
 const k = @import("kompute");
 const zm = @import("zm");
@@ -34,14 +34,14 @@ pub const Buffers = struct {
     starts: [n_cells + 1]u32,
     /// The velocity change `sort_kernels.viscosity` applies. UNTESTED KERNEL #1: it is one of
     /// only two the fluid still runs that nothing has verified, and its inner loop carries a
-    /// `continue` gated on a COMPUTED FLOAT (`if (u <= 0) continue`) — data-dependent control
+    /// `continue` gated on a COMPUTED FLOAT (`if (u <= 0) continue`) - data-dependent control
     /// flow nested three loops deep, which nothing else in the module does.
     visc: [n_particles]Vec2,
-    /// The position `sort_kernels.applyAndFinalize` produces. UNTESTED KERNEL #2 — and the
+    /// The position `sort_kernels.applyAndFinalize` produces. UNTESTED KERNEL #2 - and the
     /// last one standing. Branch-heavy: a soft wall band, a hard clamp with per-particle
     /// jitter (`i % 7`), directional wall damping, and a speed cap.
     applied: [n_particles]Vec2,
-    /// (rho, rho_near) per particle — Clavet's double density, computed EXACTLY as
+    /// (rho, rho_near) per particle - Clavet's double density, computed EXACTLY as
     /// `sort_kernels.density` does. The neighbour SET is already proven correct; this tests
     /// the ARITHMETIC over it, which nothing so far has.
     dens: [n_particles]Vec2,
@@ -85,7 +85,7 @@ const b_corr = g.bind(.corr);
 const b_visc = g.bind(.visc);
 const b_applied = g.bind(.applied);
 
-/// floor(pos / h), clamped into the grid. The ONE definition of a particle's cell —
+/// floor(pos / h), clamped into the grid. The ONE definition of a particle's cell -
 /// countGrid, scatter and any neighbour walk must all agree with it exactly.
 fn cellOf(p: Vec2, cols: u32, rows: u32, h: f32) u32 {
     const max_cx: f32 = float(cols - 1);
@@ -156,7 +156,7 @@ pub fn copyback(c: k.Ctx(@This())) void {
 ///
 /// The host computes the same sums by brute force in f64 and compares. If the neighbour set
 /// is right (proven) but these numbers are wrong, the fault is in the FLOAT MATH of the
-/// kernel — the one layer nothing has tested yet.
+/// kernel - the one layer nothing has tested yet.
 pub fn computeDensity(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
     if (i >= c.params.count) {
@@ -205,7 +205,7 @@ pub fn computeDensity(c: k.Ctx(@This())) void {
     b_dens[i] = .{ rho, rho_near };
 }
 
-/// The pressure correction, byte for byte as `sort_kernels.force` computes it — including
+/// The pressure correction, byte for byte as `sort_kernels.force` computes it - including
 /// the co-location fallback with its pseudo-random direction (`@cos`/`@sin` of a hashed
 /// seed), which is the single most exotic thing any of these kernels does and therefore a
 /// prime suspect for a transpiler bug.
@@ -280,7 +280,7 @@ fn fakeVel(p: Vec2) Vec2 {
     return .{ p[1] * 0.01 - 2.0, 1.0 - p[0] * 0.008 };
 }
 
-/// UNTESTED KERNEL #1 — `sort_kernels.viscosity`, byte for byte, over a synthetic velocity
+/// UNTESTED KERNEL #1 - `sort_kernels.viscosity`, byte for byte, over a synthetic velocity
 /// field. Its inner loop hides a `continue` gated on a computed float, three loops deep.
 pub fn computeVisc(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
@@ -338,7 +338,7 @@ pub fn computeVisc(c: k.Ctx(@This())) void {
     b_visc[i] = my_vel;
 }
 
-/// UNTESTED KERNEL #2 — `sort_kernels.applyAndFinalize`'s POSITION path, byte for byte:
+/// UNTESTED KERNEL #2 - `sort_kernels.applyAndFinalize`'s POSITION path, byte for byte:
 /// `pos + delta`, the soft wall band, the jittered hard clamp. `corr` stands in for delta
 /// (computeForce already produced it) and `pos2` for prev (copyback made it equal to pos).
 pub fn applyMini(c: k.Ctx(@This())) void {

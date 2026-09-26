@@ -3,18 +3,18 @@
 // Ports raylib's `text_codepoints_loading`: `loadFont` bakes only ASCII 32..126,
 // so anything outside it (accented Latin, Greek, Cyrillic, ...) has no glyph.
 // `loadFontEx` takes an EXPLICIT codepoint list, so you bake exactly the scripts
-// your app renders — and no more, since every codepoint costs atlas space.
+// your app renders - and no more, since every codepoint costs atlas space.
 //
-// The example loads the SAME TTF twice — once ASCII-only, once extended — and
+// The example loads the SAME TTF twice - once ASCII-only, once extended - and
 // draws the same multilingual lines with both, so the difference is visible
 // rather than asserted.
 //
 // What this exercises (the engine work this drove):
-//   - `z.loadFontEx(f, gpa, ttf, size, codepoints)` — newly exported; the atlas
+//   - `z.loadFontEx(f, gpa, ttf, size, codepoints)` - newly exported; the atlas
 //     baker always accepted a codepoint slice, but only ASCII was reachable.
 //
 // The ranges below are the ones the bundled RobotoMono actually covers (its cmap
-// has Latin-1, Latin Extended-A, most Greek and nearly all Cyrillic — but NO
+// has Latin-1, Latin Extended-A, most Greek and nearly all Cyrillic - but NO
 // arrows, box-drawing or CJK, which would bake as empty .notdef boxes).
 //
 // Leak-clean (`.memory = .managed`): both atlases are engine-owned.
@@ -40,7 +40,7 @@ const n_greek_u: usize = 25; // 391..3A9 Alpha..Omega
 const n_greek_l: usize = 25; // 3B1..3C9 alpha..omega
 const n_cyril: usize = 64; // 410..44F  Cyrillic
 
-/// The exact codepoint set to bake, built at comptime — so the atlas contents
+/// The exact codepoint set to bake, built at comptime - so the atlas contents
 /// are a compile-time fact and the count is exact (no "bake all of Unicode").
 const cp_set: [n_ascii + n_latin1 + n_greek_u + n_greek_l + n_cyril]u21 = blk: {
     var out: [n_ascii + n_latin1 + n_greek_u + n_greek_l + n_cyril]u21 = undefined;
@@ -74,8 +74,8 @@ const line_greek = "ΑΒΓΔΕΖΗΘΙΚΛΜ αβγδεζηθικλμ";
 const line_cyril = "Привет, мир! Здравствуй";
 
 const State = struct {
-    ascii_font: z.Font, // loadFont   — ASCII 32..126 only
-    uni_font: z.Font, // loadFontEx — the set above
+    ascii_font: z.Font, // loadFont   - ASCII 32..126 only
+    uni_font: z.Font, // loadFontEx - the set above
 };
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {

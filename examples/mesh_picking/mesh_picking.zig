@@ -1,8 +1,8 @@
-//! mesh_picking — raylib's `models_mesh_picking`, the zimr way.
+//! mesh_picking - raylib's `models_mesh_picking`, the zimr way.
 //!
 //! Tap anything: the tap becomes a world-space ray
 //! (`getScreenToWorldRay`, new this port), and the ray is tested
-//! against each object with the collision routine that fits it — the
+//! against each object with the collision routine that fits it - the
 //! ground through `getRayCollisionQuad`, the cube through
 //! `getRayCollisionBox` (its AABB), the sphere analytically through
 //! `getRayCollisionSphere`, and the spinning torus through the real
@@ -12,8 +12,8 @@
 //! hit point, and the panel reports what you hit and how far away.
 //!
 //! Phone-first: raylib picks on hover, which fingers don't have.  Here
-//! a PICK is a tap — press and release with less than a knuckle of
-//! drag — so the one-finger orbit and pinch zoom keep working.
+//! a PICK is a tap - press and release with less than a knuckle of
+//! drag - so the one-finger orbit and pinch zoom keep working.
 //! Rendering is the shared forward stack: `gbuffer_vs` + `fog_fs` at
 //! density 0 (plain Lambert), one pipeline for everything including
 //! the marker.
@@ -186,7 +186,7 @@ const State = struct {
     empty_bg: z.wgpu.BindGroupHandle,
     objs: [5]Obj, // ground, cube, sphere, torus, marker
 
-    // The torus's CPU-side triangles STAY resident — getRayCollisionMesh
+    // The torus's CPU-side triangles STAY resident - getRayCollisionMesh
     // walks them on every tap (the GPU copy can't be read back cheaply).
     torus_cpu: z.Mesh,
 
@@ -212,7 +212,7 @@ const State = struct {
 
 fn deinit(gpa: Allocator, s: *State) void {
     // objs 0-3 own unique meshes; obj 4 (the marker) reuses obj 1 (cube)'s mesh
-    // handles, so freeing all five would double-free — free the four unique ones.
+    // handles, so freeing all five would double-free - free the four unique ones.
     for (s.objs[0..4]) |obj| {
         z.wgpu.destroyBuffer(obj.mesh.vbo);
         z.wgpu.destroyBuffer(obj.mesh.ibo);
@@ -309,7 +309,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const sphere_cpu: z.Mesh = try z.genMeshSphere(gpa, 1.0, 24, 20);
     defer z.unloadMesh(gpa, sphere_cpu);
     const sphere: GpuMesh = try uploadMesh(gpa, device, queue, sphere_cpu, "pick_sphere");
-    // Torus CPU mesh outlives init — it's the pick target.
+    // Torus CPU mesh outlives init - it's the pick target.
     const torus_cpu: z.Mesh = try z.genMeshTorus(gpa, 0.35, 1.0, 14, 28);
     const torus: GpuMesh = try uploadMesh(gpa, device, queue, torus_cpu, "pick_torus");
 
@@ -339,7 +339,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .triangle_list,
         .none,
         .less,
-        .none, // torus interior shows through its hole — keep both faces
+        .none, // torus interior shows through its hole - keep both faces
         .rgba8_unorm,
         .depth24_plus,
         1,

@@ -1,4 +1,4 @@
-//! examples/comptime_julia.zig — the Julia set, computed at COMPILE
+//! examples/comptime_julia.zig - the Julia set, computed at COMPILE
 //! TIME and baked into the binary as a const.  Companion to
 //! examples/comptime_mandelbrot.zig.
 //!
@@ -7,16 +7,16 @@
 //!   zig build comptime-julia
 //!
 //! The Julia set is the Mandelbrot's twin: same iteration formula
-//! (`z = z² + c`), but here `c` is a FIXED constant for the whole
-//! image and `z₀` is the per-pixel coordinate.  In Mandelbrot, it's
-//! the other way around — `c` is per-pixel and `z₀ = 0`.
+//! (`z = z^2 + c`), but here `c` is a FIXED constant for the whole
+//! image and `z_0` is the per-pixel coordinate.  In Mandelbrot, it's
+//! the other way around - `c` is per-pixel and `z_0 = 0`.
 //!
 //! For each fixed `c`, the Julia set produces a different shape.
 //! `c = -0.7 + 0.27015i` gives a classic dragon-like form; `c = 0.285
 //! + 0.01i` gives a starfish.  This file's default is the dragon.
 //!
 //! Same compile-time pattern as the Mandelbrot: `@setEvalBranchQuota`
-//! + comptime function call → the entire image is a const byte array
+//! + comptime function call -> the entire image is a const byte array
 //! in the binary's read-only data section.  Runtime does a printf.
 
 const std = @import("std");
@@ -24,7 +24,7 @@ const zm = @import("zm");
 const float = zm.float;
 
 // ============================================================================
-// SECTION 1 — the kernel
+// SECTION 1 - the kernel
 // ============================================================================
 
 /// One Julia iteration starting from (zx0, zy0) with fixed (cx, cy).
@@ -64,7 +64,7 @@ fn juliaEscape(
 }
 
 // ============================================================================
-// SECTION 2 — comptime rendering
+// SECTION 2 - comptime rendering
 // ============================================================================
 
 const palette: []const u8 = " .:-=+*#%@";
@@ -95,7 +95,7 @@ fn renderAscii(
         while (x < width) : (x += 1) {
             const u: f32 = (float(x) + 0.5) / float(width);
             const v: f32 = (float(y) + 0.5) / float(height);
-            // Julia: z₀ is the pixel coordinate, c is fixed.
+            // Julia: z_0 is the pixel coordinate, c is fixed.
             const zx0: f32 = (u - 0.5) * view_w;
             const zy0: f32 = (0.5 - v) * view_h;
             const escape: ?f32 = juliaEscape(zx0, zy0, cx, cy, max_iter);
@@ -109,7 +109,7 @@ fn renderAscii(
 }
 
 // ============================================================================
-// SECTION 3 — the comptime call site
+// SECTION 3 - the comptime call site
 // ============================================================================
 
 const img_w: usize = 120;
@@ -117,7 +117,7 @@ const img_h: usize = 54;
 const iter_cap: u32 = 192;
 
 /// The Julia constant `c`.  Different values produce wildly
-/// different shapes — try `(0.285, 0.01)` for a starfish,
+/// different shapes - try `(0.285, 0.01)` for a starfish,
 /// `(-0.4, 0.6)` for a fern, `(-0.7269, 0.1889)` for a spiral
 /// dragon.
 const julia_c_x: f32 = -0.7;
@@ -134,7 +134,7 @@ const image: [img_h * (img_w + 1)]u8 = renderAscii(
 );
 
 // ============================================================================
-// SECTION 4 — runtime entry point
+// SECTION 4 - runtime entry point
 // ============================================================================
 
 pub fn main() void {

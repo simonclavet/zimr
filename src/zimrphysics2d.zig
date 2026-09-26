@@ -1,5 +1,5 @@
 //! lint:alias zimrphysics2d
-//! zimrphysics2d.zig — a single-file, single-threaded 2D rigid-body engine.
+//! zimrphysics2d.zig - a single-file, single-threaded 2D rigid-body engine.
 //!
 //! This is a faithful port of Box2D v3.1 (Erin Catto's data-oriented C rewrite, the
 //! "TGS Soft" solver) to Zig, in the style of `zimrphysics.zig` (our Jolt port):
@@ -26,7 +26,7 @@
 //!   * Ordered, shrinking tree casts (ray and box) and a periodic median-split rebuild
 //!     of the broad-phase trees to recover query quality.
 //!
-//! -- What is adapted (the engineering) — see the deviations ledger below ---------
+//! -- What is adapted (the engineering) - see the deviations ledger below ---------
 //!   1.  Single-threaded only. No task scheduler, no atomics. Box2D's parallelism is
 //!       replaced by serial iteration over the same colored constraint blocks, so the
 //!       result matches Box2D's output for a single worker.
@@ -119,7 +119,7 @@ const sweepTransform2 = zm.sweepTransform2;
 // ================================================================================
 // Geometric constants
 //
-// These are fixed geometric tolerances, not user tunables — Box2D defines them as
+// These are fixed geometric tolerances, not user tunables - Box2D defines them as
 // compile-time constants (`#define`). They are comptime `pub const`s here (immutable,
 // not mutable global state), and the runtime `Settings` below mirrors the ones the
 // solver reads so a world can still be retuned without touching these.
@@ -163,7 +163,7 @@ pub const huge_length: f32 = 100000.0 * linear_slop;
 pub const max_rotation: f32 = 0.25 * pi;
 
 // ================================================================================
-// Settings — per-world runtime tunables (no globals; passed by value where needed)
+// Settings - per-world runtime tunables (no globals; passed by value where needed)
 // box2d: b2WorldDef (types.h:83) + the derived world fields (physics_world.c)
 // ================================================================================
 
@@ -199,7 +199,7 @@ pub const Settings = struct {
     contact_push_speed: f32 = 3.0,
 
     /// Maximum translational speed (m/s) a body may reach, clamped during position
-    /// integration. Box2D's default is 400 m/s ("faster than the speed of sound") — high
+    /// integration. Box2D's default is 400 m/s ("faster than the speed of sound") - high
     /// enough never to throttle ordinary motion, low enough to bound a single step.
     /// box2d: b2WorldDef.maximumLinearSpeed
     max_linear_speed: f32 = 400.0,
@@ -227,7 +227,7 @@ pub const Settings = struct {
 };
 
 // ================================================================================
-// Softness — the soft-constraint coefficients used by the TGS-Soft solver
+// Softness - the soft-constraint coefficients used by the TGS-Soft solver
 // box2d: b2Softness + b2MakeSoft  solver.h:218
 // ================================================================================
 
@@ -265,7 +265,7 @@ pub fn makeSoft(hertz: f32, zeta: f32, h: f32) Softness {
 }
 
 // ================================================================================
-// Shape geometry — the five primitive shapes and their tagged union
+// Shape geometry - the five primitive shapes and their tagged union
 //
 // Field names track Box2D so the data layout can be diffed against the C; the cryptic
 // names appear only in the solver, where we expand them. box2d: collision.h
@@ -278,7 +278,7 @@ pub const Circle = struct {
     radius: f32,
 };
 
-/// A "stadium" / line segment swept by a radius — two cap centers and a radius.
+/// A "stadium" / line segment swept by a radius - two cap centers and a radius.
 /// box2d: b2Capsule  collision.h
 pub const Capsule = struct {
     center1: Vec2,
@@ -345,10 +345,10 @@ pub const MassData = struct {
 };
 
 /// A shape's extent relative to a reference point (the body center of mass):
-///   * `min_extent` is the smallest distance from the COM to any support plane — it
+///   * `min_extent` is the smallest distance from the COM to any support plane - it
 ///     gates continuous collision (a body cannot be allowed to move more than half
 ///     of this in a step without sweeping).
-///   * `max_extent` is the farthest any part of the shape reaches from the COM — it
+///   * `max_extent` is the farthest any part of the shape reaches from the COM - it
 ///     scales angular velocity into a linear speed for the sleep test.
 /// box2d: b2ShapeExtent  shape.h
 pub const ShapeExtent = struct {
@@ -435,7 +435,7 @@ fn recurseHull(p1: Vec2, p2: Vec2, points: []const Vec2) Hull {
         }
     }
 
-    // No point is meaningfully off the edge — this edge is already a hull edge.
+    // No point is meaningfully off the edge - this edge is already a hull edge.
     if (best_signed_distance < 2.0 * linear_slop) {
         return hull;
     }
@@ -508,7 +508,7 @@ pub fn computeHull(input: []const Vec2) Hull {
     }
 
     if (n < 3) {
-        return hull; // all points coincident — check your data / scale
+        return hull; // all points coincident - check your data / scale
     }
 
     // Seed the hull with two extreme points: the point farthest from the box center,
@@ -1131,7 +1131,7 @@ pub fn computeShapeMargin(geom: Geometry) f32 {
 // sample app to draw the GJK steps) is dropped.
 // ================================================================================
 
-/// A convex shape reduced to its support points (vertices) plus a rounding radius —
+/// A convex shape reduced to its support points (vertices) plus a rounding radius -
 /// the only thing GJK and TOI need from a shape.
 /// box2d: b2ShapeProxy  collision.h
 pub const ShapeProxy = struct {
@@ -1175,7 +1175,7 @@ pub const SimplexCache = struct {
 /// Minkowski difference `w = wa - wb`, the barycentric weight `a`, and the source
 /// vertex indices.
 ///
-/// IMPORTANT: `w = wa - wb` here — this matches the Box2D *code* (the struct comment
+/// IMPORTANT: `w = wa - wb` here - this matches the Box2D *code* (the struct comment
 /// in the C claims `wb - wa`, but the implementation computes `wa - wb`, and the whole
 /// simplex solver is built around that sign).
 /// box2d: b2SimplexVertex  distance.c
@@ -1468,7 +1468,7 @@ fn solveSimplex2(s: *Simplex) Vec2 {
 /// Reduce a 3-vertex simplex (a triangle in the Minkowski difference) to the feature
 /// closest to the origin by testing the seven Voronoi regions in order: the three vertices,
 /// the three edges, and the interior. Sets the surviving vertices' barycentric weights and
-/// `s.count`, and returns the direction toward the origin — or zero when the origin lies
+/// `s.count`, and returns the direction toward the origin - or zero when the origin lies
 /// inside the triangle, which means the shapes overlap. The `dXY_n` / `d123_n` values are
 /// Box2D's edge and triangle barycentric numerators. box2d: b2SolveSimplex3
 fn solveSimplex3(s: *Simplex) Vec2 {
@@ -1559,8 +1559,8 @@ fn solveSimplex3(s: *Simplex) Vec2 {
 
 /// GJK distance between two convex proxies.
 ///
-/// GJK works on the Minkowski difference A ⊖ B: the shapes overlap iff that set contains
-/// the origin. Each iteration keeps a simplex (1–3 points of the difference), reduces it to
+/// GJK works on the Minkowski difference A (-) B: the shapes overlap iff that set contains
+/// the origin. Each iteration keeps a simplex (1-3 points of the difference), reduces it to
 /// the feature closest to the origin, and adds the support point farthest toward the
 /// origin. A full triangle enclosing the origin means overlap; a repeated support point
 /// means we've found the closest features. `cache` is read for a warm start and overwritten
@@ -1763,7 +1763,7 @@ pub fn shapeCast(input: *const ShapeCastPairInput) CastOutput {
                     // reporting an immediate hit.
                     target = dist.distance - linear_slop;
                 } else {
-                    // Initial overlap — report a hit at fraction 0 with a midpoint.
+                    // Initial overlap - report a hit at fraction 0 with a midpoint.
                     output.hit = true;
                     const surface_a: Vec2 = mulAdd2(dist.point_a, input.proxy_a.radius, dist.normal);
                     const surface_b: Vec2 = mulAdd2(dist.point_b, -input.proxy_b.radius, dist.normal);
@@ -1783,18 +1783,18 @@ pub fn shapeCast(input: *const ShapeCastPairInput) CastOutput {
         // Are the shapes actually approaching along the contact normal?
         const denominator: f32 = dot2(delta, dist.normal);
         if (denominator >= 0.0) {
-            return output; // miss — moving apart
+            return output; // miss - moving apart
         }
 
         // Conservative advancement: step the fraction so we just reach `target`.
         fraction += (target - dist.distance) / denominator;
         if (fraction >= input.max_fraction) {
-            return output; // miss — would pass the end of the translation
+            return output; // miss - would pass the end of the translation
         }
         distance_input.transform.p = mulAdd2(input.transform.p, fraction, delta);
     }
 
-    return output; // ran out of iterations — treat as a miss
+    return output; // ran out of iterations - treat as a miss
 }
 
 // ================================================================================
@@ -2082,14 +2082,14 @@ pub fn timeOfImpact(input: *const TOIInput) TOIOutput {
             const index_a: i32 = ms2.index_a;
             const index_b: i32 = ms2.index_b;
 
-            // Fully separated at t2 — the shapes never touch within the sweep.
+            // Fully separated at t2 - the shapes never touch within the sweep.
             if (s2 > target + tolerance) {
                 output.state = .separated;
                 output.fraction = t_max;
                 done = true;
                 break :inner;
             }
-            // Within tolerance at t2 — advance the outer time to t2 and re-derive.
+            // Within tolerance at t2 - advance the outer time to t2 and re-derive.
             if (s2 > target - tolerance) {
                 t1 = t2;
                 break :inner;
@@ -2105,7 +2105,7 @@ pub fn timeOfImpact(input: *const TOIInput) TOIOutput {
                 done = true;
                 break :inner;
             }
-            // Touching at t1 — t1 is the impact time.
+            // Touching at t1 - t1 is the impact time.
             if (s1 <= target + tolerance) {
                 output.state = .hit;
                 const pa: Vec2 = mulAdd2(world_point_a, proxy_a.radius, world_normal);
@@ -2161,7 +2161,7 @@ pub fn timeOfImpact(input: *const TOIInput) TOIOutput {
         }
 
         if (distance_iterations == max_distance_iterations) {
-            // Root finder stuck — report a best-effort hit (semi-victory).
+            // Root finder stuck - report a best-effort hit (semi-victory).
             output.state = .failed;
             const pa: Vec2 = mulAdd2(world_point_a, proxy_a.radius, world_normal);
             const pb: Vec2 = mulAdd2(world_point_b, -proxy_b.radius, world_normal);
@@ -2181,7 +2181,7 @@ pub fn timeOfImpact(input: *const TOIInput) TOIOutput {
 // A collide function takes two shapes and the relative pose of B in A's frame, and
 // returns a LOCAL manifold (in shape A's frame): a contact normal plus up to two
 // contact points carrying a separation and a stable feature id. `updateContact`
-// (§14) later marshals this into the persistent, COM-relative `Manifold` the solver
+// (section 14) later marshals this into the persistent, COM-relative `Manifold` the solver
 // consumes. box2d: manifold.c
 // ================================================================================
 
@@ -2683,7 +2683,7 @@ fn findMaxSeparation(poly: *const Polygon, other: *const Polygon) MaxSeparation 
 /// incident edge on the other shape. We project the incident edge onto the reference edge's
 /// tangent, clip it to the reference edge's span, then measure each clipped point's
 /// separation along the normal. `flip` records that the reference edge belongs to B, so the
-/// emitted normal and point ids are swapped to keep the manifold A→B.
+/// emitted normal and point ids are swapped to keep the manifold A->B.
 /// box2d: b2ClipPolygons  manifold.c:631
 fn clipPolygons(
     poly_a: *const Polygon,
@@ -2988,9 +2988,9 @@ pub fn collideSegmentAndPolygon(
 
 /// How a candidate contact normal relates to a chain vertex's Gauss map.
 const NormalType = enum {
-    skip, // non-smooth direction at a convex vertex — ignore this contact
-    admit, // smooth direction — use this contact
-    snap, // concave region — snap to the segment's own normal
+    skip, // non-smooth direction at a convex vertex - ignore this contact
+    admit, // smooth direction - use this contact
+    snap, // concave region - snap to the segment's own normal
 };
 
 /// The smoothing context for one chain segment: its own edge direction and the
@@ -3472,7 +3472,7 @@ pub fn collideChainSegmentAndCapsule(
 // -- Collide dispatch ------------------------------------------------------------
 //
 // Box2D registers each collide function for an ordered shape-type pair (the more
-// complex shape first), with a "primary"/flip bit. Contact creation (§14) swaps the
+// complex shape first), with a "primary"/flip bit. Contact creation (section 14) swaps the
 // two shapes so the stored pair always matches a primary registration; therefore this
 // dispatch only ever sees the 12 registered orderings, and all other combinations are
 // unreachable. box2d: s_registers + b2GetManifoldFcn  contact.c:173-203
@@ -3518,7 +3518,7 @@ pub fn collideShapes(
 }
 
 // ================================================================================
-// Bodies — the ECS primary component plus indexed side-tables
+// Bodies - the ECS primary component plus indexed side-tables
 //
 // Box2D splits a body across three cache-tiered structs (b2Body / b2BodySim /
 // b2BodyState). We collapse those into the zimr shape: `Body` is the authoritative
@@ -3732,7 +3732,7 @@ fn enlargeAabb(a: *Aabb2, b: Aabb2) bool {
 
 /// Quality metrics for the dynamic tree, for diagnostics. `area_ratio` is the sum of internal-node
 /// perimeters over the root perimeter (box2d's b2DynamicTree_GetAreaRatio): at a fixed leaf count it
-/// climbing means the hierarchy is bloating — internal AABBs overlap more, so queries visit far more
+/// climbing means the hierarchy is bloating - internal AABBs overlap more, so queries visit far more
 /// nodes and the broad phase slows even though nothing is allocated. `height` is the root depth.
 pub const TreeStats = struct {
     height: u16,
@@ -4137,7 +4137,7 @@ pub const DynamicTree = struct {
         const sibling: i32 = self.findBestSibling(leaf_aabb);
         const old_parent: i32 = self.at(sibling).parent;
 
-        // Allocate the new parent first — this may move the backing array, so we only
+        // Allocate the new parent first - this may move the backing array, so we only
         // take node references AFTER the allocation.
         const new_parent: i32 = try self.allocateNode(gpa);
         const nodes: []TreeNode = self.nodes.items;
@@ -4356,8 +4356,8 @@ pub const DynamicTree = struct {
     /// Re-tighten every internal node's AABB from its children, bottom-up, without touching the
     /// tree structure. `enlargeProxy` only ever *grows* ancestor AABBs (it never shrinks them when a
     /// leaf moves away), so over the steps between structural rebuilds the internal bounds bloat and
-    /// queries visit more falsely-overlapping nodes. This O(n) pass — far cheaper than a structural
-    /// rebuild — recomputes each internal AABB as the tight union of its children, so the tree stays
+    /// queries visit more falsely-overlapping nodes. This O(n) pass - far cheaper than a structural
+    /// rebuild - recomputes each internal AABB as the tight union of its children, so the tree stays
     /// query-tight every step even when every leaf is moving (where a structural rebuild can't help).
     /// Internal nodes are gathered in pre-order, then processed in reverse so each node's children are
     /// already tightened when it is combined.
@@ -4607,7 +4607,7 @@ fn partitionMid(indices: []i32, centers: []Vec2, count: usize) usize {
 // buffer of proxies that changed this step and a hash set of the shape pairs that
 // already have a contact. Proxies are addressed by a packed "proxy key" = (treeId <<
 // 2) | bodyType. The actual pair-finding (`updateBroadPhasePairs`) lives with the
-// World in §21, because it must read shapes/bodies and create contacts.
+// World in section 21, because it must read shapes/bodies and create contacts.
 // box2d: broad_phase.c / broad_phase.h
 // ================================================================================
 
@@ -4652,7 +4652,7 @@ pub fn shouldShapesCollide(a: Filter, b: Filter) bool {
 
 /// A flat open-addressing hash set of shape-pair keys, used by the broad phase to dedup contacts.
 /// It is probed once per broad-phase candidate (`contains`) plus once per contact create/destroy
-/// (`put`/`remove`) — in a dense pile, tens of thousands of lookups per step, making it the hottest
+/// (`put`/`remove`) - in a dense pile, tens of thousands of lookups per step, making it the hottest
 /// structure in the broad phase. A single contiguous key array with linear probing and
 /// backward-shift deletion keeps every probe in cache and skips the metadata side-table + Wyhash of
 /// the general-purpose hash map; the keys are uniform so a multiply-shift hash suffices. Empty slots
@@ -4911,7 +4911,7 @@ pub const BroadPhase = struct {
 };
 
 // ================================================================================
-// Contacts — persistent narrow-phase state
+// Contacts - persistent narrow-phase state
 //
 // A `Contact` couples two shapes that are (or may soon be) touching. It owns the
 // persistent manifold whose stored impulses and feature ids warm-start the solver
@@ -4920,7 +4920,7 @@ pub const BroadPhase = struct {
 // `updateContact` regenerates the manifold each step and matches impulses by id.
 // box2d: contact.c / contact.h (we merge b2Contact + b2ContactSim, having dropped
 // the solver-set / constraint-graph machinery). Contact creation/destruction needs
-// the World and lives in §21.
+// the World and lives in section 21.
 // ================================================================================
 
 /// Persistent + per-step contact flags. box2d: b2ContactFlags  contact.h:9
@@ -5164,7 +5164,7 @@ pub fn updateContact(
 }
 
 // ================================================================================
-// Contact constraint solver — the heart (TGS-Soft, scalar / single-threaded)
+// Contact constraint solver - the heart (TGS-Soft, scalar / single-threaded)
 //
 // This is a direct port of Box2D's scalar "_Overflow" contact kernels, which ARE its
 // single-threaded solver (the graph-coloring split only exists to run colors on
@@ -5265,7 +5265,7 @@ fn prepareContacts(
         constraint.tangent_speed = contact.tangent_speed;
         constraint.count = point_count;
 
-        // Stiffer softness when either body is immovable in the solve — i.e. not in the
+        // Stiffer softness when either body is immovable in the solve - i.e. not in the
         // awake set. box2d keys this on a null body-state index; the equivalent here is a
         // static body or a sleeping one (a sleeping neighbour is normally woken before
         // prepare, but this stays correct if one slips through). Kinematic bodies are awake
@@ -5313,7 +5313,7 @@ fn prepareContacts(
             // current (rotated) offset cheaply. box2d folds the anchor delta out here too.
             point.base_separation = manifold_point.separation - dot2(anchor_b - anchor_a, normal);
 
-            // Effective mass along the normal: 1 / (Jacobian * inverse-mass * Jacobianᵀ).
+            // Effective mass along the normal: 1 / (Jacobian * inverse-mass * Jacobian^T).
             const lever_normal_a: f32 = cross2(anchor_a, normal);
             const lever_normal_b: f32 = cross2(anchor_b, normal);
             const k_normal: f32 = inv_mass_a + inv_mass_b +
@@ -5606,8 +5606,8 @@ fn storeImpulses(constraints: []const ContactConstraint, contacts: []Contact) vo
 // -- Body integration kernels (driven by the sub-step loop) ----------------------
 
 /// Integrate velocities for one sub-step: apply gravity and the accumulated force/torque,
-/// then apply implicit (Padé) damping. Implicit damping multiplies the velocity by
-/// 1/(1 + h·c) rather than (1 - h·c), which stays stable for any damping coefficient c.
+/// then apply implicit (Pade) damping. Implicit damping multiplies the velocity by
+/// 1/(1 + h*c) rather than (1 - h*c), which stays stable for any damping coefficient c.
 /// box2d: b2IntegrateVelocitiesTask  solver.c:66
 fn integrateVelocities(
     active: []const BodyIndex,
@@ -5622,7 +5622,7 @@ fn integrateVelocities(
         // Kinematic bodies have inverse_mass 0, so gravity must not act on them.
         const gravity_scale: f32 = if (body_motion.inverse_mass > 0.0) body_motion.gravity_scale else 0.0;
 
-        // Δv = h·(F/m + gravity_scale·g); torque term is h·(τ/I).
+        // dv = h*(F/m + gravity_scale*g); torque term is h*(tau/I).
         const linear_delta: Vec2 = body_motion.force * splat2(h * body_motion.inverse_mass) +
             gravity * splat2(h * gravity_scale);
         const angular_delta: f32 = h * body_motion.inverse_inertia * body_motion.torque;
@@ -5685,11 +5685,11 @@ fn integratePositions(
 }
 
 // ================================================================================
-// Joints — the articulated-constraint family
+// Joints - the articulated-constraint family
 //
 // Each joint constrains two bodies through a pair of LOCAL frames (one per body).
 // At prepare the frames are baked into world orientation relative to each body's
-// center of mass; then — unlike contacts, whose anchors stay fixed — joint anchors
+// center of mass; then - unlike contacts, whose anchors stay fixed - joint anchors
 // are RE-ROTATED by the per-substep body delta rotations so the constraint tracks the
 // bodies as they turn. The same TGS-Soft machinery applies: a biased pass that pushes
 // out position error softly, and relax passes (use_bias == false) that only kill
@@ -5699,11 +5699,11 @@ fn integratePositions(
 // All seven joint kinds live in this section: revolute, distance, weld, motor,
 // prismatic, wheel, and the collision-filter joint (which only disables collision
 // between its two bodies). The per-joint solve order follows Box2D's canonical
-// sequence: spring → motor → limit → equality constraint.
+// sequence: spring -> motor -> limit -> equality constraint.
 //
 // Shared solver vocabulary used throughout (the same in every joint):
-//   c           the constraint value — the current position/angle error to remove.
-//   c_dot       its time derivative — the relative velocity in constraint space.
+//   c           the constraint value - the current position/angle error to remove.
+//   c_dot       its time derivative - the relative velocity in constraint space.
 //   bias        c scaled by the soft-constraint bias_rate (only in the biased pass);
 //               for one-sided limits a positive c instead biases speculatively at inv_h.
 //   mass_scale  / impulse_scale  the soft-constraint gains from `makeSoft`; together they
@@ -5711,7 +5711,7 @@ fn integratePositions(
 //   axial_arm / perp_arm   moment arms: cross(anchor, axis) for an axis-aligned constraint,
 //               i.e. how much a unit impulse along the axis changes each body's spin.
 //   The applied impulse is always accumulated, then clamped (to a motor/limit/friction
-//               bound), and only the delta is applied — the standard sequential-impulse form.
+//               bound), and only the delta is applied - the standard sequential-impulse form.
 // box2d: joint.c + {revolute,distance,weld,motor,prismatic,wheel}_joint.c
 // ================================================================================
 
@@ -5885,7 +5885,7 @@ const WheelJoint = struct {
 };
 
 /// A pulley: two bodies are linked by an inextensible rope that runs over two fixed ground
-/// anchors, so `lengthA + ratio*lengthB` stays constant — raising one side lowers the other.
+/// anchors, so `lengthA + ratio*lengthB` stays constant - raising one side lowers the other.
 /// The rest lengths and the constant are captured lazily on the first solver prepare from the
 /// bodies' initial anchor positions. box2d v2: b2PulleyJoint (dropped in box2d v3, reintroduced).
 const PulleyJoint = struct {
@@ -7426,7 +7426,7 @@ fn solveWheelJoint(
 // contact/joint graph, used only to decide sleeping coherently. Two dynamic bodies
 // joined by a touching contact or a joint share an island; an island may sleep only
 // when every one of its dynamic members has been "slow" long enough and all permit
-// sleeping. Static and kinematic bodies are never merged — a static floor must not
+// sleeping. Static and kinematic bodies are never merged - a static floor must not
 // chain every body resting on it into one giant island, and kinematic bodies never
 // sleep. The parent array is indexed by BodyIndex and rebuilt every step.
 // box2d (in spirit): island.c + the sleep accounting in solver.c:594
@@ -7519,7 +7519,7 @@ fn aggregateAndMarkSleep(
 }
 
 // ================================================================================
-// Continuous collision (CCD) — pure helpers
+// Continuous collision (CCD) - pure helpers
 //
 // Most of CCD is World-coupled (it sweeps a fast body's shapes against the broad-phase
 // trees and clamps the body to its earliest time of impact), so the driver lives with
@@ -7547,7 +7547,7 @@ fn makeRelativeSweep(body: *const Body, base: Vec2) Sweep2 {
 pub const core_fraction: f32 = 0.25;
 
 // ================================================================================
-// Sensors — data model
+// Sensors - data model
 //
 // Sensors never produce solver contacts; they are resolved in a separate overlap pass
 // that runs after the step (querying the broad phase for each sensor shape and diffing
@@ -7588,7 +7588,7 @@ const Sensor = struct {
 // events are single-buffered: cleared at the start of a step, filled during it, read
 // after. "End" events are double-buffered and swapped each step, because a contact can
 // end not only during the narrow phase but also when a body or shape is destroyed
-// between steps — the extra buffer keeps those until the next read without being wiped.
+// between steps - the extra buffer keeps those until the next read without being wiped.
 // box2d: the b2*Event structs in types.h + the world event buffers
 // ================================================================================
 
@@ -7701,7 +7701,7 @@ pub const EventBuffers = struct {
 };
 
 // ================================================================================
-// World — the container and its lifecycle
+// World - the container and its lifecycle
 //
 // The World owns every body, shape, contact, joint, and sensor, plus the broad phase,
 // the per-step solver side-tables, and the event buffers. Bodies and the other entity
@@ -7749,7 +7749,7 @@ pub const BodyHandle = entities.Handle(Body);
 pub const ShapeHandle = entities.Handle(Shape);
 pub const JointHandle = entities.Handle(Joint);
 
-/// A plain growable pool of contacts with a manual free list — no generational handles and no
+/// A plain growable pool of contacts with a manual free list - no generational handles and no
 /// parallel ECS archetype. Contacts are referenced only by integer id (never by a handle held
 /// across frames; the public API takes and returns a `u32` contact_id) and carry no secondary
 /// components, so the ECS machinery the other pools use was pure overhead on the hot
@@ -7762,7 +7762,7 @@ const ContactPool = struct {
     /// bytes that are never read until the id is handed back out by `alloc`.
     data: []Contact,
     /// Ids returned by `free`, available for reuse (box2d: b2IdPool.freeArray). Its capacity is
-    /// held >= `data.len`, so `free` never allocates — you cannot free more ids than slots exist.
+    /// held >= `data.len`, so `free` never allocates - you cannot free more ids than slots exist.
     free_list: std.ArrayListUnmanaged(u32) = .empty,
     /// High-water mark: the next never-before-used id (box2d: b2IdPool.nextIndex).
     next_index: u32 = 0,
@@ -7795,7 +7795,7 @@ const ContactPool = struct {
         try self.free_list.ensureTotalCapacity(gpa, min_capacity);
     }
 
-    /// Reserve a slot, store `value`, and return its id — reusing a freed id when one exists,
+    /// Reserve a slot, store `value`, and return its id - reusing a freed id when one exists,
     /// otherwise bumping `next_index` and growing (amortised doubling) past capacity.
     /// box2d: b2AllocId + the contact-array grow in b2CreateContact.
     fn alloc(
@@ -7833,8 +7833,8 @@ const ContactPool = struct {
 //
 // To let the solver process constraints in wide (SIMD) batches, contacts and joints are
 // partitioned into "colors" such that within one color no two constraints touch the same
-// dynamic body. Constraints in a color can then be solved independently — four at a time in
-// @Vector lanes — because each writes a distinct body's velocity. Static and kinematic
+// dynamic body. Constraints in a color can then be solved independently - four at a time in
+// @Vector lanes - because each writes a distinct body's velocity. Static and kinematic
 // bodies are never written, so they may appear any number of times in a color and get no
 // usage bit. Constraints that cannot fit any color land in the overflow color, solved
 // scalar. This is the per-step batch form of box2d's persistent constraint graph.
@@ -7924,7 +7924,7 @@ fn regrowFill(
 }
 
 /// Like `regrowFill` but for per-step scratch tables (`island_*`, `body_sleep`) that `World.init`
-/// leaves uninitialised — the new tail is left undefined, matching init, since these are written
+/// leaves uninitialised - the new tail is left undefined, matching init, since these are written
 /// before they are read each step.
 fn regrowScratch(
     comptime T: type,
@@ -7992,7 +7992,7 @@ pub const World = struct {
     /// the contact-constraint array, the graph-coloring scratch) is allocated here and
     /// reclaimed wholesale by a single `reset(.retain_capacity)` at the top of each step.
     /// After the first few steps the arena has grown to the peak working-set size and no
-    /// further allocation reaches the backing allocator — which is what keeps step cost flat
+    /// further allocation reaches the backing allocator - which is what keeps step cost flat
     /// as the contact count climbs on the wasm allocator, where per-step alloc/free of
     /// contact-sized arrays was previously the dominant cost.
     step_arena: FrameArena,
@@ -8007,7 +8007,7 @@ pub const World = struct {
         errdefer shapes.deinit(gpa);
         // Contacts are NOT one-per-body: a dense 2D pile produces several contacts per body (a
         // hexagonal pack is ~3x, and speculative fat-AABB pairs push it higher), so a contact pool
-        // sized to the body count overflows mid-step in dense scenes like Benchmark|Capacity — and
+        // sized to the body count overflows mid-step in dense scenes like Benchmark|Capacity - and
         // because the pool is fixed, the overflowing spawn errors and aborts the whole step, freezing
         // the world. box2d grows contact storage on demand; with fixed pools we provision generous
         // headroom up front instead. Six contacts per body covers a maximally dense pack at full
@@ -8930,7 +8930,7 @@ fn wakeBody(world: *World, body_index: BodyIndex) void {
 }
 
 /// Wake both bodies a joint connects (a static endpoint is a no-op inside `wakeBody`). The motor-speed
-/// setters call this so a motor command takes effect even when the driven body had slept at rest —
+/// setters call this so a motor command takes effect even when the driven body had slept at rest -
 /// otherwise the new speed sits unread until something else happens to wake the body.
 fn wakeJointBodies(world: *World, joint: JointHandle) void {
     const j: *const Joint = &world.joints.data[joint.index()];
@@ -10140,7 +10140,7 @@ pub const RayCastInput = struct {
 pub const QueryFilter = struct {
     category: u64 = 1,
     mask: u64 = 0xFFFF_FFFF_FFFF_FFFF,
-    /// Skip this body entirely — e.g. so a ray fired from a body doesn't hit itself.
+    /// Skip this body entirely - e.g. so a ray fired from a body doesn't hit itself.
     /// Named/typed to mirror the 3D engine's `QueryFilter.exclude`.
     exclude: ?BodyHandle = null,
     /// Also report sensor shapes. Queries usually want sensors; the solver never does.
@@ -10610,7 +10610,7 @@ fn boxCastTree(
 
 /// The result of a closest-hit ray cast.
 /// The closest shape a ray hit. The query returns `?RayResult`, so a miss is `null` and a
-/// hit always has valid fields — there is no separate "did it hit" flag to check.
+/// hit always has valid fields - there is no separate "did it hit" flag to check.
 pub const RayResult = struct {
     fraction: f32 = 0,
     point: Vec2 = .{ 0, 0 },
@@ -11050,7 +11050,7 @@ pub const ContactPointData = struct {
     normal_impulse: f32, // normal impulse accumulated across the last step's sub-steps
 };
 
-/// Live data for a contact: the world-space normal (A→B) and up to two manifold points. Pair with a
+/// Live data for a contact: the world-space normal (A->B) and up to two manifold points. Pair with a
 /// contact_id from a begin-touch event, or iterate liveContactId. box2d: b2ContactData / b2Contact_GetData
 pub const ContactData = struct {
     shape_a: ShapeIndex,
@@ -11119,7 +11119,7 @@ pub fn getJointEvents(world: *const World) []const JointEvent {
 // lockstep with the pool, and that registry is not cheaply byte-copyable, so the contacts
 // pool (the only one whose allocation set changes mid-step) cannot just be memcpy'd back.
 //
-// Instead the checkpoint captures the persistent per-entity DATA — body transforms + sleep
+// Instead the checkpoint captures the persistent per-entity DATA - body transforms + sleep
 // state, shape geometry/AABBs, joint warm-start impulses, and the motion (velocity) and
 // solver-delta side tables. Restore writes that data back (pool ALLOCATION state and the ECS
 // registry are left untouched, so the lockstep invariant holds), then rebuilds the derived
@@ -11462,7 +11462,7 @@ pub const DistanceJointDef = struct {
     hertz: f32 = 0,
     damping_ratio: f32 = 0,
     // Spring force is clamped to this range; default unbounded so an enabled spring is not
-    // silently pinned to zero force. box2d: b2DefaultDistanceJointDef (±FLT_MAX)
+    // silently pinned to zero force. box2d: b2DefaultDistanceJointDef (+/-FLT_MAX)
     lower_spring_force: f32 = -floatMax(f32),
     upper_spring_force: f32 = floatMax(f32),
     enable_limit: bool = false,
@@ -11529,7 +11529,7 @@ pub fn createPrismaticJoint(world: *World, def: PrismaticJointDef) !JointHandle 
 /// about the axle and translation limits along the axis. box2d: b2CreateWheelJoint
 pub const WheelJointDef = struct {
     base: JointBaseDef,
-    // The suspension spring is on by default, matching b2DefaultWheelJointDef — a wheel
+    // The suspension spring is on by default, matching b2DefaultWheelJointDef - a wheel
     // joint left at defaults behaves as a sprung suspension, not a rigid slider.
     enable_spring: bool = true,
     hertz: f32 = 1.0,
@@ -11773,7 +11773,7 @@ pub fn enableHitEvents(world: *World, shape: ShapeHandle, flag: bool) void {
 //
 // Generic accessors work on any joint; the per-type setters tune motors, springs, and
 // limits while the simulation runs. Following Box2D, toggling a feature zeroes its
-// accumulated impulse (so it restarts cleanly) and setters do not auto-wake — call
+// accumulated impulse (so it restarts cleanly) and setters do not auto-wake - call
 // wakeJoint if a sleeping pair should react immediately. box2d: *_joint.c (b2*Joint_*)
 
 pub fn getJointType(world: *const World, joint: JointHandle) JointType {
@@ -11809,7 +11809,7 @@ pub fn wakeJoint(world: *World, joint: JointHandle) void {
     wakeBody(world, j.body_b);
 }
 
-// — Revolute —
+// - Revolute -
 
 /// Current relative angle of the two joint frames (radians). box2d: b2RevoluteJoint_GetAngle
 pub fn revoluteGetAngle(world: *const World, joint: JointHandle) f32 {
@@ -11872,7 +11872,7 @@ pub fn revoluteSetMaxMotorTorque(world: *World, joint: JointHandle, torque: f32)
     world.joints.data[joint.index()].data.revolute.max_motor_torque = torque;
 }
 
-/// Reaction torque the motor applied last step (N·m). box2d: b2RevoluteJoint_GetMotorTorque
+/// Reaction torque the motor applied last step (N*m). box2d: b2RevoluteJoint_GetMotorTorque
 pub fn revoluteGetMotorTorque(world: *const World, joint: JointHandle) f32 {
     return world.inv_h * world.joints.data[joint.index()].data.revolute.motor_impulse;
 }
@@ -11951,7 +11951,7 @@ pub fn getConstraintForce(world: *const World, joint: JointHandle) Vec2 {
     }
 }
 
-/// Reaction torque this joint applied last step (N·m). box2d: b2Joint_GetConstraintTorque dispatch
+/// Reaction torque this joint applied last step (N*m). box2d: b2Joint_GetConstraintTorque dispatch
 pub fn getConstraintTorque(world: *const World, joint: JointHandle) f32 {
     const j: *const Joint = &world.joints.data[joint.index()];
     const inv_h: f32 = world.inv_h;
@@ -11965,7 +11965,7 @@ pub fn getConstraintTorque(world: *const World, joint: JointHandle) f32 {
     };
 }
 
-// — Prismatic —
+// - Prismatic -
 
 /// Current translation along the joint axis (m). box2d: b2PrismaticJoint_GetTranslation
 pub fn prismaticGetTranslation(world: *const World, joint: JointHandle) f32 {
@@ -12043,7 +12043,7 @@ pub fn prismaticSetLimits(
     }
 }
 
-// — Distance —
+// - Distance -
 
 /// Set the rest length the spring pulls toward (clamped to >= slop). box2d: b2DistanceJoint_SetLength
 pub fn distanceSetLength(world: *World, joint: JointHandle, length: f32) void {
@@ -12123,7 +12123,7 @@ pub fn distanceGetMotorForce(world: *const World, joint: JointHandle) f32 {
     return world.inv_h * world.joints.data[joint.index()].data.distance.motor_impulse;
 }
 
-// — Wheel —
+// - Wheel -
 
 pub fn wheelEnableSpring(world: *World, joint: JointHandle, enable: bool) void {
     const wh: *WheelJoint = &world.joints.data[joint.index()].data.wheel;
@@ -12187,7 +12187,7 @@ pub fn wheelSetLimits(
     }
 }
 
-// — Weld —
+// - Weld -
 
 pub fn weldSetLinearHertz(world: *World, joint: JointHandle, hertz: f32) void {
     world.joints.data[joint.index()].data.weld.linear_hertz = hertz;
@@ -12205,7 +12205,7 @@ pub fn weldSetAngularDampingRatio(world: *World, joint: JointHandle, ratio: f32)
     world.joints.data[joint.index()].data.weld.angular_damping_ratio = ratio;
 }
 
-// — Motor —
+// - Motor -
 
 pub fn motorSetLinearVelocity(world: *World, joint: JointHandle, velocity: Vec2) void {
     world.joints.data[joint.index()].data.motor.linear_velocity = velocity;
@@ -13889,7 +13889,7 @@ fn warmStartWide(
             b.vx += wc.inv_mass_b * px;
             b.vy += wc.inv_mass_b * py;
         }
-        // Point 2 (zeroed for one-point manifolds → contributes nothing).
+        // Point 2 (zeroed for one-point manifolds -> contributes nothing).
         {
             const px: FloatW = nx * wc.normal_impulse2 + tx * wc.tangent_impulse2;
             const py: FloatW = ny * wc.normal_impulse2 + ty * wc.tangent_impulse2;
@@ -13910,7 +13910,7 @@ fn warmStartWide(
 }
 
 /// Solve one sub-step, four contacts wide. This is `solveContacts` transcribed into SIMD
-/// lanes: read it first for the commentary and the physics — every step here is the same,
+/// lanes: read it first for the commentary and the physics - every step here is the same,
 /// just done for four contacts at once. The `x`/`y` suffixes are the two components of a
 /// vector spread across lanes (struct-of-arrays); `block` is the four-contact block.
 /// Non-penetration runs in both passes; friction and rolling resistance only in the relax
@@ -14127,7 +14127,7 @@ fn applyRestitutionWide(
     const neg_thresholdW: FloatW = splatW(-threshold);
     for (blocks) |*wc| {
         // Skip blocks with no restitution in any lane (cheap early out preserves the scalar
-        // "restitution == 0 → continue" behaviour without per-lane harm otherwise).
+        // "restitution == 0 -> continue" behaviour without per-lane harm otherwise).
         const any_restitution: bool = @reduce(.Or, wc.restitution > zeroW);
         if (any_restitution == false) {
             continue;
@@ -14293,8 +14293,8 @@ test "setShapeGeometry swaps geometry, refreshing mass and broad-phase proxy" {
     const m_big: f32 = getMass(&world, body);
     try expect(m_big > m_small * 3.0);
 
-    // The body still simulates after the swap — its moved proxy regenerates a contact, so it falls
-    // and lands on the segment, settling near y≈1 (the 1x1 box's half-height).
+    // The body still simulates after the swap - its moved proxy regenerates a contact, so it falls
+    // and lands on the segment, settling near y~1 (the 1x1 box's half-height).
     var i: usize = 0;
     while (i < 240) : (i += 1) {
         try step(&world, 1.0 / 60.0);
@@ -14469,7 +14469,7 @@ test "getContactData reports a live touching contact's manifold" {
         }
         const data: ContactData = getContactData(&world, cid);
         try expect(data.point_count >= 1);
-        try expect(@abs(data.points[0].point[1]) < 0.2); // contact near the ground line y≈0
+        try expect(@abs(data.points[0].point[1]) < 0.2); // contact near the ground line y~0
         try expect(@abs(data.normal[1]) > 0.9); // vertical normal on flat ground
         try expect(data.points[0].normal_impulse > 0.0); // supporting the ball's weight
         found = true;

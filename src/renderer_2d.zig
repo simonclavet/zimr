@@ -1,18 +1,18 @@
 //! lint:alias renderer_2d
 // src/renderer_2d.zig - the raylib-parity drawing layer.
 // WebGPU architecture is documented centrally in src/zimr.zig
-// (the module-level `//!` doc) — read that before changing wgpu code.
+// (the module-level `//!` doc) - read that before changing wgpu code.
 //
 //
 // `Renderer2D` owns the resources needed for 2D drawing:
 //
-//   - The default shapes shader — TWO modules (VS + FS), each
+//   - The default shapes shader - TWO modules (VS + FS), each
 //     compiled from a separate WGSL file produced by the engine's
 //     typed shader pipeline (`src/shaders/default_shapes_vs.zig`
 //     and `src/shaders/default_shapes_fs.zig`).  Rule 1 of the
 //     wgpu migration plan: no hand-written WGSL.
-//   - A 1×1 white texture (the "shapes" texture).
-//   - The per-frame UBO buffer (group 0, binding 0) — currently
+//   - A 1x1 white texture (the "shapes" texture).
+//   - The per-frame UBO buffer (group 0, binding 0) - currently
 //     just the view-projection matrix.
 //   - The per-frame and per-material bind groups.
 //   - The shapes batch's GPU buffers (vertex + index).
@@ -54,13 +54,13 @@ const shader = @import("shader_interface");
 const shader_runtime = @import("shader_runtime_wgpu.zig");
 const assertf = zm.assertf;
 
-/// Slots in the per-frame ortho ring — the max projection switches one
+/// Slots in the per-frame ortho ring - the max projection switches one
 /// frame can record (frame begin + one per beginTextureMode + one per
 /// reopen2DPass).  UI-heavy frames reopen a handful of times; 32 gives
-/// generous headroom at 2 KB total (32 × 64 B).
+/// generous headroom at 2 KB total (32 x 64 B).
 pub const ortho_ring_len: u32 = 32;
 
-// Engine VS+FS IO modules — imported here so `Renderer2D.shapes_pipeline`
+// Engine VS+FS IO modules - imported here so `Renderer2D.shapes_pipeline`
 // can carry the comptime VS+FS types via `RenderPipeline(VsIoT, FsIoT)`.
 // Turn 2 of finishing_new_gpu_foundations.md: the typed pipeline gives
 // the SW backend a comptime path to the shader's Io/Out types, which
@@ -68,7 +68,7 @@ pub const ortho_ring_len: u32 = 32;
 //
 // Note: we use the IO modules (not the body modules) as the type
 // parameters because the body modules' externs use
-// `addrspace(.constant)` which is SPIR-V-only — not native-importable.
+// `addrspace(.constant)` which is SPIR-V-only - not native-importable.
 // Turn 3 closes the loop by either (a) exposing a native-target
 // build of the body modules, or (b) wiring the IO modules to carry
 // `pub const shaderMain` pointers via codegen.
@@ -78,7 +78,7 @@ const default_shapes_fs_io = @import("shaders/default_shapes_fs_io.zig");
 const WgpuTexture = wgpu_texture.WgpuTexture;
 const GpuFrame = gpu.GpuFrame;
 
-/// The merged engine schema — combines the VS UBO + FS samplers
+/// The merged engine schema - combines the VS UBO + FS samplers
 /// into a single resource schema that drives the engine's bind
 /// groups via `Resources(EngineSchema)`.  Declared here (rather than
 /// imported from `default_shapes_*_io.zig`) to keep the engine
@@ -90,7 +90,7 @@ const GpuFrame = gpu.GpuFrame;
 /// IO files; the solver-generated WGSL would mismatch otherwise.
 pub const EngineSchema = struct {
     /// Per-frame view-projection matrix.  Equivalent shape to
-    /// `default_shapes_vs_io.Ubo` — extern struct with one mat4 field.
+    /// `default_shapes_vs_io.Ubo` - extern struct with one mat4 field.
     pub const Ubo = struct {
         view_projection: [4]@Vector(4, f32) = .{
             .{ 1, 0, 0, 0 },
@@ -100,7 +100,7 @@ pub const EngineSchema = struct {
         },
     };
 
-    /// One sampler — engine 2D shapes uses a single texture (white-1×1
+    /// One sampler - engine 2D shapes uses a single texture (white-1x1
     /// by default; user textures swap in via `Resources.set`).
     /// Equivalent to `default_shapes_fs_io.Samplers`.
     pub const Samplers = struct {
@@ -108,23 +108,23 @@ pub const EngineSchema = struct {
     };
 };
 
-/// Engine VS WGSL — built by the typed shader pipeline from
+/// Engine VS WGSL - built by the typed shader pipeline from
 /// `src/shaders/default_shapes_vs.zig`.  Declares `@group(0)
 /// @binding(0)` for the view-projection UBO, entry-point `entry`.
 const default_shapes_vs_wgsl = @embedFile("default_shapes_vs.wgsl");
 
-/// Engine FS WGSL — built by the typed shader pipeline from
+/// Engine FS WGSL - built by the typed shader pipeline from
 /// `src/shaders/default_shapes_fs.zig`.  Declares `@group(1)
 /// @binding(0/1)` for texture + sampler (via `--sampler-group=1`),
 /// entry-point `entry`.
 const default_shapes_fs_wgsl = @embedFile("default_shapes_fs.wgsl");
 
 // ============================================================================
-// SECTION 1 — per-frame UBO type
+// SECTION 1 - per-frame UBO type
 // ============================================================================
 
 pub const PerFrameUbo = extern struct {
-    /// Column-major mat4x4 — the view-projection matrix used by every
+    /// Column-major mat4x4 - the view-projection matrix used by every
     /// 2D draw call.  Updated once per frame at `beginFrame2D`.
     view_projection: [16]f32 = .{
         1, 0, 0, 0,
@@ -135,12 +135,12 @@ pub const PerFrameUbo = extern struct {
 };
 
 // ============================================================================
-// SECTION 1B — MatrixStack + ShapesBatch (the drawing-layer state machine)
+// SECTION 1B - MatrixStack + ShapesBatch (the drawing-layer state machine)
 // ============================================================================
 //
 // These used to live on `GpuFrame`, but they're drawing-layer
 // concerns, not GPU-trait concerns.  Moved here in step #6 of the
-// May-2026 birds-eye plan so `Renderer2D` owns them outright — the
+// May-2026 birds-eye plan so `Renderer2D` owns them outright - the
 // GpuFrame stays a thin "long-lived GPU resources" container, and
 // `gpu_iface` no longer has to know about matrix stacks or batched
 // shape buffers.
@@ -199,13 +199,13 @@ pub const max_registered_textures: u32 = 64;
 const max_sprite_residency: usize = 64;
 
 // ============================================================================
-// SECTION 2 — Renderer2D
+// SECTION 2 - Renderer2D
 // ============================================================================
 
 /// Build a material bind group (group 1) for the given texture.
 /// Used at Renderer2D init and any time the user binds a new texture.
 ///
-/// Texture lands at binding 0, sampler at binding 1 — matches the
+/// Texture lands at binding 0, sampler at binding 1 - matches the
 /// FS WGSL declaration produced with `--sampler-group=1`.
 pub fn buildMaterialBindGroup(
     gpa: Allocator,
@@ -225,7 +225,7 @@ pub fn buildMaterialBindGroup(
 /// The 2D batch's vertex layout: position (2xf32), uv (2xf32), packed colour (4xu8) = 20 bytes.
 ///
 /// A free function, NOT a literal inlined at each use, because `Shader2D` builds a user
-/// pipeline against this exact layout. Two copies would drift silently — a mismatched
+/// pipeline against this exact layout. Two copies would drift silently - a mismatched
 /// `array_stride` does not raise an error, it reads the wrong bytes as vertices.
 pub fn shapesVertexBufferLayout() gpu.VertexBufferLayout {
     return .{
@@ -242,7 +242,7 @@ pub fn shapesVertexBufferLayout() gpu.VertexBufferLayout {
 pub const Renderer2D = struct {
     gpa: Allocator,
 
-    // Shaders + pipeline.  Two separate modules — engine emits VS
+    // Shaders + pipeline.  Two separate modules - engine emits VS
     // and FS WGSL as independent files.
     shapes_vs_module: wgpu.ShaderModuleHandle = .invalid,
     shapes_fs_module: wgpu.ShaderModuleHandle = .invalid,
@@ -251,7 +251,7 @@ pub const Renderer2D = struct {
     /// Wraps `wgpu.RenderPipelineHandle` with the comptime VS+FS IO
     /// module types so the SW backend (turn 3) can find the shader
     /// dispatch entry points.  On the wgpu side, this is bit-for-bit
-    /// equivalent to a raw handle — `setPipeline` extracts
+    /// equivalent to a raw handle - `setPipeline` extracts
     /// `.gpu_handle` and binds it.
     shapes_pipeline: shader_runtime.RenderPipeline(
         default_shapes_vs_io,
@@ -268,19 +268,19 @@ pub const Renderer2D = struct {
     ///
     /// Kept because `Shader2D` must build the USER's pipeline with the same ones. The depth
     /// part is the trap: when the app has no depth target the pipeline must declare NO depth
-    /// state, or it is incompatible with the depth-less pass it is bound into — and WebGPU
+    /// state, or it is incompatible with the depth-less pass it is bound into - and WebGPU
     /// rejects the entire command buffer, not just the offending draw.
     backbuffer_format: wgpu.TextureFormat = .rgba8_unorm,
     depth_format: ?wgpu.TextureFormat = null,
 
     /// The blend mode in force, so `endShaderMode` knows what to go BACK to.
     ///
-    /// Without this, leaving a user shader would silently reset the blend to `.alpha` —
+    /// Without this, leaving a user shader would silently reset the blend to `.alpha` -
     /// so `beginBlendMode(.additive)` ... `beginShaderMode` ... `endShaderMode` would drop
     /// the additive blend on the floor and nothing would say why.
     active_blend: wgpu.BlendMode = .alpha,
 
-    /// All bind-group state for the engine's shapes pipeline — UBO
+    /// All bind-group state for the engine's shapes pipeline - UBO
     /// at group 0 + sampler at group 1.  Replaces the hand-wired
     /// `per_frame_bgl`/`material_bgl`/`per_frame_ubo`/
     /// `per_frame_bind_group`/`white_material_bind_group` fields
@@ -288,7 +288,7 @@ pub const Renderer2D = struct {
     /// for the resource shape.
     resources: shader_runtime.Resources(EngineSchema) = undefined,
 
-    // Built-in 1×1 white texture.  Owned separately from `resources`
+    // Built-in 1x1 white texture.  Owned separately from `resources`
     // because the user can replace it via `Resources.set(.texture0,
     // their_tex)` and we want a reset-to-default path.
     white_tex: WgpuTexture = .{},
@@ -312,7 +312,7 @@ pub const Renderer2D = struct {
     //
     // `queue.writeBuffer` calls all execute BEFORE the frame's single
     // encoder submit, so writing ONE ubo several times in a frame means
-    // only the LAST matrix survives — and it applies to EVERY pass
+    // only the LAST matrix survives - and it applies to EVERY pass
     // segment, including ones already recorded.  The shapes batch
     // solved this exact hazard for VERTEX data with a ring (see
     // `flushBatch`: "queue-timeline writes clobber each other");
@@ -327,13 +327,13 @@ pub const Renderer2D = struct {
     /// Index of the slot holding the CURRENT projection (the one
     /// `bindForPass` binds).  Advanced by `updatePerFrame`.
     ortho_cursor: u32 = 0,
-    /// Ortho writes within the CURRENT encoder — asserted <= ring
+    /// Ortho writes within the CURRENT encoder - asserted <= ring
     /// length, because a wrap within one encoder would clobber a slot
     /// an earlier recorded pass segment still references (the exact
     /// bug the ring prevents).  The budget resets automatically when
     /// the frame's encoder changes (encoder handles are monotonic on
     /// both the real bridge and the smoke mock), so NO per-frame call
-    /// is required of the app — the reset is structural.
+    /// is required of the app - the reset is structural.
     ortho_writes_this_frame: u32 = 0,
     ortho_ring_encoder: wgpu.CommandEncoderHandle = .invalid,
 
@@ -349,7 +349,7 @@ pub const Renderer2D = struct {
     registered_bind_groups: [max_registered_textures]wgpu.BindGroupHandle = @splat(.invalid),
     // Which registrations the ENGINE created + owns (e.g. a font atlas): those
     // textures must be DESTROYED on resetRegistry. Example-drawn textures are
-    // owned by the example (freed via its WgpuTexture.deinit) → owned=false, so
+    // owned by the example (freed via its WgpuTexture.deinit) -> owned=false, so
     // resetRegistry frees only their bind group, never the texture.
     registered_owned: [max_registered_textures]bool = @splat(false),
     // Per-CHILD attribution for the launcher: which child "gen" registered each
@@ -394,13 +394,13 @@ pub const Renderer2D = struct {
             "shapes_fs",
         );
 
-        // ---- 2. Built-in 1×1 white texture ----
+        // ---- 2. Built-in 1x1 white texture ----
         // Created before Resources.init so we can pass it as the
         // initial `texture0` value.  User-supplied textures swap
         // in later via `r.resources.set(.texture0, their_tex)`.
         r.white_tex = WgpuTexture.createWhite1x1(f.device, f.queue);
 
-        // ---- 3. Resources(EngineSchema) — replaces all the
+        // ---- 3. Resources(EngineSchema) - replaces all the
         // hand-wired BGL/BG construction for both groups.
         //
         // Before turn 1, this block was 50+ LOC of:
@@ -476,7 +476,7 @@ pub const Renderer2D = struct {
                 // When a depth target exists (a 3D scene opted in via
                 // window.depth_format), the single shared pass carries depth, so 2D
                 // pipelines need a matching depth state. compare=always means 2D
-                // ignores depth and always draws (HUD over 3D). No depth target → none.
+                // ignores depth and always draws (HUD over 3D). No depth target -> none.
                 if (f.depth_format != null) .always else .none,
                 .none,
                 f.backbuffer_format,
@@ -535,7 +535,7 @@ pub const Renderer2D = struct {
     /// texture stack (drawTexturePro etc.).
     pub fn registerTexture(self: *Renderer2D, tex: WgpuTexture) u32 {
         // Reuse a freed slot first (bounds the registry under register/release
-        // cycles — the launcher reset path); otherwise grow.
+        // cycles - the launcher reset path); otherwise grow.
         var id: u32 = undefined;
         if (self.reg_free_len > 0) {
             self.reg_free_len -= 1;
@@ -565,7 +565,7 @@ pub const Renderer2D = struct {
     /// This is what makes re-baking a font safe. Without it, every re-bake
     /// registers a NEW atlas and abandons the old one: the GPU textures pile up
     /// and, once `max_registered_textures` (64) is exhausted, `registerTexture`
-    /// returns 0 — the white/untextured slot — so text would silently render as
+    /// returns 0 - the white/untextured slot - so text would silently render as
     /// solid blocks. Callers must flush any pending batch first (the app-level
     /// `unloadFont` does), since staged geometry can still reference the bind
     /// group being destroyed.
@@ -598,7 +598,7 @@ pub const Renderer2D = struct {
 
     /// Release every registration tagged `owner`: destroy its material bind group
     /// (and, if engine-owned like a font atlas, its texture), then recycle the id
-    /// via the free-list. Sibling owners' registrations are untouched — this is
+    /// via the free-list. Sibling owners' registrations are untouched - this is
     /// what makes the shared-registry launcher (2x2 grid) leak-tight on a child
     /// reset. No-op for owner 0 (engine / launcher-fixed).
     pub fn releaseOwner(self: *Renderer2D, owner: u32) void {
@@ -626,7 +626,7 @@ pub const Renderer2D = struct {
         self.shapes_batch.current_texture_bind_group = self.resources.bind_groups[1];
     }
 
-    /// Release every per-example texture registration — destroy each material
+    /// Release every per-example texture registration - destroy each material
     /// bind group (id >= 1) and reset the count, keeping only id 0 (the engine
     /// white/untextured group). Called on example teardown so the engine does
     /// NOT retain an example's texture registrations across lifecycles (the
@@ -703,7 +703,7 @@ pub const Renderer2D = struct {
 
     /// Change a registered texture's sampler filter (raylib `SetTextureFilter`).
     /// The filter lives in the SAMPLER, and the sampler is baked into the
-    /// texture's material bind group — so switching it means rebuilding both:
+    /// texture's material bind group - so switching it means rebuilding both:
     /// new sampler, new bind group, old ones destroyed.
     ///
     /// CALLER MUST FLUSH FIRST (`wgpu_app.setTextureFilter` does): pending
@@ -768,10 +768,10 @@ pub const Renderer2D = struct {
     /// Swap the texture behind an already-registered id IN PLACE (a fresh
     /// material bind group around the new view; the id stays stable so
     /// callers' `setTexture(id)` keeps working).  This is what makes a
-    /// resizable `CpuFramebuffer` possible — recreate the texture at the
+    /// resizable `CpuFramebuffer` possible - recreate the texture at the
     /// new size, then update the registration instead of consuming a new
     /// slot per resize.  The OLD bind-group handle is dropped without a
-    /// destroy (the JS bridge has no bind-group destroy yet — see
+    /// destroy (the JS bridge has no bind-group destroy yet - see
     /// audit_cleanup_notes.md); one handle per resize, bounded by how
     /// often the user rotates the device.  No-op on id 0 / unregistered.
     pub fn updateRegisteredTexture(self: *Renderer2D, id: u32, tex: WgpuTexture) void {
@@ -794,7 +794,7 @@ pub const Renderer2D = struct {
     /// shared `bind_groups[1]` in place: every distinct texture gets its own
     /// persistent bind-group handle, so the deferred shapes batch (which resolves
     /// the bind group at flush/submit time) can never alias one texture's draw
-    /// onto another's. (.invalid → white/untextured.) Bounded by
+    /// onto another's. (.invalid -> white/untextured.) Bounded by
     /// max_registered_textures; falls back to white if the registry is full.
     pub fn bindGroupForTexture(self: *Renderer2D, tex: WgpuTexture) wgpu.BindGroupHandle {
         if (tex.view == .invalid) {
@@ -826,7 +826,7 @@ pub const Renderer2D = struct {
         }
         self.white_tex.deinit();
         // Fixed shapes pipelines/layout/modules. Built directly (not via the
-        // dedup PipelineCache — they survive its deinit), so this owns them.
+        // dedup PipelineCache - they survive its deinit), so this owns them.
         // `shapes_pipeline` aliases one of `blend_pipes`, so the array covers it.
         for (self.blend_pipes) |p| {
             if (p != .invalid) {
@@ -849,7 +849,7 @@ pub const Renderer2D = struct {
     /// frame (frame begin, `beginTextureMode`, every `reopen2DPass`):
     /// each call advances the ortho ring and writes a FRESH slot, so
     /// pass segments recorded earlier keep the matrix they were bound
-    /// with — a plain single-buffer write here would be clobbered by
+    /// with - a plain single-buffer write here would be clobbered by
     /// the last write of the frame (queue-timeline ordering), which is
     /// exactly the zimr516 "duplicated grid" glitch.  Call BEFORE
     /// `bindForPass` (both call sites do).
@@ -869,7 +869,7 @@ pub const Renderer2D = struct {
         self.ortho_cursor = (self.ortho_cursor + 1) % ortho_ring_len;
         self.ortho_writes_this_frame += 1;
         // A wrap within one frame would clobber a slot an earlier
-        // recorded segment still references — surface it loudly rather
+        // recorded segment still references - surface it loudly rather
         // than glitch silently.  Debug @panics; release logs to the
         // page overlay and the LAST writer wins for the overflowing
         // segments (degraded, but bounded).
@@ -881,7 +881,7 @@ pub const Renderer2D = struct {
             .{ self.ortho_writes_this_frame, ortho_ring_len },
         );
         // Translate PerFrameUbo (local type, [16]f32 representation)
-        // → EngineSchema.Ubo (the schema's mat4-of-vec4 shape). The flat
+        // -> EngineSchema.Ubo (the schema's mat4-of-vec4 shape). The flat
         // [16]f32 reinterprets to [4]@Vector(4, f32) (identical bytes); the
         // plain-struct Ubo is then serialized via the wire layout.
         const schema_ubo: EngineSchema.Ubo = .{ .view_projection = @bitCast(ubo.view_projection) };
@@ -904,7 +904,7 @@ pub const Renderer2D = struct {
     pub fn bindForPass(self: *Renderer2D, ps: *@import("gpu_iface.zig").PassState) void {
         const Backend = @import("gpu_iface.zig").WgpuBackend;
         // Drop the dedup's memory FIRST. This function is called both at pass start and as the
-        // restore after a custom/3D pipeline has been bound — and in the restore case the
+        // restore after a custom/3D pipeline has been bound - and in the restore case the
         // device has already invalidated these groups even though the tracker has not. Binding
         // unconditionally is what "bind for pass" has to mean; the cost is a handful of
         // redundant binds per pass. See `WgpuBackend.invalidateBindGroups`.
@@ -929,7 +929,7 @@ pub const Renderer2D = struct {
     ///
     /// `Shader2D` must build the user's pipeline with the SAME state, and the depth part is
     /// the trap: when the app has no depth target the pipeline must declare NO depth state, or
-    /// it is incompatible with the depth-less pass it gets bound into — and WebGPU rejects the
+    /// it is incompatible with the depth-less pass it gets bound into - and WebGPU rejects the
     /// whole command buffer, not just the draw.
     pub fn pipelineState(self: *const Renderer2D, blend: wgpu.BlendMode) gpu.StateCombo {
         @setEvalBranchQuota(2000);
@@ -962,7 +962,7 @@ pub const Renderer2D = struct {
         ps.batch_owner_pipeline = self.shapes_pipeline.gpu_handle;
     }
 
-    /// Run a USER fragment shader over the ordinary 2D batch — raylib's `BeginShaderMode`.
+    /// Run a USER fragment shader over the ordinary 2D batch - raylib's `BeginShaderMode`.
     ///
     /// This is not a post-process and it is not `effects2d`. There is no fullscreen quad and
     /// no render target: the user's shader BECOMES the fragment stage of the shapes pipeline,
@@ -993,7 +993,7 @@ pub const Renderer2D = struct {
         ps.batch_owner_pipeline = self.shapes_pipeline.gpu_handle;
     }
 
-    /// Back to the engine's own shapes shader — raylib's `EndShaderMode`.
+    /// Back to the engine's own shapes shader - raylib's `EndShaderMode`.
     ///
     /// Returns to whatever BLEND MODE was in force, not unconditionally to `.alpha`, so a
     /// user shader nested inside `beginBlendMode(.additive)` leaves the additive blend intact.
@@ -1010,7 +1010,7 @@ pub const Renderer2D = struct {
 };
 
 // ============================================================================
-// SECTION 3 — orthographic projection helper
+// SECTION 3 - orthographic projection helper
 // ============================================================================
 
 /// Build a column-major mat4x4 for a screen-space orthographic

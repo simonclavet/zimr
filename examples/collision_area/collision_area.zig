@@ -1,6 +1,6 @@
 // examples/collision_area.zig - visualise the intersection of an
 // axis-aligned bouncing box (A) and a mouse-controlled box (B).
-// Port of raylib's `examples/shapes/shapes_collision_area.c` (★2,
+// Port of raylib's `examples/shapes/shapes_collision_area.c` (*2,
 // ~117 LOC).  Box A slides left-right and bounces off the screen
 // edges; box B tracks the mouse cursor.  When they overlap, the
 // intersection rectangle is drawn in lime green and a HUD strip

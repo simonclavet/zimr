@@ -1,14 +1,14 @@
-//! src/shaders/default_shapes_vs.zig — Zig source for the wgpu
+//! src/shaders/default_shapes_vs.zig - Zig source for the wgpu
 //! engine's default 2D vertex shader.  Replaces the hand-written
-//! the engine-emitted `default_shapes_vs.wgsl` —
+//! the engine-emitted `default_shapes_vs.wgsl` -
 //! same effect (transform vertex through `view_projection`, pass
 //! UV + color through), now compiled through the typed shader
-//! pipeline → SPIR-V → spv2wgsl → embedded `.wgsl`.  See
-//! `src/notes/webgpu-migration-plan.md` §3 Phase C for context.
+//! pipeline -> SPIR-V -> spv2wgsl -> embedded `.wgsl`.  See
+//! `src/notes/webgpu-migration-plan.md` section 3 Phase C for context.
 //!
 //! Same source runs on:
-//!   - SPIR-V (→ WGSL via spv2wgsl → @embedFile → wgpu pipeline)
-//!   - SPIR-V (→ GLSL via spirv-cross → @embedFile → WebGL2 pipeline)
+//!   - SPIR-V (-> WGSL via spv2wgsl -> @embedFile -> wgpu pipeline)
+//!   - SPIR-V (-> GLSL via spirv-cross -> @embedFile -> WebGL2 pipeline)
 //!     when emit_wgsl is opted out (legacy path during transition)
 //!   - wasm32 / x86_64 (CPU dispatcher in `raster_shader.zig`)
 //!
@@ -55,7 +55,7 @@ pub fn shaderMain(io_in: Io) Out {
     );
     out.position = mulMatVec(io_in.u.view_projection, pos4);
 
-    // Varyings pass through unchanged — interpolation across the
+    // Varyings pass through unchanged - interpolation across the
     // triangle happens in the rasterizer.
     out.frag_tex_coord = io_in.vertex_tex_coord;
     out.frag_color = io_in.vertex_color;

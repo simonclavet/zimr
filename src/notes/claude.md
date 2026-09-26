@@ -387,9 +387,25 @@ Prior arc (`src/notes/mocap_plan.md`, §11-12): BVH/FBX loading, skinning, and t
 
 # ★★★ HOW TO RUN TESTS — `test-fast` FIRST, ALWAYS
 
-    zig build test-fast                              ~0 s warm, 234 s cold, 9 modules
+    zig build test                                   EVERY QUICK TEST: src/tests.zig + test-fast + tier-A wasm
+    zig build test-fast                              the shader-free half only (zimrnum, zimrmath, robot family)
     zig build test-fast -Dtest-filter="<substring>"  one test by name
-    zig build test                                   THE FULL SUITE — minutes, links ~50 shaders
+    zig build zn-<stem> -Dtest-filter="<substring>"  one root, one test - the fastest loop
+    zig build test -Dslow-tests                      also the long simulations and learning curves
+    zig build zn-<stem> -Dtest-report                also print the robot tests' measurement tables
+
+★★★ **`test` IS A SUPERSET OF `test-fast` (Sep 26).** One command runs every test that is quick,
+each binary once and in parallel. `src/tests.zig` no longer runs the robot family - it skips
+`zimr.zig`'s robot re-exports (`robot_family` in that file) and leaves them to
+`src/robot_tests.zig` - because with both wired, every robot test ran twice. What `test` leaves
+out is the long end: `-Dslow-tests` (the same `@hasDecl(options, "slow_tests")` gate the tests
+already use) and `test-all-examples`.
+
+★★★ **A PASSING TEST BINARY MUST PRINT NOTHING.** This Zig's build runner prints a test binary's
+whole stderr even when every test passed - headed `run test w` and followed by a stale
+`failed command:` line - so a few hundred lines of robot tables made a green `zig build test` read
+as red. The tables go through `report.print` (`src/test_report.zig`), silent unless
+`-Dtest-report`. A new report line uses it too; `std.debug.print` in a test brings the noise back.
 
 ★★ **`test-fast` COVERS THE SHADER-FREE HALF OF THE ENGINE**: robot, robot_physics,
 robot_control, robot_mpc, robot_scene, urdf, mjcf, robot_urdf, robot_mjcf. Each is its own test
@@ -1428,6 +1444,10 @@ scanners, one restyling, one lesson not carried across. **When a document's mark
 grep for every tool that parses it**, not just the one that broke.
 
 ★★★ **`test` AND `test-fast` ARE COMPLEMENTARY, NOT NESTED. NEITHER IS "THE FULL SUITE".**
+
+(HISTORY - superseded Sep 26: `test` now depends on `test-fast`, see "HOW TO RUN TESTS". What
+follows is why that edge was added: the blindness it describes is real whenever a step runs one
+half without the other.)
 
 Measured, not assumed - `zig build … --summary all` shows the shape:
 

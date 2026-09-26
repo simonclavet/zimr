@@ -19,7 +19,7 @@ const text2d = @import("../text2d.zig");
 const width: u32 = 480;
 const height: u32 = 360;
 
-test "ui: tab-bar scene → PNG for visual debug" {
+test "ui: tab-bar scene -> PNG for visual debug" {
     // Always attempt to write - host test runners with /mnt available
     // produce the screenshot; environments without it skip via the
     // catch on renderToPng below.
@@ -27,7 +27,7 @@ test "ui: tab-bar scene → PNG for visual debug" {
     const gpa: Allocator = std.testing.allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
-        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
         // live-byte tripwire that catches a dropped per-frame reset). These four test
         // files were imported by nothing, so they never compiled against the change.
         .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),

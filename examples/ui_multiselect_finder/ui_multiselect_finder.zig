@@ -49,7 +49,7 @@ const FileItem = struct {
 
 // 50 synthetic items.  Mix of kinds + a few "folders" at the top to
 // match Finder's typical layout (folders first).  Sizes chosen to
-// span the natural formatting transitions (B → KB → MB → GB).
+// span the natural formatting transitions (B -> KB -> MB -> GB).
 const files = [_]FileItem{
     .{ .name = "Projects", .kind = .folder, .size_bytes = 0 },
     .{ .name = "Downloads", .kind = .folder, .size_bytes = 0 },

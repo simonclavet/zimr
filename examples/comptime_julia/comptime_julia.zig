@@ -1,4 +1,4 @@
-//! comptime_julia — the Julia set computed ENTIRELY at COMPILE TIME and
+//! comptime_julia - the Julia set computed ENTIRELY at COMPILE TIME and
 //! baked into the binary as a `const` escape-value grid, then drawn on the GPU.
 //! The graphical sibling of the CLI `comptime_julia` (which printed ASCII): same
 //! comptime kernel, but the image is painted as colored cells.
@@ -6,8 +6,8 @@
 //! What it shows:
 //!   - Zig comptime: the whole Julia iteration runs in the compiler; the escape
 //!     grid lives in the read-only data section. Runtime does zero fractal math
-//!     — it just maps each baked escape value to a color and draws it.
-//!   - Julia vs Mandelbrot: same z = z² + c iteration, but here z₀ is the pixel
+//!     - it just maps each baked escape value to a color and draws it.
+//!   - Julia vs Mandelbrot: same z = z^2 + c iteration, but here z_0 is the pixel
 //!     coordinate and `c` is a FIXED constant (the whole image is one orbit
 //!     family). Try other `julia_c*` values for wildly different shapes.
 //!   - zm color math at runtime: `Color.fromHSV` (wasm-safe scalar path).
@@ -26,13 +26,13 @@ const iter_limit: u32 = 128;
 const view_w: f32 = 3.4;
 const view_h: f32 = 3.0;
 
-/// The Julia constant `c`. Different values produce wildly different shapes —
+/// The Julia constant `c`. Different values produce wildly different shapes -
 /// `(0.285, 0.01)` is a starfish, `(-0.4, 0.6)` a fern, `(-0.7269, 0.1889)` a
 /// spiral dragon. `(-0.7, 0.27015)` is the classic swirl.
 const julia_cx: f32 = -0.7;
 const julia_cy: f32 = 0.27015;
 
-/// The Julia iteration — pure function, callable at comptime OR runtime. `z`
+/// The Julia iteration - pure function, callable at comptime OR runtime. `z`
 /// starts at the pixel coordinate and `c` is fixed. Returns the smooth
 /// (continuous) escape value, or null for interior points.
 fn juliaEscape(
@@ -80,7 +80,7 @@ const escape_grid: [grid_h * grid_w]?f32 = blk: {
         while (x < grid_w) : (x += 1) {
             const u: f32 = (float(x) + 0.5) / float(grid_w);
             const v: f32 = (float(y) + 0.5) / float(grid_h);
-            // Julia: z₀ is the pixel coordinate, c is fixed.
+            // Julia: z_0 is the pixel coordinate, c is fixed.
             const zx0: f32 = (u - 0.5) * view_w;
             const zy0: f32 = (0.5 - v) * view_h; // imaginary axis grows up
             grid[y * grid_w + x] = juliaEscape(zx0, zy0, julia_cx, julia_cy, iter_limit);

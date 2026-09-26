@@ -1,7 +1,7 @@
-//! tests/math_full_smoke_fs.zig — Stage 3 smoke shader.
+//! tests/math_full_smoke_fs.zig - Stage 3 smoke shader.
 //! Imports `math` and exercises a representative cross-section of
 //! its functions on SPIR-V.  If this compiles cleanly through the
-//! SPIR-V → spirv-opt → spirv-cross pipeline, the covered subset
+//! SPIR-V -> spirv-opt -> spirv-cross pipeline, the covered subset
 //! of math.zig is GPU-portable.
 //!
 //! See `src/notes/math_unification.md` Stage 3 entry.  Supersedes
@@ -32,7 +32,7 @@ export fn main() callconv(.{ .spirv_fragment = .{} }) void {
     const dot_val: f32 = zm.dot3(a, n);
     const n_normalized: zm.Vec = zm.normalize3(c);
 
-    // Scalar trig — routes through the polynomial fallbacks
+    // Scalar trig - routes through the polynomial fallbacks
     // (atan2Scalar, asinScalar) inlined into math.zig at Stage 3.
     const angle: f32 = zm.atan2Rad(@as(f32, v), @as(f32, u));
     const asin_val: f32 = zm.asinRad(@as(f32, u * 0.5));
@@ -47,7 +47,7 @@ export fn main() callconv(.{ .spirv_fragment = .{} }) void {
     // SCALAR forms (atan2Scalar / asinScalar are reachable through
     // the scalar dispatch in zm.atan2Rad(f32, f32) / zm.asinRad(f32)).
 
-    // Matrix math — the column-major M*v API landed in Stage 2.
+    // Matrix math - the column-major M*v API landed in Stage 2.
     const t: zm.Mat = zm.translation(u * 10.0, v * 10.0, 0.0);
     const m: zm.Mat = zm.mulMat(t, zm.identity());
     const transformed: zm.Vec = zm.mulMatVec(m, a);
@@ -55,7 +55,7 @@ export fn main() callconv(.{ .spirv_fragment = .{} }) void {
 
     // Complex arithmetic (Phase 0.5 of math-unification).  Exercises
     // cmul + native `+` (the headline mandelbrot one-liner shape) and
-    // cnorm2 (the iteration escape test).  All SPIR-V-portable —
+    // cnorm2 (the iteration escape test).  All SPIR-V-portable -
     // Complex is just `@Vector(2, f32)` so `+` lowers to a single
     // `OpFAdd`; cmul becomes 4 OpFMul + 1 OpFSub + 1 OpFAdd + an
     // OpCompositeConstruct.

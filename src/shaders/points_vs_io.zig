@@ -1,4 +1,4 @@
-//! src/shaders/points_vs_io.zig — typed interface for the instanced points VS.
+//! src/shaders/points_vs_io.zig - typed interface for the instanced points VS.
 //!
 //! First real port from the direct `@SpirvType` pattern to IoT, using the new
 //! `Storage` + `Builtins` schema sections. Reads `positions[instance_index]`
@@ -11,7 +11,7 @@ const Vec = zm.Vec;
 const shader = @import("shader_interface");
 const common = @import("points_common_io.zig");
 
-/// No vertex buffer — corners come from `vertex_index`, instance data from the
+/// No vertex buffer - corners come from `vertex_index`, instance data from the
 /// storage buffer. The empty `Attributes` marks this as the vertex stage (so
 /// the Ubo binds at group 0, storage after it).
 pub const Attributes = struct {};
@@ -24,7 +24,7 @@ pub const Ubo = struct {
     bot: Vec,
 };
 
-/// Read-only storage buffer of per-instance positions (group 0, binding 1 —
+/// Read-only storage buffer of per-instance positions (group 0, binding 1 -
 /// after the Ubo). A compute pass or CPU upload fills it.
 pub const Storage = struct {
     positions: shader.StorageBuf(Vec2, .read),
@@ -36,5 +36,5 @@ pub const Builtins = struct {
     instance_index: shader.Builtin(.instance_index),
 };
 
-/// Varyings to the FS — the per-vertex colour.
+/// Varyings to the FS - the per-vertex colour.
 pub const Outputs = common.Interp;

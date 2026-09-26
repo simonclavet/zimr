@@ -1,5 +1,5 @@
 //! HOST-ONLY debug harness (not shipped): exercises the pure-CPU text-into-image
-//! path — bakeFontAtlas → imageDrawTextWithFont → exportImageToMemory(PNG) — so the
+//! path - bakeFontAtlas -> imageDrawTextWithFont -> exportImageToMemory(PNG) - so the
 //! result can be viewed directly in the sandbox without a device round-trip.
 const std = @import("std");
 const text2d = @import("text2d.zig");

@@ -1,29 +1,29 @@
-//! robot_contact — a robot arm that touches the world.
+//! robot_contact - a robot arm that touches the world.
 //!
 //! The scene phase 7 was written for, and the first one where both engines have to agree
 //! about something. An actuated two-link arm sweeps across a table; a crate sits on the
 //! table waiting to be hit.
 //!
-//! ── WHAT IS ACTUALLY HAPPENING, WHICH IS TWO SIMULATIONS AT ONCE ──
+//! -- WHAT IS ACTUALLY HAPPENING, WHICH IS TWO SIMULATIONS AT ONCE --
 //!
 //! robot.zig owns the arm. It has no collision detector and never will: contacts arrive as
 //! an INPUT, exactly the way controls do.
 //!
 //! zimrphysics owns the table and the crate, and also holds a KINEMATIC PROXY for each of
-//! the arm's geoms — bodies it steers to wherever the arm's own kinematics put them. That
+//! the arm's geoms - bodies it steers to wherever the arm's own kinematics put them. That
 //! is what lets the crate see the arm at all: a body outside the broad phase does not exist
 //! as far as the world's solver is concerned.
 //!
 //! Each step: steer the proxies, step the world, harvest the contacts its listener recorded,
 //! hand them to the arm as `robot.Contact` values, step the arm.
 //!
-//! ── THE APPROXIMATION, IN PLAIN SIGHT ──
+//! -- THE APPROXIMATION, IN PLAIN SIGHT --
 //!
 //! The two solvers do not negotiate. zimrphysics resolves crate-against-arm treating the arm
 //! as immovable; robot.zig resolves the same contact treating the crate as immovable. Both
 //! feel it, neither knows the other's answer. That is right when the arm is much heavier
-//! than what it touches — a real arm bolted to a bench — and it is why the crate here is
-//! light. §4h of the plan works through what it costs and what the fix would be; the short
+//! than what it touches - a real arm bolted to a bench - and it is why the crate here is
+//! light. section 4h of the plan works through what it costs and what the fix would be; the short
 //! version is that the load the arm feels depends on the ratio of two contact stiffnesses,
 //! which is a coupling with no physical meaning.
 //!
@@ -128,7 +128,7 @@ const text_col: Color = .{ .r = 240, .g = 230, .b = 210, .a = 255 };
 const dim_col: Color = .{ .r = 168, .g = 150, .b = 132, .a = 255 };
 const hit_col: Color = .{ .r = 232, .g = 196, .b = 92, .a = 255 };
 
-/// Scale text and chrome with the viewport — a standalone renders at device resolution, so
+/// Scale text and chrome with the viewport - a standalone renders at device resolution, so
 /// fixed pixel sizes are unreadable on a phone. See the note in `robot_sidebyside`.
 fn uiScale(w: f32, h: f32) f32 {
     return @max(1.0, @min(w, h) / 450.0);
@@ -136,32 +136,32 @@ fn uiScale(w: f32, h: f32) f32 {
 
 /// Closed-form inverse kinematics for this two-link planar arm.
 ///
-/// ★ WHY THIS EXISTS, and it is the fix for a scene that did not work. The first version
-/// picked the sweep's joint angles BY GUESSING — interpolate the shoulder from 1.9 to 0.4,
-/// the elbow from −1.2 to −0.7, and hope the hand goes somewhere useful. It did not: the
+/// * WHY THIS EXISTS, and it is the fix for a scene that did not work. The first version
+/// picked the sweep's joint angles BY GUESSING - interpolate the shoulder from 1.9 to 0.4,
+/// the elbow from -1.2 to -0.7, and hope the hand goes somewhere useful. It did not: the
 /// arm straightened, drove its own tip into the table, and spent the whole sweep fighting a
 /// contact it should never have made. It never reached the crate at all.
 ///
 /// The lesson generalises past this demo. **Joint angles are the wrong space to author a
 /// motion in.** What the task is about is where the HAND goes; the angles are whatever
 /// achieves that, and a human cannot reliably guess them for even two links. So the path is
-/// specified in Cartesian coordinates — sweep the tip along a horizontal line at crate
-/// height — and the angles are solved for.
+/// specified in Cartesian coordinates - sweep the tip along a horizontal line at crate
+/// height - and the angles are solved for.
 ///
 /// That is also what a real robot does: a planner works in task space, inverse kinematics
 /// turns the path into joint targets, and the servos chase those. Doing it that way here
 /// keeps the scene a demonstration of position servos rather than becoming an animation.
 ///
-/// ── THE GEOMETRY ──
-/// At `q = 0` a link points along −Y, so rotating by `q` about +Z gives the direction
-/// `(sin q, −cos q)` — which is the unit vector at angle `q − π/2` in the usual convention.
-/// Writing `a₁ = q₁ − π/2`, the standard two-link solution applies unchanged:
+/// -- THE GEOMETRY --
+/// At `q = 0` a link points along -Y, so rotating by `q` about +Z gives the direction
+/// `(sin q, -cos q)` - which is the unit vector at angle `q - pi/2` in the usual convention.
+/// Writing `a_1 = q_1 - pi/2`, the standard two-link solution applies unchanged:
 ///
-///     cos q₂ = (r² − L₁² − L₂²) / (2 L₁ L₂)
-///     a₁     = atan2(y, x) − atan2(L₂ sin q₂, L₁ + L₂ cos q₂)
+///     cos q_2 = (r^2 - L_1^2 - L_2^2) / (2 L_1 L_2)
+///     a_1     = atan2(y, x) - atan2(L_2 sin q_2, L_1 + L_2 cos q_2)
 ///
-/// and `q₁ = a₁ + π/2`. Two solutions exist — elbow up and elbow down — and the sign of
-/// `q₂` picks between them; this scene wants elbow-up so the arm reaches over the crate
+/// and `q_1 = a_1 + pi/2`. Two solutions exist - elbow up and elbow down - and the sign of
+/// `q_2` picks between them; this scene wants elbow-up so the arm reaches over the crate
 /// rather than under the table.
 const Ik = struct {
     const l1: f32 = 2.0 * upper_half;
@@ -231,7 +231,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.data = try rbt.Data.init(gpa, &s.model);
     s.world.gravity = vec(0, -9.81, 0);
 
-    // The table. STATIC, which is what a table is — and which only works because a robot
+    // The table. STATIC, which is what a table is - and which only works because a robot
     // proxy opts into `report_immovable_contacts`. Without that flag zimrphysics drops any
     // pair where neither body can respond, so the arm would pass straight through.
     const table_shape: zp.ShapeId = try s.world.shapes.add(gpa, .{
@@ -288,7 +288,7 @@ fn update(f: *z.Frame, s: *State) void {
     // is what makes it a robot rather than an animation.
     // The tip travels a horizontal line at the crate's mid-height, right to left, passing
     // straight through where the crate is sitting. Above the table by enough that the arm
-    // never touches it — the only thing it should hit is the crate.
+    // never touches it - the only thing it should hit is the crate.
     const sweep_y: f32 = table_top + crate_half;
     const sweep_from: f32 = 0.62;
     const sweep_to: f32 = 0.10;
@@ -302,7 +302,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     s.accumulator += @min(f.time.delta_time, 0.1);
     while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
-        // ★ The seam, in four lines and a fixed order.
+        // * The seam, in four lines and a fixed order.
         s.bridge.sync(&s.world, &s.model, &s.data) catch |err| {
             assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
         };
@@ -378,7 +378,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     // Where the tip is COMMANDED to be. The gap between this and the actual tip is the
-    // servo's tracking error — which grows exactly when the arm meets the crate, because a
+    // servo's tracking error - which grows exactly when the arm meets the crate, because a
     // finite-gain servo trades position for force.
     gl.circle(
         toScreen(origin, scale, s.target),

@@ -1,7 +1,7 @@
 // Non-power-of-2 integer widths in the 33-63 bit range (u40, u48, i40). These live
 // in int64_t/uint64_t C storage and are BigInts in the JS model. Pre-fix the wrap
 // helper masked them with a Number literal (`x & 1099511627775`), which threw
-// "cannot mix BigInt and other types" against the BigInt value — triggered by a
+// "cannot mix BigInt and other types" against the BigInt value - triggered by a
 // @truncate / @bitCast to such a width (the C backend lowers those via
 // zig_wrap_u64(x, bits)). Fix masks via asUintN/asIntN at the real bit width.
 var sink: u64 = 0;

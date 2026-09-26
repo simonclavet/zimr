@@ -1,33 +1,33 @@
-//! balance_flywheel — why a balancing robot windmills its arms.
+//! balance_flywheel - why a balancing robot windmills its arms.
 //!
 //! Two identical inverted pendulums get the same shove. The near one may only shift its centre
 //! of pressure inside its foot; the far one may also spin its arms. Both are driven by the same
-//! planner, the same cost and the same horizon — **the only difference is whether the arms are
+//! planner, the same cost and the same horizon - **the only difference is whether the arms are
 //! allowed to move.**
 //!
-//! ── ★★ WHAT THE ARMS ACTUALLY DO, BECAUSE IT IS NOT WHAT IT LOOKS LIKE ──
+//! -- ** WHAT THE ARMS ACTUALLY DO, BECAUSE IT IS NOT WHAT IT LOOKS LIKE --
 //!
 //! They are a momentum SINK, not a momentum source. Internal joint torques cannot change a
-//! body's angular momentum about its own centre of mass — that is Newton's third law, and it is
+//! body's angular momentum about its own centre of mass - that is Newton's third law, and it is
 //! provable in one line. What changes it is the GROUND:
 //!
-//!     L̇ = (p − c) × f          →     L̇_y = −h·fₓ − (pₓ − cₓ)·m·g
+//!     L_dot = (p - c) x f          ->     L_dot_y = -h*f_x - (p_x - c_x)*m*g
 //!
 //! Two independent knobs fall out. The **centre of pressure** `p`, limited by the foot. And the
-//! **tangential force** `fₓ`, limited by friction. Once the foot has run out of room the first
-//! is finished — but you can still push sideways, and that generates angular momentum which has
+//! **tangential force** `f_x`, limited by friction. Once the foot has run out of room the first
+//! is finished - but you can still push sideways, and that generates angular momentum which has
 //! to go somewhere. Into the arms, or the body rotates and you fall over.
 //!
-//! ★ SO THE WINDMILLING IS THE PRICE OF THE SIDEWAYS PUSH, NOT THE PUSH ITSELF. Watch the near
+//! * SO THE WINDMILLING IS THE PRICE OF THE SIDEWAYS PUSH, NOT THE PUSH ITSELF. Watch the near
 //! pendulum: its pressure marker pins to the edge of the foot and then it has nothing left.
 //!
-//! ── ★★★ AND WHY THIS NEEDS A PLANNER RATHER THAN A GAIN ──
+//! -- *** AND WHY THIS NEEDS A PLANNER RATHER THAN A GAIN --
 //!
-//! Angular momentum is bounded in EXCURSION — arms only rotate so far. So spending it is
+//! Angular momentum is bounded in EXCURSION - arms only rotate so far. So spending it is
 //! BORROWING: you take momentum now to arrest the fall and must give it back before the arms
 //! run out. That is a finite-horizon trade with a terminal condition, and there is no gain that
 //! means "spend now, repay in 400 ms". Measured, the foot alone survives 0.30 m/s and the arms
-//! take it to 0.85 — **2.8x** — and the whole of that margin is momentum the planner knows it
+//! take it to 0.85 - **2.8x** - and the whole of that margin is momentum the planner knows it
 //! can return.
 
 const std = @import("std");
@@ -99,7 +99,7 @@ const State = struct {
 
 // Cost weights, in state order [com_x, com_y, vel_x, vel_y, momentum_x, momentum_y].
 //
-// ★ MOMENTUM IS BARELY PENALISED ALONG THE WAY AND HEAVILY AT THE END. That asymmetry IS the
+// * MOMENTUM IS BARELY PENALISED ALONG THE WAY AND HEAVILY AT THE END. That asymmetry IS the
 // borrowing: the planner is free to take on momentum mid-horizon and must have given it back by
 // the last knot. Penalising it uniformly would forbid the very thing the arms are for.
 const state_weight = [_]f32{ 400, 400, 40, 40, 0.02, 0.02 };
@@ -180,7 +180,7 @@ fn advance(p: *Pendulum) void {
     }
     _ = mpc.solveBalance(body, &p.plan, &p.state, weights(), p.limits, sim_timestep, 3);
     p.pressure = .{ p.plan.ctrl[mpc.lipm_cop_offset], p.plan.ctrl[mpc.lipm_cop_offset + 1] };
-    // ★ SATURATION IS THE STORY, so it gets its own flag and its own colour. The near pendulum
+    // * SATURATION IS THE STORY, so it gets its own flag and its own colour. The near pendulum
     // spends almost the whole recovery pinned to the edge of its foot with nothing left.
     p.pinned = @abs(p.pressure[0]) > 0.98 * foot_half[0];
 
@@ -254,8 +254,8 @@ fn drawPendulum(s: *State, gl: *z.WgpuGl, p: *const Pendulum, offset: f32) void 
     );
     z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (p.fallen) mass_lost else mass_ok);
 
-    // ★ THE ARMS. Their angle is the integral of the angular momentum, so a pendulum with no
-    // momentum authority simply never moves them — which is the comparison, drawn.
+    // * THE ARMS. Their angle is the integral of the angular momentum, so a pendulum with no
+    // momentum authority simply never moves them - which is the comparison, drawn.
     const arm_length: f32 = 0.34;
     inline for ([_]f32{ 0.0, zm.pi }) |side| {
         const angle: f32 = p.arm_angle + side;
@@ -274,12 +274,12 @@ fn drawPendulum(s: *State, gl: *z.WgpuGl, p: *const Pendulum, offset: f32) void 
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
-    // ★ THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
+    // * THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
     // know how tall the viewport is. Kept in the signature because every example shares it.
     _ = viewport_h;
     const captured: bool = u.wantCaptureMouse();
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
-    // ★ AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
+    // * AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
     // which on a phone left the thing the demo is ABOUT as a sliver at the bottom. Letting the
     // window size to its content keeps it as small as it can be, and capping the width stops it
     // spanning the screen.

@@ -1,4 +1,4 @@
-//! first_person_maze — raylib's `models_first_person_maze`, the zimr way.
+//! first_person_maze - raylib's `models_first_person_maze`, the zimr way.
 //!
 //! The same cubicmap maze as `cubicmap.zig` (white pixel = wall column,
 //! black = corridor), but you WALK it in first person instead of
@@ -9,7 +9,7 @@
 //!
 //! Movement + collision follow raylib: store the old camera position,
 //! move, then if the player's collision circle overlaps any WALL cell
-//! in the 3×3 neighborhood around it, snap back — so you slide along
+//! in the 3x3 neighborhood around it, snap back - so you slide along
 //! walls and can't clip through. raylib uses WASD + locked-mouse look;
 //! phone-first here means a left thumb-zone drag turns you (and a nudge
 //! forward walks), while a right-side "walk" toggle auto-advances so
@@ -55,8 +55,8 @@ const sun_dir: [3]f32 = .{ 0.45, 0.8, 0.4 };
 const grid_w: i32 = 17;
 const grid_h: i32 = 17;
 const cube_size: [3]f32 = .{ 1.0, 1.0, 1.0 };
-// genMeshCubicmap places cell (cx,cz) centered at world (cx, ·, cz)
-// directly — the mesh spans world 0..(grid-1), it is NOT centered on the
+// genMeshCubicmap places cell (cx,cz) centered at world (cx, *, cz)
+// directly - the mesh spans world 0..(grid-1), it is NOT centered on the
 // origin. So the cell<->world map is the identity (cell centers ARE integer
 // world coords) and wall AABBs are unit squares around them.
 const eye_height: f32 = 0.45;
@@ -187,7 +187,7 @@ fn isWall(s: *const State, cx: i32, cz: i32) bool {
     return s.walls[@intCast(cz * grid_w + cx)];
 }
 
-/// World x/z → cell index. Cell centers sit at integer world coords, so
+/// World x/z -> cell index. Cell centers sit at integer world coords, so
 /// the nearest cell is just the rounded world coordinate.
 fn worldToCellX(wx: f32) i32 {
     const c: i32 = @round(wx);
@@ -239,7 +239,7 @@ fn regen(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 /// Would the player's circle at (wx,wz) overlap a wall cell? Checks the
-/// 3×3 neighborhood around the player's cell (raylib's approach).
+/// 3x3 neighborhood around the player's cell (raylib's approach).
 fn blocked(s: *const State, wx: f32, wz: f32) bool {
     const pcx: i32 = worldToCellX(wx);
     const pcz: i32 = worldToCellZ(wz);
@@ -424,7 +424,7 @@ fn tryMove(s: *State, nx: f32, nz: f32) void {
 }
 
 /// Drag anywhere outside the UI turns you (yaw only). Looking is
-/// horizontal — vertical drag is ignored so you can't tilt off the floor.
+/// horizontal - vertical drag is ignored so you can't tilt off the floor.
 fn handleLook(f: *z.Frame, s: *State, ui_wants_mouse: bool) void {
     if (z.isMouseButtonDown(f.input, .left) and !ui_wants_mouse) {
         if (s.dragging) {
@@ -511,7 +511,7 @@ fn update(f: *z.Frame, s: *State) void {
     if (u.window("first person maze", .{})) |w| {
         defer w.close();
         u.text("HOLD forward to walk; drag to look", .{});
-        // Hold-to-move: the button doesn't need to "fire" — we walk every
+        // Hold-to-move: the button doesn't need to "fire" - we walk every
         // frame it's held down, read via isItemActive right after it.
         _ = u.button("  forward  ", .{});
         hold_forward = u.isItemActive();

@@ -1,8 +1,8 @@
-//! render.zig — visualize a `zimrphysics2d` World by adapting the engine's
+//! render.zig - visualize a `zimrphysics2d` World by adapting the engine's
 //! box2d-faithful DebugDraw callbacks into zimr's batched `ui.DrawList`.
 //!
 //! Why this shape: the engine already walks the world (`phys.draw`) and fires one
-//! callback per primitive — every shape, joint, contact, and AABB it can emit. We
+//! callback per primitive - every shape, joint, contact, and AABB it can emit. We
 //! supply ~10 small callbacks that push into a DrawList; the demo never switches on
 //! shape type, so any new primitive the engine learns to draw lights up here for
 //! free. ImDrawList batches all of it into a handful of GPU draw calls, so "draw the
@@ -20,7 +20,7 @@ const Transform2 = zm.Transform2;
 const transformPoint2 = zm.transformPoint2;
 const rotateVec2 = zm.rotateVec2;
 
-/// World(metres) → screen(pixels). Physics is Y-up; the screen is Y-down, so the
+/// World(metres) -> screen(pixels). Physics is Y-up; the screen is Y-down, so the
 /// vertical axis flips. `target` is the world point parked at the screen centre and
 pub const Camera2D = zm.Camera2D;
 
@@ -106,7 +106,7 @@ fn ctxOf(p: *anyopaque) *DrawCtx {
     return @ptrCast(@alignCast(p));
 }
 
-/// 0xRRGGBB → opaque colour. box2d hands us 24-bit hex (b2HexColor).
+/// 0xRRGGBB -> opaque colour. box2d hands us 24-bit hex (b2HexColor).
 fn hex(c: phys.HexColor) Color {
     const r: u8 = @intCast((c >> 16) & 0xFF);
     const g: u8 = @intCast((c >> 8) & 0xFF);
@@ -201,7 +201,7 @@ fn drawSolidCapsule(
     const s1: Vec2 = c.cam.worldToScreen(p1);
     const s2: Vec2 = c.cam.worldToScreen(p2);
     // Stadium = two end discs + the body rectangle. Offset each endpoint by the
-    // screen-space normal × r to get the rectangle's four corners.
+    // screen-space normal x r to get the rectangle's four corners.
     const d: Vec2 = .{ s2[0] - s1[0], s2[1] - s1[1] };
     const len_px: f32 = @sqrt(d[0] * d[0] + d[1] * d[1]);
     const inv: f32 = if (len_px > 1.0e-6) 1.0 / len_px else 0.0;
@@ -238,7 +238,7 @@ fn drawPoint(
     const c: *DrawCtx = ctxOf(ctx);
     // `size` is already in pixels (box2d convention). Draw a small filled SQUARE rather than a
     // tessellated circle: drawPoly emits each circle as N quads (a 12-gon = 48 verts / 72 indices),
-    // and a dense scene's contact overlay has tens of thousands of points — Benchmark|Barrel 2.4
+    // and a dense scene's contact overlay has tens of thousands of points - Benchmark|Barrel 2.4
     // peaks at ~26K manifold points, which as circles is ~1.4M verts and overruns the 2D ring. A
     // square is 4 verts / 6 indices (~12x cheaper) and reads the same at debug-dot sizes.
     const sp: Vec2 = c.cam.worldToScreen(p);

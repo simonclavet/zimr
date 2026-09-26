@@ -1,4 +1,4 @@
-//! examples/rt_workers/tracer.zig — the PURE half. A path tracer that is a job kernel.
+//! examples/rt_workers/tracer.zig - the PURE half. A path tracer that is a job kernel.
 //!
 //! No DOM, no GPU, no globals. It takes a scene and a band of scanlines, and returns those
 //! scanlines' pixels. That is the whole contract, and it is why this compiles into a
@@ -9,14 +9,14 @@
 //!
 //! WHY A TRACER, and not the PNG encoder or the Mandelbrot:
 //!
-//!   * The payload is TINY — a handful of spheres, a few hundred bytes — and the result is
+//!   * The payload is TINY - a handful of spheres, a few hundred bytes - and the result is
 //!     one band of pixels. `worker_png` shoves 4 MB in and 2.7 MB out, and the cost of moving
 //!     those bytes is what dominated (and hid) its behaviour for weeks. Here the transport is
 //!     nothing, so what you see is the POOL rather than the plumbing.
 //!   * The cost is real and TUNABLE. `samples` spans "instant" to "please wait", so the same
 //!     demo stays honest across the whole range.
 //!   * Tiles land as they finish, so progressive display is not a presentation trick bolted
-//!     on afterwards — it is what out-of-order completion actually looks like.
+//!     on afterwards - it is what out-of-order completion actually looks like.
 const std = @import("std");
 const zm = @import("zm");
 
@@ -31,8 +31,8 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const expectError = std.testing.expectError;
 
-/// `extern`: these bytes are memcpy'd out of the app's wasm and into the KERNEL's — two
-/// separate compilations — and Zig's auto layout is free to reorder fields across them.
+/// `extern`: these bytes are memcpy'd out of the app's wasm and into the KERNEL's - two
+/// separate compilations - and Zig's auto layout is free to reorder fields across them.
 pub const Sphere = extern struct {
     cx: f32,
     cy: f32,
@@ -93,7 +93,7 @@ const Hit = struct {
     mat: u32,
 };
 
-/// xorshift32. A kernel gets no globals and wants none — the RNG state is a local, seeded
+/// xorshift32. A kernel gets no globals and wants none - the RNG state is a local, seeded
 /// from the pixel and the tile, so the same tile renders the same way wherever it runs.
 /// (That is not a nicety: it is what lets the test below assert the worker and the main
 /// thread agree.)
@@ -118,7 +118,7 @@ const Rng = struct {
 
     fn inUnitSphere(self: *Rng) Vec3 {
         // Rejection sampling, bounded: a kernel must not be able to spin forever on a bad
-        // seed. After 8 tries take what we have and normalise — the bias is invisible and
+        // seed. After 8 tries take what we have and normalise - the bias is invisible and
         // the bound is absolute.
         var i: u32 = 0;
         while (i < 8) : (i += 1) {
@@ -183,7 +183,7 @@ fn hitScene(spheres: []const Sphere, ro: Vec3, rd: Vec3) ?Hit {
 }
 
 /// Iterative, not recursive. A worker's wasm stack is small and a kernel that blows it takes
-/// the whole worker with it — and a stack overflow across a postMessage boundary is a
+/// the whole worker with it - and a stack overflow across a postMessage boundary is a
 /// miserable thing to debug.
 fn radiance(
     spheres: []const Sphere,
@@ -229,7 +229,7 @@ fn radiance(
 /// THE KERNEL. An ordinary Zig function: allocator first, header, payload, writer.
 ///
 /// Nothing here says "worker". It runs identically on a Web Worker, on the main thread via
-/// the inline fallback, and in a unit test — which is the whole point of the jobs design and
+/// the inline fallback, and in a unit test - which is the whole point of the jobs design and
 /// the reason the tests below can be trusted.
 ///
 /// `payload` is the sphere array, verbatim. `gpa` is an ARENA the job system releases when
@@ -298,7 +298,7 @@ fn toByte(v: f32) u8 {
 // ---------------------------------------------------------------------------------------
 // The kernel is a plain function, so testing it needs no browser, no worker and no wasm.
 // This is the ergonomic payoff of the jobs design, and it is worth stating plainly: if you
-// can `zig build test` your kernel, the only thing left to break is transport — and
+// can `zig build test` your kernel, the only thing left to break is transport - and
 // transport is the engine's problem, not yours.
 // ---------------------------------------------------------------------------------------
 
@@ -351,7 +351,7 @@ test "traceTile: emits exactly one RGBA pixel per pixel of the band" {
     try expectEqual(@as(usize, 3 * 8 * 4), out.buffered().len);
 }
 
-test "traceTile: a band is deterministic — same tile, same bytes, wherever it ran" {
+test "traceTile: a band is deterministic - same tile, same bytes, wherever it ran" {
     // Load-bearing. A worker and the main thread must agree, or a progressively-drawn image
     // would show seams at the tile boundaries depending on which core got which band.
     const hdr: Tile = testTile(0, 2, 6, 6, 3, 3, 11);

@@ -1,29 +1,29 @@
-//! cartpole — a policy learning to balance, live, in a browser tab.
+//! cartpole - a policy learning to balance, live, in a browser tab.
 //!
-//! ── ★ WHAT THIS DEMONSTRATES ──
+//! -- * WHAT THIS DEMONSTRATES --
 //!
 //! The whole robot stack in its smallest honest form, doing the thing the stack exists for:
 //!
-//!   * a model, a controller and a REWARD, wired into `ctl.Env` — reset, step, observe;
+//!   * a model, a controller and a REWARD, wired into `ctl.Env` - reset, step, observe;
 //!   * **cross-entropy method**, about twenty lines and no gradients, training a four-weight
 //!     linear policy from scratch while you watch;
 //!   * the reward curve climbing beside the robot it belongs to.
 //!
-//! ★★ THIS IS THE THING MuJoCo CANNOT DO CASUALLY. Not because its physics is worse — it is
-//! not — but because getting a MuJoCo training loop in front of someone means an install, a
+//! ** THIS IS THE THING MuJoCo CANNOT DO CASUALLY. Not because its physics is worse - it is
+//! not - but because getting a MuJoCo training loop in front of someone means an install, a
 //! Python environment, and a plotting library. This is a file you open.
 //!
-//! ── ★ WHY CROSS-ENTROPY AND NOT A GRADIENT METHOD ──
+//! -- * WHY CROSS-ENTROPY AND NOT A GRADIENT METHOD --
 //!
 //! CEM samples policies, keeps the best few, and refits a Gaussian to them. That is the entire
-//! algorithm, and it fits on screen next to the robot — which for a demonstration is worth more
+//! algorithm, and it fits on screen next to the robot - which for a demonstration is worth more
 //! than sample efficiency. Measured on this engine it solves cartpole in **four to eight
 //! generations**, from an elite score of ~180 to the 500-step ceiling.
 //!
-//! ── ★★ THE NUMBERS THAT MADE IT FEASIBLE ──
+//! -- ** THE NUMBERS THAT MADE IT FEASIBLE --
 //!
-//! One generation is 40 policies × 4 seeds × up to 500 steps = 80 000 steps, and a cartpole
-//! step costs 824 ns — so ~66 ms in the worst case, with most episodes ending long before 500.
+//! One generation is 40 policies x 4 seeds x up to 500 steps = 80 000 steps, and a cartpole
+//! step costs 824 ns - so ~66 ms in the worst case, with most episodes ending long before 500.
 //! Training is therefore spread across frames rather than blocking one: `generations_per_frame`
 //! is a slider, and turning it up makes the curve climb faster and the frame rate drop, which
 //! is an honest thing for a demo to show.
@@ -62,14 +62,14 @@ const pole_hinge: usize = 1;
 /// How far the pole may lean before the episode ends, and how far the cart may travel.
 const fail_angle: f32 = 0.25;
 const fail_position: f32 = 2.0;
-/// The most steps an episode may last — also the best possible score.
+/// The most steps an episode may last - also the best possible score.
 const max_steps: usize = 500;
 /// The model's timestep, restated so the display loop can pace itself against wall time.
 const sim_timestep: f32 = 1.0 / 100.0;
 
-/// ★ THE START IS INSIDE THE FAIL LIMIT, and that is not a detail. A first version tilted the
+/// * THE START IS INSIDE THE FAIL LIMIT, and that is not a detail. A first version tilted the
 /// pole further than the limit allowed, so a fixed fraction of episodes scored ZERO before the
-/// policy acted — and the learning curve plateaued at exactly three quarters of the maximum. A
+/// policy acted - and the learning curve plateaued at exactly three quarters of the maximum. A
 /// plateau at a round fraction is arithmetic, not a ceiling.
 const start_tilt: f32 = 0.30;
 
@@ -82,10 +82,10 @@ const cart_col: Color = .{ .r = 95, .g = 190, .b = 180, .a = 255 };
 const pole_col: Color = .{ .r = 230, .g = 175, .b = 85, .a = 255 };
 const fail_col: Color = .{ .r = 190, .g = 70, .b = 70, .a = 255 };
 
-/// A four-weight linear policy: `action = w · (cart x, pole angle, cart v, pole v)`.
+/// A four-weight linear policy: `action = w * (cart x, pole angle, cart v, pole v)`.
 ///
-/// ★ LINEAR IS ENOUGH, and saying so matters. Cartpole is solvable by a plane through the state
-/// space, so nothing here rests on a neural network being correctly implemented — what is being
+/// * LINEAR IS ENOUGH, and saying so matters. Cartpole is solvable by a plane through the state
+/// space, so nothing here rests on a neural network being correctly implemented - what is being
 /// demonstrated is the SIMULATOR and the loop around it.
 const Policy = [4]f32;
 
@@ -112,7 +112,7 @@ const Cartpole = rbt.Spec(.{
             }},
         },
     },
-    // ★ GEAR 6, NOT 10. A stronger motor makes the task trivial — the first random batch of
+    // * GEAR 6, NOT 10. A stronger motor makes the task trivial - the first random batch of
     // forty policies already contained a perfect one, and a demo whose curve starts at the
     // ceiling shows nothing.
     .actuators = &.{.{
@@ -130,7 +130,7 @@ const State = struct {
     trainer: ctl.Env,
     /// A second environment, so the on-screen robot is not disturbed by training.
     ///
-    /// ★ TWO ENVIRONMENTS, ONE MODEL — which `robot.zig` proves is safe, and which is the
+    /// * TWO ENVIRONMENTS, ONE MODEL - which `robot.zig` proves is safe, and which is the
     /// whole reason a batch is affordable. Sharing one would make the display flicker through
     /// forty policies a frame.
     display: ctl.Env,
@@ -157,18 +157,18 @@ const State = struct {
     training: bool,
     show_best: bool,
 
-    // ── ★★★ A GENERATION IN PROGRESS, NOT A GENERATION PER FRAME ──
+    // -- *** A GENERATION IN PROGRESS, NOT A GENERATION PER FRAME --
     //
     // The first version ran a whole generation inside `update`. A generation is 40 policies x 4
-    // seeds x up to 500 steps — about 66 ms on a desktop and several times that on a phone —
+    // seeds x up to 500 steps - about 66 ms on a desktop and several times that on a phone -
     // so the frame took most of a second and **the demo was not interactive at all**: a swipe
     // needs several samples to read as a drag, and a tap needs its press and release to land in
     // frames that actually happen.
     //
-    // ★ THE UNIT OF WORK IS NOW ONE POLICY EVALUATION. A frame does as many as its budget
+    // * THE UNIT OF WORK IS NOW ONE POLICY EVALUATION. A frame does as many as its budget
     // allows and returns; the generation completes across however many frames it takes. Nothing
-    // about the search changes — the same 40 policies are scored against the same seeds, in the
-    // same order — only when.
+    // about the search changes - the same 40 policies are scored against the same seeds, in the
+    // same order - only when.
     samples: [population]Policy,
     scores: [population]f32,
     /// How many of `population` have been scored so far this generation.
@@ -273,7 +273,7 @@ fn beginGeneration(s: *State) void {
 
 /// Score one policy, on four seeds.
 ///
-/// ★ FOUR SEEDS, NOT ONE. On a single start a policy that happens to suit that one tilt wins,
+/// * FOUR SEEDS, NOT ONE. On a single start a policy that happens to suit that one tilt wins,
 /// the elite set fills with specialists, and the mean goes nowhere.
 fn evaluateOne(s: *State, index: usize) void {
     var total: f32 = 0;
@@ -285,7 +285,7 @@ fn evaluateOne(s: *State, index: usize) void {
 
 /// Rank the finished population, keep the best, and refit the Gaussian to them.
 ///
-/// ── ★ THE WHOLE OF CROSS-ENTROPY METHOD ──
+/// -- * THE WHOLE OF CROSS-ENTROPY METHOD --
 ///
 /// No gradients, no learning rate, no network: draw, rank, refit.
 fn finishGeneration(s: *State) void {
@@ -313,8 +313,8 @@ fn finishGeneration(s: *State) void {
             const d: f32 = s.samples[i][k] - next[k];
             spread += d * d;
         }
-        // ★ A FLOOR ON THE SPREAD. Without it the Gaussian collapses onto the first decent
-        // policy it finds and the search stops — the classic CEM failure, and it looks like
+        // * A FLOOR ON THE SPREAD. Without it the Gaussian collapses onto the first decent
+        // policy it finds and the search stops - the classic CEM failure, and it looks like
         // convergence rather than like giving up.
         s.sigma[k] = @max(0.03, @sqrt(spread / @as(f32, elite)));
         s.mean[k] = next[k];
@@ -337,20 +337,20 @@ fn finishGeneration(s: *State) void {
 
 /// Do as much training as this frame can afford, and no more.
 ///
-/// ── ★★ THE BUDGET ADAPTS, BECAUSE THE DEVICE IS UNKNOWN ──
+/// -- ** THE BUDGET ADAPTS, BECAUSE THE DEVICE IS UNKNOWN --
 ///
 /// A fixed count tuned on a desktop is far too much for a phone, and a phone-safe count wastes
 /// a desktop. Last frame's `delta_time` says which one this is: below 12 ms there is room for
 /// more, above 22 ms there is not, and the budget walks between those bounds.
 ///
-/// ★ THE FLOOR IS ONE POLICY PER FRAME. Training slowly is a demo that works; training in
+/// * THE FLOOR IS ONE POLICY PER FRAME. Training slowly is a demo that works; training in
 /// bursts that eat the frame is a demo you cannot touch.
 fn trainWithinFrame(s: *State, delta_time: f32) void {
     if (delta_time > 0.022) {
         s.budget = @max(1.0, s.budget * 0.8);
     } else if (delta_time < 0.012) {
-        // ★ THE CEILING IS LOW ON PURPOSE. Letting this reach the full population means one
-        // frame doing a whole generation — the very thing that made the demo untouchable — and
+        // * THE CEILING IS LOW ON PURPOSE. Letting this reach the full population means one
+        // frame doing a whole generation - the very thing that made the demo untouchable - and
         // then fifteen more frames shrinking back from it. Eight policies is a few milliseconds
         // even late in training, when episodes run their full length.
         s.budget = @min(8.0, s.budget + 0.5);
@@ -378,8 +378,8 @@ fn update(f: *z.Frame, s: *State) void {
 
     // The displayed robot runs the current best policy, restarting when it falls.
     //
-    // ★ AN ACCUMULATOR, NOT ONE STEP PER FRAME. The simulation runs at 100 Hz and the display
-    // at whatever the device gives — 60, or 30 under load — so stepping once per frame plays
+    // * AN ACCUMULATOR, NOT ONE STEP PER FRAME. The simulation runs at 100 Hz and the display
+    // at whatever the device gives - 60, or 30 under load - so stepping once per frame plays
     // the pole back at 60% speed on a good device and 30% on a struggling one. The physics
     // would be right and the motion visibly wrong, in a way that reads as the policy being
     // sluggish rather than the loop being wrong.
@@ -397,7 +397,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     z.clearViewport(f, bg);
-    // ★ PULL BACK ON A TALL, NARROW VIEWPORT. The rail is 4.8 m wide and a portrait phone sees
+    // * PULL BACK ON A TALL, NARROW VIEWPORT. The rail is 4.8 m wide and a portrait phone sees
     // far less of it horizontally than a desktop does, so a fixed distance frames the scene for
     // one and crops it for the other.
     const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
@@ -423,7 +423,7 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     s.transform[0] = mulMat(translation(x, 0, 0), scaling(0.2, 0.1, 0.1));
     z.drawMeshInstanced(gl, &s.cube, &s.transform, cart_col);
 
-    // ★ THE POLE IS DRAWN FROM ITS PIVOT, not centred on it — the cylinder mesh spans [0, h]
+    // * THE POLE IS DRAWN FROM ITS PIVOT, not centred on it - the cylinder mesh spans [0, h]
     // along Y, measured from the mesh's own bounds rather than assumed from the generator,
     // which remaps axes as it writes.
     s.transform[0] = mulMat(
@@ -436,14 +436,14 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     const captured: bool = u.wantCaptureMouse();
 
-    // ── ★ SIZED TO THE VIEWPORT, NOT TO PIXELS ──
+    // -- * SIZED TO THE VIEWPORT, NOT TO PIXELS --
     //
     // This shipped with a hardcoded 380x400 panel and a fixed font, which on a phone left the
     // plot's label hanging outside its own box and most of the screen empty. The panel takes a
     // FRACTION of the width and everything inside follows from it.
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
     const panel_w: f32 = if (narrow) viewport_w - 16 else @min(430.0, viewport_w * 0.34);
-    // ★ ~30 CHARACTERS ACROSS a full-width panel, ~22 across a floating one — the widest line
+    // * ~30 CHARACTERS ACROSS a full-width panel, ~22 across a floating one - the widest line
     // below is "spread 0.043 0.031 0.030 0.030", and a panel narrower than its widest line is
     // a panel with a horizontal scrollbar.
     const font_size: f32 = u.scaleToViewport(panel_w, if (narrow) 30.0 else 22.0);
@@ -456,8 +456,8 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
 
         u.text("generation {d}   best ever {d:.0} / {d}", .{ s.generation, s.best_ever, max_steps });
         if (s.history_len > 1) {
-            // ★ THE WIDTH IS GIVEN. Without it the plot defaults to something wider than the
-            // panel and its label renders OUTSIDE the box — which is exactly how this looked
+            // * THE WIDTH IS GIVEN. Without it the plot defaults to something wider than the
+            // panel and its label renders OUTSIDE the box - which is exactly how this looked
             // on a phone, and the kind of thing only a device screenshot shows.
             u.plotLines("", s.history[0..s.history_len], .{
                 .min = 0,
@@ -471,7 +471,7 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         }
         u.separator();
 
-        // ★ THE POLICY IS FOUR NUMBERS, SHOWN. Watching them move is most of what makes this
+        // * THE POLICY IS FOUR NUMBERS, SHOWN. Watching them move is most of what makes this
         // legible: the search is not a black box, it is a Gaussian walking across a plane.
         u.text("policy  x {d:>6.2}  angle {d:>6.2}", .{ s.mean[0], s.mean[1] });
         u.text("        v {d:>6.2}  omega {d:>6.2}", .{ s.mean[2], s.mean[3] });
@@ -480,11 +480,11 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
 
         _ = u.checkbox("training", &s.training);
         _ = u.checkbox("show the current best", &s.show_best);
-        // ★ TURNING THIS UP MAKES THE CURVE CLIMB AND THE FRAME RATE DROP, which is an honest
+        // * TURNING THIS UP MAKES THE CURVE CLIMB AND THE FRAME RATE DROP, which is an honest
         // thing to show: a generation is 40 policies x 4 seeds x up to 500 steps, about 66 ms
         // in the worst case.
-        // ★ THE BUDGET IS SHOWN, NOT SET. It is what the device turned out to be able to
-        // afford, adapted from the frame time — a number worth seeing precisely because it
+        // * THE BUDGET IS SHOWN, NOT SET. It is what the device turned out to be able to
+        // afford, adapted from the frame time - a number worth seeing precisely because it
         // differs so much between a desktop and a phone.
         u.text("{d:.0} policies/frame, {d}/{d} this generation", .{
             s.budget,

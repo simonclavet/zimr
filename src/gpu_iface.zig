@@ -1,14 +1,14 @@
 //! lint:alias gpu_iface
 // src/gpu_iface.zig - the pass-based GPU trait, neither WebGL nor WebGPU shaped.
 // WebGPU architecture is documented centrally in src/zimr.zig
-// (the module-level `//!` doc) — read that before changing wgpu code.
+// (the module-level `//!` doc) - read that before changing wgpu code.
 //
 //
 // `renderer_trait.zig` (the existing file) defines the IMMEDIATE-MODE trait
-// — `begin(.triangles)`, `vertex2f(x, y)`, `end()`.  That's the
+// - `begin(.triangles)`, `vertex2f(x, y)`, `end()`.  That's the
 // surface the software rasterizer and the WebGL backend both share.
 //
-// This file (`gpu_iface.zig`) defines the PASS-BASED trait — the
+// This file (`gpu_iface.zig`) defines the PASS-BASED trait - the
 // shape WebGPU actually wants, at zimr's chosen abstraction height
 // (per D7).  It's neither WebGL-shaped (no immediate-mode vertex
 // submission) nor WebGPU-shaped at the raw level (no manual bind
@@ -21,17 +21,17 @@
 // value; the caller threads it explicitly into every subsequent
 // draw / set / flush call.  Compare to the old design which stashed
 // `current_pass` / `current_pipeline` / `current_bind_groups[4]`
-// onto `GpuFrame` and let callers mutate them implicitly — that
+// onto `GpuFrame` and let callers mutate them implicitly - that
 // model looked explicit (you could see the fields) but functioned
 // implicitly (`drawQuadBatched(f, ...)` would read+write them
 // silently).  We took the mach view: passes are values.
 //
 // The trait is implemented by two backends:
 //
-//   - `WgpuBackend` — issues real WebGPU calls via `wgpu.zig` and
+//   - `WgpuBackend` - issues real WebGPU calls via `wgpu.zig` and
 //     `render_pass.zig`.
 //
-//   - `SwBackend` — translates the trait calls into the software
+//   - `SwBackend` - translates the trait calls into the software
 //     rasterizer's API.  Reuses zimr's existing `raster.zig`.
 //
 // User code that wants SW-compatibility goes through this trait:
@@ -50,7 +50,7 @@
 //
 // User code that needs WebGPU-only features (render bundles,
 // indirect draws, etc.) reads `ps.pass` and calls
-// `render_pass.X(ps.pass, ...)` directly — no abstraction wall.
+// `render_pass.X(ps.pass, ...)` directly - no abstraction wall.
 //
 // STATUS: scaffolding.  `WgpuBackend` is the path the wgpu engine
 // uses.  `SwBackend` is the path the software renderer will use
@@ -66,20 +66,20 @@ const wgpu = @import("wgpu.zig");
 // ===========================================================================
 // The 2D batch data layer (moved from renderer_2d.zig, structure-plan S0):
 // Vertex2D, ShapesBatch and the ring/batch capacities are PASS-level data
-// the backend flushes — defining them here makes gpu_iface a leaf (the
+// the backend flushes - defining them here makes gpu_iface a leaf (the
 // renderer re-exports these names, so its API is unchanged).
 // ===========================================================================
 pub const max_batch_vertices: u32 = 8192;
 pub const max_batch_indices: u32 = 12288;
-/// GPU ring-buffer capacity (vertices/indices) — MUCH larger than the CPU
+/// GPU ring-buffer capacity (vertices/indices) - MUCH larger than the CPU
 /// staging arrays. Within a frame the batch auto-flushes every
 /// max_batch_vertices and APPENDS at a running offset (distinct region per
-/// flush, since same-pass draws still reference earlier regions — no wrap). So
+/// flush, since same-pass draws still reference earlier regions - no wrap). So
 /// the GPU buffer must hold a WHOLE FRAME's geometry. A mid-frame flush that
 /// reused offset 0 would corrupt earlier same-pass draws; truly freeing a region
 /// would require a mid-frame submit + render-pass restart, which on a tiled
 /// mobile GPU forces a full attachment store+reload and is unsafe in the shared
-/// depth pass — so instead the ring is sized generously for the whole frame and
+/// depth pass - so instead the ring is sized generously for the whole frame and
 /// flushBatch asserts (rather than corrupts) if a frame ever exceeds it.
 /// Heaviest known frame: Benchmark|Barrel 2.4 (3380 cubes) with the contact
 /// overlay on (each contact point is a small filled circle) peaks around ~235K
@@ -106,10 +106,10 @@ pub const Vertex2D = extern struct {
 /// that happens to place a resource at THIS group (e.g. a vertex-visible
 /// sampler) and then lets 2D immediate mode run again on the same pass. The
 /// next `flushBatch` binds the atlas here under the still-bound custom
-/// pipeline → "BindGroupLayout does not match at group index 1" and the whole
+/// pipeline -> "BindGroupLayout does not match at group index 1" and the whole
 /// command buffer is rejected. That one CAN'T be a comptime guard (the pass
 /// mixing is a runtime sequence, not a static property), so `flushBatch`
-/// carries a runtime assert instead — see `PassState.batch_owner_pipeline`.
+/// carries a runtime assert instead - see `PassState.batch_owner_pipeline`.
 /// The fix at the call site is to bracket the custom draw:
 /// `f.gl.flushBeforeMaterialSwap()` before it, `f.gl.renderer().bindForPass(ps)`
 /// after it. `pipeline_basic` gets away without the bracket only because its
@@ -122,8 +122,8 @@ pub const batch_reserved_group: u32 = 1;
 /// `current_pipeline`, given the `batch_owner` the 2D renderer last recorded
 /// (via `bindForPass` / `setBlend` / `setUserShader` / `clearUserShader`).
 ///
-/// Safe when the owner is unknown — the 2D renderer hasn't bound a batch
-/// pipeline this pass, so we refuse to guess — OR the bound pipeline IS that
+/// Safe when the owner is unknown - the 2D renderer hasn't bound a batch
+/// pipeline this pass, so we refuse to guess - OR the bound pipeline IS that
 /// owner. A `false` here means a FOREIGN pipeline (a custom `bindForDraw` that
 /// wasn't followed by `renderer().bindForPass`) is bound, and the flush would
 /// bind the atlas at group `batch_reserved_group` against a pipeline that
@@ -142,14 +142,14 @@ test "batchFlushPipelineOk: catches a foreign pipeline, allows the batch owner" 
     const t: type = std.testing;
     const shapes: wgpu.RenderPipelineHandle = @fromBackingInt(@intCast(1));
     const foreign: wgpu.RenderPipelineHandle = @fromBackingInt(@intCast(2));
-    // Owner unknown → don't guess (some other bug catches a truly-unbound draw).
+    // Owner unknown -> don't guess (some other bug catches a truly-unbound draw).
     try t.expect(batchFlushPipelineOk(null, null));
     try t.expect(batchFlushPipelineOk(shapes, null));
-    // Owner known and bound → safe (the normal 2D path, and BeginShaderMode).
+    // Owner known and bound -> safe (the normal 2D path, and BeginShaderMode).
     try t.expect(batchFlushPipelineOk(shapes, shapes));
-    // Owner known but a FOREIGN pipeline is bound → the bug we guard against.
+    // Owner known but a FOREIGN pipeline is bound -> the bug we guard against.
     try t.expect(!batchFlushPipelineOk(foreign, shapes));
-    // Owner known but nothing bound → also wrong (missing restore).
+    // Owner known but nothing bound -> also wrong (missing restore).
     try t.expect(!batchFlushPipelineOk(null, shapes));
 }
 
@@ -181,7 +181,7 @@ pub const ShapesBatch = struct {
     vbo_vertex_base: u32 = 0,
     ibo_index_base: u32 = 0,
 
-    // State machine — which material is being accumulated.  A switch
+    // State machine - which material is being accumulated.  A switch
     // here forces a flush (else the batch would mix textures).
     current_texture: wgpu.TextureHandle = .invalid,
     current_texture_view: wgpu.TextureViewHandle = .invalid,
@@ -193,7 +193,7 @@ pub const ShapesBatch = struct {
     /// Change the material bind group SAFELY. The batch resolves the bind group
     /// lazily at flush/submit time, so changing it while geometry is staged
     /// (`vertex_count > 0`) would retroactively re-bind ALREADY-RECORDED
-    /// vertices to the new texture — the deferred-draw aliasing class (turn 909
+    /// vertices to the new texture - the deferred-draw aliasing class (turn 909
     /// black-shapes). Callers MUST flush first; this asserts they did. In debug
     /// it panics at the offending call instead of silently corrupting; in
     /// release it's a no-cost direct store. (The texture-bind paths in
@@ -207,7 +207,7 @@ pub const ShapesBatch = struct {
 const GpuFrame = gpu.GpuFrame;
 
 // ============================================================================
-// SECTION 1 — required method list (comptime trait check)
+// SECTION 1 - required method list (comptime trait check)
 // ============================================================================
 
 const required_methods: []const []const u8 = &.{
@@ -221,12 +221,12 @@ const required_methods: []const []const u8 = &.{
     "beginComputePass",
     "endComputePass",
 
-    // Common 2D primitives — every one takes `*PassState`
+    // Common 2D primitives - every one takes `*PassState`
     "drawQuadBatched",
     "drawTriangleBatched",
     "flushBatch",
 
-    // Pipeline / bind-group state — every one takes `*PassState`
+    // Pipeline / bind-group state - every one takes `*PassState`
     "setPipeline",
     "setBindGroup",
 
@@ -234,7 +234,7 @@ const required_methods: []const []const u8 = &.{
     // setMatrix is drawing-layer state (lives on Renderer2D's
     // matrix_stack; user calls `renderer.matrix_stack.setCurrent(m)`
     // directly).  clearColor is set via `BeginRenderPassDesc.clear`
-    // — there's no need for a deferred "set this for next pass"
+    // - there's no need for a deferred "set this for next pass"
     // method, since the caller controls beginRenderPass.
 };
 
@@ -252,7 +252,7 @@ pub fn assertIsGpuBackend(comptime T: type) void {
 }
 
 // ============================================================================
-// SECTION 2 — descriptor / value types
+// SECTION 2 - descriptor / value types
 // ============================================================================
 
 pub const ClearDesc = struct {
@@ -261,7 +261,7 @@ pub const ClearDesc = struct {
 
 /// 2D rectangle for positions and texture-coordinate windows.
 /// Used as the basic shape primitive for `QuadDesc`.  Field order
-/// matches the convention `{ x, y, w, h }` — top-left + size.
+/// matches the convention `{ x, y, w, h }` - top-left + size.
 pub const Rect = struct {
     x: f32 = 0,
     y: f32 = 0,
@@ -273,7 +273,7 @@ pub const QuadDesc = struct {
     /// World-space rectangle the quad covers.
     pos: Rect,
     /// UV rectangle sampled from the bound texture.  Default is the
-    /// full-texture window (0, 0, 1, 1) — what the caller wants for
+    /// full-texture window (0, 0, 1, 1) - what the caller wants for
     /// the common case of sampling an entire texture once.
     uv: Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
     /// Per-vertex tint (uniform across the four corners).  RGBA bytes.
@@ -313,7 +313,7 @@ pub const BeginRenderPassDesc = struct {
 };
 
 /// `beginRenderPassMrt` options: N color views, one clear for all, one
-/// shared depth.  No MSAA resolve — the G-buffer is 1-sample by nature
+/// shared depth.  No MSAA resolve - the G-buffer is 1-sample by nature
 /// (you can't meaningfully resolve world positions).
 pub const BeginRenderPassMrtDesc = struct {
     color_views: []const wgpu.TextureViewHandle,
@@ -344,7 +344,7 @@ pub const FrameContext = struct {
 ///
 /// The vtable lives inside `RenderPipeline(VsT, FsT)` as
 /// `pub const sw_dispatch = ...` so:
-///   - It's per-TYPE, not per-instance — no allocation, no per-pipe
+///   - It's per-TYPE, not per-instance - no allocation, no per-pipe
 ///     setup cost.
 ///   - `setPipeline` records the pointer with `&@TypeOf(pipe).sw_dispatch`.
 ///   - The functions inside are comptime-specialized with VsT and FsT
@@ -398,11 +398,11 @@ pub const PassState = struct {
     /// "Attachment state ... not compatible" GPU error -> black frame. The
     /// assert turns it into a clear, located panic. (Can't be a COMPILE error:
     /// the pass's depth attachment is a runtime decision and the pipeline handle
-    /// is opaque — no comptime expression spans both. This is the loud-runtime
+    /// is opaque - no comptime expression spans both. This is the loud-runtime
     /// guard, same as the bind-group + scissor asserts.)
     has_depth: bool = false,
 
-    /// Queue handle — needed by `flushBatch` to upload accumulated
+    /// Queue handle - needed by `flushBatch` to upload accumulated
     /// vertex/index data.  Optional only because not every pass
     /// uses the batched helpers; required if `flushBatch` is called.
     queue: wgpu.QueueHandle = .invalid,
@@ -432,12 +432,12 @@ pub const PassState = struct {
     /// dedup semantics as `current_pipeline`.
     current_bind_groups: [4]?wgpu.BindGroupHandle = .{ null, null, null, null },
 
-    /// The pipeline that OWNS the 2D shapes batch — set by
+    /// The pipeline that OWNS the 2D shapes batch - set by
     /// `Renderer2D.bindForPass` to the shapes pipeline handle whenever it
     /// binds that pipeline at pass start (and on blend/material swaps).
     ///
     /// This exists purely so `flushBatch` can ASSERT that the pipeline bound
-    /// at drain time is the batch's owner — NOT to auto-rebind it (binding
+    /// at drain time is the batch's owner - NOT to auto-rebind it (binding
     /// stays the consumer's explicit job; see flushBatch). It's the diagnostic
     /// half of the "pipeline binding is the consumer's responsibility" rule.
     ///
@@ -446,7 +446,7 @@ pub const PassState = struct {
     /// `LoadedShader.bindForDraw` (which binds YOUR pipeline + YOUR group-1
     /// resource) and then issue a 2D immediate call (text/caption/clearViewport)
     /// without restoring the 2D pipeline, the next material-swap flush drains
-    /// the batch while YOUR pipeline is still bound — so the atlas lands at
+    /// the batch while YOUR pipeline is still bound - so the atlas lands at
     /// group 1 against a pipeline that expects something else there. WebGPU
     /// rejects the whole command buffer with the opaque "BindGroupLayout
     /// 'resources_bgl' ... does not match ... at group index 1". The assert in
@@ -457,15 +457,15 @@ pub const PassState = struct {
 };
 
 // ============================================================================
-// SECTION 3 — WgpuBackend (the real thing)
+// SECTION 3 - WgpuBackend (the real thing)
 // ============================================================================
 
 /// The wgpu-backed implementation of the trait.  Every method takes
-/// explicit arguments — no hidden state on `GpuFrame`.
+/// explicit arguments - no hidden state on `GpuFrame`.
 ///
 /// History: pre-2026-05 this stashed `current_pass`, `current_pipeline`,
 /// and `current_bind_groups[4]` on `GpuFrame` and mutated them
-/// implicitly.  The "mach move" took those out — passes return
+/// implicitly.  The "mach move" took those out - passes return
 /// values; dedup state lives on `PassState`; the user threads
 /// everything.  Bigger call sites, smaller magic.
 pub const WgpuBackend = struct {
@@ -474,7 +474,7 @@ pub const WgpuBackend = struct {
     /// caller threads into `beginRenderPass`.
     ///
     /// As a convenience the same two values are also written back
-    /// to `f.surface_view` and `f.encoder` — older call sites that
+    /// to `f.surface_view` and `f.encoder` - older call sites that
     /// reach for `f.encoder` still find it.  Both are equivalent;
     /// using the returned `FrameContext` is preferred.
     ///
@@ -504,7 +504,7 @@ pub const WgpuBackend = struct {
     /// closed by the caller (via `endRenderPass` / `endComputePass`)
     /// before this is called.  In debug builds, the encoder.finish
     /// path would surface a WebGPU validation error if a pass were
-    /// left open — we don't pre-check here because the validation
+    /// left open - we don't pre-check here because the validation
     /// message is more diagnostic than a Zig panic would be.
     pub fn endFrame(f: *GpuFrame) void {
         const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(f.encoder);
@@ -530,13 +530,13 @@ pub const WgpuBackend = struct {
             .label = desc.label,
         });
         // depth_view is set to .invalid (wrapped, not null) when the frame has
-        // no depth attachment — so check the sentinel, not just optional-null.
+        // no depth attachment - so check the sentinel, not just optional-null.
         const has_depth: bool = if (desc.depth_view) |dv| dv != .invalid else false;
         return .{ .pass = pass, .has_depth = has_depth };
     }
 
     /// MRT sibling of `beginRenderPass`: one pass, several color
-    /// attachments (fragment `@location(N)` → `color_views[N]`), one
+    /// attachments (fragment `@location(N)` -> `color_views[N]`), one
     /// shared depth.  Same PassState contract as the single-view path.
     pub fn beginRenderPassMrt(
         encoder: wgpu.CommandEncoderHandle,
@@ -555,7 +555,7 @@ pub const WgpuBackend = struct {
 
     pub fn endRenderPass(ps: *PassState) void {
         wgpu.render_pass.end(ps.pass);
-        // Zero the dedup cache — a stale PassState reused without a
+        // Zero the dedup cache - a stale PassState reused without a
         // fresh beginRenderPass would otherwise silently skip the
         // first bind on the next pass.  The user is supposed to drop
         // the value, but defensive zeroing makes accidental reuse
@@ -653,25 +653,25 @@ pub const WgpuBackend = struct {
         }
         // The 2D shapes pipeline now carries a matching depth state
         // (compare=always, see renderer_2d) whenever a depth target exists, so
-        // flushing the batch into the depth-attached *shared* pass — the one the
-        // 3D immediate path renders into — is valid (the 2D draws compose on top
+        // flushing the batch into the depth-attached *shared* pass - the one the
+        // 3D immediate path renders into - is valid (the 2D draws compose on top
         // of the depth-tested 3D). When there's no depth target, both pipeline
         // and pass are depth-free. The pipeline's depth state tracks the pass,
         // so no assert is needed here.
 
-        // Vertex buffer: 20 bytes/vertex × N — always a multiple of 4.
+        // Vertex buffer: 20 bytes/vertex x N - always a multiple of 4.
         // Append at the running offset (NOT 0): multiple flushes/frame share
         // one buffer and each must occupy a distinct region, else the
         // queue-timeline writes clobber each other (only the last survives).
         // NOTE: this means a single frame's geometry must fit in
-        // max_batch_vertices/INDICES (no wrap — wrapping would overwrite a
+        // max_batch_vertices/INDICES (no wrap - wrapping would overwrite a
         // region an earlier same-pass draw still references). The buffers are
         // sized generously for that.
         {
             // A whole frame's 2D geometry must fit in the ring (see vbo_ring_vertices): the
             // running offset can't wrap, because earlier same-pass draws still reference their
-            // regions. If a frame exceeds it, assertf surfaces it — debug @panics, release logs
-            // to the page's log overlay and keeps running, ship compiles the check out — and we
+            // regions. If a frame exceeds it, assertf surfaces it - debug @panics, release logs
+            // to the page's log overlay and keeps running, ship compiles the check out - and we
             // then drop this batch (abort its draw) rather than wrap and clobber earlier geometry.
             // The ring has generous headroom for the heaviest known frame, so this isn't hit in
             // normal use; reaching it means a scene needs a bigger ring.
@@ -701,9 +701,9 @@ pub const WgpuBackend = struct {
         const vbyte_off: u64 = @as(u64, b.vbo_vertex_base) * @sizeOf(Vertex2D);
         wgpu.queueWriteBuffer(ps.queue, b.vbo, vbyte_off, std.mem.sliceAsBytes(b.vertices[0..b.vertex_count]));
 
-        // Index buffer: u16 × N.  WebGPU requires `queueWriteBuffer`
+        // Index buffer: u16 x N.  WebGPU requires `queueWriteBuffer`
         // size to be a multiple of 4, so odd index counts (e.g. 9
-        // for 3 triangles → 18 bytes) fail validation with
+        // for 3 triangles -> 18 bytes) fail validation with
         // `OperationError: Number of bytes to write must be a
         // multiple of 4`.  Round the slice length up; the index
         // buffer is sized with the same rounding via createBuffer
@@ -728,23 +728,23 @@ pub const WgpuBackend = struct {
 
         const rp = wgpu.render_pass;
         // Pipeline binding is the consumer's responsibility (typically
-        // `Renderer2D.bindForPass` at pass start) — flushBatch does
+        // `Renderer2D.bindForPass` at pass start) - flushBatch does
         // NOT re-bind the pipeline.  Pre-turn-2 the defensive bind
         // here used a raw handle field on `ShapesBatch`; with the
         // typed-pipeline rule in turn 2, the right answer is to make
         // pipeline-binding the consumer's job and have flushBatch
         // only drain the batch.  setBindGroup is still here because
-        // material swaps between flushes (white tex ↔ user texture)
-        // require it — that state lives on the batch itself.
-        // GUARD (loud, located — sibling to the `has_depth` guard above).
+        // material swaps between flushes (white tex <-> user texture)
+        // require it - that state lives on the batch itself.
+        // GUARD (loud, located - sibling to the `has_depth` guard above).
         // We are about to bind the batch's texture atlas at group
         // `batch_reserved_group` (== 1) under whatever pipeline is CURRENTLY
         // bound, then drawIndexed. That pipeline must be the one the 2D
-        // renderer last bound for batch drawing — `bindForPass` / `setBlend` /
+        // renderer last bound for batch drawing - `bindForPass` / `setBlend` /
         // `setUserShader` / `clearUserShader` each record it in
         // `ps.batch_owner_pipeline`. If a custom `LoadedShader.bindForDraw`
         // bound its own pipeline and no `f.gl.renderer().bindForPass(ps)`
-        // restored the 2D pipeline before this 2D op, they differ — and the
+        // restored the 2D pipeline before this 2D op, they differ - and the
         // atlas would bind at group 1 against a pipeline that expects something
         // else there (e.g. a vertex-visible sampler). WebGPU then rejects the
         // WHOLE command buffer at submit with the opaque "BindGroupLayout
@@ -753,7 +753,7 @@ pub const WgpuBackend = struct {
         // names the fix. Only checked once the 2D renderer has bound a batch
         // pipeline this pass (owner set) so we never guess. Runtime-only for the
         // same reason as `has_depth`: the bound pipeline is an opaque handle
-        // chosen at runtime — no comptime expression spans the two.
+        // chosen at runtime - no comptime expression spans the two.
         if (ps.batch_owner_pipeline) |batch_owner| {
             assertf(
                 batchFlushPipelineOk(ps.current_pipeline, batch_owner),
@@ -792,7 +792,7 @@ pub const WgpuBackend = struct {
     }
 
     /// Bind a render pipeline to this pass.  Accepts ONLY
-    /// `RenderPipeline(VsT, FsT)` — comptime-asserted via the
+    /// `RenderPipeline(VsT, FsT)` - comptime-asserted via the
     /// presence of `Vs` and `Fs` decls.  Raw handles are rejected
     /// at compile time with a clear error.
     ///
@@ -802,7 +802,7 @@ pub const WgpuBackend = struct {
     ///
     /// Side effect on `PassState`:
     /// - `current_pipeline` set to the raw gpu handle (for dedup)
-    /// - `sw_dispatch` set to `&@TypeOf(pipeline).sw_dispatch` —
+    /// - `sw_dispatch` set to `&@TypeOf(pipeline).sw_dispatch` -
     ///   the per-pipeline-type comptime vtable.  Null for wgpu-only
     ///   pipelines.
     pub fn setPipeline(ps: *PassState, pipeline: anytype) void {
@@ -816,7 +816,7 @@ pub const WgpuBackend = struct {
         }
         if (ps.current_pipeline) |cur| {
             if (cur == pipeline.gpu_handle) {
-                return; // already bound — skip
+                return; // already bound - skip
             }
         }
         wgpu.render_pass.setPipeline(ps.pass, pipeline.gpu_handle);
@@ -826,7 +826,7 @@ pub const WgpuBackend = struct {
         ps.sw_dispatch = T.sw_dispatch;
     }
 
-    /// Cache-aware pipeline bind for a RAW wgpu pipeline handle — wgpu-only
+    /// Cache-aware pipeline bind for a RAW wgpu pipeline handle - wgpu-only
     /// pipelines that carry no SW-dispatch vtable (DrawPoints, FluidDiscs, decals,
     /// etc.). This is the sanctioned alternative to calling
     /// `render_pass.setPipeline` directly: it keeps `ps.current_pipeline` in sync,
@@ -839,7 +839,7 @@ pub const WgpuBackend = struct {
     pub fn setPipelineHandle(ps: *PassState, handle: wgpu.RenderPipelineHandle) void {
         if (ps.current_pipeline) |cur| {
             if (cur == handle) {
-                return; // already bound — skip
+                return; // already bound - skip
             }
         }
         wgpu.render_pass.setPipeline(ps.pass, handle);
@@ -850,14 +850,14 @@ pub const WgpuBackend = struct {
     /// Forget which bind groups are believed to be bound, so the next `setBindGroup` for each
     /// index actually emits.
     ///
-    /// ★ WHY THIS IS NEEDED, AND WHY THE DEDUP ALONE IS WRONG ACROSS A PIPELINE SWAP.
+    /// * WHY THIS IS NEEDED, AND WHY THE DEDUP ALONE IS WRONG ACROSS A PIPELINE SWAP.
     ///
-    /// `setPipeline` updates `current_pipeline` but leaves `current_bind_groups` alone — yet
+    /// `setPipeline` updates `current_pipeline` but leaves `current_bind_groups` alone - yet
     /// WebGPU INVALIDATES bind groups when a pipeline with an incompatible layout is set. So
     /// after a foreign (3D, custom-shader) pipeline has been bound, the tracker still believes
     /// the 2D atlas sits at `batch_reserved_group` while the device has dropped it. The next
     /// `setBindGroup` for that index is then deduped away, the draw goes out with the group
-    /// unset, and WebGPU rejects the whole command buffer — a black canvas, no message.
+    /// unset, and WebGPU rejects the whole command buffer - a black canvas, no message.
     ///
     /// Found by the smoke runner's bind-group validator on `mocap_viewer`, which returns to
     /// the shapes batch after drawing 3D wireframes. The trace showed `set_pipeline(shapes)`
@@ -874,7 +874,7 @@ pub const WgpuBackend = struct {
         if (group_index < ps.current_bind_groups.len) {
             if (ps.current_bind_groups[group_index]) |cur| {
                 if (cur == bind_group) {
-                    return; // already bound — skip
+                    return; // already bound - skip
                 }
             }
         }
@@ -885,13 +885,13 @@ pub const WgpuBackend = struct {
     }
 };
 
-// Comptime sanity check — WgpuBackend must implement the trait
+// Comptime sanity check - WgpuBackend must implement the trait
 comptime {
     assertIsGpuBackend(WgpuBackend);
 }
 
 // ============================================================================
-// SECTION 4 — SwBackend skeleton (placeholder)
+// SECTION 4 - SwBackend skeleton (placeholder)
 // ============================================================================
 //
 // The SW backend is fully wired in Phase E of the migration.  For now

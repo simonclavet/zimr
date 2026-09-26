@@ -4,7 +4,7 @@
 // layered DAG: above `codecs` and `web` (whose error sets it composes),
 // below `sound` / `drawing` (which use it as their fn return type).
 // Phase 1 of the DAG-plan extracted this from `types.zig` to break
-// the `types → codecs` and `types → web` back-edges that put types
+// the `types -> codecs` and `types -> web` back-edges that put types
 // in the SCC.  Lives in its own file (rather than inside `codecs` or
 // `web`) because it composes BOTH sets - neither leaf alone is the
 // right home.
@@ -55,7 +55,7 @@ pub const PngError = png_mod.Error;
 pub const FetchError = fetch_mod.Error;
 
 /// Errors the CPU-side image generators (`genImageColor`,
-/// `genImageGradientLinear`, `genImagePerlinNoise`, …) can surface.
+/// `genImageGradientLinear`, `genImagePerlinNoise`, ...) can surface.
 /// Strictly narrower than `LoadError` - these never touch the GPU,
 /// never decode anything, never fetch anything, so the only failure
 /// modes are allocator OOM and caller-supplied bad dimensions.
@@ -64,7 +64,7 @@ pub const FetchError = fetch_mod.Error;
 /// combined error set, and the compiler can prove the inclusion.
 /// The bad-dimensions case used to be encoded as a silent
 /// `std.mem.zeroes(Image)` return, which collided with a successfully
-/// allocated 0×0 image and forced every caller to invent its own
+/// allocated 0x0 image and forced every caller to invent its own
 /// post-hoc validity check.  Promoting it to a real error means the
 /// existing `try` at every call site catches it, and a caller who
 /// genuinely wants to ignore bad input writes `catch return` once.

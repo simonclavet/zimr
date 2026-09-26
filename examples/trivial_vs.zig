@@ -1,4 +1,4 @@
-//! examples/trivial_vs.zig — minimal vertex shader for the
+//! examples/trivial_vs.zig - minimal vertex shader for the
 //! wgpu_bringup's Phase D1 validation.  Pass-through: caller pushes
 //! clip-space positions; VS forwards them with w=1.  UV varies to
 //! the FS unchanged.

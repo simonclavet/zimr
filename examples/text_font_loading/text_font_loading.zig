@@ -20,7 +20,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 
-// Atkinson Hyperlegible Mono — the Braille Institute's legibility font.
+// Atkinson Hyperlegible Mono - the Braille Institute's legibility font.
 // Distinct letterforms (slashed zero, unambiguous I/l/1), and a deliberate
 // break from raylib's look. Latin-only content, so its cmap is plenty:
 // ASCII + Latin-1 accented in full. (It has NO Cyrillic and almost no Greek,

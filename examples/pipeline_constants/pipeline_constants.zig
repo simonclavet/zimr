@@ -1,8 +1,8 @@
-//! pipeline_constants — increment 5 of the custom-pipeline API
+//! pipeline_constants - increment 5 of the custom-pipeline API
 //! (`src/notes/webgpu_control.md`). Ported from raygpu's `pipeline_constants.cpp`:
 //! WGSL pipeline-overridable constants (`override`). ONE shader source becomes
 //! THREE specialised pipelines, each baked with different constant values at
-//! creation — different tint, position and scale — with no separate shaders and
+//! creation - different tint, position and scale - with no separate shaders and
 //! no per-draw uniforms.
 //!
 //! This increment added the plumbing the rest of the stack lacked: a `constants`
@@ -11,7 +11,7 @@
 //! `constants` field on `z.PipelineOptions` (each entry is a `z.material.Constant
 //! = .{ .name, .value }`).
 //!
-//! Override constants are fixed at pipeline creation — so the three triangles
+//! Override constants are fixed at pipeline creation - so the three triangles
 //! are static (an aspect-correct UBO would belong with per-frame data instead).
 //!
 //! Build:  zig build wgpu-pipeline-constants
@@ -60,7 +60,7 @@ const Vertex = extern struct {
     b: f32,
 };
 
-/// A white triangle — the tint comes entirely from each pipeline's constants.
+/// A white triangle - the tint comes entirely from each pipeline's constants.
 const vertices = [_]Vertex{
     .{ .x = 0.0, .y = 0.9, .r = 1.0, .g = 1.0, .b = 1.0 },
     .{ .x = -0.9, .y = -0.8, .r = 1.0, .g = 1.0, .b = 1.0 },

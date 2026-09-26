@@ -1,4 +1,4 @@
-//! examples/shaders_shapes_textures — a port of raylib's `shaders_shapes_textures`.
+//! examples/shaders_shapes_textures - a port of raylib's `shaders_shapes_textures`.
 //!
 //! THE POINT. raylib's `BeginShaderMode` wraps ORDINARY draws, and toggles in and out of the
 //! shader SEVERAL TIMES within a single frame:
@@ -20,7 +20,7 @@
 //! pipeline, so the rectangles below are grey because THEIR OWN fragments went through it.
 //! Nothing is rendered to a texture and nothing is read back.
 //!
-//! The repeated toggling is not decoration — it is the test. Each `beginShaderMode` /
+//! The repeated toggling is not decoration - it is the test. Each `beginShaderMode` /
 //! `endShaderMode` must FLUSH the pending batch, or geometry queued before the swap would be
 //! drawn with the pipeline bound after it, and the columns would bleed into one another.
 //! Three toggles in one frame is what makes that visible rather than theoretical.
@@ -30,10 +30,10 @@
 //!     value parked at 0.5 proves the shader really is running per fragment, rather than
 //!     swapping in a pre-greyed texture.
 //!   * A UI panel replaces the keyboard, because this runs on a phone.
-//!   * A "filter the whole frame" toggle wraps EVERYTHING in one shader mode — the other thing
+//!   * A "filter the whole frame" toggle wraps EVERYTHING in one shader mode - the other thing
 //!     raylib's API allows and its example never shows.
 //!
-//! (c) Fudesumi sprite by Eiden Marsal — shipped with raylib's examples.
+//! (c) Fudesumi sprite by Eiden Marsal - shipped with raylib's examples.
 const std = @import("std");
 const z = @import("zimr");
 const zm = @import("zm");
@@ -43,7 +43,7 @@ const c = Color;
 const tau = zm.tau;
 const Allocator = std.mem.Allocator;
 
-/// The WGSL the build generated from `src/shaders/shapes_filter_fs.zig` — raylib's
+/// The WGSL the build generated from `src/shaders/shapes_filter_fs.zig` - raylib's
 /// `grayscale.fs`, written in Zig.
 const filter_wgsl = @embedFile("shapes_filter_fs.wgsl");
 
@@ -53,8 +53,8 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const State = struct {
     gpa: Allocator,
 
-    /// The user 2D shader. Owns SIX GPU handles — pipeline, its layout, the group-2
-    /// bind-group layout, the fragment module, the uniform buffer, the bind group — and frees
+    /// The user 2D shader. Owns SIX GPU handles - pipeline, its layout, the group-2
+    /// bind-group layout, the fragment module, the uniform buffer, the bind group - and frees
     /// all six in `deinit`. Creating a pipeline creates more than a pipeline, and an example
     /// that frees only the obvious one leaks the other five in silence.
     filter: z.Shader2D = .{},
@@ -104,7 +104,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
     // Six GPU handles in `filter`, and the texture. Creating a pipeline creates a layout, a
-    // bind-group layout and a shader module as well — an example that frees only the obvious
+    // bind-group layout and a shader module as well - an example that frees only the obvious
     // one leaks the rest in silence, which is exactly what the smoke harness's leak census is
     // there to catch.
     s.filter.deinit();
@@ -148,7 +148,7 @@ fn drawTriangles(gl: anytype) void {
     gl.poly(.{ 430, 320 }, 6, 80, 0, .{ .color = c.brown });
 }
 
-/// The sprite. raylib puts this INSIDE the shader, as a SECOND, separate shader mode — which
+/// The sprite. raylib puts this INSIDE the shader, as a SECOND, separate shader mode - which
 /// is what proves the mode can be re-entered rather than merely entered once.
 fn drawSprite(gl: anytype, s: *State) void {
     const w: f32 = @floatFromInt(s.fudesumi.width);
@@ -179,7 +179,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.filter.setParams(.{ .params = .{ s.amount, s.elapsed, 0, 0 } });
 
     if (s.filter_everything) {
-        // One shader mode around the whole frame — everything, including the labels, goes grey.
+        // One shader mode around the whole frame - everything, including the labels, goes grey.
         z.beginShaderMode(gl, s.filter);
         drawLabels(gl);
         drawCircles(gl);

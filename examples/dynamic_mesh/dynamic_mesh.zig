@@ -1,4 +1,4 @@
-//! dynamic_mesh — port of the GL `dynamic_mesh`: a quad whose four corners
+//! dynamic_mesh - port of the GL `dynamic_mesh`: a quad whose four corners
 //! breathe in and out radially each frame via `updateMeshBuffer`, proving the
 //! dynamic-vertex path. Built as a 4-vertex indexed mesh; the per-frame corner
 //! positions are written into the mesh's position array, which the retained
@@ -39,7 +39,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     mesh.vertexCount = 4;
     mesh.triangleCount = 2;
 
-    // Position buffer — 12 floats, overwritten per-frame by updateMeshBuffer.
+    // Position buffer - 12 floats, overwritten per-frame by updateMeshBuffer.
     const verts: []f32 = try gpa.alloc(f32, 12);
     @memcpy(verts, &base_positions);
     mesh.vertices = verts.ptr;
@@ -49,7 +49,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     @memcpy(texs, &[8]f32{ 0, 0, 1, 0, 1, 1, 0, 1 });
     mesh.texcoords = texs.ptr;
 
-    // Normals — all face +Z.
+    // Normals - all face +Z.
     const norms: []f32 = try gpa.alloc(f32, 12);
     var i: usize = 0;
     while (i < 4) : (i += 1) {
@@ -59,7 +59,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
     mesh.normals = norms.ptr;
 
-    // Indices — two triangles forming the quad.
+    // Indices - two triangles forming the quad.
     const idx: []u16 = try gpa.alloc(u16, 6);
     @memcpy(idx, &[6]u16{ 0, 1, 2, 0, 2, 3 });
     mesh.indices = idx.ptr;

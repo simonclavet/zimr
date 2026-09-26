@@ -1,9 +1,9 @@
-//! textures_magnifying_glass — port of raylib [textures] example.
+//! textures_magnifying_glass - port of raylib [textures] example.
 //! A 2x magnifier follows the pointer. The magnified world is rendered into a
 //! 256x256 render texture through a zoomed Camera2D, where hidden bunnies are
 //! drawn with MULTIPLY blend so they blend into the parrots below (invisible in
 //! the normal view). The square RTT is masked to a circle by drawing a white
-//! circle over it with MULTIPLY blend — whose alpha function (src.a * dst.a)
+//! circle over it with MULTIPLY blend - whose alpha function (src.a * dst.a)
 //! zeroes the RTT alpha outside the circle. Drag/move the pointer to hunt.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -42,7 +42,7 @@ fn uploadPng(gpa: Allocator, gl: *z.WgpuGl, png: []const u8) !z.WgpuTexture {
     return tex;
 }
 
-/// A 256x256 white disc on transparent — the circular alpha mask.
+/// A 256x256 white disc on transparent - the circular alpha mask.
 fn buildCircleMask(gpa: Allocator, gl: *z.WgpuGl) !z.WgpuTexture {
     const sz: usize = 256;
     const r: f32 = 128;

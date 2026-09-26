@@ -1,4 +1,4 @@
-//! textures_image_channel — port of raylib [textures] example.
+//! textures_image_channel - port of raylib [textures] example.
 //! Split a PNG into its R, G, B, and A channels on the CPU (imageFromChannel
 //! returns a grayscale image per channel), promote each colour channel to RGBA
 //! and punch it through the alpha silhouette (imageAlphaMask needs an RGBA

@@ -1,4 +1,4 @@
-//! textures_gif_player — port of raylib [textures] example - gif player.
+//! textures_gif_player - port of raylib [textures] example - gif player.
 //! raylib source: examples/textures/textures_gif_player.c (complexity 3/4).
 //!
 //! raylib's original decodes an animated GIF into one big Image (frames
@@ -7,16 +7,16 @@
 //! keyboard demo on a desktop; this is the honest phone translation, and it
 //! goes further than the original in three ways a touch UI makes worth doing:
 //!
-//!   * a FRAME SCRUBBER — drag to any frame; raylib has no seek at all.
-//!   * TIMELINE-ACCURATE playback — each frame is held for its OWN native
+//!   * a FRAME SCRUBBER - drag to any frame; raylib has no seek at all.
+//!   * TIMELINE-ACCURATE playback - each frame is held for its OWN native
 //!     delay (scarfy is a uniform 120 ms, but a real GIF varies per frame),
 //!     scaled by a speed slider, instead of raylib's single tick counter.
 //!   * frame-by-frame STEP buttons + a play/pause + loop toggle, so you can
 //!     inspect the sprite sheet the way an animator would.
 //!
 //! The decode is the point: `z.loadGifAnim` runs the new pure-Zig GIF codec
-//! (`codecs.gif`) — LZW + palette + per-frame disposal/transparency
-//! compositing — validated pixel-exact against a reference decoder. Each
+//! (`codecs.gif`) - LZW + palette + per-frame disposal/transparency
+//! compositing - validated pixel-exact against a reference decoder. Each
 //! frame is a full RGBA8 canvas; playback just uploads the current one into a
 //! single `CpuFramebuffer` (nearest-filtered, so the pixel art stays crisp).
 //! `.memory = .managed`: the decoded frames, the GPU framebuffer, the font
@@ -157,7 +157,7 @@ fn update(f: *z.Frame, s: *State) void {
 
         u.text("scarfy_run.gif  -  {d}x{d}  -  {d} frames", .{ s.anim.width, s.anim.height, s.anim.frame_count });
         // The byte offset raylib's original prints, as a nod to "frames are
-        // just appended in image.data" — here it is the real frame stride.
+        // just appended in image.data" - here it is the real frame stride.
         const offset: usize = @as(usize, s.current) * @as(usize, s.fb.width) * @as(usize, s.fb.height) * 4;
         u.text("current frame {d} / {d}   data offset {d}", .{ s.current + 1, s.anim.frame_count, offset });
         u.text("this frame delay: {d} ms", .{s.anim.delays_ms[s.current]});
@@ -187,7 +187,7 @@ fn update(f: *z.Frame, s: *State) void {
         _ = u.checkbox("loop", &s.loop);
 
         // Frame scrubber: dragging pauses and seeks. `slider` is generic over
-        // *u32, so the bound value IS the frame index — no float round-trip.
+        // *u32, so the bound value IS the frame index - no float round-trip.
         u.separator();
         if (u.slider("frame", &s.current, .{ .min = 0, .max = s.anim.frame_count - 1 })) {
             s.playing = false;

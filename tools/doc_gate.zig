@@ -1,7 +1,7 @@
-//! doc_gate — fail the build if a published page drifts back to its own style.
+//! doc_gate - fail the build if a published page drifts back to its own style.
 //!
-//! Every finding in `src/notes/docs_style_plan.md` §1 — five palettes, three
-//! highlighters, two pages fetching Google Fonts — existed because nothing
+//! Every finding in `src/notes/docs_style_plan.md` section 1 - five palettes, three
+//! highlighters, two pages fetching Google Fonts - existed because nothing
 //! checked.  A style rule with no gate is a preference, and the next page gets
 //! styled in the turn that creates it, exactly like those eleven were.
 //!
@@ -15,7 +15,7 @@
 //!      listed below and is application code, not presentation.
 //!   4. NO webfont fetch.  A doc page reaches across the network for nothing.
 //!
-//! A fifth property — "every code block carries a language class" — is NOT
+//! A fifth property - "every code block carries a language class" - is NOT
 //! gated, because it is not mechanically decidable: shell transcripts, MJCF and
 //! the ASCII pipeline diagrams live in bare <pre><code> too, and a diagram
 //! tagged `zig` comes out speckled.  Classing those is a judgement, so it stays
@@ -33,7 +33,7 @@ const endsWith = std.mem.endsWith;
 
 const marker = "<!--docfmt:style-->";
 
-/// index.html's <script> is the gallery's manifest-driven filter and search —
+/// index.html's <script> is the gallery's manifest-driven filter and search -
 /// application code that happens to live in a page this gate covers.  Named
 /// here so the exception is visible rather than implied.
 const script_ok = [_][]const u8{"index.html"};

@@ -5,35 +5,35 @@
 // and `default_sort`.  Single-table view (not a 4-lane board);
 // the plan called for draggable cards across 4 lanes, but card
 // drag-reorder needs hit-test + drag-state machinery that
-// doesn't exist yet.  Filed in §13 backlog under "feature
+// doesn't exist yet.  Filed in section 13 backlog under "feature
 // surfaced after kanban example".
 //
 // What each flag does, demonstrated here:
 //
-//   - Title column   → `no_sort = true`.  Click the header,
+//   - Title column   -> `no_sort = true`.  Click the header,
 //                      nothing happens; visually no sort
 //                      indicator.  Sorting alphabetically by
 //                      task title isn't meaningful in a
 //                      kanban context.
 //
-//   - Priority col   → `default_sort = .descending`,
+//   - Priority col   -> `default_sort = .descending`,
 //                      `no_sort_ascending = true`.  Opens
 //                      sorted high-to-low.  Click again, stays
-//                      descending — can't flip to ascending
+//                      descending - can't flip to ascending
 //                      because least-important-at-top is never
 //                      a useful kanban view.
 //
-//   - Age (days) col → `default_sort = .descending`.  Opens
+//   - Age (days) col -> `default_sort = .descending`.  Opens
 //                      oldest-first (staleness = visibility).
 //                      Click freely; both directions allowed.
 //
-//   - Status column  → no flags; cycles ascending → descending
-//                      → none → ascending normally.
+//   - Status column  -> no flags; cycles ascending -> descending
+//                      -> none -> ascending normally.
 //
 // `default_sort` seeds the table's sort spec at column-setup
 // time.  Multiple columns with `default_sort` set: leftmost
 // wins.  Once the user clicks ANY header, the user's choice
-// sticks across frames — `default_sort` does NOT re-seed.
+// sticks across frames - `default_sort` does NOT re-seed.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -111,7 +111,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 /// Compare two cards using the table's current sort spec.  Walks
 /// the spec list in priority order; first column that yields a
-/// definite ordering wins.  Column-index → field mapping is
+/// definite ordering wins.  Column-index -> field mapping is
 /// hardcoded to match the tableSetupColumn order in update().
 fn sortCards(
     specs: *const ui.TableSortSpecs,

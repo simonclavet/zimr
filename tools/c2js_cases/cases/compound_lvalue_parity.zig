@@ -1,6 +1,6 @@
 // READ/STORE PARITY canary. A compound assignment (`OP=`) reads and writes the
 // SAME lvalue in one statement, so it catches any divergence between the read-
-// address path and the store-address path — the asymmetry behind several past
+// address path and the store-address path - the asymmetry behind several past
 // silent miscompiles (the nested-field read that returned 0, the dropped global
 // array-of-structs store). Exercises nested fields and array-of-struct element
 // fields, global and local, with +=, *=, -=, &=, <<=, ^=. Self-checks (0 = pass).

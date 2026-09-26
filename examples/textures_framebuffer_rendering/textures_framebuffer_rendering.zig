@@ -1,20 +1,20 @@
-//! textures_framebuffer_rendering — port of raylib's
+//! textures_framebuffer_rendering - port of raylib's
 //! `examples/textures/textures_framebuffer_rendering.c` (Jack Boakes, 2/4).
 //!
 //! The sample's subject is the RENDER TEXTURE itself: one world drawn twice, into
-//! two framebuffers, composited side by side — plus a cropped ZOOM of one of them
+//! two framebuffers, composited side by side - plus a cropped ZOOM of one of them
 //! sampled straight back out of its own framebuffer.
-//!   * OBSERVER pane — the world, plus a wire prism showing exactly where the
+//!   * OBSERVER pane - the world, plus a wire prism showing exactly where the
 //!     other camera is and what it can see (its frustum, unprojected).
-//!   * SUBJECT pane — the same world through that camera.
-//!   * The viewfinder — a `capture_px` square of the SUBJECT framebuffer, drawn
+//!   * SUBJECT pane - the same world through that camera.
+//!   * The viewfinder - a `capture_px` square of the SUBJECT framebuffer, drawn
 //!     magnified over the corner. That is one `gl.texture(dst, rt, .{ .source })`
 //!     call: a sub-rectangle of a texture we rendered ourselves this same frame.
 //!
 //! WHERE THIS DEPARTS FROM RAYLIB (and why):
 //!   * raylib drives the observer with WASD+mouse and the subject with
 //!     CAMERA_ORBITAL. A phone has neither. Here BOTH cameras are `z.OrbitCamera`s
-//!     and the pane you touch is the one you steer — drag the top pane to fly the
+//!     and the pane you touch is the one you steer - drag the top pane to fly the
 //!     observer, drag the bottom pane to AIM the subject and watch its green
 //!     frustum swing round in the pane above. The pane is latched on press, so a
 //!     drag that crosses the divider keeps steering the camera it started on.
@@ -23,7 +23,7 @@
 //!     pixels, so the 3D is never stretched and the zoom is never resampled twice.
 //!   * raylib passes a NEGATIVE source height (`-texture.height`) everywhere here,
 //!     because a GL render texture arrives upside down. zimr's do not, so the
-//!     source rects are plain positive pixels — except the `mirror` toggle, which
+//!     source rects are plain positive pixels - except the `mirror` toggle, which
 //!     flips the viewfinder on purpose to show that the negative-extent rule works.
 //!
 //! Leak-clean (`.memory = .managed`): both render textures and the UI host are
@@ -85,7 +85,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
 }
 
-/// Both framebuffers are one pane in BACKING pixels — half the surface on the
+/// Both framebuffers are one pane in BACKING pixels - half the surface on the
 /// split axis, full on the other. Recreated only when that size actually
 /// changes (rotation, resize), never per frame.
 fn ensureTargets(f: *z.Frame, s: *State) void {
@@ -122,7 +122,7 @@ fn drawWorld(f: *z.Frame) void {
 /// The trick is that the far plane is deliberately built at the camera's TARGET
 /// distance (`far = |position - target|`), so the prism is sliced exactly where
 /// the subject is looking instead of running off to z_far. Take the four far-plane
-/// NDC corners `(±1, ±1, 1)`, push them through the INVERSE view-projection, and
+/// NDC corners `(+/-1, +/-1, 1)`, push them through the INVERSE view-projection, and
 /// the perspective divide hands back the four world-space corners of what that
 /// camera can see. z = 1 is the far plane in WebGPU's 0..1 clip space just as it
 /// is in GL's -1..1, so raylib's corner list ports across unchanged.
@@ -153,7 +153,7 @@ fn drawCameraPrism(f: *z.Frame, cam: Camera3D, aspect: f32, color: Color) void {
 
 /// The two viewports, in logical coords: stacked on a portrait phone, side by
 /// side on a landscape screen. These rects are BOTH the compositor's layout and
-/// each camera's `region` — one source of truth, so what you see is what you
+/// each camera's `region` - one source of truth, so what you see is what you
 /// steer.
 const Layout = struct {
     observer: z.Rectangle,
@@ -200,12 +200,12 @@ fn update(f: *z.Frame, s: *State) void {
     };
 
     // ORDER (forced, and worth understanding): `manages_own_frame` means the
-    // offscreen passes run BEFORE the screen pass opens — that is the whole
+    // offscreen passes run BEFORE the screen pass opens - that is the whole
     // tile-based-GPU point. But `UiHost.begin` asserts an OPEN draw frame (the UI
     // is built into it), and the camera must not steal a drag that belongs to the
     // UI panel. So input can only be read AFTER `beginDrawing`, i.e. after the
     // framebuffers are already drawn. The cameras therefore render from the state
-    // last frame's input left them in, and this frame's drag lands next frame —
+    // last frame's input left them in, and this frame's drag lands next frame -
     // one frame of lag, invisible at 60fps, and exactly what cel_shading does.
     const cam_observer: Camera3D = s.observer.camera(observer_opts);
     const cam_subject: Camera3D = s.subject.camera(subject_opts);
@@ -290,7 +290,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     // Both controllers see every gesture; each takes only the ones that BEGAN in
-    // its own `region` — pointer for a drag, MIDPOINT OF THE TWO FINGERS for a
+    // its own `region` - pointer for a drag, MIDPOINT OF THE TWO FINGERS for a
     // pinch. No pane bookkeeping here: that is the controller's job now.
     // Auto-orbit yields while a gesture owns the subject pane.
     const ui_owns: bool = u.wantCaptureMouse();

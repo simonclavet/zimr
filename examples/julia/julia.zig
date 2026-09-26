@@ -3,12 +3,12 @@
 // The Julia set on WebGPU: a fullscreen fragment-shader demo, the sibling of
 // mandel_sidebyside's GPU half. Same escape-iteration shader family
 // (cmandelbrot_step), but z starts at the pixel coordinate and the constant is
-// the animated `julia_c` — so the fractal morphs continuously as julia_c orbits
+// the animated `julia_c` - so the fractal morphs continuously as julia_c orbits
 // a small circle.
 //
 // This is the WebGPU port of examples/julia.zig. It exercises:
-//   - the pure-Zig SPIR-V→WGSL pipeline on a non-trivial escape loop, and
-//   - loadShaderVF: the comptime VS↔FS varying check (the trivial fullscreen
+//   - the pure-Zig SPIR-V->WGSL pipeline on a non-trivial escape loop, and
+//   - loadShaderVF: the comptime VS<->FS varying check (the trivial fullscreen
 //     VS outputs only frag_tex_coord; julia_fs_io.Inputs must match exactly).
 //
 // Build:      zig build wgpu-julia
@@ -53,7 +53,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    // Animate julia_c around a small circle near the boundary — the classic
+    // Animate julia_c around a small circle near the boundary - the classic
     // morphing-Julia look. The pixel/view params stay fixed.
     const t: f32 = f.time.time;
     const julia_c: Vec2 = .{

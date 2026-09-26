@@ -9,6 +9,7 @@
 //! -Dtest-filter="robot_ppo_track: train chunk - the get-up"`.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const float64 = zm.float64;
 const rbt = @import("robot.zig");
@@ -125,8 +126,7 @@ test "robot_ppo_track: an untrained policy is the servo, and the wiring says so"
     }
     const servo_mean: f32 = float(8 * 32 * 2) / float(@max(servo.episodes, 1));
     const trainer_mean: f32 = float(8 * 32 * 2) / float(@max(first.episodes, 1));
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  wiring: untrained policy {d:.1} frames an episode ({d} ended, reward {d:.3}); " ++
+    report.print("\n  wiring: untrained policy {d:.1} frames an episode ({d} ended, reward {d:.3}); " ++
         "servo alone {d:.1} ({d} ended)\n", .{
         trainer_mean,
         first.episodes,
@@ -150,8 +150,7 @@ test "robot_ppo_track: an untrained policy is the servo, and the wiring says so"
     });
     defer noisy.deinit();
     const shaken: Stats = try noisy.iterate();
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  control: with exploration at 1.6, reward {d:.3} against {d:.3} untrained\n", .{
+    report.print("  control: with exploration at 1.6, reward {d:.3} against {d:.3} untrained\n", .{
         shaken.mean_reward,
         first.mean_reward,
     });
@@ -535,8 +534,7 @@ test "robot_ppo_track: Geno holds the T-pose - the model-free baseline (S2b)" {
     }
     const judged: Stats = try trainer.evaluate(1200, false);
     const servo: Stats = try trainer.evaluate(1200, true);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  PPO on Geno's T-pose, {d:.0} s ({d} iterations, {d} steps): " ++
+    report.print("\n  PPO on Geno's T-pose, {d:.0} s ({d} iterations, {d} steps): " ++
         "judged {d:.1} frames an episode " ++
         "({d} ended) | servo alone {d:.1} frames ({d} ended)\n", .{
         budget_seconds,
@@ -704,8 +702,7 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     const cloned: Stats = try trainer.evaluate(judged_decisions, false);
     const servo_mttf: f64 = float64(servo.exposure) / float64(@max(servo.failures, 1));
     const clone_mttf: f64 = float64(cloned.exposure) / float64(@max(cloned.failures, 1));
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D5 step 3: the teacher kept up {d} frames over {d} starts -> {d} demonstrations;\n" ++
+    report.print("\n  D5 step 3: the teacher kept up {d} frames over {d} starts -> {d} demonstrations;\n" ++
         "  clone error {d:.4} -> {d:.4} over {d} minibatches;\n" ++
         "  judged ({d} decisions x 8): servo {d} failures, MTTF {d:.0} steps, reward {d:.3} | " ++
         "clone {d} failures, MTTF {d:.0} steps, reward {d:.3}\n", .{
@@ -723,8 +720,7 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
         clone_mttf,
         cloned.mean_reward,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  held out ({d} of {d} starts, {d} rows): clone error {d:.4} (training {d:.4}); " ++
+    report.print("  held out ({d} of {d} starts, {d} rows): clone error {d:.4} (training {d:.4}); " ++
         "always-zero {d:.4}, training mean {d:.4}\n", .{
         starts / 5,
         starts,
@@ -734,14 +730,11 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
         zero_error,
         mean_error,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  held-out error after", .{});
+    report.print("  held-out error after", .{});
     for (checkpoints, curve) |checkpoint, value| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print(" {d}: {d:.4}", .{ checkpoint, value });
+        report.print(" {d}: {d:.4}", .{ checkpoint, value });
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  normaliser: {d} of {d} inputs spread under 1e-3; pinned at +-5: training {d:.2}%, held out " ++
+    report.print("\n  normaliser: {d} of {d} inputs spread under 1e-3; pinned at +-5: training {d:.2}%, held out " ++
         "{d:.2}%\n", .{
         narrow,
         demo.width,
@@ -831,8 +824,7 @@ test "robot_ppo_track: episodes CUT by the step cap are bootstrapped from where 
             },
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  cut episodes: {d} decisions ended CUT (bootstrapped), {d} STOPPED, of {d}\n", .{
+    report.print("\n  cut episodes: {d} decisions ended CUT (bootstrapped), {d} STOPPED, of {d}\n", .{
         cut,
         stopped,
         trainer.ends.len,

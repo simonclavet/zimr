@@ -1,8 +1,8 @@
-//! textures_sprite_stacking — port of raylib [textures] example, zimr-ified.
+//! textures_sprite_stacking - port of raylib [textures] example, zimr-ified.
 //! booth.png is a vertical sheet of 122 horizontal cross-sections of a 3D
 //! model. We render each slice as a fixed horizontal textured quad stacked in
 //! world Y (via drawBillboardRec with explicit right/up so the quads DON'T face
-//! the camera), then view the whole stack with the shared orbit camera — drag
+//! the camera), then view the whole stack with the shared orbit camera - drag
 //! to orbit, wheel/pinch to zoom, exactly like the raytracer example. A UI
 //! slider controls the vertical separation between slices.
 const std = @import("std");

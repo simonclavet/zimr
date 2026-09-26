@@ -1,4 +1,4 @@
-//! examples/pipeline_msaa_fs.zig — pipeline_msaa fragment shader body.
+//! examples/pipeline_msaa_fs.zig - pipeline_msaa fragment shader body.
 //! Emits one flat high-contrast colour so the MSAA edge quality is obvious.
 
 const shader_io = @import("pipeline_msaa_fs_io.zig");

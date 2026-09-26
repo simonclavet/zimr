@@ -1,4 +1,4 @@
-//! examples/mandelbrot_fs.zig — Mandelbrot fragment shader in Zig.
+//! examples/mandelbrot_fs.zig - Mandelbrot fragment shader in Zig.
 //!
 //! Companion to `examples/mandelbrot.zig` (the CPU side).  Compiles
 //! to SPIR-V via the Zig shader build pipeline, then through
@@ -33,7 +33,7 @@ pub const Io = shader_externs.IoT(shader_io.Ubo);
 pub const Out = shader_externs.Out;
 
 // ---- Helpers --------------------------------------------------------
-// `pub fn` (NOT `pub inline fn`) — spirv-opt's `-O` inline pass does
+// `pub fn` (NOT `pub inline fn`) - spirv-opt's `-O` inline pass does
 // the work post-codegen.  Forcing inline at the Zig level breaks the
 // SPIR-V structured-control-flow markers.
 fn hsv2rgb(c: Vec3) Vec3 {
@@ -61,12 +61,12 @@ fn hsv2rgb(c: Vec3) Vec3 {
 //
 // Takes an `Io` by value (varying inputs + uniforms), returns an
 // `Out` by value (stage outputs).  Compiles on every target Zig
-// supports — SPIR-V backend produces a fragment shader, x86_64/wasm
+// supports - SPIR-V backend produces a fragment shader, x86_64/wasm
 // targets get callable Zig that `raster_shader.dispatchFragmentShader`
 // runs per pixel.
 //
 // Pattern (see `src/notes/software_shaders.md`):
-//   - The signature is `pub fn shaderMain(io: Io) Out` — return-by-
+//   - The signature is `pub fn shaderMain(io: Io) Out` - return-by-
 //     value is required by SPIR-V's Logical addressing model;
 //     pointer-out params don't survive spirv-val.
 //   - The name is `shaderMain`, NOT `main`.  Zig's `std.start.zig`
@@ -77,7 +77,7 @@ fn hsv2rgb(c: Vec3) Vec3 {
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
-    // Pixel → complex plane.  At u.zoom=1.0 the canvas height spans
+    // Pixel -> complex plane.  At u.zoom=1.0 the canvas height spans
     // 4.0 units; halving u.zoom doubles the span.  Y is flipped:
     // screen Y grows downward, imaginary axis grows upward.  The CPU
     // side's `screenToComplex` flips with the same sign so mouse
@@ -91,12 +91,12 @@ pub fn shaderMain(io_in: Io) Out {
         io_in.u.center[1] - (frag[1] - half_res[1]) * scale,
     );
 
-    // Mandelbrot iteration: z_{n+1} = z_n² + c.  `Complex` is a
+    // Mandelbrot iteration: z_{n+1} = z_n^2 + c.  `Complex` is a
     // Vec2 alias with `cmul` and native `+`.  Reads like the textbook
     // math; same GLSL output as a hand-rolled version (spirv-opt
     // inlines the `cmul` call).
     //
-    // `escaped` is a u32 flag instead of `bool` — Zig's SPIR-V codegen
+    // `escaped` is a u32 flag instead of `bool` - Zig's SPIR-V codegen
     // emits `bool` storage as `u1` / `uint8_t`, which WebGL2 rejects.
     // `+%=` is the wrapping increment; without it Zig emits an
     // overflow check.
@@ -109,13 +109,13 @@ pub fn shaderMain(io_in: Io) Out {
         if (float(i) >= io_in.u.max_iter) {
             break;
         }
-        // Escape radius² = 128 (|z| > ~11.3). Large enough that the
+        // Escape radius^2 = 128 (|z| > ~11.3). Large enough that the
         // log-log smooth-iteration term below stays accurate, small enough
         // that squaring in cmandelbrot_step CANNOT overflow f32 to inf: a
-        // bailout at |z|²=256 (the old value) let z reach ~16, and on the
+        // bailout at |z|^2=256 (the old value) let z reach ~16, and on the
         // boundary the NEXT square plus accumulated growth could push cmul
-        // to inf → inf−inf = NaN → `NaN > 256` is false → escape never
-        // fires → the loop runs out with NaN → the whole pixel renders
+        // to inf -> inf-inf = NaN -> `NaN > 256` is false -> escape never
+        // fires -> the loop runs out with NaN -> the whole pixel renders
         // white (the turn-901 mandelbrot WHITE bug). 128 keeps every
         // intermediate finite on the no-spirv-opt WGSL path.
         if (cnorm2(z) > 128.0) {
@@ -135,7 +135,7 @@ pub fn shaderMain(io_in: Io) Out {
         const nu: f32 = log2(log2(mod_z));
         const smoothed: f32 = n + 1.0 - nu;
         // clamp01 guards the smooth-iteration tail: a fast escape can
-        // drive `smoothed` negative, and pow(negative, 0.4) is NaN —
+        // drive `smoothed` negative, and pow(negative, 0.4) is NaN -
         // which a GPU renders as a hole (the clear color shows through,
         // so the fractal looks absent).  Clamping keeps every pixel
         // finite and in-gamut.
@@ -155,7 +155,7 @@ pub fn shaderMain(io_in: Io) Out {
 // On SPIR-V targets this materializes an `export fn entry() callconv(
 // .spirv_fragment)` wrapper that reads externs into Io, calls
 // shaderMain, writes the returned Out's fields to extern outputs.
-// On CPU targets this is a no-op — the caller (raster_shader.dispatch-
+// On CPU targets this is a no-op - the caller (raster_shader.dispatch-
 // FragmentShader) invokes shaderMain(io) directly per pixel.
 comptime {
     _ = shader_externs.installSpirvEntry(shaderMain);

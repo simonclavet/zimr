@@ -1,7 +1,7 @@
 // examples/damaged_helmet/damaged_helmet.zig
 //
 // The wgpu port of the GL `damaged_helmet`: the canonical Khronos "Damaged
-// Helmet" PBR glTF, rendered through `z.pbr3d` with its real materials — base
+// Helmet" PBR glTF, rendered through `z.pbr3d` with its real materials - base
 // color, metallic-roughness, normal, occlusion and emissive maps (JPEG, decoded
 // by codecs.jpeg). It ships normals, so it skips the flat-normal synthesis. A
 // directional key light + ambient; the helmet auto-rotates so you can see the
@@ -104,7 +104,7 @@ fn update(f: *z.Frame, s: *State) void {
     const proj: Mat = perspectiveFovRh(0.8, aspect, 0.1, 100.0);
 
     // pbr3d.loadGltf ignores the glTF node transform; the helmet mesh is Z-up
-    // with the visor toward +Y. +90° about X stands it upright, visor forward.
+    // with the visor toward +Y. +90 deg about X stands it upright, visor forward.
     const model_m: Mat = rotationX(1.5707963);
 
     s.renderer.beginFrame(f.gpu, .{

@@ -1,7 +1,7 @@
-//! audio_stream_synth — port of the GL `audio_stream_synth`: a theremin on
+//! audio_stream_synth - port of the GL `audio_stream_synth`: a theremin on
 //! the wgpu audio bridge. Mouse Y maps (logarithmically) to a pitch in
-//! 110–1760 Hz; each frame it synthesizes sine samples and feeds them to an
-//! `AudioStream` — a 3-buffer rotation scheduled gaplessly via the bridge's
+//! 110-1760 Hz; each frame it synthesizes sine samples and feeds them to an
+//! `AudioStream` - a 3-buffer rotation scheduled gaplessly via the bridge's
 //! `play_buffer_at` (implemented this turn). Click toggles the sound. The synth
 //! phase_turns persists across chunks so the wave doesn't click at chunk seams.
 const std = @import("std");
@@ -52,7 +52,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
-/// Mouse Y → frequency in [110, 1760] Hz (4 octaves of A), logarithmic so equal
+/// Mouse Y -> frequency in [110, 1760] Hz (4 octaves of A), logarithmic so equal
 /// pixel-spans give equal musical intervals.
 fn mouseToFreq(mouse_y: f32, height: f32) f32 {
     const min_freq: f32 = 110.0;
@@ -70,7 +70,7 @@ fn update(f: *z.Frame, state: *State) void {
     const mp: Vec2 = z.getMousePosition(f.input);
 
     // Hold-to-play (theremin): sound while the finger/button is held, silent on
-    // release — so lifting your finger stops it.
+    // release - so lifting your finger stops it.
     const down: bool = z.isMouseButtonDown(f.input, .left);
     if (down and !state.enabled) {
         state.enabled = true;
@@ -80,7 +80,7 @@ fn update(f: *z.Frame, state: *State) void {
         z.streams.pause(&state.audio.streams, state.stream);
     }
 
-    // Top up the stream while the scheduler wants data (≈ one chunk/frame).
+    // Top up the stream while the scheduler wants data (~ one chunk/frame).
     if (state.enabled) {
         const freq: f32 = mouseToFreq(mp[1], h);
         const phase_step_turns: f32 = freq / float(sample_rate);

@@ -1,7 +1,7 @@
 //! lint:alias shader_runtime
 // src/shader_runtime_wgpu.zig - the user-facing shader loading API.
 // WebGPU architecture is documented centrally in src/zimr.zig
-// (the module-level `//!` doc) — read that before changing wgpu code.
+// (the module-level `//!` doc) - read that before changing wgpu code.
 //
 //
 // This is where the descriptor-with-defaults pattern lands (D1/D3
@@ -25,20 +25,20 @@
 //   loaded.setVertex(ps, 0, vbo, vbo_bytes);
 //   loaded.draw(ps, vertex_count, 1);
 //
-// The `@embedFile(".wgsl")` is the build's machine-generated artifact —
+// The `@embedFile(".wgsl")` is the build's machine-generated artifact -
 // users never WRITE WGSL.  spv2wgsl runs at BUILD time (no transpiler
-// in the shipped wasm — Rule 2 of the wgpu plan), with `wgsl_strict`,
+// in the shipped wasm - Rule 2 of the wgpu plan), with `wgsl_strict`,
 // so the text is guaranteed `// ERROR:`-free.  `loadShader` builds the
 // shader modules + pipeline + bind-group layout from the typed schema;
 // renaming a uniform or attribute in the schema breaks both the shader
-// and the host simultaneously — that's the point (Rule 1: no
+// and the host simultaneously - that's the point (Rule 1: no
 // hand-written WGSL anywhere).
 //
 // Key surface:
-//   loadShader(FsSchema, desc)         — fullscreen / FS-only shaders.
-//   loadShaderVF(VsSchema, FsSchema, desc) — full VS+FS; asserts the
+//   loadShader(FsSchema, desc)         - fullscreen / FS-only shaders.
+//   loadShaderVF(VsSchema, FsSchema, desc) - full VS+FS; asserts the
 //                                      VS `Outputs` match the FS `Inputs`.
-//   vertexLayout(VsSchema)             — interleaved vertex layout DERIVED
+//   vertexLayout(VsSchema)             - interleaved vertex layout DERIVED
 //                                      from the schema's typed `Attributes`
 //                                      (single source of truth).
 //   LoadedShader.{pushUbo, setMaterial, bindForDraw, setVertex, draw,
@@ -46,7 +46,7 @@
 //
 // History:
 //   - pre-Phase-D this file exposed `loadShaderFromWgsl(WgslShaderDesc)
-//     → DynamicLoadedShader` — a runtime-typed escape path that took
+//     -> DynamicLoadedShader` - a runtime-typed escape path that took
 //     raw WGSL source.  It went away with Phase D once the engine's
 //     own shaders moved onto the typed pipeline (steps #1+#2 of the
 //     May-2026 birds-eye plan).
@@ -59,7 +59,7 @@
 //     faster startup, no transpiler in the wasm.
 //
 // Implementation note: this file orchestrates a chain of calls
-// (compile → pipeline build → bind group layout → bind group)
+// (compile -> pipeline build -> bind group layout -> bind group)
 // but does not contain the heavy logic itself.  It delegates:
 //
 //   `shader_introspect.zig` does the comptime bind group layout.
@@ -86,7 +86,7 @@ const wgpu_texture = @import("wgpu_texture.zig");
 const PassState = gpu_iface.PassState;
 
 // ============================================================================
-// SECTION 1 — LoadedShader result type
+// SECTION 1 - LoadedShader result type
 // ============================================================================
 
 pub const SwPipelineDispatch = gpu_iface.SwPipelineDispatch;
@@ -98,7 +98,7 @@ pub const SwPipelineDispatch = gpu_iface.SwPipelineDispatch;
 /// pointer to a per-pipeline-type comptime const vtable.
 ///
 /// The closure captures VsT and FsT.  All per-pixel work inside
-/// the dispatcher is fully comptime-specialized — Zig inlines
+/// the dispatcher is fully comptime-specialized - Zig inlines
 /// `FsT.shaderMain` into the rasterizer's inner loop, no virtual
 /// dispatch per pixel.  The pointer cost is paid ONCE per
 /// `flush_batch` call.
@@ -122,7 +122,7 @@ pub fn makeSwDispatch(
         };
         fn flushBatch(ctx_opaque: *anyopaque, ps_opaque: *anyopaque) void {
             // Turn 3 fills in the body.  For turn 2's scope this is
-            // the structural seam — the comptime witness lines below
+            // the structural seam - the comptime witness lines below
             // ensure the type captures are live and the vtable's
             // generation is honest (not a no-op stub).
             _ = ctx_opaque;
@@ -143,10 +143,10 @@ pub fn makeSwDispatch(
 /// Typed wrapper around `wgpu.RenderPipelineHandle`.  Carries the
 /// comptime VS+FS shader types so the SW backend can find the
 /// dispatch entry points.  This is the only pipeline type in the
-/// public API — wgpu-only consumers use `RenderPipeline(void, void)`.
+/// public API - wgpu-only consumers use `RenderPipeline(void, void)`.
 pub fn RenderPipeline(comptime VsT: type, comptime FsT: type) type {
     return struct {
-        /// The wgpu side of the pipeline — what gets bound when
+        /// The wgpu side of the pipeline - what gets bound when
         /// `setPipeline` calls into `render_pass.setPipeline`.
         /// This is the only runtime state; everything else is
         /// compile-time type info.
@@ -154,7 +154,7 @@ pub fn RenderPipeline(comptime VsT: type, comptime FsT: type) type {
 
         /// VS shader type.  When `VsT.shaderMain` exists, the SW
         /// backend can dispatch through it.  When `VsT` is `void`,
-        /// no SW dispatch — wgpu-only pipeline.
+        /// no SW dispatch - wgpu-only pipeline.
         pub const Vs = VsT;
 
         /// FS shader type.  See `Vs` for the analogous contract.
@@ -180,8 +180,8 @@ pub fn LoadedShader(comptime SchemaT: type) type {
         vs_module: wgpu.ShaderModuleHandle,
         fs_module: wgpu.ShaderModuleHandle,
         pipeline: wgpu.RenderPipelineHandle,
-        /// Every bind group this shader needs — the UBO (at its stage's group:
-        /// VS→0, FS→2) and any `Samplers` (group 1) — lives in one `Resources`,
+        /// Every bind group this shader needs - the UBO (at its stage's group:
+        /// VS->0, FS->2) and any `Samplers` (group 1) - lives in one `Resources`,
         /// built from the schema via `solveLayout`, the SAME group convention
         /// the shader codegen emits. This is the ONE bind-group mechanism:
         /// UBO-only and textured shaders share it.
@@ -229,7 +229,7 @@ pub fn LoadedShader(comptime SchemaT: type) type {
         pub fn deinit(self: *Self) void {
             self.resources.deinit();
             // The pipeline is owned by pipeline_cache.zig (deduplicated by
-            // source+state and reused across LoadedShaders/lifecycles) — do NOT
+            // source+state and reused across LoadedShaders/lifecycles) - do NOT
             // destroy it here or a later cache hit returns a dead handle. The
             // modules, by contrast, are created fresh per loadShaderVF call and
             // are only needed to BUILD the pipeline, so they're safe to release.
@@ -246,13 +246,13 @@ pub fn LoadedShader(comptime SchemaT: type) type {
 
         /// Bind this shader's pipeline + ALL its bind groups (UBO + any
         /// samplers) to the pass. Call before drawing through this shader.
-        /// Binds through a copy of `resources` — it only reads handles.
+        /// Binds through a copy of `resources` - it only reads handles.
         ///
         /// MIXING WITH 2D IMMEDIATE MODE: this leaves YOUR pipeline bound on the
         /// pass. If you then call any 2D immediate op on the same pass (text,
         /// caption, clearViewport, shapes), the 2D batch's next flush runs under
         /// YOUR pipeline and binds its atlas at `gpu_iface.batch_reserved_group`
-        /// — if your schema uses that group (e.g. a sampler landed there) WebGPU
+        /// - if your schema uses that group (e.g. a sampler landed there) WebGPU
         /// rejects the whole command buffer at submit. Bracket it: call
         /// `f.gl.flushBeforeMaterialSwap()` BEFORE this, and
         /// `f.gl.renderer().bindForPass(ps)` AFTER your draw to restore the 2D
@@ -320,7 +320,7 @@ pub fn LoadedShader(comptime SchemaT: type) type {
 }
 
 // ============================================================================
-// SECTION 2 — loadShader descriptor (typed-schema path)
+// SECTION 2 - loadShader descriptor (typed-schema path)
 // ============================================================================
 
 pub fn ShaderDesc(comptime SchemaT: type) type {
@@ -334,7 +334,7 @@ pub fn ShaderDesc(comptime SchemaT: type) type {
         ///
         /// The VS and FS are separate modules because the typed
         /// shader pipeline emits each shader's WGSL into its own
-        /// file — VS and FS author files are independent and travel
+        /// file - VS and FS author files are independent and travel
         /// through the build separately.  Pass both here; loadShader
         /// builds one shader module per source and wires them into
         /// the render pipeline.
@@ -346,7 +346,7 @@ pub fn ShaderDesc(comptime SchemaT: type) type {
 
         // ---- Optional overrides (every default applied below if null) ----
         initial_ubo: ?(if (@hasDecl(SchemaT, "Ubo")) SchemaT.Ubo else void) = null,
-        /// Textures for the schema's `Samplers` fields, by field name — e.g.
+        /// Textures for the schema's `Samplers` fields, by field name - e.g.
         /// `.textures = .{ .scene = my_render_texture }`. Each field defaults to
         /// an empty texture, so UBO-only shaders omit this entirely. Bound at
         /// load; swap later with `LoadedShader.setTexture(.field, tex)`.
@@ -359,7 +359,7 @@ pub fn ShaderDesc(comptime SchemaT: type) type {
         cull_mode: ?wgpu.CullMode = null,
         /// Vertex buffer layouts for the pipeline.  Null = the default
         /// 2D layout (one interleaved buffer: pos vec2 @0, uv vec2 @1,
-        /// color u8x4 @2).  3D meshes pass their own layouts here — e.g.
+        /// color u8x4 @2).  3D meshes pass their own layouts here - e.g.
         /// two separate buffers `(vec3 position @0)` and `(vec2 uv @1)`
         /// for raylib-style non-interleaved attribute arrays.  When set,
         /// loadShader uses these verbatim instead of the 2D default.
@@ -428,7 +428,7 @@ fn attrElemFormat(kind: shader.ElemKind) wgpu.VertexFormat {
 /// Derive a single interleaved vertex-buffer layout from a vertex schema's
 /// typed `Attributes`. The schema is the SINGLE source of truth: each
 /// attribute's format and `@location` come straight from its `shader.Attr(...)`,
-/// offsets are packed in declaration order, and the stride is their sum — so the
+/// offsets are packed in declaration order, and the stride is their sum - so the
 /// buffer layout can never silently drift from what the shader reads.
 ///
 /// Use it at the call site:
@@ -476,7 +476,7 @@ pub fn vertexLayout(comptime VsSchema: type) gpu.VertexBufferLayout {
 /// Compile + assemble a shader into a ready-to-use `LoadedShader`.
 /// This is the descriptor-with-defaults user-facing API.
 ///
-/// Every step is in this function body — grep `orelse` to find
+/// Every step is in this function body - grep `orelse` to find
 /// every default.  Nothing hidden.
 pub fn loadShader(
     comptime SchemaT: type,
@@ -510,7 +510,7 @@ pub fn loadShader(
     // `@embedFile("foo_vs.wgsl")` and `@embedFile("foo_fs.wgsl")`).
     // spv2wgsl already ran at build time with `wgsl_strict = true`,
     // so this text is guaranteed `// ERROR:`-free.  No runtime
-    // transpilation — Rule 2 of the wgpu plan.
+    // transpilation - Rule 2 of the wgpu plan.
 
     // ---- Step 4: create the WGSL shader modules on the GPU ----
     const vs_module: wgpu.ShaderModuleHandle = wgpu.createShaderModuleWgsl(
@@ -525,7 +525,7 @@ pub fn loadShader(
     );
 
     // ---- Step 5: build ALL bind groups via Resources ----
-    // One Resources owns the UBO (bound at its stage's group — VS→0, FS→2) and
+    // One Resources owns the UBO (bound at its stage's group - VS->0, FS->2) and
     // any `Samplers` (group 1), assigned by `solveLayout`: the SAME group
     // convention the shader codegen emits, so the pipeline layout below matches
     // the generated WGSL. This is the ONE bind-group mechanism for every shader.
@@ -644,7 +644,7 @@ pub fn loadShader(
         // has internalized them into `handle`, so release them now. The real
         // per-group layouts belong to `resources` (freed by resources.deinit); the
         // ones destroyed here are the empty layouts we minted above for unused
-        // groups plus the pipeline layout — none are referenced after the build.
+        // groups plus the pipeline layout - none are referenced after the build.
         wgpu.destroyPipelineLayout(pipeline_layout);
         {
             var di: u32 = 0;
@@ -670,11 +670,11 @@ pub fn loadShader(
     };
 }
 
-/// `loadShader`, but with the VS→FS varying contract enforced at COMPILE TIME.
+/// `loadShader`, but with the VS->FS varying contract enforced at COMPILE TIME.
 /// Takes BOTH schemas: `VsSchema` (the `*_vs_io.zig` type) and `FsSchema` (the
 /// `*_fs_io.zig` type), and asserts `VsSchema.Outputs` match `FsSchema.Inputs`
 /// field-for-field (name, type, order) before building the pipeline. A mismatch
-/// — e.g. an FS input the VS never emits — is otherwise silently rejected by the
+/// - e.g. an FS input the VS never emits - is otherwise silently rejected by the
 /// GPU at draw time, far from the cause (the turn-N6 mandelbrot bug). Prefer
 /// this over bare `loadShader` whenever you have a real vertex schema; it costs
 /// one extra type argument and makes that whole bug class a clear, localized
@@ -682,7 +682,7 @@ pub fn loadShader(
 ///
 /// The VS schema is a separate comptime PARAMETER (not a ShaderDesc field)
 /// because a struct holding a `type` becomes comptime-only, which would force
-/// the whole desc literal — including its runtime `f`/`gpa` — to be
+/// the whole desc literal - including its runtime `f`/`gpa` - to be
 /// comptime-known.
 /// The schema that carries the shader's uniform block (`Ubo`), and therefore
 /// parameterizes the returned `LoadedShader`. The shader codegen binds a
@@ -714,7 +714,7 @@ pub fn MaterialSchema(comptime VsSchema: type, comptime FsSchema: type) type {
 /// Load a full vertex+fragment shader. Asserts the VS `Outputs` match the FS
 /// `Inputs` field-for-field, then builds the pipeline + all bind groups via
 /// `Resources` on whichever schema carries the resources. `solveLayout` assigns
-/// the groups (VS uniforms→0, samplers→1, FS uniforms→2), so the caller never
+/// the groups (VS uniforms->0, samplers->1, FS uniforms->2), so the caller never
 /// reasons about group numbers; `pushUbo` takes that schema's `Ubo` type and
 /// textures are supplied by name in `desc.textures`.
 pub fn loadShaderVF(
@@ -751,7 +751,7 @@ test "ShaderDesc(SchemaT) has correctly-typed initial_ubo" {
     try expectEqual(@TypeOf(@as(_Desc, undefined).initial_ubo), ?TestSchema.Ubo);
 }
 
-test "ShaderDesc carries vs_wgsl_source + fs_wgsl_source (Phase D1 — pre-translated WGSL)" {
+test "ShaderDesc carries vs_wgsl_source + fs_wgsl_source (Phase D1 - pre-translated WGSL)" {
     // Phase D1 of webgpu-migration-plan.md: the descriptor carries
     // SEPARATE `vs_wgsl_source` and `fs_wgsl_source` (both
     // []const u8, both required), NOT `spirv_source` or
@@ -803,51 +803,51 @@ test "LoadedShader wraps a Resources for its bind groups" {
 }
 
 // ============================================================================
-// SECTION 4 — Resources(SchemaT) — typed bind group container
+// SECTION 4 - Resources(SchemaT) - typed bind group container
 // ============================================================================
 //
 // The user-facing primitive that turns "WebGPU bind groups" into
 // "Zig struct of named resources."  See
-// `src/notes/finishing_new_gpu_foundations.md` turn 1 §G for the
-// design rationale and the user-facing tutorial in §K.
+// `src/notes/finishing_new_gpu_foundations.md` turn 1 section G for the
+// design rationale and the user-facing tutorial in section K.
 //
 // Mental model: a `Resources(Schema)` value owns the GPU bind group
 // LAYOUTS and BIND GROUPS for `Schema`'s declared resources.  The
-// user never types group or binding numbers — `solveLayout` derives
+// user never types group or binding numbers - `solveLayout` derives
 // them from the schema at comptime.
 //
 // API surface (5 methods):
-//   - `init(f, args)` — args is a struct literal with one field per
+//   - `init(f, args)` - args is a struct literal with one field per
 //     resource (UBO buffer / texture).  Walks the solved layout,
 //     builds one BGL+BG per used group.
-//   - `deinit()` — frees the GPU buffers Resources owns.
-//   - `bind(*PassState)` — calls `setBindGroup` for each used group.
+//   - `deinit()` - frees the GPU buffers Resources owns.
+//   - `bind(*PassState)` - calls `setBindGroup` for each used group.
 //     Inline-for over `groups_used` from solveLayout.
-//   - `writeUbo(.field, value)` — `queueWriteBuffer` to the UBO
+//   - `writeUbo(.field, value)` - `queueWriteBuffer` to the UBO
 //     buffer matching `.field`.  No bind group rebuild needed.
-//   - `set(.field, new)` — rebuild the bind group containing
+//   - `set(.field, new)` - rebuild the bind group containing
 //     `.field` with the new resource handle.  Other groups untouched.
 //
 // What Resources owns:
 //   - The BGL handles (one per used group)
 //   - The BG handles (one per used group)
-//   - The UBO buffer (if the schema declares Ubo) — Resources
+//   - The UBO buffer (if the schema declares Ubo) - Resources
 //     creates this at init time and owns it (freed in deinit)
 //
 // What Resources doesn't own (user manages lifetimes):
-//   - Texture handles passed to init for samplers — user keeps
+//   - Texture handles passed to init for samplers - user keeps
 //     the WgpuTexture and is responsible for `.deinit()`-ing it.
 //
 // LIMITATIONS (turn-1 scope):
 //   - Schema must use the old-style `Ubo` + `Samplers` decls (not
 //     unified `Resources = struct { ... }`).  The unified shape is
 //     a separate cleanup turn.
-//   - Storage buffers not yet supported — turn 11 adds them as
+//   - Storage buffers not yet supported - turn 11 adds them as
 //     first-class schema fields with their own DSL marker.
 
 /// Comptime-generic typed bind group container.  See section header
 /// for the design rationale; see the user-facing tutorial in the
-/// plan's §K for worked examples.
+/// plan's section K for worked examples.
 /// A caller-supplied storage-buffer binding for a `Resources` schema's
 /// `Storage` field: the buffer handle, a byte offset into it, and the bound
 /// byte size. The buffer is owned by the caller (e.g. a compute pass writes it
@@ -865,7 +865,7 @@ pub fn Resources(comptime SchemaT: type) type {
     const has_ubo = comptime @hasDecl(SchemaT, "Ubo");
     const UboT: type = comptime if (has_ubo) SchemaT.Ubo else void;
 
-    // Comptime count of how many Sampler2D fields the schema has —
+    // Comptime count of how many Sampler2D fields the schema has -
     // used to size the local cache.  Outside the struct body so it's
     // a free comptime constant, not a struct decl (Zig rejects
     // interleaved const + field decls).
@@ -905,12 +905,12 @@ pub fn Resources(comptime SchemaT: type) type {
         groups_used: u8 = 0,
 
         // UBO buffer (when the schema has a Ubo).  Resources owns
-        // this — created in init, destroyed in deinit.  When no Ubo,
+        // this - created in init, destroyed in deinit.  When no Ubo,
         // stays `.invalid`.
         ubo_buffer: wgpu.BufferHandle = .invalid,
         /// Enforcement state for the one-write-per-frame invariant below. The
         /// encoder handle IS the frame identity (monotonic on both the bridge and
-        /// the smoke mock), so the counter resets structurally — no per-frame
+        /// the smoke mock), so the counter resets structurally - no per-frame
         /// call is required of anyone.
         ubo_write_encoder: wgpu.CommandEncoderHandle = .invalid,
         ubo_writes_this_frame: u32 = 0,
@@ -930,11 +930,11 @@ pub fn Resources(comptime SchemaT: type) type {
         /// The InitArgs type: a struct with one field per resource
         /// in the schema, typed by resource kind.
         ///
-        ///   - `Ubo` field → no init arg (Resources allocates the buffer)
+        ///   - `Ubo` field -> no init arg (Resources allocates the buffer)
         ///     PLUS an `.initial_ubo` init arg of type `?UboT` for the
         ///     initial value (optional; user can also fill via
         ///     writeUbo before drawing).
-        ///   - Each Sampler2D field → field of type `WgpuTexture`.
+        ///   - Each Sampler2D field -> field of type `WgpuTexture`.
         ///
         /// Built at comptime from the resolved layout using Zig
         /// 0.16's `@Struct` type-construction builtin.
@@ -949,7 +949,7 @@ pub fn Resources(comptime SchemaT: type) type {
             var attrs: [total]std.builtin.Type.Struct.FieldAttributes = undefined;
             var i: usize = 0;
 
-            // initial_ubo, optional — defaults to null so the user
+            // initial_ubo, optional - defaults to null so the user
             // can skip it.
             if (has_ubo) {
                 names[i] = "initial_ubo";
@@ -958,7 +958,7 @@ pub fn Resources(comptime SchemaT: type) type {
                 i += 1;
             }
 
-            // One field per sampler, typed WgpuTexture — no default
+            // One field per sampler, typed WgpuTexture - no default
             // (user MUST supply a texture).
             for (layout.fields) |fld| {
                 if (fld.kind != .sampler_2d) continue;
@@ -968,7 +968,7 @@ pub fn Resources(comptime SchemaT: type) type {
                 i += 1;
             }
 
-            // One field per storage buffer, typed StorageBinding — no default
+            // One field per storage buffer, typed StorageBinding - no default
             // (user MUST supply the buffer handle + size).
             for (layout.fields) |fld| {
                 if (fld.kind != .storage_buffer) continue;
@@ -1000,7 +1000,7 @@ pub fn Resources(comptime SchemaT: type) type {
                 });
                 // Optional initial value: write it now if provided;
                 // user can also call writeUbo later.  If neither
-                // happens, the UBO contains garbage — caller's
+                // happens, the UBO contains garbage - caller's
                 // responsibility.
                 if (@field(args, "initial_ubo")) |v| {
                     const bytes: [shader.wireSizeOf(UboT)]u8 = shader.wireOf(UboT, &v);
@@ -1070,7 +1070,7 @@ pub fn Resources(comptime SchemaT: type) type {
                 if (fld_kind == .storage_buffer) storage_idx_global += 1;
                 // Only emit entries for fields in the group we're
                 // currently building.  `fld.group` is comptime but
-                // `group` is the runtime parameter — guard the body
+                // `group` is the runtime parameter - guard the body
                 // with a runtime if rather than `continue` to keep
                 // the inline-for's comptime structure honest.
                 if (fld.group == group) {
@@ -1079,7 +1079,7 @@ pub fn Resources(comptime SchemaT: type) type {
                             try bgl_entries.append(self.gpa, .{
                                 .binding = fld.binding,
                                 // UBOs are conservatively visible to all
-                                // stages — the cost is zero and it avoids
+                                // stages - the cost is zero and it avoids
                                 // a stage-mismatch error when the same
                                 // schema's UBO is read by both VS and FS.
                                 .visibility = .{ .vertex = true, .fragment = true, .compute = true },
@@ -1097,8 +1097,8 @@ pub fn Resources(comptime SchemaT: type) type {
                             // A Sampler2D is TWO WebGPU bindings: the texture at
                             // @binding(N) and its paired sampler at @binding(N+1).
                             // `fld.binding` (N) came from `solveLayout`, which
-                            // delegates to `shader_interface.solveSamplerSlots` —
-                            // the SAME authority the WGSL codegen uses — so this
+                            // delegates to `shader_interface.solveSamplerSlots` -
+                            // the SAME authority the WGSL codegen uses - so this
                             // host entry can't drift from the shader's decoration.
                             const tex = self.sampler_textures[my_sampler_idx];
                             try bgl_entries.append(self.gpa, .{
@@ -1173,7 +1173,7 @@ pub fn Resources(comptime SchemaT: type) type {
             }
             // Release the per-instance bind groups + their layouts (created fresh
             // by Resources.init each lifecycle). Safe even though a cached
-            // pipeline was built from these layouts — a built pipeline doesn't
+            // pipeline was built from these layouts - a built pipeline doesn't
             // hold a live reference to them.
             var g: usize = 0;
             while (g < self.bind_groups.len) : (g += 1) {
@@ -1203,13 +1203,13 @@ pub fn Resources(comptime SchemaT: type) type {
 
         /// Update the UBO contents.  Requires the schema to have a
         /// `Ubo` decl; comptime-error otherwise.  No bind group
-        /// rebuild — the BG references the buffer, only the
+        /// rebuild - the BG references the buffer, only the
         /// buffer's bytes change.
         ///
-        /// ★ INVARIANT: at most ONE write per frame — now ENFORCED. ★  This is a
+        /// * INVARIANT: at most ONE write per frame - now ENFORCED. *  This is a
         /// plain `queue.writeBuffer` into a single buffer at offset 0, and the
         /// queue executes ALL writeBuffer calls BEFORE the frame's encoder
-        /// submit — write twice in a frame and only the LAST value survives,
+        /// submit - write twice in a frame and only the LAST value survives,
         /// applied to EVERY pass segment including ones already recorded (the
         /// zimr517 "duplicated grid" bug class).  Need per-segment or per-draw
         /// values?  Ring-buffer them like `renderer_2d`'s ortho ring,
@@ -1254,7 +1254,7 @@ pub fn Resources(comptime SchemaT: type) type {
             );
         }
 
-        /// Result of `set` — tells the user whether a bind group
+        /// Result of `set` - tells the user whether a bind group
         /// rebuild happened.  Helpful for perf-sensitive callers.
         pub const SetResult = enum {
             /// New resource was different from the current; the
@@ -1308,11 +1308,11 @@ pub fn Resources(comptime SchemaT: type) type {
 }
 
 // ============================================================================
-// SECTION 5 — RenderPipeline(VsT, FsT) — typed render pipeline
+// SECTION 5 - RenderPipeline(VsT, FsT) - typed render pipeline
 // ============================================================================
 //
 // Turn 2 of `src/notes/finishing_new_gpu_foundations.md`.  Today
-// `wgpu.RenderPipelineHandle` is `enum(u32)` — just an integer.
+// `wgpu.RenderPipelineHandle` is `enum(u32)` - just an integer.
 // The SW backend can't dispatch the right Zig function from an
 // integer.  `RenderPipeline(VsT, FsT)` wraps the handle with the
 // comptime VS+FS shader types, giving the SW backend a way to find
@@ -1323,8 +1323,8 @@ pub fn Resources(comptime SchemaT: type) type {
 // accept that the SW dispatcher is `null`.  Consumers that
 // participate in SW dispatch use real VS/FS module types.
 //
-// `setPipeline(ps, pipeline)` accepts ONE shape — `RenderPipeline(VsT,
-// FsT)` — and rejects raw handles at compile time with a clear error.
+// `setPipeline(ps, pipeline)` accepts ONE shape - `RenderPipeline(VsT,
+// FsT)` - and rejects raw handles at compile time with a clear error.
 // Composition over erasure: no separate `TypeErasedPipeline` type,
 // no opaque type-id markers, no `rawHandle()` helper.  Just a
 // generic wrapper that holds a handle and two type tags.
@@ -1336,7 +1336,7 @@ pub fn Resources(comptime SchemaT: type) type {
 // specialized.  `setPipeline` records `&@TypeOf(pipe).sw_dispatch`
 // on `PassState.sw_dispatch`; `SwBackend.flushBatch` calls through
 // the vtable.  One indirect call per flush, no virtual dispatch
-// per pixel — same speed as a hand-coded SW renderer.
+// per pixel - same speed as a hand-coded SW renderer.
 
 /// Comptime helper: generate a `connect(VsOut, *FsIo)` function
 /// that copies every field present in BOTH `VsOut` and `FsIo`,
@@ -1356,12 +1356,12 @@ pub fn Resources(comptime SchemaT: type) type {
 /// Re-export the canonical `autoConnect` from `shader_connect.zig` so
 /// callers using `shader_runtime_wgpu` see the same function.  The
 /// implementation moved to its own tiny module to break the dep
-/// between native examples and the wgpu runtime — see
+/// between native examples and the wgpu runtime - see
 /// `src/shader_connect.zig`.
 pub const autoConnect = @import("shader_connect.zig").autoConnect;
 
 // ============================================================================
-// SECTION 6 — Tests for Resources(SchemaT)
+// SECTION 6 - Tests for Resources(SchemaT)
 // ============================================================================
 
 const shader = @import("shader_interface");
@@ -1400,14 +1400,14 @@ const TestResourcesSchemaFull = struct {
     };
 };
 
-test "Resources empty schema — InitArgs has zero fields" {
+test "Resources empty schema - InitArgs has zero fields" {
     const R = Resources(TestResourcesSchemaEmpty);
     const info = @typeInfo(R.InitArgs).@"struct";
     try expectEqual(@as(usize, 0), info.field_names.len);
     try expectEqual(@as(usize, 0), R.Layout.fields.len);
 }
 
-test "Resources sampler-only schema — InitArgs has texture field" {
+test "Resources sampler-only schema - InitArgs has texture field" {
     const R = Resources(TestResourcesSchemaSamplerOnly);
     const info = @typeInfo(R.InitArgs).@"struct";
     try expectEqual(@as(usize, 1), info.field_names.len);
@@ -1415,7 +1415,7 @@ test "Resources sampler-only schema — InitArgs has texture field" {
     try expectEqual(wgpu_texture.WgpuTexture, info.field_types[0]);
 }
 
-test "Resources UBO-only schema — InitArgs has only initial_ubo" {
+test "Resources UBO-only schema - InitArgs has only initial_ubo" {
     const R = Resources(TestResourcesSchemaUboOnly);
     const info = @typeInfo(R.InitArgs).@"struct";
     try expectEqual(@as(usize, 1), info.field_names.len);
@@ -1423,7 +1423,7 @@ test "Resources UBO-only schema — InitArgs has only initial_ubo" {
     try expectEqual(?TestResourcesSchemaUboOnly.Ubo, info.field_types[0]);
 }
 
-test "Resources full schema — InitArgs has UBO + samplers" {
+test "Resources full schema - InitArgs has UBO + samplers" {
     const R = Resources(TestResourcesSchemaFull);
     const info = @typeInfo(R.InitArgs).@"struct";
     // initial_ubo + albedo + normal = 3 fields
@@ -1433,7 +1433,7 @@ test "Resources full schema — InitArgs has UBO + samplers" {
     try expectEqualStrings("normal", info.field_names[2]);
 }
 
-test "Resources resolves layout — sampler-only schema lands in group 1" {
+test "Resources resolves layout - sampler-only schema lands in group 1" {
     const R = Resources(TestResourcesSchemaSamplerOnly);
     // groups_used bitmask: bit 1 set
     try expectEqual(@as(u8, 0b0010), R.Layout.groups_used);
@@ -1459,7 +1459,7 @@ const TestFsWithShaderMain = struct {
 const TestFsIoOnly = struct {
     pub const Io = struct { uv: Vec2 };
     pub const Out = struct { color: Vec };
-    // No shaderMain — IO module shape, like the engine's
+    // No shaderMain - IO module shape, like the engine's
     // default_shapes_fs_io.zig.
 };
 
@@ -1526,7 +1526,7 @@ test "autoConnect copies matching field names except position" {
     const FsIo = struct {
         frag_color: Vec = .{ 0, 0, 0, 0 },
         frag_uv: Vec2 = .{ 0, 0 },
-        // No `position` field — autoConnect skips it on the VS side.
+        // No `position` field - autoConnect skips it on the VS side.
     };
     const connect = autoConnect(VsOut, FsIo);
     const vs_out: VsOut = .{
@@ -1546,11 +1546,11 @@ test "autoConnect skips VsOut fields not present in FsIo" {
     const VsOut = struct {
         position: Vec,
         frag_color: Vec,
-        debug_normal: Vec3, // not in FS — should be skipped
+        debug_normal: Vec3, // not in FS - should be skipped
     };
     const FsIo = struct {
         frag_color: Vec = .{ 0, 0, 0, 0 },
-        // No debug_normal — autoConnect skips it.
+        // No debug_normal - autoConnect skips it.
     };
     const connect = autoConnect(VsOut, FsIo);
     const vs_out: VsOut = .{
@@ -1569,7 +1569,7 @@ const raster = @import("raster.zig");
 const raster_shader = @import("raster_shader.zig");
 const gpu_iface = @import("gpu_iface.zig");
 
-/// Test-only side channel — see the test below.  Production engines
+/// Test-only side channel - see the test below.  Production engines
 /// store their batch on `PassState.batch` instead of this.
 // lint:off module-var: test-only side channel for the opaque pipeline callback
 var test_pipeline_impl_state: ?*anyopaque = null;
@@ -1582,7 +1582,7 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
     // rasterization through the vtable is not wired yet, so this test is skipped
     // rather than asserting a green pixel the code can't produce. Un-skip when
     // flushBatch drives raster_shader.rasterizeTriangles (folds into N6, the
-    // raster‖wgpu side-by-side demo, in wgpu_new_beginnings.md).
+    // raster||wgpu side-by-side demo, in wgpu_new_beginnings.md).
     if (comptime true) {
         return error.SkipZigTest;
     }
@@ -1592,7 +1592,7 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
     //    that drives raster_shader.rasterizeTriangles
     // 3. Call setPipeline through the trait, which records the vtable
     //    pointer on PassState
-    // 4. Invoke ps.sw_dispatch.?.flush_batch — exactly what
+    // 4. Invoke ps.sw_dispatch.?.flush_batch - exactly what
     //    SwBackend.flushBatch will do in production
     // 5. Verify the pixel landed where the triangle covers
     //
@@ -1632,7 +1632,7 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
         }
     };
 
-    // The test's vertex data — three vertices forming a CCW triangle
+    // The test's vertex data - three vertices forming a CCW triangle
     // in NDC (after Y-flip in rasterizer): bottom-left, top-left,
     // bottom-right.  Same as the raster_shader test pattern.  All
     // green.
@@ -1694,7 +1694,7 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
         };
     };
 
-    // The test's pipeline value — gpu_handle is invalid (no GPU here);
+    // The test's pipeline value - gpu_handle is invalid (no GPU here);
     // sw_dispatch (comptime const on the type) carries the vtable.
     var pipeline: TestPipeline = .{ .impl_state = &test_state };
     _ = &pipeline;
@@ -1702,7 +1702,7 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
     test_pipeline_impl_state = &test_state;
     defer test_pipeline_impl_state = null;
 
-    // Set up an raster context — the SW framebuffer.
+    // Set up an raster context - the SW framebuffer.
     var ctx: raster.Context = try .init(gpa, 32, 32);
     defer ctx.deinit(gpa);
     ctx.clearColor(.{ .r = 0, .g = 0, .b = 0, .a = 0 });
@@ -1717,7 +1717,7 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
     try expect(ps.sw_dispatch != null);
     try expect(ps.sw_dispatch == TestPipeline.sw_dispatch);
 
-    // Invoke flush_batch — exactly what SwBackend.flushBatch does.
+    // Invoke flush_batch - exactly what SwBackend.flushBatch does.
     ps.sw_dispatch.?.flush_batch(@ptrCast(&ctx), @ptrCast(&ps));
 
     // Verify pixels: the triangle covers the bottom-left half (in
@@ -1745,9 +1745,9 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
 // public `z.shader_compile` shape unchanged.
 // ===========================================================================
 pub const shader_compile = struct {
-    // src/shader_compile.zig - SPIR-V → WGSL transpiler wrapper.
+    // src/shader_compile.zig - SPIR-V -> WGSL transpiler wrapper.
     //
-    // This file is the ONE PLACE the SPIR-V → WGSL transpiler plugs in.
+    // This file is the ONE PLACE the SPIR-V -> WGSL transpiler plugs in.
     // Everything else in zimr's WebGPU stack treats shader compilation
     // as opaque: "here's SPIR-V, give me back WGSL + reflection metadata."
     //
@@ -1757,7 +1757,7 @@ pub const shader_compile = struct {
     //       Takes a SPIR-V binary blob, returns the WGSL text +
     //       reflection metadata.  The reflection metadata tells the
     //       pipeline builder what bindings / vertex attributes the
-    //       shader uses.  THIS IS THE PRIMARY PATH —
+    //       shader uses.  THIS IS THE PRIMARY PATH -
     //       `shader_runtime_wgpu.loadShader` calls it.
     //
     //   - `compileFromWgsl(allocator, wgsl) !CompiledShader`
@@ -1765,10 +1765,10 @@ pub const shader_compile = struct {
     //       reflection).  Used by scaffolding code that hand-writes
     //       WGSL for low-level tests (`wgpu_smoke_test.zig`'s
     //       triangle); not exposed through the user-facing
-    //       `loadShader` API — Rule 1 of the wgpu plan forbids
+    //       `loadShader` API - Rule 1 of the wgpu plan forbids
     //       hand-written WGSL in the engine surface.
     //
-    //   - `CompiledShader.deinit(allocator)` — free the allocated WGSL
+    //   - `CompiledShader.deinit(allocator)` - free the allocated WGSL
     //      text + reflection arrays.
 
     const spv2wgsl = @import("spv2wgsl.zig");
@@ -1781,7 +1781,7 @@ pub const shader_compile = struct {
     };
 
     /// Reflection metadata extracted from the shader.  Mirrors raygpu's
-    /// approach (§4.4) but in Zig.  Used by the pipeline builder to
+    /// approach (section 4.4) but in Zig.  Used by the pipeline builder to
     /// auto-construct bind group layouts when the user didn't supply a
     /// typed schema.
     pub const Reflection = struct {
@@ -1867,13 +1867,13 @@ pub const shader_compile = struct {
     };
 
     // ============================================================================
-    // SECTION — the SPIR-V → WGSL transpiler integration
+    // SECTION - the SPIR-V -> WGSL transpiler integration
     // ============================================================================
     //
     // The transpiler (`src/spv2wgsl.zig`) does the heavy lifting.  This
     // function is the lifecycle-management layer: it runs the transpiler
-    // in an internal arena (so the transpiler's intermediate state — id
-    // table, decoration table, ArrayLists, sanitised name copies — all
+    // in an internal arena (so the transpiler's intermediate state - id
+    // table, decoration table, ArrayLists, sanitised name copies - all
     // goes away in one drop), then copies the final WGSL out under the
     // caller's allocator.
     //
@@ -1914,7 +1914,7 @@ pub const shader_compile = struct {
     }
 
     // ============================================================================
-    // SECTION — public API
+    // SECTION - public API
     // ============================================================================
 
     /// Compile a shader from SPIR-V.  Returned `CompiledShader` owns its
@@ -1939,7 +1939,7 @@ pub const shader_compile = struct {
 
         // Phase 3 will fill in WGSL reflection via the vendored
         // simple_wgsl parser or a thin Zig equivalent.  For now,
-        // reflection stays empty — callers using this path are
+        // reflection stays empty - callers using this path are
         // responsible for supplying their own bind group layout.
         return .{
             .wgsl = wgsl_copy,
@@ -1985,7 +1985,7 @@ pub const shader_compile = struct {
         };
         var compiled: CompiledShader = try compileFromSpirv(allocator, mod);
         defer compiled.deinit(allocator);
-        // No functions in this module → empty (or near-empty) output.
+        // No functions in this module -> empty (or near-empty) output.
         try expect(compiled.wgsl.len < 16);
     }
 
@@ -2010,7 +2010,7 @@ pub const shader_compile = struct {
             .wgsl = try allocator.dupe(u8, "stub"),
             .reflection = reflection,
         };
-        // Should not leak — std.testing.allocator catches leaks
+        // Should not leak - std.testing.allocator catches leaks
         compiled.deinit(allocator);
     }
 };

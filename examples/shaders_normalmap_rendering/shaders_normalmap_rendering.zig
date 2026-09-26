@@ -1,6 +1,6 @@
-//! shaders_normalmap_rendering — port of raylib [shaders] example - normalmap.
+//! shaders_normalmap_rendering - port of raylib [shaders] example - normalmap.
 //! raylib source: examples/shaders/shaders_normalmap_rendering.c (assets:
-//! tiles_diffuse.png, tiles_normal.png — copied under examples/assets/normalmap,
+//! tiles_diffuse.png, tiles_normal.png - copied under examples/assets/normalmap,
 //! zlib-licensed, porting encouraged).
 //!
 //! What a normal map is: the floor is a FLAT quad, but `normalmap_fs` perturbs
@@ -39,7 +39,7 @@ pub var zimr_app: z.App = .{};
 const State = struct {
     renderer: z.pbr3d.Renderer,
     // ONE tile diffuse, SHARED across both models (normal-map on vs off) via
-    // `TextureRef.shared` — no duplicate GPU texture. The example owns it and
+    // `TextureRef.shared` - no duplicate GPU texture. The example owns it and
     // frees it once in deinit; the models don't (their `.shared` slot is unowned).
     diffuse: z.WgpuTexture,
     bumpy: z.pbr3d.Model,
@@ -84,7 +84,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .vs_wgsl = pbr_vs_wgsl,
         .fs_wgsl = normalmap_fs_wgsl,
         // A single flat floor has no "inside", and the demo lets you orbit
-        // freely above AND below it — cull nothing so the tiles show from
+        // freely above AND below it - cull nothing so the tiles show from
         // either side (the vertex normal stays +Y, so it lights the same).
         .cull_mode = .none,
     });
@@ -97,7 +97,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     var mesh: z.Mesh = try z.genMeshPlane(gpa, 6.0, 6.0, 1, 1);
     try z.genMeshTangents(gpa, &mesh);
     // bumpy binds the real tile normal map; flat omits it, so loadMesh fills the
-    // normal slot with a flat (0,0,1) neutral → the same quad, no perturbation.
+    // normal slot with a flat (0,0,1) neutral -> the same quad, no perturbation.
     const bumpy: z.pbr3d.Model = try renderer.loadMesh(mesh, .{
         .base_color = TextureRef.shared(diffuse),
         .normal = TextureRef.owned(normal_tex),
@@ -164,12 +164,12 @@ fn update(f: *z.Frame, s: *State) void {
     // ONE 3D scope owns the whole transition: beginMode3D flushes the 2D
     // background BEHIND the 3D and records the camera; endMode3D restores 2D
     // for the UI below. The plane (a pbr3d model via drawModel3D) and the light
-    // marker (an immediate sphere) share that one camera — no per-draw
+    // marker (an immediate sphere) share that one camera - no per-draw
     // view/proj, no drawInApp, no manual restore2DState.
     z.beginMode3D(f.gl, cam);
     z.drawModel3D(f.gl, &s.renderer, light, if (s.use_normal_map) s.bumpy else s.flat, zm.identity());
     // Light indicator at the directional light's source (-light_dir), so it
-    // orbits with the angle — same idea as raylib's normalmap marker sphere.
+    // orbits with the angle - same idea as raylib's normalmap marker sphere.
     const sun_r: f32 = 5.0;
     const sun_pos: zm.Vec = pointVec(-light_dir[0] * sun_r, -light_dir[1] * sun_r, -light_dir[2] * sun_r);
     z.drawSphere(f.gl, sun_pos, .{ .radius = 0.3, .color = .{ .r = 255, .g = 221, .b = 92, .a = 255 } });

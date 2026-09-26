@@ -1,8 +1,8 @@
 //! lint:alias image
-//! image — Image (CPU pixel buffer) type helpers + the full CPU
+//! image - Image (CPU pixel buffer) type helpers + the full CPU
 //! image-processing library (merged from drawing.textures in
 //! GL-retirement P5): generators (color/checked/gradients/noise/
-//! cellular), transforms (crop/resize×3/rotate/flip/blur/dither),
+//! cellular), transforms (crop/resizex3/rotate/flip/blur/dither),
 //! draws-into-image (pixels/lines/shapes/text), color ops, format
 //! conversion, and PNG export glue.
 
@@ -70,7 +70,7 @@ pub fn genImageColor(
     return rgba8Image(@ptrCast(pixels.ptr), width, height);
 }
 
-/// Checkerboard of `col1`/`col2`, `checks_x`×`checks_y` cells.
+/// Checkerboard of `col1`/`col2`, `checks_x`x`checks_y` cells.
 pub fn genImageChecked(
     gpa: Allocator,
     width: i32,
@@ -317,7 +317,7 @@ pub fn genImageCellular(
 
 // ============================================================================
 // CPU image manipulation (in-place / allocate-and-swap), extracted from
-// drawing.zig. RGBA8-focused — the formats the wgpu examples use; block-
+// drawing.zig. RGBA8-focused - the formats the wgpu examples use; block-
 // compressed formats are no-ops, matching the GL behaviour.
 // ============================================================================
 
@@ -460,9 +460,9 @@ fn edt8(grid: []EdtPt, w: usize, h: usize) void {
 /// Convert a COVERAGE atlas (RGB white, alpha = glyph coverage) IN PLACE into a
 /// signed-distance-field atlas (RGB white, alpha = SDF). The edge (coverage
 /// crossing 50%) maps to alpha 0.5; interior rises toward 1, exterior falls
-/// toward 0, linearly over ±`spread` pixels. This is the raylib SDF convention
-/// (distance in the alpha channel, 0.5 = edge) so a `smoothstep(0.5±w, a)`
-/// fragment shader renders it crisp at any scale. Pure CPU (a signed 8SSEDT) —
+/// toward 0, linearly over +/-`spread` pixels. This is the raylib SDF convention
+/// (distance in the alpha channel, 0.5 = edge) so a `smoothstep(0.5+/-w, a)`
+/// fragment shader renders it crisp at any scale. Pure CPU (a signed 8SSEDT) -
 /// unit-testable headless. RGBA8 image required; `spread` in pixels (> 0).
 pub fn coverageToSdf(gpa: Allocator, image: Image, spread: f32) !void {
     if (image.data == null or image.pixelFormat() != .uncompressed_r8g8b8a8 or
@@ -476,8 +476,8 @@ pub fn coverageToSdf(gpa: Allocator, image: Image, spread: f32) !void {
     const data: [*]u8 = @ptrCast(image.data.?);
 
     const inf_pt: EdtPt = .{ .dx = 20000, .dy = 20000 };
-    // grid_in seeds on INSIDE cells → distance to nearest inside (for outside cells).
-    // grid_out seeds on OUTSIDE cells → distance to nearest outside (for inside cells).
+    // grid_in seeds on INSIDE cells -> distance to nearest inside (for outside cells).
+    // grid_out seeds on OUTSIDE cells -> distance to nearest outside (for inside cells).
     const grid_in: []EdtPt = try gpa.alloc(EdtPt, n);
     defer gpa.free(grid_in);
     const grid_out: []EdtPt = try gpa.alloc(EdtPt, n);
@@ -502,7 +502,7 @@ pub fn coverageToSdf(gpa: Allocator, image: Image, spread: f32) !void {
         const dist: f32 = @sqrt(float(d2));
         var signed: f32 = if (inside) dist else -dist;
         // Anti-aliased sub-texel refinement. The binary 8SSEDT only knows the
-        // edge to ±1 texel — that quantization is what makes magnified curves
+        // edge to +/-1 texel - that quantization is what makes magnified curves
         // look faceted. But the SOURCE coverage is anti-aliased: a texel that is
         // fraction c inside sits ~(c - 0.5) px from the true edge. For texels on
         // or beside the boundary, trust that sub-texel value instead of the
@@ -549,7 +549,7 @@ test "coverageToSdf: filled square has 0.5 edge, >0.5 inside, <0.5 outside" {
         }
     }.a;
     // deep interior (centre) is brighter than an edge cell, which is brighter
-    // than a far-outside cell — the SDF is monotone across the boundary.
+    // than a far-outside cell - the SDF is monotone across the boundary.
     try expect(at(&buf, 7, 7) > at(&buf, 4, 7));
     try expect(at(&buf, 4, 7) >= 120 and at(&buf, 4, 7) <= 160); // near the edge ~0.5
     try expect(at(&buf, 0, 0) < at(&buf, 4, 7)); // far outside is darkest
@@ -574,7 +574,7 @@ fn spriteFontKeyMatch(data: [*]const u8, i: usize, key: Color) bool {
         data[b + 2] == key.b and data[b + 3] == key.a;
 }
 
-/// Segment a raylib-style bitmap-font image into glyph rectangles — a faithful
+/// Segment a raylib-style bitmap-font image into glyph rectangles - a faithful
 /// port of raylib's `LoadFontFromImage` scan, with NO GPU dependency so it is
 /// unit-testable headless. Glyphs sit on a `key`-coloured background; the first
 /// non-key pixel (row-major) gives the shared `charSpacing`/`lineSpacing`
@@ -765,7 +765,7 @@ pub fn imageCopy(gpa: Allocator, image: Image) errors.ImageGenError!Image {
     };
 }
 
-/// Rotate an image 90° clockwise in place (allocate-and-swap). Pass the same
+/// Rotate an image 90 deg clockwise in place (allocate-and-swap). Pass the same
 /// allocator the image was created with.
 pub fn imageRotateCW(gpa: Allocator, image: *Image) Allocator.Error!void {
     if (image.data == null or image.width == 0 or image.height == 0) {
@@ -785,7 +785,7 @@ pub fn imageRotateCW(gpa: Allocator, image: *Image) Allocator.Error!void {
     const src: [*]const u8 = @ptrCast(image.data.?);
     for (0..h) |y| {
         for (0..w) |x| {
-            // (x, y) source → (h-y-1, x) destination (rotate 90 CW).
+            // (x, y) source -> (h-y-1, x) destination (rotate 90 CW).
             const dst_idx: usize = (x * h + (h - y - 1)) * bpp;
             const src_idx: usize = (y * w + x) * bpp;
             for (0..bpp) |k| {
@@ -836,7 +836,7 @@ pub fn imageBlurGaussian(
 
     const bs: i32 = blurSize;
     for (0..@intCast(gaussian_blur_iterations)) |_| {
-        // ---- Horizontal pass (buf1 → buf2) ----
+        // ---- Horizontal pass (buf1 -> buf2) ----
         for (0..@intCast(image.height)) |rowu| {
             const row: i32 = @intCast(rowu);
             var avg_r: f32 = 0;
@@ -882,7 +882,7 @@ pub fn imageBlurGaussian(
             }
         }
 
-        // ---- Vertical pass (buf2 → buf1) ----
+        // ---- Vertical pass (buf2 -> buf1) ----
         for (0..@intCast(image.width)) |colu| {
             const col: i32 = @intCast(colu);
             var avg_r: f32 = 0;
@@ -991,7 +991,7 @@ test "image: perlin noise is deterministic + in range" {
 }
 
 // ===========================================================================
-// CPU image-processing library — MOVED from drawing.zig's `textures`
+// CPU image-processing library - MOVED from drawing.zig's `textures`
 // namespace (GL-retirement P5).  Pure-CPU raylib image ops: gradients,
 // noise, crops, resizes, rotations, draws-into-image, color transforms.
 // The 12 GL-texture fns of that namespace died with the GL backend
@@ -1119,7 +1119,7 @@ pub fn drawTexturePro(
     // NOTE: deliberately NO `gl.setTexture(0)` reset here. Resetting to the
     // white material after every textured quad turned a glyph run into one
     // flush+draw PER GLYPH (drawCodepoint calls this per glyph), because the
-    // atlas→white swap flushes the staged geometry. Every draw fn binds its
+    // atlas->white swap flushes the staged geometry. Every draw fn binds its
     // OWN material up front (shapes bind white, text binds the atlas), so the
     // reset was redundant; dropping it lets consecutive same-texture quads
     // (a whole text run, a sprite sheet) batch into one draw.
@@ -1356,7 +1356,7 @@ pub fn getColor(hexValue: u32) Color {
 // Pixel-format helpers
 /// Compute byte size of an image with given dimensions and pixel format.
 /// Behaviour matches raylib's `GetPixelDataSize` (rtextures.c) - the
-/// HDR-format bpp values (R32=32, R16=16, R32G32B32=96, …) are
+/// HDR-format bpp values (R32=32, R16=16, R32G32B32=96, ...) are
 /// raylib's, NOT what an earlier zimr version had (which mistakenly
 /// returned 8 bpp for R32/R16 and 32 bpp for R32G32B32 / R16G16B16A16).
 pub fn getPixelDataSize(width: i32, height: i32, format: i32) i32 {
@@ -1373,12 +1373,12 @@ pub fn getPixelDataSize(width: i32, height: i32, format: i32) i32 {
         .uncompressed_r8g8b8a8,
         .uncompressed_r32,
         => 32,
-        .uncompressed_r16g16b16 => 48, // 16 × 3
-        .uncompressed_r16g16b16a16 => 64, // 16 × 4
-        .uncompressed_r32g32b32 => 96, // 32 × 3
-        .uncompressed_r32g32b32a32 => 128, // 32 × 4
+        .uncompressed_r16g16b16 => 48, // 16 x 3
+        .uncompressed_r16g16b16a16 => 64, // 16 x 4
+        .uncompressed_r32g32b32 => 96, // 32 x 3
+        .uncompressed_r32g32b32a32 => 128, // 32 x 4
         // Compressed-block formats are 4-bpp or 8-bpp at the
-        // 4×4-block level; row/column rounding handled below.
+        // 4x4-block level; row/column rounding handled below.
         .compressed_dxt1_rgb,
         .compressed_dxt1_rgba,
         .compressed_etc1_rgb,
@@ -1396,7 +1396,7 @@ pub fn getPixelDataSize(width: i32, height: i32, format: i32) i32 {
 
     var dataSize: i32 = @divFloor(width * height * bpp, 8);
 
-    // Compressed formats are stored in 4×4 blocks; round dims up.
+    // Compressed formats are stored in 4x4 blocks; round dims up.
     const is_compressed: bool = switch (fmt) {
         .compressed_dxt1_rgb,
         .compressed_dxt1_rgba,
@@ -1472,7 +1472,7 @@ pub fn imageDrawPixel(
             data[idx * 4 + 2] = color.b;
             data[idx * 4 + 3] = color.a;
         },
-        else => {}, // Unsupported format → silent no-op
+        else => {}, // Unsupported format -> silent no-op
     }
 }
 
@@ -1957,7 +1957,7 @@ pub fn imageDraw(
     };
     const src_bpp: usize = @intCast(@divFloor(src_bpp_bits, 8));
 
-    // When the dest is smaller than the source (downscaling — e.g. drawing a
+    // When the dest is smaller than the source (downscaling - e.g. drawing a
     // device-pixel-baked glyph at a smaller logical size), one nearest sample
     // drops thin strokes and aliases badly. Box-average the source footprint of
     // each dest pixel instead. For 1:1 or upscaling the box is a single pixel, so
@@ -2025,7 +2025,7 @@ pub fn imageDraw(
             // Read existing dst color.
             const dst_color: Color = getImageColor(dst.*, dx, dy);
 
-            // Blend src ⊗ tint onto dst.
+            // Blend src (x) tint onto dst.
             const blended: Color = colorAlphaBlend(dst_color, src_color, tint);
             imageDrawPixel(dst, dx, dy, blended);
         }
@@ -2341,14 +2341,14 @@ pub fn imageAlphaMask(image: *Image, mask: Image) void {
 // horizontal + vertical box blur converges to a Gaussian).  For each
 // iteration: precompute the running sum at the row's start, then
 // slide the window, subtracting the leaving pixel and adding the
-// entering pixel - O(width × height) per iteration regardless of
+// entering pixel - O(width x height) per iteration regardless of
 // blur size.
 
 /// Apply an arbitrary square convolution kernel to an RGBA8 image.
 /// `kernelSize` is the side length (must be odd: 3, 5, 7, ...).
 /// Edges replicate the nearest valid pixel (clamp-to-edge).  `gpa`
 /// is used only for a scratch buffer; image data is mutated in place.
-/// `kernel` is a flat row-major odd×odd matrix; pass e.g. a 3×3
+/// `kernel` is a flat row-major oddxodd matrix; pass e.g. a 3x3
 /// kernel as `&[_]f32{ 0, -1, 0, -1, 5, -1, 0, -1, 0 }`.
 pub fn imageKernelConvolution(
     gpa: Allocator,
@@ -2361,7 +2361,7 @@ pub fn imageKernelConvolution(
     if (image.pixelFormat() != .uncompressed_r8g8b8a8) {
         return;
     }
-    // Kernel must be square (s × s) with odd s ≥ 1.  Equivalently,
+    // Kernel must be square (s x s) with odd s >= 1.  Equivalently,
     // `kernel.len` is an odd perfect square.
     const kernel_size_f: f32 = @sqrt(float(kernel.len));
     const kernelSize: i32 = @trunc(kernel_size_f);
@@ -2391,7 +2391,7 @@ pub fn imageKernelConvolution(
             var acc_a: f32 = 0;
 
             // Iterate the kernel rows/cols by index, then derive the
-            // signed offset (`kx`/`ky` ∈ [-half, +half]) from it.
+            // signed offset (`kx`/`ky` in [-half, +half]) from it.
             for (0..ks) |krow| {
                 const ky: i32 = @as(i32, @intCast(krow)) - half;
                 for (0..ks) |kcol| {
@@ -2429,7 +2429,7 @@ pub fn imageKernelConvolution(
         }
     }
 
-    // Copy out → image.data
+    // Copy out -> image.data
     const dst: [*]u8 = @ptrCast(image.data.?);
     @memcpy(dst[0 .. pixel_count * 4], out[0 .. pixel_count * 4]);
 }
@@ -2437,8 +2437,8 @@ pub fn imageKernelConvolution(
 /// Floyd-Steinberg dither an RGBA8 image down to the specified bit
 /// depth per channel.  Output pixel format is determined by the
 /// per-channel bit depths:
-///   - rBpp + gBpp + bBpp + aBpp == 16 → R5G6B5 (or R5G5B5A1, R4G4B4A4)
-///   - others → unchanged (function is a no-op for unsupported combos)
+///   - rBpp + gBpp + bBpp + aBpp == 16 -> R5G6B5 (or R5G5B5A1, R4G4B4A4)
+///   - others -> unchanged (function is a no-op for unsupported combos)
 /// Error diffusion: 7/16 right, 3/16 below-left, 5/16 below, 1/16
 /// below-right (classic Floyd-Steinberg coefficients).
 pub fn imageDither(
@@ -2506,7 +2506,7 @@ pub fn imageDither(
             const err_b: f32 = old_b - new_b;
             const err_a: f32 = if (aBpp == 0) 0.0 else old_a - new_a;
 
-            // 7/16 → (x+1, y)
+            // 7/16 -> (x+1, y)
             if (x + 1 < w) {
                 const ni: usize = (y * w + x + 1) * 4;
                 fbuf[ni + 0] += err_r * (7.0 / 16.0);
@@ -2514,7 +2514,7 @@ pub fn imageDither(
                 fbuf[ni + 2] += err_b * (7.0 / 16.0);
                 fbuf[ni + 3] += err_a * (7.0 / 16.0);
             }
-            // 3/16 → (x-1, y+1)
+            // 3/16 -> (x-1, y+1)
             if (y + 1 < h and x > 0) {
                 const ni: usize = ((y + 1) * w + x - 1) * 4;
                 fbuf[ni + 0] += err_r * (3.0 / 16.0);
@@ -2522,7 +2522,7 @@ pub fn imageDither(
                 fbuf[ni + 2] += err_b * (3.0 / 16.0);
                 fbuf[ni + 3] += err_a * (3.0 / 16.0);
             }
-            // 5/16 → (x, y+1)
+            // 5/16 -> (x, y+1)
             if (y + 1 < h) {
                 const ni: usize = ((y + 1) * w + x) * 4;
                 fbuf[ni + 0] += err_r * (5.0 / 16.0);
@@ -2530,7 +2530,7 @@ pub fn imageDither(
                 fbuf[ni + 2] += err_b * (5.0 / 16.0);
                 fbuf[ni + 3] += err_a * (5.0 / 16.0);
             }
-            // 1/16 → (x+1, y+1)
+            // 1/16 -> (x+1, y+1)
             if (y + 1 < h and x + 1 < w) {
                 const ni: usize = ((y + 1) * w + x + 1) * 4;
                 fbuf[ni + 0] += err_r * (1.0 / 16.0);
@@ -3099,7 +3099,7 @@ pub fn drawTextureNPatch(
     gl.setTexture(0);
 }
 
-/// Rotate image 90° counter-clockwise.  Pass the same allocator the
+/// Rotate image 90 deg counter-clockwise.  Pass the same allocator the
 /// image was created with.
 pub fn imageRotateCCW(
     gpa: Allocator,
@@ -3122,7 +3122,7 @@ pub fn imageRotateCCW(
     const src: [*]const u8 = @ptrCast(image.data.?);
     for (0..h) |y| {
         for (0..w) |x| {
-            // (x, y) source → (y, w-x-1) destination (rotate 90 CCW).
+            // (x, y) source -> (y, w-x-1) destination (rotate 90 CCW).
             const dst_idx: usize = (x * h + y) * bpp;
             const src_idx: usize = (y * w + (w - x - 1)) * bpp;
             for (0..bpp) |k| {
@@ -3345,7 +3345,7 @@ pub fn imageDrawTriangle(
 /// barycentric weights derived from the same edge functions
 /// `imageDrawTriangle` already uses.  Behaves like raylib's
 /// `ImageDrawTriangleEx`.
-/// Degenerate triangle (zero area) → silent no-op.
+/// Degenerate triangle (zero area) -> silent no-op.
 pub fn imageDrawTriangleGradient(
     dst: *Image,
     v1: Vec2,
@@ -3381,7 +3381,7 @@ pub fn imageDrawTriangleGradient(
         return;
     }
 
-    // Total signed area × 2.  Used as the divisor so the per-pixel
+    // Total signed area x 2.  Used as the divisor so the per-pixel
     // sub-areas (w0, w1, w2) normalize to barycentrics in [0, 1].
     const denom: f32 = (v2[0] - v1[0]) * (v3[1] - v1[1]) - (v2[1] - v1[1]) * (v3[0] - v1[0]);
     if (denom == 0) {
@@ -3409,10 +3409,10 @@ pub fn imageDrawTriangleGradient(
                 continue;
             }
 
-            // Convert edge functions → barycentrics for v1, v2, v3.  In
+            // Convert edge functions -> barycentrics for v1, v2, v3.  In
             // canonical form, b1+b2+b3 = 1.  Mapping derived from the
             // edge-function-to-area relation:  b3 corresponds to the
-            // edge opposite v3, i.e. the v1→v2 edge - which is `w0`.
+            // edge opposite v3, i.e. the v1->v2 edge - which is `w0`.
             const b3: f32 = w0 * inv_denom;
             const b1: f32 = w1 * inv_denom;
             const b2: f32 = w2 * inv_denom;
@@ -3604,8 +3604,8 @@ pub fn imageFromChannel(
 }
 
 /// Generate a mipmap chain for `image` in place.  Each level is a
-/// 2× box-filter downscale of the previous level until we reach
-/// 1×1 (or a 1×N / N×1 strip stops shrinking on one axis).
+/// 2x box-filter downscale of the previous level until we reach
+/// 1x1 (or a 1xN / Nx1 strip stops shrinking on one axis).
 /// raylib: `ImageMipmaps(Image *image)`.
 /// On success `image.data` points at a fresh allocation containing
 /// the original level-0 followed by all generated levels, packed
@@ -3663,7 +3663,7 @@ pub fn imageMipmaps(
     const level0_bytes: usize = @intCast(getPixelDataSize(image.width, image.height, image.format));
     @memcpy(out[0..level0_bytes], src[0..level0_bytes]);
 
-    // Box-filter downscale, level n → level n+1.  Each pixel of the
+    // Box-filter downscale, level n -> level n+1.  Each pixel of the
     // destination averages the four-pixel block above it in the
     // source level.  Edge pixels for odd dimensions just clamp the
     // sampling - same approach raylib's ImageMipmaps takes.
@@ -3727,7 +3727,7 @@ pub fn imageMipmaps(
 /// Convert `image.data` from its current pixel format to `new_format`
 /// in place.  Allocates a fresh destination buffer at the new
 /// format's size, walks each pixel through `getPixelColor`
-/// (source-format→Color) then `setPixelColor` (Color→destination-
+/// (source-format->Color) then `setPixelColor` (Color->destination-
 /// format), then frees the old buffer and installs the new.
 /// Strong exception guarantee: on `error.OutOfMemory` from the
 /// allocator, `image` is left untouched.
@@ -3794,7 +3794,7 @@ pub fn imageFormat(
 
 test "imageFormat: same format is a no-op (no realloc)" {
     const ta: Allocator = std.testing.allocator;
-    const buf: []u8 = try ta.alloc(u8, 4 * 4 * 4); // 4×4 RGBA8
+    const buf: []u8 = try ta.alloc(u8, 4 * 4 * 4); // 4x4 RGBA8
     @memset(buf, 0xCC);
     var img: Image = .{
         .data = @ptrCast(buf.ptr),
@@ -3805,11 +3805,11 @@ test "imageFormat: same format is a no-op (no realloc)" {
     };
     defer ta.free(buf); // we still own the original
     try imageFormat(ta, &img, .uncompressed_r8g8b8a8);
-    // Same format → no swap, original buf still owned by us.
+    // Same format -> no swap, original buf still owned by us.
     try expectEqual(@backingInt(PixelFormat.uncompressed_r8g8b8a8), img.format);
 }
 
-test "imageFormat: RGBA8 → grayscale shrinks buffer + preserves mean" {
+test "imageFormat: RGBA8 -> grayscale shrinks buffer + preserves mean" {
     const ta: Allocator = std.testing.allocator;
     const buf: []u8 = try ta.alloc(u8, 2 * 2 * 4);
     // Four pixels: red, green, blue, white.
@@ -3846,10 +3846,10 @@ test "imageFormat: RGBA8 → grayscale shrinks buffer + preserves mean" {
     // setPixelColor uses the standard luma formula:
     //   Y = 0.299 R + 0.587 G + 0.114 B
     // applied in normalised 0-1 space and scaled back to 0-255.
-    // red   → 0.299 × 255 = 76.245 → 76
-    // green → 0.587 × 255 = 149.685 → 149
-    // blue  → 0.114 × 255 = 29.07 → 29
-    // white → 1.0   × 255 = 255
+    // red   -> 0.299 x 255 = 76.245 -> 76
+    // green -> 0.587 x 255 = 149.685 -> 149
+    // blue  -> 0.114 x 255 = 29.07 -> 29
+    // white -> 1.0   x 255 = 255
     const gray: [*]u8 = @ptrCast(img.data.?);
     try expectEqual(@as(u8, 76), gray[0]); // red
     try expectEqual(@as(u8, 149), gray[1]); // green
@@ -3957,9 +3957,9 @@ inline fn lerpColor(
     };
 }
 
-/// Linear gradient.  `direction_rad` is in radians: 0 goes top→bottom,
-/// 90° left→right, etc. (counter-clockwise from "up").  The math:
-/// rotate the gradient axis by 90°-direction, then for each pixel
+/// Linear gradient.  `direction_rad` is in radians: 0 goes top->bottom,
+/// 90 deg left->right, etc. (counter-clockwise from "up").  The math:
+/// rotate the gradient axis by 90 deg-direction, then for each pixel
 /// project its position onto that axis and lerp between `start` and
 /// `end`.  Caller frees with `unloadImage(gpa, img)`.
 pub fn genImageGradientLinear(
@@ -4083,7 +4083,7 @@ pub fn genImageGradientSquare(
 /// NOT for rendering text glyphs.  For "render this string into
 /// an image" you want text2d.zig's `imageDrawText` (which uses the
 /// default font and produces a proper RGBA8 anti-aliased result).
-/// Output is `width × height` bytes of single-channel grayscale;
+/// Output is `width x height` bytes of single-channel grayscale;
 /// text bytes are copied left-to-right, top-to-bottom; if `text`
 /// is shorter than the image the remaining pixels stay zero
 /// (allocator zeroes); if longer the excess is silently truncated.
@@ -4557,7 +4557,7 @@ test "HSV round-trip preserves the colour within 1 byte" {
     const c: Color = .{ .r = 100, .g = 150, .b = 200, .a = 255 };
     const hsv: Vec = colorToHSV(c);
     const c2: Color = colorFromHSV(hsv[0], hsv[1], hsv[2]);
-    // Allow ±2 bytes since HSV→RGB is lossy at integer precision.
+    // Allow +/-2 bytes since HSV->RGB is lossy at integer precision.
     try expect(@abs(@as(i32, c.r) - @as(i32, c2.r)) <= 2);
     try expect(@abs(@as(i32, c.g) - @as(i32, c2.g)) <= 2);
     try expect(@abs(@as(i32, c.b) - @as(i32, c2.b)) <= 2);
@@ -4608,7 +4608,7 @@ test "colorLerp(a, b, 0) = a; colorLerp(a, b, 1) = b" {
     try expect(at_one.r == 255 and at_one.g == 255 and at_one.b == 255);
 }
 
-test "colorLerp(black_c, white_c, 0.5) ≈ grey" {
+test "colorLerp(black_c, white_c, 0.5) ~ grey" {
     const black_c: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     const white_c: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
     const mid: Color = colorLerp(black_c, white_c, 0.5);
@@ -4640,7 +4640,7 @@ test "colorAlphaBlend: zero-alpha src leaves dst unchanged" {
 // getPixelDataSize
 // Pixel-format byte sizes pinned against raylib's reference implementation
 // in `rtextures.c`'s `GetPixelDataSize`.  The HDR-format cases (R32, R16,
-// R32G32B32, R16G16B16A16, …) caught a real bug during the aggressive
+// R32G32B32, R16G16B16A16, ...) caught a real bug during the aggressive
 // ziggification sweep - the previous magic-number switch had bpp=8 for
 // R32/R16 (should be 32 and 16) and bpp=32 for R32G32B32 (should be 96).
 // Don't simplify these tests; they're regression coverage.
@@ -4714,7 +4714,7 @@ test "getPixelDataSize: half-float quad-channel = 8 B/px (R16G16B16A16) (raylib 
 }
 
 test "getPixelDataSize: DXT1 compressed = 0.5 B/px on 4-aligned dims" {
-    // 8x8 = 64 pixels × 4 bpp ÷ 8 = 32 bytes.
+    // 8x8 = 64 pixels x 4 bpp / 8 = 32 bytes.
     try expect(getPixelDataSize(8, 8, pf(.compressed_dxt1_rgb)) == 32);
     try expect(getPixelDataSize(8, 8, pf(.compressed_dxt1_rgba)) == 32);
 }
@@ -4724,16 +4724,16 @@ test "getPixelDataSize: DXT5 compressed = 1 B/px on 4-aligned dims" {
 }
 
 test "getPixelDataSize: ASTC 8x8 = 0.25 B/px (raylib parity)" {
-    // 8×8 = 64 pixels × 2 bpp ÷ 8 = 16 bytes.
+    // 8x8 = 64 pixels x 2 bpp / 8 = 16 bytes.
     try expect(getPixelDataSize(8, 8, pf(.compressed_astc_8x8_rgba)) == 16);
 }
 
-test "getPixelDataSize: compressed formats round non-aligned dims up to 4×4 blocks" {
-    // 5×5 image at 4 bpp:
-    //   raw:        5 × 5 × 4 / 8 = 12 (intermediate, gets overwritten)
-    //   block-rounded: ((5/4)+1)*4 = 8, ((5/4)+1)*4 = 8 → 8 × 8 × 4 / 8 = 32
+test "getPixelDataSize: compressed formats round non-aligned dims up to 4x4 blocks" {
+    // 5x5 image at 4 bpp:
+    //   raw:        5 x 5 x 4 / 8 = 12 (intermediate, gets overwritten)
+    //   block-rounded: ((5/4)+1)*4 = 8, ((5/4)+1)*4 = 8 -> 8 x 8 x 4 / 8 = 32
     try expect(getPixelDataSize(5, 5, pf(.compressed_dxt1_rgb)) == 32);
-    // 7×3 image at 8 bpp: rounded to 8×4 → 8 × 4 × 8 / 8 = 32.
+    // 7x3 image at 8 bpp: rounded to 8x4 -> 8 x 4 x 8 / 8 = 32.
     try expect(getPixelDataSize(7, 3, pf(.compressed_dxt5_rgba)) == 32);
 }
 
@@ -4783,10 +4783,10 @@ test "isTextureValid: id 0 is invalid" {
 
 // getImageColor + imageDraw - Roadmap Step 5
 // Build small RGBA buffers on the stack so we can test without a wasm
-// allocator on host.  4×2 source, 4×4 destination is plenty.
+// allocator on host.  4x2 source, 4x4 destination is plenty.
 test "getImageColor: in-bounds RGBA8 read" {
     var pixels = [_]u8{
-        // 2×2 image: (0,0)=red (1,0)=green (0,1)=blue (1,1)=white
+        // 2x2 image: (0,0)=red (1,0)=green (0,1)=blue (1,1)=white
         255, 0, 0,   255, 0,   255, 0,   255,
         0,   0, 255, 255, 255, 255, 255, 255,
     };
@@ -4835,7 +4835,7 @@ test "getImageColor: grayscale read" {
 }
 
 test "imageDraw: same-size copy paints source onto dest" {
-    // 2×1 source: [red, green]
+    // 2x1 source: [red, green]
     var src_pixels = [_]u8{ 255, 0, 0, 255, 0, 255, 0, 255 };
     const src: Image = .{
         .data = @ptrCast(&src_pixels),
@@ -4844,7 +4844,7 @@ test "imageDraw: same-size copy paints source onto dest" {
         .mipmaps = 1,
         .format = 7,
     };
-    // 2×1 dest, all blue
+    // 2x1 dest, all blue
     var dst_pixels = [_]u8{ 0, 0, 255, 255, 0, 0, 255, 255 };
     var dst: Image = .{
         .data = @ptrCast(&dst_pixels),
@@ -4891,7 +4891,7 @@ test "imageDraw: out-of-bounds dst rectangle clipped (no crash)" {
 }
 
 test "imageDraw: alpha blends translucent source" {
-    // 1×1 50%-alpha red source
+    // 1x1 50%-alpha red source
     var src_pixels = [_]u8{ 255, 0, 0, 128 };
     const src: Image = .{
         .data = @ptrCast(&src_pixels),
@@ -4925,7 +4925,7 @@ test "imageDraw: alpha blends translucent source" {
 
 // imageDrawTriangleGradient - Roadmap Step 6
 test "imageDrawTriangleGradient: solid fill (all same color)" {
-    // 4×4 dest, all transparent
+    // 4x4 dest, all transparent
     var pixels: [4 * 4 * 4]u8 = @splat(0);
     var dst: Image = .{
         .data = @ptrCast(&pixels),
@@ -4971,13 +4971,13 @@ test "imageDrawTriangleGradient: vertex-color blend" {
         green,
         blue,
     );
-    // Near v1 (top-left) → mostly red
+    // Near v1 (top-left) -> mostly red
     const near_v1: Color = getImageColor(dst, 0, 0);
     try expect(near_v1.r > near_v1.g and near_v1.r > near_v1.b);
-    // Near v2 (top-right) → mostly green
+    // Near v2 (top-right) -> mostly green
     const near_v2: Color = getImageColor(dst, 6, 0);
     try expect(near_v2.g > near_v2.r);
-    // Near v3 (bottom-left) → mostly blue
+    // Near v3 (bottom-left) -> mostly blue
     const near_v3: Color = getImageColor(dst, 0, 6);
     try expect(near_v3.b > near_v3.r);
 }
@@ -5071,7 +5071,7 @@ test "imageDrawTriangle: triangle entirely off-screen is no-op" {
 
 // imageAlpha* - Roadmap Step 8
 test "getImageAlphaBorder: detects opaque rect inside transparent margin" {
-    // 4×4 RGBA8 with a 2×2 opaque block at (1,1)..(2,2)
+    // 4x4 RGBA8 with a 2x2 opaque block at (1,1)..(2,2)
     var pixels: [4 * 4 * 4]u8 = @splat(0);
     var dst: Image = .{
         .data = @ptrCast(&pixels),
@@ -5105,7 +5105,7 @@ test "getImageAlphaBorder: fully transparent image returns zero rect" {
 }
 
 test "getImageAlphaBorder: threshold tunes which pixels count" {
-    // 2×2 RGBA8 - alpha values: 64, 128, 192, 255 (one per pixel)
+    // 2x2 RGBA8 - alpha values: 64, 128, 192, 255 (one per pixel)
     var pixels = [_]u8{
         100, 100, 100, 64,  100, 100, 100, 128,
         100, 100, 100, 192, 100, 100, 100, 255,
@@ -5153,7 +5153,7 @@ test "imageAlphaMask: rejects mismatched formats" {
 }
 
 test "imageAlphaMask: GRAYSCALE mask replaces alpha channel" {
-    // 2×1 RGBA8 image, both fully opaque
+    // 2x1 RGBA8 image, both fully opaque
     var img_pixels = [_]u8{ 200, 200, 200, 255, 100, 100, 100, 255 };
     var img: Image = .{
         .data = @ptrCast(&img_pixels),
@@ -5162,7 +5162,7 @@ test "imageAlphaMask: GRAYSCALE mask replaces alpha channel" {
         .mipmaps = 1,
         .format = 7,
     };
-    // 2×1 GRAYSCALE mask: 64, 192
+    // 2x1 GRAYSCALE mask: 64, 192
     var mask_pixels = [_]u8{ 64, 192 };
     const mask: Image = .{
         .data = @ptrCast(&mask_pixels),
@@ -5248,7 +5248,7 @@ test "imageKernelConvolution: rejects even kernel sizes" {
         .mipmaps = 1,
         .format = 7,
     };
-    // 4 elements → sqrt = 2 → even → rejected.
+    // 4 elements -> sqrt = 2 -> even -> rejected.
     const kernel: [4]f32 = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
     try imageKernelConvolution(ta, &img, &kernel);
     try expect(pixels[0] == 0); // unchanged
@@ -5264,7 +5264,7 @@ test "imageKernelConvolution: rejects non-square kernel" {
         .mipmaps = 1,
         .format = 7,
     };
-    // 5 elements: sqrt(5) ≈ 2.24, intCast = 2, 2*2 = 4 ≠ 5 → rejected.
+    // 5 elements: sqrt(5) ~ 2.24, intCast = 2, 2*2 = 4 != 5 -> rejected.
     const kernel: [5]f32 = [_]f32{ 0.2, 0.2, 0.2, 0.2, 0.2 };
     const original: u8 = pixels[0];
     try imageKernelConvolution(ta, &img, &kernel);
@@ -5304,17 +5304,17 @@ test "imageDither: requires bitDepths summing to 16" {
         .mipmaps = 1,
         .format = 7,
     };
-    // Sum != 16 → no-op
+    // Sum != 16 -> no-op
     try imageDither(ta, &img, 4, 4, 4, 4); // sum=16 ok
-    try imageDither(ta, &img, 8, 8, 8, 8); // sum=32 → no-op
-    try imageDither(ta, &img, 0, 0, 0, 0); // sum=0 → no-op
+    try imageDither(ta, &img, 8, 8, 8, 8); // sum=32 -> no-op
+    try imageDither(ta, &img, 0, 0, 0, 0); // sum=0 -> no-op
 }
 
 // imageColorTint / Invert / Grayscale / Brightness / Contrast / Replace
 // - Roadmap Step 10
 // All operate on RGBA8 in-place; safe to host-test with stack buffers.
 test "imageColorTint: multiplicative tint" {
-    // 1×1 white pixel
+    // 1x1 white pixel
     var pixels = [_]u8{ 255, 255, 255, 255 };
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5357,7 +5357,7 @@ test "imageColorGrayscale: pure red maps to luma=76" {
         .format = 7,
     };
     imageColorGrayscale(&img);
-    // Luma weights: 0.299*255 ≈ 76
+    // Luma weights: 0.299*255 ~ 76
     try expect(pixels[0] == 76);
     try expect(pixels[1] == 76);
     try expect(pixels[2] == 76);
@@ -5406,7 +5406,7 @@ test "imageColorReplace: replaces matching color" {
         .format = 7,
     };
     imageColorReplace(&img, .{ .r = 255, .g = 0, .b = 0, .a = 255 }, .{ .r = 0, .g = 0, .b = 255, .a = 255 });
-    // First pixel: red → blue.  Second: untouched.
+    // First pixel: red -> blue.  Second: untouched.
     try expect(pixels[0] == 0 and pixels[2] == 255);
     try expect(pixels[4] == 0 and pixels[5] == 255 and pixels[6] == 0);
 }
@@ -5428,7 +5428,7 @@ test "imageColorContrast: positive value increases contrast" {
 }
 
 // imageRotate (arbitrary angle) - Phase E.2 ziggified.  Realloc-path
-// coverage for the 90° variants lives below; the arbitrary-angle path
+// coverage for the 90 deg variants lives below; the arbitrary-angle path
 // still has only no-op coverage at host.
 test "imageRotate: null data is no-op" {
     const ta: Allocator = std.testing.allocator;
@@ -5531,7 +5531,7 @@ test "imageResizeNN: same-size is no-op" {
     try expect(pixels[0] == 100);
 }
 
-test "imageResize: real realloc path - 4x4 → 8x8 RGBA8" {
+test "imageResize: real realloc path - 4x4 -> 8x8 RGBA8" {
     const ta: Allocator = std.testing.allocator;
     // Build a 4x4 RGBA8 image via genImageColor so it's gpa-owned.
     var img: Image = try genImageColor(ta, 4, 4, .{ .r = 100, .g = 50, .b = 200, .a = 255 });
@@ -5550,7 +5550,7 @@ test "imageResize: real realloc path - 4x4 → 8x8 RGBA8" {
     try expect(data[(8 * 8 - 1) * 4] == 100);
 }
 
-test "imageResizeNN: real realloc path - 2x2 → 4x4 RGBA8" {
+test "imageResizeNN: real realloc path - 2x2 -> 4x4 RGBA8" {
     const ta: Allocator = std.testing.allocator;
     var img: Image = try genImageColor(ta, 2, 2, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
     defer unloadImage(ta, img);
@@ -5562,7 +5562,7 @@ test "imageResizeNN: real realloc path - 2x2 → 4x4 RGBA8" {
     try expect(data[(4 * 4 - 1) * 4 + 2] == 90); // B of last pixel
 }
 
-test "imageResizeCanvas: real realloc path - pad 2x2 → 4x4 RGBA8" {
+test "imageResizeCanvas: real realloc path - pad 2x2 -> 4x4 RGBA8" {
     const ta: Allocator = std.testing.allocator;
     var img: Image = try genImageColor(ta, 2, 2, .{ .r = 200, .g = 200, .b = 200, .a = 255 });
     defer unloadImage(ta, img);
@@ -5576,7 +5576,7 @@ test "imageResizeCanvas: real realloc path - pad 2x2 → 4x4 RGBA8" {
     try expect(data[(1 * 4 + 1) * 4] == 200);
 }
 
-test "imageCrop: real realloc path - crop 4x4 → 2x2 center" {
+test "imageCrop: real realloc path - crop 4x4 -> 2x2 center" {
     const ta: Allocator = std.testing.allocator;
     var img: Image = try genImageColor(ta, 4, 4, .{ .r = 50, .g = 100, .b = 150, .a = 255 });
     defer unloadImage(ta, img);
@@ -5587,7 +5587,7 @@ test "imageCrop: real realloc path - crop 4x4 → 2x2 center" {
     try expect(data[0] == 50); // unchanged fill
 }
 
-test "imageRotateCW: real realloc path - 4x2 → 2x4 RGBA8" {
+test "imageRotateCW: real realloc path - 4x2 -> 2x4 RGBA8" {
     const ta: Allocator = std.testing.allocator;
     var img: Image = try genImageColor(ta, 4, 2, .{ .r = 70, .g = 80, .b = 90, .a = 255 });
     defer unloadImage(ta, img);
@@ -5826,11 +5826,11 @@ test "imageMipmaps: 4x4 RGBA generates 3 levels" {
     defer unloadImage(ta, img);
 
     try imageMipmaps(ta, &img);
-    // Expected levels: 4×4 → 2×2 → 1×1 == 3 levels.
+    // Expected levels: 4x4 -> 2x2 -> 1x1 == 3 levels.
     try expect(img.mipmaps == 3);
     try expect(img.width == 4 and img.height == 4);
 
-    // All-gray input → each downscale level is also all-gray.
+    // All-gray input -> each downscale level is also all-gray.
     const buf: [*]const u8 = @ptrCast(@alignCast(img.data));
     // Level 0: 4*4*4 = 64 bytes
     // Level 1: 2*2*4 = 16 bytes (offset 64)

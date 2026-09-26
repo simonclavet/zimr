@@ -125,7 +125,7 @@ fn update(f: *z.Frame, s: *State) void {
             cursor_for_this_frame = zone.cursor;
         }
 
-        // Centred label.  Atkinson at 12 px ≈ 7 px advance per char;
+        // Centred label.  Atkinson at 12 px ~ 7 px advance per char;
         // crude but adequate for this demo.
         const label_w: i32 = @intCast(zone.label.len * 7);
         const lx: f32 = x + float(@divFloor(zone_w - label_w, 2));
@@ -171,7 +171,7 @@ fn update(f: *z.Frame, s: *State) void {
     // Apply the chosen cursor exactly once at the end of the frame.
     // Doing it here (rather than inside each hover branch) means
     // the LAST claimant wins, which works because we walk zones
-    // → square in source-order top-to-bottom - the visual stacking
+    // -> square in source-order top-to-bottom - the visual stacking
     // order users expect.
     u.setMouseCursor(cursor_for_this_frame);
 

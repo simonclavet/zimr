@@ -2,7 +2,7 @@
 //
 // The simplest possible test of the REAL ui.zig (Dear ImGui) on the WebGPU
 // backend: a dark background + one ImGui window with a label, a slider, a
-// checkbox, and a button (with a click counter). No fractal, no scene — just
+// checkbox, and a button (with a click counter). No fractal, no scene - just
 // the UI, so any UI rendering issue is isolated here.
 //
 // Build:      zig build wgpu-ui-demo

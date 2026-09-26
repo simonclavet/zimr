@@ -1,4 +1,4 @@
-//! particle_step.zig — one compute kernel: advance a particle under gravity and
+//! particle_step.zig - one compute kernel: advance a particle under gravity and
 //! bounce it off the unit-box walls. Pure GATHER (each id writes only its own
 //! pos/vel), so it's identical on CPU and GPU and trivially parallel. Positions
 //! live in [0,1]^2; the host maps them to the screen. Written once in the kompute
@@ -19,7 +19,7 @@ pub const Buffers = struct {
     vel: [config.max]Vec2,
 };
 
-// 16-byte uniform: u32 + 3×f32 (scalar fields — an array pad would break the
+// 16-byte uniform: u32 + 3xf32 (scalar fields - an array pad would break the
 // uniform layout; see the gpu-compute tutorial).
 pub const Params = extern struct {
     count: u32,

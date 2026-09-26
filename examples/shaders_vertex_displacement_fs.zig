@@ -1,4 +1,4 @@
-//! examples/shaders_vertex_displacement_fs.zig — lights the displaced surface:
+//! examples/shaders_vertex_displacement_fs.zig - lights the displaced surface:
 //! Lambert diffuse over a height-graded colour (deep trough -> mid water ->
 //! bright crest), plus a Blinn specular glint. The normal it shades with was
 //! computed in the vertex shader from the heightfield samples.
@@ -34,7 +34,7 @@ pub fn shaderMain(io_in: Io) Out {
     const c1: Vec3 = mixVec3(deep, midc, smoothstep(0.25, 0.55, h));
     const base: Vec3 = mixVec3(c1, crest, smoothstep(0.62, 0.90, h));
 
-    // Blinn specular glint. Exponent 32 via five squarings — the DSL has no pow().
+    // Blinn specular glint. Exponent 32 via five squarings - the DSL has no pow().
     const view: Vec3 = normalize(Vec3{ io_in.frag_view[0], io_in.frag_view[1], io_in.frag_view[2] });
     const half: Vec3 = normalize(Vec3{ light_dir[0] + view[0], light_dir[1] + view[1], light_dir[2] + view[2] });
     var spec: f32 = @max(dot(nrm, half), 0.0);

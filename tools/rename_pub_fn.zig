@@ -1,4 +1,4 @@
-//! rename_pub_fn — rename a top-level function within its defining file.
+//! rename_pub_fn - rename a top-level function within its defining file.
 //!
 //! Usage: rename_pub_fn <file> <old_name> <new_name>
 //!

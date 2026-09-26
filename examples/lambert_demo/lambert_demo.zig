@@ -1,15 +1,15 @@
 // examples/lambert_demo/lambert_demo.zig
 //
-// Canonical MULTI-GROUP wgpu example (§4(b) of the architecture doc):
+// Canonical MULTI-GROUP wgpu example (section 4(b) of the architecture doc):
 // the Lambert-lit cube, binding VS uniforms (group 0), a sampler
 // (group 1), and an FS uniform (group 2) by hand.  The WebGPU
-// architecture — especially the stage-segregated binding model that
-// makes this layout necessary — is documented centrally in
+// architecture - especially the stage-segregated binding model that
+// makes this layout necessary - is documented centrally in
 // src/zimr.zig.  Read that before changing this demo.
 //
 // The first 3D-on-wgpu demo: a textured spinning cube, depth-tested,
-// drawn through the WebGPU backend (not GL).  This is §4.A of
-// `src/notes/finishing_webgpu.md` — the linchpin that proves the
+// drawn through the WebGPU backend (not GL).  This is section 4.A of
+// `src/notes/finishing_webgpu.md` - the linchpin that proves the
 // 3D draw path renders end-to-end before lambert/PBR/the helmet.
 //
 // What's new vs the 2D wgpu_bringup:
@@ -18,12 +18,12 @@
 //   - a 3D vertex-buffer layout (interleaved position+uv) passed via
 //     ShaderDesc.vertex_buffer_layouts (the override added this arc);
 //   - an MVP matrix pushed to the VS UBO each frame
-//     (perspective × view × model-rotation).
+//     (perspective x view x model-rotation).
 //
 // Reuses the cube_split VS+FS shader pair (already typed +
 // naga-valid): cube_split_vs_io declares `Ubo.mvp`, cube_split_fs
-// samples texture0.  Same source the GL+CPU cube_split demo uses —
-// here it runs through spv2wgsl → WGSL → wgpu.
+// samples texture0.  Same source the GL+CPU cube_split demo uses -
+// here it runs through spv2wgsl -> WGSL -> wgpu.
 //
 // Build:    zig build wgpu-cube-demo
 // Serve:    bun run webtests/server.ts --web-dir=zig-out/wgpu-cube
@@ -51,7 +51,7 @@ const vec = zm.vec;
 // ============================================================================
 //
 // 24 vertices (4 per face) so each face gets clean UVs; 36 indices.
-// Interleaved position(vec3) + tex_coord(vec2) → ONE vertex buffer,
+// Interleaved position(vec3) + tex_coord(vec2) -> ONE vertex buffer,
 // stride 20 bytes (3*4 + 2*4).  CCW winding from outside.
 
 const LitVertex = extern struct {
@@ -105,11 +105,11 @@ const cube_indices = [_]u32{
 };
 
 // ============================================================================
-// Combined cube schema (Ubo + Samplers → two bind groups)
+// Combined cube schema (Ubo + Samplers -> two bind groups)
 // ============================================================================
 //
 // cube_split's VS UBO (mvp) lands at @group(0) and its FS texture0 at
-// @group(1) (the shader was built so the sampler sits in group 1 —
+// @group(1) (the shader was built so the sampler sits in group 1 -
 // confirmed in its WGSL).  loadShader's single-schema path only wires
 // ONE bind group, so it can't drive this two-group layout.  Instead we
 // use `Resources(LambertSchema)` + an explicit pipeline, exactly like
@@ -125,13 +125,13 @@ pub var zimr_app: z.App = .{};
 const State = struct {
 
     // The engine emits each uniform as its own binding (loose .constant
-    // storage), so lambert's VS UBO is TWO bindings at group 0 — `mvp`
-    // @binding(0) + `mat_model` @binding(1) — not one struct buffer.
+    // storage), so lambert's VS UBO is TWO bindings at group 0 - `mvp`
+    // @binding(0) + `mat_model` @binding(1) - not one struct buffer.
     // (Confirmed in the emitted WGSL.)  `Resources` models one UBO
     // buffer per group, so it can't drive this; we build the bind
     // groups explicitly: two uniform buffers at group 0, texture+sampler
     // at group 1.  col_diffuse (@group0 @binding... in the FS) is a
-    // third uniform — see init.
+    // third uniform - see init.
     mvp_buffer: z.wgpu.BufferHandle,
     model_buffer: z.wgpu.BufferHandle,
     col_diffuse_buffer: z.wgpu.BufferHandle,
@@ -209,7 +209,7 @@ fn initState(
         },
     };
 
-    // ---- Explicit bind groups (NOT Resources — see note below) ----
+    // ---- Explicit bind groups (NOT Resources - see note below) ----
     // The engine now emits stage-segregated uniform groups (the
     // toolchain fix for the cross-stage binding collision):
     //   group 0 = VS uniforms: mvp@0, mat_model@1
@@ -217,7 +217,7 @@ fn initState(
     //   group 2 = FS uniforms:  col_diffuse@0
     // (Confirmed in the emitted, naga-valid WGSL.)  Resources models one
     // UBO buffer per group at a single binding, so it can't express the
-    // multi-binding group 0 or the split across three groups — we build
+    // multi-binding group 0 or the split across three groups - we build
     // the bind groups by hand.
     const mvp_buffer: z.wgpu.BufferHandle = z.wgpu.createBuffer(device, .{
         .size = mat4_bytes,
@@ -235,7 +235,7 @@ fn initState(
     const white: Vec = .{ 1, 1, 1, 1 };
     z.wgpu.queueWriteBuffer(queue, col_diffuse_buffer, 0, std.mem.asBytes(&white));
 
-    // group 0 layout: VS uniforms — mvp@0, mat_model@1.
+    // group 0 layout: VS uniforms - mvp@0, mat_model@1.
     const g0_layout_entries = [_]z.shader_introspect.BindGroupLayoutEntry{
         .{
             .binding = 0,
@@ -277,7 +277,7 @@ fn initState(
     defer gpa.free(g1_blob);
     const group1_bind_group: z.wgpu.BindGroupHandle = z.wgpu.createBindGroup(device, g1_bgl, g1_blob, "lambert_g1_bg");
 
-    // group 2 layout: FS uniform — col_diffuse@0.
+    // group 2 layout: FS uniform - col_diffuse@0.
     const g2_layout_entries = [_]z.shader_introspect.BindGroupLayoutEntry{
         .{
             .binding = 0,
@@ -351,7 +351,7 @@ fn update(f: *z.Frame, s: *State) void {
     const gf: *z.GpuFrame = f.gpu;
     const Backend: type = z.WgpuBackend;
 
-    // ---- MVP: perspective × view × model(rotate over time) ----
+    // ---- MVP: perspective x view x model(rotate over time) ----
     const t: f32 = f.time.time;
     const aspect: f32 = f.window.aspect();
 
@@ -365,7 +365,7 @@ fn update(f: *z.Frame, s: *State) void {
         vec(0, 1, 0), // up
     );
     const proj: Mat = perspectiveFovRh(
-        0.9, // fovy radians (~52°)
+        0.9, // fovy radians (~52 deg)
         aspect,
         0.1, // near
         100.0, // far

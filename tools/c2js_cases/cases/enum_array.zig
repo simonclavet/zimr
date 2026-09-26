@@ -3,7 +3,7 @@
 // 4 bytes (enum-tag aliases are intentionally NOT width-resolved for user structs,
 // where a scalar enum field uses a self-consistent 4-byte slot). For an ARRAY that
 // breaks: the element STORE strides by the real width (1), but the whole-array
-// struct copy + read used a 4-byte stride — the values read back garbage and the
+// struct copy + read used a 4-byte stride - the values read back garbage and the
 // `switch` on them hit `unreachable`. Fix resolves enum-tag elements to their real
 // width for array wrappers only (scalar enum fields keep the 4-byte slot).
 const Color = enum(u8) { red, green, blue, alpha };

@@ -1,4 +1,4 @@
-//! tesseract_view — raylib's `models_tesseract_view`.
+//! tesseract_view - raylib's `models_tesseract_view`.
 //!
 //! A tesseract (4-dimensional hypercube) spinning through the XW plane,
 //! projected from 4D down to 3D and drawn as 16 vertices + their edges.
@@ -8,7 +8,7 @@
 //! share an edge when they differ in exactly one of the four coordinates.
 //!
 //! raylib uses a fixed camera; here you can orbit / pan / zoom it with
-//! `z.OrbitCamera` (drag / two-finger / pinch / wheel) — much nicer for
+//! `z.OrbitCamera` (drag / two-finger / pinch / wheel) - much nicer for
 //! studying a 4D object from different angles.
 
 const std = @import("std");
@@ -30,7 +30,7 @@ pub var zimr_app: z.App = .{};
 const red: Color = .{ .r = 230, .g = 41, .b = 55, .a = 255 };
 const maroon: Color = .{ .r = 190, .g = 33, .b = 55, .a = 255 };
 
-/// The 16 corners of a unit tesseract: every (±1, ±1, ±1, ±1).
+/// The 16 corners of a unit tesseract: every (+/-1, +/-1, +/-1, +/-1).
 const corners: [16][4]f32 = .{
     .{ 1, 1, 1, 1 },    .{ 1, 1, 1, -1 },
     .{ 1, 1, -1, 1 },   .{ 1, 1, -1, -1 },
@@ -85,7 +85,7 @@ fn update(f: *z.Frame, s: *State) void {
         // Rotate the (x, w) pair; leave y, z.
         const x: f32 = c[0] * cr - c[3] * sr;
         const w: f32 = c[0] * sr + c[3] * cr;
-        // 4D→3D perspective divide: points with larger w spread out.
+        // 4D->3D perspective divide: points with larger w spread out.
         const k: f32 = 3.0 / (3.0 - w);
         proj[i] = pointVec(k * x, k * c[1], k * c[2]);
         w_vals[i] = w;

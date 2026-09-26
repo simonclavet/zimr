@@ -1,7 +1,7 @@
-//! examples/sw_julia.zig — native CPU Julia set, writes a colored PNG.
+//! examples/sw_julia.zig - native CPU Julia set, writes a colored PNG.
 //!
 //! Direct per-pixel compute, no rasterizer.  The same kernel pattern
-//! as the Mandelbrot but `c` is a fixed constant and z₀ is per-pixel.
+//! as the Mandelbrot but `c` is a fixed constant and z_0 is per-pixel.
 //! Produces a colored 1280x720 PNG using the same smooth-escape +
 //! cosine palette as sw_mandelbrot.
 //!
@@ -29,7 +29,7 @@ const width: u32 = 1280;
 const height: u32 = 720;
 const max_iter: u32 = 256;
 
-// Julia constant — the classic dragon shape.
+// Julia constant - the classic dragon shape.
 const c_x: f32 = -0.7;
 const c_y: f32 = 0.27015;
 
@@ -72,7 +72,7 @@ fn juliaPixel(zx0: f32, zy0: f32) [4]u8 {
     const mag2: f32 = zx2 + zy2;
     const log_mag: f32 = 0.5 * @log(mag2);
     const nu: f32 = float(iter) + 1.0 - @log2(log_mag);
-    const t: f32 = nu * 0.04; // palette period — tweak by eye
+    const t: f32 = nu * 0.04; // palette period - tweak by eye
 
     const PI2: f32 = 6.28318530718;
     // Three-channel cosine palette, phase-shifted.  Different phase
@@ -98,7 +98,7 @@ pub fn main() !void {
     const buf: []u8 = try gpa.alloc(u8, pixels * 4);
     defer gpa.free(buf);
 
-    // Render — measure best-of-N to avoid scheduler noise.
+    // Render - measure best-of-N to avoid scheduler noise.
     const N: usize = 3;
     var best_ms: f64 = inf(f64);
     var run: usize = 0;

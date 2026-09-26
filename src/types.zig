@@ -20,7 +20,7 @@
 //     calls into the C ABI port, not into the type).
 // Coverage: every typedef from raylib.h's "Structures Definition"
 // block (lines 200-553).  Enums + raylib-style constants (KEY_*,
-// MOUSE_*, FLAG_*, …) live in src/enums.zig.
+// MOUSE_*, FLAG_*, ...) live in src/enums.zig.
 
 // ===========================================================================
 // Math primitives
@@ -63,7 +63,7 @@ const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
 
 // 2D / 3D / 4D vector aliases live in math.zig (`zm.Vec`,
-// `zm.Vec2`) — files should `const Vec2 = zm.Vec2;` and
+// `zm.Vec2`) - files should `const Vec2 = zm.Vec2;` and
 // `const Vec = zm.Vec;` at top instead of going through this
 // module.  Turn 351 directive: don't re-export them here.
 //
@@ -84,8 +84,8 @@ const Vec2i = zm.Vec2i;
 /// Convert an integer pixel-coord vector to its float Vec2.  Useful
 /// when feeding integer pixel coords into float math (viewport
 /// center, NDC mapping).  Free function (not method) because
-/// `@Vector(2, i32)` is a primitive — no method-syntax dispatch
-/// — so the call site reads `vec2iToFloat(v)` rather than the
+/// `@Vector(2, i32)` is a primitive - no method-syntax dispatch
+/// - so the call site reads `vec2iToFloat(v)` rather than the
 /// pre-migration `.toFloat()`.  Inline so it's free at the call
 /// site.
 pub inline fn vec2iToFloat(v: Vec2i) Vec2 {
@@ -104,7 +104,7 @@ pub inline fn vec2iToFloat(v: Vec2i) Vec2 {
 /// `zmath-adoption-plan.md`): layout-compatible with `[4]@Vector]`,
 /// no semantically-named fields (`.m5` was a bare index for
 /// `m[1][1]`), and it never crosses a hard ABI boundary as a struct
-/// - every matrix→GPU path already flattens it to `[16]f32` via
+/// - every matrix->GPU path already flattens it to `[16]f32` via
 /// `matToArr` / `matrixToFloatV`.
 /// Element access is now `m[row][col]` (the old `.mN` mapped as
 /// `m[N / 4][N % 4]`).  Builders that used to be `Matrix.identity()`
@@ -118,9 +118,9 @@ const Matrix = Mat;
 
 const Color = zm.Color;
 
-/// The high-level color currency — defined in zimrmath (the one home for
+/// The high-level color currency - defined in zimrmath (the one home for
 /// color + its conversions). sRGB bytes; see `zm.Color`.
-/// raylib's degree-hue HSV helper (canonical home — S4 dedup; image.zig
+/// raylib's degree-hue HSV helper (canonical home - S4 dedup; image.zig
 /// and wgpu_app.zig re-export this).
 pub fn colorFromHSV(hue: f32, saturation: f32, value: f32) Color {
     return Color.fromHSV(.{ hue / 360.0, saturation, value, 1.0 });
@@ -420,7 +420,7 @@ pub const Mesh = extern struct {
     /// Bone palette pointer.  NOT owned by the Mesh - mirrors
     /// `model.boneMatrices` after `updateModelAnimation`.  Used by
     /// `drawMesh` to re-upload the boneMatrices uniform per draw.
-    /// `null` means "this mesh isn't currently skinned" → drawMesh
+    /// `null` means "this mesh isn't currently skinned" -> drawMesh
     /// uses the default shader path.
     boneMatrices: [*c]Matrix = null,
 
@@ -566,7 +566,7 @@ pub const Music = extern struct {
     stream: AudioStream = .{},
     frameCount: u32 = 0,
     looping: bool = false,
-    /// File-format-specific tag (WAV / OGG / MP3 / …).
+    /// File-format-specific tag (WAV / OGG / MP3 / ...).
     ctxType: i32 = 0,
     /// Backend-internal pointer; managed by raudio.
     ctxData: ?*anyopaque = null,
@@ -880,13 +880,13 @@ pub const GamepadAxis = enum(i32) {
 // ===========================================================================
 
 /// Material-map slot indices.  Re-exported from `shader_interface.zig`
-/// where it now lives canonically — same enum is used by typed shader
+/// where it now lives canonically - same enum is used by typed shader
 /// schemas (`Sampler2D(.albedo)`) and engine-side material maps
 /// (`material.maps[.albedo].texture = ...`).  The move was driven by
 /// module-boundary mechanics: `shader_interface` must be wirable as
 /// a standalone named module for the codegen bootstrap exes, so its
 /// dependency on `types.zig` was inverted (now `types.zig` depends
-/// on `shader_interface` — a small one-way re-export).  Backwards-
+/// on `shader_interface` - a small one-way re-export).  Backwards-
 /// compatible: every `types.MaterialMapIndex` call site keeps working.
 const _shader_interface = @import("shader_interface");
 pub const MaterialMapIndex = _shader_interface.MaterialMapIndex;
@@ -1422,11 +1422,11 @@ test "Rectangle.intersection" {
     const i: Rectangle = a.intersection(b).?;
     try expectEqual(Rectangle.init(5, 5, 5, 5), i);
 
-    // Disjoint → null
+    // Disjoint -> null
     const d = Rectangle.init(100, 100, 5, 5);
     try expect(a.intersection(d) == null);
 
-    // Touching → null (touching is not overlap by our half-open convention)
+    // Touching -> null (touching is not overlap by our half-open convention)
     const c = Rectangle.init(10, 0, 5, 5);
     try expect(a.intersection(c) == null);
 }
@@ -1437,7 +1437,7 @@ test "Rectangle.intersection" {
 
 test "Vec2i constructors + equality" {
     // `@Vector(2, i32)` literal coercion works the same as struct
-    // literal — `.{ a, b }` picks up the inferred type from the
+    // literal - `.{ a, b }` picks up the inferred type from the
     // expected argument.
     try expectEqual(@as(Vec2i, .{ 3, 4 }), @as(Vec2i, .{ 3, 4 }));
     try expectEqual(splat2i(0), @as(Vec2i, .{ 0, 0 }));
@@ -1492,11 +1492,11 @@ test "Vec constructors + arithmetic" {
 }
 
 test "Vec.cross right-handed" {
-    // x × y = z (right-handed coordinates)
+    // x x y = z (right-handed coordinates)
     const x_axis: Vec = vec(1, 0, 0);
     const y_axis: Vec = vec(0, 1, 0);
     try expectEqual(vec(0, 0, 1), cross(x_axis, y_axis));
-    // y × x = -z (anti-commutative)
+    // y x x = -z (anti-commutative)
     try expectEqual(vec(0, 0, -1), cross(y_axis, x_axis));
 }
 
@@ -1518,7 +1518,7 @@ test "Vec.lerp + reflect + project" {
     try expectEqual(a, lerp(a, b, 0));
     try expectEqual(b, lerp(a, b, 1));
 
-    // Reflect off floor (normal +Y): incoming (1, -1, 0) → outgoing (1, 1, 0)
+    // Reflect off floor (normal +Y): incoming (1, -1, 0) -> outgoing (1, 1, 0)
     const reflected: Vec = reflect3(vec(1, -1, 0), vec(0, 1, 0));
     try expectApproxEqAbs(@as(f32, 1), reflected[0], eps);
     try expectApproxEqAbs(@as(f32, 1), reflected[1], eps);

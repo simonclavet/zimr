@@ -20,7 +20,7 @@
 //      under iOS's 44pt minimum).
 //
 // Tab color theme is configured for the turn-411 hover-wins-over-
-// active priority — see the `update` body for the palette rationale.
+// active priority - see the `update` body for the palette rationale.
 
 const std = @import("std");
 const zm = @import("zm");
@@ -191,7 +191,7 @@ fn update(f: *z.Frame, s: *State) void {
     const u: ui.Ui = s.ui_host.begin(f);
     defer s.ui_host.render(f);
 
-    // Style applied EVERY frame.  imgui_demo's pattern — the
+    // Style applied EVERY frame.  imgui_demo's pattern - the
     // `update` body is where the user expresses their per-frame
     // intent, including the visual theme.  Cheap (just a handful
     // of field writes) and avoids any "did initState run before
@@ -206,9 +206,9 @@ fn update(f: *z.Frame, s: *State) void {
     // Tab color palette is laid out for zimr's hover-wins-over-active
     // priority (turn 411):
     //
-    //   tab          — idle, deepest navy
-    //   tab_active   — selected/persistent, bright sky blue
-    //   tab_hovered  — press-feedback, even brighter (near-white blue)
+    //   tab          - idle, deepest navy
+    //   tab_active   - selected/persistent, bright sky blue
+    //   tab_hovered  - press-feedback, even brighter (near-white blue)
     //
     // Touching a tab momentarily flashes tab_hovered (your finger is
     // ON the tab); releasing settles the active tab to tab_active

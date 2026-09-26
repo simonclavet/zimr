@@ -22,6 +22,7 @@
 //! curve is the point; the training scheme is a means.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const rbt = @import("robot.zig");
 const track = @import("robot_track.zig");
@@ -189,7 +190,7 @@ pub fn WorldModel(comptime M: type) type {
     };
 }
 
-// ── The check: not the training loss, but the drift. ──
+// -- The check: not the training loss, but the drift. --
 
 const dance = @import("robot_dance.zig");
 const codecs = @import("codecs.zig");
@@ -290,8 +291,7 @@ test "robot_world: the model predicts, and a planner acts through it" {
     );
     defer track.freeDrift(gpa, learned);
 
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  world model: loss {d:.4} -> {d:.4} over {d} steps\n" ++
+    report.print("\n  world model: loss {d:.4} -> {d:.4} over {d} steps\n" ++
         "  mean body position error (m) by step, over {d} windows:\n    oracle     ", .{
         first_loss,
         last_loss,
@@ -299,23 +299,17 @@ test "robot_world: the model predicts, and a planner acts through it" {
         learned.windows,
     });
     for (oracle.position) |e| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{d:8.4}", .{e});
+        report.print("{d:8.4}", .{e});
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n    learned    ", .{});
+    report.print("\n    learned    ", .{});
     for (learned.position) |e| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{d:8.4}", .{e});
+        report.print("{d:8.4}", .{e});
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n    hold first ", .{});
+    report.print("\n    hold first ", .{});
     for (baseline.position) |e| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{d:8.4}", .{e});
+        report.print("{d:8.4}", .{e});
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
 
     // Sized to run in under a minute: the loss must FALL, not by how much.
     try expect(last_loss < first_loss);
@@ -335,7 +329,7 @@ test "robot_world: the model predicts, and a planner acts through it" {
         try expect(learned.position[k] < 2.0 * learned.position[k - 1] + 0.005);
     }
 
-    // ── And the guard for the bug this test was written during. ──
+    // -- And the guard for the bug this test was written during. --
     //
     // The articulated-body dynamics and the collision world are separate things joined by a
     // bridge, so a model whose text contains a floor collides with NOTHING until somebody builds
@@ -358,8 +352,7 @@ test "robot_world: the model predicts, and a planner acts through it" {
             deepest = @min(deepest, dance.lowestBodyPoint(m, &watch.data[0]));
             contacts = @max(contacts, watch.data[0].contact_count);
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  standing: after 30 frames of nothing, deepest {d:.3} m below the floor, " ++
+        report.print("  standing: after 30 frames of nothing, deepest {d:.3} m below the floor, " ++
             "{d} contacts at most\n", .{ deepest, contacts });
         try expect(contacts > 0);
         try expect(deepest > -0.1);
@@ -744,10 +737,8 @@ test "robot_world: D15 - the latent model against the structured one, on the sam
         last_loss = loss;
     }
 
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  D15 (pose drift, mean body distance in the root frame, same windows):\n", .{});
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("    latent training loss {d:.3} -> {d:.3} (normalised units)\n", .{ first_loss, last_loss });
+    report.print("\n  D15 (pose drift, mean body distance in the root frame, same windows):\n", .{});
+    report.print("    latent training loss {d:.3} -> {d:.3} (normalised units)\n", .{ first_loss, last_loss });
     for ([_]usize{ 8, 32 }) |horizon| {
         var a_rng: std.Random.DefaultPrng = .init(91);
         var b_rng: std.Random.DefaultPrng = .init(91);
@@ -763,15 +754,13 @@ test "robot_world: D15 - the latent model against the structured one, on the sam
         const lat: latent.PoseDrift = try latent.measurePoseDrift(gpa, model, fleet, 80, horizon, d_rng.random());
         defer lat.deinit(gpa);
         const k: usize = horizon - 1;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("    {d:>2} steps  structured: oracle {d:.1} mm, learned {d:.1} mm, hold-first {d:.1} mm\n", .{
+        report.print("    {d:>2} steps  structured: oracle {d:.1} mm, learned {d:.1} mm, hold-first {d:.1} mm\n", .{
             horizon,
             oracle.pose[k] * 1000.0,
             learned.pose[k] * 1000.0,
             hold.pose[k] * 1000.0,
         });
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("              latent:     learned {d:.1} mm, persist {d:.1} mm, " ++
+        report.print("              latent:     learned {d:.1} mm, persist {d:.1} mm, " ++
             "hold-first {d:.1} mm ({d} windows)\n", .{
             lat.learned[k] * 1000.0,
             lat.persist[k] * 1000.0,

@@ -1,4 +1,4 @@
-//! ui_minimal_one_context — port of the GL `ui_minimal_one_context` onto
+//! ui_minimal_one_context - port of the GL `ui_minimal_one_context` onto
 //! the WebGPU UI host. Three windows submitted through ONE UiHost (text +
 //! button + tap counter each). Harness swap only; the widget body is unchanged.
 const std = @import("std");

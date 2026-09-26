@@ -1,8 +1,8 @@
-//! examples/cube_split_fs_io.zig — schema for the cube_split demo's
+//! examples/cube_split_fs_io.zig - schema for the cube_split demo's
 //! fragment shader.  Declares Inputs / Samplers / Outputs.
 //!
 //! `Inputs.frag_tex_coord` MUST match `cube_split_vs_io.Outputs`
-//! field-for-field (varying link).  No Ubo — texture binding is all
+//! field-for-field (varying link).  No Ubo - texture binding is all
 //! we need.
 
 const zm = @import("zm");
@@ -16,7 +16,7 @@ pub const Inputs = struct {
     frag_tex_coord: Vec2,
 };
 
-/// Sampler.  Reserved name `texture0` → auto-bound to slot 0 by
+/// Sampler.  Reserved name `texture0` -> auto-bound to slot 0 by
 /// `loadShader`'s schema scan.  On CPU the dispatcher populates
 /// `io._texture0: TextureRef` from the user's `gpu.Texture`.
 pub const Samplers = struct {

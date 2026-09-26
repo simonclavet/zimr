@@ -1,4 +1,4 @@
-//! dag_png.zig — render the src/*.zig dependency graph to a PNG, drawn by
+//! dag_png.zig - render the src/*.zig dependency graph to a PNG, drawn by
 //! zimr itself (the same `Canvas` / software rasterizer / truetype
 //! / PNG codec that the engine ships).  Dogfood: zimr drawing its own map.
 //!
@@ -48,7 +48,7 @@ const fd_iters: usize = 820; // total iterations
 const fd_ygap: f32 = 76; // directed vertical rest gap: importer sits this far ABOVE its dep
 const fd_yhier: f32 = 0.28; // strength of the directed vertical ordering (the SOLE y force)
 const fd_attx: f32 = 0.08; // horizontal spring pulling coupled files toward a common column
-const fd_k: f32 = 46; // repulsion scale (px) — small, balances the linear column spring
+const fd_k: f32 = 46; // repulsion scale (px) - small, balances the linear column spring
 const fd_gravx: f32 = 0.05; // horizontal compaction toward the axis
 const fd_rep_tail: usize = 260; // x-only repulsion enabled ONLY in the last N iters (fan-out)
 const fd_rep_temp: f32 = 110; // temperature reset to this when repulsion turns on
@@ -238,7 +238,7 @@ fn drawNode(
 /// Freeform layout. Vertical position is governed by a SINGLE directed force:
 /// each import edge pulls the importer above its dependency. With no level
 /// scaffolding and no competing y-force, a file settles between the things it
-/// depends on and the things that depend on it — so files that many others sit
+/// depends on and the things that depend on it - so files that many others sit
 /// on sink to the bottom, revealing what is truly fundamental. Horizontal
 /// springs cluster coupled files; repulsion (x-only) is held back to the final
 /// iterations to fan things out. Colour encodes in-degree (how many files
@@ -289,7 +289,7 @@ fn renderForce(
         @memset(dx, 0);
         @memset(dy, 0);
 
-        // x-only repulsion — only during the fan-out tail.
+        // x-only repulsion - only during the fan-out tail.
         if (rep_on) {
             for (0..n) |u| {
                 for (u + 1..n) |v| {
@@ -322,7 +322,7 @@ fn renderForce(
         }
 
         // directed vertical ordering: each importer must sit ABOVE its dep.
-        // One-sided — only correct violations — so a dependency sinks below ALL
+        // One-sided - only correct violations - so a dependency sinks below ALL
         // its importers (a universal leaf like zimrmath drops to the bottom)
         // instead of averaging to the middle of them.
         for (0..n) |u| {
@@ -764,7 +764,7 @@ pub fn main() !void {
         drawNode(&canvas, graph.names[id], symsFor(graph.names[id]), cx[id], cy[id], bw[id], bh[id], fill);
     }
 
-    // title block (ASCII only — the mono font lacks em-dash / arrows).
+    // title block (ASCII only - the mono font lacks em-dash / arrows).
     canvas.text(
         .{ margin, 40 },
         "zimr - src module dependency graph",

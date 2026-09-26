@@ -1,8 +1,8 @@
-//! vector_angle — the angle between 2D vectors; v2 follows the pointer (mouse/touch),
+//! vector_angle - the angle between 2D vectors; v2 follows the pointer (mouse/touch),
 //! the mode cycles every five seconds. MODE 0: the signed angle at v0 between a fixed
 //! reference v0->v1 and v0->v2. MODE 1: the angle of v0->v2 vs the horizontal axis. All the
-//! vector math is zimrmath — native `-` for difference, zm.angle2 for the signed between-
-//! angle, zm.lineAngle2 for a ray's angle — no hand-rolled helpers. From raylib's vector_angle.
+//! vector math is zimrmath - native `-` for difference, zm.angle2 for the signed between-
+//! angle, zm.lineAngle2 for a ray's angle - no hand-rolled helpers. From raylib's vector_angle.
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;

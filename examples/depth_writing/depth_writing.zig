@@ -1,12 +1,12 @@
-//! depth_writing — raylib's `shaders_depth_writing`, the zimr way.
+//! depth_writing - raylib's `shaders_depth_writing`, the zimr way.
 //!
 //! The material LIES to the depth buffer:
 //! `frag_depth = 1 - shaded.blue` (`depth_write_fs`, raylib's exact
-//! gag).  The purple cube (blue ≈ 1) claims depth ≈ 0 and pops in
+//! gag).  The purple cube (blue ~ 1) claims depth ~ 0 and pops in
 //! FRONT of everything; the yellow cube (blue = 0) claims depth 1 and
 //! sinks BEHIND everything; the teal cube floats between.  Real
 //! positions say otherwise, and the impossible occlusion holds up as
-//! the camera orbits — that's the whole demo.
+//! the camera orbits - that's the whole demo.
 //!
 //! Upgrade over raylib: a "lie to depth" checkbox.  Off, the same
 //! three cubes draw through `fog_fs` at density 0 (an honest Lambert
@@ -53,7 +53,7 @@ const sun_dir: [3]f32 = .{ 0.4, 0.85, 0.5 };
 
 // Three cubes staggered along z so their REAL depth order (yellow
 // nearest, purple farthest at the start pose) is the OPPOSITE of what
-// the blue channel claims — maximum fraud visibility.
+// the blue channel claims - maximum fraud visibility.
 const Placement = struct {
     center: [3]f32,
     half: f32,

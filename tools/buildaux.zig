@@ -1,6 +1,6 @@
-//! tools/buildaux.zig — build-time helper CLI for zimr's build graph.
+//! tools/buildaux.zig - build-time helper CLI for zimr's build graph.
 //!
-//! The Zig 0.16→0.17 build-system rework (configurer/maker split, devlog
+//! The Zig 0.16->0.17 build-system rework (configurer/maker split, devlog
 //! 2026-05-26) removed user `makeFn` closures: the maker is a separate
 //! release-mode process, so a closure from the configurer can't run there.
 //! The custom build steps that used to live in build.zig as `Step` subclasses

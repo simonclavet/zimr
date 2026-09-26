@@ -33,7 +33,7 @@ export fn run_test() i32 {
         return 4;
     }
 
-    // floored division/modulo (sign follows divisor) — distinct from C truncation
+    // floored division/modulo (sign follows divisor) - distinct from C truncation
     if (@divFloor(@as(i32, -7), 3) != -3) {
         return 5;
     }

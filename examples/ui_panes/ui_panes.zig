@@ -1,4 +1,4 @@
-//! ui_panes — port of the GL `ui_panes`: a three-pane workspace built from
+//! ui_panes - port of the GL `ui_panes`: a three-pane workspace built from
 //! the imgui-parity primitives. A horizontal splitter divides a file-tree pane
 //! (collapsible `treeNode` folders + leaf files) from a right column, which a
 //! vertical splitter divides into an editor pane and an output pane. Drag either

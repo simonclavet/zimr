@@ -1,4 +1,4 @@
-//! mesh_builder — a little workshop for the mesh-ops toolkit. It doesn't draw
+//! mesh_builder - a little workshop for the mesh-ops toolkit. It doesn't draw
 //! any bare primitive; instead it BUILDS things out of them, the way you're
 //! meant to: generate parts, orient/place them with meshTranslate/meshRotate,
 //! flip caps with meshInvert, and weld everything into one mesh with meshMerge.
@@ -6,7 +6,7 @@
 //! Two pieces are on display:
 //!   * a solid capped cylinder  (cylinder body + a disk on each end)
 //!   * an arrow pointing +X      (thin cylinder shaft + a cone head, both spun
-//!                                90° off the +Y axis onto +X with meshRotate)
+//!                                90 deg off the +Y axis onto +X with meshRotate)
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -17,7 +17,7 @@ const Camera3D = zm.Camera3D;
 const pi = zm.pi;
 const pointVec = zm.pointVec;
 
-// a quarter turn in radians — spinning a +Y part by -90° around Z lands it on +X
+// a quarter turn in radians - spinning a +Y part by -90 deg around Z lands it on +X
 const quarter_turn: f32 = pi * 0.5;
 
 const State = struct {
@@ -35,7 +35,7 @@ fn buildCappedCylinder(
     height: f32,
     slices: i32,
 ) !z.types.Mesh {
-    // the tube itself — open at both ends (that's what the caps are for)
+    // the tube itself - open at both ends (that's what the caps are for)
     const tube_body: z.types.Mesh = try z.genMeshCylinder(gpa, radius, height, slices, 2);
 
     // top cap: a disk already faces up (+Y), so we just slide it up to the top
@@ -43,7 +43,7 @@ fn buildCappedCylinder(
     z.meshTranslate(&top_cap, 0, height, 0);
 
     // bottom cap: it needs to face DOWN (outward at the base), but genMeshDisk
-    // faces up — so flip it inside-out with meshInvert (reverses winding +
+    // faces up - so flip it inside-out with meshInvert (reverses winding +
     // normals). It's already sitting at y = 0, so no translate needed.
     var bottom_cap: z.types.Mesh = try z.genMeshDisk(gpa, radius, slices);
     z.meshInvert(&bottom_cap);
@@ -59,13 +59,13 @@ fn buildCappedCylinder(
 }
 
 /// Build an arrow pointing along +X: a thin cylinder shaft with a cone head.
-/// Both come out of the generators pointing UP (+Y), so we spin each one -90°
-/// around Z to lay it on the +X axis — which is exactly what meshRotate is for.
+/// Both come out of the generators pointing UP (+Y), so we spin each one -90 deg
+/// around Z to lay it on the +X axis - which is exactly what meshRotate is for.
 fn buildArrow(gpa: Allocator) !z.types.Mesh {
     const shaft_length: f32 = 1.7;
     const head_length: f32 = 0.6;
 
-    // shaft: a Y-axis cylinder (0..len), spun -90° about Z so it runs along +X
+    // shaft: a Y-axis cylinder (0..len), spun -90 deg about Z so it runs along +X
     var shaft: z.types.Mesh = try z.genMeshCylinder(gpa, 0.07, shaft_length, 18, 2);
     z.meshRotate(&shaft, 0, 0, 1, -quarter_turn); // +Y -> +X
 
@@ -90,7 +90,7 @@ fn verifyCleanupOps(gpa: Allocator) !void {
     const faceted: z.types.Mesh = try z.meshUnweld(gpa, torus);
     defer z.unloadMesh(gpa, faceted);
     assert(faceted.vertexCount == faceted.triangleCount * 3, @src());
-    // weld the faceted mesh back down — should recover far fewer vertices
+    // weld the faceted mesh back down - should recover far fewer vertices
     const rewelded: z.types.Mesh = try z.meshWeld(gpa, faceted, 0.0001);
     defer z.unloadMesh(gpa, rewelded);
     assert(rewelded.vertexCount < faceted.vertexCount, @src());

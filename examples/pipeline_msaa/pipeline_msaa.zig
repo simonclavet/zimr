@@ -1,4 +1,4 @@
-//! pipeline_msaa — MSAA (multisample anti-aliasing). The same rotating
+//! pipeline_msaa - MSAA (multisample anti-aliasing). The same rotating
 //! high-contrast triangle is rendered twice into small targets, magnified side
 //! by side so the edge quality is obvious:
 //!   - LEFT  : 1 sample  -> jagged, stair-stepped diagonal edges

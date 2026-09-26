@@ -1,6 +1,6 @@
-//! gestures_testbed — port of the GL `gestures_testbed`: a comprehensive
-//! gesture-state visualizer. Three columns — per-finger touch state, gesture-
-//! detector state, and a state-transition log — plus numbered touch circles
+//! gestures_testbed - port of the GL `gestures_testbed`: a comprehensive
+//! gesture-state visualizer. Three columns - per-finger touch state, gesture-
+//! detector state, and a state-transition log - plus numbered touch circles
 //! tracking each finger. Touch-driven (no-op on desktop). Same backend-agnostic
 //! recognizers as gestures_demo, ticked on the wgpu input snapshot.
 const std = @import("std");
@@ -115,7 +115,7 @@ fn update(f: *z.Frame, state: *State) void {
     const col3_x: f32 = 600;
     const col_y: f32 = 80;
 
-    // Column 1 — touch state.
+    // Column 1 - touch state.
     f.gl.text(.{ col1_x, col_y }, "TOUCH STATE", .{ .size = 16, .color = c.sky_400, .font = &state.font });
     const tcount: i32 = z.getTouchPointCount(f.input);
     const count_txt: []const u8 = allocPrint(arena, "count: {d}", .{tcount}) catch "";
@@ -136,7 +136,7 @@ fn update(f: *z.Frame, state: *State) void {
         );
     }
 
-    // Column 2 — gesture state.
+    // Column 2 - gesture state.
     f.gl.text(.{ col2_x, col_y }, "GESTURE STATE", .{ .size = 16, .color = c.pink_400, .font = &state.font });
     const cur_txt: []const u8 = allocPrint(arena, "current: {s}", .{gestureName(cur)}) catch "";
     f.gl.text(.{ col2_x, col_y + 24 }, cur_txt, .{ .size = 14, .color = c.slate_300, .font = &state.font });
@@ -156,7 +156,7 @@ fn update(f: *z.Frame, state: *State) void {
     ) catch "";
     f.gl.text(.{ col2_x, col_y + 96 }, pinch_txt, .{ .size = 14, .color = c.slate_300, .font = &state.font });
 
-    // Column 3 — transition log.
+    // Column 3 - transition log.
     f.gl.text(.{ col3_x, col_y }, "TRANSITION LOG", .{ .size = 16, .color = c.amber_400, .font = &state.font });
     var j: usize = 0;
     while (j < state.log_count) : (j += 1) {

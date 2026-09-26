@@ -1,19 +1,19 @@
-//! src/shaders/effect_ascii_fs.zig — ASCII-art post effect (raylib's
+//! src/shaders/effect_ascii_fs.zig - ASCII-art post effect (raylib's
 //! `shaders_ascii_rendering` ported into the engine's 2D effect family).
 //!
 //! The scene is diced into character CELLS. Each cell takes ONE sample from the
-//! source texture — at the cell's centre — and that single sample is what makes
+//! source texture - at the cell's centre - and that single sample is what makes
 //! it a quantisation: everything inside the cell collapses to one brightness, the
 //! way a terminal collapses a region to one character. That brightness then picks
 //! a glyph from a ramp that gets denser as it gets brighter:
 //!
-//!     (blank)  .  :  -  +  x  #  █
+//!     (blank)  .  :  -  +  x  #  (solid block)
 //!
-//! The glyphs are drawn with PURE FLOAT MATH — discs and bars over the cell's
-//! local coordinates — rather than sampled from a bitmap font. That is deliberate:
+//! The glyphs are drawn with PURE FLOAT MATH - discs and bars over the cell's
+//! local coordinates - rather than sampled from a bitmap font. That is deliberate:
 //! a bitmap font would need a second sampler plus u32 bit-twiddling to unpack the
 //! rows, and neither dynamic bit-shifts nor `@intFromFloat` are exercised anywhere
-//! else in this shader family, so they are unproven on the SPIR-V→WGSL path. Float
+//! else in this shader family, so they are unproven on the SPIR-V->WGSL path. Float
 //! primitives are proven, they antialias for free, and they scale to any cell size.
 
 const zm = @import("zm");
@@ -70,13 +70,13 @@ fn glyph(level: f32, px: f32, py: f32, aa: f32) f32 {
             bar(px, 0.5, t, aa) * bar(py, 0.5, 0.30, aa),
         );
     } else if (level < 5.5) {
-        // 'x' — two diagonals. |x-y| and |x+y-1| are the distances to them.
+        // 'x' - two diagonals. |x-y| and |x+y-1| are the distances to them.
         const d1: f32 = bar(px - py, 0.0, t * 1.4, aa);
         const d2: f32 = bar(px + py - 1.0, 0.0, t * 1.4, aa);
         const inside: f32 = bar(px, 0.5, 0.34, aa) * bar(py, 0.5, 0.34, aa);
         m = @max(d1, d2) * inside;
     } else if (level < 6.5) {
-        // '#' — two verticals, two horizontals.
+        // '#' - two verticals, two horizontals.
         const v: f32 = @max(bar(px, 0.34, t, aa), bar(px, 0.66, t, aa));
         const h: f32 = @max(bar(py, 0.34, t, aa), bar(py, 0.66, t, aa));
         m = @max(v, h) * bar(px, 0.5, 0.42, aa) * bar(py, 0.5, 0.42, aa);
@@ -120,7 +120,7 @@ pub fn shaderMain(io_in: Io) Out {
     const aa: f32 = 1.0 / cell;
     const ink: f32 = glyph(level, local_x, local_y, aa);
 
-    // Classic terminal green, or the scene's own colour — `color_mix` crossfades.
+    // Classic terminal green, or the scene's own colour - `color_mix` crossfades.
     const term: Vec3 = vec3(0.36, 1.0, 0.42);
     const tint: Vec3 = vec3(
         term[0] + (src[0] - term[0]) * color_mix,

@@ -1,7 +1,7 @@
-//! render_texture — render-to-texture demo for the new offscreen API. An animated
+//! render_texture - render-to-texture demo for the new offscreen API. An animated
 //! scene (spinning rectangles + a pulsing circle) is drawn INTO an offscreen render
 //! texture via `beginTextureMode`/`endTextureMode`, then that ONE texture is composited
-//! to the screen as a tinted grid with `drawTextureRec` — "render once, reuse many."
+//! to the screen as a tinted grid with `drawTextureRec` - "render once, reuse many."
 //! Exercises loadRenderTexture / texture-mode / asTexture. Viewport-relative.
 const std = @import("std");
 const Allocator = std.mem.Allocator;

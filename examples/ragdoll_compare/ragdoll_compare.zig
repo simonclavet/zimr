@@ -1,4 +1,4 @@
-//! ragdoll_compare — one humanoid, two engines.
+//! ragdoll_compare - one humanoid, two engines.
 //!
 //! MuJoCo's humanoid, limp, dropped twice onto the same floor from the same tipped squat:
 //!
@@ -10,16 +10,16 @@
 //!
 //! Same geoms, same masses and inertias (tested equal to 1e-7), same 1/500 s timestep, same
 //! floor. Each engine steps in its own world, so every microsecond on a readout belongs to one
-//! engine — and the reduced side's include its collision detection, because it needs some.
+//! engine - and the reduced side's include its collision detection, because it needs some.
 //!
-//! ── WHAT TO LOOK AT ──
+//! -- WHAT TO LOOK AT --
 //!
-//!   * **joint gap** — how far the maximal ragdoll's joints have opened. The reduced one has
+//!   * **joint gap** - how far the maximal ragdoll's joints have opened. The reduced one has
 //!     nothing to open.
 //!   * **the limit buttons.** With ALL limits the maximal ragdoll never quite settles; with
 //!     hinge limits only it does; with none it settles perfectly. That is Stage 0's measured
 //!     finding (`src/notes/ragdoll_compare_plan.md`), shown here rather than described.
-//!   * **µs per step** for each engine, averaged over half a second, because a browser's clock
+//!   * **us per step** for each engine, averaged over half a second, because a browser's clock
 //!     is too coarse to time one step.
 //!
 //! Standard wgpu example contract: a `pub const app: z.AppSpec(State)`.
@@ -71,10 +71,10 @@ const side_offset: f32 = 0.8;
 /// How long the step timers accumulate before a readout updates, in seconds.
 const timing_window: f32 = 0.5;
 /// "Hold the squat". Reduced: IMPLICIT computed torque through floating-base inverse dynamics
-/// (`rmx.stableSpringAccel`, `rmx.floatingBaseTorques`) — stable at any stiffness and any rate;
+/// (`rmx.stableSpringAccel`, `rmx.floatingBaseTorques`) - stable at any stiffness and any rate;
 /// at 60 Hz, falling onto the floor, 20 Hz held the squat to 7 degrees. Maximal: joint motors
 /// at 10 Hz, the stiffest that reached the squat on a fixed base without fighting its limits
-/// into a blow-up (ragdoll_compare_plan.md §9) — and, free and on the floor, they do NOT yet
+/// into a blow-up (ragdoll_compare_plan.md section 9) - and, free and on the floor, they do NOT yet
 /// hold it at either rate. That is the finding, not a bug in this page.
 const hold_frequency_reduced: f32 = 20.0;
 const hold_frequency_maximal: f32 = 10.0;
@@ -255,7 +255,7 @@ fn destroyWorlds(gpa: Allocator, s: *State) void {
     s.world_maximal.deinit(gpa);
 }
 
-/// The model's `squat` keyframe, 1.2 m up and tipped onto its side — the drop `robot_physics`'
+/// The model's `squat` keyframe, 1.2 m up and tipped onto its side - the drop `robot_physics`'
 /// ragdoll test uses. A body that lands upright makes few contacts and shows little.
 fn dropPose(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;

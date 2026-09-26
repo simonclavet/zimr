@@ -1,4 +1,4 @@
-//! triangle_strip — a gear/star built from a triangle strip: alternating inside- and
+//! triangle_strip - a gear/star built from a triangle strip: alternating inside- and
 //! outside-radius points around a circle form a ring of triangles, each filled with an HSV
 //! hue that cycles around the wheel. The strip slowly rotates and the hue drifts so it is
 //! alive without input. Phone-first: drag left/right to set the segment count (3..60), tap to

@@ -1,9 +1,9 @@
-//! examples/rt_fs_io.zig — schema for the ray-tracing fragment shader.
+//! examples/rt_fs_io.zig - schema for the ray-tracing fragment shader.
 //!
 //! Declares Inputs / Outputs / Ubo. The SAME `shaderMain` (rt_fs.zig) compiles
 //! to WGSL for the GPU and to native Zig for the raster software dispatcher, so a
 //! side-by-side demo can run one shader on both backends. Everything the trace
-//! needs — camera basis + the sphere scene — lives in the Ubo (fixed-size
+//! needs - camera basis + the sphere scene - lives in the Ubo (fixed-size
 //! arrays, which both WGSL and the raster dispatcher handle).
 //!
 //! Materials are encoded compactly: each sphere carries an albedo (rgb), a

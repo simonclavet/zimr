@@ -1,5 +1,5 @@
 //! lint:alias jobs_abi
-//! src/jobs_abi.zig — the names the three sides of the jobs system must agree on.
+//! src/jobs_abi.zig - the names the three sides of the jobs system must agree on.
 //!
 //! THREE sides, and that is why this file exists on its own:
 //!
@@ -10,17 +10,17 @@
 //! They are three separate compilations that never link against each other. Before this file,
 //! each name was a string literal in Zig AND a second string literal in hand-written
 //! JavaScript, with nothing checking that the two agreed. Rename one and the worker fails
-//! SILENTLY — no error, no result, a job that simply never comes back.
+//! SILENTLY - no error, no result, a job that simply never comes back.
 //!
 //! WHY THE CONSTANTS ARE NOT IN jobs_worker.zig, WHERE THEY WERE FIRST WRITTEN.
 //!
 //! They were, for about ten minutes, and the build stopped it:
 //!
-//!     error: kernel wasm imports 'env.js_global' — a job kernel must be PURE.
+//!     error: kernel wasm imports 'env.js_global' - a job kernel must be PURE.
 //!
 //! `jobs.zig` needs these names, and `jobs.zig` is linked into the kernel wasm. Importing them
 //! from `jobs_worker.zig` dragged that file's `extern fn js_global` (and the rest of the
-//! browser interop) along with them — into a wasm that is required to have ZERO imports so a
+//! browser interop) along with them - into a wasm that is required to have ZERO imports so a
 //! bare `{}` can instantiate it. The purity check in c2js caught it immediately, which is
 //! precisely the job it was written for.
 //!
@@ -30,7 +30,7 @@
 /// The kernel wasm's linear memory, as a JS object with a `.buffer`.
 ///
 /// CRITICAL: re-read `.buffer` AFTER EVERY call into the kernel. Growing a wasm memory
-/// DETACHES the old ArrayBuffer, so any view taken beforehand is dead — and it dies silently,
+/// DETACHES the old ArrayBuffer, so any view taken beforehand is dead - and it dies silently,
 /// as a zero-length read. This is the classic wasm-in-JS bug.
 pub const memory = "memory";
 
@@ -38,7 +38,7 @@ pub const memory = "memory";
 /// failure.
 pub const alloc = "zimr_job_alloc";
 
-/// `zimr_job_<name>(n) -> len`. ONE EXPORT PER KERNEL — no id, no dispatch table — so a job
+/// `zimr_job_<name>(n) -> len`. ONE EXPORT PER KERNEL - no id, no dispatch table - so a job
 /// physically cannot reach the wrong kernel. `len >= 0` is the result size in bytes; `len < 0`
 /// means the kernel returned a Zig error.
 pub const kernel_prefix = "zimr_job_";
@@ -56,7 +56,7 @@ pub const msg = struct {
     pub const init = "init";
     /// The host will NOT dispatch a job to a worker that has not sent this.
     ///
-    /// The worker always sent it. The host used to THROW IT AWAY — the message carries no
+    /// The worker always sent it. The host used to THROW IT AWAY - the message carries no
     /// job handle, so it fell through a `handle >= 1` guard and vanished. Nothing knew when a
     /// worker had finished instantiating, so `pump()` would hand a job to one that could not
     /// yet run it.

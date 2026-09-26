@@ -2,7 +2,7 @@
 // usize len; }`; the slice POINTER is built with the correct 1-byte element stride,
 // but the pointee element of the `ptr` field was sized at the default 4 bytes (the
 // enum-tag typedef isn't resolved in struct layout), so `slice.ptr[i]` strided by 4
-// over 1-byte-packed enum storage — reading the wrong elements. Fix resolves the
+// over 1-byte-packed enum storage - reading the wrong elements. Fix resolves the
 // pointer field's pointee to the enum's real width.
 const Color = enum(u8) { red, green, blue, alpha };
 var arr: [6]Color = .{ .red, .green, .blue, .alpha, .red, .blue };

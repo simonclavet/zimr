@@ -1,24 +1,24 @@
-//! text_sprite_fonts — port of raylib [text] examples "font spritefont" and
+//! text_sprite_fonts - port of raylib [text] examples "font spritefont" and
 //! "sprite fonts" (merged). raylib sources: examples/text/text_font_spritefont.c
 //! and examples/text/text_sprite_fonts.c.
 //!
 //! Both raylib samples do the same thing: `LoadFont("something.png")`, which for
-//! a PNG routes into `LoadFontFromImage` — an XNA-style BITMAP font where the
+//! a PNG routes into `LoadFontFromImage` - an XNA-style BITMAP font where the
 //! glyphs sit on a MAGENTA key background and are separated by key-coloured
 //! gutters. raylib then draws a fixed sentence per font and exits; nothing is
 //! interactive. This is the honest phone translation and adds what a touch UI
 //! makes worth having: pick the sample text, scale every font live, and tighten
-//! or loosen the inter-glyph spacing (raylib's `DrawTextEx` spacing) — so you
+//! or loosen the inter-glyph spacing (raylib's `DrawTextEx` spacing) - so you
 //! can actually see how each face behaves, not just a frozen screenshot.
 //!
 //! The engine work this drove is `z.loadFontFromImage` (raylib's
 //! `LoadFontFromImage`): segment the image into glyph rectangles (a pure,
-//! unit-tested `image.segmentSpriteFont` — first non-key pixel gives the shared
+//! unit-tested `image.segmentSpriteFont` - first non-key pixel gives the shared
 //! char/line spacing border, the first glyph column gives the char height, then
 //! each line band is walked splitting glyphs on key columns), replace the key
 //! colour with transparent, and upload the cleaned image as a NEAREST atlas.
 //! The glyphs carry `advanceX = 0`, so the existing text path advances by the
-//! rec width — exactly like raylib. The segmentation was validated headless:
+//! rec width - exactly like raylib. The segmentation was validated headless:
 //! pixel-for-pixel identical glyph counts/rects to a reference scan on all three
 //! real fonts (mecha 96, alagard 95, jupiter_crash 96 glyphs).
 //!
@@ -65,7 +65,7 @@ const samples = [_][]const u8{
 const State = struct {
     ui_font: z.Font,
     ui_host: z.UiHost,
-    /// mecha, alagard, jupiter_crash — parsed from magenta-keyed PNGs.
+    /// mecha, alagard, jupiter_crash - parsed from magenta-keyed PNGs.
     fonts: [3]z.Font,
 
     sample_idx: u32 = 0,

@@ -1,11 +1,11 @@
-//! examples/mandel_julia_inline_fs.zig — mandelbrot ↔ julia
+//! examples/mandel_julia_inline_fs.zig - mandelbrot <-> julia
 //! morph shader with iface co-located at the top of this file.
 //! See `mandel_inline_fs.zig` for the inline-iface mechanism.
 //!
-//! Both fractals share the iteration kernel `z' = z² + c`.  Per-
-//! pixel LERP between mandelbrot's (z₀=0, c=pixel) and julia's
-//! (z₀=pixel, c=julia_const) endpoints gives every continuous
-//! morph between them, driven by `t ∈ [0, 1]` from the UBO.
+//! Both fractals share the iteration kernel `z' = z^2 + c`.  Per-
+//! pixel LERP between mandelbrot's (z_0=0, c=pixel) and julia's
+//! (z_0=pixel, c=julia_const) endpoints gives every continuous
+//! morph between them, driven by `t in [0, 1]` from the UBO.
 
 const zm = @import("zm");
 const Complex = zm.Complex;
@@ -77,7 +77,7 @@ pub fn shaderMain(io_in: Io) Out {
             break;
         }
         if (cnorm2(z) > 128.0) {
-            // Radius² 128 not 256: avoids f32 overflow → NaN → white in
+            // Radius^2 128 not 256: avoids f32 overflow -> NaN -> white in
             // cmandelbrot_step on the no-spirv-opt WGSL path (N6 lesson).
             escaped = 1;
             break;

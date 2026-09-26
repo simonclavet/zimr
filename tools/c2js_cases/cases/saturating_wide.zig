@@ -1,7 +1,7 @@
 // Saturating +| -| *| <<| on 64-bit operands. Pre-fix the __clampu/__clampi
 // helpers used Number bounds (clamping u64 to 2^53-1, computing i64 bounds via
 // Math.pow) and returned a Number for an out-of-range value while passing a
-// BigInt through otherwise — so the emitted JS threw "Cannot convert ... to a
+// BigInt through otherwise - so the emitted JS threw "Cannot convert ... to a
 // BigInt" / "Cannot mix BigInt and other types". The saturating <<| additionally
 // did `BigInt * Math.pow(2, b)`. References use the *WithOverflow builtins (a
 // different lowering) and pick the saturation bound on overflow.

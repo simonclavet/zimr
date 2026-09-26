@@ -3,10 +3,10 @@
 // An array of it must therefore stride by 8. Two bugs made it stride by 4 (elements
 // overlapping, silent garbage):
 //   1. struct layouts were computed (inside prescanData) BEFORE prescanTypedefs ran,
-//      so the bitpack typedef's width wasn't known yet — now enums/typedefs prescan
+//      so the bitpack typedef's width wasn't known yet - now enums/typedefs prescan
 //      first.
 //   2. the free fn tyFromSpecifiers can't see the alias tables, so a `bitpack__...`
-//      element defaulted to a 32-bit int — parseStructDef now resolves it via
+//      element defaulted to a 32-bit int - parseStructDef now resolves it via
 //      bitpack_sizes to the real byte width.
 // Self-checks (returns 0 on success).
 const F = packed struct { x: u24, y: u24, z: u16 }; // 64 bits -> bitpack u64
@@ -23,7 +23,7 @@ export fn run_test() i32 {
     }
     var s: u32 = 0;
     for (&arr) |*f| {
-        f.x +%= 1; // each element's x bumped — must not bleed into a neighbour
+        f.x +%= 1; // each element's x bumped - must not bleed into a neighbour
         s += f.x + f.y + f.z;
     }
     // i=0: x=2  y=100 z=7  -> 109

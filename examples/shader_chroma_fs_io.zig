@@ -1,9 +1,9 @@
-//! examples/shader_chroma_fs_io.zig — schema for the chroma-shift
+//! examples/shader_chroma_fs_io.zig - schema for the chroma-shift
 //! fragment shader.  Declares Inputs / Samplers / Uniforms / Outputs.
 //!
 //! Inputs MUST match the engine default VS's outputs
 //! (frag_tex_coord at loc 0, frag_color at loc 1); see
-//! `src/shaders/default_vs.zig`.  No Ubo — sampler bindings and
+//! `src/shaders/default_vs.zig`.  No Ubo - sampler bindings and
 //! loose uniforms (col_diffuse, u_offset, u_time) carry everything.
 
 const zm = @import("zm");
@@ -20,12 +20,12 @@ pub const Inputs = struct {
 };
 
 /// Sampler used for the RTT-result image.  Reserved name (`texture0`)
-/// → auto-bound to `MaterialMapIndex.albedo` slot by `loadShader`.
+/// -> auto-bound to `MaterialMapIndex.albedo` slot by `loadShader`.
 pub const Samplers = struct {
     texture0: shader.Sampler2D(.albedo, .{}),
 };
 
-/// Loose uniforms — one engine-reserved (`col_diffuse`, pushed by
+/// Loose uniforms - one engine-reserved (`col_diffuse`, pushed by
 /// rlgl on each draw) plus two example-specific scalar uniforms the
 /// host pushes per frame.
 pub const Uniforms = struct {
@@ -40,7 +40,7 @@ pub const Uniforms = struct {
     u_time: f32 = 0,
 };
 
-/// Stage output — the final fragment colour.
+/// Stage output - the final fragment colour.
 pub const Outputs = struct {
     final_color: Vec,
 };

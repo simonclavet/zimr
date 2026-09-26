@@ -1,18 +1,18 @@
 //! lint:alias WgpuGl
-//! src/WgpuGl.zig — the WebGPU `gl: anytype` adapter (the "third renderer").
+//! src/WgpuGl.zig - the WebGPU `gl: anytype` adapter (the "third renderer").
 //!
 //! `src/renderer_trait.zig` defines a comptime trait (`assertIsGlContext`) plus two
-//! adapters — `GlAdapter` (wraps `*rlgl.GlState`, the WebGL path) and
-//! `SwAdapter` (wraps `*raster.Context`, the software rasterizer) — so a single
+//! adapters - `GlAdapter` (wraps `*rlgl.GlState`, the WebGL path) and
+//! `SwAdapter` (wraps `*raster.Context`, the software rasterizer) - so a single
 //! `fn drawX(gl: anytype, ...)` drives both with zero overhead. Its own comment
 //! says "adding a third renderer is a third adapter struct." This is that third
 //! adapter: a WebGPU one, so the SAME scene code runs on rlgl, raster, AND wgpu.
 //!
 //! It is the spine of two later goals: the bulk example port (scene code stops
-//! caring which backend it draws through) and the raster‖wgpu side-by-side demo
-//! (N6) — CPU and GPU halves driven by one `shaderMain` AND one `drawScene`.
+//! caring which backend it draws through) and the raster||wgpu side-by-side demo
+//! (N6) - CPU and GPU halves driven by one `shaderMain` AND one `drawScene`.
 //!
-//! HOW IT WORKS (immediate-mode → batched)
+//! HOW IT WORKS (immediate-mode -> batched)
 //! The trait is immediate-mode (raylib/rlgl style): `begin(mode)`, then
 //! `vertex2f/3f` + `color4ub` + `texCoord2f` per vertex, then `end`. rlgl and
 //! raster consume that natively. `Renderer2D` (the WebGPU 2D pipeline) instead
@@ -20,14 +20,14 @@
 //! the current primitive's vertices, transforms each by the modelview stack
 //! top, and on `end` emits triangles/quads into `Renderer2D`'s shapes batch via
 //! `WgpuBackend.drawTriangleBatched`. The PROJECTION stack feeds the batch
-//! shader's per-frame view-projection UBO — exactly the rlgl/raster split
+//! shader's per-frame view-projection UBO - exactly the rlgl/raster split
 //! (modelview transforms verts CPU-side; projection lives in the shader).
 //!
 //! LIFETIME
 //! Holds a `*Renderer2D` (long-lived, owns the batch + pipeline) and a
 //! `*PassState` (the live render pass, valid only between beginDrawing /
 //! endDrawing). Construct per frame via `WgpuGl.init(renderer, pass)`; no
-//! allocation, no teardown — like the other two adapters.
+//! allocation, no teardown - like the other two adapters.
 //!
 //! v1 SCOPE (N4 in wgpu_new_beginnings.md)
 //!  * Primitive modes: points/lines/triangles/quads accumulate + emit as
@@ -36,7 +36,7 @@
 //!  * `enable/disable/clearColor/clear` are recorded but the heavy lifting
 //!    (real scissor, depth toggles) lands with the 2D-parity work in N5; the
 //!    trait requires the methods, so they exist and are sound no-ops/recorders.
-//!  * texture binding (`setTexture`) swaps the batch's material — wired in N5
+//!  * texture binding (`setTexture`) swaps the batch's material - wired in N5
 //!    when textured 2D lands; for now it forces a flush + records the id.
 
 const renderer_2d = @import("renderer_2d.zig");
@@ -160,7 +160,7 @@ const ScissorRect = struct { x: i32, y: i32, w: i32, h: i32 };
 /// shrinks the width/height, so the right/bottom edge stays at its intended
 /// position. The earlier bug clamped the origin but kept the full extent, so a
 /// negative x (window dragged/scrolled off-screen left) left the right edge at
-/// `0 + w` — hundreds of px past the window — and content spilled to the right.
+/// `0 + w` - hundreds of px past the window - and content spilled to the right.
 fn clampScissorRect(
     x: i32,
     y: i32,
@@ -195,7 +195,7 @@ pass: *PassState,
 /// constructed standalone (e.g. in unit tests).
 owner: ?*anyopaque = null,
 /// Backing render-target dimensions (px), set by beginDrawing. Used to
-/// CLAMP scissor rects — WebGPU REJECTS a scissor larger than the render
+/// CLAMP scissor rects - WebGPU REJECTS a scissor larger than the render
 /// area (unlike GL, which clamps), so disable(.scissor_test) must reset to
 /// exactly these, not a giant rect.
 render_w: u32 = 0,
@@ -230,7 +230,7 @@ pub fn init(renderer_slot: *?Renderer2D, pass: *PassState) WgpuGl {
 
 /// The live Renderer2D. SINGLE SOURCE OF TRUTH: `renderer_slot` points at
 /// `App.renderer_2d`, so this can never be a stale copy, and there is no field
-/// to wire per-frame. Asserts (via assertf, so it fires even in ReleaseSmall —
+/// to wire per-frame. Asserts (via assertf, so it fires even in ReleaseSmall -
 /// surfacing on the page log rather than compiling out) that the renderer has
 /// been created; a use-before-init is a clear message AT THE SOURCE instead of
 /// an `undefined`/null deref that crashes far away.
@@ -384,7 +384,7 @@ pub fn texCoord2f(
 /// helpers (drawTexture/drawTextureRec). An `.invalid` view resets to white.
 pub fn bindTexture(self: *WgpuGl, tex: WgpuTexture) void {
     // Material-bind dedup: re-binding the texture already staged (e.g. the
-    // font atlas rebound per-glyph by drawWithFont) must NOT flush — that
+    // font atlas rebound per-glyph by drawWithFont) must NOT flush - that
     // turned a batchable text run into one draw call per glyph. Only a real
     // texture CHANGE flushes the staged geometry + swaps the bind group.
     const bg: BindGroupHandle = self.renderer().bindGroupForTexture(tex);
@@ -393,7 +393,7 @@ pub fn bindTexture(self: *WgpuGl, tex: WgpuTexture) void {
     }
     self.flushBeforeMaterialSwap();
     // Route through the per-texture registry (cached by handle) so this
-    // texture gets a DISTINCT, persistent bind group — NOT the shared
+    // texture gets a DISTINCT, persistent bind group - NOT the shared
     // `bind_groups[1]` mutated in place. The shapes batch resolves the bind
     // group lazily at flush time; mutating a shared slot would alias a prior
     // untextured/other-textured draw onto this texture at submit time (the
@@ -489,7 +489,7 @@ pub fn translate(self: *WgpuGl, x: f32, y: f32, z: f32) void {
 /// Post-multiply the modelview by a rotation of `angle_rad` radians about axis
 /// (x, y, z). 2D and text paths use (0, 0, 1); the three principal axes are
 /// supported and anything else falls back to Z. (`rlRotatef`, the raylib
-/// degree-taking name, is a thin shim over this — see text2d.)
+/// degree-taking name, is a thin shim over this - see text2d.)
 pub fn rotate(
     self: *WgpuGl,
     angle_rad: f32,
@@ -588,7 +588,7 @@ pub fn imageXYWH(
 /// texture directly and emits a textured quad (the same path as raylib
 /// `drawTexture`), so there is no per-frame registry churn.
 ///
-/// `opts.source` selects a sub-rectangle **in PIXELS** — the same units as
+/// `opts.source` selects a sub-rectangle **in PIXELS** - the same units as
 /// `gl.image` (Sprites) and raylib's `DrawTexturePro`, including raylib's
 /// negative-extent rule: a negative `width`/`height` FLIPS that axis, which is
 /// how you draw a RenderTexture right-way-up (`.height = -h`). `null` draws the
@@ -596,7 +596,7 @@ pub fn imageXYWH(
 ///
 /// This primitive used to take raw 0..1 UVs while its doc comment claimed
 /// pixels. Every one of its five call sites therefore hand-divided by the
-/// texture size (`sr.x / tw`, ...) — five private copies of one transform, none
+/// texture size (`sr.x / tw`, ...) - five private copies of one transform, none
 /// of which could flip. Same bug class as the scissor letterbox: the conversion
 /// belongs in the primitive, so it lives here, once.
 pub fn texture(
@@ -612,7 +612,7 @@ pub fn texture(
     var ub: f32 = 1;
     var vb: f32 = 1;
     if (opts.source) |source_in| {
-        // Identical normalization to image_mod.zig:drawTexturePro — negative width
+        // Identical normalization to image_mod.zig:drawTexturePro - negative width
         // mirrors u; negative height slides the origin down by |height| and
         // leaves the extent negative, so v runs bottom-to-top.
         var src: Rectangle = source_in;
@@ -906,7 +906,7 @@ pub fn triangle(
 }
 
 /// Unified primitive: draw `str` at `pos`. `opts.font` is required for now (the
-/// sink default is deferred — a null font draws nothing). Renders via the same
+/// sink default is deferred - a null font draws nothing). Renders via the same
 /// host-safe glyph path as raylib `drawText`.
 pub fn text(self: *WgpuGl, pos: Vec2, str: []const u8, opts: draw2d.TextOpts) void {
     const font: *const Font = opts.font orelse return;
@@ -992,9 +992,9 @@ pub fn ortho(
 
 /// Blend recipe. Matches the shape of renderer_trait's trait `setBlendMode` (an
 /// enum-literal `.alpha` coerces to this), but defined locally so the WGPU
-/// backend doesn't depend on renderer_trait → rlgl. WgpuGl's 2D pipeline is
+/// backend doesn't depend on renderer_trait -> rlgl. WgpuGl's 2D pipeline is
 /// created with standard alpha blending already, so `.alpha` is native and
-/// this is a no-op — present so `gl: anytype` scene code compiles + runs on
+/// this is a no-op - present so `gl: anytype` scene code compiles + runs on
 /// WGPU. (Seam for swapping the pipeline's blend state when more modes land.)
 pub const BlendMode = enum { alpha };
 pub fn setBlendMode(self: *WgpuGl, mode: BlendMode) void {
@@ -1079,7 +1079,7 @@ pub fn clear(self: *WgpuGl, mask: raster.ClearMask) void {
 // ============================================================================
 
 // ============================================================================
-// Tests — the headline: WgpuGl satisfies the renderer_trait trait, and a single
+// Tests - the headline: WgpuGl satisfies the renderer_trait trait, and a single
 // `fn drawX(gl: anytype)` compiles against all three adapters.
 // ============================================================================
 
@@ -1121,7 +1121,7 @@ test "one `gl: anytype` scene fn compiles against WgpuGl" {
 }
 
 // Moved from renderer_trait.zig (structure-plan S0): the impl asserts its own
-// trait conformance — and the old placement made trait↔impl a cycle.
+// trait conformance - and the old placement made trait<->impl a cycle.
 test "assertIsGlContext: WgpuGl satisfies the trait" {
     // Compile-time check; if this doesn't fail to compile, the live
     // renderer has every required method (GL-retirement P5: this
@@ -1131,7 +1131,7 @@ test "assertIsGlContext: WgpuGl satisfies the trait" {
 }
 
 // ----------------------------------------------------------------------------
-// Scissor clamp (pure, unit-tested) — see WgpuGl.scissor for usage.
+// Scissor clamp (pure, unit-tested) - see WgpuGl.scissor for usage.
 
 test "clampScissorRect: in-bounds rect keeps its size" {
     const sc: ScissorRect = clampScissorRect(100, 100, 400, 200, 1080, 2000);

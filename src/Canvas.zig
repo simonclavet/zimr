@@ -1,5 +1,5 @@
 //! lint:alias Canvas
-//! `Canvas` — a pure-Zig, native, anti-aliased 2D drawing surface that
+//! `Canvas` - a pure-Zig, native, anti-aliased 2D drawing surface that
 //! exports PNG with zero third-party code. It renders into a supersampled
 //! RGBA8 buffer using zimr's own `imageDraw*` rasterizers + truetype text, then
 //! box-downsamples (premultiplied) for clean anti-aliasing, and encodes via
@@ -10,7 +10,7 @@
 //! texturedQuad) matches what the plot renderers call, so a `Plot` can be drawn
 //! straight to a PNG with no UI / GPU / wasm involved.
 //!
-//! Ergonomics: build a `Canvas`, draw, `savePng(io, "out.png")` — where `io`
+//! Ergonomics: build a `Canvas`, draw, `savePng(io, "out.png")` - where `io`
 //! is the `std.Io` your `main` already created (see `examples/native_plot_png`
 //! for a ~40-line program). For bytes without a file, use `writePngToMemory`.
 
@@ -258,7 +258,7 @@ pub fn circleFilled(self: *Canvas, c: Vec2, radius: f32, col: Color) void {
 
 /// Unified primitive: fill a circle (see notes/drawing_api.md). `circleFilled`
 /// stays as the plot-sink name. Outline (ring) and `segments` are deferred on the
-/// CPU canvas — it fills a smooth disc, so segments don't apply.
+/// CPU canvas - it fills a smooth disc, so segments don't apply.
 pub fn circle(self: *Canvas, center: Vec2, radius: f32, opts: draw2d.CircleOpts) void {
     self.circleFilled(center, radius, opts.color);
 }
@@ -457,7 +457,7 @@ pub fn writePngToMemory(self: *const Canvas) ![]u8 {
 }
 
 /// Resolve, encode, and write `path`. Takes the application's `io` (the
-/// `std.Io` chosen in `main`, e.g. from a `std.Io.Threaded`) — same way the
+/// `std.Io` chosen in `main`, e.g. from a `std.Io.Threaded`) - same way the
 /// rest of zimr threads its allocator. For bytes-in-memory use
 /// `writePngToMemory` (no `io` needed).
 pub fn savePng(self: *const Canvas, io: std.Io, path: []const u8) !void {

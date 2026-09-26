@@ -1,4 +1,4 @@
-//! bullet_hell — a radial bullet spawner. Every few frames a ring of bullets fires outward from the
+//! bullet_hell - a radial bullet spawner. Every few frames a ring of bullets fires outward from the
 //! centre; the spawn angle creeps each volley so the rings braid into a spiral. A rotating "magic
 //! circle" (two spinning squares + three rings) anchors the middle. Self-running; tap to cycle the
 //! spiral pattern (row count / creep / speed). From raylib shapes_bullet_hell.

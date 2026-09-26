@@ -1,4 +1,4 @@
-//! examples/pipeline_uniforms_fs.zig — pipeline_uniforms fragment shader body.
+//! examples/pipeline_uniforms_fs.zig - pipeline_uniforms fragment shader body.
 //! Emits the interpolated colour straight through.
 
 const shader_io = @import("pipeline_uniforms_fs_io.zig");

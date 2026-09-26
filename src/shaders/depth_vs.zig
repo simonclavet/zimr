@@ -1,4 +1,4 @@
-//! src/shaders/depth_vs.zig — depth-in-red vertex shader body.
+//! src/shaders/depth_vs.zig - depth-in-red vertex shader body.
 //!
 //! Projects the vertex, then computes its depth value and folds it into
 //! a grayscale colour the FS emits verbatim. mode 0 stores the raw
@@ -6,7 +6,7 @@
 //! linearizes the NDC depth to a view-space distance and normalizes it
 //! against the viz window for a full-contrast visualisation.
 //!
-//! Same source compiles for SPIR-V (→ WGSL/GLSL → GPU) and wasm32 (→
+//! Same source compiles for SPIR-V (-> WGSL/GLSL -> GPU) and wasm32 (->
 //! CPU dispatch). Schema lives in `depth_vs_io.zig`.
 
 const zm = @import("zm");
@@ -40,7 +40,7 @@ pub fn shaderMain(io_in: Io) Out {
     const norm_c: f32 = clamp(norm, 0.0, 1.0);
 
     // mode 0: raw ndc_z*0.5+0.5 (shadow-map, pbr-faithful). mode 2: raw ndc_z
-    // ([0,1] full range) — the correct viz for an ORTHOGRAPHIC light, whose
+    // ([0,1] full range) - the correct viz for an ORTHOGRAPHIC light, whose
     // NDC depth is already linear (mode 1's perspective linearize would distort
     // it). else (mode 1): perspective linearize + normalize.
     const d: f32 = if (io_in.u.mode == 0) raw else if (io_in.u.mode == 2) ndc_z else norm_c;

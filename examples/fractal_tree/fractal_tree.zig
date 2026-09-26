@@ -1,4 +1,4 @@
-//! fractal_tree — a recursive L-system tree swaying in the wind. Each branch splits
+//! fractal_tree - a recursive L-system tree swaying in the wind. Each branch splits
 //! into two thinner, shorter children; recursion to a fixed depth grows the canopy, with
 //! blossoms at the tips. A per-depth, per-position sinusoidal sway makes a ripple travel up
 //! the tree so the whole thing bends and shimmers. Pure recursion + drawLine.

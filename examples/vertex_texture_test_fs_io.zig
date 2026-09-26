@@ -1,4 +1,4 @@
-//! examples/vertex_texture_test_fs_io.zig — fragment schema (pass-through).
+//! examples/vertex_texture_test_fs_io.zig - fragment schema (pass-through).
 const zm = @import("zm");
 const Vec = zm.Vec;
 

@@ -1,4 +1,4 @@
-//! penrose_tile — a Penrose tiling grown from an L-system (Lindenmayer system) and drawn with
+//! penrose_tile - a Penrose tiling grown from an L-system (Lindenmayer system) and drawn with
 //! a turtle: the production string is expanded generation by generation from W/X/Y/Z rules, then
 //! interpreted as turtle commands (F draws, +/- turn by 36 degrees, [ ] push/pop state). The tiling
 //! reveals itself progressively, then tap to step to the next generation (raylib uses UP/DOWN).

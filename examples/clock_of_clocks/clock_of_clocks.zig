@@ -1,4 +1,4 @@
-//! clock_of_clocks — the time as HHMMSS, where every digit is a 4x6 grid of 24 tiny analog
+//! clock_of_clocks - the time as HHMMSS, where every digit is a 4x6 grid of 24 tiny analog
 //! clocks. Each little clock has two hands; neighbouring hands line up to trace the strokes of the
 //! digit. When a digit changes the hands sweep to their new pose with a smoothstep. Driven by the
 //! real wall clock via z.localTime(). Tap to toggle 12/24-hour mode (raylib uses SPACE).

@@ -1,4 +1,4 @@
-//! textures_background_scrolling — port of raylib [textures] example.
+//! textures_background_scrolling - port of raylib [textures] example.
 //! Three parallax cyberpunk layers scroll at different speeds, each drawn twice
 //! for a seamless loop and scaled 2x (raylib's DrawTextureEx). PNGs are decoded
 //! at runtime -> GPU textures; the CPU pixels are freed right after upload.

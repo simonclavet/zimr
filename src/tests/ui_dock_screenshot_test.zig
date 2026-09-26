@@ -16,7 +16,7 @@ test "ui: dockspace with 3 docked windows -> PNG" {
     const gpa: Allocator = std.testing.allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
-        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
         // live-byte tripwire that catches a dropped per-frame reset). These four test
         // files were imported by nothing, so they never compiled against the change.
         .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),
@@ -86,7 +86,7 @@ test "ui: dock drag overlay -> PNG" {
     const gpa: Allocator = std.testing.allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
-        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
         // live-byte tripwire that catches a dropped per-frame reset). These four test
         // files were imported by nothing, so they never compiled against the change.
         .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),

@@ -1,4 +1,4 @@
-//! c2js CANARY — proves the transpiler still lowers Zig's C backend correctly
+//! c2js CANARY - proves the transpiler still lowers Zig's C backend correctly
 //! after a compiler bump.
 //!
 //! The `/*?...*/` marker gate in `tools/c2js.zig` catches constructs c2js KNOWS
@@ -14,7 +14,7 @@
 //! parameter precisely so the optimizer CANNOT fold the runtime path back into
 //! the constant and make the comparison tautological.
 //!
-//! Any disagreement means c2js is emitting wrong VALUES — the failure mode that
+//! Any disagreement means c2js is emitting wrong VALUES - the failure mode that
 //! ships green through build, lint, fmt and verify_imports.
 //!
 //! Run: `zig build c2js-canary` (see webtests/c2js_canary.mjs).
@@ -27,7 +27,7 @@
 const seed: u32 = 0x9E3779B9;
 
 /// A packed struct exercises sub-width field loads/stores, which lower to
-/// masking helpers with a `bits` argument narrower than the storage width —
+/// masking helpers with a `bits` argument narrower than the storage width -
 /// exactly the case where treating a same-width cast as identity goes wrong.
 const Packed = packed struct {
     a: u9,

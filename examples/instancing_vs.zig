@@ -1,4 +1,4 @@
-//! examples/instancing_vs.zig — instancing vertex shader body.
+//! examples/instancing_vs.zig - instancing vertex shader body.
 //!
 //! Adds the per-instance offset to the per-vertex triangle position, transforms
 //! by the UBO's 4x4 aspect matrix, and passes the per-instance colour through.

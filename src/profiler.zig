@@ -1,5 +1,5 @@
 //! lint:alias profiler
-//! profiler.zig — zimr's integrated, in-process profiler (Tracy-inspired).
+//! profiler.zig - zimr's integrated, in-process profiler (Tracy-inspired).
 //!
 //! Comptime-gated by `build_options.profile_enabled` (derived from `-Dmode`:
 //! on for `debug`/`release`, stripped in `ship`).  When disabled every entry
@@ -9,7 +9,7 @@
 //!
 //! Model (locked in design): a HYBRID live+freeze profiler.  One set of ring
 //! buffers is always recording; "freeze" merely stops them advancing.  Every
-//! view defaults to the LONGEST frame in a rolling ~2 second window — the
+//! view defaults to the LONGEST frame in a rolling ~2 second window - the
 //! hitch, not the average.
 //!
 //! Identity is the comptime `@src()` call site, so statistics aggregate by
@@ -30,7 +30,7 @@ const expectEqual = std.testing.expectEqual;
 
 /// Compile-time master switch.  Defensive `@hasDecl` so any module whose
 /// build_options predate this option simply compiles the profiler out
-/// instead of failing — only `debug`/`release` of the main modules turn it on.
+/// instead of failing - only `debug`/`release` of the main modules turn it on.
 pub const enabled: bool = if (@hasDecl(build_options, "profile_enabled"))
     build_options.profile_enabled
 else
@@ -104,7 +104,7 @@ var timer_res_ms: f64 = 0; // lint:off module-var: measured clock resolution (on
 
 /// Sample the installed clock to estimate its resolution: the smallest non-zero
 /// delta between consecutive reads. Call once after setClock. Without cross-origin
-/// isolation browsers clamp performance.now() to ~100us; with it, ~5us — this
+/// isolation browsers clamp performance.now() to ~100us; with it, ~5us - this
 /// reports which you actually got, so a sub-resolution phase reading 0 is explained.
 pub fn probeResolution() void {
     if (enabled) {

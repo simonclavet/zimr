@@ -1,8 +1,8 @@
-//! worker_png — start a task on a worker, and watch the frame NOT freeze.
+//! worker_png - start a task on a worker, and watch the frame NOT freeze.
 //!
 //! `codecs.png.encode` of a 1024x1024 image costs ~240 ms in wasm on a phone.
 //!
-//!   * On the MAIN THREAD that is a 233 ms frozen frame — fourteen dropped frames. The
+//!   * On the MAIN THREAD that is a 233 ms frozen frame - fourteen dropped frames. The
 //!     orbiting dot below stops dead, and the "worst frame gap" readout says so.
 //!   * On a WORKER the encode still takes ~222 ms, but the worst frame gap is 17 ms.
 //!     Nothing stalls. The dot never even flickers.
@@ -11,7 +11,7 @@
 //!
 //! Tap either button and watch the dot. That is the demo.
 //!
-//! (Where workers are unavailable — a sandboxed iframe refuses `new Worker()` — the
+//! (Where workers are unavailable - a sandboxed iframe refuses `new Worker()` - the
 //! kernel runs inline on the main thread instead, so this example still WORKS. It just
 //! hitches on both buttons, and the readout tells you why.)
 
@@ -27,7 +27,7 @@ const sinRad = zm.sinRad;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-/// 1024x1024 RGBA — 4 MB in, ~2.7 MB of PNG out. Big enough that the main-thread encode
+/// 1024x1024 RGBA - 4 MB in, ~2.7 MB of PNG out. Big enough that the main-thread encode
 /// is unmissable; small enough to stay inside the registry's 8 MB bounds.
 const dim: u32 = 1024;
 
@@ -35,13 +35,13 @@ const State = struct {
     gpa: Allocator,
     ui_host: z.UiHost,
     font: z.Font,
-    /// The image we encode. Filled once, never touched again — the kernel gets a COPY.
+    /// The image we encode. Filled once, never touched again - the kernel gets a COPY.
     pixels: []u8,
 
     /// The result buffer, allocated ONCE. Handing this to `pollInto` every frame is the
     /// difference between a 17 ms landing frame and a 154 ms one: `poll()` would allocate
     /// 2.7 MB on the frame the PNG arrives, and a multi-megabyte request grows the wasm
-    /// linear memory — which Chrome services by copying the whole thing. The worker had
+    /// linear memory - which Chrome services by copying the whole thing. The worker had
     /// already handed the frame back; collecting the answer took it away again.
     result_buf: []u8,
 
@@ -55,12 +55,12 @@ const State = struct {
     watching: bool = false,
 
     /// WHERE the main thread actually spent the time. A single "worst gap" told us a worker
-    /// run still cost 157 ms and left us guessing which part of the round trip did it — and
+    /// run still cost 157 ms and left us guessing which part of the round trip did it - and
     /// guessing is how you spend a day bisecting the wrong layer. So the number is broken
     /// into the three places it can possibly come from:
     ///
     ///   submit  the frame we called `submit()`. Blame: staging the 4 MB payload (a Zig
-    ///           alloc + memcpy, then a JS-owned copy), and — the first time only — bringing
+    ///           alloc + memcpy, then a JS-owned copy), and - the first time only - bringing
     ///           the worker pool up, which `available()` does lazily INSIDE a frame.
     ///   wait    the worst frame while the worker was actually working. This one SHOULD be
     ///           ~16 ms. If it is not, the work is not really off-thread and the feature is
@@ -72,17 +72,17 @@ const State = struct {
     land_ms: f32 = 0,
 
     /// LAND is 149 ms and does not shrink with repetition, so it is not a one-off
-    /// `memory.grow` — and `submit` allocates a BIGGER buffer (4 MB) in 17 ms, so a large
+    /// `memory.grow` - and `submit` allocates a BIGGER buffer (4 MB) in 17 ms, so a large
     /// wasm_allocator alloc is not inherently slow either. Both of my hypotheses died.
     ///
     /// So: stop inferring from frame gaps and time the landing frame from the inside.
-    /// `poll_ms` is wall-clock around `job.poll()` alone — the alloc, the copy-out, the
+    /// `poll_ms` is wall-clock around `job.poll()` alone - the alloc, the copy-out, the
     /// handle retire. If the 149 ms is in there, it is ours. If it is NOT, the cost is
     /// elsewhere in the frame (GC from churning 7 MB a run is the next suspect) and no
     /// amount of tuning `poll` would have touched it.
     poll_ms: f32 = 0,
     /// `pollInto` crosses into JS exactly twice: ask if the result is ready, then copy it
-    /// out. With the allocation gone it STILL costs 93 ms for 2.7 MB — 29 MB/s, when a
+    /// out. With the allocation gone it STILL costs 93 ms for 2.7 MB - 29 MB/s, when a
     /// native `TypedArray.set` runs at gigabytes/sec. So one of these two is not what it
     /// looks like, and the only way to know which is to time them apart.
     ready_ms: f32 = 0,
@@ -93,12 +93,12 @@ const State = struct {
     ///
     /// Load-bearing. A main-thread encode BLOCKS INSIDE its own frame, so the frame time that
     /// proves it only arrives on the NEXT frame. Clearing `watching` the moment the encode
-    /// returned meant the 233 ms this example exists to show was never actually recorded —
+    /// returned meant the 233 ms this example exists to show was never actually recorded -
     /// the headline number could not measure itself.
     settle: u32 = 0,
     ran_on: enum { nothing, main_thread, worker } = .nothing,
 
-    /// Which run this is. A wasm `memory.grow` is paid ONCE — if `land` collapses on run 2,
+    /// Which run this is. A wasm `memory.grow` is paid ONCE - if `land` collapses on run 2,
     /// the 2.7 MB result alloc was growing the heap, and the fix is to keep a buffer rather
     /// than allocate one per job.
     runs: u32 = 0,
@@ -110,7 +110,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const pixels: []u8 = try gpa.alloc(u8, dim * dim * 4);
     // ONCE, and sized from the REGISTRY rather than from a number typed here.
     //
-    // A hand-written constant that drifts from `max_output` does not fail loudly — it fails as
+    // A hand-written constant that drifts from `max_output` does not fail loudly - it fails as
     // `Error.OutputTooLarge`, on a phone, on the frame a result lands. The registry already
     // knows the answer; there is no reason to know it twice.
     const result_buf: []u8 = try gpa.alloc(u8, kernels.registry.max_output);
@@ -152,7 +152,7 @@ fn update(f: *z.Frame, s: *State) void {
             s.worst_gap_ms = gap_ms;
         }
         // Attribute this frame's cost to the phase that CAUSED it. A dispatch blocks inside
-        // its own frame, so the cost always lands on the frame AFTER — which is why the
+        // its own frame, so the cost always lands on the frame AFTER - which is why the
         // phase advances here, one frame late, rather than at the call site.
         switch (s.phase) {
             .submitted => {
@@ -247,7 +247,7 @@ fn update(f: *z.Frame, s: *State) void {
             s.settle = 0;
             s.phase = .submitted; // the whole encode happens inside this one frame
             s.ran_on = .main_thread;
-            // The bad way, kept on purpose. This BLOCKS the frame for ~240 ms — the dot
+            // The bad way, kept on purpose. This BLOCKS the frame for ~240 ms - the dot
             // stops, and `worst frame gap` below records exactly how long for.
             if (z.codecs.png.encode(s.gpa, s.pixels, dim, dim)) |png| {
                 defer s.gpa.free(png);
@@ -256,7 +256,7 @@ fn update(f: *z.Frame, s: *State) void {
             } else |err| {
                 std.log.err("worker_png: main-thread encode failed: {s}", .{@errorName(err)});
             }
-            // NOT `s.watching = false` — see `settle`. The 240 ms just spent blocking shows
+            // NOT `s.watching = false` - see `settle`. The 240 ms just spent blocking shows
             // up as the NEXT frame's delta, and stopping the watch here would discard it.
             s.settle = 3;
         }
@@ -273,7 +273,7 @@ fn update(f: *z.Frame, s: *State) void {
             s.ran_on = .worker;
             s.runs += 1;
             // The good way. Returns IMMEDIATELY; `poll` above collects it whenever it
-            // lands. Note the kernel is named by the FUNCTION, not a string — so a typo
+            // lands. Note the kernel is named by the FUNCTION, not a string - so a typo
             // is a compile error, not a NoSuchKernel at runtime.
             s.job = kernels.registry.submit(
                 s.gpa,

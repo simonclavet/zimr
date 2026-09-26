@@ -1,4 +1,4 @@
-//! robot_mpc.zig — iterative LQR over a horizon.
+//! robot_mpc.zig - iterative LQR over a horizon.
 //!
 //! Given a start state, a control sequence and a cost, improve the sequence. That is the
 //! whole of it, and it is the engine under MPC (re-solve every step, apply the first
@@ -6,38 +6,38 @@
 //!
 //! Each iteration does three things:
 //!
-//!   1. **roll out** the current controls and linearise around the result — `A` and `B` at
+//!   1. **roll out** the current controls and linearise around the result - `A` and `B` at
 //!      every knot, from the differencing section above;
 //!   2. **backward pass**, a Riccati recursion from the terminal cost back to the start,
 //!      producing at each knot a feedforward correction `k` and a feedback gain `K`;
-//!   3. **forward pass**, applying `u + α·k + K·δx` for decreasing α until the cost
+//!   3. **forward pass**, applying `u + alpha*k + K*dx` for decreasing alpha until the cost
 //!      actually drops.
 //!
-//! ── ★★★ THE FEEDBACK TERM IS A TANGENT VECTOR, AND THAT IS NOT A DETAIL ──
+//! -- *** THE FEEDBACK TERM IS A TANGENT VECTOR, AND THAT IS NOT A DETAIL --
 //!
-//! `K·δx` needs `δx` — how far the new rollout has drifted from the one we linearised
+//! `K*dx` needs `dx` - how far the new rollout has drifted from the one we linearised
 //! about. For a legged or floating robot that difference is NOT a subtraction: `qpos` holds
 //! quaternions and the space it moves in is `nv`-dimensional, not `nq`. `stateDiff`
 //! is the quaternion logarithm and is public for exactly this caller.
 //!
 //! Getting it wrong gives a planner that works on every arm and quietly steers legged
-//! robots into nonsense — the same failure mode the derivative file is built to avoid, one
+//! robots into nonsense - the same failure mode the derivative file is built to avoid, one
 //! level up.
 //!
-//! ── ★ WHY iLQR AND NOT DDP ──
+//! -- * WHY iLQR AND NOT DDP --
 //!
-//! DDP adds the second derivative of the DYNAMICS — a rank-3 tensor at every knot. It buys
+//! DDP adds the second derivative of the DYNAMICS - a rank-3 tensor at every knot. It buys
 //! quadratic convergence near the optimum and costs `ndx` times more differencing, which
 //! here means `ndx` times more full simulation steps. iLQR drops that term and keeps
 //! Gauss-Newton convergence, which is what essentially every practical implementation does,
 //! MuJoCo's included. If the tensor is ever wanted, it goes in `backward` and nothing else
 //! changes.
 //!
-//! ── ★ WHAT IS NOT HERE ──
+//! -- * WHAT IS NOT HERE --
 //!
 //! No control limits. A box-constrained `Q_uu` solve (MuJoCo's `boxQP`) is the standard
 //! answer and is a self-contained addition to `solveGains`. Until then a planner will
-//! happily ask for torques an actuator cannot produce, and `actuation` will clamp them —
+//! happily ask for torques an actuator cannot produce, and `actuation` will clamp them -
 //! so the plan is optimistic in exactly the way an unconstrained plan always is.
 
 const std = @import("std");
@@ -45,7 +45,7 @@ const Allocator = std.mem.Allocator;
 const zm = @import("zm");
 const rbt = @import("robot.zig");
 
-// ★ ONE ALIAS BLOCK FOR THE WHOLE FILE. Four files' worth of planning and control live here
+// * ONE ALIAS BLOCK FOR THE WHOLE FILE. Four files' worth of planning and control live here
 // now, and each used to carry its own copy of these; the merge kept exactly one.
 const Vec = zm.Vec;
 const vec = zm.vec;
@@ -62,29 +62,29 @@ const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 
 /// A quadratic tracking cost with diagonal weights.
 ///
-/// `l(x, u) = ½·Σ qᵢ·δxᵢ² + ½·Σ rⱼ·uⱼ²` per knot, and `½·Σ qfᵢ·δxᵢ²` at the end, where
-/// `δx` is the tangent-space difference from the reference.
+/// `l(x, u) = 1/2*sum q_i*dx_i^2 + 1/2*sum r_j*u_j^2` per knot, and `1/2*sum qf_i*dx_i^2` at the end, where
+/// `dx` is the tangent-space difference from the reference.
 ///
-/// ★ DIAGONAL ON PURPOSE. A full `Q` is more general and is almost never what anyone
+/// * DIAGONAL ON PURPOSE. A full `Q` is more general and is almost never what anyone
 /// writes; the weights people actually tune are per-coordinate. A dense form is a change to
 /// `quadratize` and to nothing else.
 
 // ============================================================================
-// DERIVATIVES OF ONE STEP, BY FINITE DIFFERENCING — the A and B a planner consumes
+// DERIVATIVES OF ONE STEP, BY FINITE DIFFERENCING - the A and B a planner consumes
 // ============================================================================
 
 /// How to take the difference.
 pub const Scheme = enum {
     /// One extra step per column. Error is O(eps).
     forward,
-    /// Two extra steps per column, so twice the cost. Error is O(eps²), which in f32 is
-    /// worth it more often than in double — see `defaultEps`.
+    /// Two extra steps per column, so twice the cost. Error is O(eps^2), which in f32 is
+    /// worth it more often than in double - see `defaultEps`.
     centered,
 };
 
 /// The step size that minimises total finite-difference error in f32.
 ///
-/// ★ DERIVED, NOT CHOSEN. Truncation error is O(eps) forward and O(eps²) centered;
+/// * DERIVED, NOT CHOSEN. Truncation error is O(eps) forward and O(eps^2) centered;
 /// cancellation error is O(machine_eps / eps) either way. Setting the two equal gives
 /// `sqrt(machine_eps)` and `cbrt(machine_eps)`. For f32 those are 3.4e-4 and 4.9e-3.
 ///
@@ -109,15 +109,15 @@ pub const DerivativeOptions = struct {
     sensors: bool = false,
     /// Derive `B`'s POSITION rows from its velocity rows instead of differencing them.
     ///
-    /// ── ★★★ THE ONE PLACE f32 CANNOT DIFFERENCE, AND THE INTEGRATOR ALREADY KNOWS ──
+    /// -- *** THE ONE PLACE f32 CANNOT DIFFERENCE, AND THE INTEGRATOR ALREADY KNOWS --
     ///
-    /// Every supported integrator finishes with `q′ = integratePos(q, v′, h)`, so a control's
+    /// Every supported integrator finishes with `q' = integratePos(q, v', h)`, so a control's
     /// effect on position arrives ENTIRELY through velocity:
     ///
-    ///     ∂q′/∂u  =  h · ∂v′/∂u
+    ///     dq'/du  =  h * dv'/du
     ///
-    /// Differencing it directly asks f32 to see `h²·gear·eps/M` ≈ 2e-7 inside a `q′` of order
-    /// 1 — below the last bit — so the quotient is quantisation. Measured on a cartpole, `B`'s
+    /// Differencing it directly asks f32 to see `h^2*gear*eps/M` ~ 2e-7 inside a `q'` of order
+    /// 1 - below the last bit - so the quotient is quantisation. Measured on a cartpole, `B`'s
     /// position rows across five epsilons:
     ///
     ///     at rest, upright        spread 0.00   usable
@@ -125,43 +125,43 @@ pub const DerivativeOptions = struct {
     ///     mid-swing, moving       spread 1.13   NOISE
     ///     moving fast             spread 1.70   NOISE
     ///
-    /// The velocity rows are fine at every one of those states, because `v′ = v + h·a` puts
+    /// The velocity rows are fine at every one of those states, because `v' = v + h*a` puts
     /// the signal against a much smaller number. So take the good rows and multiply by `h`.
     ///
-    /// ★ VERIFIED, NOT ASSUMED. `∂q′/∂u` differenced vs `h·∂v′/∂u`, worst relative
+    /// * VERIFIED, NOT ASSUMED. `dq'/du` differenced vs `h*dv'/du`, worst relative
     /// disagreement, where the differencing is trustworthy:
     ///
     ///     two-hinge arm, at rest      6.6e-8
-    ///     two-hinge arm, ω = 1        4.7e-5
-    ///     two-hinge arm, ω = 5        2.1e-4
+    ///     two-hinge arm, omega = 1        4.7e-5
+    ///     two-hinge arm, omega = 5        2.1e-4
     ///     free-joint body             exact (no actuators)
     ///
-    /// ★★ AND IT IS `B` ONLY — THE SAME TRICK ON `A` IS WRONG. `∂q′/∂q` is not `I + h·∂v′/∂q`,
-    /// because `integratePos` depends on `q` directly as well as through `v′`; for a quaternion
+    /// ** AND IT IS `B` ONLY - THE SAME TRICK ON `A` IS WRONG. `dq'/dq` is not `I + h*dv'/dq`,
+    /// because `integratePos` depends on `q` directly as well as through `v'`; for a quaternion
     /// that direct path is the exponential map's adjoint, not the identity. Measured on a free
-    /// body at ω = 1 the "prediction" was off by a factor of 1.3e4. The temptation to apply
+    /// body at omega = 1 the "prediction" was off by a factor of 1.3e4. The temptation to apply
     /// this to `A` for symmetry is exactly the kind of tidiness that produces a silent
     /// catastrophe on the one model class that cannot be checked by eye.
     position_rows_from_integrator: bool = true,
 };
 
-/// The linearisation of one step. Row-major, `ndx = 2·nv + na`.
+/// The linearisation of one step. Row-major, `ndx = 2*nv + na`.
 ///
-/// ★ ROW-MAJOR AND NOT TRANSPOSED, unlike MuJoCo, which builds transposed and flips at the
-/// end. The natural loop here fills a COLUMN per nudge, so building `Aᵀ` and transposing
+/// * ROW-MAJOR AND NOT TRANSPOSED, unlike MuJoCo, which builds transposed and flips at the
+/// end. The natural loop here fills a COLUMN per nudge, so building `A^T` and transposing
 /// would be MuJoCo's layout arrived at by MuJoCo's route; writing straight into the column
 /// costs one strided store per entry and removes a whole matrix of scratch. At these sizes
 /// the stride is free and the missing allocation is not.
 pub const Transition = struct {
-    /// ∂x'/∂x — `ndx × ndx`.
+    /// dx'/dx - `ndx x ndx`.
     a: []f32,
-    /// ∂x'/∂u — `ndx × nu`.
+    /// dx'/du - `ndx x nu`.
     b: []f32,
-    /// ∂y/∂x — `nsensordata × ndx`. Empty unless `Options.sensors`.
+    /// dy/dx - `nsensordata x ndx`. Empty unless `Options.sensors`.
     c: []f32,
-    /// ∂y/∂u — `nsensordata × nu`. Empty unless `Options.sensors`.
+    /// dy/du - `nsensordata x nu`. Empty unless `Options.sensors`.
     d: []f32,
-    /// 2·nv + na. The tangent-space state dimension — see the file header.
+    /// 2*nv + na. The tangent-space state dimension - see the file header.
     ndx: u32,
 
     scratch: DerivativeScratch,
@@ -169,16 +169,16 @@ pub const Transition = struct {
 
     /// Everything the differencing needs that is not the answer.
     ///
-    /// ★ NAMED APART FROM THE iLQR `Scratch` further down. Both are "the working memory of the
+    /// * NAMED APART FROM THE iLQR `Scratch` further down. Both are "the working memory of the
     /// thing above them" and in one namespace that is ambiguous, which the compiler said so
     /// plainly it needed no thought: two types cannot both be `Scratch` here.
     const DerivativeScratch = struct {
         saved: rbt.State,
-        /// ★ RAW STATE, so `nq + nv + na` — NOT `ndx`. The configuration block keeps its `nq`
+        /// * RAW STATE, so `nq + nv + na` - NOT `ndx`. The configuration block keeps its `nq`
         /// entries because `stateDiff` needs the actual quaternions to take a logarithm of;
         /// a tangent vector cannot be differenced against another tangent vector unless both
         /// were taken about the same base point, and these were not. Sizing these `ndx`
-        /// overflowed by exactly `nq − nv` — invisible on any model without a free or ball
+        /// overflowed by exactly `nq - nv` - invisible on any model without a free or ball
         /// joint, which is every model an arm-only test would use.
         next: []f32,
         next_plus: []f32,
@@ -241,7 +241,7 @@ pub const Transition = struct {
 
 /// Read the tangent-space state `x = [qpos_as_tangent, qvel, act]` out of `d`.
 ///
-/// ★ `qpos` IS COPIED RAW HERE, not converted — this is the *reference* half of a pair that
+/// * `qpos` IS COPIED RAW HERE, not converted - this is the *reference* half of a pair that
 /// `stateDiff` later differences properly. Nothing consumes this layout except `stateDiff`,
 /// which knows the first `nq` entries are configuration and treats them with
 /// `differentiatePos`. Keeping the raw values is what makes that possible: a tangent vector
@@ -249,7 +249,7 @@ pub const Transition = struct {
 /// the same base point, and they were not.
 /// Pack `(qpos, qvel, act)` into one flat `nq + nv + na` vector.
 ///
-/// ★ RAW, NOT TANGENT. This is the representation `stateDiff` consumes — the configuration
+/// * RAW, NOT TANGENT. This is the representation `stateDiff` consumes - the configuration
 /// block keeps its quaternions, because a logarithm needs them.
 pub fn readState(m: *const rbt.Model, d: *const rbt.Data, out: []f32) void {
     @memcpy(out[0..m.nq], d.pos);
@@ -257,13 +257,13 @@ pub fn readState(m: *const rbt.Model, d: *const rbt.Data, out: []f32) void {
     @memcpy(out[m.nq + m.nv ..][0..m.na], d.act);
 }
 
-/// `out = (to − from) / h`, in the TANGENT space — the configuration block through the
+/// `out = (to - from) / h`, in the TANGENT space - the configuration block through the
 /// quaternion logarithm, the rest by subtraction.
-/// The tangent-space difference of two raw states, `(to − from) / h`, `ndx` long.
+/// The tangent-space difference of two raw states, `(to - from) / h`, `ndx` long.
 ///
-/// ★ PUBLIC BECAUSE EVERY CALLER THAT COMPARES TWO STATES NEEDS EXACTLY THIS. A planner's
-/// feedback term is `K·(x − x_ref)`, and that subtraction is this function, not a `for` loop
-/// — the configuration block is a quaternion logarithm. A second copy of this logic is a
+/// * PUBLIC BECAUSE EVERY CALLER THAT COMPARES TWO STATES NEEDS EXACTLY THIS. A planner's
+/// feedback term is `K*(x - x_ref)`, and that subtraction is this function, not a `for` loop
+/// - the configuration block is a quaternion logarithm. A second copy of this logic is a
 /// second place to get a free joint wrong.
 pub fn stateDiff(
     m: *const rbt.Model,
@@ -289,7 +289,7 @@ fn plainDiff(out: []f32, from: []const f32, to: []const f32, h: f32) void {
     }
 }
 
-/// Write one column of a row-major `rows × cols` matrix.
+/// Write one column of a row-major `rows x cols` matrix.
 fn writeColumn(
     matrix: []f32,
     cols: usize,
@@ -305,14 +305,14 @@ fn writeColumn(
 ///
 /// `d` is left holding the state it started with. `out` is fully overwritten.
 ///
-/// ── ★ THE COST, SO IT IS NOT A SURPRISE IN A PLANNER'S INNER LOOP ──
+/// -- * THE COST, SO IT IS NOT A SURPRISE IN A PLANNER'S INNER LOOP --
 ///
 /// One full `step` per column: `ndx + nu` of them forward, twice that centered. A Go1 is
-/// `ndx = 36`, `nu = 12`, so a forward linearisation is 48 steps ≈ 0.7 ms and a centered one
-/// ≈ 1.3 ms. That is the price of not having analytic derivatives, and it is why this
+/// `ndx = 36`, `nu = 12`, so a forward linearisation is 48 steps ~ 0.7 ms and a centered one
+/// ~ 1.3 ms. That is the price of not having analytic derivatives, and it is why this
 /// interface is shaped so an analytic version can replace it without touching a caller.
 ///
-/// ★ MuJoCo skips pipeline stages the nudge cannot have changed (`mj_stepSkip` with
+/// * MuJoCo skips pipeline stages the nudge cannot have changed (`mj_stepSkip` with
 /// `mjSTAGE_POS` for a velocity nudge, and so on). That is a real factor-of-something and it
 /// is deliberately NOT done yet: a skip that is wrong produces a derivative that is subtly
 /// off rather than obviously broken, and there is nothing to check it against until the
@@ -346,7 +346,7 @@ pub fn transition(
     const want_sensors: bool = options.sensors and m.nsensordata > 0;
     const s: *Transition.DerivativeScratch = &out.scratch;
 
-    // ★ WARM STARTING OFF FOR THE DURATION. See the file header: it makes each perturbed
+    // * WARM STARTING OFF FOR THE DURATION. See the file header: it makes each perturbed
     // rollout depend on the one before it, which is history, not sensitivity.
     const opt_mutable: *rbt.Options = @constCast(&m.opt);
     const saved_warm_start: bool = opt_mutable.warm_start;
@@ -363,7 +363,7 @@ pub fn transition(
     }
     s.saved.restore(d);
 
-    // ── controls → B, D ──
+    // -- controls -> B, D --
     for (0..m.nu) |i| {
         const base: f32 = d.ctrl[i];
         d.ctrl[i] = base + eps;
@@ -389,8 +389,8 @@ pub fn transition(
         const from: []const f32 = if (centered) s.next_minus else s.next;
         stateDiff(m, s.column, from, s.next_plus, h);
         if (options.position_rows_from_integrator) {
-            // ★ THE POSITION ROWS ARE h TIMES THE VELOCITY ROWS, and the velocity rows are
-            // the ones f32 can actually see. Overwrite rather than difference — see the
+            // * THE POSITION ROWS ARE h TIMES THE VELOCITY ROWS, and the velocity rows are
+            // the ones f32 can actually see. Overwrite rather than difference - see the
             // option's doc for the measurements, and for why this is B only.
             for (0..m.nv) |r| {
                 s.column[r] = m.opt.timestep * s.column[m.nv + r];
@@ -404,7 +404,7 @@ pub fn transition(
         }
     }
 
-    // ── state → A, C. Three blocks, and the position one is the one with a trap in it. ──
+    // -- state -> A, C. Three blocks, and the position one is the one with a trap in it. --
     var column: usize = 0;
     while (column < ndx) : (column += 1) {
         nudgeState(m, d, s, column, eps);
@@ -438,7 +438,7 @@ pub fn transition(
 
 /// Move `d` `amount` along tangent direction `column` of the state.
 ///
-/// ★★ THE POSITION BRANCH IS WHY THIS IS A FUNCTION. `d.pos[column] += amount` is wrong for
+/// ** THE POSITION BRANCH IS WHY THIS IS A FUNCTION. `d.pos[column] += amount` is wrong for
 /// any model with a free or ball joint: the quaternion components are not independent
 /// coordinates, and nudging one denormalises it. `integratePos` with a one-hot velocity
 /// walks along the manifold instead, which is the same operation the integrator itself uses
@@ -462,23 +462,23 @@ fn nudgeState(
     d.stage = .stale;
 }
 
-// ────────────────────────────────────
+// ------------------------------------
 // Tests
 //
-// ★★★ THE ORACLES HERE ARE HAND-DERIVED, NOT RECORDED. A finite-difference routine checked
+// *** THE ORACLES HERE ARE HAND-DERIVED, NOT RECORDED. A finite-difference routine checked
 // against the same engine it differentiates proves only that the engine is consistent with
 // itself. Every expected matrix below is written out from the integrator's definition on
 // paper, so a wrong SIGN, a transposed block or a mis-ordered state would have to be wrong
 // in the same way in two independent places to pass.
-// ────────────────────────────────────
+// ------------------------------------
 
 const Spec = rbt.Spec;
 
 /// A point mass on a frictionless slide, optionally sprung, optionally motorised.
 ///
-/// ★ GRAVITY IS ZERO and the joint is the only DOF, which is what makes the discrete
-/// transition writable in closed form. Anything else — a second body, a contact, a bias
-/// force — and the "oracle" would have to be computed by the engine, which is not an oracle.
+/// * GRAVITY IS ZERO and the joint is the only DOF, which is what makes the discrete
+/// transition writable in closed form. Anything else - a second body, a contact, a bias
+/// force - and the "oracle" would have to be computed by the engine, which is not an oracle.
 fn Slider(comptime stiffness: f32, comptime motorised: bool) type {
     return Spec(.{
         .bodies = &.{.{
@@ -508,32 +508,32 @@ fn Slider(comptime stiffness: f32, comptime motorised: bool) type {
     });
 }
 
-test "★★★ derivative: A is the double integrator, to the digit" {
-    // ── THE ORACLE, DERIVED ON PAPER FROM `advanceEuler` ──
+test "*** derivative: A is the double integrator, to the digit" {
+    // -- THE ORACLE, DERIVED ON PAPER FROM `advanceEuler` --
     //
     // One free DOF, no spring, no damping, no forces: the acceleration does not depend on
     // the state at all. Semi-implicit Euler is then
     //
-    //     v' = v + h·a          with a = 0
-    //     q' = q + h·v'  = q + h·v
+    //     v' = v + h*a          with a = 0
+    //     q' = q + h*v'  = q + h*v
     //
     // so, with x = [q, v],
     //
-    //     A = ⎡ 1  h ⎤
-    //         ⎣ 0  1 ⎦
+    //     A = [ 1  h ]
+    //         [ 0  1 ]
     //
     // The `h` in the top right is the ONE entry that catches a transposed A: swap the
     // indices and it lands at [1][0], where the truth is 0.
     //
-    // ── ★★ WHAT THE TOLERANCES ARE, AND WHY THEY ARE NOT TIGHTER ──
+    // -- ** WHAT THE TOLERANCES ARE, AND WHY THEY ARE NOT TIGHTER --
     //
-    // The first version of this test asked for 1e-5 on `∂q'/∂v = h = 0.01` and measured
-    // 0.009926 — 0.74% out. That is not a bug, it is **the arithmetic this engine is made
+    // The first version of this test asked for 1e-5 on `dq'/dv = h = 0.01` and measured
+    // 0.009926 - 0.74% out. That is not a bug, it is **the arithmetic this engine is made
     // of**, and it is worth the paragraph because every derivative-consuming algorithm
     // downstream inherits it.
     //
-    // Nudging `v` by eps changes `q'` by `h·eps ≈ 3.4e-6`, against a `q'` of about 0.28. The
-    // ratio is 1.2e-5, and f32 carries 1.2e-7 of relative precision — so the difference has
+    // Nudging `v` by eps changes `q'` by `h*eps ~ 3.4e-6`, against a `q'` of about 0.28. The
+    // ratio is 1.2e-5, and f32 carries 1.2e-7 of relative precision - so the difference has
     // **about two significant digits before it is subtracted**, and the quotient inherits
     // that. Centered differencing buys roughly one more.
     //
@@ -556,37 +556,37 @@ test "★★★ derivative: A is the double integrator, to the digit" {
 
     const h: f32 = model.opt.timestep;
     try expect(jac.ndx == 2);
-    try expectApproxEqAbs(jac.a[0], 1.0, 1e-3); // ∂q'/∂q
-    try expectApproxEqAbs(jac.a[1], h, 1e-4); // ∂q'/∂v — 1% of h, per the note above
-    try expectApproxEqAbs(jac.a[2], 0.0, 1e-3); // ∂v'/∂q
-    try expectApproxEqAbs(jac.a[3], 1.0, 1e-3); // ∂v'/∂v
+    try expectApproxEqAbs(jac.a[0], 1.0, 1e-3); // dq'/dq
+    try expectApproxEqAbs(jac.a[1], h, 1e-4); // dq'/dv - 1% of h, per the note above
+    try expectApproxEqAbs(jac.a[2], 0.0, 1e-3); // dv'/dq
+    try expectApproxEqAbs(jac.a[3], 1.0, 1e-3); // dv'/dv
 
-    // ★ AND THE STATE IS PUT BACK. A planner linearises and then keeps simulating from the
+    // * AND THE STATE IS PUT BACK. A planner linearises and then keeps simulating from the
     // same point; a routine that leaves the last nudge behind corrupts the trajectory it was
     // asked to advise on, and would do it invisibly.
     try expectApproxEqAbs(data.pos[0], 0.3, 1e-6);
     try expectApproxEqAbs(data.vel[0], -1.7, 1e-6);
 }
 
-test "★★ derivative: a spring shows up in A exactly where the algebra says" {
-    // Same cart, now sprung. `a = −k·q/M`, so
+test "** derivative: a spring shows up in A exactly where the algebra says" {
+    // Same cart, now sprung. `a = -k*q/M`, so
     //
-    //     v' = v − h·k·q/M
-    //     q' = q + h·v' = q − h²·k·q/M + h·v
+    //     v' = v - h*k*q/M
+    //     q' = q + h*v' = q - h^2*k*q/M + h*v
     //
-    //     A = ⎡ 1 − h²k/M    h ⎤
-    //         ⎣   −h·k/M     1 ⎦
+    //     A = [ 1 - h^2k/M    h ]
+    //         [   -h*k/M     1 ]
     //
     // The lower-left entry is the point: it is zero in the test above and non-zero here for
     // exactly one reason, so a derivative that never actually varied `q` passes that test and
     // fails this one.
     //
-    // ── ★★ `M` IS NOT THE GEOM'S MASS, AND THIS TEST FOUND THAT OUT THE HARD WAY ──
+    // -- ** `M` IS NOT THE GEOM'S MASS, AND THIS TEST FOUND THAT OUT THE HARD WAY --
     //
-    // Written with `M = 2.0` — the mass the spec asks for — the expected lower-left was
-    // −0.2000 and the measurement was −0.19802, wrong by exactly 1%. **The builder adds a
+    // Written with `M = 2.0` - the mass the spec asks for - the expected lower-left was
+    // -0.2000 and the measurement was -0.19802, wrong by exactly 1%. **The builder adds a
     // default armature of `default_armature_fraction = 0.01` times the DOF's own inertia**,
-    // so the effective inertia is 2.02 and −0.01·40/2.02 = −0.19802 to five digits.
+    // so the effective inertia is 2.02 and -0.01*40/2.02 = -0.19802 to five digits.
     //
     // A systematic 1% is never noise, and chasing it is how the armature turned from
     // something the docs mention into something this file accounts for. The oracle reads
@@ -617,12 +617,12 @@ test "★★ derivative: a spring shows up in A exactly where the algebra says" 
     try expectApproxEqAbs(jac.a[3], 1.0, 1e-3);
 }
 
-test "★★ derivative: B is the control's path into the state, and it is h²/M at the top" {
+test "** derivative: B is the control's path into the state, and it is h^2/M at the top" {
     // A motor with unit gear puts `u` newtons on the joint, so `a = u/M` and
     //
-    //     ∂v'/∂u = h/M          ∂q'/∂u = h²/M
+    //     dv'/du = h/M          dq'/du = h^2/M
     //
-    // ★ THE h² ENTRY IS THE ONE WORTH ASSERTING. It is small — 5e-5 here — and it is the
+    // * THE h^2 ENTRY IS THE ONE WORTH ASSERTING. It is small - 5e-5 here - and it is the
     // first thing to vanish if the control is applied after the position integration rather
     // than before it. A B matrix with a zero top row still looks like a B matrix.
     const gpa: Allocator = std.testing.allocator;
@@ -639,12 +639,12 @@ test "★★ derivative: B is the control's path into the state, and it is h²/M
     rbt.forward(&model, &data);
     const effective_mass: f32 = rbt.massDiagonal(&model, &data, 0);
     try expect(model.nu == 1);
-    try expectApproxEqAbs(jac.b[0], h * h / effective_mass, 1e-6); // ∂q'/∂u
-    try expectApproxEqAbs(jac.b[1], h / effective_mass, 1e-4); // ∂v'/∂u
+    try expectApproxEqAbs(jac.b[0], h * h / effective_mass, 1e-6); // dq'/du
+    try expectApproxEqAbs(jac.b[1], h / effective_mass, 1e-4); // dv'/du
 }
 
-test "★★★ derivative: on a LINEAR system there is no truncation error at all" {
-    // ── A RESULT THAT SURPRISED THIS FILE INTO EXISTING ──
+test "*** derivative: on a LINEAR system there is no truncation error at all" {
+    // -- A RESULT THAT SURPRISED THIS FILE INTO EXISTING --
     //
     // The sprung cart is exactly linear, so its secant IS its tangent for any step size: the
     // difference quotient is algebraically exact and the only error left is f32 rounding.
@@ -653,8 +653,8 @@ test "★★★ derivative: on a LINEAR system there is no truncation error at a
     //     eps    1e-8    1e-6    1e-4    1e-2    1e-1
     //     rel   1.0e0   9.7e-2  6.7e-4  6.2e-6  2.3e-7
     //
-    // ★ WHICH IS WHY THE EPS SWEEP BELOW USES A PENDULUM. A linear oracle is the right tool
-    // for checking that the implementation is exact — it is what the three tests above do —
+    // * WHICH IS WHY THE EPS SWEEP BELOW USES A PENDULUM. A linear oracle is the right tool
+    // for checking that the implementation is exact - it is what the three tests above do -
     // and exactly the wrong tool for choosing eps, because it has destroyed the truncation
     // error that eps is supposed to be traded against. Written on the cart, that test asserted
     // a U-shape against a curve that only ever goes down.
@@ -683,7 +683,7 @@ test "★★★ derivative: on a LINEAR system there is no truncation error at a
 
 /// A pendulum: one hinge, a compact mass hung at a distance, gravity across it.
 ///
-/// ★ NONLINEAR BY CONSTRUCTION — the gravity torque is `−m·g·L·sin(q)`, so the second
+/// * NONLINEAR BY CONSTRUCTION - the gravity torque is `-m*g*L*sin(q)`, so the second
 /// derivative that finite differencing truncates is genuinely there. That is the whole
 /// reason this model exists next to the cart.
 const pendulum_mass: f32 = 1.5;
@@ -706,44 +706,44 @@ const Pendulum = Spec(.{
     },
 });
 
-test "★★★ derivative: the eps sweep is U-shaped, and its floor is where f32 says" {
-    // ── THE MEASUREMENT BEHIND `defaultEps`, SO THE CONSTANT IS NOT INHERITED ──
+test "*** derivative: the eps sweep is U-shaped, and its floor is where f32 says" {
+    // -- THE MEASUREMENT BEHIND `defaultEps`, SO THE CONSTANT IS NOT INHERITED --
     //
     // MuJoCo's default eps is 1e-6, sized for `double`. Copying it into an f32 engine is the
     // easiest way to get derivatives that look plausible and are noise, and nothing about the
     // number itself says so. This walks eps across six orders of magnitude against an oracle
     // known on paper, and requires the error to behave the way the theory says:
     //
-    //   * too SMALL and cancellation dominates — `f(x+eps)` and `f(x)` agree in nearly every
+    //   * too SMALL and cancellation dominates - `f(x+eps)` and `f(x)` agree in nearly every
     //     f32 bit they have, so their difference is mostly rounding;
-    //   * too LARGE and truncation dominates — the secant stops approximating the tangent;
+    //   * too LARGE and truncation dominates - the secant stops approximating the tangent;
     //   * in between, a floor near `sqrt(machine_eps)`.
     //
-    // ★ THE TEST IS THE SHAPE, NOT A THRESHOLD. "Error < x at the default" would pass for any
+    // * THE TEST IS THE SHAPE, NOT A THRESHOLD. "Error < x at the default" would pass for any
     // eps in a wide band and would not notice the default drifting to a bad one. Requiring the
     // default to BEAT BOTH ENDS makes it a claim about the choice.
     //
-    // THE ORACLE, on paper. The bob sits at `+x` when `q = 0` — the arm is HORIZONTAL there,
-    // not hanging — so the gravity torque is `−m·g·L·cos(q)` and
+    // THE ORACLE, on paper. The bob sits at `+x` when `q = 0` - the arm is HORIZONTAL there,
+    // not hanging - so the gravity torque is `-m*g*L*cos(q)` and
     //
-    //     ∂v'/∂q = +h·(m·g·L / I)·sin(q)
+    //     dv'/dq = +h*(m*g*L / I)*sin(q)
     //
-    // ★ WRITTEN WITH sin AND cos SWAPPED, this test reported a relative error of **1.84 at
+    // * WRITTEN WITH sin AND cos SWAPPED, this test reported a relative error of **1.84 at
     // every single eps in the sweep**. Flat. A finite-difference error that does not move when
-    // eps moves by seven orders of magnitude is not a finite-difference error — it is the
+    // eps moves by seven orders of magnitude is not a finite-difference error - it is the
     // oracle being wrong, and the flatness is the tell. (Third time this session: a ratio or a
     // residual that is constant across a swept parameter is a property of something that is
     // not being swept.)
     //
-    // Only `I` comes from the engine — via `massDiagonal`, because the builder's default
-    // armature contributes to it — and that quantity has its own test above.
+    // Only `I` comes from the engine - via `massDiagonal`, because the builder's default
+    // armature contributes to it - and that quantity has its own test above.
     const gpa: Allocator = std.testing.allocator;
     var model: rbt.Model = try Pendulum.build(gpa);
     defer model.deinit();
     var data: rbt.Data = try rbt.Data.init(gpa, &model);
     defer data.deinit();
 
-    // Well away from 0 and from π/2, so neither sin nor cos is near a stationary point.
+    // Well away from 0 and from pi/2, so neither sin nor cos is near a stationary point.
     const angle: f32 = 0.7;
     data.pos[0] = angle;
     data.vel[0] = 0.3;
@@ -767,7 +767,7 @@ test "★★★ derivative: the eps sweep is U-shaped, and its floor is where f3
     transition(&model, &data, &jac, .{});
     const at_default: f32 = @abs(jac.a[2] - truth) / @abs(truth);
 
-    // ★ MuJoCo's 1e-6 is index 2 — two and a half orders below f32's floor. It is in the sweep
+    // * MuJoCo's 1e-6 is index 2 - two and a half orders below f32's floor. It is in the sweep
     // specifically so this fails if anyone "aligns with MuJoCo" by copying that number.
     try expect(at_default < errors[0]); // beats 1e-8, deep in cancellation
     try expect(at_default < errors[2]); // beats MuJoCo's double-precision default
@@ -775,22 +775,22 @@ test "★★★ derivative: the eps sweep is U-shaped, and its floor is where f3
     try expect(at_default < 0.05); // and is accurate, not merely least-bad
 }
 
-test "★★★ derivative: a free joint — where nq ≠ nv and the naive nudge is wrong" {
-    // ── THE CASE THAT SEPARATES A CORRECT IMPLEMENTATION FROM ONE THAT WORKS ON ARMS ──
+test "*** derivative: a free joint - where nq != nv and the naive nudge is wrong" {
+    // -- THE CASE THAT SEPARATES A CORRECT IMPLEMENTATION FROM ONE THAT WORKS ON ARMS --
     //
     // A free body has `nq = 7` and `nv = 6`. Everything about this file's shape follows from
     // that gap, and every claim in the header about it is checked here:
     //
-    //   * `ndx` is `2·nv + na = 12`, not `nq + nv = 13`;
+    //   * `ndx` is `2*nv + na = 12`, not `nq + nv = 13`;
     //   * the position nudge goes through `integratePos`, so the quaternion stays a unit
     //     quaternion and the nudge is a rotation rather than a denormalisation;
     //   * the difference goes through `differentiatePos`, so the orientation rows are an
     //     angular velocity rather than a subtraction of four-vectors.
     //
-    // ★ THE ORACLE IS BALLISTIC MOTION, which is exact under semi-implicit Euler and does not
-    // care about orientation at all: with no forces but gravity, `∂q'/∂v = h·I` on the three
-    // translational rows and `∂v'/∂v = I` on all six. **A naive `pos[i] += eps` fails this
-    // loudly** — it denormalises the quaternion, so the body's inertia tensor rotates and the
+    // * THE ORACLE IS BALLISTIC MOTION, which is exact under semi-implicit Euler and does not
+    // care about orientation at all: with no forces but gravity, `dq'/dv = h*I` on the three
+    // translational rows and `dv'/dv = I` on all six. **A naive `pos[i] += eps` fails this
+    // loudly** - it denormalises the quaternion, so the body's inertia tensor rotates and the
     // angular block fills with values that have no business being there.
     const gpa: Allocator = std.testing.allocator;
     const Falling = Spec(.{
@@ -816,7 +816,7 @@ test "★★★ derivative: a free joint — where nq ≠ nv and the naive nudge
     try expect(model.nq == 7);
     try expect(model.nv == 6);
 
-    // Tumbling, off-axis, and away from the identity quaternion — a state where getting the
+    // Tumbling, off-axis, and away from the identity quaternion - a state where getting the
     // manifold wrong cannot hide.
     data.pos[0] = 0.2;
     data.pos[1] = 1.5;
@@ -837,14 +837,14 @@ test "★★★ derivative: a free joint — where nq ≠ nv and the naive nudge
     try expect(ndx == 12);
 
     const h: f32 = model.opt.timestep;
-    // Translational position rows: ∂q'/∂v = h·I, and nothing from the rotational velocities.
+    // Translational position rows: dq'/dv = h*I, and nothing from the rotational velocities.
     for (0..3) |row| {
         for (0..model.nv) |col| {
             const want: f32 = if (col == row) h else 0;
             try expectApproxEqAbs(jac.a[row * ndx + (model.nv + col)], want, 2e-4);
         }
     }
-    // Linear velocity is untouched by anything: gravity is constant, so ∂v'/∂x has a clean
+    // Linear velocity is untouched by anything: gravity is constant, so dv'/dx has a clean
     // identity in the linear block and zeros against position.
     for (0..3) |row| {
         for (0..model.nv) |col| {
@@ -852,7 +852,7 @@ test "★★★ derivative: a free joint — where nq ≠ nv and the naive nudge
             try expectApproxEqAbs(jac.a[(model.nv + row) * ndx + (model.nv + col)], want, 2e-3);
         }
     }
-    // ★ AND THE QUATERNION SURVIVED. Every nudge and every restore has to leave it unit; a
+    // * AND THE QUATERNION SURVIVED. Every nudge and every restore has to leave it unit; a
     // naive nudge drifts it, and a drifted quaternion silently rescales the body's inertia.
     const q: [4]f32 = .{ data.pos[3], data.pos[4], data.pos[5], data.pos[6] };
     const norm: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
@@ -860,12 +860,12 @@ test "★★★ derivative: a free joint — where nq ≠ nv and the naive nudge
 }
 
 // ============================================================================
-// THE MODEL-AGNOSTIC HALF OF iLQR — written in terms of A, B and a quadratic cost
+// THE MODEL-AGNOSTIC HALF OF iLQR - written in terms of A, B and a quadratic cost
 // ============================================================================
 
 /// A quadratic tracking cost with diagonal weights, shared by every planner built on this.
 ///
-/// `l(x, u) = ½·Σ qᵢ·δxᵢ² + ½·Σ rⱼ·uⱼ²` per knot, `½·Σ qfᵢ·δxᵢ²` at the end. `δx` is the
+/// `l(x, u) = 1/2*sum q_i*dx_i^2 + 1/2*sum r_j*u_j^2` per knot, `1/2*sum qf_i*dx_i^2` at the end. `dx` is the
 /// caller's business: for an articulated robot it is a tangent-space difference through a
 /// quaternion logarithm, for a rigid-body trunk it is a subtraction. This file never forms it.
 pub const Weights = struct {
@@ -879,13 +879,13 @@ pub const Weights = struct {
 
 /// The control box, when the model has one. `null` means unbounded.
 pub const Limits = struct {
-    /// `horizon × nu`, knot-major. **Per knot, not per control.**
+    /// `horizon x nu`, knot-major. **Per knot, not per control.**
     ///
-    /// ── ★★★ A SINGLE BOX FOR THE WHOLE HORIZON IS WRONG FOR ANYTHING THAT SWITCHES ──
+    /// -- *** A SINGLE BOX FOR THE WHOLE HORIZON IS WRONG FOR ANYTHING THAT SWITCHES --
     ///
     /// It used to be `nu` long and shared across the horizon, which is exact for an actuator
     /// whose limits never change and silently catastrophic for a quadruped. There, a foot in
-    /// SWING is pinned to zero force — and with one box, that pin applied to every future knot
+    /// SWING is pinned to zero force - and with one box, that pin applied to every future knot
     /// too, including the ones where the foot should be carrying the robot. At duty 0.5 that
     /// is half the feet, permanently.
     ///
@@ -894,77 +894,77 @@ pub const Limits = struct {
     /// cannot push would produce.
     ///
     /// A constant box is now expressed by filling every knot with the same numbers, which
-    /// costs `horizon × nu` floats and removes the special case.
+    /// costs `horizon x nu` floats and removes the special case.
     lower: []const f32,
     upper: []const f32,
 };
 
-/// Everything the backward pass reads. A VIEW, built by the caller from whatever it stores —
+/// Everything the backward pass reads. A VIEW, built by the caller from whatever it stores -
 /// so a planner keeps its own layout and this file never dictates one.
 pub const Problem = struct {
     horizon: u32,
     ndx: u32,
     nu: u32,
-    /// `horizon × ndx × ndx` and `horizon × ndx × nu`, row-major, one linearisation per knot.
+    /// `horizon x ndx x ndx` and `horizon x ndx x nu`, row-major, one linearisation per knot.
     a: []const f32,
     b: []const f32,
-    /// `horizon × nu` — the sequence being improved.
+    /// `horizon x nu` - the sequence being improved.
     ctrl: []const f32,
-    /// `horizon × ndx` — each knot's state error against its reference.
+    /// `horizon x ndx` - each knot's state error against its reference.
     knot_error: []const f32,
-    /// `ndx` — the final knot's error, which seeds the recursion's gradient.
+    /// `ndx` - the final knot's error, which seeds the recursion's gradient.
     terminal_error: []const f32,
     cost: Weights,
     limits: ?Limits,
     /// Extra per-knot cost, already reduced to a gradient and a Hessian in TANGENT space, added
     /// to `Q_x` and `Q_xx` alongside the diagonal `cost.state`.
     ///
-    /// ── ★★★ WHY PRECOMPUTED, RATHER THAN A TASK DESCRIPTION ──
+    /// -- *** WHY PRECOMPUTED, RATHER THAN A TASK DESCRIPTION --
     ///
-    /// The motivating case is a TASK cost — "the hand should be here, moving like that" — which
+    /// The motivating case is a TASK cost - "the hand should be here, moving like that" - which
     /// a diagonal weight on joint angles cannot express. Making that expressible is the single
     /// change that separates a planner from a trajectory follower: given a task, a redundant arm
     /// can use its null space; given joint angles, it has already been told which configuration
     /// to adopt and every alternative is forbidden.
     ///
-    /// ★ BUT `backward` MUST NOT LEARN ABOUT ROBOTS. It is a Riccati recursion; it knows states,
+    /// * BUT `backward` MUST NOT LEARN ABOUT ROBOTS. It is a Riccati recursion; it knows states,
     /// controls and quadratics. A caller that has a hand Jacobian can reduce any task residual
-    /// to Gauss-Newton form — `Q_x += Jᵀ·W·r`, `Q_xx += Jᵀ·W·J` — and hand over the result. That
+    /// to Gauss-Newton form - `Q_x += J^T*W*r`, `Q_xx += J^T*W*J` - and hand over the result. That
     /// keeps the optimiser generic, keeps the robot knowledge where the robot is, and means this
     /// same channel serves obstacle terms, centre-of-mass terms, or anything else quadratic.
     ///
-    /// `extra_gradient` is `horizon × ndx`; `extra_hessian` is `horizon × ndx × ndx`, row-major,
-    /// and must be SYMMETRIC — `JᵀWJ` is, and a non-symmetric block would quietly break the
+    /// `extra_gradient` is `horizon x ndx`; `extra_hessian` is `horizon x ndx x ndx`, row-major,
+    /// and must be SYMMETRIC - `J^TWJ` is, and a non-symmetric block would quietly break the
     /// recursion's assumptions rather than fail.
     extra_gradient: ?[]const f32 = null,
     extra_hessian: ?[]const f32 = null,
-    /// The same, for the TERMINAL knot — `ndx` and `ndx × ndx`, seeding `V_x` and `V_xx`.
+    /// The same, for the TERMINAL knot - `ndx` and `ndx x ndx`, seeding `V_x` and `V_xx`.
     ///
-    /// ★★★ SEPARATE BECAUSE THE RECURSION SEEDS SEPARATELY, and forgetting it is silent. The
+    /// *** SEPARATE BECAUSE THE RECURSION SEEDS SEPARATELY, and forgetting it is silent. The
     /// running channel is indexed over `0..horizon`; the terminal knot is not in that range, so
     /// a task supplied only through `extra_gradient` has NO terminal pull at all. Measured, that
     /// left a task-space run reaching 0.79-1.21 m from its target where a joint-space reference
-    /// reached 0.09-0.17 — not a slightly worse plan, an arm that barely moved.
+    /// reached 0.09-0.17 - not a slightly worse plan, an arm that barely moved.
     extra_terminal_gradient: ?[]const f32 = null,
     extra_terminal_hessian: ?[]const f32 = null,
 };
 
 /// Everything the backward pass writes.
 pub const Gains = struct {
-    /// `horizon × nu`
+    /// `horizon x nu`
     feedforward: []f32,
-    /// `horizon × nu × ndx`
+    /// `horizon x nu x ndx`
     feedback: []f32,
-    /// `horizon × nu` — which controls the box solver pinned. See `BoxActive`.
+    /// `horizon x nu` - which controls the box solver pinned. See `BoxActive`.
     clamped: []bool,
 };
 
 /// What one backward pass predicts its step will buy, split into the terms linear and
-/// quadratic in the step size: `ΔJ(α) = α·d1 + ½·α²·d2`.
+/// quadratic in the step size: `dJ(alpha) = alpha*d1 + 1/2*alpha^2*d2`.
 ///
-/// ★ THIS IS RETURNED RATHER THAN KEPT, because it is the only honest way to tell "already at
+/// * THIS IS RETURNED RATHER THAN KEPT, because it is the only honest way to tell "already at
 /// the optimum" from "the quadratic model is bad". Both look like a line search that accepts
-/// nothing, and only one of them should raise regularization — conflating them once returned
+/// nothing, and only one of them should raise regularization - conflating them once returned
 /// gains half their correct size on a problem that was already solved.
 pub const Predicted = struct {
     linear: f32,
@@ -977,7 +977,7 @@ pub const Predicted = struct {
 };
 
 /// In-place Cholesky of a small symmetric matrix, lower triangle. False if not positive
-/// definite — which is the signal to raise regularization and try again, not to proceed.
+/// definite - which is the signal to raise regularization and try again, not to proceed.
 fn cholesky(
     matrix: []f32,
     n: u32,
@@ -1004,15 +1004,15 @@ fn cholesky(
 /// The largest `nu` the box solver will take on the stack. An assert, not a truncation.
 const max_stack_nu: usize = 64;
 
-/// ★ A STACK BUFFER, WITH A LOUD CEILING. Threading another scratch slice through the
+/// * A STACK BUFFER, WITH A LOUD CEILING. Threading another scratch slice through the
 /// recursion for a vector this size buys nothing; exceeding it is an assert, not a silent
 /// truncation. See `assertFits`.
 pub const max_stack_ndx: usize = 256;
 
 /// Which controls the box solver pinned to a bound, and how many are still free.
 ///
-/// ★ A CLAMPED CONTROL MUST GET ZERO FEEDBACK GAIN, which is the whole reason this is
-/// returned rather than kept private. A saturated actuator does not react to the state — if
+/// * A CLAMPED CONTROL MUST GET ZERO FEEDBACK GAIN, which is the whole reason this is
+/// returned rather than kept private. A saturated actuator does not react to the state - if
 /// the plan says "full torque" and the robot drifts, the answer is still full torque. Giving
 /// it a `K` row anyway is a controller that believes it has authority it does not have, and
 /// it shows up as chatter around the limit rather than as an obvious failure.
@@ -1021,9 +1021,9 @@ const BoxActive = struct {
     free_count: u32,
 };
 
-/// Minimise `½·xᵀ·H·x + gᵀ·x` subject to `lo ≤ x ≤ hi`, by projected Newton.
+/// Minimise `1/2*x^T*H*x + g^T*x` subject to `lo <= x <= hi`, by projected Newton.
 ///
-/// ── ★★ WHY NOT JUST SOLVE AND CLAMP ──
+/// -- ** WHY NOT JUST SOLVE AND CLAMP --
 ///
 /// The tempting shortcut is to take the unconstrained step and clamp the result. That is
 /// wrong whenever the controls are COUPLED: pinning one at its limit changes the optimum for
@@ -1075,7 +1075,7 @@ fn boxQP(
         }
 
         // Gather the free block and solve the unconstrained problem on it, holding the
-        // clamped variables at their bounds — which is what `grad` already accounts for.
+        // clamped variables at their bounds - which is what `grad` already accounts for.
         var index: [max_stack_nu]u32 = undefined;
         var k: u32 = 0;
         for (0..n) |i| {
@@ -1120,7 +1120,7 @@ fn boxQP(
     return active;
 }
 
-/// `½·xᵀ·H·x + gᵀ·x`, for the box solver's own line search.
+/// `1/2*x^T*H*x + g^T*x`, for the box solver's own line search.
 fn quadratic(
     hessian: []const f32,
     gradient: []const f32,
@@ -1139,7 +1139,7 @@ fn quadratic(
     return total;
 }
 
-/// Solve `L·Lᵀ·x = rhs` in place, given `L` from `cholesky`.
+/// Solve `L*L^T*x = rhs` in place, given `L` from `cholesky`.
 fn choleskySolve(
     factor: []const f32,
     n: u32,
@@ -1234,8 +1234,8 @@ pub fn backward(
     var expected_1: f32 = 0;
     var expected_2: f32 = 0;
 
-    // V ← the terminal cost's expansion. `δx` at the terminal knot enters the recursion
-    // through `value_x`, which the forward pass never sees — only the gains matter.
+    // V <- the terminal cost's expansion. `dx` at the terminal knot enters the recursion
+    // through `value_x`, which the forward pass never sees - only the gains matter.
     @memset(s.value_x, 0);
     @memset(s.value_xx, 0);
     for (0..ndx) |i| {
@@ -1264,11 +1264,11 @@ pub fn backward(
         const b: []const f32 = problem.b[t * ndx * nu ..][0 .. ndx * nu];
         const u: []const f32 = problem.ctrl[t * nu ..][0..nu];
 
-        // Q_x = l_x + Aᵀ·V_x
+        // Q_x = l_x + A^T*V_x
         //
-        // ★ `l_x` IS NOT OPTIONAL AND ITS ABSENCE IS ALMOST INVISIBLE. Dropping it leaves
-        // `K` untouched — the feedback gain comes from `Q_ux` and `Q_uu`, neither of which
-        // sees the gradient — so an LQR gain check still passes to the digit. What breaks is
+        // * `l_x` IS NOT OPTIONAL AND ITS ABSENCE IS ALMOST INVISIBLE. Dropping it leaves
+        // `K` untouched - the feedback gain comes from `Q_ux` and `Q_uu`, neither of which
+        // sees the gradient - so an LQR gain check still passes to the digit. What breaks is
         // the FEEDFORWARD `k`, which stops accounting for the running state error, and the
         // symptom is a planner that converges to the wrong trajectory while every gain in it
         // is correct.
@@ -1283,7 +1283,7 @@ pub fn backward(
             }
             s.q_x[i] = sum;
         }
-        // Q_u = l_u + Bᵀ·V_x
+        // Q_u = l_u + B^T*V_x
         for (0..nu) |j| {
             var sum: f32 = problem.cost.control[j] * u[j];
             for (0..ndx) |r| {
@@ -1291,15 +1291,15 @@ pub fn backward(
             }
             s.q_u[j] = sum;
         }
-        // Q_xx = l_xx + Aᵀ·V_xx·A, and Q_ux = Bᵀ·V_xx·A, Q_uu = l_uu + Bᵀ·V_xx·B.
-        // tmp = V_xx·A once, reused for both.
+        // Q_xx = l_xx + A^T*V_xx*A, and Q_ux = B^T*V_xx*A, Q_uu = l_uu + B^T*V_xx*B.
+        // tmp = V_xx*A once, reused for both.
         for (0..ndx) |r| {
             for (0..ndx) |c| {
                 var sum: f32 = 0;
                 for (0..ndx) |k| {
                     sum += s.value_xx[r * ndx + k] * a[k * ndx + c];
                 }
-                s.q_xx[r * ndx + c] = sum; // holds V_xx·A for now
+                s.q_xx[r * ndx + c] = sum; // holds V_xx*A for now
             }
         }
         for (0..nu) |j| {
@@ -1311,16 +1311,16 @@ pub fn backward(
                 s.q_ux[j * ndx + c] = sum;
             }
         }
-        // Q_xx = diag(l_xx) + Aᵀ·(V_xx·A), into a SEPARATE buffer.
+        // Q_xx = diag(l_xx) + A^T*(V_xx*A), into a SEPARATE buffer.
         //
-        // ★★★ THIS WAS THE BUG, AND IT IS THE ONE TO REMEMBER. It used to finish "in place",
-        // writing row `r` of the result over row `r` of `V_xx·A`. But the multiply reads
+        // *** THIS WAS THE BUG, AND IT IS THE ONE TO REMEMBER. It used to finish "in place",
+        // writing row `r` of the result over row `r` of `V_xx*A`. But the multiply reads
         // `q_xx[k]` for EVERY k, so by the time `r` reached the bottom it was consuming rows
-        // it had already overwritten — a mix of `V_xx·A` above the diagonal and finished
+        // it had already overwritten - a mix of `V_xx*A` above the diagonal and finished
         // `Q_xx` below it.
         //
         // A matrix product cannot share its destination with either input. It does not
-        // crash, it does not produce garbage, it produces a number that is 5% wrong — which
+        // crash, it does not produce garbage, it produces a number that is 5% wrong - which
         // on a nonlinear problem is indistinguishable from "iLQR is converging slowly".
         for (0..ndx) |r| {
             for (0..ndx) |c| {
@@ -1335,7 +1335,7 @@ pub fn backward(
             }
         }
         @memcpy(s.q_xx, s.tmp_mat);
-        // Q_uu = diag(l_uu) + Bᵀ·V_xx·B, regularised.
+        // Q_uu = diag(l_uu) + B^T*V_xx*B, regularised.
         for (0..nu) |i| {
             for (0..nu) |j| {
                 var sum: f32 = 0;
@@ -1351,14 +1351,14 @@ pub fn backward(
             }
         }
 
-        // ── k AND K, WITH THE CONTROL LIMITS IF THE MODEL HAS ANY ──
+        // -- k AND K, WITH THE CONTROL LIMITS IF THE MODEL HAS ANY --
         //
-        // Unconstrained this is `k = −Q_uu⁻¹·Q_u`, `K = −Q_uu⁻¹·Q_ux`. With limits it is the
+        // Unconstrained this is `k = -Q_uu^-1*Q_u`, `K = -Q_uu^-1*Q_ux`. With limits it is the
         // same solve restricted to the controls that are not pinned against a bound.
         var active: BoxActive = .{ .clamped = @splat(false), .free_count = nu };
         if (problem.limits) |box| {
             // The box is on the CONTROL, so on `k` it is the box shifted by the control we
-            // already have: `lo − u ≤ k ≤ hi − u`.
+            // already have: `lo - u <= k <= hi - u`.
             const u_now: []const f32 = problem.ctrl[t * nu ..][0..nu];
             for (0..nu) |j| {
                 s.box_lo[j] = box.lower[t * nu + j] - u_now[j];
@@ -1381,7 +1381,7 @@ pub fn backward(
             }
         }
 
-        // ★★★ A CLAMPED CONTROL GETS A ZERO FEEDBACK ROW, AND THAT IS THE POINT OF THE BOX.
+        // *** A CLAMPED CONTROL GETS A ZERO FEEDBACK ROW, AND THAT IS THE POINT OF THE BOX.
         //
         // A saturated actuator cannot react: if the plan says full torque and the robot
         // drifts, the answer is still full torque. Handing it a `K` row anyway builds a
@@ -1427,11 +1427,11 @@ pub fn backward(
             }
         }
 
-        // V_x  = Q_x  + Kᵀ·Q_uu·k + Kᵀ·Q_u + Q_uxᵀ·k
-        // V_xx = Q_xx + Kᵀ·Q_uu·K + Kᵀ·Q_ux + Q_uxᵀ·K
+        // V_x  = Q_x  + K^T*Q_uu*k + K^T*Q_u + Q_ux^T*k
+        // V_xx = Q_xx + K^T*Q_uu*K + K^T*Q_ux + Q_ux^T*K
         const kff: []const f32 = gains.feedforward[t * nu ..][0..nu];
         const kfb: []const f32 = gains.feedback[t * nu * ndx ..][0 .. nu * ndx];
-        // ★ WHAT THIS PASS EXPECTS TO BUY, which is the only honest way to tell "already at
+        // * WHAT THIS PASS EXPECTS TO BUY, which is the only honest way to tell "already at
         // the optimum" apart from "the quadratic model is bad". Both look like a line search
         // that accepts nothing; only one of them should raise regularization.
         for (0..nu) |j| {
@@ -1476,18 +1476,18 @@ pub fn backward(
 
 const expectEqual = std.testing.expectEqual;
 
-test "★★★ boxQP: unconstrained, one bound active, and the coupled case clamping gets wrong" {
-    // ── EACH CASE HAS A HAND-COMPUTABLE ANSWER, WHICH IS THE POINT ──
+test "*** boxQP: unconstrained, one bound active, and the coupled case clamping gets wrong" {
+    // -- EACH CASE HAS A HAND-COMPUTABLE ANSWER, WHICH IS THE POINT --
     //
     // The third is the one that matters. With a COUPLED Hessian, taking the unconstrained
-    // step and clamping afterwards gives a different — and worse — answer than solving with
+    // step and clamping afterwards gives a different - and worse - answer than solving with
     // the bound active, because pinning one variable moves the optimum for the other. A
     // one-actuator test cannot see this, and a one-actuator test is what a cartpole is.
     var factor: [16]f32 = undefined;
     var x: [2]f32 = undefined;
 
-    // 1. Unconstrained: H = [[2,0],[0,4]], g = [-2,-4] → minimise x² - 2x + 2y² - 4y
-    //    → x = 1, y = 1, both well inside the box.
+    // 1. Unconstrained: H = [[2,0],[0,4]], g = [-2,-4] -> minimise x^2 - 2x + 2y^2 - 4y
+    //    -> x = 1, y = 1, both well inside the box.
     {
         const h = [4]f32{ 2, 0, 0, 4 };
         const g = [2]f32{ -2, -4 };
@@ -1516,14 +1516,14 @@ test "★★★ boxQP: unconstrained, one bound active, and the coupled case cla
         try expectEqual(@as(u32, 1), active.free_count);
     }
 
-    // 3. ★ COUPLED, WITH A BOUND ACTIVE — where clamp-after-solve is wrong.
+    // 3. * COUPLED, WITH A BOUND ACTIVE - where clamp-after-solve is wrong.
     //    H = [[2,1],[1,2]], g = [-3,-3]. Unconstrained optimum: solve
     //      2x +  y = 3
-    //       x + 2y = 3   →   x = y = 1.
+    //       x + 2y = 3   ->   x = y = 1.
     //    Now cap x at 0.4. With x pinned, minimise over y alone:
-    //      ∂/∂y [ ½(2x² + 2xy + 2y²) − 3x − 3y ] = x + 2y − 3 = 0
-    //      → y = (3 − 0.4)/2 = 1.3
-    //    Clamping the unconstrained answer would have left y at 1.0 — visibly wrong, and
+    //      d/dy [ 1/2(2x^2 + 2xy + 2y^2) - 3x - 3y ] = x + 2y - 3 = 0
+    //      -> y = (3 - 0.4)/2 = 1.3
+    //    Clamping the unconstrained answer would have left y at 1.0 - visibly wrong, and
     //    wrong in the direction that matters: the free actuator should work HARDER to make
     //    up for the saturated one.
     {
@@ -1556,14 +1556,14 @@ test "★★★ boxQP: unconstrained, one bound active, and the coupled case cla
 }
 
 // ============================================================================
-// THE TRUNK AS ONE RIGID BODY — twelve states, twelve foot forces, analytic Jacobians
+// THE TRUNK AS ONE RIGID BODY - twelve states, twelve foot forces, analytic Jacobians
 // ============================================================================
 
 /// `[position(3), roll-pitch-yaw(3), linear velocity(3), angular velocity(3)]`.
 ///
-/// ★ ANGULAR VELOCITY IS IN WORLD AXES, not body. Body-frame `ω` is the more usual choice for
-/// rigid-body dynamics and the wrong one here: the foot torques `r × f` are naturally world,
-/// so a body-frame `ω` would need a rotation on every term for no benefit.
+/// * ANGULAR VELOCITY IS IN WORLD AXES, not body. Body-frame `omega` is the more usual choice for
+/// rigid-body dynamics and the wrong one here: the foot torques `r x f` are naturally world,
+/// so a body-frame `omega` would need a rotation on every term for no benefit.
 pub const trunk_state_dim: u32 = 12;
 pub const pos_offset: u32 = 0;
 pub const rpy_offset: u32 = 3;
@@ -1585,21 +1585,21 @@ pub const TrunkModel = struct {
 pub const Stance = struct {
     /// Where each foot is, in WORLD coordinates.
     ///
-    /// ── ★★★ THIS USED TO BE AN OFFSET FROM THE TRUNK, AND THAT HID THE PHYSICS ──
+    /// -- *** THIS USED TO BE AN OFFSET FROM THE TRUNK, AND THAT HID THE PHYSICS --
     ///
-    /// Storing `foot − centre` looks equivalent and is not. The moment arm is `r = foot − p`
+    /// Storing `foot - centre` looks equivalent and is not. The moment arm is `r = foot - p`
     /// where `p` is a STATE, so writing the arm down as a fixed number tells the model that
-    /// translating the trunk does not change the torque. It does — by `m·g·δ` — and that
+    /// translating the trunk does not change the torque. It does - by `m*g*delta` - and that
     /// coupling IS the inverted pendulum a standing quadruped has to balance.
     ///
-    /// With the offset form the model could not see it, `srbdLinearize` had no `∂ω′/∂p` block
+    /// With the offset form the model could not see it, `srbdLinearize` had no `d omega'/dp` block
     /// to write, and the cross-check could not catch the omission because a fixed offset really
     /// does have zero derivative. Measured cost of the blindness: a plain four-footed stand
     /// diverged in about **one second**, demanding legs 8 to 13 m long against a Go1's true
     /// reach of 0.426 m.
     ///
     /// Holding the world position instead makes the dependence real, the Jacobian block
-    /// derivable, and the existing cross-check — which already sweeps several trunk positions —
+    /// derivable, and the existing cross-check - which already sweeps several trunk positions -
     /// able to falsify it.
     foot: [leg_count]Vec,
     /// False for a foot in swing. Its force is held at zero and its columns of `B` are zero,
@@ -1607,7 +1607,7 @@ pub const Stance = struct {
     active: [leg_count]bool,
 };
 
-/// `[r]×`, the matrix with `[r]× · f == r × f`, row-major 3x3.
+/// `[r]x`, the matrix with `[r]x * f == r x f`, row-major 3x3.
 fn skew(r: Vec) [9]f32 {
     return .{
         0,     -r[2], r[1],
@@ -1616,7 +1616,7 @@ fn skew(r: Vec) [9]f32 {
     };
 }
 
-/// `Rz(ψ)`, row-major 3x3.
+/// `Rz(psi)`, row-major 3x3.
 fn rotationZ3(yaw: f32) [9]f32 {
     const c: f32 = @cos(yaw);
     const s: f32 = @sin(yaw);
@@ -1645,7 +1645,7 @@ fn apply3(a: [9]f32, v: Vec) Vec {
     );
 }
 
-/// `Rz · diag(d) · Rzᵀ` — used for both the world inertia and its inverse, because inverting a
+/// `Rz * diag(d) * Rz^T` - used for both the world inertia and its inverse, because inverting a
 /// rotated diagonal is just rotating the reciprocals.
 fn rotatedDiagonal(yaw: f32, d: Vec) [9]f32 {
     const rz: [9]f32 = rotationZ3(yaw);
@@ -1658,9 +1658,9 @@ fn rotatedDiagonal(yaw: f32, d: Vec) [9]f32 {
     return mul3(rz, scaled);
 }
 
-/// The rate map `T(ψ)` taking world angular velocity to roll-pitch-yaw rates.
+/// The rate map `T(psi)` taking world angular velocity to roll-pitch-yaw rates.
 ///
-/// ★ THE SMALL-ANGLE FORM, which for `Θ̇ = T·ω` with roll and pitch near zero is `Rz(ψ)ᵀ`.
+/// * THE SMALL-ANGLE FORM, which for `Theta_dot = T*omega` with roll and pitch near zero is `Rz(psi)^T`.
 /// The exact map has a `1/cos(pitch)` that blows up at 90 degrees; a quadruped that pitches
 /// that far has already lost, and pretending otherwise would put a singularity inside the
 /// planner's inner loop.
@@ -1669,9 +1669,9 @@ fn rateMap(yaw: f32) [9]f32 {
     return .{ rz[0], rz[3], rz[6], rz[1], rz[4], rz[7], rz[2], rz[5], rz[8] };
 }
 
-/// One step of the trunk dynamics, semi-implicit Euler — velocity first, then position.
+/// One step of the trunk dynamics, semi-implicit Euler - velocity first, then position.
 ///
-/// ★ SEMI-IMPLICIT TO MATCH `robot.zig`'s `.euler`, so a trajectory planned here and one
+/// * SEMI-IMPLICIT TO MATCH `robot.zig`'s `.euler`, so a trajectory planned here and one
 /// simulated there drift for physical reasons rather than because two integrators disagree.
 pub fn srbdStep(
     body: TrunkModel,
@@ -1692,7 +1692,7 @@ pub fn srbdStep(
         }
         const f: Vec = vec(u[3 * i + 0], u[3 * i + 1], u[3 * i + 2]);
         total_force += f;
-        // ★ THE ARM IS COMPUTED FROM THE STATE, which is the whole point of the change above.
+        // * THE ARM IS COMPUTED FROM THE STATE, which is the whole point of the change above.
         total_torque += cross(stance.foot[i] - centre, f);
     }
 
@@ -1710,8 +1710,8 @@ pub fn srbdStep(
     const next_rate: Vec = rate + apply3(inv_inertia, total_torque) * splat(dt);
     const rpy_rate: Vec = apply3(t_map, next_rate);
 
-    // ★ UNPACKED TO ARRAYS FIRST. A `@Vector` cannot be indexed by a runtime value, and the
-    // loop counter is one — so the alternative is an `inline for`, which unrolls fine but hides
+    // * UNPACKED TO ARRAYS FIRST. A `@Vector` cannot be indexed by a runtime value, and the
+    // loop counter is one - so the alternative is an `inline for`, which unrolls fine but hides
     // the layout the rest of this file is written against.
     const next_vel_xyz = [3]f32{ next_vel[0], next_vel[1], next_vel[2] };
     const next_rate_xyz = [3]f32{ next_rate[0], next_rate[1], next_rate[2] };
@@ -1729,57 +1729,57 @@ pub fn srbdStep(
 
 /// The discrete Jacobians of `step`, in closed form. `a` is `12x12`, `b` is `12x12`, row-major.
 ///
-/// ── ★★ DERIVED, NOT DIFFERENCED, AND THIS IS THE POINT OF THE FILE ──
+/// -- ** DERIVED, NOT DIFFERENCED, AND THIS IS THE POINT OF THE FILE --
 ///
 /// With `T` frozen per knot (see the header), `step` is affine in both the state and the
-/// controls, so its Jacobians are exact rather than approximate — and cost nothing to compute:
+/// controls, so its Jacobians are exact rather than approximate - and cost nothing to compute:
 ///
-///     ∂p'/∂p = I          ∂p'/∂v = dt·I
-///     ∂Θ'/∂Θ = I          ∂Θ'/∂ω = dt·T
-///     ∂v'/∂v = I          ∂ω'/∂ω = I
+///     dp'/dp = I          dp'/dv = dt*I
+///     d Theta'/d Theta = I          d Theta'/d omega = dt*T
+///     dv'/dv = I          d omega'/d omega = I
 ///
 ///     per foot i, when in stance:
-///     ∂v'/∂fᵢ = (dt/m)·I            ∂p'/∂fᵢ = (dt²/m)·I
-///     ∂ω'/∂fᵢ = dt·Iw⁻¹·[rᵢ]×       ∂Θ'/∂fᵢ = dt²·T·Iw⁻¹·[rᵢ]×
+///     dv'/df_i = (dt/m)*I            dp'/df_i = (dt^2/m)*I
+///     d omega'/df_i = dt*Iw^-1*[r_i]x       d Theta'/df_i = dt^2*T*Iw^-1*[r_i]x
 ///
-/// ── ★★★ THE POSITION COLUMNS ARE MISSING, AND THAT IS WHY A PLANTED-FOOT ROBOT FALLS ──
+/// -- *** THE POSITION COLUMNS ARE MISSING, AND THAT IS WHY A PLANTED-FOOT ROBOT FALLS --
 ///
-/// **This linearisation has no `∂ω′/∂p`, and it needs one.** The torque is
-/// `τ = Σ rᵢ × fᵢ` with `rᵢ = footᵢ − p`, so when the feet are PLANTED and the body moves, the
+/// **This linearisation has no `d omega'/dp`, and it needs one.** The torque is
+/// `tau = sum r_i x f_i` with `r_i = foot_i - p`, so when the feet are PLANTED and the body moves, the
 /// moment arms change and a torque appears out of nothing but translation. That coupling IS
 /// the inverted pendulum, and it is absent here:
 ///
-///     ∂τ/∂p    = Σ [fᵢ]×          (since (foot − p) × f = −[f]×(foot − p))
-///     ∂ω′/∂p   = dt·Iw⁻¹·Σ[fᵢ]×
-///     ∂Θ′/∂p   = dt²·T·Iw⁻¹·Σ[fᵢ]×
+///     d tau/dp    = sum [f_i]x          (since (foot - p) x f = -[f]x(foot - p))
+///     d omega'/dp   = dt*Iw^-1*sum[f_i]x
+///     d Theta'/dp   = dt^2*T*Iw^-1*sum[f_i]x
 ///
-/// ★ WHY IT WAS NOT CAUGHT: the cross-check test holds `Stance.offset` FIXED, and with a fixed
-/// offset the term genuinely is zero — the feet move with the body, which is a hovering
+/// * WHY IT WAS NOT CAUGHT: the cross-check test holds `Stance.offset` FIXED, and with a fixed
+/// offset the term genuinely is zero - the feet move with the body, which is a hovering
 /// platform, not a robot standing on the ground. So the analytic Jacobian and the numerical one
 /// agree perfectly on a case that never exercises the missing block. **A verification is only
 /// as good as the states it sweeps**, and every state that test sweeps has the feet welded to
 /// the trunk.
 ///
-/// ★ AND IT EXPLAINS EVERY SYMPTOM. With the term absent the model believes translating costs
+/// * AND IT EXPLAINS EVERY SYMPTOM. With the term absent the model believes translating costs
 /// no torque, so the planner never anticipates tipping and never leans against it. Measured:
 /// stable indefinitely with offsets held fixed; falls from any lookahead between 0.2 s and
 /// 1.2 s once the feet are planted in the world. Lengthening the horizon does not help,
-/// because the horizon is not the problem — the model inside it is blind.
+/// because the horizon is not the problem - the model inside it is blind.
 ///
-/// ── ★★★ THE YAW COLUMN IS NOT ZERO, AND ASSUMING IT WAS COST A TEST FAILURE ──
+/// -- *** THE YAW COLUMN IS NOT ZERO, AND ASSUMING IT WAS COST A TEST FAILURE --
 ///
-/// `step` reads yaw to build BOTH `T` and `Iw⁻¹`, so rotating the body changes the map that
-/// turns `ω` into `Θ̇` and the inertia the torque acts against. An earlier version wrote this
+/// `step` reads yaw to build BOTH `T` and `Iw^-1`, so rotating the body changes the map that
+/// turns `omega` into `Theta_dot` and the inertia the torque acts against. An earlier version wrote this
 /// column as zero on the grounds that `T` is "frozen per knot", and the numerical cross-check
-/// disagreed immediately — 0 against −0.0106.
+/// disagreed immediately - 0 against -0.0106.
 ///
 /// Frozen means frozen ACROSS THE HORIZON, not blind to the state it was evaluated at. The
 /// exact column costs a handful of flops:
 ///
-///     dRz/dψ = Rz'                    dT/dψ = (Rz')ᵀ
-///     dIw⁻¹/dψ = Rz'·D·Rzᵀ + Rz·D·Rz'ᵀ
-///     ∂ω'/∂ψ  = dt·(dIw⁻¹/dψ)·τ
-///     ∂Θ'/∂ψ += dt·( (dT/dψ)·ω' + T·∂ω'/∂ψ )
+///     dRz/d psi = Rz'                    dT/d psi = (Rz')^T
+///     dIw^-1/d psi = Rz'*D*Rz^T + Rz*D*Rz'^T
+///     d omega'/d psi  = dt*(dIw^-1/d psi)*tau
+///     d Theta'/d psi += dt*( (dT/d psi)*omega' + T*d omega'/d psi )
 ///
 /// which is why this takes `u` as well as `x`: the column is proportional to the torque, so a
 /// linearisation point is a state AND a control, not a state alone.
@@ -1819,7 +1819,7 @@ pub fn srbdLinearize(
         }
     }
 
-    // The torque at this linearisation point, and the resulting next rate — both needed for
+    // The torque at this linearisation point, and the resulting next rate - both needed for
     // the yaw column below.
     const centre: Vec = vec(x[pos_offset], x[pos_offset + 1], x[pos_offset + 2]);
     var torque: Vec = vec(0, 0, 0);
@@ -1834,7 +1834,7 @@ pub fn srbdLinearize(
     const rate_now: Vec = vec(x[rate_offset], x[rate_offset + 1], x[rate_offset + 2]);
     const next_rate: Vec = rate_now + apply3(inv_inertia, torque) * splat(dt);
 
-    // dRz/dψ and the two derived maps.
+    // dRz/d psi and the two derived maps.
     const cos_yaw: f32 = @cos(yaw);
     const sin_yaw: f32 = @sin(yaw);
     const d_rz = [9]f32{ -sin_yaw, -cos_yaw, 0, cos_yaw, -sin_yaw, 0, 0, 0, 0 };
@@ -1859,18 +1859,18 @@ pub fn srbdLinearize(
         a[(rpy_offset + k) * n + rpy_offset + 2] += d_rpy_xyz[k];
     }
 
-    // ── ★★★ THE POSITION COLUMNS: THE INVERTED PENDULUM, AT LAST ──
+    // -- *** THE POSITION COLUMNS: THE INVERTED PENDULUM, AT LAST --
     //
-    // `τ = Σ (footᵢ − p) × fᵢ`, and `(a) × f = −[f]×·a`, so `∂τ/∂p = +Σ[fᵢ]×`. Translating the
+    // `tau = sum (foot_i - p) x f_i`, and `(a) x f = -[f]x*a`, so `d tau/dp = +sum[f_i]x`. Translating the
     // trunk while the feet stay planted changes every moment arm and produces torque out of
     // nothing but the translation. That is the mode a standing quadruped balances against, at
-    // `√(g/h)` ≈ 5.6 rad/s for a 0.30 m stand, and without these columns the planner cannot
+    // `sqrt(g/h)` ~ 5.6 rad/s for a 0.30 m stand, and without these columns the planner cannot
     // see it coming.
     //
-    //     ∂ω′/∂p = dt·Iw⁻¹·Σ[fᵢ]×
-    //     ∂Θ′/∂p = dt²·T·Iw⁻¹·Σ[fᵢ]×
+    //     d omega'/dp = dt*Iw^-1*sum[f_i]x
+    //     d Theta'/dp = dt^2*T*Iw^-1*sum[f_i]x
     //
-    // ★ IT IS PROPORTIONAL TO THE FORCE, not to the geometry — a foot pushing with nothing
+    // * IT IS PROPORTIONAL TO THE FORCE, not to the geometry - a foot pushing with nothing
     // contributes nothing. Which is why, like the yaw column, this needs `u` as well as `x`:
     // a linearisation point is a state AND a control.
     {
@@ -1892,8 +1892,8 @@ pub fn srbdLinearize(
         }
         const col: usize = 3 * foot;
         const arm: [9]f32 = skew(stance.foot[foot] - centre);
-        const angular: [9]f32 = mul3(inv_inertia, arm); // Iw⁻¹·[r]×
-        const rpy_block: [9]f32 = mul3(t_map, angular); // T·Iw⁻¹·[r]×
+        const angular: [9]f32 = mul3(inv_inertia, arm); // Iw^-1*[r]x
+        const rpy_block: [9]f32 = mul3(t_map, angular); // T*Iw^-1*[r]x
         for (0..3) |k| {
             b[(vel_offset + k) * trunk_control_dim + col + k] = inv_mass;
             b[(pos_offset + k) * trunk_control_dim + col + k] = inv_mass * dt;
@@ -1934,9 +1934,9 @@ pub fn hoverForces(body: TrunkModel, stance: Stance, out: []f32) void {
     }
 }
 
-// ────────────────────────────────────
+// ------------------------------------
 // TESTS
-// ────────────────────────────────────
+// ------------------------------------
 
 /// Roughly a Go1 trunk: 5 kg, a flattened box.
 const go1_trunk: TrunkModel = .{
@@ -1947,7 +1947,7 @@ const go1_trunk: TrunkModel = .{
 
 /// Four feet in a rectangle under the trunk, all down.
 /// Four feet on the ground in a rectangle. WORLD positions, so the trunk states swept in the
-/// cross-check genuinely change the moment arms — which is what makes the position columns
+/// cross-check genuinely change the moment arms - which is what makes the position columns
 /// falsifiable rather than untested.
 fn squareStance() Stance {
     return .{
@@ -1963,21 +1963,21 @@ fn squareStance() Stance {
 
 /// How closely a finite difference should match a derivation.
 ///
-/// ★ RELATIVE, WITH AN ABSOLUTE FLOOR, because the entries now span four orders of magnitude.
-/// A flat `2e-3` was right while every entry was O(1); once the position columns arrived —
-/// `∂ω′/∂p` reaches −38.8 — it started failing on a term that agreed to **0.006%**. A fixed
+/// * RELATIVE, WITH AN ABSOLUTE FLOOR, because the entries now span four orders of magnitude.
+/// A flat `2e-3` was right while every entry was O(1); once the position columns arrived -
+/// `d omega'/dp` reaches -38.8 - it started failing on a term that agreed to **0.006%**. A fixed
 /// absolute tolerance quietly encodes an assumption about scale, and that assumption expired
 /// the moment the matrix gained a genuinely large block.
 fn jacobianTolerance(numeric: f32) f32 {
     return @max(2.0e-3, 1.0e-3 * @abs(numeric));
 }
 
-test "★★★ srbd: the analytic Jacobians agree with finite differences of the same step" {
-    // ── THE CHECK PHASE 2 EXISTS FOR ──
+test "*** srbd: the analytic Jacobians agree with finite differences of the same step" {
+    // -- THE CHECK PHASE 2 EXISTS FOR --
     //
     // The whole point of this model is that its linearisation is derived rather than measured,
-    // and a derivation is exactly where a sign flips silently: `[r]×` transposed, `T` not
-    // transposed, a `dt` that should be `dt²`. None of those crash. They produce a planner
+    // and a derivation is exactly where a sign flips silently: `[r]x` transposed, `T` not
+    // transposed, a `dt` that should be `dt^2`. None of those crash. They produce a planner
     // that leans the wrong way, which reads as bad cost weights.
     //
     // So: difference `step` numerically and require the closed form to match. Cross-checking
@@ -1986,7 +1986,7 @@ test "★★★ srbd: the analytic Jacobians agree with finite differences of th
     const dt: f32 = 0.02;
     const stance: Stance = squareStance();
 
-    // Several states, because a term can be zero at the origin and wrong everywhere else —
+    // Several states, because a term can be zero at the origin and wrong everywhere else -
     // especially anything that depends on yaw.
     const states = [_][trunk_state_dim]f32{
         .{ 0, 0, 0.30, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
@@ -2008,27 +2008,27 @@ test "★★★ srbd: the analytic Jacobians agree with finite differences of th
         srbdLinearize(go1_trunk, &x0, &u, stance, dt, &a, &b);
         const base: [trunk_state_dim]f32 = srbdStep(go1_trunk, &x0, &u, stance, dt);
 
-        // ── ★★★ CENTRED DIFFERENCES AT eps = 1e-2, AND BOTH CHOICES WERE MEASURED ──
+        // -- *** CENTRED DIFFERENCES AT eps = 1e-2, AND BOTH CHOICES WERE MEASURED --
         //
         // **Centred**, because a one-sided difference carries truncation of order `eps` and the
-        // yaw column is genuinely nonlinear. That cost 6% on a small entry — 0.0304 against
-        // 0.0324 — which is indistinguishable from a wrong derivation if you are hunting one.
+        // yaw column is genuinely nonlinear. That cost 6% on a small entry - 0.0304 against
+        // 0.0324 - which is indistinguishable from a wrong derivation if you are hunting one.
         //
         // **1e-2 rather than something smaller**, because the reference degrades as `eps`
-        // shrinks. Swept on the hardest state (trunk at (−1.0, 2.0), yaw −2.1):
+        // shrinks. Swept on the hardest state (trunk at (-1.0, 2.0), yaw -2.1):
         //
         //     entry d(wx)/du[1]     analytic 0.157163
         //     eps 1e-2   0.157547   0.24% out
         //     eps 1e-3   0.160217   1.9%  out
-        //     eps 1e-4   0.114441   27%   out — and identical across three columns, so quantised
+        //     eps 1e-4   0.114441   27%   out - and identical across three columns, so quantised
         //
         // The error grows as the nudge SHRINKS: f32 cancellation, not truncation, the same wall
         // the articulated differencing hits. `srbdStep` is exactly affine in `u`, so a larger
         // nudge costs nothing there at all.
         //
-        // ★ THE POINT WORTH KEEPING: for a while this looked like a wrong Jacobian. It was a
+        // * THE POINT WORTH KEEPING: for a while this looked like a wrong Jacobian. It was a
         // wrong REFERENCE. When an analytic derivation and a numerical check disagree, sweep
-        // the nudge before touching the algebra — a real error is flat in `eps`, and this was
+        // the nudge before touching the algebra - a real error is flat in `eps`, and this was
         // not.
         const eps: f32 = 1.0e-2;
         for (0..trunk_state_dim) |c| {
@@ -2060,8 +2060,8 @@ test "★★★ srbd: the analytic Jacobians agree with finite differences of th
     }
 }
 
-test "★★ srbd: physics, not just self-consistency" {
-    // ★ THE TEST ABOVE WOULD PASS IF `step` WERE WRONG IN A SELF-CONSISTENT WAY. It checks a
+test "** srbd: physics, not just self-consistency" {
+    // * THE TEST ABOVE WOULD PASS IF `step` WERE WRONG IN A SELF-CONSISTENT WAY. It checks a
     // derivative against the function it was derived from; both could share a mistake. These
     // check the function against physics.
     const dt: f32 = 0.01;
@@ -2091,11 +2091,11 @@ test "★★ srbd: physics, not just self-consistency" {
         }
     }
 
-    // 3. ★ THE SIGN OF A TORQUE, which is the thing a derivation gets wrong. Push up harder on
+    // 3. * THE SIGN OF A TORQUE, which is the thing a derivation gets wrong. Push up harder on
     //    the FRONT feet than the rear and the trunk must pitch NOSE UP.
     //
     //    Pitch is rotation about +y. A front foot is at +x and pushes along +z, so its torque
-    //    is r × f = (+x) × (+z) = -y. Nose-up is therefore NEGATIVE pitch in this convention,
+    //    is r x f = (+x) x (+z) = -y. Nose-up is therefore NEGATIVE pitch in this convention,
     //    and writing that down is the only way the assertion below means anything.
     {
         const stance: Stance = squareStance();
@@ -2110,7 +2110,7 @@ test "★★ srbd: physics, not just self-consistency" {
     }
 
     // 4. And a lateral push on one side rolls it, with the matching sign.
-    //    A left foot is at +y pushing +z: r × f = (+y) × (+z) = +x, so roll is POSITIVE.
+    //    A left foot is at +y pushing +z: r x f = (+y) x (+z) = +x, so roll is POSITIVE.
     {
         const stance: Stance = squareStance();
         hoverForces(go1_trunk, stance, &u);
@@ -2123,7 +2123,7 @@ test "★★ srbd: physics, not just self-consistency" {
     }
 }
 
-test "★★ srbd: a swing foot contributes nothing, in the step and in the Jacobian" {
+test "** srbd: a swing foot contributes nothing, in the step and in the Jacobian" {
     // The contact schedule reaches the optimiser ONLY through `active`. If a swing foot's
     // columns of B were non-zero the planner would happily push with a foot in the air, and
     // the resulting plan would be beautiful and impossible.
@@ -2159,7 +2159,7 @@ test "★★ srbd: a swing foot contributes nothing, in the step and in the Jaco
     }
 
     // And hoverForces splits across the THREE feet that are down, not four. Into a FRESH
-    // buffer — the one above was deliberately vandalised, and asserting against it would be
+    // buffer - the one above was deliberately vandalised, and asserting against it would be
     // asserting about the vandalism.
     var hover: [trunk_control_dim]f32 = undefined;
     hoverForces(go1_trunk, stance, &hover);
@@ -2169,15 +2169,15 @@ test "★★ srbd: a swing foot contributes nothing, in the step and in the Jaco
 }
 
 // ============================================================================
-// THE BALANCING MODEL — inverted pendulum plus flywheel
+// THE BALANCING MODEL - inverted pendulum plus flywheel
 // ============================================================================
 
 /// `[com_x, com_y, vel_x, vel_y, momentum_x, momentum_y]`.
 ///
-/// ── ★★★ WHY THE ANGULAR MOMENTUM IS A STATE AND NOT A CONTROL ──
+/// -- *** WHY THE ANGULAR MOMENTUM IS A STATE AND NOT A CONTROL --
 ///
 /// Because it is the thing with a HARD LIMIT. Arms only rotate so far, so a planner cannot just
-/// keep spending momentum — it has to give it back. Making it a state, with its rate as the
+/// keep spending momentum - it has to give it back. Making it a state, with its rate as the
 /// control, is what lets a horizon express "accept momentum now, return it before the arms run
 /// out". A reactive controller has nowhere to put that sentence.
 pub const lipm_state_dim: u32 = 6;
@@ -2194,28 +2194,28 @@ pub const lipm_rate_offset: u32 = 2;
 pub const BalanceModel = struct {
     mass: f32,
     /// Height of the centre of mass above the support. Sets the instability: an undriven
-    /// pendulum diverges as `exp(t·√(g/h))`, which for a 0.83 m humanoid is 3.4 rad/s.
+    /// pendulum diverges as `exp(t*sqrt(g/h))`, which for a 0.83 m humanoid is 3.4 rad/s.
     height: f32,
     gravity: f32 = 9.81,
 };
 
 /// One step of the balancing dynamics, semi-implicit Euler.
 ///
-/// ── ★★ THE DERIVATION, BECAUSE THE SIGNS ARE THE WHOLE THING ──
+/// -- ** THE DERIVATION, BECAUSE THE SIGNS ARE THE WHOLE THING --
 ///
-///     m·c̈ = f          L̇ = (p − c) × f          f_z = m·g
+///     m*c_ddot = f          L_dot = (p - c) x f          f_z = m*g
 ///
-/// Eliminating `f` between them, with `(p − c)` having vertical component `−h`:
+/// Eliminating `f` between them, with `(p - c)` having vertical component `-h`:
 ///
-///     c̈ₓ = (g/h)·(cₓ − pₓ) − L̇_y/(m·h)
-///     c̈_y = (g/h)·(c_y − p_y) + L̇ₓ/(m·h)
+///     c_ddot_x = (g/h)*(c_x - p_x) - L_dot_y/(m*h)
+///     c_ddot_y = (g/h)*(c_y - p_y) + L_dot_x/(m*h)
 ///
-/// ★ NOTE THE CROSS-COUPLING AND THE OPPOSITE SIGNS. Momentum about **y** drives motion in
-/// **x**, and about **x** drives motion in **y** with the other sign — because a cross product
+/// * NOTE THE CROSS-COUPLING AND THE OPPOSITE SIGNS. Momentum about **y** drives motion in
+/// **x**, and about **x** drives motion in **y** with the other sign - because a cross product
 /// is what relates them. Getting either wrong gives a robot that leans into its own recovery,
 /// which is why the test below pins both directions separately rather than checking a norm.
 ///
-/// ★ AND `(cₓ − pₓ)` IS POSITIVE FEEDBACK: the further the mass is from the support, the harder
+/// * AND `(c_x - p_x)` IS POSITIVE FEEDBACK: the further the mass is from the support, the harder
 /// it accelerates away. That sign IS the inverted pendulum, and a planner that got it backwards
 /// would look stable in simulation and fall over on a robot.
 pub fn lipmStep(
@@ -2245,10 +2245,10 @@ pub fn lipmStep(
     return out;
 }
 
-/// The Jacobians of `lipmStep`. Constant — the dynamics is linear — so these depend only on the
+/// The Jacobians of `lipmStep`. Constant - the dynamics is linear - so these depend only on the
 /// body and the timestep, never on the state.
 ///
-/// ★ WHICH MAKES THE PROBLEM GENUINELY CONVEX, not approximately so. The trunk model had a mild
+/// * WHICH MAKES THE PROBLEM GENUINELY CONVEX, not approximately so. The trunk model had a mild
 /// yaw dependence that had to be re-linearised; this has none. One backward pass is the exact
 /// answer, and there is no basin to fall into.
 pub fn lipmLinearize(
@@ -2273,7 +2273,7 @@ pub fn lipmLinearize(
     for (0..2) |k| {
         // velocity rows
         a[(lipm_vel_offset + k) * n + lipm_com_offset + k] = dt * omega_squared;
-        // position rows: `c' = c + dt·v'`, so they inherit the velocity row scaled by dt
+        // position rows: `c' = c + dt*v'`, so they inherit the velocity row scaled by dt
         a[(lipm_com_offset + k) * n + lipm_com_offset + k] = 1.0 + dt * dt * omega_squared;
         a[(lipm_com_offset + k) * n + lipm_vel_offset + k] = dt;
 
@@ -2284,7 +2284,7 @@ pub fn lipmLinearize(
         b[(lipm_momentum_offset + k) * nu + lipm_rate_offset + k] = dt;
     }
 
-    // ★ THE CROSS TERMS, WITH OPPOSITE SIGNS. Momentum rate about y drives x negatively;
+    // * THE CROSS TERMS, WITH OPPOSITE SIGNS. Momentum rate about y drives x negatively;
     // about x drives y positively. This is the flywheel, and it is the only reason a robot
     // whose centre of pressure has saturated can still do anything at all.
     b[lipm_vel_offset * nu + lipm_rate_offset + 1] = -dt * lever;
@@ -2296,7 +2296,7 @@ pub fn lipmLinearize(
 /// A horizon of balance plan: centre-of-pressure and momentum-rate commands, and the gains.
 pub const BalancePlan = struct {
     horizon: u32,
-    /// `horizon × lipm_control_dim` — the answer.
+    /// `horizon x lipm_control_dim` - the answer.
     ctrl: []f32,
     states: []f32,
     reference: []f32,
@@ -2354,7 +2354,7 @@ pub const BalancePlan = struct {
 
 /// What the balancing machine is allowed to do.
 pub const BalanceLimits = struct {
-    /// Half-extents of the support polygon about its centre — how far the centre of pressure
+    /// Half-extents of the support polygon about its centre - how far the centre of pressure
     /// may travel. For one human-sized foot this is a few centimetres, which is why it
     /// saturates on any real push.
     foot_half: [2]f32,
@@ -2364,9 +2364,9 @@ pub const BalanceLimits = struct {
 
 /// Improve `plan.ctrl` for the balance state in `x0`. Returns the cost of the result.
 ///
-/// ── ★★★ ONE PASS IS THE EXACT ANSWER HERE ──
+/// -- *** ONE PASS IS THE EXACT ANSWER HERE --
 ///
-/// `lipmStep` is exactly affine, so the quadratic model is not an approximation — its minimum
+/// `lipmStep` is exactly affine, so the quadratic model is not an approximation - its minimum
 /// IS the minimum, and the Riccati recursion lands on it. The trunk planner ran several passes
 /// only to chase its yaw dependence; this has none. Passes above one exist solely to let the
 /// box solver's active set settle.
@@ -2382,7 +2382,7 @@ pub fn solveBalance(
     const n: u32 = lipm_state_dim;
     const u: u32 = lipm_control_dim;
 
-    // ★ FILLED ONCE, NOT PER KNOT. A and B do not depend on the state.
+    // * FILLED ONCE, NOT PER KNOT. A and B do not depend on the state.
     lipmLinearize(body, dt, plan.a[0 .. n * n], plan.b[0 .. n * u]);
     for (1..plan.horizon) |k| {
         @memcpy(plan.a[k * n * n ..][0 .. n * n], plan.a[0 .. n * n]);
@@ -2473,7 +2473,7 @@ pub fn solveBalance(
 }
 
 // ============================================================================
-// A CRANE — trolley on a rail, payload swinging below
+// A CRANE - trolley on a rail, payload swinging below
 // ============================================================================
 
 /// `[trolley_x, trolley_vel, angle, angle_rate]`. The angle is from vertical, positive when the
@@ -2484,11 +2484,11 @@ pub const crane_vel_offset: u32 = 1;
 pub const crane_angle_offset: u32 = 2;
 pub const crane_rate_offset: u32 = 3;
 
-/// `[trolley_acceleration]` — what a real crane's drive actually takes.
+/// `[trolley_acceleration]` - what a real crane's drive actually takes.
 pub const crane_control_dim: u32 = 1;
 
 pub const CraneModel = struct {
-    /// Cable length. Sets the whole timescale: the payload swings at `√(g/L)`.
+    /// Cable length. Sets the whole timescale: the payload swings at `sqrt(g/L)`.
     cable: f32,
     gravity: f32 = 9.81,
 };
@@ -2496,17 +2496,17 @@ pub const CraneModel = struct {
 /// One step of the crane, semi-implicit Euler. `linear` selects the small-angle model the
 /// planner uses; the simulation should pass `false` and get the real thing.
 ///
-/// ── ★★★ THE SIGN ON `a/L` IS THE ENTIRE PROBLEM ──
+/// -- *** THE SIGN ON `a/L` IS THE ENTIRE PROBLEM --
 ///
-///     ẍ = a          θ̈ = −(g/L)·sin θ − (a/L)·cos θ
+///     x_ddot = a          theta_ddot = -(g/L)*sin theta - (a/L)*cos theta
 ///
 /// Accelerating the trolley forward swings the payload BACKWARD. So to arrest a load that is
-/// already swinging you must accelerate INTO it — decelerate early, and briefly reverse. It
+/// already swinging you must accelerate INTO it - decelerate early, and briefly reverse. It
 /// looks like the wrong move and it is exactly right, and **no gain on trolley position can
 /// produce it**, because the trolley is already where it should be by then.
 ///
-/// ★ AND THE PLANNER'S MODEL IS AN APPROXIMATION ON PURPOSE. Planning on the linearisation while
-/// simulating the real `sin`/`cos` is what real MPC does — it turns "does the small-angle
+/// * AND THE PLANNER'S MODEL IS AN APPROXIMATION ON PURPOSE. Planning on the linearisation while
+/// simulating the real `sin`/`cos` is what real MPC does - it turns "does the small-angle
 /// assumption hold?" into something a run answers instead of something a comment claims.
 pub fn craneStep(
     body: CraneModel,
@@ -2533,7 +2533,7 @@ pub fn craneStep(
     return out;
 }
 
-/// Jacobians of the LINEAR crane step. Constant — no state dependence at all.
+/// Jacobians of the LINEAR crane step. Constant - no state dependence at all.
 pub fn craneLinearize(body: CraneModel, dt: f32, a: []f32, b: []f32) void {
     assertf(a.len == crane_state_dim * crane_state_dim, @src(), "crane: A is {d}", .{a.len});
     assertf(b.len == crane_state_dim * crane_control_dim, @src(), "crane: B is {d}", .{b.len});
@@ -2548,7 +2548,7 @@ pub fn craneLinearize(body: CraneModel, dt: f32, a: []f32, b: []f32) void {
     a[crane_pos_offset * n + crane_vel_offset] = dt;
     a[crane_angle_offset * n + crane_rate_offset] = dt;
     a[crane_rate_offset * n + crane_angle_offset] = -dt * omega_squared;
-    // `θ' = θ + dt·θ̇'`, so the angle row inherits the rate row scaled by dt.
+    // `theta' = theta + dt*theta_dot'`, so the angle row inherits the rate row scaled by dt.
     a[crane_angle_offset * n + crane_angle_offset] = 1.0 - dt * dt * omega_squared;
 
     b[crane_vel_offset] = dt;
@@ -2616,18 +2616,18 @@ pub const CranePlan = struct {
 
 /// Improve `plan.ctrl` for the crane state in `x0`. Returns the cost of the result.
 ///
-/// ── ★★★ MEASURED AGAINST A POSITION PD, SAME ACCELERATION LIMIT, SAME TRAVEL ──
+/// -- *** MEASURED AGAINST A POSITION PD, SAME ACCELERATION LIMIT, SAME TRAVEL --
 ///
 ///     controller     final x   |angle|   |rate|   peak |vel|   residual swing
 ///     position PD      9.994    0.1348   0.3129       2.077           0.2217
 ///     MPC             10.000    0.0001   0.0001       3.258           0.0002
 ///
-/// **A thousandfold less residual swing** — the PD arrives and leaves the load swinging through
+/// **A thousandfold less residual swing** - the PD arrives and leaves the load swinging through
 /// 12.7 degrees, because a gain on trolley POSITION has nothing to say about a payload that is
 /// already where it should be and still moving.
 ///
-/// ★ AND THE RAIL SPEED IS THE CATCH: 3.26 m/s against the PD's 2.08. That is a STATE limit and
-/// `boxQP` bounds controls only, so there is no constraint to write — the cost weight on
+/// * AND THE RAIL SPEED IS THE CATCH: 3.26 m/s against the PD's 2.08. That is a STATE limit and
+/// `boxQP` bounds controls only, so there is no constraint to write - the cost weight on
 /// velocity is the whole brake, exactly as it was for momentum excursion. **Measure the peak;
 /// do not assume the weight handled it.**
 pub fn solveCrane(
@@ -2721,7 +2721,7 @@ pub fn solveCrane(
 }
 
 // ============================================================================
-// A ROCKET — landing on gimballed thrust that cannot be switched off
+// A ROCKET - landing on gimballed thrust that cannot be switched off
 // ============================================================================
 
 /// `[x, altitude, vel_x, vel_y, tilt, tilt_rate]`. Tilt is from vertical, positive toward +x.
@@ -2748,7 +2748,7 @@ pub const RocketModel = struct {
 
 /// What the vehicle may do.
 ///
-/// ── ★★★ THE LOWER THRUST BOUND IS THE INTERESTING ONE ──
+/// -- *** THE LOWER THRUST BOUND IS THE INTERESTING ONE --
 ///
 /// A real engine cannot throttle to zero, so "cut it and coast" is unavailable. A plan that
 /// wants less deceleration than `min_thrust` provides has exactly one move left: **tilt the
@@ -2762,11 +2762,11 @@ pub const RocketLimits = struct {
 
 /// One step of the rocket, semi-implicit Euler.
 ///
-/// Body up is `(sin θ, cos θ)`; the gimbal deflects the thrust by `δ` within the body, so the
-/// world thrust direction is `(sin(θ+δ), cos(θ+δ))` and the torque about the centre of mass is
-/// `−L·T·sin δ` — only the component across the body axis has a lever.
+/// Body up is `(sin theta, cos theta)`; the gimbal deflects the thrust by `delta` within the body, so the
+/// world thrust direction is `(sin(theta+delta), cos(theta+delta))` and the torque about the centre of mass is
+/// `-L*T*sin delta` - only the component across the body axis has a lever.
 ///
-/// ★ NONLINEAR, WHICH THE CRANE AND THE BALANCING MODEL WERE NOT. `sin(θ+δ)` couples attitude
+/// * NONLINEAR, WHICH THE CRANE AND THE BALANCING MODEL WERE NOT. `sin(theta+delta)` couples attitude
 /// to gimbal, so the Jacobians depend on where you are and every knot must be re-linearised.
 /// **This is the first of these problems that exercises the full iLQR loop** rather than one
 /// backward pass on a constant system.
@@ -2829,7 +2829,7 @@ pub fn rocketLinearize(
     a[rocket_y_offset * n + rocket_vy_offset] = dt;
     a[rocket_tilt_offset * n + rocket_rate_offset] = dt;
 
-    // ★ TILT FEEDS THE ACCELERATIONS, which is the coupling that makes this nonlinear. Leaning
+    // * TILT FEEDS THE ACCELERATIONS, which is the coupling that makes this nonlinear. Leaning
     // over trades vertical thrust for horizontal, and the derivative of that trade is what lets
     // a planner decide how far to lean.
     const dax_dtilt: f32 = thrust * cosine * inv_mass;
@@ -2848,7 +2848,7 @@ pub fn rocketLinearize(
     b[rocket_rate_offset * nu + rocket_thrust_offset] = dt * drate_dthrust;
     b[rocket_tilt_offset * nu + rocket_thrust_offset] = dt * dt * drate_dthrust;
 
-    // Gimbal column. It enters twice — through the thrust direction AND through the torque —
+    // Gimbal column. It enters twice - through the thrust direction AND through the torque -
     // which is exactly the trade the planner is making when it steers.
     b[rocket_vx_offset * nu + rocket_gimbal_offset] = dt * dax_dtilt;
     b[rocket_vy_offset * nu + rocket_gimbal_offset] = dt * day_dtilt;
@@ -2924,21 +2924,21 @@ pub const RocketPlan = struct {
 /// Slide the plan one knot forward, so the next solve starts from yesterday's answer aligned to
 /// today's clock. The last knot repeats.
 ///
-/// ── ★★★ WITHOUT THIS THE WARM START IS STALE BY ONE KNOT, EVERY TICK ──
+/// -- *** WITHOUT THIS THE WARM START IS STALE BY ONE KNOT, EVERY TICK --
 ///
-/// The tutorial has said so since it was written — *"shift the control sequence one knot forward
-/// and use it as the seed for the next solve"* — and the crane and balancing planners got away
+/// The tutorial has said so since it was written - *"shift the control sequence one knot forward
+/// and use it as the seed for the next solve"* - and the crane and balancing planners got away
 /// without it because their problems barely change between ticks.
 ///
 /// A descent does. Measured without the shift, the commanded throttle chattered between its
-/// bounds every few ticks — **163%, 109%, 88%, 61%, 132%, 192%, 200%, 77%** on the way down —
+/// bounds every few ticks - **163%, 109%, 88%, 61%, 132%, 192%, 200%, 77%** on the way down -
 /// which is not a flare, it is a solver being handed a seed that no longer describes its
 /// problem and re-deriving from scratch under an iteration budget that assumes it does not have
 /// to.
 ///
-/// ★ AND THE CARTPOLE ALREADY KNEW. Its `shift()` moved the controls and the gains but NOT the
-/// reference states, so the feedback measured `δx` against a knot one step stale and the error
-/// compounded — the pole drifted from 3.0 to 58 rad. Everything the plan carries per knot has
+/// * AND THE CARTPOLE ALREADY KNEW. Its `shift()` moved the controls and the gains but NOT the
+/// reference states, so the feedback measured `dx` against a knot one step stale and the error
+/// compounded - the pole drifted from 3.0 to 58 rad. Everything the plan carries per knot has
 /// to move together or none of it should.
 pub fn shiftRocketPlan(plan: *RocketPlan) void {
     const nu: usize = rocket_control_dim;
@@ -2948,7 +2948,7 @@ pub fn shiftRocketPlan(plan: *RocketPlan) void {
     }
     const last: usize = plan.horizon - 1;
     std.mem.copyForwards(f32, plan.ctrl[0 .. last * nu], plan.ctrl[nu .. plan.horizon * nu]);
-    // The final knot keeps its command rather than being zeroed — zero thrust is not even a
+    // The final knot keeps its command rather than being zeroed - zero thrust is not even a
     // legal control here, and seeding an illegal one costs the solver a pass to climb out of.
     std.mem.copyForwards(
         f32,
@@ -2959,10 +2959,10 @@ pub fn shiftRocketPlan(plan: *RocketPlan) void {
 
 /// Improve `plan.ctrl` for the descent state in `x0`. Returns the cost of the result.
 ///
-/// ── ★★★ THIS ONE RE-LINEARISES, AND THAT IS THE POINT ──
+/// -- *** THIS ONE RE-LINEARISES, AND THAT IS THE POINT --
 ///
 /// The crane and the balancing model are linear, so their `A` and `B` are filled once and one
-/// backward pass is exact. `rocketStep` is not: `sin(θ+δ)` couples attitude to gimbal, so every
+/// backward pass is exact. `rocketStep` is not: `sin(theta+delta)` couples attitude to gimbal, so every
 /// knot gets its own Jacobians from its own state and control, and the passes above one are
 /// doing real work rather than settling an active set.
 pub fn solveRocket(
@@ -2980,7 +2980,7 @@ pub fn solveRocket(
     for (0..plan.horizon) |k| {
         const lo: []f32 = plan.lower[k * nu ..][0..nu];
         const hi: []f32 = plan.upper[k * nu ..][0..nu];
-        // ★ ASYMMETRIC, AND DELIBERATELY SO. `min_thrust` is above zero because a real engine
+        // * ASYMMETRIC, AND DELIBERATELY SO. `min_thrust` is above zero because a real engine
         // cannot be switched off, which is the constraint that makes this problem interesting.
         lo[rocket_thrust_offset] = limits.min_thrust;
         hi[rocket_thrust_offset] = limits.max_thrust;
@@ -3044,20 +3044,20 @@ pub fn solveRocket(
             return cost;
         }
 
-        // ── ★★★ A LINE SEARCH, BECAUSE THE STEP SIZE IS NOT OPTIONAL ──
+        // -- *** A LINE SEARCH, BECAUSE THE STEP SIZE IS NOT OPTIONAL --
         //
-        // §37 of the tutorial says exactly this and this solver did not do it: it rolled out at
+        // section 37 of the tutorial says exactly this and this solver did not do it: it rolled out at
         // full feedforward every pass and kept whatever came back. On a LINEAR model that is
-        // fine — the quadratic model is exact, so the full step is the answer, which is why the
+        // fine - the quadratic model is exact, so the full step is the answer, which is why the
         // crane and the balancing planner never needed one.
         //
         // This model is not linear, and the symptom was unmistakable: **more iterations made it
-        // worse.** Four passes brought the vehicle in at −1.1 m/s with 0.013 rad of tilt; sixty
+        // worse.** Four passes brought the vehicle in at -1.1 m/s with 0.013 rad of tilt; sixty
         // passes tumbled it through 6.4 radians. An optimiser that diverges as you let it work
-        // harder is not converging slowly, it is overshooting — and halving the step until the
+        // harder is not converging slowly, it is overshooting - and halving the step until the
         // cost actually falls is the standard, boring answer.
         //
-        // ★ THE PREVIOUS CONTROLS ARE KEPT so a rejected step can be undone. Without that the
+        // * THE PREVIOUS CONTROLS ARE KEPT so a rejected step can be undone. Without that the
         // search cannot reject anything, which makes it a very expensive way to take the full
         // step anyway.
         @memcpy(plan.trial, plan.ctrl);
@@ -3096,7 +3096,7 @@ pub fn solveRocket(
             }
         }
         if (!improved) {
-            // Every step made it worse, so keep what we had and stop — another pass will only
+            // Every step made it worse, so keep what we had and stop - another pass will only
             // produce the same rejected directions.
             @memcpy(plan.ctrl, plan.trial);
             return cost;
@@ -3106,7 +3106,7 @@ pub fn solveRocket(
 }
 
 // ============================================================================
-// GAIT — when each foot is down, and where the next one goes
+// GAIT - when each foot is down, and where the next one goes
 // ============================================================================
 
 pub const leg_count: usize = 4;
@@ -3126,8 +3126,8 @@ pub const Gait = struct {
     frequency: f32,
     /// Fraction of a cycle a foot spends in STANCE. 1.0 means it never lifts.
     ///
-    /// ★ THIS IS THE NUMBER THE OLD KINEMATIC GAIT COULD NOT LOWER. Its own measurements:
-    /// duty 0.85 stood, 0.70 fell at 2.5 s, 0.50 ended up on its belly — because nothing was
+    /// * THIS IS THE NUMBER THE OLD KINEMATIC GAIT COULD NOT LOWER. Its own measurements:
+    /// duty 0.85 stood, 0.70 fell at 2.5 s, 0.50 ended up on its belly - because nothing was
     /// deciding how hard each foot pushed, so the only way to stay up was to keep three or
     /// four feet down at all times. A planner that chooses forces should reach 0.5, and that
     /// is the acceptance test for the whole exercise.
@@ -3138,7 +3138,7 @@ pub const Gait = struct {
     /// All four feet down, forever. The default before anyone asks for motion.
     pub const stand: Gait = .{ .frequency = 1.0, .duty = 1.0, .offset = .{ 0, 0, 0, 0 } };
 
-    /// Diagonal pairs together — the fast, efficient, and least stable of the three.
+    /// Diagonal pairs together - the fast, efficient, and least stable of the three.
     pub const trot: Gait = .{ .frequency = 2.0, .duty = 0.5, .offset = .{ 0.0, 0.5, 0.5, 0.0 } };
 
     /// One foot at a time, so three are always down. Slow and very stable.
@@ -3172,7 +3172,7 @@ pub fn swingProgress(gait: Gait, phase: f32, leg: Leg) f32 {
 
 /// Seconds until this leg next touches down. Zero if it is already in stance.
 ///
-/// ★ THE FOOTSTEP PLANNER'S MOST IMPORTANT INPUT, because everything it computes is about
+/// * THE FOOTSTEP PLANNER'S MOST IMPORTANT INPUT, because everything it computes is about
 /// where the world will be THEN, not where it is now.
 pub fn timeToTouchdown(gait: Gait, phase: f32, leg: Leg) f32 {
     if (gait.duty >= 1.0 or inStance(gait, phase, leg)) {
@@ -3200,7 +3200,7 @@ pub const Layout = struct {
     hip: [leg_count]Vec,
     /// The Raibert feedback gain. Larger steps harder toward wherever the body is drifting.
     ///
-    /// ★ 0.03 IS A STARTING POINT, NOT A RESULT. Too small and the robot cannot catch itself;
+    /// * 0.03 IS A STARTING POINT, NOT A RESULT. Too small and the robot cannot catch itself;
     /// too large and it chases its own noise and paces on the spot. It wants tuning against a
     /// measured recovery, and the number here should be replaced by one.
     feedback: f32 = 0.03,
@@ -3218,7 +3218,7 @@ pub const Trunk = struct {
 
 /// Where one foot should land, in world coordinates.
 ///
-/// ── ★★ TIME ENTERS TWICE AND BOTH MATTER ──
+/// -- ** TIME ENTERS TWICE AND BOTH MATTER --
 ///
 /// Once as `t_td`, the wait until touchdown, which says where the hip will have travelled and
 /// how far the body will have turned. Once as `T_stance / 2`, which says how far the foot
@@ -3246,7 +3246,7 @@ pub fn footTarget(
     // That hip, rotated into the world at the attitude the body will then have.
     const hip_then: Vec = rotateZ(layout.hip[index], yaw_then);
 
-    // ★ THE HIP'S VELOCITY, NOT THE BODY'S. `ω × r` is what makes a turn a turn: with zero
+    // * THE HIP'S VELOCITY, NOT THE BODY'S. `omega x r` is what makes a turn a turn: with zero
     // commanded translation and a yaw rate, this is purely tangential, so the four feet land
     // on a circle and the robot spins in place. Nothing here knows that is what it is doing.
     const spin: Vec = cross(vec(0, 0, command.yaw_rate), hip_then);
@@ -3271,7 +3271,7 @@ fn rotateZ(v: Vec, yaw: f32) Vec {
 /// Fill `out` with which feet are down at each knot of the horizon.
 ///
 /// `out` is `horizon * leg_count` booleans, knot-major. This is the ONLY channel by which the
-/// gait reaches the trunk optimiser — `srbd.Stance.active` reads straight from it — so a bug
+/// gait reaches the trunk optimiser - `srbd.Stance.active` reads straight from it - so a bug
 /// here is a plan that pushes with a foot in the air.
 pub fn contactSchedule(
     gait: Gait,
@@ -3296,19 +3296,19 @@ pub fn contactSchedule(
 
 /// Where a swinging foot should be, `progress` from 0 at liftoff to 1 at touchdown.
 ///
-/// ── ★★ BOTH ENDS MUST HAVE ZERO VELOCITY, AND THAT IS THE WHOLE DESIGN ──
+/// -- ** BOTH ENDS MUST HAVE ZERO VELOCITY, AND THAT IS THE WHOLE DESIGN --
 ///
 /// A foot that still has horizontal speed when it lands SCUFFS: it arrives moving relative to
 /// the ground, the contact solver resolves that as a slip, and the trunk gets a sideways
 /// impulse nobody planned. A foot that still has vertical speed when it lifts DRAGS. So both
 /// profiles are chosen to have zero derivative at both ends rather than for their shape.
 ///
-///   * horizontal — smoothstep `3t² − 2t³`, whose derivative vanishes at 0 and 1;
-///   * vertical — the lerp between the two heights plus `16·t²·(1−t)²`, which peaks at exactly
+///   * horizontal - smoothstep `3t^2 - 2t^3`, whose derivative vanishes at 0 and 1;
+///   * vertical - the lerp between the two heights plus `16*t^2*(1-t)^2`, which peaks at exactly
 ///     1 at `t = 0.5` and has zero derivative at both ends too.
 ///
-/// ★ THE SOFT LANDING IS A TRADE, NOT A FREE WIN. Zero vertical velocity at touchdown means
-/// the foot settles gently and also that it approaches the ground asymptotically — on a
+/// * THE SOFT LANDING IS A TRADE, NOT A FREE WIN. Zero vertical velocity at touchdown means
+/// the foot settles gently and also that it approaches the ground asymptotically - on a
 /// surface lower than planned it can arrive late. Controllers that care add a downward bias
 /// near the end; this one does not yet, and the place to add it is here.
 pub fn swingPoint(start: Vec, end: Vec, apex: f32, progress: f32) Vec {
@@ -3326,9 +3326,9 @@ pub fn advance(gait: Gait, phase: f32, dt: f32) f32 {
     return next - @floor(next);
 }
 
-// ────────────────────────────────────
+// ------------------------------------
 // TESTS
-// ────────────────────────────────────
+// ------------------------------------
 
 /// Go1 hips, projected to the ground plane.
 const go1_layout: Layout = .{
@@ -3347,7 +3347,7 @@ const level_trunk: Trunk = .{
     .velocity = vec(0, 0, 0),
 };
 
-test "★★ gait: the schedule is a clock, and a trot really does move diagonal pairs" {
+test "** gait: the schedule is a clock, and a trot really does move diagonal pairs" {
     // Trot: FR+RL together, FL+RR together, each pair down half the cycle.
     const g: Gait = Gait.trot;
     try expect(inStance(g, 0.0, .front_right));
@@ -3359,7 +3359,7 @@ test "★★ gait: the schedule is a clock, and a trot really does move diagonal
     try expect(!inStance(g, 0.5, .front_right));
     try expect(inStance(g, 0.5, .front_left));
 
-    // ★ AT DUTY 0.5 EXACTLY TWO FEET ARE DOWN AT EVERY INSTANT. That is what makes a trot a
+    // * AT DUTY 0.5 EXACTLY TWO FEET ARE DOWN AT EVERY INSTANT. That is what makes a trot a
     // trot, and what the old kinematic gait could not survive.
     var sample: f32 = 0;
     while (sample < 1.0) : (sample += 0.05) {
@@ -3379,11 +3379,11 @@ test "★★ gait: the schedule is a clock, and a trot really does move diagonal
     }
 }
 
-test "★★★ gait: turning on the spot falls out of the hip velocity, with no code for turning" {
-    // ── COMMAND A PURE YAW RATE AND NOTHING ELSE ──
+test "*** gait: turning on the spot falls out of the hip velocity, with no code for turning" {
+    // -- COMMAND A PURE YAW RATE AND NOTHING ELSE --
     //
-    // If the heuristic is right, each foot lands displaced TANGENTIALLY from its hip — forward
-    // on the left, backward on the right for a positive (counter-clockwise) yaw — and all four
+    // If the heuristic is right, each foot lands displaced TANGENTIALLY from its hip - forward
+    // on the left, backward on the right for a positive (counter-clockwise) yaw - and all four
     // stay at the same radius. That is a robot spinning in place, and no line of this file
     // mentions spinning.
     const g: Gait = Gait.trot;
@@ -3398,7 +3398,7 @@ test "★★★ gait: turning on the spot falls out of the hip velocity, with no
         const target: Vec = footTarget(go1_layout, g, level_trunk, command, leg, phase, 0);
         const hip: Vec = go1_layout.hip[l];
         radius[l] = @sqrt(target[0] * target[0] + target[1] * target[1]);
-        // The tangential direction at this hip for a +z rotation is ω × r, normalised.
+        // The tangential direction at this hip for a +z rotation is omega x r, normalised.
         const tangent: Vec = cross(vec(0, 0, 1), hip);
         const offset: Vec = vec(target[0] - hip[0], target[1] - hip[1], 0);
         tangential[l] = offset[0] * tangent[0] + offset[1] * tangent[1];
@@ -3409,7 +3409,7 @@ test "★★★ gait: turning on the spot falls out of the hip velocity, with no
         try expect(t > 0.001);
     }
 
-    // 2. And all four end up at nearly the same radius from the centre — a circle, which is
+    // 2. And all four end up at nearly the same radius from the centre - a circle, which is
     //    what "turning on the spot" means geometrically.
     const hip_radius: f32 = @sqrt(0.19 * 0.19 + 0.13 * 0.13);
     for (radius) |r| {
@@ -3417,15 +3417,15 @@ test "★★★ gait: turning on the spot falls out of the hip velocity, with no
     }
 }
 
-test "★★★ gait: forward and strafe put the feet where the body is going" {
+test "*** gait: forward and strafe put the feet where the body is going" {
     const g: Gait = Gait.trot;
     const phase: f32 = 0.75;
     const leg: Leg = .front_right;
     const hip: Vec = go1_layout.hip[@backingInt(leg)];
 
-    // ★ THE TRUNK IS ALREADY MOVING AT THE COMMANDED SPEED IN THESE CHECKS, so the feedback
+    // * THE TRUNK IS ALREADY MOVING AT THE COMMANDED SPEED IN THESE CHECKS, so the feedback
     // term is zero and the pure geometry shows. A first version used a stationary trunk and
-    // failed by exactly 0.018 = 0.6 * 0.03 — the heuristic correctly stepping SHORT because
+    // failed by exactly 0.018 = 0.6 * 0.03 - the heuristic correctly stepping SHORT because
     // the robot was not yet going as fast as it had been told to. That is the feedback doing
     // its job, and it gets its own assertion at the end rather than polluting these.
     const still: Vec = footTarget(go1_layout, g, level_trunk, .{}, leg, phase, 0);
@@ -3433,7 +3433,7 @@ test "★★★ gait: forward and strafe put the feet where the body is going" {
     try expectApproxEqAbs(hip[0], still[0], 1.0e-4);
     try expectApproxEqAbs(hip[1], still[1], 1.0e-4);
 
-    // Forward: ahead of the hip, and by the amount the heuristic says — the body's travel
+    // Forward: ahead of the hip, and by the amount the heuristic says - the body's travel
     // until touchdown plus half a stance of stride.
     const speed: f32 = 0.6;
     const moving: Trunk = .{ .position = level_trunk.position, .yaw = 0, .velocity = vec(speed, 0, 0) };
@@ -3449,33 +3449,33 @@ test "★★★ gait: forward and strafe put the feet where the body is going" {
     try expectApproxEqAbs(expected_x - hip[0], sideways[1] - hip[1], 1.0e-4);
     try expectApproxEqAbs(hip[0], sideways[0], 1.0e-4);
 
-    // ★ AND THE FEEDBACK TERM, ON ITS OWN. A robot drifting forward while commanded to stand
-    // still must step FORWARD to catch itself — that is the entire balance strategy at this
+    // * AND THE FEEDBACK TERM, ON ITS OWN. A robot drifting forward while commanded to stand
+    // still must step FORWARD to catch itself - that is the entire balance strategy at this
     // layer, and its sign is the thing worth pinning.
     const drifting: Trunk = .{ .position = level_trunk.position, .yaw = 0, .velocity = vec(0.5, 0, 0) };
     const caught: Vec = footTarget(go1_layout, g, drifting, .{}, leg, phase, 0);
     try expect(caught[0] > still[0] + 0.005);
     try expectApproxEqAbs(0.5 * go1_layout.feedback, caught[0] - still[0], 1.0e-5);
 
-    // Ground height is obeyed — the hook uneven terrain will use.
+    // Ground height is obeyed - the hook uneven terrain will use.
     const raised: Vec = footTarget(go1_layout, g, level_trunk, .{}, leg, phase, 0.07);
     try expectApproxEqAbs(@as(f32, 0.07), raised[2], 1.0e-6);
 }
 
-test "★★★ gait: translation and rotation superpose EXACTLY, which is why commands can blend" {
-    // ── ★★★ I PREDICTED THIS WOULD ONLY HOLD APPROXIMATELY. IT IS EXACT, AND THE REASON IS
-    // WORTH MORE THAN THE PREDICTION WAS ──
+test "*** gait: translation and rotation superpose EXACTLY, which is why commands can blend" {
+    // -- *** I PREDICTED THIS WOULD ONLY HOLD APPROXIMATELY. IT IS EXACT, AND THE REASON IS
+    // WORTH MORE THAN THE PREDICTION WAS --
     //
-    // The argument for "approximate" was that the yaw rate enters inside `Rz(yaw + ω·t_td)`,
+    // The argument for "approximate" was that the yaw rate enters inside `Rz(yaw + omega*t_td)`,
     // and a rotation is not a linear function of its angle. True, and irrelevant: that term
     // appears IDENTICALLY in the pure-turn plan and in the combined plan, so it cancels in
-    // `both − (turn + walk − base)`. Measured gap: 2.1e-8 at a yaw rate of 0.2 and 2.1e-8 at
-    // 1.5 — the same number, which is float noise rather than a trend. (A quantity identical
+    // `both - (turn + walk - base)`. Measured gap: 2.1e-8 at a yaw rate of 0.2 and 2.1e-8 at
+    // 1.5 - the same number, which is float noise rather than a trend. (A quantity identical
     // across a swept parameter is not a function of it.)
     //
-    // ★ THE STRUCTURAL REASON IS `t_td`: the time to touchdown comes from the CLOCK, not from
-    // the command. Once it is fixed, every dependence on the command is affine — the body's
-    // travel, the hip's tangential velocity, the drift feedback — and the one nonlinear piece
+    // * THE STRUCTURAL REASON IS `t_td`: the time to touchdown comes from the CLOCK, not from
+    // the command. Once it is fixed, every dependence on the command is affine - the body's
+    // travel, the hip's tangential velocity, the drift feedback - and the one nonlinear piece
     // does not involve the command at all.
     //
     // Which means a driver can blend freely: half a turn plus half a strafe really is the plan
@@ -3512,7 +3512,7 @@ test "★★★ gait: translation and rotation superpose EXACTLY, which is why c
     }
 }
 
-test "★★ gait: the contact schedule over a horizon matches the clock knot by knot" {
+test "** gait: the contact schedule over a horizon matches the clock knot by knot" {
     const g: Gait = Gait.trot;
     const dt: f32 = 0.02;
     const horizon: u32 = 25;
@@ -3526,9 +3526,9 @@ test "★★ gait: the contact schedule over a horizon matches the clock knot by
         }
     }
 
-    // ★ AND THE SCHEDULE ACTUALLY CHANGES ACROSS THE HORIZON. A trot at 2 Hz over half a
+    // * AND THE SCHEDULE ACTUALLY CHANGES ACROSS THE HORIZON. A trot at 2 Hz over half a
     // second covers a whole cycle, so a schedule that were constant would mean the clock was
-    // not advancing — and the trunk planner would optimise against a stance that never lifts.
+    // not advancing - and the trunk planner would optimise against a stance that never lifts.
     var changes: u32 = 0;
     for (1..horizon) |k| {
         for (0..leg_count) |l| {
@@ -3540,12 +3540,12 @@ test "★★ gait: the contact schedule over a horizon matches the clock knot by
     try expect(changes >= 4);
 }
 
-test "★★ gait: a swing arc leaves and lands with no velocity, and clears the higher end" {
+test "** gait: a swing arc leaves and lands with no velocity, and clears the higher end" {
     const start: Vec = vec(0.1, -0.2, 0.0);
     const end: Vec = vec(0.4, -0.2, 0.06); // a 6 cm step up
     const apex: f32 = 0.08;
 
-    // Endpoints are exact — a foot must leave from where it is and land where it was told.
+    // Endpoints are exact - a foot must leave from where it is and land where it was told.
     const at_start: Vec = swingPoint(start, end, apex, 0);
     const at_end: Vec = swingPoint(start, end, apex, 1);
     inline for (0..3) |k| {
@@ -3553,8 +3553,8 @@ test "★★ gait: a swing arc leaves and lands with no velocity, and clears the
         try expectApproxEqAbs(end[k], at_end[k], 1.0e-6);
     }
 
-    // ★ ZERO VELOCITY AT BOTH ENDS, measured rather than asserted from the algebra. The first
-    // and last hundredth of the swing should move the foot far less than the middle does —
+    // * ZERO VELOCITY AT BOTH ENDS, measured rather than asserted from the algebra. The first
+    // and last hundredth of the swing should move the foot far less than the middle does -
     // that is what "no scuff, no drag" is, numerically.
     const eps: f32 = 0.01;
     const near_start: Vec = swingPoint(start, end, apex, eps);
@@ -3581,15 +3581,15 @@ test "★★ gait: a swing arc leaves and lands with no velocity, and clears the
 }
 
 // ============================================================================
-// THE TRUNK PLANNER — convex MPC on the single rigid body
+// THE TRUNK PLANNER - convex MPC on the single rigid body
 // ============================================================================
 
 /// A horizon of trunk plan: the forces, the trajectory they produce, and the gains.
 ///
-/// ── ★★★ ONE BACKWARD PASS IS THE WHOLE SOLVE, AND THAT IS THE POINT OF THE MODEL ──
+/// -- *** ONE BACKWARD PASS IS THE WHOLE SOLVE, AND THAT IS THE POINT OF THE MODEL --
 ///
-/// `optimize` further down runs iLQR properly — line search, regularization ladder, the
-/// "already optimal versus bad model" test — because the articulated robot is nonlinear and
+/// `optimize` further down runs iLQR properly - line search, regularization ladder, the
+/// "already optimal versus bad model" test - because the articulated robot is nonlinear and
 /// its quadratic model can lie. **None of that applies here.** `srbdStep` is affine in the
 /// state and the controls, so the quadratic approximation is EXACT, its minimum is the true
 /// minimum, and the Riccati recursion lands on it in one pass. There is no step size to
@@ -3600,13 +3600,13 @@ test "★★ gait: a swing arc leaves and lands with no velocity, and clears the
 /// plenty, and the difference between two and twenty is not stability, it is a fourth digit.
 pub const TrunkPlan = struct {
     horizon: u32,
-    /// `horizon × trunk_control_dim` — the ground reaction forces. The answer.
+    /// `horizon x trunk_control_dim` - the ground reaction forces. The answer.
     ctrl: []f32,
-    /// `(horizon + 1) × trunk_state_dim`
+    /// `(horizon + 1) x trunk_state_dim`
     states: []f32,
-    /// `(horizon + 1) × trunk_state_dim` — where the trunk is asked to be.
+    /// `(horizon + 1) x trunk_state_dim` - where the trunk is asked to be.
     reference: []f32,
-    /// `horizon` — which feet are down and where they are, per knot.
+    /// `horizon` - which feet are down and where they are, per knot.
     stance: []Stance,
     feedforward: []f32,
     feedback: []f32,
@@ -3665,26 +3665,26 @@ pub const TrunkPlan = struct {
 
 /// The force box for one knot, written into `plan.lower`/`plan.upper`.
 ///
-/// ── ★★★ THE TANGENTIAL BOUND MUST FOLLOW THAT FOOT'S OWN NORMAL FORCE ──
+/// -- *** THE TANGENTIAL BOUND MUST FOLLOW THAT FOOT'S OWN NORMAL FORCE --
 ///
-/// Coulomb friction is `√(fx² + fy²) ≤ μ·fz` — a CONE, and `boxQP` solves boxes. The first
-/// version bounded the tangential components by `μ·f_max/√2` with `f_max` a constant, and
+/// Coulomb friction is `sqrt(fx^2 + fy^2) <= mu*fz` - a CONE, and `boxQP` solves boxes. The first
+/// version bounded the tangential components by `mu*f_max/sqrt2` with `f_max` a constant, and
 /// claimed in this comment that such a box "fits inside the cone". **It does not.** Take
 /// `fz = 0`: the cone permits no tangential force at all, and that box permitted 85 N.
 ///
 /// The planner found it. Measured, standing with zero command: the feet produced **149.95 N,
 /// then 230.10 N of tangential force while carrying 0.56 N of load**, and the trunk slid
 /// sideways to 7.8 m with no tilt at all. A body translating with zero tilt on planted feet is
-/// the signature — the only thing that can do that is horizontal force, and there was no
+/// the signature - the only thing that can do that is horizontal force, and there was no
 /// horizontal force available in reality.
 ///
-/// ★ THE FIX IS TO PASS THE NORMAL FORCE IN AND BOUND AGAINST IT. `μ·fz/√2` per component
+/// * THE FIX IS TO PASS THE NORMAL FORCE IN AND BOUND AGAINST IT. `mu*fz/sqrt2` per component
 /// keeps the box strictly inside the cone for THAT load. `fz` is itself a variable, so this is
-/// a chicken-and-egg — solved the way it always is, by iterating: the first pass uses the
+/// a chicken-and-egg - solved the way it always is, by iterating: the first pass uses the
 /// hover share (the load a foot carries just holding the robot up) and later passes use what
 /// the previous pass actually asked for. `solveTrunk` already loops, so this costs nothing.
 ///
-/// A swing foot gets `lower == upper == 0`, which pins it exactly — `boxQP`'s hand-computed
+/// A swing foot gets `lower == upper == 0`, which pins it exactly - `boxQP`'s hand-computed
 /// tests cover a box that is a single point, and it is why `plan.ctrl` can be handed straight
 /// to `stanceTorques`.
 pub fn forceBox(
@@ -3704,7 +3704,7 @@ pub fn forceBox(
             }
             continue;
         }
-        // ★ A FLOOR UNDER THE ESTIMATE, so a foot the previous pass unloaded is not frozen at
+        // * A FLOOR UNDER THE ESTIMATE, so a foot the previous pass unloaded is not frozen at
         // zero tangential force forever. Without it the iteration has an absorbing state: a
         // foot that once carried nothing can never be asked to steer again.
         const carried: f32 = @max(normal_estimate[leg], 1.0);
@@ -3720,7 +3720,7 @@ pub fn forceBox(
 
 /// Improve `plan.ctrl` for the trunk state in `x0`. Returns the cost of the result.
 ///
-/// `plan.reference` and `plan.stance` must already be filled — `buildTrunkReference` and the
+/// `plan.reference` and `plan.stance` must already be filled - `buildTrunkReference` and the
 /// gait do that. Forces are clamped per knot by `forceBox`, so a swing foot's entry comes back
 /// exactly zero.
 /// Where the regularization ladder starts. Exposed so it can be swept.
@@ -3777,7 +3777,7 @@ pub fn solveTrunk(
             cost += 0.5 * weights.terminal[i] * e * e;
         }
 
-        // ★ ONE BOX PER KNOT, FROM THAT KNOT'S OWN CONTACT SET. This is the whole reason
+        // * ONE BOX PER KNOT, FROM THAT KNOT'S OWN CONTACT SET. This is the whole reason
         // `Limits` is per-knot: a foot in swing now must still be allowed to push at the knots
         // where the schedule says it has landed.
         for (0..plan.horizon) |k| {
@@ -3824,23 +3824,23 @@ pub fn solveTrunk(
             .feedback = plan.feedback,
             .clamped = plan.clamped,
         };
-        // ── ★★★ THE REGULARIZATION LADDER IS NOT OPTIONAL HERE, AND THE REASON IS STRUCTURAL ──
+        // -- *** THE REGULARIZATION LADDER IS NOT OPTIONAL HERE, AND THE REASON IS STRUCTURAL --
         //
-        // `Q_uu` is 12x12 — three force components at four feet — but those twelve numbers
+        // `Q_uu` is 12x12 - three force components at four feet - but those twelve numbers
         // reach the trunk through only SIX physical dimensions, three of force and three of
-        // torque. So `BᵀV_xx B` has rank at most six and `Q_uu` is rank-deficient BY
+        // torque. So `B^TV_xx B` has rank at most six and `Q_uu` is rank-deficient BY
         // CONSTRUCTION: six directions in force space do nothing at all, and the only thing
         // separating them from zero is the control weight.
         //
         // That is the statically-indeterminate force allocation named as a risk before any of
-        // this was written — four feet hold one trunk in infinitely many ways, and the cost has
-        // to break the tie. In f32 a weight of 5e-4 against `BᵀV_xx B` entries of order 1 to
+        // this was written - four feet hold one trunk in infinitely many ways, and the cost has
+        // to break the tie. In f32 a weight of 5e-4 against `B^TV_xx B` entries of order 1 to
         // 100 does not break it: the Cholesky hits a non-positive pivot and `backward` returns
         // null.
         //
         // Measured before this loop existed: the planner returned **exactly zero force on all
-        // four feet**, every tick, and the trunk free-fell to −19.5 m while the cost climbed to
-        // 2.6e6. Not a tuning problem — an unsolved linear system reported as a plan.
+        // four feet**, every tick, and the trunk free-fell to -19.5 m while the cost climbed to
+        // 2.6e6. Not a tuning problem - an unsolved linear system reported as a plan.
         var reg: f32 = trunk_regularization_floor;
         var solved: bool = false;
         while (reg < 1.0e7) : (reg *= 10.0) {
@@ -3881,9 +3881,9 @@ pub fn solveTrunk(
 
 /// Where the trunk should be over the horizon, given a velocity command.
 ///
-/// ★ THE REFERENCE IS A MOVING TARGET, NOT A POSE. Asking the trunk to hold one position while
+/// * THE REFERENCE IS A MOVING TARGET, NOT A POSE. Asking the trunk to hold one position while
 /// the feet walk out from under it is the mistake the old kinematic gait made in world
-/// coordinates — the body was commanded somewhere the legs could no longer reach. Here the
+/// coordinates - the body was commanded somewhere the legs could no longer reach. Here the
 /// reference TRAVELS at the commanded velocity, so "tracking it" and "walking" are the same
 /// instruction.
 pub fn buildTrunkReference(
@@ -3921,7 +3921,7 @@ fn rotateAboutZ(v: Vec, yaw: f32) Vec {
 }
 
 // ============================================================================
-// WHOLE-BODY MAPPING — planned foot forces to joint torques
+// WHOLE-BODY MAPPING - planned foot forces to joint torques
 // ============================================================================
 
 /// Which body each foot belongs to, and which DOFs drive it.
@@ -3930,24 +3930,24 @@ pub const LegWiring = struct {
     body: [leg_count]u32,
     /// The three velocity-space indices this leg owns, in order hip/thigh/calf.
     ///
-    /// ★ NEEDED BECAUSE A LEG MUST NOT PAY FOR ANOTHER LEG'S FORCE. `Jᵀ·f` for a foot has
-    /// non-zero entries on the FLOATING BASE too — that is the whole point, the force moves the
-    /// trunk — but the base has no actuators. Writing the full column into the torque vector
+    /// * NEEDED BECAUSE A LEG MUST NOT PAY FOR ANOTHER LEG'S FORCE. `J^T*f` for a foot has
+    /// non-zero entries on the FLOATING BASE too - that is the whole point, the force moves the
+    /// trunk - but the base has no actuators. Writing the full column into the torque vector
     /// would ask the trunk to torque itself, so only these three indices are taken.
     dof: [leg_count][3]u32,
 };
 
 /// Joint torques that deliver the planned ground reaction forces.
 ///
-/// `forces` is `3 × leg_count`, the force the GROUND exerts on each foot — the same convention
+/// `forces` is `3 x leg_count`, the force the GROUND exerts on each foot - the same convention
 /// `zig` plans in, so a force straight out of the optimiser can be handed here unchanged.
 /// `out` is `nv` long and is ACCUMULATED into, so a caller can add swing torques afterwards.
 ///
-/// ── ★★★ THE SIGN, AND HOW IT WAS SETTLED ──
+/// -- *** THE SIGN, AND HOW IT WAS SETTLED --
 ///
-/// `Jᵀ·f` is the generalized force an external `f` at the foot exerts on the robot. The
+/// `J^T*f` is the generalized force an external `f` at the foot exerts on the robot. The
 /// actuators have to produce the equal and opposite thing at the joints for the leg to press
-/// on the ground rather than be pressed by it — hence the minus.
+/// on the ground rather than be pressed by it - hence the minus.
 ///
 /// That argument is easy to get backwards, and getting it backwards gives a robot that
 /// collapses instead of standing, which looks like a gain problem. So it is not argued, it is
@@ -3986,34 +3986,34 @@ pub fn stanceTorques(
 
 /// The foot's world position, from the model's geom rather than from a stored guess.
 ///
-/// ★ READ IT, DO NOT REMEMBER IT. A foot position cached at liftoff is wrong by the time the
-/// body has moved, and the resulting Jacobian is evaluated at a point the foot is not at — a
+/// * READ IT, DO NOT REMEMBER IT. A foot position cached at liftoff is wrong by the time the
+/// body has moved, and the resulting Jacobian is evaluated at a point the foot is not at - a
 /// torque that is subtly, consistently wrong in the direction the robot is travelling.
 pub fn footPosition(m: *const rbt.Model, d: *const rbt.Data, geom: u32) Vec {
     const body: u32 = m.geom_body[geom];
     return d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[geom]);
 }
 
-// ────────────────────────────────────
+// ------------------------------------
 // TESTS
-// ────────────────────────────────────
+// ------------------------------------
 
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
 const rmj = @import("robot_mjcf.zig");
 
-test "★★★ quadruped: the mapped foot forces satisfy the floating base's own equilibrium" {
-    // ── THE CROSS-CHECK PHASE 4 EXISTS FOR ──
+test "*** quadruped: the mapped foot forces satisfy the floating base's own equilibrium" {
+    // -- THE CROSS-CHECK PHASE 4 EXISTS FOR --
     //
     // Two completely different routes to "what torque holds this robot up":
     //
-    //   A. plan a ground reaction force per foot (`hoverForces` — a quarter of the weight
-    //      each) and map it through the foot Jacobians, `τ = −Jᵀ·f`;
-    //   B. ask what the robot's own dynamics need to cancel gravity — `data.bias_force`, which
+    //   A. plan a ground reaction force per foot (`hoverForces` - a quarter of the weight
+    //      each) and map it through the foot Jacobians, `tau = -J^T*f`;
+    //   B. ask what the robot's own dynamics need to cancel gravity - `data.bias_force`, which
     //      is recursive Newton-Euler and shares no line of code with (A).
     //
-    // If the sign of the map were backwards — the easy mistake, and one that reads as a gain
-    // problem because the robot simply collapses — the two would ANTICORRELATE. So the test is
+    // If the sign of the map were backwards - the easy mistake, and one that reads as a gain
+    // problem because the robot simply collapses - the two would ANTICORRELATE. So the test is
     // the correlation, not the magnitudes: (A) carries only what the feet carry, while (B)
     // carries the legs' own weight too, so they agree in direction and not to the digit.
     const gpa: Allocator = std.testing.allocator;
@@ -4067,17 +4067,17 @@ test "★★★ quadruped: the mapped foot forces satisfy the floating base's ow
     }
     try expect(found == leg_count);
 
-    // ── ★★★ THE CHECK IS THE FLOATING BASE, AND THE FIRST VERSION ASKED THE WRONG QUESTION ──
+    // -- *** THE CHECK IS THE FLOATING BASE, AND THE FIRST VERSION ASKED THE WRONG QUESTION --
     //
-    // It compared `−Jᵀ·f` against `bias_force` at the LEG joints and required positive
-    // correlation. Measured −0.62, and the code was right: those are not the same quantity.
-    // `|Jᵀf| = 10.9` against `|c_leg| = 1.6` — the ground force carries a quarter of the ROBOT,
-    // the leg bias carries a thigh and a calf. From `M·v̇ + c = τ + Jᵀf`, static equilibrium at
-    // the leg joints is `τ = c − Jᵀf`, which is DOMINATED by `−Jᵀf`. Anticorrelation with a
+    // It compared `-J^T*f` against `bias_force` at the LEG joints and required positive
+    // correlation. Measured -0.62, and the code was right: those are not the same quantity.
+    // `|J^Tf| = 10.9` against `|c_leg| = 1.6` - the ground force carries a quarter of the ROBOT,
+    // the leg bias carries a thigh and a calf. From `M*v_dot + c = tau + J^Tf`, static equilibrium at
+    // the leg joints is `tau = c - J^Tf`, which is DOMINATED by `-J^Tf`. Anticorrelation with a
     // small `c_leg` is what the physics predicts.
     //
-    // ★ THE FLOATING BASE IS WHERE THE CLAIM IS FALSIFIABLE, because it has NO ACTUATORS. Its
-    // six rows of the same equation read `c_base = (Jᵀf)_base` with nothing else in them: the
+    // * THE FLOATING BASE IS WHERE THE CLAIM IS FALSIFIABLE, because it has NO ACTUATORS. Its
+    // six rows of the same equation read `c_base = (J^Tf)_base` with nothing else in them: the
     // ground forces alone must cancel gravity on the whole robot and produce no net moment.
     // That is an identity, it needs no controller to compare against, and it fails loudly if
     // either the Jacobian or the sign is wrong.
@@ -4102,8 +4102,8 @@ test "★★★ quadruped: the mapped foot forces satisfy the floating base's ow
     defer gpa.free(mapped);
     const all_down: [leg_count]bool = @splat(true);
 
-    // ★ `−Jᵀ·f` OVER EVERY DOF, COMPUTED HERE. `stanceTorques` deliberately writes only the
-    // three DOFs each leg owns — the trunk has no actuators to torque itself with — so it
+    // * `-J^T*f` OVER EVERY DOF, COMPUTED HERE. `stanceTorques` deliberately writes only the
+    // three DOFs each leg owns - the trunk has no actuators to torque itself with - so it
     // cannot produce the base rows, and a `LegWiring` bent into producing them gets each base
     // DOF from two legs instead of four. (Measured: exactly half the right answer, 62.5
     // against 125.0. A clean factor of two is a counting bug, not a physics one.)
@@ -4117,17 +4117,17 @@ test "★★★ quadruped: the mapped foot forces satisfy the floating base's ow
     }
     const bias: []const f32 = d.bias_force;
 
-    // 1. ★ VERTICAL: the ground pushes up with exactly the robot's weight. `mapped` is −Jᵀf,
-    //    so `−mapped[2]` is the upward generalized force on the base.
+    // 1. * VERTICAL: the ground pushes up with exactly the robot's weight. `mapped` is -J^Tf,
+    //    so `-mapped[2]` is the upward generalized force on the base.
     try expectApproxEqAbs(bias[2], -mapped[2], 0.05 * @abs(bias[2]));
 
-    // 2. ★ AND NO NET MOMENT, because a symmetric stance carrying equal shares must not tip.
-    //    This is the assertion a transposed `[r]×` or a wrong Jacobian point fails.
+    // 2. * AND NO NET MOMENT, because a symmetric stance carrying equal shares must not tip.
+    //    This is the assertion a transposed `[r]x` or a wrong Jacobian point fails.
     for (3..6) |k| {
         try expect(@abs(-mapped[k] - bias[k]) < 0.5);
     }
 
-    // 3. THE SIGN, isolated. Flip the forces and the vertical balance inverts — so (1) is
+    // 3. THE SIGN, isolated. Flip the forces and the vertical balance inverts - so (1) is
     //    measuring a direction rather than passing on a magnitude.
     var pushed_down: [trunk_control_dim]f32 = forces;
     for (&pushed_down) |*f| {
@@ -4144,10 +4144,10 @@ test "★★★ quadruped: the mapped foot forces satisfy the floating base's ow
     try expect(-mapped[2] * bias[2] < 0);
 
     // 4. AND THE LEG TORQUES ARE LARGE AND OPPOSE THE GROUND FORCE, which is what a leg
-    //    holding up a robot does — carrying far more than its own segments weigh.
+    //    holding up a robot does - carrying far more than its own segments weigh.
     @memset(mapped, 0);
     stanceTorques(m, &d, wiring, &foot_point, &forces, &all_down, jac, mapped);
-    // ★ AND `stanceTorques` LEFT THE BASE ALONE, which is the restriction it exists to make.
+    // * AND `stanceTorques` LEFT THE BASE ALONE, which is the restriction it exists to make.
     for (0..6) |k| {
         try expectApproxEqAbs(@as(f32, 0), mapped[k], 0);
     }
@@ -4161,7 +4161,7 @@ test "★★★ quadruped: the mapped foot forces satisfy the floating base's ow
     }
     try expect(@sqrt(leg_norm) > 3.0 * @sqrt(bias_norm));
 
-    // 5. ★ A SWING FOOT CONTRIBUTES NO TORQUE — the contact schedule's only route into this
+    // 5. * A SWING FOOT CONTRIBUTES NO TORQUE - the contact schedule's only route into this
     //    layer, exactly as `active` is its only route into the optimiser.
     @memset(mapped, 0);
     var one_up: [leg_count]bool = @splat(true);
@@ -4184,15 +4184,15 @@ pub const Cost = struct {
     control: []const f32,
     /// `ndx` weights on state error at the final knot. Usually much larger than `state`.
     terminal: []const f32,
-    /// `(horizon + 1) × nstate` raw reference states. Raw, not tangent — `stateDiff` needs
+    /// `(horizon + 1) x nstate` raw reference states. Raw, not tangent - `stateDiff` needs
     /// the quaternions.
     reference: []const f32,
     /// Optional TASK-space objective, reduced per knot and added to the state cost.
     ///
-    /// ── ★★★ THIS IS WHAT LETS A PLANNER BE GIVEN A TASK RATHER THAN AN ANSWER ──
+    /// -- *** THIS IS WHAT LETS A PLANNER BE GIVEN A TASK RATHER THAN AN ANSWER --
     ///
-    /// Everything above weights JOINT ANGLES. A task — "the hand should be here, moving like
-    /// that" — has to be turned into joint angles by IK before a joint-space cost can hold it,
+    /// Everything above weights JOINT ANGLES. A task - "the hand should be here, moving like
+    /// that" - has to be turned into joint angles by IK before a joint-space cost can hold it,
     /// and **that translation is where the planner's advantage goes**: given a task, a redundant
     /// arm can use its null space; given joint angles, it has already been told which
     /// configuration to adopt and every alternative is forbidden.
@@ -4208,15 +4208,15 @@ pub const Cost = struct {
 
 /// A point on the robot that should be somewhere, and optionally moving somehow.
 pub const Task = struct {
-    /// The body the point belongs to, and where on it — the offset is in the body's frame.
+    /// The body the point belongs to, and where on it - the offset is in the body's frame.
     body: u32,
     offset: Vec = .{ 0, 0, 0, 0 },
-    /// `3 × (horizon + 1)` world positions the point should hold. One per knot, so a moving
+    /// `3 x (horizon + 1)` world positions the point should hold. One per knot, so a moving
     /// target is expressed by the target moving.
     position: []const f32,
-    /// `3 × (horizon + 1)` world velocities, or null to leave velocity unconstrained.
+    /// `3 x (horizon + 1)` world velocities, or null to leave velocity unconstrained.
     ///
-    /// ★ THE VELOCITY BLOCK IS THE POINT FOR AN INTERCEPTION. Position alone gets a hand to the
+    /// * THE VELOCITY BLOCK IS THE POINT FOR AN INTERCEPTION. Position alone gets a hand to the
     /// ball and stops there; matching velocity is the difference between a catch and a swat, and
     /// a servo has nowhere to put such a term.
     velocity: ?[]const f32 = null,
@@ -4235,7 +4235,7 @@ pub const Options = struct {
     tolerance: f32 = 1.0e-4,
     /// Added to `Q_uu`'s diagonal before inverting.
     ///
-    /// ★ THIS IS LEVENBERG-MARQUARDT, NOT A FUDGE. `Q_uu` is only guaranteed positive
+    /// * THIS IS LEVENBERG-MARQUARDT, NOT A FUDGE. `Q_uu` is only guaranteed positive
     /// definite at a minimum; away from one it can be indefinite, and the "optimal" step
     /// from an indefinite Hessian points uphill. Regularising interpolates towards gradient
     /// descent, which is slower and always downhill. It rises when a step fails and falls
@@ -4265,7 +4265,7 @@ pub const Result = struct {
 /// A horizon's worth of trajectory, gains and workspace.
 /// Reduce a `Task` at one knot into the Gauss-Newton blocks the backward pass consumes.
 ///
-/// ★ THE TERMINAL KNOT GETS ITS OWN WEIGHTS, which is what makes an INTERCEPTION expressible:
+/// * THE TERMINAL KNOT GETS ITS OWN WEIGHTS, which is what makes an INTERCEPTION expressible:
 /// the moment that matters carries the emphasis, and `Plan.setHorizon` puts that moment where
 /// the event is rather than at a fixed offset. Without both, a task cost is a regulation cost.
 fn accumulateTask(
@@ -4277,8 +4277,8 @@ fn accumulateTask(
     s: anytype,
     terminal: bool,
 ) void {
-    // ★★★ THE KINEMATICS MUST BE CURRENT. `jacPoint` asserts it needs the position stage, and
-    // `optimize`'s loop leaves `d` at `.stale` after stepping — so reading `body_xpos` here
+    // *** THE KINEMATICS MUST BE CURRENT. `jacPoint` asserts it needs the position stage, and
+    // `optimize`'s loop leaves `d` at `.stale` after stepping - so reading `body_xpos` here
     // without a `forward` first is both a wrong Jacobian and a wrong point to hang it on.
     //
     // Caught by the end-to-end test rather than by the two unit oracles: they check the channel
@@ -4312,7 +4312,7 @@ fn accumulateTask(
     if (task.velocity) |velocity| {
         const w_vel: f32 = if (last) task.w_velocity_terminal else task.w_velocity;
         if (w_vel > 0) {
-            // The point's world velocity is `J·q̇`, which is what the residual is against.
+            // The point's world velocity is `J*q_dot`, which is what the residual is against.
             var moving: Vec = vec(0, 0, 0);
             for (0..m.nv) |v| {
                 moving += s.task_jacobian[v] * splat(d.vel[v]);
@@ -4329,9 +4329,9 @@ fn accumulateTask(
 
 /// Accumulate a task-space residual into the extra-cost channel for one knot.
 ///
-/// ── ★★★ THIS IS THE PIECE THAT LETS A PLANNER BE GIVEN A TASK ──
+/// -- *** THIS IS THE PIECE THAT LETS A PLANNER BE GIVEN A TASK --
 ///
-/// `Cost` weights joint angles. A task — "the hand should be at `target`" — has to be turned
+/// `Cost` weights joint angles. A task - "the hand should be at `target`" - has to be turned
 /// into joint angles by IK before a joint-space cost can hold it, and **that translation is
 /// where a planner's advantage goes**: given a task, a redundant arm can use its null space;
 /// given joint angles, it has already been told which configuration to adopt and every
@@ -4343,15 +4343,15 @@ fn accumulateTask(
 ///
 /// The reduction is Gauss-Newton, using the point Jacobian:
 ///
-///     r = p(q) − target       gradient += Jᵀ·w·r        Hessian += Jᵀ·w·J
+///     r = p(q) - target       gradient += J^T*w*r        Hessian += J^T*w*J
 ///
-/// ★ THE SECOND-ORDER TERM IS DROPPED ON PURPOSE. The exact Hessian carries `∂J/∂q · w · r`,
+/// * THE SECOND-ORDER TERM IS DROPPED ON PURPOSE. The exact Hessian carries `dJ/dq * w * r`,
 /// which needs the dynamics' second derivatives and vanishes as the residual does. Gauss-Newton
-/// is the standard choice, is positive semi-definite by construction — which the recursion needs
-/// — and converges quadratically near the solution, where it matters.
+/// is the standard choice, is positive semi-definite by construction - which the recursion needs
+/// - and converges quadratically near the solution, where it matters.
 ///
 /// `jac` is the point Jacobian at this knot, `nv` entries. `gradient` and `hessian` are this
-/// knot's slices of the extra channel: `ndx` and `ndx × ndx`. Only the POSITION block is touched,
+/// knot's slices of the extra channel: `ndx` and `ndx x ndx`. Only the POSITION block is touched,
 /// so a velocity task can accumulate into the same arrays through the velocity block.
 pub fn addTaskResidual(
     nv: u32,
@@ -4383,7 +4383,7 @@ pub fn addTaskResidual(
 }
 
 pub const Plan = struct {
-    /// Knots the plan currently spans. **May be shortened with `setHorizon`** — see there.
+    /// Knots the plan currently spans. **May be shortened with `setHorizon`** - see there.
     horizon: u32,
     /// Knots the buffers were allocated for. `horizon` may be reduced below this and raised
     /// back, but never past it.
@@ -4392,26 +4392,26 @@ pub const Plan = struct {
     nu: u32,
     nstate: u32,
 
-    /// `horizon × nu` — the control sequence. Input AND output: seed it, then improve it.
+    /// `horizon x nu` - the control sequence. Input AND output: seed it, then improve it.
     ctrl: []f32,
-    /// `(horizon + 1) × nstate` — the states the current controls produce.
+    /// `(horizon + 1) x nstate` - the states the current controls produce.
     states: []f32,
-    /// `horizon × nu` — feedforward corrections.
+    /// `horizon x nu` - feedforward corrections.
     feedforward: []f32,
     /// The model's control box, gathered once. `has_limits` is false when no actuator
     /// declares a `ctrl_range`, and then the box solver is skipped entirely.
     ctrl_lower: []f32,
     ctrl_upper: []f32,
     has_limits: bool,
-    /// `horizon × nu` — which controls the box solver pinned at each knot.
+    /// `horizon x nu` - which controls the box solver pinned at each knot.
     ///
-    /// ★ "PINNED" IS NOT "AT THE BOUND". A control sitting on its upper limit still has
+    /// * "PINNED" IS NOT "AT THE BOUND". A control sitting on its upper limit still has
     /// authority to come DOWN; it is pinned only when the gradient pushes it further out, and
     /// only then is its feedback row zero. A caller running MPC wants this: it says which
     /// actuators have no headroom left in the direction the plan wants to go.
     clamped: []bool,
-    /// `horizon × nu × ndx` — feedback gains. **Keep these.** In MPC you apply
-    /// `u₀ + K₀·δx` between re-solves, and that feedback is most of why MPC works at all.
+    /// `horizon x nu x ndx` - feedback gains. **Keep these.** In MPC you apply
+    /// `u_0 + K_0*dx` between re-solves, and that feedback is most of why MPC works at all.
     feedback: []f32,
 
     scratch: PlanScratch,
@@ -4420,34 +4420,34 @@ pub const Plan = struct {
     const PlanScratch = struct {
         core: Scratch,
         jacobians: Transition,
-        /// `horizon × ndx × ndx` and `horizon × ndx × nu` — every knot's linearisation,
+        /// `horizon x ndx x ndx` and `horizon x ndx x nu` - every knot's linearisation,
         /// because the backward pass needs them in reverse order.
         a: []f32,
         b: []f32,
         ctrl_trial: []f32,
         states_trial: []f32,
         start: rbt.State,
-        /// `horizon × ndx` — every knot's tangent error against its reference, computed once
+        /// `horizon x ndx` - every knot's tangent error against its reference, computed once
         /// during the rollout because the backward pass needs all of them in reverse.
         knot_error: []f32,
-        /// `ndx × ndx`. A matrix product needs a destination that is neither of its inputs.
+        /// `ndx x ndx`. A matrix product needs a destination that is neither of its inputs.
         /// The box on `k`, and the Cholesky of the free block. Separate from `q_uu_factor`
         /// so the feedback solve never depends on where the box solver left its scratch.
-        /// The gains from the last pass a line search ACCEPTED — see `optimize`.
+        /// The gains from the last pass a line search ACCEPTED - see `optimize`.
         kept_feedforward: []f32,
         kept_feedback: []f32,
         kept_clamped: []bool,
         has_kept: bool,
         /// The backward pass's own prediction of how much the cost will fall, split into the
-        /// terms linear and quadratic in the step size: `ΔJ(α) = α·d1 + ½·α²·d2`.
+        /// terms linear and quadratic in the step size: `dJ(alpha) = alpha*d1 + 1/2*alpha^2*d2`.
         delta: []f32,
-        /// `horizon × ndx` and `horizon × ndx × ndx` — a task objective reduced to Gauss-Newton
+        /// `horizon x ndx` and `horizon x ndx x ndx` - a task objective reduced to Gauss-Newton
         /// form, one block per knot. Allocated always and used only when `Cost.task` is set;
         /// the Hessian is the largest buffer here, so if that ever matters it is the one to
         /// make conditional.
         task_gradient: []f32,
         task_hessian: []f32,
-        /// `nv` — the point Jacobian at one knot, reused across all of them.
+        /// `nv` - the point Jacobian at one knot, reused across all of them.
         task_jacobian: []Vec,
         /// The terminal knot's blocks, which the running arrays do not cover.
         task_terminal_gradient: []f32,
@@ -4459,11 +4459,11 @@ pub const Plan = struct {
         const ndx: u32 = 2 * m.nv + m.na;
         const nstate: u32 = m.nq + m.nv + m.na;
         const nu: u32 = m.nu;
-        // ── ★★★ THE CONTROL BOX IS ON BY DEFAULT ──
+        // -- *** THE CONTROL BOX IS ON BY DEFAULT --
         //
         // It used to be opt-in via `readLimits`, and the first caller to plan on a real
-        // articulated robot forgot — so `optimize` planned UNCONSTRAINED while the model clamped
-        // `d.ctrl` to its ctrlrange on the way in. The plan asked for **357 N·m against a ±260
+        // articulated robot forgot - so `optimize` planned UNCONSTRAINED while the model clamped
+        // `d.ctrl` to its ctrlrange on the way in. The plan asked for **357 N*m against a +/-260
         // limit** and believed it would get it, then flew a trajectory the arm could not.
         //
         // An unbounded plan is the surprising case, so it is the one that should take an extra
@@ -4510,16 +4510,16 @@ pub const Plan = struct {
 
     /// Shorten (or restore) the horizon in place, without reallocating.
     ///
-    /// ── ★★★ SO THE TERMINAL COST CAN LAND AT A CHOSEN MOMENT ──
+    /// -- *** SO THE TERMINAL COST CAN LAND AT A CHOSEN MOMENT --
     ///
-    /// A fixed horizon puts the terminal knot at `now + horizon·dt`, always. For a regulation
-    /// task that is what you want. For an INTERCEPTION — catching, striking, landing, arriving —
+    /// A fixed horizon puts the terminal knot at `now + horizon*dt`, always. For a regulation
+    /// task that is what you want. For an INTERCEPTION - catching, striking, landing, arriving -
     /// the moment that matters is a specific instant that is approaching, and the terminal
     /// weight is by far the largest in the problem.
     ///
-    /// ★ MEASURED ON THE CATCH: with a 0.88 s horizon and a 0.73 s interception, the terminal
+    /// * MEASURED ON THE CATCH: with a 0.88 s horizon and a 0.73 s interception, the terminal
     /// knot sat **after the ball had already hit the floor**. The plan was being asked, with
-    /// maximum emphasis, to be somewhere at a moment that no longer meant anything — and no
+    /// maximum emphasis, to be somewhere at a moment that no longer meant anything - and no
     /// amount of iteration helps, which is exactly what a 6-to-60 sweep showed: 0.4981, 0.4985,
     /// 0.4964. Identical.
     ///
@@ -4539,13 +4539,13 @@ pub const Plan = struct {
         self.horizon = knots;
     }
 
-    /// Gather the model's control box. **`init` already calls this** — see the note there; it
+    /// Gather the model's control box. **`init` already calls this** - see the note there; it
     /// remains public so a caller who deliberately wants an unbounded plan can clear the limits
     /// and put them back.
     ///
-    /// ★ AN ACTUATOR WITHOUT A `ctrl_range` IS UNBOUNDED, NOT ZERO-BOUNDED. Defaulting a
+    /// * AN ACTUATOR WITHOUT A `ctrl_range` IS UNBOUNDED, NOT ZERO-BOUNDED. Defaulting a
     /// missing range to `{0, 0}` would pin that control shut and the plan would quietly stop
-    /// using it — the class of bug where the optimiser dutifully reports success on a
+    /// using it - the class of bug where the optimiser dutifully reports success on a
     /// crippled problem.
     pub fn readLimits(self: *Plan, m: *const rbt.Model) void {
         self.has_limits = false;
@@ -4557,7 +4557,7 @@ pub const Plan = struct {
                 hi = range[1];
                 self.has_limits = true;
             }
-            // ★ THE SAME BOX AT EVERY KNOT. An actuator's range does not change with time, so
+            // * THE SAME BOX AT EVERY KNOT. An actuator's range does not change with time, so
             // the per-knot form costs a memset and buys one code path instead of two.
             for (0..self.horizon) |t| {
                 self.ctrl_lower[t * self.nu + j] = lo;
@@ -4601,7 +4601,7 @@ pub const Plan = struct {
 /// `d` is left at the end of the rollout; the caller restores.
 /// The task's contribution to the cost at one knot, evaluated where `d` already stands.
 ///
-/// ★ THIS MUST MIRROR `accumulateTask` EXACTLY — same residual, same weights, same terminal
+/// * THIS MUST MIRROR `accumulateTask` EXACTLY - same residual, same weights, same terminal
 /// switch. It is the same quadratic, once as a number for the line search and once as a
 /// gradient for the backward pass, and if they drift apart the optimiser stalls without any
 /// individual piece being wrong.
@@ -4673,17 +4673,17 @@ fn rollout(
             cost,
             @intCast(t),
         );
-        // ── ★★★ THE TASK MUST BE IN THE COST THE LINE SEARCH JUDGES BY ──
+        // -- *** THE TASK MUST BE IN THE COST THE LINE SEARCH JUDGES BY --
         //
         // It was only in the GRADIENTS. With the joint weights at zero the cost the line search
         // saw was pure control effort, so every step the task gradient recommended made that
-        // number worse and was REJECTED — the optimiser dutifully drove toward zero torque and
+        // number worse and was REJECTED - the optimiser dutifully drove toward zero torque and
         // the arm hung there. Measured: 0.79 to 1.21 m from targets a joint reference reached to
         // 0.09.
         //
-        // ★ THE GENERAL RULE, AND IT IS NOT OBVIOUS FROM EITHER SIDE ALONE: **a line search and
+        // * THE GENERAL RULE, AND IT IS NOT OBVIOUS FROM EITHER SIDE ALONE: **a line search and
         // a gradient must be evaluating the same function.** Add a term to one and not the other
-        // and the optimiser is not wrong, it is being asked two different questions — and the
+        // and the optimiser is not wrong, it is being asked two different questions - and the
         // symptom is a plan that will not move while every derivative in it is correct.
         total += taskCost(m, d, cost, @intCast(t), false);
         @memcpy(d.ctrl, ctrl[t * nu ..][0..nu]);
@@ -4708,7 +4708,7 @@ fn knotCost(
     _ = &scratch;
     var total: f32 = 0;
     // The tangent error against this knot's reference. `h = 1` because this is a difference,
-    // not a rate — `stateDiff` divides by `h` and we want the raw displacement.
+    // not a rate - `stateDiff` divides by `h` and we want the raw displacement.
     var delta: [max_stack_ndx]f32 = undefined;
     const reference: []const f32 = cost.reference[t * plan.nstate ..][0..plan.nstate];
     stateDiff(m, delta[0..plan.ndx], reference, state, 1.0);
@@ -4737,19 +4737,19 @@ fn terminalCost(
     return total;
 }
 
-/// ★ A STACK BUFFER, WITH A LOUD CEILING. The alternative is threading another scratch
+/// * A STACK BUFFER, WITH A LOUD CEILING. The alternative is threading another scratch
 /// slice through every cost call for a vector that is nv-sized on any model a planner is
 /// plausibly running online. Exceeding it is an assert, not a silent truncation.
 /// Improve `plan.ctrl` in place, starting from the state `d` is in.
 ///
 /// `d` is restored to that state on the way out, so a caller can re-solve from the same
-/// place or step forward — MPC does both.
+/// place or step forward - MPC does both.
 /// Slide the whole plan one knot forward, so the next solve starts from the last one.
 ///
-/// ── ★★★ THIS IS WHAT MAKES MPC AFFORDABLE, AND IT IS THE WHOLE TRICK ──
+/// -- *** THIS IS WHAT MAKES MPC AFFORDABLE, AND IT IS THE WHOLE TRICK --
 ///
 /// A cold solve of the cartpole swing-up takes 142 iterations. One step later the problem is
-/// almost the same problem — one knot older, one knot of new horizon on the end — so the
+/// almost the same problem - one knot older, one knot of new horizon on the end - so the
 /// previous answer, shifted, is already nearly optimal and a couple of iterations finish it.
 /// Without this, MPC is just trajectory optimisation run repeatedly and cannot keep up with
 /// anything.
@@ -4772,14 +4772,14 @@ pub fn shift(plan: *Plan) void {
         plan.feedback[nu * ndx ..][0 .. last * nu * ndx],
     );
     std.mem.copyForwards(bool, plan.clamped[0 .. last * nu], plan.clamped[nu..][0 .. last * nu]);
-    // ★★★ AND THE TRAJECTORY, WHICH IS NOT OPTIONAL AND WAS MISSING.
+    // *** AND THE TRAJECTORY, WHICH IS NOT OPTIONAL AND WAS MISSING.
     //
     // `plan.states[t]` is the state `feedback[t]` was LINEARISED ABOUT. Shifting the gains
     // without shifting the states leaves `feedback[0]` holding knot 1's gain while
-    // `states[0]` still holds knot 0's state, so `feedbackControl` measures `δx` against a
-    // reference one knot stale — and one more knot stale on every subsequent shift.
+    // `states[0]` still holds knot 0's state, so `feedbackControl` measures `dx` against a
+    // reference one knot stale - and one more knot stale on every subsequent shift.
     //
-    // The symptom was not a crash. The cartpole simply wandered: theta drifting 3.0 → 58 rad
+    // The symptom was not a crash. The cartpole simply wandered: theta drifting 3.0 -> 58 rad
     // over ten seconds while the cost climbed through 1e6, which reads like a controller that
     // is merely bad rather than one being fed mismatched indices.
     const ns: u32 = plan.nstate;
@@ -4794,15 +4794,15 @@ pub fn shift(plan: *Plan) void {
     @memcpy(plan.clamped[last * nu ..][0..nu], plan.clamped[(last - 1) * nu ..][0..nu]);
 }
 
-/// The control to apply RIGHT NOW, given where the robot actually is: `u₀ + K₀·δx`.
+/// The control to apply RIGHT NOW, given where the robot actually is: `u_0 + K_0*dx`.
 ///
-/// ── ★★ WHY THE FEEDBACK TERM IS NOT REDUNDANT ──
+/// -- ** WHY THE FEEDBACK TERM IS NOT REDUNDANT --
 ///
-/// If you could re-solve from the measured state before every control tick, `δx` would be
-/// zero by construction and `u₀` alone would be right. You usually cannot: a solve costs more
+/// If you could re-solve from the measured state before every control tick, `dx` would be
+/// zero by construction and `u_0` alone would be right. You usually cannot: a solve costs more
 /// than a control period, so the plan in hand was computed for a state the robot has since
-/// left. `K₀` is the backward pass's answer to exactly that — how to react to being somewhere
-/// else — and using it is most of why MPC tolerates a slow solver and a wrong model.
+/// left. `K_0` is the backward pass's answer to exactly that - how to react to being somewhere
+/// else - and using it is most of why MPC tolerates a slow solver and a wrong model.
 ///
 /// `plan.states[0]` is the state the current gains were linearised about. The difference is
 /// taken in the TANGENT space, because on anything with a free or ball joint a subtraction is
@@ -4879,16 +4879,16 @@ pub fn optimize(
             transition(m, d, &s.jacobians, opt.derivative);
             @memcpy(s.a[t * ndx * ndx ..][0 .. ndx * ndx], s.jacobians.a);
             @memcpy(s.b[t * ndx * nu ..][0 .. ndx * nu], s.jacobians.b);
-            // ★ THE TASK IS REDUCED HERE, WHERE `d` ALREADY HOLDS THIS KNOT'S STATE AND
+            // * THE TASK IS REDUCED HERE, WHERE `d` ALREADY HOLDS THIS KNOT'S STATE AND
             // `forward` has already run. The point Jacobian is one call away and costs nothing
-            // extra to place — anywhere else it would mean a second rollout.
+            // extra to place - anywhere else it would mean a second rollout.
             if (cost.task) |task| {
                 accumulateTask(m, d, task, t, ndx, s, false);
             }
             rbt.step(m, d);
         }
-        // ★★★ AND THE TERMINAL KNOT, WHICH THE LOOP ABOVE DOES NOT REACH. `d` is left holding it
-        // by the final `rbt.step`, so this is the one place it is free. Missing it is silent —
+        // *** AND THE TERMINAL KNOT, WHICH THE LOOP ABOVE DOES NOT REACH. `d` is left holding it
+        // by the final `rbt.step`, so this is the one place it is free. Missing it is silent -
         // the plan simply has no terminal pull and drifts, which measured as an arm that barely
         // moved while every gain in it was correct.
         if (cost.task) |task| {
@@ -4966,22 +4966,22 @@ pub fn optimize(
             }
         }
 
-        // ── ★★★ ALREADY OPTIMAL IS NOT THE SAME AS MODEL IS BAD ──
+        // -- *** ALREADY OPTIMAL IS NOT THE SAME AS MODEL IS BAD --
         //
         // Both show up as a line search that accepts nothing, and treating them alike is what
         // made this return halved gains at the optimum: every iteration failed, regularization
         // climbed 10x each time, and `plan.feedback` ended up holding a heavily damped pass.
         //
-        // The backward pass already knows the difference. `ΔJ(α) = α·d1 + ½α²·d2` is what it
-        // predicts the step will buy; at the optimum `k → 0` and both terms vanish. So stop
-        // here, keep THESE gains — they are the undamped LQR answer — and do not touch
+        // The backward pass already knows the difference. `dJ(alpha) = alpha*d1 + 1/2 alpha^2*d2` is what it
+        // predicts the step will buy; at the optimum `k -> 0` and both terms vanish. So stop
+        // here, keep THESE gains - they are the undamped LQR answer - and do not touch
         // regularization.
-        // ── ★★★ THE THRESHOLD SCALES WITH THE *INITIAL* COST, NOT THE CURRENT ONE ──
+        // -- *** THE THRESHOLD SCALES WITH THE *INITIAL* COST, NOT THE CURRENT ONE --
         //
         // It used to read `tolerance * max(|current|, 1)`, and that is a trap with a feedback
         // loop in it: if the trajectory ever diverges, `current` grows, so the bar for calling
         // the problem "solved" grows with it. Measured on a cartpole given an impossible
-        // horizon — cost 2.2e7, tolerance 1e-4, so ANY predicted improvement below 2187 counted
+        // horizon - cost 2.2e7, tolerance 1e-4, so ANY predicted improvement below 2187 counted
         // as convergence. The optimiser did **one iteration per frame and declared victory**,
         // every frame, while the pole spun up to 58 radians.
         //
@@ -5003,7 +5003,7 @@ pub fn optimize(
             readState(m, d, s.states_trial[0..nstate]);
             var trial_cost: f32 = 0;
             for (0..plan.horizon) |t| {
-                // δx against the trajectory we linearised about — tangent space, always.
+                // dx against the trajectory we linearised about - tangent space, always.
                 stateDiff(
                     m,
                     s.delta,
@@ -5016,11 +5016,11 @@ pub fn optimize(
                     for (0..ndx) |c| {
                         value += plan.feedback[t * nu * ndx + j * ndx + c] * s.delta[c];
                     }
-                    // ★ CLAMP HERE TOO, NOT ONLY IN THE BOX SOLVER. The backward pass keeps
-                    // `k` inside the box, but `α·k + K·δx` can still leave it: the step size
+                    // * CLAMP HERE TOO, NOT ONLY IN THE BOX SOLVER. The backward pass keeps
+                    // `k` inside the box, but `alpha*k + K*dx` can still leave it: the step size
                     // scales the feedforward and the feedback adds an amount that depends on
                     // where the rollout actually went. Without this the plan would respect
-                    // limits the rollout then violated, and `actuation` would clamp anyway —
+                    // limits the rollout then violated, and `actuation` would clamp anyway -
                     // so the cost being minimised would not be the cost of what runs.
                     if (plan.has_limits) {
                         value = clamp(value, plan.ctrl_lower[t * nu + j], plan.ctrl_upper[t * nu + j]);
@@ -5096,10 +5096,10 @@ fn keepGains(plan: *Plan) void {
 
 /// Put the last earned gains back, so a caller never receives one from a rejected pass.
 ///
-/// ★ THIS IS FOR THE CALLER, NOT FOR THE OPTIMISER. MPC applies `K₀·δx` to the robot between
+/// * THIS IS FOR THE CALLER, NOT FOR THE OPTIMISER. MPC applies `K_0*dx` to the robot between
 /// re-solves; a gain left over from an exploratory pass that got damped by a factor of ten
-/// and then thrown away is a gain nobody chose. If NOTHING was ever kept — the backward pass
-/// failed at every regularization the ladder allows — the gains stay as they are and
+/// and then thrown away is a gain nobody chose. If NOTHING was ever kept - the backward pass
+/// failed at every regularization the ladder allows - the gains stay as they are and
 /// `Result.converged` is false, which is the signal not to trust them.
 fn restoreGains(plan: *Plan) void {
     if (!plan.scratch.has_kept) {
@@ -5110,18 +5110,18 @@ fn restoreGains(plan: *Plan) void {
     @memcpy(plan.clamped, plan.scratch.kept_clamped);
 }
 
-// ────────────────────────────────────
+// ------------------------------------
 // TESTS
 //
-// ★★★ THE ORACLE IS LQR. On a LINEAR system with a QUADRATIC cost, iLQR is not an
-// approximation of anything — it IS the discrete-time LQR recursion, and its answer is the
+// *** THE ORACLE IS LQR. On a LINEAR system with a QUADRATIC cost, iLQR is not an
+// approximation of anything - it IS the discrete-time LQR recursion, and its answer is the
 // exact optimum. So the fixture is a double integrator (a point mass on a frictionless
 // slide, semi-implicit Euler, no gravity), where the Riccati recursion can be run
 // independently in the test and compared gain for gain.
 //
 // That is a far stronger check than "the cost went down", which passes for any descent
 // direction at all, including badly wrong ones.
-// ────────────────────────────────────
+// ------------------------------------
 
 const pi = zm.pi;
 
@@ -5145,57 +5145,57 @@ const Cart = Spec(.{
 });
 
 // ======================================================================
-// ★★★ THE THREE BUGS THIS FILE COST, BECAUSE EACH LOOKED LIKE SOMETHING ELSE.
+// *** THE THREE BUGS THIS FILE COST, BECAUSE EACH LOOKED LIKE SOMETHING ELSE.
 //
 // The LQR test now passes to 0.1%. Getting there took three fixes, and every one of them
 // first presented as a plausible wrong story:
 //
-// **1. Aliasing.** `backward()` finished `Q_xx` IN PLACE over `V_xx·A`, so the multiply
-// consumed rows it had already overwritten. Error 5.5% → 1.5%. A matrix product cannot share
+// **1. Aliasing.** `backward()` finished `Q_xx` IN PLACE over `V_xx*A`, so the multiply
+// consumed rows it had already overwritten. Error 5.5% -> 1.5%. A matrix product cannot share
 // its destination with either input; it does not crash, it returns a number a few percent
 // wrong, which on a nonlinear problem is indistinguishable from slow convergence.
 //
-// **2. `l_x` missing from `Q_x`.** The comment said `l_x + Aᵀ·V_x`; the code omitted `l_x`.
+// **2. `l_x` missing from `Q_x`.** The comment said `l_x + A^T*V_x`; the code omitted `l_x`.
 // Nearly invisible: `K` comes from `Q_ux` and `Q_uu`, neither of which sees the gradient, so
 // an LQR gain check passes to the digit while the FEEDFORWARD silently stops accounting for
-// running state error — a planner converging to the wrong trajectory with correct gains.
+// running state error - a planner converging to the wrong trajectory with correct gains.
 //
 // **3. Regularization leaking into the kept gains.** At the optimum every line search fails,
 // so regularization climbed 10x per iteration and `plan.feedback` ended up holding a heavily
-// damped exploratory pass — gains half the correct size. Fixed by asking the backward pass
-// what it PREDICTS the step will buy (`ΔJ(α) = α·d1 + ½α²·d2`): near zero means already
+// damped exploratory pass - gains half the correct size. Fixed by asking the backward pass
+// what it PREDICTS the step will buy (`dJ(alpha) = alpha*d1 + 1/2 alpha^2*d2`): near zero means already
 // optimal, keep these gains and stop; large but unusable means the model is bad, damp it.
 // Those two look identical from the line search alone, and conflating them was the bug.
-// `keepGains`/`restoreGains` make sure a caller never receives a gain from a rejected pass —
-// which matters more in MPC than the cost does, since `K₀` is applied to the robot.
+// `keepGains`/`restoreGains` make sure a caller never receives a gain from a rejected pass -
+// which matters more in MPC than the cost does, since `K_0` is applied to the robot.
 //
-// ── ★★ AND ONE LIMIT THAT IS NOT A BUG: f32 ──
+// -- ** AND ONE LIMIT THAT IS NOT A BUG: f32 --
 //
-// `B = ∂x′/∂u` measured on this cart — a LINEAR system where B is exactly constant:
+// `B = dx'/du` measured on this cart - a LINEAR system where B is exactly constant:
 //
 //     q=0.0  v=0.0   B = [4.95050e-5, 4.95050e-3]   correct
 //     q=1.0  v=0.0   B = [0.00000e0,  4.95050e-3]   <- top entry GONE
 //     ctrl=5.0       B = [3.45267e-4, 4.94703e-3]   <- 7x too large
 //
-// A control nudge moves `q′` by `h²·eps/M` ≈ 1.7e-8; f32 resolves ~1.2e-7 near `q′ ≈ 1`. The
+// A control nudge moves `q'` by `h^2*eps/M` ~ 1.7e-8; f32 resolves ~1.2e-7 near `q' ~ 1`. The
 // signal sits below the last bit of the number it is added to, so the quotient is
 // quantisation. No epsilon fixes it: raising it enough to clear the noise floor puts
 // truncation error back. **This is why MuJoCo is f64.** The LQR test therefore linearises at
 // the ORIGIN, where B is exact, so it asks about the recursion and not about precision.
 //
-// It still plans fine from `q = 1` — the velocity row is clean and position integrates from
-// it — but `∂q′/∂u` is unreliable far from the origin, and any future analytic or autodiff
+// It still plans fine from `q = 1` - the velocity row is clean and position integrates from
+// it - but `dq'/du` is unreliable far from the origin, and any future analytic or autodiff
 // derivative path sidesteps this rather than tuning around it.
 // ======================================================================
 
-test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
+test "*** mpc: on a linear system iLQR reproduces the LQR gains exactly" {
     // The plant, on paper. Semi-implicit Euler with `a = u/M`:
     //
-    //     v' = v + h·u/M
-    //     q' = q + h·v'  = q + h·v + h²·u/M
+    //     v' = v + h*u/M
+    //     q' = q + h*v'  = q + h*v + h^2*u/M
     //
-    //     A = ⎡1  h⎤      B = ⎡h²/M⎤
-    //         ⎣0  1⎦          ⎣ h/M⎦
+    //     A = [1  h]      B = [h^2/M]
+    //         [0  1]          [ h/M]
     //
     // Both are pinned by the differencing tests above; this test depends on them being
     // right and would fail loudly if they were not.
@@ -5211,9 +5211,9 @@ test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
     try expect(plan.ndx == 2);
     try expect(plan.nu == 1);
 
-    // ★★ STARTED AT THE ORIGIN, NOT 1 m OUT, AND THAT IS THE WHOLE POINT. The banner above
+    // ** STARTED AT THE ORIGIN, NOT 1 m OUT, AND THAT IS THE WHOLE POINT. The banner above
     // measures `B[0]` collapsing to zero once `|q|` is O(1), because a control nudge moves
-    // `q′` by less than f32 resolves at that magnitude. Linearising about `q = 0` keeps the
+    // `q'` by less than f32 resolves at that magnitude. Linearising about `q = 0` keeps the
     // derivative exact, which is what lets this test ask about the RECURSION rather than
     // about precision. The reference is the origin too, so the optimum is `u = 0` and the
     // gains are still the full LQR gains.
@@ -5238,15 +5238,15 @@ test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
     @memset(plan.ctrl, 0);
     const result: Result = optimize(&model, &data, &plan, cost, .{ .iterations = 5 });
 
-    // ── THE INDEPENDENT RICCATI RECURSION, run here on the paper A and B ──
+    // -- THE INDEPENDENT RICCATI RECURSION, run here on the paper A and B --
     const h: f32 = model.opt.timestep;
-    // ★ READ THE INERTIA, DO NOT ASSUME IT. The geom says `mass = 2.0`, and the effective
-    // inertia of the slide DOF is not 2.0 — the builder's default armature adds to it. Using
+    // * READ THE INERTIA, DO NOT ASSUME IT. The geom says `mass = 2.0`, and the effective
+    // inertia of the slide DOF is not 2.0 - the builder's default armature adds to it. Using
     // the literal put the paper `B` a factor of 3.5 off and made this test fail for a reason
     // that had nothing to do with the code under test. `massDiagonal` has its own test.
     const mass: f32 = rbt.massDiagonal(&model, &data, 0);
-    // ★ THE ENGINE'S OWN A AND B, NOT THE PAPER ONES. Two things could make this test fail —
-    // a wrong recursion here, or wrong derivatives upstream — and a test that cannot tell
+    // * THE ENGINE'S OWN A AND B, NOT THE PAPER ONES. Two things could make this test fail -
+    // a wrong recursion here, or wrong derivatives upstream - and a test that cannot tell
     // them apart is a test that sends you to the wrong file. The differencing has its own
     // oracle tests in the differencing section; this one isolates the RECURSION by feeding it
     // exactly what the recursion was fed.
@@ -5255,8 +5255,8 @@ test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
         plan.scratch.a[2], plan.scratch.a[3],
     };
     const b_vec = [2]f32{ plan.scratch.b[0], plan.scratch.b[1] };
-    // ★ NO PAPER CROSS-CHECK OF A AND B HERE, DELIBERATELY. A first version asserted
-    // `B = [h²/M, h/M]` and failed — `B[0]` came out 3.5x the paper value — and the useful
+    // * NO PAPER CROSS-CHECK OF A AND B HERE, DELIBERATELY. A first version asserted
+    // `B = [h^2/M, h/M]` and failed - `B[0]` came out 3.5x the paper value - and the useful
     // question is what that test would have been telling us. Not that the recursion is
     // wrong: it never touches the actuator. It would have been reporting that this
     // fixture's motor gain, gear or transmission is not what the comment assumed, in a file
@@ -5264,7 +5264,7 @@ test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
     //
     // the differencing section owns that claim and has oracle tests for A and B on a motorised
     // slider. A second copy of a paper oracle here is a second place to get it wrong, and it
-    // was — it cost two debugging rounds pointing at the wrong file.
+    // was - it cost two debugging rounds pointing at the wrong file.
     _ = h;
     _ = mass;
 
@@ -5273,7 +5273,7 @@ test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
     var t: usize = horizon;
     while (t > 0) {
         t -= 1;
-        // Q_uu = R + Bᵀ·P·B ; Q_ux = Bᵀ·P·A
+        // Q_uu = R + B^T*P*B ; Q_ux = B^T*P*A
         var pb: [2]f32 = .{
             p_mat[0] * b_vec[0] + p_mat[1] * b_vec[1],
             p_mat[2] * b_vec[0] + p_mat[3] * b_vec[1],
@@ -5286,7 +5286,7 @@ test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
                 b_vec[1] * (p_mat[2] * a_mat[1] + p_mat[3] * a_mat[3]),
         };
         expected_k = .{ -q_ux[0] / q_uu, -q_ux[1] / q_uu };
-        // P ← Q + Aᵀ·P·A − Q_uxᵀ·Q_uu⁻¹·Q_ux
+        // P <- Q + A^T*P*A - Q_ux^T*Q_uu^-1*Q_ux
         const ap = [4]f32{
             a_mat[0] * p_mat[0] + a_mat[2] * p_mat[2],
             a_mat[0] * p_mat[1] + a_mat[2] * p_mat[3],
@@ -5308,24 +5308,24 @@ test "★★★ mpc: on a linear system iLQR reproduces the LQR gains exactly" {
         _ = &pb;
     }
 
-    // ★ THE FIRST KNOT'S FEEDBACK GAIN IS THE CLAIM. Everything upstream — the differencing,
-    // the tangent handling, the recursion, the Cholesky — has to be right for this to land.
+    // * THE FIRST KNOT'S FEEDBACK GAIN IS THE CLAIM. Everything upstream - the differencing,
+    // the tangent handling, the recursion, the Cholesky - has to be right for this to land.
     // The tolerance is loose in absolute terms because the gains are O(10) and the A/B
     // matrices came from f32 finite differences, which carry ~1e-3 relative error.
     try expectApproxEqAbs(expected_k[0], plan.feedback[0], 1.0e-3 * @abs(expected_k[0]));
     try expectApproxEqAbs(expected_k[1], plan.feedback[1], 1.0e-3 * @abs(expected_k[1]));
 
-    // ★ AND STARTING AT THE OPTIMUM MUST BE RECOGNISED AS SUCH. `cost < initial_cost` is the
+    // * AND STARTING AT THE OPTIMUM MUST BE RECOGNISED AS SUCH. `cost < initial_cost` is the
     // wrong assertion here and used to be the right one: the cart now starts ON its
     // reference, so the cost begins at zero and there is nothing to improve. What the
-    // optimiser must do is notice that, report it, and hand back the UNDAMPED gains — which
+    // optimiser must do is notice that, report it, and hand back the UNDAMPED gains - which
     // is exactly the bug this test caught, since it previously kept climbing regularization
     // and returned a gain half the correct size.
     try expect(result.converged);
     try expectApproxEqAbs(@as(f32, 0), result.cost, 1.0e-6);
 }
 
-test "★★ mpc: the cart reaches the target, and a zero-cost problem stays put" {
+test "** mpc: the cart reaches the target, and a zero-cost problem stays put" {
     const gpa: Allocator = std.testing.allocator;
     var model: rbt.Model = try Cart.build(gpa);
     defer model.deinit();
@@ -5359,9 +5359,9 @@ test "★★ mpc: the cart reaches the target, and a zero-cost problem stays put
     try expect(result.converged);
     try expect(result.cost < result.initial_cost);
 
-    // ── ★★★ THE CONVERGENCE TEST IS A TOLERANCE SWEEP, NOT A MAGIC NUMBER ──
+    // -- *** THE CONVERGENCE TEST IS A TOLERANCE SWEEP, NOT A MAGIC NUMBER --
     //
-    // This used to assert `|final position| < 0.1`, which failed at 0.202 — and the useful
+    // This used to assert `|final position| < 0.1`, which failed at 0.202 - and the useful
     // question was whether 0.202 is wrong or whether 0.1 was invented. Measured, from the
     // same start, tightening the tolerance five orders of magnitude and allowing 30x the
     // iterations:
@@ -5375,21 +5375,21 @@ test "★★ mpc: the cart reaches the target, and a zero-cost problem stays put
     // weight trade against the terminal weight. The 0.1 was a number I wanted to be true.
     //
     // So the assertion is the sweep itself: a far tighter tolerance must not materially move
-    // the answer. That tests convergence — which is the claim — instead of pinning an
+    // the answer. That tests convergence - which is the claim - instead of pinning an
     // endpoint nobody derived.
     const tight: Result = fromScratch(&model, &data, &plan, cost, 1.0e-9, 60);
     try expect(@abs(tight.cost - result.cost) < 0.01 * @abs(result.cost));
 
-    // ★ AND THE OUTCOME, NOT ONLY THE COST. A falling cost proves descent; it does not prove
-    // the plan does the job. The cart starts 1 m out and must get most of the way home —
+    // * AND THE OUTCOME, NOT ONLY THE COST. A falling cost proves descent; it does not prove
+    // the plan does the job. The cart starts 1 m out and must get most of the way home -
     // 0.25 is a bound the measured optimum clears with room, not a claim about where the
     // optimum is.
     const final_pos: f32 = plan.states[horizon * plan.nstate];
     try expect(@abs(final_pos) < 0.25);
     try expect(@abs(final_pos) < 1.0);
 
-    // ★ AND A PROBLEM ALREADY AT ITS OPTIMUM MUST NOT BE "IMPROVED". Starting at the target
-    // with zero controls, the cost is already 0 and every gain should be a no-op — a line
+    // * AND A PROBLEM ALREADY AT ITS OPTIMUM MUST NOT BE "IMPROVED". Starting at the target
+    // with zero controls, the cost is already 0 and every gain should be a no-op - a line
     // search that accepts a step here is finding improvement in noise.
     data.pos[0] = 0.0;
     data.vel[0] = 0.0;
@@ -5416,7 +5416,7 @@ fn fromScratch(
     return optimize(model, data, plan, cost, .{ .tolerance = tolerance, .iterations = iterations });
 }
 
-/// The same cart, but the motor may only push within ±0.3.
+/// The same cart, but the motor may only push within +/-0.3.
 const LimitedCart = Spec(.{
     .bodies = &.{.{
         .name = "cart",
@@ -5440,23 +5440,23 @@ const LimitedCart = Spec(.{
     },
 });
 
-test "★★★ mpc: control limits bind, and a saturated actuator gets no feedback" {
-    // ── THE ASSERTION THAT MATTERS IS THE ONE ABOUT `K`, NOT ABOUT `u` ──
+test "*** mpc: control limits bind, and a saturated actuator gets no feedback" {
+    // -- THE ASSERTION THAT MATTERS IS THE ONE ABOUT `K`, NOT ABOUT `u` --
     //
     // Clamping the controls is easy and `actuation` already does it. What a box-constrained
     // solve buys is a plan that KNOWS about the limit: it stops asking for torque it cannot
     // have, and it stops promising feedback a saturated actuator cannot deliver.
     //
-    // ── ★★ THE SETUP IS SIZED FROM THE DYNAMICS, NOT GUESSED ──
+    // -- ** THE SETUP IS SIZED FROM THE DYNAMICS, NOT GUESSED --
     //
-    // A first version used gear 1, cap ±0.3 and a 0.4 s horizon, and "failed". It was right:
-    // force 0.3 on an effective inertia of 2.02 is a = 0.148 m/s², which covers 1.2 cm in
+    // A first version used gear 1, cap +/-0.3 and a 0.4 s horizon, and "failed". It was right:
+    // force 0.3 on an effective inertia of 2.02 is a = 0.148 m/s^2, which covers 1.2 cm in
     // 0.4 s. The plan barely moved because a plan that moved more does not exist. Asking an
     // optimiser for the impossible and reading the result as a bug is the same mistake as
     // asserting an endpoint nobody derived.
     //
-    // So: gear 20 gives force 6 and a ≈ 2.97 m/s². Covering 1 m takes √(2·1/2.97) ≈ 0.82 s,
-    // and a 1.2 s horizon leaves room to arrive AND decelerate — which is what makes the
+    // So: gear 20 gives force 6 and a ~ 2.97 m/s^2. Covering 1 m takes sqrt(2*1/2.97) ~ 0.82 s,
+    // and a 1.2 s horizon leaves room to arrive AND decelerate - which is what makes the
     // motor come off its limit near the end, which is what assertion 4 needs.
     const gpa: Allocator = std.testing.allocator;
     var model: rbt.Model = try LimitedCart.build(gpa);
@@ -5494,7 +5494,7 @@ test "★★★ mpc: control limits bind, and a saturated actuator gets no feedb
     const result: Result = optimize(&model, &data, &plan, cost, .{ .iterations = 30 });
     try expect(result.cost < result.initial_cost);
 
-    // 1. Every control the plan produced is inside the box. Not "was clamped afterwards" —
+    // 1. Every control the plan produced is inside the box. Not "was clamped afterwards" -
     //    inside it as planned, which is what makes the cost honest.
     var saturated: u32 = 0;
     for (plan.ctrl) |u| {
@@ -5505,14 +5505,14 @@ test "★★★ mpc: control limits bind, and a saturated actuator gets no feedb
         }
     }
 
-    // 2. ★ AND THE LIMIT ACTUALLY BINDS, so the test is not passing vacuously. A plan that
+    // 2. * AND THE LIMIT ACTUALLY BINDS, so the test is not passing vacuously. A plan that
     //    never reaches its bound would satisfy (1) without exercising any of this.
     try expect(saturated > 3);
 
-    // 3. ★★★ WHERE THE SOLVER PINNED A CONTROL, THE FEEDBACK ROW IS ZERO.
+    // 3. *** WHERE THE SOLVER PINNED A CONTROL, THE FEEDBACK ROW IS ZERO.
     //
     //    An earlier version asserted this wherever `|u|` sat on the bound, and that is a
-    //    DIFFERENT and wrong claim — measured, the gain there was −10.1, not 0. A control at
+    //    DIFFERENT and wrong claim - measured, the gain there was -10.1, not 0. A control at
     //    its upper limit still has authority to come back down; it is pinned only when the
     //    gradient pushes it further out. `plan.clamped` is the solver's own answer, which is
     //    the thing worth asserting, and the distinction is the whole reason it is exposed.
@@ -5545,8 +5545,8 @@ test "★★★ mpc: control limits bind, and a saturated actuator gets no feedb
     try expect(any_nonzero);
 }
 
-/// The cartpole from `examples/cartpole`, unmodified: gear 6, control capped at ±1, and a
-/// rail at ±2.4 that the planner is allowed to use all of.
+/// The cartpole from `examples/cartpole`, unmodified: gear 6, control capped at +/-1, and a
+/// rail at +/-2.4 that the planner is allowed to use all of.
 const Cartpole = Spec(.{
     .bodies = &.{
         .{
@@ -5586,22 +5586,22 @@ const Cartpole = Spec(.{
     },
 });
 
-test "★★★ mpc: a cartpole swings itself up, by pumping, on a motor too weak to lift it" {
-    // ── THE TEST THE WHOLE FILE EXISTS FOR ──
+test "*** mpc: a cartpole swings itself up, by pumping, on a motor too weak to lift it" {
+    // -- THE TEST THE WHOLE FILE EXISTS FOR --
     //
-    // ★ THE MOTOR IS TOO WEAK BY A FACTOR OF ~1.8, AND THAT IS ARITHMETIC, NOT A CLAIM.
-    // Force 6 N on ~1.1 kg gives the cart a ≈ 5.45 m/s², so the largest torque it can induce
-    // on the pole is `m·a·l` = 0.1·5.45·0.3 = 0.164 N·m. Gravity's torque with the pole
-    // horizontal is `m·g·l` = 0.1·9.81·0.3 = 0.294 N·m. There is no control sequence that
-    // holds the pole at horizontal, so there is no lift — only a pump.
+    // * THE MOTOR IS TOO WEAK BY A FACTOR OF ~1.8, AND THAT IS ARITHMETIC, NOT A CLAIM.
+    // Force 6 N on ~1.1 kg gives the cart a ~ 5.45 m/s^2, so the largest torque it can induce
+    // on the pole is `m*a*l` = 0.1*5.45*0.3 = 0.164 N*m. Gravity's torque with the pole
+    // horizontal is `m*g*l` = 0.1*9.81*0.3 = 0.294 N*m. There is no control sequence that
+    // holds the pole at horizontal, so there is no lift - only a pump.
     //
     // A PD controller cannot do this at any gain: at the moment the pole must move AWAY from
     // upright to build energy, the error says move towards it. Only something that plans over
-    // a horizon finds the pump. So this exercises every part at once — derivatives across a
+    // a horizon finds the pump. So this exercises every part at once - derivatives across a
     // large state range, the backward pass, the line search, regularization, and the control
     // box that makes the motor genuinely too weak.
     //
-    // ★ AND THE ASSERTION THAT MAKES IT A SWING-UP RATHER THAN A LIFT is the one on peak
+    // * AND THE ASSERTION THAT MAKES IT A SWING-UP RATHER THAN A LIFT is the one on peak
     // angle. A strong motor would raise the pole monotonically and satisfy "ends upright". A
     // weak one MUST first go further from the target than it started. That is the signature,
     // and it is what is checked.
@@ -5626,9 +5626,9 @@ test "★★★ mpc: a cartpole swings itself up, by pumping, on a motor too wea
 
     const reference: []f32 = try gpa.alloc(f32, (horizon + 1) * plan.nstate);
     defer gpa.free(reference);
-    @memset(reference, 0); // upright, centred, at rest — at every knot
+    @memset(reference, 0); // upright, centred, at rest - at every knot
 
-    // ★ THE TERMINAL WEIGHTS DWARF THE RUNNING ONES, WHICH IS WHAT BUYS THE PUMP. A heavy
+    // * THE TERMINAL WEIGHTS DWARF THE RUNNING ONES, WHICH IS WHAT BUYS THE PUMP. A heavy
     // running penalty on angle tells the pole to get upright NOW, which it cannot, and the
     // optimiser settles for hanging still. Making the END expensive and the journey cheap is
     // what lets it spend three swings going the wrong way.
@@ -5655,35 +5655,35 @@ test "★★★ mpc: a cartpole swings itself up, by pumping, on a motor too wea
     const final_x: f32 = plan.states[horizon * ns];
     const final_vtheta: f32 = plan.states[horizon * ns + model.nq + 1];
 
-    // 1. It ends upright and STOPPED — not merely passing through on the way round, which a
+    // 1. It ends upright and STOPPED - not merely passing through on the way round, which a
     //    pole spinning freely would also do.
     try expect(@abs(final_theta) < 0.06);
     try expect(@abs(final_vtheta) < 0.25);
 
-    // ── ★★★ AND NOT WHERE THE CART ENDS UP, BECAUSE THAT IS NOT THE TASK ──
+    // -- *** AND NOT WHERE THE CART ENDS UP, BECAUSE THAT IS NOT THE TASK --
     //
-    // A first version asserted `|final_x| < 0.3`, and it failed — while swinging up perfectly.
+    // A first version asserted `|final_x| < 0.3`, and it failed - while swinging up perfectly.
     // Measured, the same problem from the same start:
     //
-    //     ReleaseFast   theta 0.0124   x −0.026   cost 415.6   436 iterations
-    //     ReleaseSafe   theta 0.0109   x −2.403   cost 532.9   117 iterations
+    //     ReleaseFast   theta 0.0124   x -0.026   cost 415.6   436 iterations
+    //     ReleaseSafe   theta 0.0109   x -2.403   cost 532.9   117 iterations
     //
     // Both are upright and at rest; one returns to the middle and one parks against the rail.
-    // **Swing-up is non-convex and these are different local optima** — float contraction
-    // differs between build modes by parts in 10⁷, which is enough to send the line search
+    // **Swing-up is non-convex and these are different local optima** - float contraction
+    // differs between build modes by parts in 10^7, which is enough to send the line search
     // into a different basin on iteration three, after which the trajectories have nothing to
     // do with each other.
     //
     // With angle weighted 40x more than position, trading 2.4 m of cart for a better angle is
     // a genuinely better answer to the cost function as written. So the test asserts the TASK
-    // — upright, stopped, pumped, within limits — and not which valid solution was found.
+    // - upright, stopped, pumped, within limits - and not which valid solution was found.
     // Pinning the cart position would be pinning the build mode.
     try expect(@abs(final_x) <= 2.45);
 
-    // 1b. ★ IT WENT THROUGH HORIZONTAL AND IT WENT FAST. Horizontal is the configuration the
+    // 1b. * IT WENT THROUGH HORIZONTAL AND IT WENT FAST. Horizontal is the configuration the
     //     arithmetic above says cannot be held, so passing it proves the pole was moving
     //     rather than being carried. And the peak angular speed is far beyond anything a
-    //     direct lift would need — it is the energy that was pumped in, showing up as speed.
+    //     direct lift would need - it is the energy that was pumped in, showing up as speed.
     //     Measured on one run: peak 7.6 rad/s, and the motor saturated on 77 of 250 knots.
     var peak_speed: f32 = 0;
     var saturated_knots: u32 = 0;
@@ -5702,7 +5702,7 @@ test "★★★ mpc: a cartpole swings itself up, by pumping, on a motor too wea
     try expect(peak_speed > 5.0);
     try expect(saturated_knots > 10);
 
-    // 2. ★ IT PUMPED. Peak angle exceeds the start, so the pole deliberately went further
+    // 2. * IT PUMPED. Peak angle exceeds the start, so the pole deliberately went further
     //    from upright before coming back. Measured, the swing goes pi -> 3.76 -> 2.34 ->
     //    4.24 -> over the top: three swings of growing amplitude.
     var peak_theta: f32 = 0;
@@ -5711,7 +5711,7 @@ test "★★★ mpc: a cartpole swings itself up, by pumping, on a motor too wea
     }
     try expect(peak_theta > pi + 0.3);
 
-    // 3. Every control is inside the box, and the box genuinely binds — an unconstrained
+    // 3. Every control is inside the box, and the box genuinely binds - an unconstrained
     //    plan would simply ask for more torque and never need to swing at all.
     var saturated: u32 = 0;
     for (plan.ctrl) |u| {
@@ -5720,11 +5720,11 @@ test "★★★ mpc: a cartpole swings itself up, by pumping, on a motor too wea
             saturated += 1;
         }
     }
-    // ★ A LOOSE BOUND ON PURPOSE. `> horizon/4` was the first attempt, taken from a
+    // * A LOOSE BOUND ON PURPOSE. `> horizon/4` was the first attempt, taken from a
     // ReleaseFast run that saturated 221 knots of 350; ReleaseSafe finds a different basin
     // and saturates 57. How MUCH of the trajectory runs against the stop is a property of
     // which local optimum was found, not of the solver being right. What this needs to check
-    // is that the box binds AT ALL — without that the test would pass on an unconstrained
+    // is that the box binds AT ALL - without that the test would pass on an unconstrained
     // planner that never needed to swing.
     try expect(saturated > 20);
 
@@ -5738,16 +5738,16 @@ test "★★★ mpc: a cartpole swings itself up, by pumping, on a motor too wea
     try expect(peak_x > 1.5);
 }
 
-test "★★★ mpc: receding horizon — a warm re-solve is cheap enough to run inside a frame" {
-    // ── THE CLAIM THIS TEST EXISTS TO CHECK ──
+test "*** mpc: receding horizon - a warm re-solve is cheap enough to run inside a frame" {
+    // -- THE CLAIM THIS TEST EXISTS TO CHECK --
     //
     // MPC is only usable if a re-solve fits in the time between control ticks. The cold
     // swing-up takes 142 iterations; if every tick cost that, nothing would run in real time
     // and an interactive demo would freeze the browser. `shift` is supposed to make the next
     // solve nearly free by handing it the last answer.
     //
-    // So: solve once cold, then run a closed loop — shift, re-solve with a SMALL iteration
-    // budget, apply, step — and require that the cheap re-solves are enough to keep the pole
+    // So: solve once cold, then run a closed loop - shift, re-solve with a SMALL iteration
+    // budget, apply, step - and require that the cheap re-solves are enough to keep the pole
     // up. Balancing rather than swinging, because that is what a controller does once the
     // plan has done its job.
     const gpa: Allocator = std.testing.allocator;
@@ -5761,7 +5761,7 @@ test "★★★ mpc: receding horizon — a warm re-solve is cheap enough to run
     defer plan.deinit();
     plan.readLimits(&model);
 
-    // Start near upright but genuinely disturbed — leaning and moving.
+    // Start near upright but genuinely disturbed - leaning and moving.
     data.reset(&model);
     data.pos[1] = 0.25;
     data.vel[1] = -0.8;
@@ -5786,7 +5786,7 @@ test "★★★ mpc: receding horizon — a warm re-solve is cheap enough to run
     const cold: Result = optimize(&model, &data, &plan, cost, .{ .iterations = 100 });
     try expect(cold.converged);
 
-    // ── THE LOOP. Two iterations per tick, which is the budget an interactive app has. ──
+    // -- THE LOOP. Two iterations per tick, which is the budget an interactive app has. --
     const applied: []f32 = try gpa.alloc(f32, plan.nu);
     defer gpa.free(applied);
     var worst_angle: f32 = 0;
@@ -5807,13 +5807,13 @@ test "★★★ mpc: receding horizon — a warm re-solve is cheap enough to run
         }
     }
 
-    // 1. ★ IT STAYED UP. The pole started 0.25 rad over and falling at 0.8 rad/s; without
+    // 1. * IT STAYED UP. The pole started 0.25 rad over and falling at 0.8 rad/s; without
     //    control it would be past horizontal within half a second. Two iterations per tick
     //    caught it and held it.
     try expect(worst_angle < 0.6);
     try expect(@abs(data.pos[1]) < 0.15);
 
-    // 2. ★ AND THE WARM SOLVES REALLY WERE CHEAP — the point of `shift`. Two hundred ticks
+    // 2. * AND THE WARM SOLVES REALLY WERE CHEAP - the point of `shift`. Two hundred ticks
     //    at a budget of two is at most 400 iterations; a controller that needed a cold solve
     //    every tick would have wanted 200x142. This asserts the budget was not merely
     //    offered but sufficient.
@@ -5823,15 +5823,15 @@ test "★★★ mpc: receding horizon — a warm re-solve is cheap enough to run
     try expect(@abs(data.pos[0]) < 2.45);
 }
 
-test "★★★ mpc: shift moves the trajectory with the gains, and the closed loop swings up" {
-    // ── THE BUG THIS PINS PRODUCED NO ERROR, ONLY A BAD CONTROLLER ──
+test "*** mpc: shift moves the trajectory with the gains, and the closed loop swings up" {
+    // -- THE BUG THIS PINS PRODUCED NO ERROR, ONLY A BAD CONTROLLER --
     //
     // `shift` moved `ctrl`, `feedforward`, `feedback` and `clamped` and NOT `states`. Since
     // `plan.states[t]` is the state `feedback[t]` was linearised about, that left
-    // `feedbackControl` measuring `δx` against a reference one knot stale — and one knot more
+    // `feedbackControl` measuring `dx` against a reference one knot stale - and one knot more
     // stale on every subsequent shift.
     //
-    // Nothing crashed. The cartpole just wandered, theta drifting 3.0 → 58 rad over ten
+    // Nothing crashed. The cartpole just wandered, theta drifting 3.0 -> 58 rad over ten
     // seconds, which reads as "MPC is not working very well" rather than as an index error.
     // So the test checks the invariant directly AND the behaviour it broke.
     const gpa: Allocator = std.testing.allocator;
@@ -5866,7 +5866,7 @@ test "★★★ mpc: shift moves the trajectory with the gains, and the closed l
     @memset(plan.ctrl, 0);
     _ = optimize(&model, &data, &plan, cost, .{ .iterations = 40 });
 
-    // 1. THE INVARIANT. After a shift, knot t must hold what knot t+1 held — for the states
+    // 1. THE INVARIANT. After a shift, knot t must hold what knot t+1 held - for the states
     //    exactly as much as for the gains, because they are read together.
     const before_state_1: f32 = plan.states[1 * ns + 1];
     const before_ctrl_1: f32 = plan.ctrl[1];
@@ -5876,7 +5876,7 @@ test "★★★ mpc: shift moves the trajectory with the gains, and the closed l
     try expectApproxEqAbs(before_ctrl_1, plan.ctrl[0], 1.0e-6);
     try expectApproxEqAbs(before_gain_1, plan.feedback[0], 1.0e-6);
 
-    // 2. ★ AND THE BEHAVIOUR. A closed loop — shift, re-solve on a budget, apply, step — must
+    // 2. * AND THE BEHAVIOUR. A closed loop - shift, re-solve on a budget, apply, step - must
     //    actually swing the pole up and hold it. This is the demo's loop, in miniature.
     const applied: []f32 = try gpa.alloc(f32, model.nu);
     defer gpa.free(applied);
@@ -5898,47 +5898,47 @@ test "★★★ mpc: shift moves the trajectory with the gains, and the closed l
         }
     }
     try expect(reached_upright);
-    // Upright and still there at the end — not merely passing through on a spin.
+    // Upright and still there at the end - not merely passing through on a spin.
     try expect(@abs(data.pos[1]) < 0.3);
     try expect(@abs(data.pos[0]) < 2.45);
 }
 
 // ==========================================================================
-// ★★★ THE TRUNK PLANNER DOES NOT HOLD A PLANTED-FOOT STAND. TESTS SKIPPED.
+// *** THE TRUNK PLANNER DOES NOT HOLD A PLANTED-FOOT STAND. TESTS SKIPPED.
 //
-// ── WHAT IS NOW KNOWN TO BE CORRECT ──
+// -- WHAT IS NOW KNOWN TO BE CORRECT --
 //
 // The MODEL is right. `Stance` holds world foot positions, `srbdStep` derives the moment arm
-// `r = foot − p` from the state, and `srbdLinearize` carries the resulting position columns:
+// `r = foot - p` from the state, and `srbdLinearize` carries the resulting position columns:
 //
 //     dtau/dp = sum [f_i]x      dw'/dp = dt*Iw^-1*sum[f_i]x      dTheta'/dp = dt^2*T*Iw^-1*sum[f_i]x
 //
 // Those are verified: the cross-check now sweeps trunk positions that genuinely change the
 // arms, and analytic and numerical agree to ~0.01% on entries reaching 86.
 //
-// ★ AND THE VERIFICATION ITSELF HAD TO BE FIXED TWICE, both times because the REFERENCE was
+// * AND THE VERIFICATION ITSELF HAD TO BE FIXED TWICE, both times because the REFERENCE was
 // wrong rather than the algebra. One-sided differences cost 6% on the nonlinear yaw column;
-// centring fixed that. Then f32 cancellation cost 27% at eps 1e-4 — the error grew as the
-// nudge SHRANK, the signature of cancellation — and eps 1e-2 fixed that. **When a derivation
+// centring fixed that. Then f32 cancellation cost 27% at eps 1e-4 - the error grew as the
+// nudge SHRANK, the signature of cancellation - and eps 1e-2 fixed that. **When a derivation
 // and a numerical check disagree, sweep the nudge before touching the algebra.**
 //
-// ── WHAT IS STILL WRONG, AND WHAT HAS BEEN RULED OUT ──
+// -- WHAT IS STILL WRONG, AND WHAT HAS BEEN RULED OUT --
 //
 // A four-footed stand still diverges. Ruled out by measurement, not by argument:
 //
-//   * the missing pendulum term — added, verified, still falls;
-//   * the horizon — swept 0.2 s to 1.2 s, all fall;
-//   * the reference anchor — robot-relative and support-relative both fall;
-//   * the regularization floor — swept 1e-4 to 1e2, all fall, and 1e2 launches the trunk to
+//   * the missing pendulum term - added, verified, still falls;
+//   * the horizon - swept 0.2 s to 1.2 s, all fall;
+//   * the reference anchor - robot-relative and support-relative both fall;
+//   * the regularization floor - swept 1e-4 to 1e2, all fall, and 1e2 launches the trunk to
 //     +67 m, so a near-singular solve is not the story either.
 //
-// ★ THE FAILURE MODE IS NOW UPWARD, WHICH IS NEW INFORMATION. From a start where the cost is
+// * THE FAILURE MODE IS NOW UPWARD, WHICH IS NEW INFORMATION. From a start where the cost is
 // already zero, the planner produces a large control and the trunk climbs. A zero gradient
-// that yields a big step means the step is not coming from the gradient at all — the next
+// that yields a big step means the step is not coming from the gradient at all - the next
 // place to look is the FORWARD pass, which applies `k + K*dx` and clamps, rather than the
 // backward pass everything so far has assumed.
 //
-// ── ★★★ AND THE TESTBED CANNOT SETTLE THIS ──
+// -- *** AND THE TESTBED CANNOT SETTLE THIS --
 //
 // A Go1 leg reaches 0.426 m (thigh 0.213 + calf 0.213). At a 0.30 m stand that is 0.30 m of
 // horizontal travel before the leg is straight. These runs reach 15 to 75 m. **Every number
@@ -5946,19 +5946,19 @@ test "★★★ mpc: shift moves the trajectory with the gains, and the closed l
 // measured in a regime where the simulation means nothing.
 //
 // The trunk planner cannot be validated against a free-flying SRBD sim with no leg kinematics.
-// The next step is the articulated Go1 — real legs, real contacts, real reach — where the
+// The next step is the articulated Go1 - real legs, real contacts, real reach - where the
 // pieces already exist: `robot.zig`, the Go1 model, `stanceTorques`, and contacts from
 // `robot_physics.zig`.
 // ==========================================================================
-test "trunk: UNFINISHED — stands exactly, does not trot yet; see the banner above" {
+test "trunk: UNFINISHED - stands exactly, does not trot yet; see the banner above" {
     if (true) {
         return error.SkipZigTest;
     }
-    // ── THE ACCEPTANCE TEST FOR THE WHOLE EXERCISE ──
+    // -- THE ACCEPTANCE TEST FOR THE WHOLE EXERCISE --
     //
     // `examples/quadruped`'s kinematic gait recorded its own ceiling: at duty 0.5 the Go1
     // "sags to 0.11 m, on its belly", at 0.70 it "falls at 2.5 s", and only 0.85 stood. Duty
-    // 0.85 means three or four feet down almost always — a shuffle, not a trot — and it was
+    // 0.85 means three or four feet down almost always - a shuffle, not a trot - and it was
     // forced because nothing was deciding how hard each foot pushed.
     //
     // This plans the forces. So it should hold a TROT, where exactly two feet carry the robot
@@ -5980,7 +5980,7 @@ test "trunk: UNFINISHED — stands exactly, does not trot yet; see the banner ab
     };
     const stand_height: f32 = 0.30;
     const dt: f32 = 0.02;
-    const horizon: u32 = 20; // 0.4 s — about one trot cycle
+    const horizon: u32 = 20; // 0.4 s - about one trot cycle
 
     var plan: TrunkPlan = try TrunkPlan.init(gpa, horizon);
     defer plan.deinit();
@@ -6015,13 +6015,13 @@ test "trunk: UNFINISHED — stands exactly, does not trot yet; see the banner ab
 
     // Four seconds of trotting, closed loop.
     for (0..200) |_| {
-        // ── ★★★ A PLANTED FOOT DOES NOT MOVE, AND SAYING OTHERWISE MAKES THE TRUNK BOUNCE ──
+        // -- *** A PLANTED FOOT DOES NOT MOVE, AND SAYING OTHERWISE MAKES THE TRUNK BOUNCE --
         //
         // The first version called `footTarget` for every leg at every knot, including legs
         // already in stance. That hands the model a contact point that SLIDES: the moment arm
-        // `r × f` changes under a foot physically nailed to the ground, so the planner solves
+        // `r x f` changes under a foot physically nailed to the ground, so the planner solves
         // for torques that do not exist and corrects them the next tick. Measured, the trunk
-        // oscillated between 0.194 and 0.474 m about a 0.30 m stand — ±14 cm of bounce from a
+        // oscillated between 0.194 and 0.474 m about a 0.30 m stand - +/-14 cm of bounce from a
         // modelling error, not from the gait.
         //
         // The truth is two cases: a foot in stance holds its WORLD position until it lifts; a
@@ -6043,11 +6043,11 @@ test "trunk: UNFINISHED — stands exactly, does not trot yet; see the banner ab
             was_down[l] = down;
         }
 
-        // ★ AND THE MOMENT ARMS NO LONGER NEED PREDICTING. Two earlier versions tried to guess
-        // where the trunk would be at each knot so the arm could be measured against it — first
+        // * AND THE MOMENT ARMS NO LONGER NEED PREDICTING. Two earlier versions tried to guess
+        // where the trunk would be at each knot so the arm could be measured against it - first
         // from the current centre, then from the commanded velocity. Both were wrong in
         // different directions, because the arm is not a thing to be predicted: it is
-        // `foot − p`, and `p` is a STATE the model already integrates. Handing over the world
+        // `foot - p`, and `p` is a STATE the model already integrates. Handing over the world
         // foot position lets the dynamics work it out per knot, exactly.
         for (0..horizon) |k| {
             const at: f32 = phase + g.frequency * dt * float(k);
@@ -6080,7 +6080,7 @@ test "trunk: UNFINISHED — stands exactly, does not trot yet; see the banner ab
         worst_tilt = @max(worst_tilt, @abs(x[rpy_offset]) + @abs(x[rpy_offset + 1]));
     }
 
-    // 1. ★ IT STAYED UP. The old gait's own numbers at duty 0.5 were "sags to 0.11 m"; 5 cm of
+    // 1. * IT STAYED UP. The old gait's own numbers at duty 0.5 were "sags to 0.11 m"; 5 cm of
     //    height variation about a 30 cm stand is a trotting robot, 19 cm is a fallen one.
     try expect(lowest > stand_height - 0.05);
     try expect(highest < stand_height + 0.05);
@@ -6089,12 +6089,12 @@ test "trunk: UNFINISHED — stands exactly, does not trot yet; see the banner ab
     //    which is rocking, not tipping.
     try expect(worst_tilt < 0.25);
 
-    // 3. ★ AND IT WENT SOMEWHERE. Holding still at duty 0.5 would also pass (1) and (2), so
+    // 3. * AND IT WENT SOMEWHERE. Holding still at duty 0.5 would also pass (1) and (2), so
     //    the test would be about standing rather than walking. 0.4 m/s for 4 s is 1.6 m; half
     //    of that is a robot that is genuinely translating.
     try expect(x[pos_offset] > 0.8);
 
-    // 4. The forces obey the box, and a swing foot's are exactly zero — which is what lets
+    // 4. The forces obey the box, and a swing foot's are exactly zero - which is what lets
     //    `plan.ctrl` be handed straight to `stanceTorques`.
     for (0..leg_count) |l| {
         if (!plan.stance[0].active[l]) {
@@ -6110,10 +6110,10 @@ test "trunk: UNFINISHED — stands exactly, does not trot yet; see the banner ab
 /// Roughly MuJoCo's humanoid balancing on one leg: 40.8 kg with its mass 0.83 m up.
 const balance_body: BalanceModel = .{ .mass = 40.8, .height = 0.83, .gravity = 9.81 };
 
-test "★★★ lipm: the analytic Jacobians agree with centred differences of the same step" {
+test "*** lipm: the analytic Jacobians agree with centred differences of the same step" {
     // Every lesson from the trunk model's cross-check applies unchanged: CENTRED differences
     // (a one-sided one carries truncation of order eps), a nudge of 1e-2 rather than something
-    // smaller (the error grows as the nudge SHRINKS — that is f32 cancellation, not truncation),
+    // smaller (the error grows as the nudge SHRINKS - that is f32 cancellation, not truncation),
     // and a tolerance RELATIVE to the entry, because the entries span orders of magnitude.
     const dt: f32 = 0.02;
     var a: [lipm_state_dim * lipm_state_dim]f32 = undefined;
@@ -6121,7 +6121,7 @@ test "★★★ lipm: the analytic Jacobians agree with centred differences of t
     lipmLinearize(balance_body, dt, &a, &b);
 
     // Several states and controls, because a term that is zero at the origin can be wrong
-    // everywhere else — and the cross terms only show up under a non-zero momentum rate.
+    // everywhere else - and the cross terms only show up under a non-zero momentum rate.
     const states = [_][lipm_state_dim]f32{
         .{ 0, 0, 0, 0, 0, 0 },
         .{ 0.04, -0.03, 0.2, -0.1, 1.5, -0.8 },
@@ -6162,12 +6162,12 @@ test "★★★ lipm: the analytic Jacobians agree with centred differences of t
     }
 }
 
-test "★★★ lipm: physics — it topples at √(g/h), and the flywheel works with the feet still" {
+test "*** lipm: physics - it topples at sqrt(g/h), and the flywheel works with the feet still" {
     const dt: f32 = 0.001;
 
-    // 1. ★ THE UNSTABLE EIGENVALUE, AGAINST THEORY. Displace the mass, pin the centre of
-    //    pressure under the origin, apply no momentum, and it must run away as exp(t·√(g/h)).
-    //    For 0.83 m that is 3.44 rad/s — a number the model does not contain anywhere and must
+    // 1. * THE UNSTABLE EIGENVALUE, AGAINST THEORY. Displace the mass, pin the centre of
+    //    pressure under the origin, apply no momentum, and it must run away as exp(t*sqrt(g/h)).
+    //    For 0.83 m that is 3.44 rad/s - a number the model does not contain anywhere and must
     //    therefore reproduce rather than repeat.
     {
         const omega: f32 = @sqrt(balance_body.gravity / balance_body.height);
@@ -6177,13 +6177,13 @@ test "★★★ lipm: physics — it topples at √(g/h), and the flywheel works
         for (0..1000) |_| { // 1 s
             x = lipmStep(balance_body, &x, &u, dt);
         }
-        // Starting from rest the solution is `c₀·cosh(ωt)`, not a pure exponential.
+        // Starting from rest the solution is `c_0*cosh(omega t)`, not a pure exponential.
         const expected: f32 = 0.001 * zm.cosh(omega * 1.0);
         try expectApproxEqAbs(expected, x[lipm_com_offset], 0.02 * expected);
         try expect(omega > 3.4 and omega < 3.5);
     }
 
-    // 2. ★ THE FLYWHEEL, WHICH IS THE WHOLE POINT: the centre of pressure never moves, and the
+    // 2. * THE FLYWHEEL, WHICH IS THE WHOLE POINT: the centre of pressure never moves, and the
     //    mass accelerates anyway. This is what a robot has left once its foot has run out of
     //    room, and no reactive controller can produce it without stepping.
     {
@@ -6193,15 +6193,15 @@ test "★★★ lipm: physics — it topples at √(g/h), and the flywheel works
         for (0..200) |_| {
             x = lipmStep(balance_body, &x, &u, dt);
         }
-        // Momentum about +y drives the mass in −x. Sign matters more than magnitude here.
+        // Momentum about +y drives the mass in -x. Sign matters more than magnitude here.
         try expect(x[lipm_com_offset] < -1.0e-6);
         try expectApproxEqAbs(@as(f32, 0), x[lipm_com_offset + 1], 1.0e-9);
         // And the momentum really did accumulate, at exactly its commanded rate.
         try expectApproxEqAbs(40.0 * 0.2, x[lipm_momentum_offset + 1], 1.0e-3);
     }
 
-    // 3. ★ AND THE OTHER AXIS, WITH THE OPPOSITE SIGN. A cross product relates them, so
-    //    momentum about x drives +y where momentum about y drove −x. Checking a norm would
+    // 3. * AND THE OTHER AXIS, WITH THE OPPOSITE SIGN. A cross product relates them, so
+    //    momentum about x drives +y where momentum about y drove -x. Checking a norm would
     //    have passed with both signs wrong.
     {
         var x: [lipm_state_dim]f32 = @splat(0);
@@ -6214,8 +6214,8 @@ test "★★★ lipm: physics — it topples at √(g/h), and the flywheel works
         try expectApproxEqAbs(@as(f32, 0), x[lipm_com_offset], 1.0e-9);
     }
 
-    // 4. ★ AND THE CENTRE OF PRESSURE PUSHES THE MASS AWAY FROM ITSELF. Put the foot ahead of
-    //    the mass and the mass must fall BACKWARD — the sign that makes this an inverted
+    // 4. * AND THE CENTRE OF PRESSURE PUSHES THE MASS AWAY FROM ITSELF. Put the foot ahead of
+    //    the mass and the mass must fall BACKWARD - the sign that makes this an inverted
     //    pendulum rather than a spring.
     {
         var x: [lipm_state_dim]f32 = @splat(0);
@@ -6283,21 +6283,21 @@ fn largestSurvivedPush(
     return best;
 }
 
-test "★★★ balance: the flywheel buys a bigger push than the foot alone — the whole thesis" {
-    // ── THE ACCEPTANCE TEST, STATED BEFORE ANY OF THIS WAS BUILT ──
+test "*** balance: the flywheel buys a bigger push than the foot alone - the whole thesis" {
+    // -- THE ACCEPTANCE TEST, STATED BEFORE ANY OF THIS WAS BUILT --
     //
-    // A push the centre of pressure alone cannot survive, that the planner can — with the
+    // A push the centre of pressure alone cannot survive, that the planner can - with the
     // ANGULAR MOMENTUM doing the work. Same model, same cost, same horizon; the only difference
     // is whether the limbs are allowed to move.
     //
-    // ★ WHY IT WORKS AT ALL: on one foot the support is a few centimetres, so any real shove
+    // * WHY IT WORKS AT ALL: on one foot the support is a few centimetres, so any real shove
     // saturates the centre of pressure immediately. After that the ONLY authority left is
-    // angular momentum — and because it is bounded in EXCURSION rather than rate, spending it
+    // angular momentum - and because it is bounded in EXCURSION rather than rate, spending it
     // is borrowing. That is a finite-horizon trade, which is exactly what a planner represents
     // and a gain cannot.
     const gpa: Allocator = std.testing.allocator;
     const dt: f32 = 0.01;
-    const horizon: u32 = 60; // 0.6 s — comfortably past the pendulum's 0.29 s time constant
+    const horizon: u32 = 60; // 0.6 s - comfortably past the pendulum's 0.29 s time constant
 
     const state_w = [_]f32{ 400, 400, 40, 40, 0.02, 0.02 };
     const control_w = [_]f32{ 1.0, 1.0, 0.002, 0.002 };
@@ -6318,28 +6318,28 @@ test "★★★ balance: the flywheel buys a bigger push than the foot alone —
     // 1. Both must recover SOMETHING, or the comparison is between two failures.
     try expect(without > 0.05);
 
-    // 2. ★ AND THE FLYWHEEL MUST BUY A MEANINGFULLY BIGGER PUSH. Measured:
+    // 2. * AND THE FLYWHEEL MUST BUY A MEANINGFULLY BIGGER PUSH. Measured:
     //
     //        centre of pressure alone .... 0.30 m/s
     //        with the limbs .............. 0.85 m/s     2.83x
     //
     //    Not a few percent. The momentum authority is worth nearly three times the foot's,
-    //    which is why humans windmill instead of just leaning — and why this problem wants a
+    //    which is why humans windmill instead of just leaning - and why this problem wants a
     //    planner. The bound is 1.3x rather than 2.8x so the test measures the CLAIM (that the
     //    flywheel matters) rather than pinning a number that will drift with the weights.
     try expect(with > without * 1.3);
 }
 
-/// A 3 m cable: the payload swings at √(9.81/3) = 1.808 rad/s, a 3.475 s period.
+/// A 3 m cable: the payload swings at sqrt(9.81/3) = 1.808 rad/s, a 3.475 s period.
 const crane_body: CraneModel = .{ .cable = 3.0, .gravity = 9.81 };
 
-test "★★★ crane: it swings at √(g/L) — a number the code does not contain" {
-    // ── THE ORACLE, AND IT IS NOT A RESTATEMENT OF THE MODEL ──
+test "*** crane: it swings at sqrt(g/L) - a number the code does not contain" {
+    // -- THE ORACLE, AND IT IS NOT A RESTATEMENT OF THE MODEL --
     //
     // A pendulum released from rest with its pivot held still has a known closed form:
-    // `θ(t) = θ₀·cos(ω·t)` with `ω = √(g/L)`. Neither 1.808 nor 3.475 appears anywhere in
-    // `craneStep`, so reproducing them is evidence rather than an echo — the same shape of
-    // check as `cosh(ω·t)` for the balancing model.
+    // `theta(t) = theta_0*cos(omega*t)` with `omega = sqrt(g/L)`. Neither 1.808 nor 3.475 appears anywhere in
+    // `craneStep`, so reproducing them is evidence rather than an echo - the same shape of
+    // check as `cosh(omega*t)` for the balancing model.
     const dt: f32 = 0.0005;
     const omega: f32 = @sqrt(crane_body.gravity / crane_body.cable);
     try expect(omega > 1.80 and omega < 1.81);
@@ -6351,7 +6351,7 @@ test "★★★ crane: it swings at √(g/L) — a number the code does not cont
         const u: [crane_control_dim]f32 = @splat(0);
 
         // Quarter period: the angle must pass through zero, moving fast.
-        // ★ `@trunc` CONVERTS DIRECTLY — no `@intFromFloat` wrapper, which the linter rejects
+        // * `@trunc` CONVERTS DIRECTLY - no `@intFromFloat` wrapper, which the linter rejects
         // as reading like a conversion happening twice.
         const quarter: usize = @trunc(0.25 * (2.0 * pi / omega) / dt);
         for (0..quarter) |_| {
@@ -6366,16 +6366,16 @@ test "★★★ crane: it swings at √(g/L) — a number the code does not cont
         }
         try expectApproxEqAbs(start, x[crane_angle_offset], 0.006);
 
-        // ★ AND THE TROLLEY NEVER MOVED. A swinging payload exerts no net horizontal force on a
-        // trolley whose acceleration is commanded — if this drifts, the two halves of the model
+        // * AND THE TROLLEY NEVER MOVED. A swinging payload exerts no net horizontal force on a
+        // trolley whose acceleration is commanded - if this drifts, the two halves of the model
         // are coupled in a way the equations do not say they are.
         try expectApproxEqAbs(@as(f32, 0), x[crane_pos_offset], 1.0e-6);
     }
 }
 
-test "★★★ crane: accelerating forward swings the payload BACKWARD" {
+test "*** crane: accelerating forward swings the payload BACKWARD" {
     // The sign that makes anti-sway control counter-intuitive, and the one thing that must not
-    // be wrong. Checked as a DIRECTION, not a magnitude — a norm would pass with it inverted.
+    // be wrong. Checked as a DIRECTION, not a magnitude - a norm would pass with it inverted.
     const dt: f32 = 0.001;
     var x: [crane_state_dim]f32 = @splat(0);
     var u: [crane_control_dim]f32 = .{1.0}; // accelerate in +x
@@ -6395,7 +6395,7 @@ test "★★★ crane: accelerating forward swings the payload BACKWARD" {
     try expect(x[crane_angle_offset] > 1.0e-4);
 }
 
-test "★★★ crane: the analytic Jacobians agree with centred differences" {
+test "*** crane: the analytic Jacobians agree with centred differences" {
     const dt: f32 = 0.02;
     var a: [crane_state_dim * crane_state_dim]f32 = undefined;
     var b: [crane_state_dim * crane_control_dim]f32 = undefined;
@@ -6438,10 +6438,10 @@ test "★★★ crane: the analytic Jacobians agree with centred differences" {
 /// 500 kg, engine 5 m below the centre of mass. Weight 4905 N.
 const rocket_body: RocketModel = .{ .mass = 500.0, .inertia = 3000.0, .arm = 5.0, .gravity = 9.81 };
 
-test "★★★ rocket: physics — free fall, hover, and which way the gimbal turns it" {
+test "*** rocket: physics - free fall, hover, and which way the gimbal turns it" {
     const dt: f32 = 0.001;
 
-    // 1. No thrust is free fall at exactly −g. Nothing in the step should survive that.
+    // 1. No thrust is free fall at exactly -g. Nothing in the step should survive that.
     {
         var x: [rocket_state_dim]f32 = @splat(0);
         x[rocket_y_offset] = 100.0;
@@ -6449,14 +6449,14 @@ test "★★★ rocket: physics — free fall, hover, and which way the gimbal t
         for (0..1000) |_| {
             x = rocketStep(rocket_body, &x, &u, dt);
         }
-        // Semi-implicit Euler over 1 s: v = −g·t exactly; position lags by half a step.
+        // Semi-implicit Euler over 1 s: v = -g*t exactly; position lags by half a step.
         try expectApproxEqAbs(-rocket_body.gravity, x[rocket_vy_offset], 1.0e-3);
         try expectApproxEqAbs(100.0 - 0.5 * rocket_body.gravity, x[rocket_y_offset], 0.02);
         try expectApproxEqAbs(@as(f32, 0), x[rocket_x_offset], 1.0e-6);
         try expectApproxEqAbs(@as(f32, 0), x[rocket_tilt_offset], 1.0e-9);
     }
 
-    // 2. ★ THRUST EXACTLY EQUAL TO WEIGHT, UPRIGHT, HOLDS STILL. Not approximately — the two
+    // 2. * THRUST EXACTLY EQUAL TO WEIGHT, UPRIGHT, HOLDS STILL. Not approximately - the two
     //    terms are the same number and must cancel, for as long as you care to run it.
     {
         var x: [rocket_state_dim]f32 = @splat(0);
@@ -6470,8 +6470,8 @@ test "★★★ rocket: physics — free fall, hover, and which way the gimbal t
         try expectApproxEqAbs(@as(f32, 0), x[rocket_tilt_offset], 1.0e-9);
     }
 
-    // 3. ★ THE GIMBAL'S SIGN, BOTH WAYS. Deflecting the exhaust one way must rotate the vehicle
-    //    the other, and checking a magnitude would pass with it inverted — which would make a
+    // 3. * THE GIMBAL'S SIGN, BOTH WAYS. Deflecting the exhaust one way must rotate the vehicle
+    //    the other, and checking a magnitude would pass with it inverted - which would make a
     //    landing demo steer itself into the ground.
     {
         const hover: f32 = rocket_body.mass * rocket_body.gravity;
@@ -6490,7 +6490,7 @@ test "★★★ rocket: physics — free fall, hover, and which way the gimbal t
         }
     }
 
-    // 4. ★ AND LEANING TRADES LIFT FOR SIDEWAYS TRAVEL — the manoeuvre the lower thrust bound
+    // 4. * AND LEANING TRADES LIFT FOR SIDEWAYS TRAVEL - the manoeuvre the lower thrust bound
     //    forces. Tilted, at a thrust that would hover upright, it must both drift AND sink.
     {
         var x: [rocket_state_dim]f32 = @splat(0);
@@ -6505,12 +6505,12 @@ test "★★★ rocket: physics — free fall, hover, and which way the gimbal t
     }
 }
 
-test "★★★ rocket: the analytic Jacobians agree with centred differences" {
+test "*** rocket: the analytic Jacobians agree with centred differences" {
     const dt: f32 = 0.05;
     const hover: f32 = rocket_body.mass * rocket_body.gravity;
 
-    // ★ SWEPT OFF-CENTRE IN BOTH TILT AND GIMBAL, because the coupling between them is the
-    // whole nonlinearity — at tilt 0 and gimbal 0 half these entries are zero and a wrong
+    // * SWEPT OFF-CENTRE IN BOTH TILT AND GIMBAL, because the coupling between them is the
+    // whole nonlinearity - at tilt 0 and gimbal 0 half these entries are zero and a wrong
     // derivative hides completely.
     const states = [_][rocket_state_dim]f32{
         .{ 0, 100, 0, 0, 0, 0 },
@@ -6541,7 +6541,7 @@ test "★★★ rocket: the analytic Jacobians agree with centred differences" {
                 try expectApproxEqAbs(numeric, a[r * rocket_state_dim + c], jacobianTolerance(numeric));
             }
         }
-        // The thrust column spans thousands of newtons, so it gets a nudge on its own scale —
+        // The thrust column spans thousands of newtons, so it gets a nudge on its own scale -
         // 1e-2 N against 4905 N is below what f32 can difference.
         for (0..rocket_control_dim) |c| {
             const scale: f32 = if (c == rocket_thrust_offset) 10.0 else 1.0e-2;
@@ -6559,15 +6559,15 @@ test "★★★ rocket: the analytic Jacobians agree with centred differences" {
     }
 }
 
-test "★★★ a fresh Plan is already bounded by the model's actuators" {
-    // ── THE REGRESSION THIS EXISTS TO PREVENT ──
+test "*** a fresh Plan is already bounded by the model's actuators" {
+    // -- THE REGRESSION THIS EXISTS TO PREVENT --
     //
     // `readLimits` was public, documented and opt-in, and the first caller to plan on a real
     // articulated robot forgot it. `optimize` then planned UNCONSTRAINED while the model clamped
-    // `d.ctrl` to its ctrlrange on the way in — so the plan asked for **357 N·m against a ±260
+    // `d.ctrl` to its ctrlrange on the way in - so the plan asked for **357 N*m against a +/-260
     // limit** and believed it would get it, then flew a trajectory the arm could not.
     //
-    // ★ A DEFAULT THAT SILENTLY REMOVES A CONSTRAINT IS THE WRONG DEFAULT. The failure is
+    // * A DEFAULT THAT SILENTLY REMOVES A CONSTRAINT IS THE WRONG DEFAULT. The failure is
     // invisible: the optimiser converges, reports success, and hands back a plan the robot
     // cannot execute. Nothing in the result says so.
     const gpa: Allocator = std.testing.allocator;
@@ -6590,7 +6590,7 @@ test "★★★ a fresh Plan is already bounded by the model's actuators" {
     defer plan.deinit();
 
     try expect(plan.has_limits);
-    // Every knot carries the actuator's own range — the box does not change with time.
+    // Every knot carries the actuator's own range - the box does not change with time.
     for (0..plan.horizon) |t| {
         for (0..plan.nu) |j| {
             const range: [2]f32 = model.act_ctrl_range[j] orelse continue;
@@ -6599,19 +6599,19 @@ test "★★★ a fresh Plan is already bounded by the model's actuators" {
         }
     }
 
-    // ★ AND THE BOUNDS ARE REAL, not the float maxima that mean "unbounded". A plan whose box is
-    // ±3.4e38 is unconstrained wearing a constraint's clothes, and would pass a naive check.
+    // * AND THE BOUNDS ARE REAL, not the float maxima that mean "unbounded". A plan whose box is
+    // +/-3.4e38 is unconstrained wearing a constraint's clothes, and would pass a naive check.
     try expect(plan.ctrl_upper[0] < 1.0e6);
     try expect(plan.ctrl_lower[0] > -1.0e6);
 }
 
-test "★★★ the extra cost channel reproduces a diagonal state cost exactly" {
-    // ── AN EQUIVALENCE THAT CANNOT BE FAKED ──
+test "*** the extra cost channel reproduces a diagonal state cost exactly" {
+    // -- AN EQUIVALENCE THAT CANNOT BE FAKED --
     //
     // The same running cost expressed two ways must give bit-comparable gains: once as
     // `cost.state`, once as an `extra_hessian` diagonal with the matching `extra_gradient`.
     // If the new channel enters `Q_x` or `Q_xx` at the wrong scale, the wrong sign, or the
-    // wrong knot, these diverge — and no amount of weight tuning could make them agree, which
+    // wrong knot, these diverge - and no amount of weight tuning could make them agree, which
     // is what makes it an oracle rather than a smoke test.
     const gpa: Allocator = std.testing.allocator;
     const horizon: u32 = 5;
@@ -6714,8 +6714,8 @@ test "★★★ the extra cost channel reproduces a diagonal state cost exactly"
         try expectApproxEqAbs(x, y, 1.0e-4);
     }
 
-    // ★ AND THE CHANNEL MUST ACTUALLY DO SOMETHING. If both `backward` calls ignored it, the
-    // test above would pass trivially — so check that dropping it changes the answer.
+    // * AND THE CHANNEL MUST ACTUALLY DO SOMETHING. If both `backward` calls ignored it, the
+    // test above would pass trivially - so check that dropping it changes the answer.
     var without: Problem = base;
     without.cost = .{ .state = &zero_state, .control = &control_w, .terminal = &terminal_w };
     _ = backward(without, gains_b, &scratch_b, 1.0e-6);
@@ -6728,14 +6728,14 @@ test "★★★ the extra cost channel reproduces a diagonal state cost exactly"
     try expect(differs);
 }
 
-test "★★★ the task reduction matches a numerical gradient of the task cost" {
-    // ── THE ORACLE: DIFFERENTIATE THE THING ITSELF ──
+test "*** the task reduction matches a numerical gradient of the task cost" {
+    // -- THE ORACLE: DIFFERENTIATE THE THING ITSELF --
     //
-    // `addTaskResidual` claims `Jᵀ·w·r` is the gradient of `0.5·w·|p(q) − target|²`. That claim
+    // `addTaskResidual` claims `J^T*w*r` is the gradient of `0.5*w*|p(q) - target|^2`. That claim
     // is checkable without trusting any of the algebra: nudge each joint, recompute the hand
     // position through forward kinematics, and difference the cost. If the Jacobian convention
     // is transposed, or the weight enters at the wrong power, or the sign is flipped, these
-    // disagree — and none of those could be tuned away.
+    // disagree - and none of those could be tuned away.
     const gpa: Allocator = std.testing.allocator;
     const keeper_xml: []const u8 = @embedFile("tests/fixtures/robot/keeper.xml");
 
@@ -6779,7 +6779,7 @@ test "★★★ the task reduction matches a numerical gradient of the task cost
     const residual: Vec = d.body_xpos[hand] - target;
     addTaskResidual(m.nv, jac, residual, weight, false, gradient, hessian);
 
-    // Numerical: 0.5·w·|p(q) − target|², centred differences on each joint.
+    // Numerical: 0.5*w*|p(q) - target|^2, centred differences on each joint.
     const eps: f32 = 1.0e-3;
     for (0..m.nv) |v| {
         const keep: f32 = d.pos[v];
@@ -6801,7 +6801,7 @@ test "★★★ the task reduction matches a numerical gradient of the task cost
     d.stage = .stale;
     rbt.forward(m, &d);
 
-    // ★ AND THE HESSIAN MUST BE SYMMETRIC AND POSITIVE SEMI-DEFINITE. `JᵀwJ` is both by
+    // * AND THE HESSIAN MUST BE SYMMETRIC AND POSITIVE SEMI-DEFINITE. `J^TwJ` is both by
     // construction; the recursion depends on it, and a transpose slip would break one or other
     // silently rather than loudly.
     for (0..m.nv) |i| {
@@ -6818,15 +6818,15 @@ test "★★★ the task reduction matches a numerical gradient of the task cost
     }
 }
 
-test "★★★ a task cost alone drives the hand to a target, with no joint reference at all" {
-    // ── THE END-TO-END ORACLE, AND THE ONE THE OTHER TWO CANNOT REPLACE ──
+test "*** a task cost alone drives the hand to a target, with no joint reference at all" {
+    // -- THE END-TO-END ORACLE, AND THE ONE THE OTHER TWO CANNOT REPLACE --
     //
     // `backward`'s channel is tested by equivalence, and `addTaskResidual`'s algebra against a
-    // numerical gradient. Neither says `optimize` ASSEMBLES them correctly — wrong knot, wrong
+    // numerical gradient. Neither says `optimize` ASSEMBLES them correctly - wrong knot, wrong
     // sign on the residual, or the Jacobian taken at the wrong rollout state would pass both and
     // fail here.
     //
-    // ★★ AND THE JOINT REFERENCE IS ALL ZEROS ON PURPOSE. If the arm reaches the target while
+    // ** AND THE JOINT REFERENCE IS ALL ZEROS ON PURPOSE. If the arm reaches the target while
     // the only thing asking it to move is the TASK, then the task cost is doing the work. A test
     // that leaves a helpful pose reference in place could be passed by the pose reference alone,
     // which is precisely the confusion this whole feature exists to remove.
@@ -6903,9 +6903,9 @@ test "★★★ a task cost alone drives the hand to a target, with no joint ref
     rbt.forward(m, &d);
 
     const final_gap: f32 = length3(d.body_xpos[hand] - vec(0.55, 0.30, 0.95));
-    // The target is well inside a 1.28 m reach, and 200 steps is 0.8 s — ample.
+    // The target is well inside a 1.28 m reach, and 200 steps is 0.8 s - ample.
     try expect(start_gap > 0.5); // the test would be vacuous if it started there
     try expect(final_gap < 0.10);
-    // ★ AND IT MUST BE A LARGE IMPROVEMENT, not a drift that happens to end nearby.
+    // * AND IT MUST BE A LARGE IMPROVEMENT, not a drift that happens to end nearby.
     try expect(final_gap < 0.2 * start_gap);
 }

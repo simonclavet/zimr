@@ -36,6 +36,7 @@
 //! come from a network or from the simulator itself.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const rbt = @import("robot.zig");
 const dance = @import("robot_dance.zig");
@@ -948,7 +949,7 @@ pub const Replay = struct {
 };
 
 /// How many numbers a policy sees: the simulated character and the reference it is chasing, both in
-/// the root's frame (§ `local`).
+/// the root's frame (section  `local`).
 pub fn observationSize(m: *const rbt.Model) usize {
     return 2 * localSize(m.nbody);
 }
@@ -1464,7 +1465,7 @@ pub const Fleet = struct {
     }
 };
 
-// ── The world model: what it is asked, what it answers, and how well. ──
+// -- The world model: what it is asked, what it answers, and how well. --
 
 /// How the servo's targets are written for a network: two numbers a hinge, six a ball.
 ///
@@ -1733,8 +1734,8 @@ pub fn freeDrift(gpa: Allocator, drift: Drift) void {
     gpa.free(drift.pose);
 }
 
-// ── The checks. Everything above is a convention, and a convention is only worth what it can be
-// caught getting wrong. ──
+// -- The checks. Everything above is a convention, and a convention is only worth what it can be
+// caught getting wrong. --
 
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
@@ -1896,8 +1897,7 @@ test "robot_track: local is blind to where you stand and which way you face - an
         }
         weakest_control = @min(weakest_control, @min(lifted, tilted));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  local: worst change under a yaw and a walk {e:.2}; " ++
+    report.print("\n  local: worst change under a yaw and a walk {e:.2}; " ++
         "weakest change under a lift or a tilt {d:.3}\n", .{
         worst_invariant,
         weakest_control,
@@ -1960,10 +1960,8 @@ test "robot_track: the integrator reproduces the simulator's next state" {
                 worst_rotation = @max(worst_rotation, 2.0 * length3(vec(rel[0], rel[1], rel[2])));
             }
         }
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
         mean_position /= counted;
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  integrator at {d:.0} Hz: worst position {d:.5} m (mean {d:.6}), " ++
+        report.print("  integrator at {d:.0} Hz: worst position {d:.5} m (mean {d:.6}), " ++
             "rotation {d:.6} rad, velocity {e:.2}\n", .{
             1.0 / dt,
             worst_position,
@@ -2048,8 +2046,7 @@ test "robot_track: a bounded action moves every body a bounded amount" {
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  action reach: worst body moved {d:.3} m at 0.2 rad, {d:.3} m at 0.1 rad\n", .{
+    report.print("\n  action reach: worst body moved {d:.3} m at 0.2 rad, {d:.3} m at 0.1 rad\n", .{
         worst[0],
         worst[1],
     });
@@ -2136,10 +2133,8 @@ test "robot_track: the servo on a fixed base - computed torque against the PD la
             mean[law] += off / float(clip.frame_count - 2);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
     for (laws, 0..) |law_spec, law| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("  walk, fixed base, {s}: {d:8.3} deg mean, {d:8.3} worst\n", .{
+        report.print("  walk, fixed base, {s}: {d:8.3} deg mean, {d:8.3} worst\n", .{
             law_spec.name,
             mean[law],
             worst[law],
@@ -2338,8 +2333,7 @@ test "robot_track: D8 - the reference through the floor, left alone or lifted cl
                 }
                 mean_error += total / float(@max(frames, 1));
             }
-            // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-            std.debug.print("\n  D8 {s}, {s}: reference deepest {d:.3} m, typical frame {d:.3} m; " ++
+            report.print("\n  D8 {s}, {s}: reference deepest {d:.3} m, typical frame {d:.3} m; " ++
                 "sim reaches {d:.3} m; pose error {d:.4} m (lift {d:.3} m)\n", .{
                 std.fs.path.basename(path),
                 names[option],
@@ -2584,8 +2578,7 @@ test "robot_track: a sampled window never crosses a segment" {
             try expect(index + replay.capacity > replay.written[window.env]);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  window sampler: {d} of 10000 draws returned a window, all unbroken\n", .{drawn});
+    report.print("\n  window sampler: {d} of 10000 draws returned a window, all unbroken\n", .{drawn});
     try expect(drawn > 5000);
 }
 
@@ -2666,8 +2659,7 @@ test "robot_track: a fleet tracks, falls, is shoved, and records all of it" {
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  fleet: {d} steps x 8 envs, mean reward {d:.3}, {d} episodes, {d} segments, " ++
+    report.print("\n  fleet: {d} steps x 8 envs, mean reward {d:.3}, {d} episodes, {d} segments, " ++
         "{d} of 200 windows drawn; draws of 200 at length 8 / 16 / 32: {d} / {d} / {d}\n", .{
         steps,
         mean_reward,
@@ -2750,8 +2742,7 @@ test "robot_track: a record remembers which clip it was tracking" {
             fleet.targetsAt(env, index, scratch, targets);
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  records by clip: {d} short, {d} long; {d} of them past the short clip's end\n", .{
+    report.print("\n  records by clip: {d} short, {d} long; {d} of them past the short clip's end\n", .{
         seen[0],
         seen[1],
         beyond_short,
@@ -2812,21 +2803,16 @@ test "robot_track: the drift harness, checked with sources that need no training
     defer freeDrift(gpa, oracle);
     const baseline: Drift = try measureDrift(gpa, fleet, .hold_first, 200, steps, baseline_rng.random());
     defer freeDrift(gpa, baseline);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  drift over {d} windows, mean body position error (m) by step:\n" ++
+    report.print("\n  drift over {d} windows, mean body position error (m) by step:\n" ++
         "    oracle     ", .{oracle.windows});
     for (oracle.position) |e| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{d:8.5}", .{e});
+        report.print("{d:8.5}", .{e});
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n    hold first ", .{});
+    report.print("\n    hold first ", .{});
     for (baseline.position) |e| {
-        // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-        std.debug.print("{d:8.5}", .{e});
+        report.print("{d:8.5}", .{e});
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n", .{});
+    report.print("\n", .{});
 
     try expect(oracle.windows > 150 and baseline.windows > 150);
     // The two sources must agree on their first step - the baseline's first acceleration IS the
@@ -2931,8 +2917,7 @@ test "robot_track: the root assist holds the character up, and nothing at zero" 
         }
         ended[i] = fleet.episodes;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  root assist: servo alone ended {d} episodes unassisted, {d} with the root held\n", .{
+    report.print("\n  root assist: servo alone ended {d} episodes unassisted, {d} with the root held\n", .{
         ended[0],
         ended[1],
     });
@@ -3009,8 +2994,7 @@ test "robot_track: the gravity gate - a body lying with the right joint angles n
     const perfect: f32 = reward(trackingError(standing, standing, root), gate);
     const blind: f32 = reward(err, .{});
     const gated: f32 = reward(err, gate);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  gravity gate: lying vs standing - pose error {d:.4} m, height {d:.2} m, up {d:.2}; " ++
+    report.print("\n  gravity gate: lying vs standing - pose error {d:.4} m, height {d:.2} m, up {d:.2}; " ++
         "reward {d:.3} ungated, {d:.5} gated (perfect {d:.3})\n", .{
         err.pose_position,
         err.height,

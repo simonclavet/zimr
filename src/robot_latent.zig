@@ -15,6 +15,7 @@
 //! kernel there is checked against the code here on identical inputs.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zm = @import("zm");
 const zn = @import("zn");
 const rbt = @import("robot.zig");
@@ -1084,7 +1085,7 @@ pub fn policyWith(
     }
 }
 
-// ──────── Tests: the learner ────────
+// -------- Tests: the learner --------
 
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
@@ -1134,8 +1135,7 @@ test "robot_track_st: past the window - the policy's gain carries beyond what it
     const policy_8: f32 = learner.modelLoss(100, 11, true, 8).loss;
     const nothing_24: f32 = learner.modelLoss(100, 11, false, 24).loss;
     const policy_24: f32 = learner.modelLoss(100, 11, true, 24).loss;
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  past the window, in the model: 8 steps nothing {d:.3} policy {d:.3}; " ++
+    report.print("\n  past the window, in the model: 8 steps nothing {d:.3} policy {d:.3}; " ++
         "24 steps nothing {d:.3} policy {d:.3}\n", .{ nothing_8, policy_8, nothing_24, policy_24 });
     try expect(policy_24 < nothing_24);
 }
@@ -1199,20 +1199,17 @@ test "robot_track_st: the policy learns through the model, and is judged in the 
     const policy: ?f32 = try learner.judge(300, 99, false);
     const in_model_zero: InModel = learner.modelLoss(100, 7, false, 8);
     const in_model_policy: InModel = learner.modelLoss(100, 7, true, 8);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  T8d (walk, {d} rounds): policy loss {d:.3} -> {d:.3}, world loss {d:.3}\n", .{
+    report.print("\n  T8d (walk, {d} rounds): policy loss {d:.3} -> {d:.3}, world loss {d:.3}\n", .{
         rounds,
         first_policy_loss,
         last_policy_loss,
         world_loss,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  mean time to failure in the REAL simulator: servo {?d:.2} s, policy {?d:.2} s\n", .{
+    report.print("  mean time to failure in the REAL simulator: servo {?d:.2} s, policy {?d:.2} s\n", .{
         servo,
         policy,
     });
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("  tracking loss IN THE MODEL, same windows, no noise: nothing {d:.3}, policy {d:.3} " ++
+    report.print("  tracking loss IN THE MODEL, same windows, no noise: nothing {d:.3}, policy {d:.3} " ++
         "(actions {d:.4} rad on average)\n", .{ in_model_zero.loss, in_model_policy.loss, in_model_policy.action });
     try expect(in_model_policy.loss < in_model_zero.loss);
 }

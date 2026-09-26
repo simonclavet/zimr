@@ -1,4 +1,4 @@
-//! textures_fog_of_war — port of raylib [textures] example.
+//! textures_fog_of_war - port of raylib [textures] example.
 //! A 25x15 tile map with fog of war. Fog state lives in a tiny 25x15 texture
 //! (one texel per tile: opaque black = unseen, 80% black = explored, clear =
 //! visible) uploaded each frame and drawn stretched over the map. Bilinear

@@ -1,4 +1,4 @@
-// @memset of a non-byte array lowers to a compact C for-loop with a `++` step —
+// @memset of a non-byte array lowers to a compact C for-loop with a `++` step -
 // both the loop form and `++` were unhandled (marker / mis-parse). Also @memcpy
 // and a struct-element fill. Self-checks (returns 0 on success).
 export fn run_test() i32 {

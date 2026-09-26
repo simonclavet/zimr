@@ -1,4 +1,4 @@
-//! import_graph.zig — shared src-module import-graph analysis for the zimr
+//! import_graph.zig - shared src-module import-graph analysis for the zimr
 //! tooling (dag_check, gen_files_md, ...).
 //!
 //! Tokenizer-based `@import("x.zig")` scan (no regex false edges from
@@ -62,7 +62,7 @@ pub fn collectImports(
         // Resolve to a src-node name. File imports map by basename; a few
         // build-wired MODULE imports map to their backing src file so the
         // graph reflects real dependencies (e.g. `@import("zm")` is zimrmath,
-        // imported almost everywhere — it is the engine's true foundation).
+        // imported almost everywhere - it is the engine's true foundation).
         var target: []const u8 = inner;
         if (std.mem.endsWith(u8, inner, ".zig")) {
             target = inner[0 .. inner.len - ".zig".len];

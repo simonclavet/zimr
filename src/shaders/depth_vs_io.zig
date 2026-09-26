@@ -1,7 +1,7 @@
-//! src/shaders/depth_vs_io.zig — typed interface for the depth-in-red
+//! src/shaders/depth_vs_io.zig - typed interface for the depth-in-red
 //! vertex shader. Companion to `depth_vs.zig`.
 //!
-//! One attribute (position — the only thing a depth pass needs; extra
+//! One attribute (position - the only thing a depth pass needs; extra
 //! mesh attributes in the bound buffer are simply not consumed) and one
 //! uniform block: the combined transform plus the linearization window
 //! and mode selector. Keeping everything in a single group-0 UBO means
@@ -37,5 +37,5 @@ pub const Ubo = struct {
     pad2: i32 = 0,
 };
 
-/// Varying outputs — aliases the shared `Interp`.
+/// Varying outputs - aliases the shared `Interp`.
 pub const Outputs = common.Interp;

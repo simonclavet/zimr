@@ -1,4 +1,4 @@
-//! textures_sprite_animation — port of raylib [textures] example.
+//! textures_sprite_animation - port of raylib [textures] example.
 //! Cycle a 6-frame sprite sheet (scarfy) at a fixed speed via drawTextureRec
 //! over normalized-UV sub-rects. PNG decoded at runtime -> GPU texture.
 const std = @import("std");

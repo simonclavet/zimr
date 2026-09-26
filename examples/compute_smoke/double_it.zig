@@ -1,4 +1,4 @@
-//! double_it.zig — the simplest compute kernel: out[i] = in[i] * 2, written in
+//! double_it.zig - the simplest compute kernel: out[i] = in[i] * 2, written in
 //! the kompute DSL form. The author writes only config + Buffers + Params + the
 //! kernel fn; `kompute` generates the g-namespace (extern storage/uniform on GPU,
 //! plain var on CPU), the Ctx type, and the spirv_kernel entry.

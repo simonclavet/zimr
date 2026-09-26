@@ -1,6 +1,6 @@
 // Address-of a local POINTER variable that ESCAPES. `&p` where `p` is a `*S` local
 // produces a `**S` the callee dereferences with `*a0` (a real heap load of the
-// stored pointer). The transpiler collapses `&local` to identity — correct for a
+// stored pointer). The transpiler collapses `&local` to identity - correct for a
 // struct VALUE (whose value is its heap offset) but wrong for a pointer VARIABLE,
 // whose `&p` is the slot's own address. The collapse passed p's value, so the
 // callee dereferenced garbage and mutations through the out-parameter were lost.

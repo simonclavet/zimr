@@ -1,4 +1,4 @@
-//! comptime_mandelbrot — the Mandelbrot set computed ENTIRELY at COMPILE
+//! comptime_mandelbrot - the Mandelbrot set computed ENTIRELY at COMPILE
 //! TIME and baked into the binary as a `const` escape-value grid, then drawn on
 //! the GPU. The graphical sibling of the CLI `comptime_mandelbrot` (which printed
 //! ASCII): same comptime kernel, but the image is painted as colored cells.
@@ -6,9 +6,9 @@
 //! What it shows:
 //!   - Zig comptime: the whole Mandelbrot iteration runs in the compiler; the
 //!     escape grid lives in the read-only data section. Runtime does zero
-//!     fractal math — just maps each baked escape value to a color and draws it.
+//!     fractal math - just maps each baked escape value to a color and draws it.
 //!   - The same `mandelbrotEscape` kernel also runs on the GPU
-//!     (examples/mandelbrot_fs.zig -> SPIR-V -> WGSL) and natively — one source,
+//!     (examples/mandelbrot_fs.zig -> SPIR-V -> WGSL) and natively - one source,
 //!     four execution targets.
 //!   - zm color math at runtime: `Color.fromHSV` (wasm-safe scalar path).
 const std = @import("std");
@@ -28,7 +28,7 @@ const im_center: f32 = 0.0;
 const view_w: f32 = 3.2;
 const view_h: f32 = 2.4;
 
-/// The Mandelbrot iteration — pure function, callable at comptime OR runtime OR
+/// The Mandelbrot iteration - pure function, callable at comptime OR runtime OR
 /// on the GPU. Returns the smooth (continuous) escape value, or null for
 /// interior points.
 fn mandelbrotEscape(cx: f32, cy: f32, max_iter: u32) ?f32 {

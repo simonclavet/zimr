@@ -1,10 +1,10 @@
-//! src/shaders/fluid_discs_vs.zig — instanced SDF-disc VS body (IoT).
+//! src/shaders/fluid_discs_vs.zig - instanced SDF-disc VS body (IoT).
 //!
-//! Ported from the direct `@SpirvType` version to the typed IoT interface — the
+//! Ported from the direct `@SpirvType` version to the typed IoT interface - the
 //! hardest shader in the engine (two read-only storage buffers + both builtins).
 //! Reads the particle centre from `io.positions(ii)` and a per-particle scalar
-//! from `io.density(ii)`, expands a 6-vertex quad, maps sim-pixels → logical
-//! pixels → NDC, and colours by density. Schema in `fluid_discs_vs_io.zig`; the
+//! from `io.density(ii)`, expands a 6-vertex quad, maps sim-pixels -> logical
+//! pixels -> NDC, and colours by density. Schema in `fluid_discs_vs_io.zig`; the
 //! shared varyings in `fluid_discs_common_io.zig`.
 
 const zm = @import("zm");

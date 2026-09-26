@@ -1,13 +1,13 @@
-//! ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host.
+//! ui_drawlists - port of the GL `ui_drawlists` onto the WebGPU UI host.
 //! Background + foreground draw lists (imgui's GetBackground/GetForegroundDrawList):
 //! the background grid renders UNDER every window, the corner watermark renders
-//! ABOVE them. Drag the control window — the grid stays under it, the watermark
+//! ABOVE them. Drag the control window - the grid stays under it, the watermark
 //! over it.
 //!
 //! Review note vs the GL original: it wrote raw packed hex (e.g. `0xFFEF4444`),
 //! but ColorU32 is 0xAABBGGRR (R in the low byte), so that literal is actually
 //! BLUE, not the red the name implied. Here colors are named `Color` literals
-//! packed through `colorToU32` — explicit RGBA, no byte-order trap, and the
+//! packed through `colorToU32` - explicit RGBA, no byte-order trap, and the
 //! constant ones fold at comptime so there's no per-call cost.
 const std = @import("std");
 const Allocator = std.mem.Allocator;

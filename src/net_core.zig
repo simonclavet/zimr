@@ -1,9 +1,9 @@
 //! lint:alias net_core
-//! src/net.zig — the P2P session layer. This is the friendly front door to the
+//! src/net.zig - the P2P session layer. This is the friendly front door to the
 //! whole multiplayer stack: you call `connect(url, room)`, then each frame you
 //! drain `poll()` for events (peers joining/leaving, messages) and use
-//! `broadcast()` / `sendTo()` to talk. Everything underneath — the WebSocket
-//! signaling handshake and the WebRTC offer/answer/ICE dance — is handled for
+//! `broadcast()` / `sendTo()` to talk. Everything underneath - the WebSocket
+//! signaling handshake and the WebRTC offer/answer/ICE dance - is handled for
 //! you, for every peer in the room.
 //!
 //! It runs a FULL MESH: one direct WebRTC connection per peer, so with N people
@@ -13,7 +13,7 @@
 //!
 //! Two channels per connection, matching the game's needs:
 //!   - channel 0 "cursor": unreliable + unordered (fire-and-forget state like a
-//!     mouse position — dropping one is fine, the next one supersedes it).
+//!     mouse position - dropping one is fine, the next one supersedes it).
 //!   - channel 1 "clicks": reliable + ordered (events you can't afford to lose).
 //!
 //! The offerer convention (who sends the SDP offer) avoids "glare" (both sides
@@ -36,7 +36,7 @@ const cq_cap = max_peers * 2 + 8; // control events queued between poll() calls
 const reconnect_cooldown = 30; // poll-calls between reconnect attempts (~0.5s @ 60fps)
 
 /// What `poll` hands back to the game. `message.bytes` points into the buffer
-/// you passed to `poll`, so it's only valid until your next `poll` call — copy
+/// you passed to `poll`, so it's only valid until your next `poll` call - copy
 /// it out if you need to keep it.
 pub const Event = union(enum) {
     /// The server assigned us this peer id (arrives once, right after connect).
@@ -45,9 +45,9 @@ pub const Event = union(enum) {
     peer_joined: u32,
     /// A data channel to a peer just opened and is ready to send/receive on.
     channel_open: ChannelRef,
-    /// A peer's WebRTC connection changed state (connecting → connected, or
-    /// failed / disconnected). Purely informational — the session handles the
-    /// terminal cases itself (see below) — but handy for showing status.
+    /// A peer's WebRTC connection changed state (connecting -> connected, or
+    /// failed / disconnected). Purely informational - the session handles the
+    /// terminal cases itself (see below) - but handy for showing status.
     peer_state: PeerState,
     /// Bytes arrived from a peer on one of the channels.
     message: Message,
@@ -55,11 +55,11 @@ pub const Event = union(enum) {
     /// tells us they left AND when their connection fails/closes on our end.
     peer_left: u32,
     /// The room's host changed to this peer id. The host is simply the
-    /// lowest-id (longest-present) peer, recomputed as peers come and go — useful
+    /// lowest-id (longest-present) peer, recomputed as peers come and go - useful
     /// if your game wants one authority. Check `isHost()` for whether it's you.
     host_changed: u32,
     /// The room is full (already at `max_peers`); the server turned us away. The
-    /// session stops here — try `connect()` with a different room.
+    /// session stops here - try `connect()` with a different room.
     room_full,
 };
 
@@ -68,7 +68,7 @@ pub const Message = struct { peer: u32, channel: u8, bytes: []const u8 };
 pub const PeerState = struct { peer: u32, state: ConnState };
 
 /// The browser's RTCPeerConnection.connectionState, plus our own states, boiled
-/// down. `failed` is where the direct connection gave up — the session then
+/// down. `failed` is where the direct connection gave up - the session then
 /// falls back to relaying this peer through the server and reports `relayed`.
 /// `closed` is terminal (the peer is dropped). `disconnected` is often transient
 /// (it can recover to `connected`), so we surface it but keep the peer.
@@ -79,7 +79,7 @@ const ControlKind = enum { joined_as, peer_joined, peer_state, channel_open, pee
 const ControlEvent = struct { kind: ControlKind, peer: u32, channel: u8 };
 
 // A tiny fixed ring buffer for the small "control" events. Data messages are
-// NOT queued here (they carry bytes) — they're returned straight out of poll.
+// NOT queued here (they carry bytes) - they're returned straight out of poll.
 const ControlQueue = struct {
     items: [cq_cap]ControlEvent,
     head: usize,
@@ -113,7 +113,7 @@ const ControlQueue = struct {
 
 /// `Net(WsT, RtcT)` binds the session layer to a pair of transports. Both the
 /// real browser transports (src/net.zig) and the in-process mock (the mesh test)
-/// go through this. Everything inside is transport-agnostic — it only ever calls
+/// go through this. Everything inside is transport-agnostic - it only ever calls
 /// the `ws`/`rtc` APIs, and this file imports neither.
 pub fn Net(comptime WsT: type, comptime RtcT: type) type {
     return struct {
@@ -214,7 +214,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
                 self.control = ControlQueue.init();
             }
 
-            // The signaling socket dropped (Render slept, network changed, …). Our
+            // The signaling socket dropped (Render slept, network changed, ...). Our
             // peers are effectively gone until we re-handshake, so close those
             // connections, tell the game they left, and schedule a reconnect. We
             // come back with a fresh id and rebuild the mesh from the new WELCOME.
@@ -249,7 +249,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
                 return self.sock != 0 and self.my_id != 0;
             }
 
-            /// True from connect() until disconnect() — including during the brief
+            /// True from connect() until disconnect() - including during the brief
             /// gap while we're reconnecting after a dropped socket.
             pub fn isActive(self: *const Session) bool {
                 return self.want_connected;
@@ -257,7 +257,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
 
             /// The current host's peer id (the lowest-id peer in the room), or 0
             /// if we don't know yet. The host is a deterministic choice everyone
-            /// agrees on — useful if your game wants a single authority.
+            /// agrees on - useful if your game wants a single authority.
             pub fn hostId(self: *const Session) u32 {
                 return self.host_id;
             }
@@ -408,7 +408,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
                                         .channel = @backingInt(ConnState.relayed),
                                     });
                                 } else if (cs == .closed) {
-                                    // Deliberately torn down — drop the peer.
+                                    // Deliberately torn down - drop the peer.
                                     self.removePeer(peer.id);
                                 } else {
                                     self.control.push(.{
@@ -525,7 +525,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
 
             fn handleSignaling(self: *Session, msg: []const u8) void {
                 if (std.mem.startsWith(u8, msg, "FULL")) {
-                    // The room is full; the server turned us away. Stop here — tear
+                    // The room is full; the server turned us away. Stop here - tear
                     // down (without clearing the queue, so room_full survives) so we
                     // don't keep trying to rejoin a room that has no space.
                     self.want_connected = false;
@@ -552,7 +552,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
                         rest = s.rest;
                     }
                 } else if (std.mem.startsWith(u8, msg, "JOINED ")) {
-                    // A newcomer (higher id) — we offer to them.
+                    // A newcomer (higher id) - we offer to them.
                     const id: u32 = std.fmt.parseInt(u32, splitFirst(msg[7..]).tok, 10) catch 0;
                     if (id != 0) {
                         _ = self.addPeer(id, self.my_id < id);
@@ -561,7 +561,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
                     const id: u32 = std.fmt.parseInt(u32, splitFirst(msg[5..]).tok, 10) catch 0;
                     self.removePeer(id);
                 } else if (std.mem.startsWith(u8, msg, "FROM ")) {
-                    // FROM <from> <kind> <data> — the peer's half of the handshake.
+                    // FROM <from> <kind> <data> - the peer's half of the handshake.
                     const a: Split = splitFirst(msg[5..]); // from id
                     const from: u32 = std.fmt.parseInt(u32, a.tok, 10) catch 0;
                     const b: Split = splitFirst(a.rest); // kind
@@ -592,7 +592,7 @@ pub fn Net(comptime WsT: type, comptime RtcT: type) type {
                 ws.send(self.sock, msg);
             }
 
-            // Relay a peer's game data through the signaling server — the fallback
+            // Relay a peer's game data through the signaling server - the fallback
             // when the direct connection failed. The payload is base64'd so binary
             // game bytes survive the text-based signaling channel intact.
             fn relaySend(self: *Session, peer_id: u32, channel: u8, bytes: []const u8) void {

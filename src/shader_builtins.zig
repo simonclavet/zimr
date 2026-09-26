@@ -1,10 +1,10 @@
-//! shader_builtins.zig — the SPIR-V shader DSL: stage-IO decorators, opaque
+//! shader_builtins.zig - the SPIR-V shader DSL: stage-IO decorators, opaque
 //! texture / sampler / storage types, and the texture-sampling + storage-buffer
 //! intrinsics. These emit SPIR-V inline asm (or `@SpirvType` declarations) that
 //! only the SPIR-V backend lowers, so they are SHADER-ONLY.
 //!
 //! They used to live at the tail of `zimrmath.zig` so a shader needed one
-//! import — but `zm` is imported by the whole host too, so editing a shader
+//! import - but `zm` is imported by the whole host too, so editing a shader
 //! intrinsic invalidated every module's cache and forced a full-project
 //! rebuild. Extracted here so touching one only rebuilds shaders. A shader now
 //! imports this module for the GPU-interface layer and `zm` for vector math.
@@ -18,8 +18,8 @@ const float = zm.float;
 // ---- SPIR-V shader decorators ---------------------------------------
 //
 // `location` / `binding` / `zsample2d` emit SPIR-V inline asm that only the
-// SPIR-V backend lowers. On host targets the asm bodies are never analyzed —
-// Zig's lazy compilation only reaches them on a SPIR-V build — so they are not
+// SPIR-V backend lowers. On host targets the asm bodies are never analyzed -
+// Zig's lazy compilation only reaches them on a SPIR-V build - so they are not
 // a host-portability concern. See the module doc above for why they live here
 // (split out of zimrmath so host edits don't rebuild the world).
 
@@ -84,7 +84,7 @@ pub noinline fn zsample2d(handle: u32, uv: Vec2) Vec {
     return Vec{ uv[0], uv[1], float(handle), 0.0 };
 }
 
-/// Sample a 2D texture at an EXPLICIT level-of-detail — the vertex-stage-safe
+/// Sample a 2D texture at an EXPLICIT level-of-detail - the vertex-stage-safe
 /// twin of `zsample2d`.  In shader source, looks like:
 /// ```zig
 /// const c = zm.zsample2d_level(s_height_sampler2d, frag_uv, 0.0);
@@ -113,39 +113,39 @@ pub noinline fn zsample2d_level(handle: u32, uv: Vec2, lod: f32) Vec {
 //
 // 0.17-dev.956 can. `@SpirvType` declares the image/sampled-image types and
 // `@extern(..., .{ .decoration = .{ .descriptor = ... } })` binds them, so the
-// helpers below emit the REAL ops directly — no placeholder, no rewrite, and
+// helpers below emit the REAL ops directly - no placeholder, no rewrite, and
 // the full `spirv-opt -O` can run again. See `src/notes/spikes/` for the
 // minimal proofs and `src/notes/zig-spirv-compiler-interface.md` for the
 // complete compiler-interface contract + a recovery playbook for when the
-// compiler changes (it WILL — every field name and constraint below is a thing
+// compiler changes (it WILL - every field name and constraint below is a thing
 // that has already moved once).
 //
 // WHY THESE ARE FUNCTIONS, NOT FILE-SCOPE CONSTS: `@SpirvType` is only valid on
 // the SPIR-V target, but zimrmath also compiles to host/wasm32. A file-scope
 // `const T = @SpirvType(...)` would be analyzed EAGERLY and break every host
 // build. Wrapping each type in a `fn ... type` keeps it behind Zig's lazy
-// analysis (a `pub fn` is only analyzed when referenced — and only shaders,
+// analysis (a `pub fn` is only analyzed when referenced - and only shaders,
 // built for SPIR-V, ever reference these). The asm bodies are lazy for the same
 // reason `zsample2d`'s is. RULE: never reference any of the four decls below
 // from host code or a host `test`, or you force eager SPIR-V analysis on host.
 
-// ⚠ P3 STATUS (956): the SAMPLE OP works — `sampleLod` inlines to native
+// !! P3 STATUS (956): the SAMPLE OP works - `sampleLod` inlines to native
 // `OpSampledImage` + `OpImageSampleImplicitLod`, and spv2wgsl lowers it to
 // `textureSample(tex, samp, uv)` with separate `texture_2d<f32>` + `sampler`.
 // But the @extern DESCRIPTOR BINDING does NOT yet materialize: an @extern whose
 // pointee is a zero-bit opaque type folds to OpUndef (compiler `constantNavRef`
-// bails for `!hasRuntimeBits` before registering the global — see the interface
+// bails for `!hasRuntimeBits` before registering the global - see the interface
 // doc / spv2wgsl.zig header). So these helpers are the correct target shape and
 // compile, but are NOT usable end-to-end until that blocker is resolved (compiler
 // fix, or an asm-declared-OpVariable workaround). The old `zsample2d`/zspv_rewrite
 // path remains the working sampler path meanwhile.
 
-/// The SPIR-V 2D texture type — a SAMPLED `OpTypeImage` (NOT a combined
+/// The SPIR-V 2D texture type - a SAMPLED `OpTypeImage` (NOT a combined
 /// sampled-image). WGSL has no combined sampler: a texture and its sampler are
 /// SEPARATE bindings, paired at the sample site by `OpSampledImage`, which
 /// spv2wgsl lowers to `textureSample(tex, samp, uv)`. (A combined
-/// `OpTypeSampledImage` *binding* makes spv2wgsl reject the shader — "WGSL
-/// requires separate texture+sampler bindings".) `.sampled = f32` → the WGSL
+/// `OpTypeSampledImage` *binding* makes spv2wgsl reject the shader - "WGSL
+/// requires separate texture+sampler bindings".) `.sampled = f32` -> the WGSL
 /// type `texture_2d<f32>`. `.format = .unknown` (format is only meaningful for
 /// storage images); `.access = .unknown` because Vulkan expresses read/write via
 /// NonReadable/NonWritable decorations, not the image-type access qualifier
@@ -165,7 +165,7 @@ pub fn Texture2D() type {
     } });
 }
 
-/// The SPIR-V sampler type — a `sampler` binding in WGSL.
+/// The SPIR-V sampler type - a `sampler` binding in WGSL.
 pub fn Sampler() type {
     if (comptime !builtin.target.cpu.arch.isSpirV()) {
         return opaque {};
@@ -175,7 +175,7 @@ pub fn Sampler() type {
 
 /// The combined sampled-image type, needed ONLY as the result type of the
 /// `OpSampledImage` that pairs a texture with a sampler inside `sampleLod`. It
-/// is never a binding (WGSL forbids that) — it exists for one instruction.
+/// is never a binding (WGSL forbids that) - it exists for one instruction.
 fn SampledImage2D() type {
     if (comptime !builtin.target.cpu.arch.isSpirV()) {
         return opaque {};
@@ -184,7 +184,7 @@ fn SampledImage2D() type {
 }
 
 /// Pointer to a `Texture2D` binding. UniformConstant storage class
-/// (`addrspace(.constant)`) — where every image/sampler descriptor lives.
+/// (`addrspace(.constant)`) - where every image/sampler descriptor lives.
 pub fn Texture2DPtr() type {
     if (comptime !builtin.target.cpu.arch.isSpirV()) {
         return *const anyopaque;
@@ -203,7 +203,7 @@ pub fn SamplerPtr() type {
 /// Declare a 2D texture descriptor binding. Pair it with a `sampler(...)`
 /// binding and sample the two together with `sampleLod`. The `@extern`
 /// `.descriptor` decoration emits the `OpDecorate DescriptorSet/Binding` that
-/// the old `zm.binding(&s, set, bind)` did — on a real texture, not a `u32`.
+/// the old `zm.binding(&s, set, bind)` did - on a real texture, not a `u32`.
 ///
 /// ```zig
 /// const albedo_tex = zm.texture2D("albedo_tex", 0, 1);
@@ -233,18 +233,18 @@ pub fn sampler(
     });
 }
 
-/// Sample a 2D texture with a sampler, implicit LOD (FRAGMENT stage only —
+/// Sample a 2D texture with a sampler, implicit LOD (FRAGMENT stage only -
 /// implicit LOD needs screen-space derivatives). Replaces `zm.zsample2d` and the
 /// entire `zspv_rewrite` path.
 ///
 /// `inline` is REQUIRED: the zimr shader pipeline is pure-Zig
-/// (build-obj → zspv → spv2wgsl) with NO spirv-opt inlining pass, so the ops
+/// (build-obj -> zspv -> spv2wgsl) with NO spirv-opt inlining pass, so the ops
 /// must land at the call site referencing the global texture + sampler directly.
 /// A non-inline helper would leave a function taking texture/sampler parameters,
 /// which does not lower cleanly.
 ///
 /// The asm references SPIR-V *types* via the `"t"` constraint (NOT as value
-/// operands — that was the wall the prior spike hit): `"t"` resolves through
+/// operands - that was the wall the prior spike hit): `"t"` resolves through
 /// `cg.resolveType` to the module's deduped id, so `%img_ty`/`%smp_ty`/`%si_ty`
 /// match the bindings exactly. `OpSampledImage` combines them; the implicit-LOD
 /// sample yields `vec4` (`%v4f`).
@@ -267,11 +267,11 @@ pub inline fn sampleLod(tex: Texture2DPtr(), samp: SamplerPtr(), uv: Vec2) Vec {
 
 /// Sample a 2D texture at an EXPLICIT level-of-detail. Unlike `sampleLod`
 /// (implicit LOD, which computes screen-space derivatives and is therefore only
-/// valid in UNIFORM control flow — hence the "sample at shaderMain's top" rule),
+/// valid in UNIFORM control flow - hence the "sample at shaderMain's top" rule),
 /// an explicit LOD needs no derivatives, so this is valid in ANY control flow:
 /// inside a helper fn, an `if`, or a loop. Use it to sample outside shaderMain's
 /// uniform top. spv2wgsl lowers it to WGSL `textureSampleLevel(tex, samp, uv,
-/// lod)`. Trade-off: no automatic mip selection — pass the LOD you want (0.0 is
+/// lod)`. Trade-off: no automatic mip selection - pass the LOD you want (0.0 is
 /// the full-resolution mip). Like `sampleLod`, this is `inline` so the sample
 /// lands at the call site referencing the global texture + sampler directly.
 pub inline fn sampleLevel(
@@ -300,9 +300,9 @@ pub inline fn sampleLevel(
 /// The SPIR-V storage 2D image type (`texture_storage_2d<...>` in WGSL). Unlike
 /// the sampled texture, a storage image's `format` is significant and must match
 /// the host-side view format. `fmt` is a Format enum literal (`.rgba8unorm`,
-/// `.r32f`, `.rgba32f`, …), taken as `anytype` so this file never has to name
+/// `.r32f`, `.rgba32f`, ...), taken as `anytype` so this file never has to name
 /// the compiler-internal `std.lang.Type.Spirv.Image.Format` enum (one less
-/// thing to chase when the compiler moves it). `.access = .unknown` — see the
+/// thing to chase when the compiler moves it). `.access = .unknown` - see the
 /// `Texture2D` note on Vulkan access decorations.
 pub fn StorageImage2D(comptime fmt: anytype) type {
     return @SpirvType(.{ .image = .{
@@ -339,8 +339,8 @@ pub fn imageStore(
 }
 
 // ---------------------------------------------------------------------------
-// @SpirvType storage buffers (runtime arrays) — the FIRST end-to-end-working
-// @SpirvType resource path on 956. Unlike samplers/images (zero-bit opaque →
+// @SpirvType storage buffers (runtime arrays) - the FIRST end-to-end-working
+// @SpirvType resource path on 956. Unlike samplers/images (zero-bit opaque ->
 // @extern folds to OpUndef, BLOCKED), a storage-buffer struct has runtime bits,
 // so its @extern materializes as a real `var<storage>` binding. Access is via
 // an asm `OpAccessChain` because plain-Zig `buf.items[i]` mis-lowers on 956
@@ -350,7 +350,7 @@ pub fn imageStore(
 // ---------------------------------------------------------------------------
 
 /// A storage-buffer block holding a single runtime-sized array of `Elem`
-/// (`@SpirvType` runtime array as the trailing struct member — the WGSL/Vulkan
+/// (`@SpirvType` runtime array as the trailing struct member - the WGSL/Vulkan
 /// SSBO shape). Declare a binding with `storageBuffer`, access with
 /// `ssboLoad`/`ssboStore`.
 pub fn StorageBuffer(comptime Elem: type) type {

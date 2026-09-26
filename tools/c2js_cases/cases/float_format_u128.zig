@@ -3,7 +3,7 @@
 //! zig_shr_u128 / zig_div_trunc_u128 / zig_rem_u128 (plus zig_make_u128). The
 //! current C backend emits these WITHOUT the trailing `w` (and with no explicit
 //! bits arg); the transpiler modelled only the `*w` names, so these calls fell to
-//! the unhandled-helper marker (lowered to `0`) — the digits came out wrong, or a
+//! the unhandled-helper marker (lowered to `0`) - the digits came out wrong, or a
 //! Number/BigInt mix threw at runtime. Checksum the printed digits of a spread of
 //! magnitudes; native ground truth vs transpiled must agree.
 

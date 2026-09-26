@@ -1,4 +1,4 @@
-//! robot_demo — a scene table for `src/robot.zig`, in the shape of the 2D physics demo.
+//! robot_demo - a scene table for `src/robot.zig`, in the shape of the 2D physics demo.
 //!
 //! The host knows nothing about any individual scene: it steps whatever `scenes.zig` hands
 //! it, draws the links from the engine's own body poses, and renders a HUD. Adding a scene
@@ -36,8 +36,8 @@ const assertUnreachable = zm.assertUnreachable;
 
 /// Scale text and chrome with the viewport.
 ///
-/// A standalone build renders at DEVICE resolution — a phone reporting a CSS width of 400
-/// gives a canvas near 1080 wide — so a fixed 13-pixel font arrives about four CSS pixels
+/// A standalone build renders at DEVICE resolution - a phone reporting a CSS width of 400
+/// gives a canvas near 1080 wide - so a fixed 13-pixel font arrives about four CSS pixels
 /// tall. Readable in the in-app viewer, invisible in a browser full-screen. Scaling against
 /// the smaller dimension makes a glyph a fixed fraction of the screen instead.
 fn uiScale(w: f32, h: f32) f32 {

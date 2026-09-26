@@ -1,5 +1,5 @@
 //! lint:alias text2d
-//! src/text2d.zig — the backend-generic 2D text stack, MOVED VERBATIM out
+//! src/text2d.zig - the backend-generic 2D text stack, MOVED VERBATIM out
 //! of drawing.zig (GL retirement P1, t1173): FontCache, TTF atlas bake
 //! (`bakeFontAtlas`), `drawWithFont`/`measureWithFont` over `gl: anytype`.
 //! Both backends draw text through this file (wgpu_app builds its Font on
@@ -21,8 +21,8 @@ const ceilPowerOfTwo = zm.ceilPowerOfTwo;
 // ensureUploaded feeds the atlas PIXELS to the renderer, which assigns
 // its own ids).  `Font.texture.id` from the bake pipeline is therefore
 // vestigial; this stub returns a nonzero sentinel so the legacy
-// upload-failed checks stay inert.  (Atlas bilinear filtering — the old
-// rlTextureParameters tail — is the renderer's sampler config now; see
+// upload-failed checks stay inert.  (Atlas bilinear filtering - the old
+// rlTextureParameters tail - is the renderer's sampler config now; see
 // the TextureRef-bilinear item in the improvement queue.)
 fn cpuAtlasTextureId() u32 {
     return 1;
@@ -267,7 +267,7 @@ pub fn bakeFontAtlas(
     // inside the multiplication.  So the whole conversion is one
     // builtin call.  `@floor` is preferred over `@intFromFloat` here
     // because it gives correct results for negative inputs too
-    // (toward -∞ vs toward 0) - pixel offsets at negative widget
+    // (toward -inf vs toward 0) - pixel offsets at negative widget
     // coordinates round the way humans expect.  See
     // `src/notes/zig-0.16-migration-guide.md` for the full
     // result-location rules.
@@ -493,10 +493,10 @@ pub fn loadFontFromTtfData(
     // edges and the sub-pixel selection turns into ugly diagonal
     // steps.  LINEAR averages the 4 nearest texels per sample, so
     // glyph edges blend smoothly across pixel boundaries.  Pairs
-    // with the 2× oversample done by `loadFontDefault`: the atlas
+    // with the 2x oversample done by `loadFontDefault`: the atlas
     // has more glyph data than the display needs, and the
     // bilinear filter does the actual downsample.
-    // (GL bilinear setup removed in P5d — see header note on the stub.)
+    // (GL bilinear setup removed in P5d - see header note on the stub.)
 
     // Step 4: free the CPU image - GPU has the pixels now.  We
     // explicitly DON'T free atlas.glyphs / atlas.recs here; they
@@ -564,7 +564,7 @@ pub fn loadFontFromTtfData(
 /// `drawText`.
 /// `ttf_bytes`: TTF/OTF byte slice.  Typically the result of
 /// `@embedFile("path/to/font.ttf")` at the call site.
-/// `bake_size`: atlas rasterization size in pixels.  Use 2×
+/// `bake_size`: atlas rasterization size in pixels.  Use 2x
 /// your typical render size for crisp downscaling (e.g. 32
 /// for a UI rendering text at 14-16 px).
 /// `codepoints`: which characters to include in the atlas.
@@ -621,7 +621,7 @@ pub fn unloadFontData(
 }
 
 fn unloadTexture(texture: Texture) void {
-    // GL-retirement P5d: no GPU-side unload — the renderer owns residency.
+    // GL-retirement P5d: no GPU-side unload - the renderer owns residency.
     _ = texture;
 }
 
@@ -657,7 +657,7 @@ pub fn unloadFont(
 /// (which is never the default, so no font_cache is needed to guard it). The
 /// font's GPU atlas texture is engine-owned (registered in the renderer) and is
 /// released with the renderer's texture registry at teardown, so it is
-/// intentionally NOT freed here — that keeps this callable from an example's
+/// intentionally NOT freed here - that keeps this callable from an example's
 /// `deinit(gpa, *State)`, which has no renderer handle.
 pub fn unloadFontOwned(gpa: Allocator, font: Font) void {
     if (font.glyphs != null and font.glyphCount > 0) {
@@ -866,8 +866,8 @@ fn loadFontRaylibBitmapImpl(
 
     // Unpack the 1-bit-per-pixel font data into RGBA8.  Mirrors the C loop
     // verbatim: for i = 0 in 32-pixel strides, walk the corresponding u32
-    // word from bit 31 down to bit 0.  Bit set → opaque white; bit clear
-    // → transparent white.
+    // word from bit 31 down to bit 0.  Bit set -> opaque white; bit clear
+    // -> transparent white.
     var counter: usize = 0;
     var i: usize = 0;
     const total_pixels: usize = atlas_size * atlas_size;
@@ -975,7 +975,7 @@ fn loadFontRaylibBitmapImpl(
     core_module.traceLog(tracelog, core_module.LOG_INFO, "FONT: Default font loaded ({d} glyphs)", .{glyph_count});
 }
 
-/// **Legacy alternative:** load the original raylib 8×10
+/// **Legacy alternative:** load the original raylib 8x10
 /// bitmap font as the default.  Available for callers who
 /// want the pixel-perfect retro aesthetic (or who can't
 /// afford the ~34 KB Atkinson TTF in their wasm).  Most code
@@ -1007,7 +1007,7 @@ pub fn unloadFontRaylibBitmapImpl(gpa: Allocator, state: *FontCache) void {
     if (!state.loaded) {
         return;
     }
-    // GL-retirement P5d: no GPU-side unload — the renderer owns residency.
+    // GL-retirement P5d: no GPU-side unload - the renderer owns residency.
     state.font.texture.id = 0;
     state.font.glyphs = null;
     state.font.recs = null;
@@ -1076,7 +1076,7 @@ const code_point = @import("codecs.zig").code_point;
 /// (zg/code_point.zig) which implements the Unicode-recommended
 /// Maximal Subparts algorithm.  Compared to the previous hand-rolled
 /// decoder this is more correct on truncated multibyte sequences:
-/// e.g. for the input "Я" (0xD0, 0xAF) followed by a stray 0xE0,
+/// e.g. for the input 0xD0 0xAF (Cyrillic Ya) followed by a stray 0xE0,
 /// the old code consumed all 3 bytes; the new code stops cleanly
 /// after 2.
 pub fn nextCodepoint(s: []const u8) DecodedCodepoint {
@@ -1179,7 +1179,7 @@ pub fn lower(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     return out;
 }
 
-/// snake_case → PascalCase.
+/// snake_case -> PascalCase.
 pub fn pascal(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     if (s.len == 0) {
         return allocator.alloc(u8, 0);
@@ -1212,7 +1212,7 @@ pub fn pascal(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-/// CamelCase → snake_case.
+/// CamelCase -> snake_case.
 pub fn snake(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     var out = try ArrayList(u8).initCapacity(allocator, s.len * 2);
     defer out.deinit(allocator);
@@ -1229,7 +1229,7 @@ pub fn snake(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-/// snake_case → camelCase.
+/// snake_case -> camelCase.
 pub fn camel(allocator: Allocator, s: []const u8) Allocator.Error![]u8 {
     if (s.len == 0) {
         return allocator.alloc(u8, 0);
@@ -1529,8 +1529,8 @@ pub fn draw(
         // Footgun-detector: the silent return
         // here was the cause of the "text shows on desktop
         // but invisible on phone" bug for ui_smoke_button +
-        // ui_dock_basic.  No font loaded → `texture.id == 0`
-        // → submit nothing → look fine, until you notice no
+        // ui_dock_basic.  No font loaded -> `texture.id == 0`
+        // -> submit nothing -> look fine, until you notice no
         // labels.  Log a one-shot warning so the next time
         // someone forgets a font load it surfaces in
         // browser devtools console immediately rather than
@@ -1646,7 +1646,7 @@ pub fn drawCodepoints(
 }
 
 // Measurement (no alloc)
-/// Measure the width × height (px) of a string with explicit
+/// Measure the width x height (px) of a string with explicit
 /// font, size, and per-glyph spacing.  Width returned in `.x`,
 /// height in `.y`.  Multi-line strings ('\n' separated) yield
 /// the max-line width and the cumulative height including line
@@ -1825,7 +1825,7 @@ pub fn measureCodepoints(
 // designed around C's lack of a slice type and lack of stdlib parsing.
 // Zig has both.  The Zig-native equivalents are strictly better:
 //   raylib                          | Zig std
-//   ─────────────────────────────────
+//   ---------------------------------
 //   TextCopy(dst, src)              | @memcpy(dst, src) or std.mem.copyForwards
 //   TextIsEqual(a, b)               | std.mem.eql(u8, a, b)
 //   TextFindIndex(s, needle)        | std.mem.indexOf(u8, s, needle)
@@ -1875,7 +1875,7 @@ pub fn isFontValid(font: Font) bool {
 // stubs are no-ops; the cleanup code paths these support are never
 // exercised by tests anyway.
 
-// loadCodepoints / loadUTF8 - UTF-8 ↔ codepoint conversion
+// loadCodepoints / loadUTF8 - UTF-8 <-> codepoint conversion
 /// Decode a UTF-8 string into a heap-allocated array of codepoints.
 /// The returned slice carries its length; free with `gpa.free(slice)`.
 /// Empty input returns an empty slice (not an error).
@@ -1977,7 +1977,7 @@ pub fn loadUTF8(
 // `loadFontDefault` (carved out of the atlas during init).  For
 // user-globalDefaultFont().loaded TTF fonts (post Step 60), they will be populated by the
 // glyph rasterizer.
-// Line height: fixed 1.5× baseSize on '\n' (matches raylib).  Custom
+// Line height: fixed 1.5x baseSize on '\n' (matches raylib).  Custom
 // line spacing isn't currently exposed (raylib has the same TODO).
 /// Draw s onto an Image using a custom font.  CPU-side equivalent
 /// of `drawTextEx`.
@@ -2023,7 +2023,7 @@ pub fn imageDrawTextWithFont(
         const idx: usize = getGlyphIndex(font, cp);
 
         if (cp == '\n') {
-            // 1.5× line-height (matches raylib).
+            // 1.5x line-height (matches raylib).
             off_y += base_f * 1.5;
             off_x = 0;
         } else if (cp != ' ' and cp != '\t') {
@@ -2102,9 +2102,9 @@ const orange: Color = .{ .r = 255, .g = 161, .b = 0, .a = 255 };
 const red: Color = .{ .r = 230, .g = 41, .b = 55, .a = 255 };
 
 /// Draw the current FPS at (`pos_x`, `pos_y`).  Color codes:
-///   ≥ 30 fps  →  lime    (good)
-///   15-29 fps →  orange  (warning)
-///   < 15 fps  →  red     (low)
+///   >= 30 fps  ->  lime    (good)
+///   15-29 fps ->  orange  (warning)
+///   < 15 fps  ->  red     (low)
 /// Uses 20-pixel default font.
 /// Reads `fps.average` (rolling FPS via `core.getFPS`),
 /// `font_cache.font` (default `Font` for the digit glyphs).
@@ -2150,12 +2150,12 @@ pub fn drawTextCodepoint(
 // `MeasureTextEx` took a null-terminated C string.  zimr already
 // had Zig-native slice-shape implementations under shorter names
 // (`draw`, `drawWithFont`, `drawPro`, `measure`, `measureWithFont`) - the C-
-// shape variants were thin `[*:0]` → slice wrappers.
+// shape variants were thin `[*:0]` -> slice wrappers.
 // Migration cheat sheet:
-//   z.text.drawText("hi", x, y, sz, c)        → z.text.draw("hi", x, y, sz, c)
-//   z.text.drawTextEx(font, "hi", p, sz, sp, c)→ z.text.drawWithFont(font, "hi", p, sz, sp, c)
-//   z.text.measureText("hi", sz)              → z.text.measure("hi", sz)
-//   z.text.measureTextWithFont(font, "hi", sz, sp)  → z.text.measureWithFont(font, "hi", sz, sp)
+//   z.text.drawText("hi", x, y, sz, c)        -> z.text.draw("hi", x, y, sz, c)
+//   z.text.drawTextEx(font, "hi", p, sz, sp, c)-> z.text.drawWithFont(font, "hi", p, sz, sp, c)
+//   z.text.measureText("hi", sz)              -> z.text.measure("hi", sz)
+//   z.text.measureTextWithFont(font, "hi", sz, sp)  -> z.text.measureWithFont(font, "hi", sz, sp)
 // Zig string literals (`"hi"`) coerce to both `[*:0]const u8` and
 // `[]const u8`, so existing call sites with literals just work.
 // For runtime-built strings, you keep the slice you already have
@@ -2267,7 +2267,7 @@ pub fn measureTextCodepoints(
 // `std.mem.replaceOwned` / manual string ops directly.
 
 // ===========================================================================
-// Atlas baker - TrueType glyphs → packed RGBA8 atlas image
+// Atlas baker - TrueType glyphs -> packed RGBA8 atlas image
 // ===========================================================================
 // Takes a parsed TrueType font and a list of codepoints to bake,
 // rasterizes each glyph at the requested pixel size, packs the
@@ -2313,7 +2313,7 @@ test "genImageFontAtlas: signature is reachable as a function pointer" {
 }
 
 // ===========================================================================
-// loadFontFromTtfData - end-to-end: parse TTF → bake atlas → upload → Font
+// loadFontFromTtfData - end-to-end: parse TTF -> bake atlas -> upload -> Font
 // ===========================================================================
 // One-call entry point for loading a custom font from in-memory TTF
 // or OTF bytes.  Combines `truetype.loadFontFromTtf`,
@@ -2367,7 +2367,7 @@ pub fn loadFontFromMemory(
 // ===========================================================================
 // Default bitmap font (embedded) - was previously src/font_default.zig
 // ===========================================================================
-// raylib's built-in 8×10 bitmap font.  224 glyphs packed into a 128×128
+// raylib's built-in 8x10 bitmap font.  224 glyphs packed into a 128x128
 // 1-bit-per-pixel atlas (512 u32 = 16384 bits) plus a per-glyph width
 // array.  This is the font the engine falls back to when no TTF has been
 // globalDefaultFont().loaded - `drawText(...)` uses it implicitly via `getFontDefault()`.
@@ -2429,7 +2429,7 @@ test "encodeCodepoint: ASCII 'A' is one byte 0x41" {
     try expect(out.bytes[0] == 0x41);
 }
 
-test "encodeCodepoint: '€' is three bytes E2 82 AC" {
+test "encodeCodepoint: U+20AC is three bytes E2 82 AC" {
     const out: Utf8Bytes = encodeCodepoint(0x20AC); // EURO SIGN
     try expect(out.len == 3);
     try expect(out.bytes[0] == 0xE2);
@@ -2477,7 +2477,7 @@ test "countCodepoints: multi-byte counts as one each" {
     try expect(countCodepoints("hi 😀") == 4); // 1+1+1+4 = 7 bytes, 4 cp
 }
 
-// Round-trip: encode → decode brings us back to the same codepoint.
+// Round-trip: encode -> decode brings us back to the same codepoint.
 test "encode/decode round-trip" {
     const codepoints = [_]u21{ 'A', 0xE9, 0x20AC, 0x1F600, 0x10FFFF };
     for (codepoints) |cp| {
@@ -2493,7 +2493,7 @@ test "encode/decode round-trip" {
 // Case conversion
 // ===========================================================================
 
-test "upper: 'hello' → 'HELLO'" {
+test "upper: 'hello' -> 'HELLO'" {
     const out: []u8 = try upper(std.testing.allocator, "hello");
     defer std.testing.allocator.free(out);
     try expectEqualStrings("HELLO", out);
@@ -2505,7 +2505,7 @@ test "upper: leaves digits / punctuation alone" {
     try expectEqualStrings("ABC 123!", out);
 }
 
-test "lower: 'HELLO' → 'hello'" {
+test "lower: 'HELLO' -> 'hello'" {
     const out: []u8 = try lower(std.testing.allocator, "HELLO");
     defer std.testing.allocator.free(out);
     try expectEqualStrings("hello", out);
@@ -2515,19 +2515,19 @@ test "lower: 'HELLO' → 'hello'" {
 // Case style transforms
 // ===========================================================================
 
-test "pascal: 'hello_world' → 'HelloWorld' (splits on underscore)" {
+test "pascal: 'hello_world' -> 'HelloWorld' (splits on underscore)" {
     const out: []u8 = try pascal(std.testing.allocator, "hello_world");
     defer std.testing.allocator.free(out);
     try expectEqualStrings("HelloWorld", out);
 }
 
-test "snake: 'helloWorld' → 'hello_world'" {
+test "snake: 'helloWorld' -> 'hello_world'" {
     const out: []u8 = try snake(std.testing.allocator, "helloWorld");
     defer std.testing.allocator.free(out);
     try expectEqualStrings("hello_world", out);
 }
 
-test "camel: 'hello_world' → 'helloWorld' (splits on underscore)" {
+test "camel: 'hello_world' -> 'helloWorld' (splits on underscore)" {
     const out: []u8 = try camel(std.testing.allocator, "hello_world");
     defer std.testing.allocator.free(out);
     try expectEqualStrings("helloWorld", out);
@@ -2677,7 +2677,7 @@ test "loadUTF8: invalid codepoint becomes U+FFFD replacement" {
 
 test "loadCodepoints: 3-codepoint multi-byte UTF-8 roundtrip" {
     const ta: Allocator = std.testing.allocator;
-    // 'é' = U+00E9 (2 bytes), '中' = U+4E2D (3 bytes), '😀' = U+1F600 (4 bytes).
+    // U+00E9 is 2 bytes in UTF-8, U+4E2D is 3 bytes, U+1F600 is 4 bytes.
     const input: []const u8 = "é中😀";
     const cps: []i32 = try loadCodepoints(ta, input);
     defer ta.free(cps);
@@ -2693,9 +2693,9 @@ test "loadCodepoints: 3-codepoint multi-byte UTF-8 roundtrip" {
 
 // imageDrawText / imageDrawTextWithFont - Roadmap Step 4
 // The default font's per-glyph CPU bitmaps are populated on first
-// `getFontDefault()` call, which goes through rlgl.fwd → rlgl GPU
+// `getFontDefault()` call, which goes through rlgl.fwd -> rlgl GPU
 // upload - not available on host.  So we test the *defensive* paths
-// here: null/zero-size dst → no crash; uninitialized font → no crash.
+// here: null/zero-size dst -> no crash; uninitialized font -> no crash.
 // Visual correctness is verified in smoke + the example output.
 test "imageDrawText: null dst data is a no-op" {
     var dst: Image = .{
@@ -2742,7 +2742,7 @@ test "nextCodepoint: ASCII still works" {
     try expect(dc.codepoint == 'A' and dc.bytes == 1);
 }
 
-test "nextCodepoint: 2-byte (Cyrillic Я)" {
+test "nextCodepoint: 2-byte (Cyrillic Ya, U+042F)" {
     const dc: DecodedCodepoint = nextCodepoint("Я");
     try expect(dc.codepoint == 0x042F and dc.bytes == 2);
 }
@@ -2757,12 +2757,12 @@ test "nextCodepoint: 4-byte emoji" {
     try expect(dc.codepoint == 0x1F980 and dc.bytes == 4);
 }
 
-test "nextCodepoint: empty input → ? marker, bytes=1" {
+test "nextCodepoint: empty input -> ? marker, bytes=1" {
     const dc: DecodedCodepoint = nextCodepoint("");
     try expect(dc.codepoint == 0x3F and dc.bytes == 1);
 }
 
-test "nextCodepoint: orphan continuation byte → ? marker" {
+test "nextCodepoint: orphan continuation byte -> ? marker" {
     // 0x80 is a continuation byte without a lead - invalid.
     const bad = [_]u8{0x80};
     const dc: DecodedCodepoint = nextCodepoint(&bad);
@@ -2782,7 +2782,7 @@ test "nextCodepoint: truncated 3-byte sequence advances by 2 (Maximal Subparts)"
 }
 
 test "countCodepoints: mixed-width string" {
-    // "Hi世🦀" = 1+1+3+4 bytes = 9 bytes; 4 codepoints.
+    // "Hi" + U+4E16 + U+1F980 = 1+1+3+4 bytes = 9 bytes; 4 codepoints.
     try expect(countCodepoints("Hi世🦀") == 4);
 }
 
@@ -2790,7 +2790,7 @@ test "countCodepoints: mixed-width string" {
 // Without an embedded TTF, we can only exercise:
 //   - The error-paths (NoCodepoints on empty input)
 //   - The FontAtlas struct shape (compiles, exports correctly)
-//   - The deinit balance (uses test allocator → leak detection
+//   - The deinit balance (uses test allocator -> leak detection
 //     would fire on imbalance)
 // Real visual / metric correctness gets verified in Turn 14 when
 // examples/text_layout.zig is updated to load a TTF.
@@ -2858,7 +2858,7 @@ test "LoadFontError: contains the documented variants" {
 
 // ===========================================================================
 // unloadFontData / unloadFont / Font.deinit signatures and leak-tightness
-// Added in aggressive sweep along with the [*]→slice migration:
+// Added in aggressive sweep along with the [*]->slice migration:
 // `unloadFontData` now takes `[]GlyphInfo`, `Font.deinit` takes a real
 // allocator (was previously broken - wrong arity, never compiled).
 // ===========================================================================
@@ -2906,8 +2906,8 @@ test "unloadFont: signature takes allocator + font_cache + font (regression)" {
 }
 
 // ===========================================================================
-// Text → Image rasterization (moved from image_mod.zig, structure-plan S0):
-// these are the image↔text cycle's image-side fns — they need FontCache,
+// Text -> Image rasterization (moved from image_mod.zig, structure-plan S0):
+// these are the image<->text cycle's image-side fns - they need FontCache,
 // so they live with the fonts.  `image` is the CPU image library.
 // ===========================================================================
 const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
@@ -2919,7 +2919,7 @@ const text2d = @This(); // the file's own container, for self-referring decls
 /// Background is fully transparent (alpha 0); glyphs tinted by `tint`.
 /// Reads: `line_spacing` (forwarded to `text.measureWithFont` to size
 /// the destination image - only matters when `s` contains '\n').
-/// Returns a 1×1 transparent image for empty input or an empty
+/// Returns a 1x1 transparent image for empty input or an empty
 /// font - always a valid, drawable result.
 pub fn imageTextWithFont(
     gpa: Allocator,
@@ -2960,7 +2960,7 @@ pub fn imageTextWithFont(
 /// default font.  Defaults `spacing` to `fontSize / 10` (matching
 /// raylib).  Caller frees with `unloadImage(gpa, image)` using the
 /// same allocator.
-/// Empty string returns a 1×1 transparent image (so the result is
+/// Empty string returns a 1x1 transparent image (so the result is
 /// always valid for `imageDraw` etc.).
 /// Allocate a new RGBA8 `Image` sized to fit `s` rendered in the
 /// default font.  Convenience wrapper around `imageTextWithFont`:
@@ -2968,7 +2968,7 @@ pub fn imageTextWithFont(
 /// (default font's 10 px base height).
 /// Reads: `line_spacing` (forwarded to `imageTextWithFont`, used only
 /// when `s` contains '\n').
-/// Empty string returns a 1×1 transparent image (so the result is
+/// Empty string returns a 1x1 transparent image (so the result is
 /// always valid for `imageDraw` etc.).
 pub fn imageText(
     gpa: Allocator,

@@ -10,6 +10,7 @@
 //! underneath change (a native SPIR-V one, one day) without these tests changing at all.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const zn = @import("zn");
 const zm = @import("zm");
 const rbt = @import("robot.zig");
@@ -80,8 +81,7 @@ test "robot_latent_kit: the kit's rollout matches the CPU model's own step" {
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  kit rollout vs CPU step, 8 steps, 291 features: worst difference {e}\n", .{worst});
+    report.print("\n  kit rollout vs CPU step, 8 steps, 291 features: worst difference {e}\n", .{worst});
     try expect(worst <= 1.0e-5);
 }
 
@@ -173,8 +173,7 @@ fn gradientsMatch(lead: u32) !void {
         }
     }
     try expect(at == kit.param_count);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  kit gradients vs zimrnum (lead {d}), {d} weights: " ++
+    report.print("\n  kit gradients vs zimrnum (lead {d}), {d} weights: " ++
         "worst difference {e} (largest gradient {e})\n", .{
         lead,
         at,
@@ -336,8 +335,7 @@ test "robot_latent_kit: Adam on the kit takes the CPU model's step" {
     for (kit_weights[0..kit.param_count], packed_weights) |gpu, cpu| {
         worst = @max(worst, @abs(gpu - cpu));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  kit Adam vs AdamSet, 3 steps, {d} weights: worst difference {e}\n", .{
+    report.print("\n  kit Adam vs AdamSet, 3 steps, {d} weights: worst difference {e}\n", .{
         kit.param_count,
         worst,
     });
@@ -698,8 +696,7 @@ test "robot_latent_kit: trained on gathered windows, the kit follows the CPU mod
             last[1] += gpu / 10.0;
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  gathered training, 60 steps (means of the first and last ten): CPU {d:.4} -> {d:.4}, " ++
+    report.print("\n  gathered training, 60 steps (means of the first and last ten): CPU {d:.4} -> {d:.4}, " ++
         "kit {d:.4} -> {d:.4}, worst relative gap {e}\n", .{
         first[0],
         last[0],
@@ -981,8 +978,7 @@ test "robot_latent_kit: the policy acts in the rollout, and the kit follows the 
             }
         }
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  policy in the rollout, 8 steps: worst action difference {e}, worst state {e}\n", .{
+    report.print("\n  policy in the rollout, 8 steps: worst action difference {e}, worst state {e}\n", .{
         worst_action,
         worst_state,
     });
@@ -1130,8 +1126,7 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
         }
     }
     try expect(at == kit.p_at + kit.policy_count);
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  policy gradients vs zimrnum, {d} weights: worst difference {e} (largest {e})\n", .{
+    report.print("\n  policy gradients vs zimrnum, {d} weights: worst difference {e} (largest {e})\n", .{
         kit.policy_count,
         worst,
         largest,
@@ -1216,8 +1211,7 @@ test "robot_latent_kit: Adam moves only the policy's weights, and takes zimrnum'
     for (expected, after[kit.p_at..][0..kit.policy_count]) |cpu, gpu| {
         worst = @max(worst, @abs(cpu - gpu));
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  policy Adam vs zimrnum, 3 steps, {d} weights: worst {e}; world model untouched\n", .{
+    report.print("\n  policy Adam vs zimrnum, 3 steps, {d} weights: worst {e}; world model untouched\n", .{
         kit.policy_count,
         worst,
     });
@@ -1318,8 +1312,7 @@ test "robot_latent_kit: the policy trained on gathered windows follows the CPU l
         }
         last = cpu;
     }
-    // lint:off debug-print: test-only numbers for the plan journal; tests never run on wasm
-    std.debug.print("\n  policy on gathered windows, 30 updates: CPU loss {d:.4} -> {d:.4}, " ++
+    report.print("\n  policy on gathered windows, 30 updates: CPU loss {d:.4} -> {d:.4}, " ++
         "worst relative gap to the kit {e}\n", .{
         first,
         last,

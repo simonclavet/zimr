@@ -1,4 +1,4 @@
-//! examples/mandel_julia_fs_io.zig — schema for the mandel_julia_fs shader.
+//! examples/mandel_julia_fs_io.zig - schema for the mandel_julia_fs shader.
 //! Declares Inputs / Outputs / Ubo consumed by `mandel_julia_fs.zig`
 //! (shader body) and shared with the CPU host.
 
@@ -21,7 +21,7 @@ pub const Ubo = struct {
     _pad0: f32 = 0,
     resolution: Vec2,
     max_iter: f32,
-    /// Morph parameter ∈ [0, 1]: 0=mandelbrot, 1=julia.
+    /// Morph parameter in [0, 1]: 0=mandelbrot, 1=julia.
     t: f32,
     /// Julia parameter (the `c` constant at t=1).
     julia_c: Vec2,

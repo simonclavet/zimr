@@ -1,7 +1,7 @@
 //! lint:alias renderer_trait
 // src/renderer_trait.zig - renderer-polymorphic immediate-mode interface.
-// The convention from `notes/claude.md` → Architectural commitments
-// → "`gl: anytype` for renderer-polymorphic scene code": scene-
+// The convention from `notes/claude.md` -> Architectural commitments
+// -> "`gl: anytype` for renderer-polymorphic scene code": scene-
 // drawing functions take their renderer as `gl: anytype` and call
 // the standard immediate-mode surface (`gl.begin`, `gl.end`,
 // `gl.vertex3f`, etc.) on it.  Both the WebGPU backend (WgpuGl)
@@ -27,7 +27,7 @@
 const raster = @import("raster.zig");
 
 // zmath-adoption Z3: `renderer_trait.zig` is fully migrated onto
-// `math.zig` (`zmath`).  Its one matrix path (`multMatrix` →
+// `math.zig` (`zmath`).  Its one matrix path (`multMatrix` ->
 // `matToArr`) used to wrap the matrix in a `matrixToZm` conversion;
 // once `Matrix` collapsed to `zm.Mat` that became the identity
 // and was deleted.  No `zimrmath.zig` dependency remains.
@@ -145,7 +145,7 @@ test "assertIsGlContext: SwAdapter satisfies the trait" {
     assertIsGlContext(&adapter);
 }
 
-// Concrete renderer types satisfy the trait directly — no adapter
+// Concrete renderer types satisfy the trait directly - no adapter
 // wrap needed.  The whole point: 2D draw code takes `gl: anytype` and
 // accepts any renderer at any call site, with zero allocation and
 // zero indirection.

@@ -1,25 +1,25 @@
-//! examples/mocap_viewer — a BVH scrubber you can drop files onto.
+//! examples/mocap_viewer - a BVH scrubber you can drop files onto.
 //!
 //! Reproduces the core of **BVHView** (and its descendant flomo, Simon's mocap tool): load a
 //! motion-capture clip, play it, scrub it, and compare several at once in different colours.
 //!
-//! ★ IT OPENS BOTH `.bvh` AND `.fbx`, and the code below barely notices. FBX is normalised into
+//! * IT OPENS BOTH `.bvh` AND `.fbx`, and the code below barely notices. FBX is normalised into
 //! `codecs.bvh.Data` at load, so the skeleton conversion, sampling, forward kinematics and the
-//! whole timeline are written once. That is the dividend of flomo's design decision — normalise
-//! into BVH rather than build a parallel representation — and it is why adding a format this
+//! whole timeline are written once. That is the dividend of flomo's design decision - normalise
+//! into BVH rather than build a parallel representation - and it is why adding a format this
 //! much larger cost one branch in `addClip`.
 //!
 //! What it exercises that nothing else in the tree did:
-//!   · `codecs.bvh` — the parser, on real captures rather than fixtures
-//!   · `draw3d.loadBvhSkeletalClip` — BVH into `ModelSkeleton` + `ModelAnimation`
-//!   · `web.userfile` — the first RUNTIME file input zimr has ever had. Every other example
+//!   * `codecs.bvh` - the parser, on real captures rather than fixtures
+//!   * `draw3d.loadBvhSkeletalClip` - BVH into `ModelSkeleton` + `ModelAnimation`
+//!   * `web.userfile` - the first RUNTIME file input zimr has ever had. Every other example
 //!     gets its assets from `@embedFile` at comptime.
 //!
-//! ── ★ THE UNIT SELECTOR IS NOT A NICETY ──
+//! -- * THE UNIT SELECTOR IS NOT A NICETY --
 //!
 //! BVH carries no unit. The load-time guess ("taller than 10 units, so it must be centimetres")
 //! is right for one of the two real fixtures and WRONG for the other: `0005_2FeetJump001` is
-//! 61.7 units tall, which the guess reads as 0.62 m — a knee-high dancer. At 0.0254 (inches) it
+//! 61.7 units tall, which the guess reads as 0.62 m - a knee-high dancer. At 0.0254 (inches) it
 //! is 1.57 m, which is a person. Both BVHView (`bvhview.c:3656`) and flomo (`flomo.cpp:1327`)
 //! ship the same five buttons rather than a cleverer heuristic, so this does too. Without them
 //! the viewer looks broken on the second file it is handed.
@@ -40,7 +40,7 @@ const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// The default clip, so the viewer is never blank: 10 seconds of `dance1_subject2`, frames
-/// 1200-1800 (20 s to 30 s in), where the dance has actually got going — the opening seconds
+/// 1200-1800 (20 s to 30 s in), where the dance has actually got going - the opening seconds
 /// are mostly the performer standing still.
 ///
 /// Trimmed from a 43 MB original, which cannot be embedded: the whole launcher is 13 MB. Cut
@@ -50,7 +50,7 @@ const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 ///
 ///     bvh_trim <source>/dance1_subject2.bvh examples/mocap_viewer/dance1_20s.bvh 1200 600
 ///
-/// The 43 MB source is NOT in the repo — it is the one capture nothing reads at runtime, so
+/// The 43 MB source is NOT in the repo - it is the one capture nothing reads at runtime, so
 /// vendoring it would cost more than every other fixture combined. Re-cutting this clip means
 /// fetching it from the capture bundle first; `assets/dance1_subject2_300.bvh` is the same take
 /// at 300 frames if all you need is something to parse.
@@ -65,7 +65,7 @@ const max_file_bytes: usize = 64 << 20;
 
 const max_clips: usize = 8;
 
-/// The five unit choices both reference viewers offer. `auto` is not a unit at all — it
+/// The five unit choices both reference viewers offer. `auto` is not a unit at all - it
 /// normalises whatever the file says to a 1.8 m figure, which is the only option that is right
 /// for every file.
 const Units = enum {
@@ -134,7 +134,7 @@ const State = struct {
     show_axes: bool = false,
 
     /// Where the Load button is drawn, so the invisible `<input type="file">` can be parked on
-    /// top of it. See `web.userfile` — a wasm-drawn button is not a user gesture.
+    /// top of it. See `web.userfile` - a wasm-drawn button is not a user gesture.
     picker_rect: [4]f32 = .{ 0, 0, 0, 0 },
 
     status: [128]u8 = @splat(0),
@@ -164,7 +164,7 @@ fn setStatus(s: *State, comptime fmt: []const u8, args: anytype) void {
 /// Parse `bytes` and append the result as a new clip.
 ///
 /// The BVH `Data` is a scratch value: everything the viewer needs is copied into the engine
-/// types by `loadBvhSkeletalClip`, so the parse is freed before this returns. That matters —
+/// types by `loadBvhSkeletalClip`, so the parse is freed before this returns. That matters -
 /// `Data` holds the whole motion matrix, which for a real capture is most of the file.
 fn addClip(s: *State, gpa: Allocator, bytes: []const u8, name: []const u8) !void {
     if (s.clip_count >= max_clips) {
@@ -172,13 +172,13 @@ fn addClip(s: *State, gpa: Allocator, bytes: []const u8, name: []const u8) !void
         return;
     }
 
-    // ★ THE FORMAT IS SNIFFED FROM THE BYTES, NOT THE FILE NAME. A dropped file's name is
-    // whatever the user called it, and on the web there is no path at all — but an FBX opens
+    // * THE FORMAT IS SNIFFED FROM THE BYTES, NOT THE FILE NAME. A dropped file's name is
+    // whatever the user called it, and on the web there is no path at all - but an FBX opens
     // with a 23-byte magic, so the content answers definitively.
     //
     // Both branches end at the SAME `bvh.Data`, which is the payoff of normalising FBX into
-    // BVH rather than into a parallel representation: everything below this point — the
-    // skeleton conversion, sampling, forward kinematics, the timeline — never learns which
+    // BVH rather than into a parallel representation: everything below this point - the
+    // skeleton conversion, sampling, forward kinematics, the timeline - never learns which
     // format it came from.
     var data: z.codecs.bvh.Data = if (z.codecs.fbx.isBinary(bytes)) blk: {
         var scene: z.codecs.fbx.Scene = z.codecs.fbx.loadScene(gpa, bytes) catch |err| {
@@ -190,8 +190,8 @@ fn addClip(s: *State, gpa: Allocator, bytes: []const u8, name: []const u8) !void
         const hint: ?f32 = z.codecs.bvh.fbxFrameTimeHint(&scene);
         const fps: f32 = if (hint) |ft| (if (ft > 0) 1.0 / ft else 30.0) else 30.0;
         break :blk z.codecs.bvh.fromFbx(gpa, &scene, .{ .fps = fps }) catch |err| {
-            // A valid FBX that simply is not a character — an optical-marker capture or a
-            // blend-shape rig — deserves that answer rather than "parse failed".
+            // A valid FBX that simply is not a character - an optical-marker capture or a
+            // blend-shape rig - deserves that answer rather than "parse failed".
             if (err == z.codecs.bvh.Error.NoSkeleton) {
                 setStatus(s, "{s}: no skeleton (mesh or marker data?)", .{name});
             } else {
@@ -315,8 +315,8 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 /// Draw one posed skeleton: a joint marker per bone and a line to its parent.
 ///
-/// Deliberately the wireframe view, matching `flomo.cpp:887` — capsules with analytical
-/// shadows and ambient occlusion are a separate arc (see `mocap_plan.md` §7a) and would
+/// Deliberately the wireframe view, matching `flomo.cpp:887` - capsules with analytical
+/// shadows and ambient occlusion are a separate arc (see `mocap_plan.md` section 7a) and would
 /// obscure whether the POSE is right, which is what this example exists to show.
 fn drawSkeleton(
     gl: *z.WgpuGl,
@@ -345,7 +345,7 @@ fn drawSkeleton(
             z.drawLine3D(gl, p, pp, if (is_end) end_color else c.color);
         }
 
-        // An RGB triad is the fastest way to SEE a wrong rotation order — the single most
+        // An RGB triad is the fastest way to SEE a wrong rotation order - the single most
         // likely BVH bug, since real files disagree (ZYX, XYZ, ZXY all occur).
         if (show_axes and !is_end) {
             const q: Quat = c.rotations[i];
@@ -392,7 +392,7 @@ fn update(f: *z.Frame, s: *State) void {
             continue;
         }
         // Each clip is sampled at the SHARED wall-clock time, converted through its own frame
-        // rate — that is what lets a 60 fps and a 120 fps capture play side by side correctly.
+        // rate - that is what lets a 60 fps and a 120 fps capture play side by side correctly.
         var k: usize = @trunc(@max(s.play_time / c.clip.frame_time, 0));
         if (k >= frames) {
             k = if (s.looping) k % frames else frames - 1;

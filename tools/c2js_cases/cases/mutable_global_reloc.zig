@@ -2,7 +2,7 @@
 //! A `var` global aggregate (struct with pointer fields, a slice, or a bare
 //! pointer) initialized with the address of another global must have the
 //! pointee's heap offset written into its data image; the transpiler used to
-//! leave it null, so the field read back as 0 — a silent wrong result. (Const
+//! leave it null, so the field read back as 0 - a silent wrong result. (Const
 //! globals escape this: the C backend value-propagates their pointer derefs, so
 //! they never read the data image; a `var` one genuinely does.) These are read
 //! at RUNTIME so the data image is exercised. run_test() returns 0 on success.

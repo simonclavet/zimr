@@ -1,4 +1,4 @@
-//! ui_window_menubar — per-window menu bars ported to WebGPU. Three windows,
+//! ui_window_menubar - per-window menu bars ported to WebGPU. Three windows,
 //! each with its own `beginMenuBar` pinned to its top (not a canvas-wide bar):
 //! a Document window (File/Edit/View, with a dirty bit and undo depth), a
 //! Properties window (its own Tools menu), and a Settings window (Help -> About).
@@ -193,7 +193,7 @@ fn update(f: *z.Frame, s: *State) void {
     const sw_f: f32 = f.window.widthf();
     const sh_f: f32 = f.window.heightf();
 
-    // Overlay palette — named Colors instead of packed-wire hex.
+    // Overlay palette - named Colors instead of packed-wire hex.
     const panel_bg: Color = Color.fromWire(0xEE111827);
     const status_bg: Color = Color.fromWire(0xCC0F172A);
     const text_light: Color = Color.fromWire(0xFFE2E8F0);

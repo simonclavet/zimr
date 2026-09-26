@@ -1,7 +1,7 @@
-//! examples/raycube_fs_io.zig — schema for the ray-traced-cube fragment shader.
+//! examples/raycube_fs_io.zig - schema for the ray-traced-cube fragment shader.
 //!
 //! The SAME `shaderMain` (raycube_fs.zig) compiles to WGSL (GPU), to native Zig
-//! (the raster software dispatcher), and runs at comptime (baked corner) — one
+//! (the raster software dispatcher), and runs at comptime (baked corner) - one
 //! shader, three execution targets, like rt_fs but rendering a rotating cube via
 //! a ray-box intersection. The camera basis is precomputed host-side; the shader
 //! just rebuilds the per-pixel ray from it.

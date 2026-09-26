@@ -1,12 +1,12 @@
-//! examples/julia_inline_fs.zig — Julia-set fragment shader with
+//! examples/julia_inline_fs.zig - Julia-set fragment shader with
 //! iface co-located in the same file (Inputs / Outputs / Ubo at
 //! the top, body below).  See `mandel_inline_fs.zig` for the
 //! mechanism; this is its companion.
 //!
-//! Same iteration kernel as `mandel_inline_fs.zig` (`z' = z² + c`
+//! Same iteration kernel as `mandel_inline_fs.zig` (`z' = z^2 + c`
 //! via `zm.cmandelbrot_step`).  The only difference is the
-//! per-pixel initial state: julia uses pixel as `z₀` and the UBO
-//! `julia_c` as the constant; mandelbrot uses 0 as `z₀` and pixel
+//! per-pixel initial state: julia uses pixel as `z_0` and the UBO
+//! `julia_c` as the constant; mandelbrot uses 0 as `z_0` and pixel
 //! as the constant.
 
 const zm = @import("zm");
@@ -73,9 +73,9 @@ pub fn shaderMain(io_in: Io) Out {
             break;
         }
         if (cnorm2(z) > 128.0) {
-            // Escape radius² 128 (not 256): squaring in cmandelbrot_step can
-            // overflow f32 to inf at the larger radius → inf−inf = NaN →
-            // `NaN > R` is false → escape never fires → white. (N6 mandelbrot
+            // Escape radius^2 128 (not 256): squaring in cmandelbrot_step can
+            // overflow f32 to inf at the larger radius -> inf-inf = NaN ->
+            // `NaN > R` is false -> escape never fires -> white. (N6 mandelbrot
             // lesson; 128 keeps every cmul intermediate finite on the
             // no-spirv-opt WGSL path while staying good for log-log smoothing.)
             escaped = 1;

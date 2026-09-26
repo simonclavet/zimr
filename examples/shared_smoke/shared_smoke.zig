@@ -1,9 +1,9 @@
-//! shared_smoke — workgroup shared-memory + barrier DIAGNOSTIC, on device.
+//! shared_smoke - workgroup shared-memory + barrier DIAGNOSTIC, on device.
 //! Runs the `diag` kernel once and checks three independent results so a single
 //! run pinpoints which primitive works on this GPU:
-//!   1. local id     (out_localid)  — is local_invocation_id delivered?
-//!   2. shared self  (out_self)     — does a workgroup var round-trip a value?
-//!   3. shared rotate(out_rotate)   — does cross-thread sharing + the barrier work?
+//!   1. local id     (out_localid)  - is local_invocation_id delivered?
+//!   2. shared self  (out_self)     - does a workgroup var round-trip a value?
+//!   3. shared rotate(out_rotate)   - does cross-thread sharing + the barrier work?
 //! Each line shows PASS (green) or FAIL (red, with mismatch count). The CPU
 //! backend runs the same kernel at startup as an independent oracle.
 const std = @import("std");

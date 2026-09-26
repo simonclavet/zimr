@@ -1,11 +1,11 @@
-//! examples/rayshadow_fs.zig — a ray-traced HARD-SHADOW fragment shader.
+//! examples/rayshadow_fs.zig - a ray-traced HARD-SHADOW fragment shader.
 //!
 //! Per pixel: build the camera ray from the host-supplied basis, intersect a
 //! bounded ground platform + two axis-aligned boxes, shade the nearest hit with
 //! a fixed directional light, then cast a SHADOW RAY from the hit point toward
-//! the light and darken to ambient if it strikes a box. Miss → gradient sky.
+//! the light and darken to ambient if it strikes a box. Miss -> gradient sky.
 //!
-//! The shadow is a second ray-scene intersection, NOT a shadow map — which is
+//! The shadow is a second ray-scene intersection, NOT a shadow map - which is
 //! exactly why the whole thing runs on all three zimr shader targets: WGSL
 //! (GPU), native Zig (raster CPU dispatcher), and comptime (baked corner). A
 //! shadow map would need a precomputed depth texture the CPU/comptime targets
@@ -46,7 +46,7 @@ fn hitBox(ro: Vec, rd: Vec, bmin: Vec, bmax: Vec) f32 {
     return miss_t;
 }
 
-/// Bounded ground platform at y=0 (an 8×8 square so sky shows around it).
+/// Bounded ground platform at y=0 (an 8x8 square so sky shows around it).
 fn hitPlatform(ro: Vec, rd: Vec) f32 {
     if (rd[1] > -1.0e-6) {
         return miss_t;
@@ -128,7 +128,7 @@ pub fn shaderMain(io_in: Io) Out {
 
     var color: Vec = vec(0, 0, 0);
     if (kind == 0) {
-        // Gradient sky (warm horizon → deep-blue zenith).
+        // Gradient sky (warm horizon -> deep-blue zenith).
         const s: f32 = 0.5 * (rd[1] + 1.0);
         const bot: Vec = vec(0.85, 0.52, 0.32);
         const top: Vec = vec(0.12, 0.20, 0.48);
@@ -149,7 +149,7 @@ pub fn shaderMain(io_in: Io) Out {
         const ndl: f32 = @max(0.0, normal[0] * light[0] + normal[1] * light[1] + normal[2] * light[2]);
 
         // Shadow ray from just above the surface toward the light; either box
-        // occludes. (The platform can't shadow — the light is above it.)
+        // occludes. (The platform can't shadow - the light is above it.)
         const origin: Vec = hit + normal * splat(0.004);
         const sa: f32 = hitBox(origin, light, a_min, a_max);
         const sb: f32 = hitBox(origin, light, b_min, b_max);

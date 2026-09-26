@@ -1,6 +1,6 @@
 // examples/easings_box.zig - five-stage box animation that
 // chains elasticOut, bounceOut, quadOut, circOut and sineOut.
-// Port of raylib's `examples/shapes/shapes_easings_box.c` (★2,
+// Port of raylib's `examples/shapes/shapes_easings_box.c` (*2,
 // ~142 LOC).  Each stage uses a different curve so the visual
 // rhythm of the animation runs through a tour of the easing
 // catalogue:
@@ -8,7 +8,7 @@
 //             past the centre then bounces back).  120 frames.
 //   Stage 1 - box scales to a horizontal bar; bounceOut on both
 //             width and height simultaneously.  120 frames.
-//   Stage 2 - bar rotates 270° around its centre; quadOut (slow
+//   Stage 2 - bar rotates 270 deg around its centre; quadOut (slow
 //             deceleration into rest).  240 frames.
 //   Stage 3 - bar's height grows to fill the screen; circOut
 //             (sharp acceleration then easing to rest).  120 frames.
@@ -48,7 +48,7 @@ const stage4_duration: f32 = 160;
 const c = Color;
 
 const State = struct {
-    /// Owned shapes-texture state. id=1 → rlgl's internal 1x1 white pixel.
+    /// Owned shapes-texture state. id=1 -> rlgl's internal 1x1 white pixel.
     /// Owned default-font cache. Populated by `loadFontFromTtfBytes` below.
     font: z.Font,
     frame_count: usize = 0,
@@ -96,7 +96,7 @@ fn update(f: *z.Frame, state: *State) void {
     // animated values per stage.
     switch (state.stage) {
         0 => {
-            // Drop in to screen-centre Y.  Travel: -100 → screen_h/2,
+            // Drop in to screen-centre Y.  Travel: -100 -> screen_h/2,
             // i.e. change of (screen_h/2 + 100).
             state.progress += tick;
             const t01: f32 = clamp(state.progress / stage0_duration, 0, 1);
@@ -108,8 +108,8 @@ fn update(f: *z.Frame, state: *State) void {
             }
         },
         1 => {
-            // Scale to a flat bar.  Height shrinks 100 → 10 (delta -90);
-            // width grows 100 → screen_w (delta screen_w).
+            // Scale to a flat bar.  Height shrinks 100 -> 10 (delta -90);
+            // width grows 100 -> screen_w (delta screen_w).
             state.progress += tick;
             const t01: f32 = clamp(state.progress / stage1_duration, 0, 1);
             const eased: f32 = z.easeBounceOut(t01);
@@ -121,7 +121,7 @@ fn update(f: *z.Frame, state: *State) void {
             }
         },
         2 => {
-            // Spin 270° around the rect's centre.
+            // Spin 270 deg around the rect's centre.
             state.progress += tick;
             const t01: f32 = clamp(state.progress / stage2_duration, 0, 1);
             state.rotation = z.easeQuadOut(t01) * (pi * 1.5);
@@ -131,7 +131,7 @@ fn update(f: *z.Frame, state: *State) void {
             }
         },
         3 => {
-            // Grow height from 10 → 10 + screen_w (fills the screen
+            // Grow height from 10 -> 10 + screen_w (fills the screen
             // once rotated).
             state.progress += tick;
             const t01: f32 = clamp(state.progress / stage3_duration, 0, 1);
@@ -143,7 +143,7 @@ fn update(f: *z.Frame, state: *State) void {
             }
         },
         4 => {
-            // Fade out - alpha goes 1.0 → 0.0.
+            // Fade out - alpha goes 1.0 -> 0.0.
             state.progress += tick;
             const t01: f32 = clamp(state.progress / stage4_duration, 0, 1);
             state.alpha = 1.0 - z.easeSineOut(t01);

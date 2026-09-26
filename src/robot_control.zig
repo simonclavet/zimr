@@ -1,14 +1,14 @@
-//! robot_control.zig — making a robot go where you want it.
+//! robot_control.zig - making a robot go where you want it.
 //!
 //! Two things every demo has needed and each has re-implemented: hold a joint pose, and put an
 //! end effector on a target. Both are small, both have a trap in them that has now bitten
 //! three separate times, and neither belongs pasted into an example.
 //!
-//! ── ★★ THE TRAP, STATED ONCE ──
+//! -- ** THE TRAP, STATED ONCE --
 //!
 //! **Gravity compensation is something a MOTOR does, and only actuated DOFs have one.**
 //!
-//! `bias_force` covers every degree of freedom — including a floating base's six and a free
+//! `bias_force` covers every degree of freedom - including a floating base's six and a free
 //! crate's six. Adding all of it cancels the machine's own weight:
 //!
 //!   * a crate tower in `robot_3d` hung in the air;
@@ -19,6 +19,7 @@
 //! in one place instead of remembered at every call site.
 
 const std = @import("std");
+const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
 
 const zm = @import("zm");
@@ -51,8 +52,8 @@ pub const Actuation = struct {
 
     /// Build the mask from the model's joints.
     ///
-    /// ★ A HINGE OR SLIDE IS POWERED; A FREE OR BALL JOINT IS NOT. That is not a statement
-    /// about actuators — a model may well leave a hinge unmotorised — but about what CAN be
+    /// * A HINGE OR SLIDE IS POWERED; A FREE OR BALL JOINT IS NOT. That is not a statement
+    /// about actuators - a model may well leave a hinge unmotorised - but about what CAN be
     /// driven by a scalar torque at all. A floating base has no motor by construction, and a
     /// controller that forgets it makes the robot fly.
     pub fn init(gpa: Allocator, model: *const rbt.Model) !Actuation {
@@ -95,9 +96,9 @@ pub const Actuation = struct {
 
 /// Restrict an `Actuation` to the joints on the path from one body to the world.
 ///
-/// ── ★ WHY IK NEEDS THIS TO MOVE A QUADRUPED'S BODY ──
+/// -- * WHY IK NEEDS THIS TO MOVE A QUADRUPED'S BODY --
 ///
-/// Placing a foot is a three-joint problem — hip, thigh, calf — but `Ik` uses every powered
+/// Placing a foot is a three-joint problem - hip, thigh, calf - but `Ik` uses every powered
 /// DOF it is given, and handed the whole robot it would happily bend the OTHER three legs to
 /// help. Four such solves then fight each other and nothing converges.
 ///
@@ -111,8 +112,8 @@ pub fn limbActuation(gpa: Allocator, model: *const rbt.Model, tip: u32) !Actuati
         const first: u32 = model.body_dof_adr[walk];
         for (0..model.body_dof_num[walk]) |k| {
             const v: u32 = first + @as(u32, @intCast(k));
-            // ★ THE ROOT'S SIX DOFs ARE ON THIS PATH AND MUST STAY OFF. A floating base sits
-            // between every foot and the world, so walking to the root sweeps it up — and an
+            // * THE ROOT'S SIX DOFs ARE ON THIS PATH AND MUST STAY OFF. A floating base sits
+            // between every foot and the world, so walking to the root sweeps it up - and an
             // IK solver allowed to use it "plants the foot" by sliding the whole robot.
             switch (model.jnt_type[dofJoint(model, v)]) {
                 .hinge, .slide => powered[v] = true,
@@ -149,33 +150,33 @@ pub const PoseHold = struct {
     /// Proportional and derivative gains, and the per-joint torque ceiling.
     kp: f32 = 100.0,
     kv: f32 = 2.0,
-    /// ★ THE CEILING IS WHAT MAKES A ROBOT WEAK OR STRONG, and without one every robot is
+    /// * THE CEILING IS WHAT MAKES A ROBOT WEAK OR STRONG, and without one every robot is
     /// infinitely strong: a PD law will produce whatever torque the error demands. Real motors
     /// have a rating, and `<position forcerange=...>` in MJCF is exactly this number.
-    /// Divide the gains by each joint's own inertia, so `kp` becomes ω² and `kv` becomes 2ζω.
+    /// Divide the gains by each joint's own inertia, so `kp` becomes omega^2 and `kv` becomes 2 zeta omega.
     ///
-    /// ── ★★ WORTH TURNING ON, AND OFF BY DEFAULT ANYWAY ──
+    /// -- ** WORTH TURNING ON, AND OFF BY DEFAULT ANYWAY --
     ///
     /// It is the better formulation: gains stop being torque numbers that only mean something
     /// next to a particular link, and become a frequency and a damping ratio that mean the same
-    /// thing everywhere. On a robot whose links differ by two orders of magnitude — a 1.6 kg
-    /// shoulder and a 0.03 kg finger — one pair of numbers then works for both, where torque
+    /// thing everywhere. On a robot whose links differ by two orders of magnitude - a 1.6 kg
+    /// shoulder and a 0.03 kg finger - one pair of numbers then works for both, where torque
     /// units cannot.
     ///
-    /// ★ BUT IT CHANGES WHAT EVERY EXISTING GAIN MEANS. Switching the default would silently
+    /// * BUT IT CHANGES WHAT EVERY EXISTING GAIN MEANS. Switching the default would silently
     /// invalidate every number any caller has tuned, and this engine has several that were
-    /// measured rather than guessed — the Go1's kp = 100 and the humanoid's kp = 400 both sit
+    /// measured rather than guessed - the Go1's kp = 100 and the humanoid's kp = 400 both sit
     /// in narrow bands found by experiment. Quietly reinterpreting them is a worse failure than
     /// making callers ask, because it looks like the robot changed.
     ///
     /// So: off by default, on where the model needs it. A rough conversion for an existing
-    /// gain is `kp_new ≈ kp_old / typical_inertia`.
+    /// gain is `kp_new ~ kp_old / typical_inertia`.
     scale_by_inertia: bool = false,
     max_torque: f32 = 1000.0,
 
     /// Write torques into `data.applied_force`.
     ///
-    /// Call between `forward` and `step` — the law reads positions and velocities that
+    /// Call between `forward` and `step` - the law reads positions and velocities that
     /// `forward` computed, and `step` consumes the forces.
     pub fn apply(
         self: PoseHold,
@@ -190,24 +191,24 @@ pub const PoseHold = struct {
                 continue;
             }
             const q: u32 = model.jnt_qpos_adr[j];
-            // ── ★★★ THE GAINS ARE SCALED BY EACH JOINT'S OWN INERTIA ──
+            // -- *** THE GAINS ARE SCALED BY EACH JOINT'S OWN INERTIA --
             //
             // A gain in torque units is only meaningful next to an inertia, and a robot's
             // joints do not share one: the arm this was found on has a 1.6 kg shoulder and a
             // 0.03 kg finger. A `kp` that is gentle on the first is violently unstable on the
             // second, and nothing about the number says so.
             //
-            // Measured on a 4-DOF arm at kp = 600, kv = 25 — reasonable-looking numbers, and
+            // Measured on a 4-DOF arm at kp = 600, kv = 25 - reasonable-looking numbers, and
             // the same ones that hold a Go1 perfectly well:
             //
-            //     joint 3 (wrist):  want 1.000  got 0.500  vel −100.000  ← the velocity CLAMP
+            //     joint 3 (wrist):  want 1.000  got 0.500  vel -100.000  <- the velocity CLAMP
             //
             // It was not stuck, it was DIVERGING, and the pose error was a snapshot of a joint
             // spinning as fast as the engine permits. Bias forces were all under 25, so gravity
             // compensation was innocent; the gains simply did not fit the link.
             //
-            // ★ DIVIDING THE INERTIA OUT TURNS `kp` INTO A FREQUENCY — `kp` becomes ω² and `kv`
-            // becomes 2ζω, properties of the RESPONSE wanted rather than of the link being
+            // * DIVIDING THE INERTIA OUT TURNS `kp` INTO A FREQUENCY - `kp` becomes omega^2 and `kv`
+            // becomes 2 zeta omega, properties of the RESPONSE wanted rather than of the link being
             // pushed. One pair of numbers then works across a whole robot, and across robots.
             // `max_torque` stays in torque units, because a motor's rating is a real quantity
             // that has nothing to do with what it is attached to.
@@ -295,18 +296,18 @@ pub const PoseHold = struct {
 
             const wanted: f32 = inertia *
                 (self.kp * (self.target[q] - data.pos[q]) - self.kv * data.vel[v]);
-            // ★ GRAVITY COMPENSATION IS ADDED, THEN THE TOTAL IS CLAMPED. Clamping only the
+            // * GRAVITY COMPENSATION IS ADDED, THEN THE TOTAL IS CLAMPED. Clamping only the
             // tracking part would let a weak motor treat its own weight as free, so a robot
-            // with a 1 N·m rating could still hold up any load. The rating bounds everything
+            // with a 1 N*m rating could still hold up any load. The rating bounds everything
             // the motor does.
             //
-            // ★★★ AND THE CODE NOW DOES WHAT THE COMMENT ABOVE ALWAYS SAID. It used to clamp
+            // *** AND THE CODE NOW DOES WHAT THE COMMENT ABOVE ALWAYS SAID. It used to clamp
             // `wanted` and add `bias_force` OUTSIDE the clamp, so the real ceiling was
-            // `max_torque + gravity` — measured at **1589 N·m on a heavy arm rated 400**. Every
+            // `max_torque + gravity` - measured at **1589 N*m on a heavy arm rated 400**. Every
             // PD-versus-planner comparison in this project was therefore giving the servo up to
             // four times the torque its planner opponent was held to by `boxQP`.
             //
-            // ★ A COMMENT THAT DISAGREES WITH ITS CODE IS A BUG REPORT SOMEONE ALREADY WROTE.
+            // * A COMMENT THAT DISAGREES WITH ITS CODE IS A BUG REPORT SOMEONE ALREADY WROTE.
             // This one stated the correct semantics and was three lines above the line that
             // broke them.
             data.applied_force[v] = clamp(
@@ -319,8 +320,8 @@ pub const PoseHold = struct {
 };
 
 /// Where an end effector should go.
-/// Solve `A·x = b` in place for a small symmetric positive-definite `A`, by Cholesky.
-/// False when `A` is not positive definite, which for `J·Jᵀ + λ²I` means the damping was
+/// Solve `A*x = b` in place for a small symmetric positive-definite `A`, by Cholesky.
+/// False when `A` is not positive definite, which for `J*J^T + lambda^2I` means the damping was
 /// swamped by f32 error rather than anything about the robot.
 fn choleskySolveSmall(a: *[6][6]f32, n: usize, b: *[6]f32) bool {
     for (0..n) |i| {
@@ -361,14 +362,14 @@ fn choleskySolveSmall(a: *[6][6]f32, n: usize, b: *[6]f32) bool {
 pub const IkTarget = struct {
     /// The body whose point is being placed.
     body: u32,
-    /// The point, in that body's frame — a fingertip, a foot, a tool centre.
+    /// The point, in that body's frame - a fingertip, a foot, a tool centre.
     offset: Vec = vec_zero,
     /// Where it should be, in world coordinates.
     goal: Vec,
     /// The orientation that body should ALSO hold, in world coordinates. Null places the point
     /// and lets the body face wherever the solver finds convenient.
     ///
-    /// ── ★★ WHY THIS IS NOT OPTIONAL FOR A GRIPPER ──
+    /// -- ** WHY THIS IS NOT OPTIONAL FOR A GRIPPER --
     ///
     /// Placing a point is enough for a foot, which only has to be somewhere. It is not enough
     /// for a hand: a top-down grasp is a statement about the jaws' DIRECTION, and without it
@@ -376,40 +377,40 @@ pub const IkTarget = struct {
     /// demo, the jaws sat sideways at rest and no choice of target position changed that,
     /// because position targets cannot express it.
     ///
-    /// ★ IT COSTS THREE MORE ROWS on the same Jacobian and turns the 3×3 damped least-squares
-    /// system into a 6×6 — which is why the solve below is written for N rows rather than
-    /// three, with the explicit 3×3 inverse replaced by a Cholesky.
+    /// * IT COSTS THREE MORE ROWS on the same Jacobian and turns the 3x3 damped least-squares
+    /// system into a 6x6 - which is why the solve below is written for N rows rather than
+    /// three, with the explicit 3x3 inverse replaced by a Cholesky.
     orientation: ?zm.Quat = null,
 };
 
 /// Solve for joint angles that put an end effector on a target.
 ///
-/// ── ★ DAMPED LEAST SQUARES, and the damping is the whole point ──
+/// -- * DAMPED LEAST SQUARES, and the damping is the whole point --
 ///
-/// The naive step is `Δq = J⁺·Δx`, and it explodes near a singularity: a stretched-out arm has
+/// The naive step is `dq = J^+*dx`, and it explodes near a singularity: a stretched-out arm has
 /// a Jacobian that is nearly rank-deficient, so the pseudo-inverse asks for enormous joint
 /// motion to achieve a tiny Cartesian one. Every real IK implementation damps it:
 ///
-///     Δq = Jᵀ(J·Jᵀ + λ²I)⁻¹ Δx
+///     dq = J^T(J*J^T + lambda^2I)^-1 dx
 ///
-/// which trades exactness for boundedness and degrades gracefully instead of flailing. λ is
+/// which trades exactness for boundedness and degrades gracefully instead of flailing. lambda is
 /// `damping` below.
 ///
 /// The system solved is 3x3 regardless of how many joints the robot has, because it is
-/// `J·Jᵀ` and the task is three-dimensional — so this costs the same on a 7-DOF arm as on a
+/// `J*J^T` and the task is three-dimensional - so this costs the same on a 7-DOF arm as on a
 /// 30-DOF humanoid.
 pub const Ik = struct {
-    /// Damping λ. Larger is more stable and slower to converge.
+    /// Damping lambda. Larger is more stable and slower to converge.
     damping: f32 = 0.05,
     /// Stop once the end effector is within this distance.
     tolerance: f32 = 1.0e-3,
-    /// Cap on one iteration's joint motion, in radians. Bounds the linearisation's validity —
+    /// Cap on one iteration's joint motion, in radians. Bounds the linearisation's validity -
     /// a Jacobian describes the mechanism only near where it was computed.
     max_step: f32 = 0.2,
     /// How much a radian of orientation error counts for against a metre of position error,
     /// when reporting `error_distance` and deciding convergence.
     ///
-    /// ★ IT AFFECTS ONLY THE REPORTED NUMBER, never the solve — the six rows are solved
+    /// * IT AFFECTS ONLY THE REPORTED NUMBER, never the solve - the six rows are solved
     /// together on their own terms. It exists so a caller with a 1 mm tolerance is not told
     /// "reached" by a wrist that is a radian out, and 0.05 makes a radian worth 5 cm, which is
     /// roughly the scale at which a gripper stops fitting over what it is aiming at.
@@ -428,11 +429,11 @@ pub const Ik = struct {
 
     /// Iterate `data.pos` toward a configuration that reaches `target`.
     ///
-    /// ★ ONLY `data.pos` AND THE POSITION STAGE ARE TOUCHED. No forces, no contacts, no warm
-    /// start — a solve is a kinematic question and must not disturb the dynamics it will be
+    /// * ONLY `data.pos` AND THE POSITION STAGE ARE TOUCHED. No forces, no contacts, no warm
+    /// start - a solve is a kinematic question and must not disturb the dynamics it will be
     /// handed back to.
     ///
-    /// Mutates `data` — it IS the answer, left in the model's own coordinates so a caller can
+    /// Mutates `data` - it IS the answer, left in the model's own coordinates so a caller can
     /// use it as a pose target, hand it to `PoseHold`, or simply look at it. `scratch` needs
     /// `scratchSize(model)` vectors.
     pub fn solve(
@@ -444,12 +445,12 @@ pub const Ik = struct {
         scratch: []Vec,
     ) Result {
         const nv: usize = model.nv;
-        // `jacPoint` gives one Vec per DOF — column-per-joint rather than three row arrays,
-        // which is both the natural layout and the one that makes `J·Jᵀ` a single pass.
+        // `jacPoint` gives one Vec per DOF - column-per-joint rather than three row arrays,
+        // which is both the natural layout and the one that makes `J*J^T` a single pass.
         const jac: []Vec = scratch[0..nv];
         const jac_rot: []Vec = scratch[nv..][0..nv];
         const step_dq: []f32 = @ptrCast(scratch[2 * nv ..][0..nv]);
-        // ★ THREE ROWS OR SIX, decided once. Everything below is written for `rows`, so the
+        // * THREE ROWS OR SIX, decided once. Everything below is written for `rows`, so the
         // position-only path is this same code with the orientation half skipped, rather than
         // a second implementation free to drift away from it.
         const rows: usize = if (target.orientation == null) 3 else 6;
@@ -457,7 +458,7 @@ pub const Ik = struct {
         var iteration: u32 = 0;
         var gap: f32 = 0;
         while (iteration < self.max_iterations) : (iteration += 1) {
-            // ── ★★ KINEMATICS ONLY, NOT `forward` — and calling `forward` here was two bugs ──
+            // -- ** KINEMATICS ONLY, NOT `forward` - and calling `forward` here was two bugs --
             //
             // IK needs body poses and a Jacobian. `forward` computes those and then the mass
             // matrix, the bias forces, the contacts and a full constraint SOLVE. Running that
@@ -466,16 +467,16 @@ pub const Ik = struct {
             // unreachable target is exactly the case that uses every iteration.
             //
             // Worse, it was not merely slow. Each intermediate solve ran with the arm wherever
-            // IK had just put it — sometimes deep inside a crate — and left those enormous
+            // IK had just put it - sometimes deep inside a crate - and left those enormous
             // forces in the WARM START. The next real step seeded from them, and the mass
             // matrix went NaN: `factorM: pivot 24 is nan` while reaching into the tower.
             //
-            // `kinematics` places the bodies and `comPos` builds `cdof` and `subtree_com` —
+            // `kinematics` places the bodies and `comPos` builds `cdof` and `subtree_com` -
             // which is exactly what `jacPoint` reads, and nothing more. Neither touches a
             // force, a contact or the warm start.
             //
-            // ★ BOTH ARE NEEDED. `kinematics` alone sets the stage to `.position`, so
-            // `jacPoint`'s stage assertion passes — and its Jacobian is then built from STALE
+            // * BOTH ARE NEEDED. `kinematics` alone sets the stage to `.position`, so
+            // `jacPoint`'s stage assertion passes - and its Jacobian is then built from STALE
             // `cdof`, giving a wrong direction with no error anywhere. The IK tests caught it
             // by failing to converge; a looser test would have shipped it.
             rbt.kinematics(model, data);
@@ -485,24 +486,24 @@ pub const Ik = struct {
             const delta: Vec = target.goal - at;
             gap = length3(delta);
 
-            // ── ★ THE ORIENTATION ERROR IS A ROTATION VECTOR ──
+            // -- * THE ORIENTATION ERROR IS A ROTATION VECTOR --
             //
-            // `wanted · current⁻¹` is the rotation still to be performed, read in the world. A
-            // quaternion's vector part is half the rotation vector to first order, so `2·vec`
-            // is the error in radians about each world axis — three numbers in the same units
+            // `wanted * current^-1` is the rotation still to be performed, read in the world. A
+            // quaternion's vector part is half the rotation vector to first order, so `2*vec`
+            // is the error in radians about each world axis - three numbers in the same units
             // the angular Jacobian produces.
             //
-            // ★ `q` AND `−q` ARE THE SAME ROTATION and the vector part flips between them, so
-            // the one with positive `w` is taken: a target 179° away corrects by 1° rather
-            // than by 359°.
+            // * `q` AND `-q` ARE THE SAME ROTATION and the vector part flips between them, so
+            // the one with positive `w` is taken: a target 179 deg away corrects by 1 deg rather
+            // than by 359 deg.
             var turn: Vec = vec_zero;
             if (target.orientation) |wanted| {
                 const misalignment: zm.Quat =
                     qmul(wanted, zm.conjugate(data.body_xrot[target.body]));
                 const shortest: zm.Quat = if (misalignment[3] < 0) -misalignment else misalignment;
                 turn = vec(2 * shortest[0], 2 * shortest[1], 2 * shortest[2]);
-                // ★ ONE NUMBER OUT, POSITION-DOMINANT. The halves are in different units —
-                // metres and radians — and none combines them honestly, so `error_distance`
+                // * ONE NUMBER OUT, POSITION-DOMINANT. The halves are in different units -
+                // metres and radians - and none combines them honestly, so `error_distance`
                 // stays the distance a caller can act on, with the angle folded in only enough
                 // that a converged position cannot claim success while the wrist points
                 // backwards.
@@ -514,9 +515,9 @@ pub const Ik = struct {
 
             rbt.jacPoint(model, data, target.body, at, jac, if (rows == 6) jac_rot else null);
 
-            // ★ UNPOWERED DOFs ARE ZEROED OUT OF THE JACOBIAN, which is what makes this work
+            // * UNPOWERED DOFs ARE ZEROED OUT OF THE JACOBIAN, which is what makes this work
             // on a floating-base robot. A humanoid's Jacobian includes its root's six DOFs,
-            // and a solver free to use them "reaches" the target by TELEPORTING the pelvis —
+            // and a solver free to use them "reaches" the target by TELEPORTING the pelvis -
             // a perfect solution to the equations and a useless one for a robot.
             for (0..nv) |i| {
                 if (!actuation.powered[i]) {
@@ -525,17 +526,17 @@ pub const Ik = struct {
                 }
             }
 
-            // A = J·Jᵀ + λ²I, three by three whatever the robot's size.
-            // ── ★ `(J·Jᵀ + λ²I)·y = e`, AT WHATEVER SIZE THE TARGET ASKED FOR ──
+            // A = J*J^T + lambda^2I, three by three whatever the robot's size.
+            // -- * `(J*J^T + lambda^2I)*y = e`, AT WHATEVER SIZE THE TARGET ASKED FOR --
             //
             // Damped least squares: the damping is what keeps a singular configuration from
             // producing an infinite step, and it is why this converges on a redundant arm where
             // a plain pseudo-inverse would not.
             //
-            // ★ CHOLESKY, NOT AN EXPLICIT INVERSE. The 3×3 case was written out by hand with
-            // cofactors, which is fine at three and unreadable at six. `J·Jᵀ + λ²I` is
-            // symmetric positive definite by construction — a Gram matrix plus a positive
-            // diagonal — so the factorisation is both valid and half the work of a general
+            // * CHOLESKY, NOT AN EXPLICIT INVERSE. The 3x3 case was written out by hand with
+            // cofactors, which is fine at three and unreadable at six. `J*J^T + lambda^2I` is
+            // symmetric positive definite by construction - a Gram matrix plus a positive
+            // diagonal - so the factorisation is both valid and half the work of a general
             // solve.
             var a: [6][6]f32 = @splat(@splat(0));
             for (0..nv) |i| {
@@ -556,7 +557,7 @@ pub const Ik = struct {
                 return .{ .error_distance = gap, .iterations = iteration, .reached = false };
             }
 
-            // Δq = Jᵀ·y, capped so the step stays inside the linearisation.
+            // dq = J^T*y, capped so the step stays inside the linearisation.
             var largest: f32 = 0;
             for (0..nv) |i| {
                 const lin: Vec = jac[i];
@@ -577,7 +578,7 @@ pub const Ik = struct {
                 }
                 const q: u32 = model.jnt_qpos_adr[j];
                 var next: f32 = data.pos[q] + scale * step_dq[v];
-                // ★ JOINT LIMITS ARE RESPECTED HERE, not left to the constraint solver. An IK
+                // * JOINT LIMITS ARE RESPECTED HERE, not left to the constraint solver. An IK
                 // answer that violates a limit is not a pose the robot can hold, and handing
                 // one to a controller produces a machine fighting itself.
                 if (model.jnt_range[j]) |range| {
@@ -615,8 +616,8 @@ const expectEqual = std.testing.expectEqual;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 
 test "ik: a KUKA reaches a target it can reach" {
-    // ★★ A REAL ROBOT, NOT A CONTRIVED ONE. Two links and a hinge would prove nothing about
-    // conditioning: the KUKA is 7-DOF and redundant, so `J·Jᵀ` is genuinely rank-deficient in
+    // ** A REAL ROBOT, NOT A CONTRIVED ONE. Two links and a hinge would prove nothing about
+    // conditioning: the KUKA is 7-DOF and redundant, so `J*J^T` is genuinely rank-deficient in
     // directions the arm cannot move, which is exactly the case damping exists for.
     const gpa: Allocator = std.testing.allocator;
     var model: rbt.Model = try kuka.Model.build(gpa);
@@ -634,7 +635,7 @@ test "ik: a KUKA reaches a target it can reach" {
     }
     data.stage = .stale;
 
-    // A point comfortably inside the arm's reach — the iiwa is about 1.3 m tall.
+    // A point comfortably inside the arm's reach - the iiwa is about 1.3 m tall.
     const wrist: u32 = model.nbody - 1;
     const goal: Vec = vec(0.35, 0.15, 0.75);
     const ik: Ik = .{};
@@ -646,15 +647,15 @@ test "ik: a KUKA reaches a target it can reach" {
     try expect(result.reached);
     try expect(result.iterations < ik.max_iterations);
 
-    // And the arm really is there — re-derived from kinematics rather than trusting the
+    // And the arm really is there - re-derived from kinematics rather than trusting the
     // solver's own bookkeeping.
     rbt.forward(&model, &data);
     try expectApproxEqAbs(@as(f32, 0), length3(data.body_xpos[wrist] - goal), 2.0e-3);
 }
 
 test "ik: an unreachable target gives the closest approach, not a failure" {
-    // ★ `reached = false` IS A NORMAL OUTCOME. A target outside the workspace has no solution,
-    // and the useful answer is the nearest pose rather than an error — a caller steering a
+    // * `reached = false` IS A NORMAL OUTCOME. A target outside the workspace has no solution,
+    // and the useful answer is the nearest pose rather than an error - a caller steering a
     // hand toward a moving object wants it to keep pointing the right way, not to stop.
     const gpa: Allocator = std.testing.allocator;
     var model: rbt.Model = try kuka.Model.build(gpa);
@@ -716,7 +717,7 @@ test "ik: joint limits are respected by the answer" {
 }
 
 test "control: only powered DOFs are driven" {
-    // ★★★ THE RULE THAT HAS BITTEN THREE TIMES — crates hanging in mid-air, and a Go1 rising
+    // *** THE RULE THAT HAS BITTEN THREE TIMES - crates hanging in mid-air, and a Go1 rising
     // at a steady 2.4 m/s. `bias_force` covers every DOF including a floating base's six, and
     // adding all of it cancels the machine's own weight.
     const gpa: Allocator = std.testing.allocator;
@@ -760,7 +761,7 @@ test "control: only powered DOFs are driven" {
     rbt.forward(&model, &data);
     hold.apply(&model, &data, actuation);
 
-    // ★ THE FREE JOINT GETS NOTHING. If it were gravity-compensated the base would float; the
+    // * THE FREE JOINT GETS NOTHING. If it were gravity-compensated the base would float; the
     // test is that the six root DOFs carry exactly zero applied force.
     const root_dof: u32 = model.jnt_dof_adr[0];
     for (0..6) |k| {
@@ -778,8 +779,8 @@ test "control: only powered DOFs are driven" {
     try expect(data.body_xpos[1][1] < start - 1.0);
 }
 
-test "★ THE GATE: a 27-DOF humanoid stands for 10 seconds" {
-    // ★★★ THE HARDEST OF THE THREE ROBOTS. A quadruped standing is nearly a table; a humanoid
+test "* THE GATE: a 27-DOF humanoid stands for 10 seconds" {
+    // *** THE HARDEST OF THE THREE ROBOTS. A quadruped standing is nearly a table; a humanoid
     // is an inverted pendulum on two small feet, 1.28 m tall and 40.8 kg, with 27 degrees of
     // freedom and nothing holding it up but ankle torque.
     //
@@ -816,19 +817,19 @@ test "★ THE GATE: a 27-DOF humanoid stands for 10 seconds" {
     defer bridge.deinit(&world);
     bridge.listen(&world);
 
-    // The model's default pose IS standing — no keyframe needed, unlike the Go1.
+    // The model's default pose IS standing - no keyframe needed, unlike the Go1.
     const home: []f32 = try gpa.dupe(f32, data.pos);
     defer gpa.free(home);
 
-    // ── ★★ THE GAINS ARE NARROW, AND BOTH FAILURES ARE INSTRUCTIVE ──
+    // -- ** THE GAINS ARE NARROW, AND BOTH FAILURES ARE INSTRUCTIVE --
     //
     //     kp  100, kv  2, limit  100  ->  torso sinks to 0.24 m: too weak to hold itself up
     //     kp  400, kv 10, limit  300  ->  torso 1.2775 m, |v| 0.018: STANDS
-    //     kp 1000, kv 30, limit 1000  ->  torso at −201 m, |v| 90: diverges
+    //     kp 1000, kv 30, limit 1000  ->  torso at -201 m, |v| 90: diverges
     //
     // Too soft and it folds; too stiff and the controller outruns the timestep and throws the
     // robot. A quadruped tolerates a much wider band because its pose is nearly statically
-    // stable — the humanoid has to be actively held at every joint, and the stiff end is a
+    // stable - the humanoid has to be actively held at every joint, and the stiff end is a
     // controller/timestep interaction rather than anything in the physics.
     const hold: PoseHold = .{ .target = home, .kp = 400.0, .kv = 10.0, .max_torque = 300.0 };
     const dt: f32 = 1.0 / 500.0;
@@ -842,7 +843,7 @@ test "★ THE GATE: a 27-DOF humanoid stands for 10 seconds" {
     }
     rbt.forward(model, &data);
 
-    // ── ★ STILL UPRIGHT, AND STILL ──
+    // -- * STILL UPRIGHT, AND STILL --
     const torso: u32 = imported.bodyIndex("torso").?;
     // It starts at 1.282 and settles within a centimetre; 5 cm is a generous gate on a robot
     // 1.28 m tall, and the measured drift is 4.5 mm.
@@ -860,9 +861,9 @@ test "★ THE GATE: a 27-DOF humanoid stands for 10 seconds" {
 
 /// Jacobian of the whole model's centre of mass.
 ///
-/// ── ★ WHY THIS IS A MASS-WEIGHTED AVERAGE OF BODY JACOBIANS ──
+/// -- * WHY THIS IS A MASS-WEIGHTED AVERAGE OF BODY JACOBIANS --
 ///
-/// The CM is `Σ mᵢ·xᵢ / Σ mᵢ`, so its derivative with respect to the joint angles is the same
+/// The CM is `sum m_i*x_i / sum m_i`, so its derivative with respect to the joint angles is the same
 /// weighted average of each body's own point Jacobian. There is no shortcut: every body
 /// contributes, which is exactly why moving an arm shifts a standing robot's balance.
 ///
@@ -895,13 +896,13 @@ pub fn comJacobian(
 }
 
 /// The centroidal momentum matrix: `A_G(q)`, mapping joint velocity to the robot's momentum
-/// about its own centre of mass. `jac` is `6 × nv`, angular rows first.
+/// about its own centre of mass. `jac` is `6 x nv`, angular rows first.
 ///
-/// ── ★★★ WHY A BALANCE CONTROLLER NEEDS THIS AND NOT JUST THE CM JACOBIAN ──
+/// -- *** WHY A BALANCE CONTROLLER NEEDS THIS AND NOT JUST THE CM JACOBIAN --
 ///
 /// `comJacobian` says where the mass IS going. This says what the robot is SPINNING with, and
 /// that is the quantity a balancing machine actually spends. Windmilling your arms does not
-/// move your centre of mass — it cannot, nothing external changed — but it does change the
+/// move your centre of mass - it cannot, nothing external changed - but it does change the
 /// angular momentum about it, and the ground reaction can then be redirected without moving
 /// the foot. That is how a human recovers from a shove while standing on one leg.
 ///
@@ -909,9 +910,9 @@ pub fn comJacobian(
 /// when to spend momentum and when to give it back, which is a finite-horizon trade rather than
 /// a gain. That is the whole case for planning this problem instead of servoing it.
 ///
-/// ★ THE ANGULAR PART IS ABOUT THE CENTRE OF MASS, NOT THE ORIGIN, and the difference is not
+/// * THE ANGULAR PART IS ABOUT THE CENTRE OF MASS, NOT THE ORIGIN, and the difference is not
 /// cosmetic: momentum about a fixed world point is not conserved for a falling robot, while
-/// momentum about its own centre of mass is — gravity acts there and exerts no torque about it.
+/// momentum about its own centre of mass is - gravity acts there and exerts no torque about it.
 /// That conservation is what the test below uses as an oracle.
 pub fn centroidalMomentum(
     model: *const rbt.Model,
@@ -947,10 +948,10 @@ pub fn centroidalMomentum(
 
 /// The robot's actual centroidal momentum, summed over bodies from the spatial algebra.
 ///
-/// ★ A SECOND ROUTE TO THE SAME NUMBER, ON PURPOSE. This never touches a Jacobian; it reads
+/// * A SECOND ROUTE TO THE SAME NUMBER, ON PURPOSE. This never touches a Jacobian; it reads
 /// `cinert` and `cvel`, which the dynamics maintains for its own reasons. Comparing it against
-/// `centroidalMomentum(...)·v` checks the matrix assembly against something that shares no code
-/// with it — the same discipline that caught a missing block in the trunk model's Jacobian.
+/// `centroidalMomentum(...)*v` checks the matrix assembly against something that shares no code
+/// with it - the same discipline that caught a missing block in the trunk model's Jacobian.
 pub fn centroidalMomentumDirect(
     model: *const rbt.Model,
     data: *const rbt.Data,
@@ -979,28 +980,28 @@ pub fn centroidalMomentumDirect(
 }
 
 /// Joint torques that produce a requested rate of change of angular momentum about the centre
-/// of mass. `scratch` is `3 × nv`; `out` is `nv` and is ACCUMULATED into.
+/// of mass. `scratch` is `3 x nv`; `out` is `nv` and is ACCUMULATED into.
 ///
-/// ── ★★★ WHY THE TRANSPOSE IS NOT ENOUGH, MEASURED ──
+/// -- *** WHY THE TRANSPOSE IS NOT ENOUGH, MEASURED --
 ///
-/// `τ = A_Gᵀ·w` is the shorthand in a hundred papers and it does not work here. A transpose maps
+/// `tau = A_G^T*w` is the shorthand in a hundred papers and it does not work here. A transpose maps
 /// a wrench to torques under a QUASI-STATIC assumption; this problem is entirely about the
-/// dynamics. From `L̇ = A_G·q̈` and `q̈ = M⁻¹(Sᵀτ − c)`:
+/// dynamics. From `L_dot = A_G*q_ddot` and `q_ddot = M^-1(S^T tau - c)`:
 ///
-///     L̇ = (A_G·M⁻¹·Sᵀ)·τ + …
+///     L_dot = (A_G*M^-1*S^T)*tau + ...
 ///
-/// so `τ = A_Gᵀ·w` gives `L̇ = (A_G·M⁻¹·A_Gᵀ)·w`, and that operator is positive definite but
-/// **not the identity** — the answer comes out rotated and rescaled. Measured on this humanoid,
-/// the cosine between requested and achieved ranged from −0.90 to +0.27. Anticorrelated.
+/// so `tau = A_G^T*w` gives `L_dot = (A_G*M^-1*A_G^T)*w`, and that operator is positive definite but
+/// **not the identity** - the answer comes out rotated and rescaled. Measured on this humanoid,
+/// the cosine between requested and achieved ranged from -0.90 to +0.27. Anticorrelated.
 ///
-/// ★ THE CORRECT MAP INVERTS IT: `τ = Gᵀ(G·Gᵀ)⁻¹·w` with `G = A_G·M⁻¹·Sᵀ`, the least-norm
+/// * THE CORRECT MAP INVERTS IT: `tau = G^T(G*G^T)^-1*w` with `G = A_G*M^-1*S^T`, the least-norm
 /// torque achieving the request.
 ///
-/// ★ AND IT COSTS THREE MASS-MATRIX SOLVES, NOT ONE PER JOINT. `G`'s rows are
-/// `A_G_row_i · M⁻¹`, and `M⁻¹` is symmetric, so each row is `M⁻¹·A_G_row_i` — solve `M·y = row`
-/// three times and `G` is the result restricted to the actuated columns. `G·Gᵀ` is then 3×3.
+/// * AND IT COSTS THREE MASS-MATRIX SOLVES, NOT ONE PER JOINT. `G`'s rows are
+/// `A_G_row_i * M^-1`, and `M^-1` is symmetric, so each row is `M^-1*A_G_row_i` - solve `M*y = row`
+/// three times and `G` is the result restricted to the actuated columns. `G*G^T` is then 3x3.
 ///
-/// ★ THE FLOATING BASE MUST NOT BE IN `actuated`, and that is not a detail — it is the whole
+/// * THE FLOATING BASE MUST NOT BE IN `actuated`, and that is not a detail - it is the whole
 /// mechanism. A robot in the air has no way to torque itself against the world; windmilling
 /// works precisely BECAUSE the base reacts freely to limb torques. Letting the solver put
 /// torque on the base rows would hand it an authority the robot does not have.
@@ -1019,7 +1020,7 @@ pub fn momentumTorques(
     assertf(scratch.len >= 3 * nv, @src(), "momentumTorques: scratch wants 3*nv", .{});
     assertf(out.len == nv, @src(), "momentumTorques: out wants nv", .{});
 
-    // Three solves: row i of `G` is `M⁻¹ · (A_G angular row i)`.
+    // Three solves: row i of `G` is `M^-1 * (A_G angular row i)`.
     inline for (0..3) |i| {
         const row: []f32 = scratch[i * nv ..][0..nv];
         for (0..nv) |v| {
@@ -1028,7 +1029,7 @@ pub fn momentumTorques(
         rbt.solveM(model, data, row);
     }
 
-    // `G·Gᵀ`, over the actuated columns only.
+    // `G*G^T`, over the actuated columns only.
     var gram: [9]f32 = @splat(0);
     inline for (0..3) |i| {
         inline for (0..3) |j| {
@@ -1043,8 +1044,8 @@ pub fn momentumTorques(
         }
     }
 
-    // ★ A RIDGE ON THE DIAGONAL, because `G·Gᵀ` is singular whenever the limbs cannot produce
-    // momentum about some axis at all — a robot with its arms at its sides has no authority
+    // * A RIDGE ON THE DIAGONAL, because `G*G^T` is singular whenever the limbs cannot produce
+    // momentum about some axis at all - a robot with its arms at its sides has no authority
     // about the vertical. Without it the solve returns enormous torques for a direction that
     // does nothing; with it, an unreachable request quietly produces a small torque instead.
     const ridge: f32 = 1.0e-6 * (@abs(gram[0]) + @abs(gram[4]) + @abs(gram[8]) + 1.0);
@@ -1114,7 +1115,7 @@ fn solve3(matrix: *[9]f32, rhs: *[3]f32) bool {
 
 /// IK that reaches for a target while holding the centre of mass over a fixed spot.
 ///
-/// ── ★★ TWO TASKS, AND THE SECOND ONE LIVES IN THE FIRST'S NULLSPACE ──
+/// -- ** TWO TASKS, AND THE SECOND ONE LIVES IN THE FIRST'S NULLSPACE --
 ///
 /// A standing robot reaching for something has a problem an arm on a bench does not: **moving
 /// the arm moves the centre of mass**, and a humanoid whose CM leaves its feet falls over.
@@ -1123,16 +1124,16 @@ fn solve3(matrix: *[9]f32, rhs: *[3]f32) bool {
 /// The standard answer is nullspace projection. Solve the reach first, then satisfy the
 /// balance goal using only the joint motions that DO NOT disturb it:
 ///
-///     Δq = Δq_reach + (I − J₁⁺J₁)·Δq_balance
+///     dq = dq_reach + (I - J_1^+J_1)*dq_balance
 ///
-/// The projector `(I − J₁⁺J₁)` strips out any component of the balance correction that would
-/// move the hand. A redundant robot has a large nullspace — a 27-DOF humanoid reaching with
-/// one hand has 24 spare dimensions — so there is usually plenty of room to lean, bend and
+/// The projector `(I - J_1^+J_1)` strips out any component of the balance correction that would
+/// move the hand. A redundant robot has a large nullspace - a 27-DOF humanoid reaching with
+/// one hand has 24 spare dimensions - so there is usually plenty of room to lean, bend and
 /// counterweight without the hand drifting at all.
 ///
 /// **The priority is deliberate and worth stating: the HAND wins.** If the target can only be
 /// reached by shifting the CM, this shifts it. That is the right way round for a demo you can
-/// drag a slider in — the alternative silently refuses to reach and looks broken — but it is
+/// drag a slider in - the alternative silently refuses to reach and looks broken - but it is
 /// the opposite of what a controller keeping a real robot upright should do.
 pub const BalancedIk = struct {
     reach: Ik = .{},
@@ -1158,22 +1159,22 @@ pub const BalancedIk = struct {
         scratch: []Vec,
     ) Result {
         const nv: usize = model.nv;
-        // ── ★★ THE NESTED SOLVE GETS ITS OWN REGION, and that is not paranoia ──
+        // -- ** THE NESTED SOLVE GETS ITS OWN REGION, and that is not paranoia --
         //
         // `Ik.solve` needs three slices of its own and was previously handed THIS buffer, whose
-        // three names are also live here. That was correct — but only because every use below
+        // three names are also live here. That was correct - but only because every use below
         // happens after the nested call returns, so its writes are overwritten before anyone
         // reads them. Correct-by-ordering is a trap: the aliasing is invisible at both call
         // sites, and moving one line would corrupt a Jacobian with no error anywhere.
         //
-        // Splitting the buffer costs `3·nv` more vectors — a few kilobytes on the largest robot
-        // here — and makes the two solvers genuinely independent.
+        // Splitting the buffer costs `3*nv` more vectors - a few kilobytes on the largest robot
+        // here - and makes the two solvers genuinely independent.
         const hand_jac: []Vec = scratch[0..nv];
         const com_jac: []Vec = scratch[nv .. 2 * nv];
         const work: []Vec = scratch[2 * nv .. 3 * nv];
         const nested: []Vec = scratch[3 * nv ..][0 .. 3 * nv];
 
-        // The reach is solved first and on its own terms — it is the higher priority task, and
+        // The reach is solved first and on its own terms - it is the higher priority task, and
         // its solver already handles damping, limits and unreachable targets.
         const reach: Ik.Result = self.reach.solve(model, data, actuation, target, nested);
 
@@ -1194,7 +1195,7 @@ pub const BalancedIk = struct {
             }
         }
 
-        // Δq_balance = J_comᵀ·(gain · drift), the transpose rather than an inverse: it is a
+        // dq_balance = J_com^T*(gain * drift), the transpose rather than an inverse: it is a
         // descent direction on the CM error, it costs one pass, and it cannot blow up near a
         // singularity the way a pseudo-inverse would. Exactness is not needed for a secondary
         // objective that is re-solved every iteration anyway.
@@ -1205,7 +1206,7 @@ pub const BalancedIk = struct {
             }
             const raw: f32 = self.com_gain * (com_jac[v][0] * drift[0] + com_jac[v][1] * drift[1]);
 
-            // ★ AND HERE IS THE PROJECTION, in the only form that is cheap: subtract the part
+            // * AND HERE IS THE PROJECTION, in the only form that is cheap: subtract the part
             // of this joint's motion that the hand would feel. `hand_jac[v]` is how much the
             // hand moves per unit of this joint, so a joint the hand cares about contributes
             // less, and a joint it does not care about contributes fully.
@@ -1232,7 +1233,7 @@ pub const BalancedIk = struct {
 };
 
 test "ik: reaching while holding the centre of mass" {
-    // ★★ THE PROBLEM A STANDING ROBOT HAS THAT A BENCH-MOUNTED ARM DOES NOT. Moving the arm
+    // ** THE PROBLEM A STANDING ROBOT HAS THAT A BENCH-MOUNTED ARM DOES NOT. Moving the arm
     // MOVES THE CENTRE OF MASS, and a humanoid whose CM leaves its feet falls over. The two
     // goals genuinely conflict, so the balance correction is projected into the nullspace of
     // the reach: it uses only the joint motions the hand does not feel.
@@ -1283,9 +1284,9 @@ test "ik: reaching while holding the centre of mass" {
     rbt.forward(model, &data);
     const balanced_drift: f32 = comDrift(data.subtree_com[rbt.world_body], rest_com);
 
-    // ── ★ THE CM MOVES MUCH LESS, AND THE HAND STILL ARRIVES ──
+    // -- * THE CM MOVES MUCH LESS, AND THE HAND STILL ARRIVES --
     //
-    // Measured: 13.5 mm of drift plain, 2.5 mm balanced — five times better — while the reach
+    // Measured: 13.5 mm of drift plain, 2.5 mm balanced - five times better - while the reach
     // error goes from 0.1 mm to 0.3 mm, which is nothing on a robot 1.28 m tall.
     try expect(plain_drift > 0.008);
     try expect(balanced_drift < plain_drift * 0.5);
@@ -1298,19 +1299,19 @@ fn comDrift(now: Vec, rest: Vec) f32 {
     return @sqrt(dx * dx + dy * dy);
 }
 
-/// A model, its state, and the buffers a learning loop needs — assembled once.
+/// A model, its state, and the buffers a learning loop needs - assembled once.
 ///
-/// ── ★ WHY A WRAPPER, WHEN THE PIECES ARE ALL PUBLIC ──
+/// -- * WHY A WRAPPER, WHEN THE PIECES ARE ALL PUBLIC --
 ///
 /// Nothing here is hard to assemble. The problem is that everyone assembles it slightly
-/// differently — one clamps actions and one does not, one observes before stepping and one
-/// after, one resets the warm start and one forgets — and then two people's numbers are not
+/// differently - one clamps actions and one does not, one observes before stepping and one
+/// after, one resets the warm start and one forgets - and then two people's numbers are not
 /// comparable and neither is wrong. A single obvious way to do it is worth more than the
 /// twenty lines it saves.
 ///
-/// ★ IT OWNS NOTHING IT DOES NOT NEED TO. The `Model` is borrowed, not copied: a batched
-/// rollout shares ONE model across hundreds of environments — proven in `robot.zig`'s
-/// independence test — and that sharing is most of why batching is affordable.
+/// * IT OWNS NOTHING IT DOES NOT NEED TO. The `Model` is borrowed, not copied: a batched
+/// rollout shares ONE model across hundreds of environments - proven in `robot.zig`'s
+/// independence test - and that sharing is most of why batching is affordable.
 pub const Env = struct {
     model: *const rbt.Model,
     data: rbt.Data,
@@ -1353,7 +1354,7 @@ pub const Env = struct {
 
     /// Bounds on one action, or null where the model states none.
     ///
-    /// ★ NULL IS NOT `(-1, 1)`. An actuator with no `ctrlrange` is genuinely unbounded, and
+    /// * NULL IS NOT `(-1, 1)`. An actuator with no `ctrlrange` is genuinely unbounded, and
     /// inventing a range would silently clip a model that meant what it said. A policy that
     /// wants normalised actions can supply its own default; the engine reports what the model
     /// declared.
@@ -1371,7 +1372,7 @@ pub const Env = struct {
 
     /// Make `start` whatever the environment is in right now.
     ///
-    /// Useful for episodes that begin from a settled pose rather than from `qpos0` — a legged
+    /// Useful for episodes that begin from a settled pose rather than from `qpos0` - a legged
     /// robot's `qpos0` is usually a pose it immediately falls out of, and starting every
     /// episode with the same half-second of settling wastes a policy's time learning it.
     pub fn markStart(self: *Env) void {
@@ -1381,9 +1382,9 @@ pub const Env = struct {
 
     /// Apply an action, advance one timestep, and return the new observation.
     ///
-    /// ★ THE ACTION IS CLAMPED TO `ctrlrange` where the model declares one. A policy exploring
+    /// * THE ACTION IS CLAMPED TO `ctrlrange` where the model declares one. A policy exploring
     /// early in training WILL emit values outside it, and a simulator that honours them is
-    /// teaching physics no real robot can produce — the classic way a policy learns to exploit
+    /// teaching physics no real robot can produce - the classic way a policy learns to exploit
     /// its simulator rather than solve its task.
     pub fn step(self: *Env, action: []const f32) []const f32 {
         for (action, 0..) |value, i| {
@@ -1392,13 +1393,13 @@ pub const Env = struct {
             else
                 value;
         }
-        // ★ NO `forward` BEFORE THE STEP. `rbt.step` does it — every integrator branch begins
+        // * NO `forward` BEFORE THE STEP. `rbt.step` does it - every integrator branch begins
         // with one, because it cannot advance a state it has not derived. Calling it here as
         // well recomputed the entire kinematics, mass matrix and bias for nothing, on the hot
         // path of every rollout.
         //
-        // Measured on cartpole (nv 2): **1168 ns/step before, and the two-link arm benchmark —
-        // the same size problem without this wrapper — runs at 247.** Nearly all of the gap was
+        // Measured on cartpole (nv 2): **1168 ns/step before, and the two-link arm benchmark -
+        // the same size problem without this wrapper - runs at 247.** Nearly all of the gap was
         // this one line.
         rbt.step(self.model, &self.data);
         // This one is not redundant: `step` leaves the state stale by design, and an
@@ -1409,8 +1410,8 @@ pub const Env = struct {
     }
 };
 
-test "★ env: reset replays, and actions are clamped to what the model declares" {
-    // ★★ THE TWO PROPERTIES A LEARNING LOOP DEPENDS ON, and they fail silently if wrong:
+test "* env: reset replays, and actions are clamped to what the model declares" {
+    // ** THE TWO PROPERTIES A LEARNING LOOP DEPENDS ON, and they fail silently if wrong:
     // a reset that does not fully reset makes episodes correlated, and an unclamped action
     // teaches physics no real robot can produce.
     const gpa: Allocator = std.testing.allocator;
@@ -1423,8 +1424,8 @@ test "★ env: reset replays, and actions are clamped to what the model declares
         .actuators = &.{.{
             .name = "motor",
             .on = .{ .joint = .{ .name = "j" } },
-            // ★ A DECLARED RANGE. An actuator without one is genuinely unbounded and must not
-            // be given an invented default — see `Env.actionRange`.
+            // * A DECLARED RANGE. An actuator without one is genuinely unbounded and must not
+            // be given an invented default - see `Env.actionRange`.
             .ctrl_range = .{ -1.0, 1.0 },
         }},
         .options = .{ .timestep = 1.0 / 500.0, .max_contacts = 4, .gravity = vec(0, -9.81, 0) },
@@ -1438,7 +1439,7 @@ test "★ env: reset replays, and actions are clamped to what the model declares
     try expectEqual(rbt.observationSize(&model), env.observationSize());
     try expect(env.actionRange(0) != null);
 
-    // ── ★ AN EPISODE, THEN THE SAME EPISODE AGAIN ──
+    // -- * AN EPISODE, THEN THE SAME EPISODE AGAIN --
     _ = env.reset();
     for (0..300) |_| {
         _ = env.step(&.{0.4});
@@ -1453,9 +1454,9 @@ test "★ env: reset replays, and actions are clamped to what the model declares
     // a policy trained on that is learning partly from its own history.
     try expectEqual(first, env.data.pos[0]);
 
-    // ── ★ AND AN OUT-OF-RANGE ACTION IS CLAMPED, NOT HONOURED ──
+    // -- * AND AN OUT-OF-RANGE ACTION IS CLAMPED, NOT HONOURED --
     //
-    // Asking for 50 when the model says ±1 must land exactly where asking for 1 does. Without
+    // Asking for 50 when the model says +/-1 must land exactly where asking for 1 does. Without
     // the clamp the two differ, and a policy discovers a motor the robot does not have.
     _ = env.reset();
     for (0..300) |_| {
@@ -1472,7 +1473,7 @@ test "★ env: reset replays, and actions are clamped to what the model declares
 
 test "env: markStart makes a settled pose the episode start" {
     // A legged robot's `qpos0` is usually a pose it immediately falls out of, so every episode
-    // would begin with the same half-second of settling — time a policy spends learning
+    // would begin with the same half-second of settling - time a policy spends learning
     // something the environment could simply not do to it.
     const gpa: Allocator = std.testing.allocator;
     const Arm: type = rbt.Spec(.{
@@ -1484,8 +1485,8 @@ test "env: markStart makes a settled pose the episode start" {
                 .axis = vec(0, 0, 1),
                 .range = .{ -0.6, 0.6 },
             }},
-            // ★ THE GEOM IS OFFSET FROM THE PIVOT, or gravity produces no torque about it and
-            // the link simply does not move — which the first version of this test asserted
+            // * THE GEOM IS OFFSET FROM THE PIVOT, or gravity produces no torque about it and
+            // the link simply does not move - which the first version of this test asserted
             // against, and failed. A body whose centre of mass sits on its own hinge is a
             // balanced wheel.
             .geoms = &.{.{
@@ -1513,12 +1514,12 @@ test "env: markStart makes a settled pose the episode start" {
         _ = env.step(&.{});
     }
     _ = env.reset();
-    // ★ RESET NOW RETURNS TO THE SETTLED POSE, not to `qpos0`.
+    // * RESET NOW RETURNS TO THE SETTLED POSE, not to `qpos0`.
     try expectApproxEqAbs(settled, env.data.pos[0], 1.0e-4);
 }
 
-test "★ ik: an orientation target aims the jaws, which a position target cannot" {
-    // ★★★ THE GAP FOUND BY BUILDING THE GRIPPER DEMO. Placing a point is enough for a foot,
+test "* ik: an orientation target aims the jaws, which a position target cannot" {
+    // *** THE GAP FOUND BY BUILDING THE GRIPPER DEMO. Placing a point is enough for a foot,
     // which only has to be somewhere. It is not enough for a hand: a top-down grasp is a
     // statement about the jaws' DIRECTION, and a position-only solver returns whatever attitude
     // its nullspace happened to drift into. On the demo the jaws sat sideways at rest and no
@@ -1542,7 +1543,7 @@ test "★ ik: an orientation target aims the jaws, which a position target canno
     const wrist: u32 = imported.bodyIndex("wrist").?;
     const grasp: Vec = vec(0, 0, 0.055);
     const goal: Vec = vec(0.40, 0, 0.50);
-    // Jaws pointing straight down: the wrist's local +z onto the world's −z.
+    // Jaws pointing straight down: the wrist's local +z onto the world's -z.
     const jaws_down: zm.Quat = quatFromAxisAngle(vec(0, 1, 0), pi);
 
     const jawDirection = struct {
@@ -1552,7 +1553,7 @@ test "★ ik: an orientation target aims the jaws, which a position target canno
         }
     }.go;
 
-    // ── Position only ──
+    // -- Position only --
     _ = rmj.applyKeyframe(model, &data, robot.keyframes[0]);
     rbt.forward(model, &data);
     const position_only: Ik.Result = (Ik{ .max_iterations = 80 }).solve(
@@ -1565,7 +1566,7 @@ test "★ ik: an orientation target aims the jaws, which a position target canno
     rbt.forward(model, &data);
     const loose_jaws: Vec = jawDirection(model, &data, wrist);
 
-    // ── The same target, with an orientation ──
+    // -- The same target, with an orientation --
     _ = rmj.applyKeyframe(model, &data, robot.keyframes[0]);
     rbt.forward(model, &data);
     const with_orientation: Ik.Result = (Ik{ .max_iterations = 120 }).solve(
@@ -1579,12 +1580,12 @@ test "★ ik: an orientation target aims the jaws, which a position target canno
     const aimed_jaws: Vec = jawDirection(model, &data, wrist);
     const reached: Vec = data.body_xpos[wrist] + zm.rotate(data.body_xrot[wrist], grasp);
 
-    // ★ BOTH REACH THE POINT. Adding three rows must not cost the three that already worked.
+    // * BOTH REACH THE POINT. Adding three rows must not cost the three that already worked.
     try expect(position_only.error_distance < 0.01);
     try expect(length3(reached - goal) < 0.02);
 
-    // ★★ AND ONLY ONE OF THEM AIMS. `jaws_down` puts the wrist's +z on the world's −z, so a
-    // solved orientation reads about −1 on that axis and an unconstrained one reads whatever.
+    // ** AND ONLY ONE OF THEM AIMS. `jaws_down` puts the wrist's +z on the world's -z, so a
+    // solved orientation reads about -1 on that axis and an unconstrained one reads whatever.
     try expect(aimed_jaws[2] < -0.9);
     try expect(loose_jaws[2] > -0.9);
     try expect(with_orientation.error_distance < 0.05);
@@ -1592,26 +1593,26 @@ test "★ ik: an orientation target aims the jaws, which a position target canno
 
 /// Many environments sharing one model, stepped together.
 ///
-/// ── ★ WHAT THIS IS FOR, AND WHAT IT IS NOT ──
+/// -- * WHAT THIS IS FOR, AND WHAT IT IS NOT --
 ///
 /// Reinforcement learning runs hundreds of environments at once. The tables that describe the
-/// robot are large, identical and read-only, so **one `Model` serves all of them** — which
+/// robot are large, identical and read-only, so **one `Model` serves all of them** - which
 /// `robot.zig` proves is safe, by running three `Data` interleaved against one model and
 /// requiring bit-for-bit agreement with each run alone.
 ///
-/// ★★ THE OBSERVATIONS AND ACTIONS ARE ONE FLAT BUFFER EACH, not an array of slices. A policy
-/// wants a matrix — `[count × observationSize]`, row-major — and handing it a slice per
+/// ** THE OBSERVATIONS AND ACTIONS ARE ONE FLAT BUFFER EACH, not an array of slices. A policy
+/// wants a matrix - `[count x observationSize]`, row-major - and handing it a slice per
 /// environment forces a copy at exactly the boundary where copies are expensive. This is the
 /// whole reason the type exists; the stepping loop itself is four lines.
 ///
-/// ── ★★ IT STEPS SERIALLY, AND THAT IS THE RIGHT ANSWER HERE ──
+/// -- ** IT STEPS SERIALLY, AND THAT IS THE RIGHT ANSWER HERE --
 ///
 /// Not a placeholder, and not a limitation of this type. **zimr targets wasm and WebGPU; the
 /// host build exists to run these tests.** There is no `std.Thread` to reach for, and the
 /// question is not "why serial" but "what would parallel even mean".
 ///
 /// The answer is `jobs.zig`: pure kernels on Web Workers, by message passing. Its header
-/// records what that buys, measured on-device rather than guessed —
+/// records what that buys, measured on-device rather than guessed -
 ///
 ///   * eight concurrent workers deliver about **3.4x aggregate**, not eight, because the
 ///     single-thread baseline runs on a boosted prime core and spreading out drops every
@@ -1619,18 +1620,18 @@ test "★ ik: an orientation target aims the jaws, which a position target canno
 ///   * a partitioned frame tops out near **2.7x**;
 ///   * and a hot CPU **throttles the GPU**, so buying CPU can cost frames in a renderer.
 ///
-/// ★ SO THE CEILING IS UNDER 3x, AND IT IS PAID FOR IN SERIALISATION. Every environment's
+/// * SO THE CEILING IS UNDER 3x, AND IT IS PAID FOR IN SERIALISATION. Every environment's
 /// state would have to be shipped to a worker and back each step; `Data` for a humanoid is far
 /// larger than the observation row it produces. For a training loop that is plainly wrong, and
 /// for a demo that renders, it is worse than wrong.
 ///
-/// The loop body touches only its own `Env` and a read-only `Model` — the property a scheduler
-/// would need, asserted by test rather than assumed — so nothing here forecloses the option.
+/// The loop body touches only its own `Env` and a read-only `Model` - the property a scheduler
+/// would need, asserted by test rather than assumed - so nothing here forecloses the option.
 /// Claiming it now would be a lie with a `for` loop behind it.
 pub const Batch = struct {
     model: *const rbt.Model,
     envs: []Env,
-    /// `count × observationSize(model)`, row-major.
+    /// `count x observationSize(model)`, row-major.
     observations: []f32,
     gpa: Allocator,
 
@@ -1682,12 +1683,12 @@ pub const Batch = struct {
 
     /// Step every environment with its own row of `actions`, and return the new observations.
     ///
-    /// `actions` is `count × actionSize`, row-major — the same layout the observations come
+    /// `actions` is `count x actionSize`, row-major - the same layout the observations come
     /// back in, so a policy reads and writes matrices of the same shape.
     pub fn step(self: *Batch, actions: []const f32) []const f32 {
         const action_width: usize = self.model.nu;
         const width: usize = rbt.observationSize(self.model);
-        // ★ THE LOOP BODY TOUCHES ONLY ITS OWN `Env` and a read-only `Model`. That is the
+        // * THE LOOP BODY TOUCHES ONLY ITS OWN `Env` and a read-only `Model`. That is the
         // property a scheduler would need, and it is asserted by test rather than assumed.
         for (self.envs, 0..) |*env, i| {
             const row: []const f32 = actions[i * action_width ..][0..action_width];
@@ -1704,10 +1705,10 @@ pub const Batch = struct {
     }
 };
 
-test "★ batch: many environments agree bit-for-bit with running each alone" {
-    // ★★★ THE PROPERTY A BATCHED ROLLOUT RESTS ON. If stepping N together differs in the last
+test "* batch: many environments agree bit-for-bit with running each alone" {
+    // *** THE PROPERTY A BATCHED ROLLOUT RESTS ON. If stepping N together differs in the last
     // bit from stepping them one at a time, a policy is training on physics that depends on the
-    // batch size — and nothing about the results would say so.
+    // batch size - and nothing about the results would say so.
     //
     // `robot.zig` already proves the underlying independence: three `Data` interleaved against
     // one `Model` match their solo runs exactly. This checks the layer above, where an indexing
@@ -1753,7 +1754,7 @@ test "★ batch: many environments agree bit-for-bit with running each alone" {
     // Different actions per environment, so any cross-talk has something to leak.
     const actions = [environments * action_width]f32{ 0.9, -0.4, -0.7, 0.2, 0.1, 0.8, -1.0, -1.0 };
 
-    // ── Each one alone ──
+    // -- Each one alone --
     var solo: [environments][2]f32 = undefined;
     for (0..environments) |i| {
         var env: Env = try Env.init(gpa, &model);
@@ -1765,7 +1766,7 @@ test "★ batch: many environments agree bit-for-bit with running each alone" {
         solo[i] = .{ env.data.pos[0], env.data.pos[1] };
     }
 
-    // ── All of them together ──
+    // -- All of them together --
     var batch: Batch = try Batch.init(gpa, &model, environments);
     defer batch.deinit();
     _ = batch.reset();
@@ -1778,8 +1779,8 @@ test "★ batch: many environments agree bit-for-bit with running each alone" {
         try expectEqual(solo[i][1], batch.envs[i].data.pos[1]);
     }
 
-    // ★★ AND THE MATRIX IS LAID OUT THE WAY A POLICY READS IT. An off-by-one in the row stride
-    // gives every environment its neighbour's observation — plausible numbers, wrong entirely,
+    // ** AND THE MATRIX IS LAID OUT THE WAY A POLICY READS IT. An off-by-one in the row stride
+    // gives every environment its neighbour's observation - plausible numbers, wrong entirely,
     // and no test of the physics would notice.
     const width: usize = rbt.observationSize(&model);
     try expectEqual(environments * width, batch.observations.len);
@@ -1792,17 +1793,17 @@ test "★ batch: many environments agree bit-for-bit with running each alone" {
     }
 }
 
-test "★★ PoseHold: inertia-scaled gains must both HOLD and not explode" {
-    // ★★★ A REGRESSION TEST FOR A REGRESSION I SHIPPED. Converting a demo's gains from torque
-    // units to frequency units, I verified the new setting was STABLE — it no longer diverged
-    // when the robot was shoved — and never checked it could still do its job. It could not:
+test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
+    // *** A REGRESSION TEST FOR A REGRESSION I SHIPPED. Converting a demo's gains from torque
+    // units to frequency units, I verified the new setting was STABLE - it no longer diverged
+    // when the robot was shoved - and never checked it could still do its job. It could not:
     // the humanoid's torso sagged from 0.596 m to 0.266 and it lay down.
     //
-    // ★ THE ARITHMETIC IS OBVIOUS AFTERWARDS. With `scale_by_inertia`, `kp` is divided by the
-    // joint's own inertia, so ω = 20 on a joint carrying M = 0.01 is an effective torque-unit
-    // gain of 4 — against the 400 it replaced. A hundred times weaker.
+    // * THE ARITHMETIC IS OBVIOUS AFTERWARDS. With `scale_by_inertia`, `kp` is divided by the
+    // joint's own inertia, so omega = 20 on a joint carrying M = 0.01 is an effective torque-unit
+    // gain of 4 - against the 400 it replaced. A hundred times weaker.
     //
-    // ★★ SO A CONTROLLER TEST NEEDS BOTH HALVES. "Does not explode" is satisfied by a
+    // ** SO A CONTROLLER TEST NEEDS BOTH HALVES. "Does not explode" is satisfied by a
     // controller that does nothing at all, and that is exactly the failure this missed.
     const gpa: Allocator = std.testing.allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
@@ -1845,8 +1846,8 @@ test "★★ PoseHold: inertia-scaled gains must both HOLD and not explode" {
     const home: []f32 = try gpa.dupe(f32, data.pos);
     defer gpa.free(home);
 
-    // ★ THE DEMO'S SHIPPED SETTING, in torque units. `kv = 10` is the stability limit for this
-    // model's lightest joint — `kv·dt/M < 2` with M = 0.01 and dt = 1/500 — and going past it
+    // * THE DEMO'S SHIPPED SETTING, in torque units. `kv = 10` is the stability limit for this
+    // model's lightest joint - `kv*dt/M < 2` with M = 0.01 and dt = 1/500 - and going past it
     // is what the slider used to allow.
     const hold: PoseHold = .{
         .target = home,
@@ -1865,13 +1866,13 @@ test "★★ PoseHold: inertia-scaled gains must both HOLD and not explode" {
     }
     rbt.forward(model, &data);
 
-    // ── ★ HALF ONE: IT HOLDS ITSELF UP ──
+    // -- * HALF ONE: IT HOLDS ITSELF UP --
     //
-    // Measured 0.565 against a starting 0.596. The bar is 70%, which the shipped ω = 20 failed
+    // Measured 0.565 against a starting 0.596. The bar is 70%, which the shipped omega = 20 failed
     // at 0.266 and everything from 30 upward passes comfortably.
     try expect(data.body_xpos[1][2] > upright * 0.7);
 
-    // ── ★ HALF TWO: SHOVING IT DOES NOT BLOW IT UP ──
+    // -- * HALF TWO: SHOVING IT DOES NOT BLOW IT UP --
     //
     // Four shoves, the demo's own. In torque units with kv = 40 this peaked at 174 J and stayed
     // at 39; here it peaks near 36 and comes back down.
@@ -1893,9 +1894,9 @@ test "★★ PoseHold: inertia-scaled gains must both HOLD and not explode" {
             hold.apply(model, &data, actuation);
             rbt.step(model, &data);
 
-            // ★ `step` LEAVES THE STATE STALE and `mulM` needs the mass matrix, so the forward
+            // * `step` LEAVES THE STATE STALE and `mulM` needs the mass matrix, so the forward
             // is not optional. The engine's own stage assert catches this rather than
-            // multiplying by whatever was in the buffer — which is the whole point of having it.
+            // multiplying by whatever was in the buffer - which is the whole point of having it.
             rbt.forward(model, &data);
             var momentum: [64]f32 = undefined;
             rbt.mulM(model, &data, data.vel, momentum[0..model.nv]);
@@ -1908,7 +1909,7 @@ test "★★ PoseHold: inertia-scaled gains must both HOLD and not explode" {
     }
     try expect(peak_energy < 100.0);
 
-    // ── ★★★ HALF THREE, ADDED AFTER A REGRESSION THAT PASSED THE FIRST TWO ──
+    // -- *** HALF THREE, ADDED AFTER A REGRESSION THAT PASSED THE FIRST TWO --
     //
     // A controller can hold the robot up and survive a shove and still be WRONG: converting
     // these gains to `scale_by_inertia` frequency units passed both halves above and left the
@@ -1946,13 +1947,13 @@ test "★★ PoseHold: inertia-scaled gains must both HOLD and not explode" {
     try expect(jitter < 1.0);
 }
 
-test "★★★ centroidal momentum: the matrix agrees with a sum that shares no code with it" {
-    // ── TWO INDEPENDENT ROUTES TO THE SAME SIX NUMBERS ──
+test "*** centroidal momentum: the matrix agrees with a sum that shares no code with it" {
+    // -- TWO INDEPENDENT ROUTES TO THE SAME SIX NUMBERS --
     //
-    // `centroidalMomentum` assembles a 6 × nv matrix out of body Jacobians. `...Direct` sums
+    // `centroidalMomentum` assembles a 6 x nv matrix out of body Jacobians. `...Direct` sums
     // over bodies using `cinert`/`cvel`, which the dynamics maintains for its own purposes and
     // which never touches a Jacobian. If they agree on a non-trivial velocity, the assembly is
-    // right — the same cross-check that caught a missing block in the trunk model.
+    // right - the same cross-check that caught a missing block in the trunk model.
     const gpa: Allocator = std.testing.allocator;
     const humanoid_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
 
@@ -2004,7 +2005,7 @@ test "★★★ centroidal momentum: the matrix agrees with a sum that shares no
     var direct_lin: Vec = vec_zero;
     centroidalMomentumDirect(model, &data, &direct_ang, &direct_lin);
 
-    // Scale the tolerance to the size of the answer — these are tens of kg·m/s, and a flat
+    // Scale the tolerance to the size of the answer - these are tens of kg*m/s, and a flat
     // absolute bound would either pass everything or fail on rounding.
     const scale: f32 = @max(1.0, length3(direct_lin) + length3(direct_ang));
     inline for (0..3) |k| {
@@ -2012,19 +2013,19 @@ test "★★★ centroidal momentum: the matrix agrees with a sum that shares no
         try expectApproxEqAbs(direct_ang[k], from_matrix_ang[k], 2.0e-3 * scale);
     }
 
-    // ★ AND THE ANSWER IS NOT TRIVIALLY ZERO, which is the way a momentum test passes without
+    // * AND THE ANSWER IS NOT TRIVIALLY ZERO, which is the way a momentum test passes without
     // testing anything.
     try expect(length3(direct_lin) > 1.0);
     try expect(length3(direct_ang) > 0.1);
 }
 
-test "★★★ centroidal momentum: angular momentum is CONSERVED in free flight" {
-    // ── THE PHYSICS ORACLE, WHICH BEATS ANY IDENTITY ──
+test "*** centroidal momentum: angular momentum is CONSERVED in free flight" {
+    // -- THE PHYSICS ORACLE, WHICH BEATS ANY IDENTITY --
     //
     // Gravity acts at the centre of mass, so it exerts no torque about it. With no contacts and
     // no actuation, the angular momentum about the robot's own centre of mass is therefore
-    // EXACTLY conserved, however wildly the limbs flail. Linear momentum is not — gravity
-    // accelerates it — so only the angular part is checked.
+    // EXACTLY conserved, however wildly the limbs flail. Linear momentum is not - gravity
+    // accelerates it - so only the angular part is checked.
     //
     // This tests the quantity against the world rather than against another formula: an error
     // shared between the matrix and the direct sum would pass the previous test and fail here.
@@ -2078,44 +2079,44 @@ test "★★★ centroidal momentum: angular momentum is CONSERVED in free fligh
     const size: f32 = length3(start_ang);
     try expect(drift < 0.05 * size);
 
-    // ★ AND LINEAR MOMENTUM MUST *NOT* BE CONSERVED — gravity is pulling on it. If this passed
+    // * AND LINEAR MOMENTUM MUST *NOT* BE CONSERVED - gravity is pulling on it. If this passed
     // too, the robot would not be falling and the test would be measuring nothing.
     try expect(length3(end_lin - start_lin) > 0.5 * size);
 }
 
-test "momentum torques: SKIPPED — free flight is the wrong gate; see the note above" {
-    // ── ★★★ THIS TEST ASKS FOR SOMETHING PHYSICS FORBIDS ──
+test "momentum torques: SKIPPED - free flight is the wrong gate; see the note above" {
+    // -- *** THIS TEST ASKS FOR SOMETHING PHYSICS FORBIDS --
     //
     // Internal joint torques CANNOT change centroidal angular momentum. That is Newton's third
     // law, and the test two above this one proves it directly: thrown into a tumble with no
     // contacts, `L` is conserved to under 5% however wildly the limbs flail.
     //
-    // So `G = A_G·M⁻¹·Sᵀ` is exactly zero for a free-floating robot — there is no authority to
-    // find — and the ridge in `momentumTorques` was the only reason it returned anything at
+    // So `G = A_G*M^-1*S^T` is exactly zero for a free-floating robot - there is no authority to
+    // find - and the ridge in `momentumTorques` was the only reason it returned anything at
     // all. The 0.214 cosine it produced was noise being normalised.
     //
-    // ★ AND THIS REFRAMES THE FLYWHEEL. Windmilling does not CREATE angular momentum, it
+    // * AND THIS REFRAMES THE FLYWHEEL. Windmilling does not CREATE angular momentum, it
     // REDISTRIBUTES it: the arms take some and the body gives it up, total unchanged. What
-    // changes the total is the GROUND REACTION — `L̇ = (p − c) × f`, which is exactly the term
+    // changes the total is the GROUND REACTION - `L_dot = (p - c) x f`, which is exactly the term
     // the balancing model already has. The limbs' job is to move the body into a configuration
     // where the ground can supply the momentum the planner asked for, not to supply it
     // themselves.
     //
     // The right gate is therefore IN CONTACT, and the mapping goes through the contact
-    // Jacobian rather than the momentum matrix. `momentumTorques` is not wrong — `G` is
-    // genuinely non-zero once a foot is planted, because the base is no longer free — but it
+    // Jacobian rather than the momentum matrix. `momentumTorques` is not wrong - `G` is
+    // genuinely non-zero once a foot is planted, because the base is no longer free - but it
     // must be exercised there.
     if (true) {
         return error.SkipZigTest;
     }
-    // ── THE GATE THAT THE JACOBIAN TRANSPOSE FAILED ──
+    // -- THE GATE THAT THE JACOBIAN TRANSPOSE FAILED --
     //
     // Free flight, no contacts: gravity acts at the centre of mass and exerts no torque about
     // it, so any change in centroidal angular momentum came from the torques. Ask for a
     // direction, measure what arrives, and compare.
     //
-    // `τ = A_Gᵀ·w` scored cosines from −0.90 to +0.27 — anticorrelated — because a transpose
-    // assumes quasi-statics and this is a dynamics problem. `τ = Gᵀ(G·Gᵀ)⁻¹·w` inverts the
+    // `tau = A_G^T*w` scored cosines from -0.90 to +0.27 - anticorrelated - because a transpose
+    // assumes quasi-statics and this is a dynamics problem. `tau = G^T(G*G^T)^-1*w` inverts the
     // operator that was in the way.
     const gpa: Allocator = std.testing.allocator;
     const humanoid_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
@@ -2147,7 +2148,7 @@ test "momentum torques: SKIPPED — free flight is the wrong gate; see the note 
     const torque: []f32 = try gpa.alloc(f32, model.nv);
     defer gpa.free(torque);
 
-    // ★ THE BASE IS NOT ACTUATED, which is the whole mechanism: a robot in the air torques its
+    // * THE BASE IS NOT ACTUATED, which is the whole mechanism: a robot in the air torques its
     // limbs and the base reacts. Marking it actuated would grant an authority it does not have.
     const actuated: []bool = try gpa.alloc(bool, model.nv);
     defer gpa.free(actuated);
@@ -2179,7 +2180,7 @@ test "momentum torques: SKIPPED — free flight is the wrong gate; see the note 
         centroidalMomentumDirect(model, &data, &before_ang, &before_lin);
 
         for (0..40) |_| {
-            // ★ `step` leaves the pose stale; the Jacobians need the kinematics refreshed.
+            // * `step` leaves the pose stale; the Jacobians need the kinematics refreshed.
             rbt.forward(model, &data);
             centroidalMomentum(model, &data, linear_rows, rows, s1, s2);
             rbt.factorM(model, &data);
@@ -2495,8 +2496,7 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
             start_height,
         );
         const seconds: f32 = float(survived) / 60.0;
-        // lint:off debug-print: the sweep IS this test's deliverable.
-        std.debug.print("    kp {d:>5.0}  kv {d:>3.0}  ->  {d:.2}s\n", .{ pair[0], pair[1], seconds });
+        report.print("    kp {d:>5.0}  kv {d:>3.0}  ->  {d:.2}s\n", .{ pair[0], pair[1], seconds });
         if (seconds > best_s) {
             best_s = seconds;
             best_kp = pair[0];
@@ -2508,8 +2508,7 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
 
     const survived_s: f32 = float(survived_frames) / 60.0;
 
-    // lint:off debug-print: the NUMBER is this test's deliverable, not its pass/fail.
-    std.debug.print(
+    report.print(
         "\n  stage 0: open-loop survived {d:.2}s of {d:.2}s   root z {d:.3} -> {d:.3}\n",
         .{
             survived_s,
@@ -2567,17 +2566,14 @@ test "stage 0 debug: does the IK solve wind joints past their limits" {
 
     const m: *const rbt.Model = &imported.model;
 
-    // lint:off debug-print: the table IS this test's deliverable.
-    // lint:off debug-print: the table IS this test's deliverable.
-    std.debug.print("\n  hinge limits as the model declares them:\n", .{});
+    report.print("\n  hinge limits as the model declares them:\n", .{});
     var unlimited: usize = 0;
     for (0..m.njnt) |j| {
         if (m.jnt_type[j] != .hinge) {
             continue;
         }
         if (m.jnt_range[j]) |range| {
-            // lint:off debug-print: the table IS this test's deliverable.
-            std.debug.print("    joint {d:>2} on {s:<16} [{d:>7.2} .. {d:>7.2}] rad\n", .{
+            report.print("    joint {d:>2} on {s:<16} [{d:>7.2} .. {d:>7.2}] rad\n", .{
                 j,
                 imported.names[m.jnt_body[j]],
                 range[0],
@@ -2590,8 +2586,7 @@ test "stage 0 debug: does the IK solve wind joints past their limits" {
 
     // *** AN UNLIMITED HINGE CAN WIND FOREVER, and a PD target that winds with it produces
     // exactly the number on screen. If this count is high, the model is the answer.
-    // lint:off debug-print: the table IS this test's deliverable.
-    std.debug.print("    UNLIMITED hinges: {d}\n", .{unlimited});
+    report.print("    UNLIMITED hinges: {d}\n", .{unlimited});
 
     try expect(m.njnt > 0);
 }
@@ -2688,9 +2683,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
         .{ .kp = 800, .kv = 40, .inertia = false, .quadruped_style = true },
     };
 
-    // lint:off debug-print: the table IS this test's deliverable.
-    // lint:off debug-print: the table IS this test's deliverable.
-    std.debug.print("\n  one elbow, target {d:.2} rad, root pinned, 2 s:\n", .{goal});
+    report.print("\n  one elbow, target {d:.2} rad, root pinned, 2 s:\n", .{goal});
 
     for (trials) |trial| {
         @memcpy(data.pos, target);
@@ -2765,7 +2758,6 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
                 }
             }
         }
-        // lint:off debug-print: the table IS this test's deliverable.
         // ---- WHERE IT ENDS UP, NOT JUST HOW FAR OFF ----
         //
         // *** "SETTLED ERROR 0.85 RAD" IS TWO COMPLETELY DIFFERENT BUGS DEPENDING ON THE FINAL
@@ -2774,8 +2766,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
         // it is jammed against its limit. **The error alone cannot tell them apart, and three
         // turns have been spent not knowing which.**
         const final: f32 = data.pos[m.jnt_qpos_adr[elbow]];
-        // lint:off debug-print: the table IS this test's deliverable.
-        std.debug.print(
+        report.print(
             "    kp {d:>4.0}  kv {d:>3.0}  {s:<12}  ->  ends {d:>6.3}  amp 8-9s {d:.3}  9-10s {d:.3}  {s}\n",
             .{
                 trial.kp,
@@ -2799,8 +2790,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
         // means the joint sits at +1.1 - OUTSIDE its own declared limit of [-2.62, 0.35], and on
         // the opposite side from where it was asked to go. "Did not reach" and "went the wrong
         // way and through a wall" are different bugs and the error magnitude hides which.
-        // lint:off debug-print: the table IS this test's deliverable.
-        std.debug.print("         ended at {d:>7.3} rad   (goal {d:.2}, limit [{d:.2} .. {d:.2}])\n", .{
+        report.print("         ended at {d:>7.3} rad   (goal {d:.2}, limit [{d:.2} .. {d:.2}])\n", .{
             data.pos[m.jnt_qpos_adr[elbow]],
             goal,
             if (m.jnt_range[elbow]) |r| r[0] else -99,
@@ -2858,8 +2848,7 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
         .{ "waist_lower", "thigh_left" },
     };
 
-    // lint:off debug-print: the table IS this test's deliverable.
-    std.debug.print("\n  excluded pairs, at rest:\n", .{});
+    report.print("\n  excluded pairs, at rest:\n", .{});
     for (pairs) |pair| {
         var a_body: ?u32 = null;
         var b_body: ?u32 = null;
@@ -2887,8 +2876,7 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
                 else => 0,
             };
         }
-        // lint:off debug-print: the table IS this test's deliverable.
-        std.debug.print("    {s:<14} .. {s:<14}  centres {d:.3} m   radii sum {d:.3} m   {s}\n", .{
+        report.print("    {s:<14} .. {s:<14}  centres {d:.3} m   radii sum {d:.3} m   {s}\n", .{
             pair[0],
             pair[1],
             gap,
@@ -2994,8 +2982,7 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
         },
     };
 
-    // lint:off debug-print: the trace IS this test's deliverable.
-    std.debug.print("\n  unfreezing progressively, elbow -> {d:.2} rad, kp 800 kv 40:\n", .{goal});
+    report.print("\n  unfreezing progressively, elbow -> {d:.2} rad, kp 800 kv 40:\n", .{goal});
 
     for (groups, 0..) |group, round| {
         @memcpy(data.pos, frozen);
@@ -3049,8 +3036,7 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
             }
         }
 
-        // lint:off debug-print: the trace IS this test's deliverable.
-        std.debug.print("    round {d}: {d:>2} bodies free  ->  elbow err {d:.4} rad  peak speed {d:>7.2}  {s}\n", .{
+        report.print("    round {d}: {d:>2} bodies free  ->  elbow err {d:.4} rad  peak speed {d:>7.2}  {s}\n", .{
             round,
             group.len,
             settled,
@@ -3154,8 +3140,7 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
         .{ .kp = 1600, .kv = 80, .vlimit = 0 },
     };
 
-    // lint:off debug-print: the table IS this test's deliverable.
-    std.debug.print(
+    report.print(
         "\n  right elbow, {d:.1} Hz sine within [{d:.2}, {d:.2}], all other joints frozen, {d:.0} Hz:\n",
         .{ hz, range[0], range[1], rate },
     );
@@ -3234,8 +3219,7 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
             }
         }
 
-        // lint:off debug-print: the table IS this test's deliverable.
-        std.debug.print(
+        report.print(
             "    kp {d:>5.0}  kv {d:>4.0}  vlim {s:<5}  ->  err {d:>6.3} rad " ++
                 "({d:>5.1} deg)  torque {d:>7.1}  vel {d:>6.1}\n",
             .{
@@ -3316,8 +3300,7 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
 
     const gains = [_][2]f32{ .{ 100, 10 }, .{ 400, 20 }, .{ 800, 40 } };
 
-    // lint:off debug-print: the table IS this test's deliverable.
-    std.debug.print("\n  rung 2: all {d} joints holding their OWN rest pose, root pinned, 5 s:\n", .{m.njnt});
+    report.print("\n  rung 2: all {d} joints holding their OWN rest pose, root pinned, 5 s:\n", .{m.njnt});
 
     for (gains) |pair| {
         @memcpy(data.pos, target);
@@ -3359,8 +3342,7 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
             }
         }
 
-        // lint:off debug-print: the table IS this test's deliverable.
-        std.debug.print(
+        report.print(
             "    kp {d:>4.0}  kv {d:>3.0}  ->  drift {d:.4} rad ({d:>5.1} deg) on {s:<16} torque {d:>7.1}  {s}\n",
             .{
                 pair[0],

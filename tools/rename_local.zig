@@ -1,4 +1,4 @@
-//! rename_local — scoped rename of a function-local variable.
+//! rename_local - scoped rename of a function-local variable.
 //!
 //! Usage: rename_local <file> <line> <old_name> <new_name>
 //!
@@ -6,7 +6,7 @@
 //! touching ONLY references within the enclosing function/test body. Works on
 //! the AST, so `.field` accesses, enum literals `.old`, and `old` in comments
 //! or strings are NOT touched (none are identifier nodes). Every binding named
-//! `old` in the function plus its identifier uses are renamed together — a
+//! `old` in the function plus its identifier uses are renamed together - a
 //! consistent alpha-rename that preserves semantics. Refuses if `new_name`
 //! already appears in scope (would merge names) or the decl isn't found. The
 //! compiler is the backstop: a missed reference becomes an "undeclared

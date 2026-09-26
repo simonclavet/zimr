@@ -1,7 +1,7 @@
 // IEEE comparisons against NaN. The Zig C backend wraps each float comparison as
 // `helper(a,b) <op> 0` (lt:<0, le:<=0, gt:>0, ge:>=0, eq:==0, ne:!=0). Pre-fix all
 // comparisons lowered to ONE spaceship returning 0 for an unordered (NaN) compare;
-// that is correct only for lt/gt — for le/ge/eq it yielded true (`0<=0`, `0>=0`,
+// that is correct only for lt/gt - for le/ge/eq it yielded true (`0<=0`, `0>=0`,
 // `0==0`) and for ne it yielded false (`0!=0`), so `NaN <= x` / `NaN == NaN` came
 // out true and `NaN != NaN` false. Every ordered compare with NaN must be false;
 // only `!=` is true.

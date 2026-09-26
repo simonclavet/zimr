@@ -1,7 +1,7 @@
-//! 3d_probe — the immediate-mode 3D pipeline, end to end. A drag-orbit
+//! 3d_probe - the immediate-mode 3D pipeline, end to end. A drag-orbit
 //! camera (z.updateCamera, .orbital) around a lit scene: a ground plane + grid,
 //! two cubes tumbling via drawCubeEx / drawCubeWiresEx, a smooth sphere, and a
-//! capped cylinder — all depth-tested in the dedicated 3D pass, batched into one
+//! capped cylinder - all depth-tested in the dedicated 3D pass, batched into one
 //! draw per topology. The caption is drawn in 2D before entering 3D so it stays
 //! screen-anchored. Drag to orbit; wheel to zoom.
 const std = @import("std");

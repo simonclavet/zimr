@@ -1,5 +1,5 @@
 //! Regression: a fixed array of extern structs INSIDE a struct INSIDE a
-//! GLOBAL struct — the shape a single consolidated `var g` produces. The C
+//! GLOBAL struct - the shape a single consolidated `var g` produces. The C
 //! backend nests the element address as `&(&(&((Globals*)&g))->boot)->ring)->array[i]`;
 //! before the last-resort lvalue-walker hook this leaked into a JS property
 //! access on a heap offset (`(addr).ring` -> undefined). Found on-device in
@@ -12,7 +12,7 @@ const Inner = struct {
 const Globals = struct {
     boot: Inner = .{},
 };
-// lint:off module-var: the regression's whole point — a consolidated global
+// lint:off module-var: the regression's whole point - a consolidated global
 var g: Globals = .{};
 
 fn poke(code: u32) u32 {

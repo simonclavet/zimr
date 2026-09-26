@@ -7,7 +7,7 @@
 // numeric heap address -> undefined), silently corrupting every access.
 //
 // This file's module name is `arr_prefixed_name_collision`, so its structs mangle
-// as `arr_prefixed_name_collision_*` — `arr_` followed by a LETTER, not a digit.
+// as `arr_prefixed_name_collision_*` - `arr_` followed by a LETTER, not a digit.
 // A genuine wrapper is always `arr_` + a digit (the element count). Exercises a
 // pointer deref, a by-value pass, and a 2-D array of such structs (the original
 // trigger). Self-checks (returns 0 on success).

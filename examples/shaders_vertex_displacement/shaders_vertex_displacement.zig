@@ -1,4 +1,4 @@
-//! shaders_vertex_displacement — the GPU displacement-mapping showcase for
+//! shaders_vertex_displacement - the GPU displacement-mapping showcase for
 //! vertex texture fetch. A flat grid is pushed into a living, lit 3D surface by
 //! sampling a Perlin heightfield IN THE VERTEX SHADER: three samples per vertex
 //! (the height plus two neighbours), from which the surface normal is computed
@@ -7,7 +7,7 @@
 //! height-graded colour + specular glint, depth-tested, orbited with the phone
 //! camera.
 //!
-//! This replaces the earlier CPU fallback — its premise, "zimr's vertex stage
+//! This replaces the earlier CPU fallback - its premise, "zimr's vertex stage
 //! doesn't sample textures", no longer holds now that vertex texture fetch works.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -114,8 +114,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.wgpu.queueWriteBuffer(f.gpu.queue, ibo, 0, std.mem.sliceAsBytes(idx));
 
     // Perlin heightfield. MIRROR_REPEAT addressing (not clamp) so the vertex
-    // shader can sample at uv*freq > 1 — and once scrolling pushes the lookup
-    // past 1 — and have the noise wrap instead of smearing the texture's edge
+    // shader can sample at uv*freq > 1 - and once scrolling pushes the lookup
+    // past 1 - and have the noise wrap instead of smearing the texture's edge
     // texels into flat / 1D-striped regions. Mirror (not plain repeat) keeps the
     // height continuous across the wrap since genImagePerlinNoise isn't tileable.
     // Linear filtering keeps the surface smooth. loadTextureFromImage would give
@@ -172,7 +172,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.clearViewport(f, .{ .r = 6, .g = 10, .b = 18, .a = 255 });
     const ps: *z.PassState = f.gl.pass;
     // Bracket the custom pipeline draw so the 2D immediate batch (the clear quad
-    // plus the text below) always flushes under the 2D pipeline, never ours —
+    // plus the text below) always flushes under the 2D pipeline, never ours -
     // our vertex-visible sampler sits at the batch's reserved group 1. See the
     // guard in gpu_iface.flushBatch and the note on LoadedShader.bindForDraw.
     f.gl.flushBeforeMaterialSwap();

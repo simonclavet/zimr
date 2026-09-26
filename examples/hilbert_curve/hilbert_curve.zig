@@ -1,10 +1,10 @@
 // examples/hilbert_curve.zig - animated space-filling curve.
 // The Hilbert curve is a continuous 1D path that tiles 2D space
 // in a recursively self-similar U-shape.  At order N it visits
-// exactly 4^N points on a 2^N × 2^N grid; at order 5 we get 1024
+// exactly 4^N points on a 2^N x 2^N grid; at order 5 we get 1024
 // points connected by 1023 line segments.
 // Each segment is coloured by its position along the curve via
-// HSV → RGB, so the colour wheel sweeps once across the full
+// HSV -> RGB, so the colour wheel sweeps once across the full
 // path.  The animation reveals the recursive structure: as the
 // stroke advances you watch the curve fill each quadrant in turn,
 // then bridge between them.
@@ -68,9 +68,9 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// The standard iterative Hilbert-step computation.  Walks the
 /// base-4 digits of `index` from least to most significant; each
 /// digit either keeps, transposes, reflects, or rotates the
-/// running point.  See e.g. Sedgewick's "Algorithms" §7.3.
+/// running point.  See e.g. Sedgewick's "Algorithms" section 7.3.
 fn computeHilbertStep(order: i32, index_in: i32) Vec2 {
-    // Base U-shape: bottom-left → top-left → top-right → bottom-right.
+    // Base U-shape: bottom-left -> top-left -> top-right -> bottom-right.
     const base: [4]Vec2 = .{
         .{ 0, 0 },
         .{ 0, 1 },
@@ -104,7 +104,7 @@ fn computeHilbertStep(order: i32, index_in: i32) Vec2 {
                 vect[0] += len_v;
                 vect[1] += len_v;
             },
-            // Bottom-right quadrant: rotate 180° within sub-grid.
+            // Bottom-right quadrant: rotate 180 deg within sub-grid.
             3 => {
                 const tmp: f32 = len_v - 1 - vect[0];
                 vect[0] = 2 * len_v - 1 - vect[1];
@@ -200,7 +200,7 @@ fn update(f: *z.Frame, state: *State) void {
 
     // ---- Render ------------------------------------------------------------
 
-    // Each stroke's hue rolls 0° → 360° across the full path.
+    // Each stroke's hue rolls 0 deg -> 360 deg across the full path.
     const stroke_total: f32 = float(state.path.len);
     var i: usize = 1;
     while (i <= visible and i < state.path.len) : (i += 1) {

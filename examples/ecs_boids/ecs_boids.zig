@@ -1,11 +1,11 @@
-//! ecs_boids — Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live
+//! ecs_boids - Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live
 //! in an archetype of Pos + Vel components. Each frame: a snapshot via `iterator` feeds a
 //! steering `forEach` (separation/alignment/cohesion), then integrate-and-wrap, then a
 //! render `iterator`. Proves the ECS subsystem (Registry, archetypes, iterator, forEach)
 //! on the wgpu backend. Self-running, viewport-relative under `.responsive`.
 //!
 //! IMPORTANT: Pos and Vel are DISTINCT struct types, not both `Vec2`. The ECS keys
-//! components by type, so two components of the same type collide into one — reading Pos
+//! components by type, so two components of the same type collide into one - reading Pos
 //! would return Vel data. Each component needs its own nominal type.
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;

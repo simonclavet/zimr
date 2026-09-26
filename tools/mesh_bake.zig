@@ -1,4 +1,4 @@
-//! mesh_bake — bake a DECIMATED glTF proxy into a generated `.zig` const.
+//! mesh_bake - bake a DECIMATED glTF proxy into a generated `.zig` const.
 //!
 //! The comptime corner of the helmet side-by-side needs geometry the
 //! COMPILER can rasterize: the full 15k-tri mesh is far past any sane
@@ -9,15 +9,15 @@
 //! example imports as the anonymous module `helmet_proxy`.
 //!
 //! Decimation is plain VERTEX CLUSTERING: snap each vertex to a uniform
-//! `grid³` lattice over the mesh bbox, average position/normal/uv per
+//! `grid^3` lattice over the mesh bbox, average position/normal/uv per
 //! occupied cell, re-index the triangles onto the cluster representatives,
 //! then drop degenerates (two-plus corners in one cell) and duplicate
 //! triangles (sorted-id key).  Crude but exactly right for a ~48px inset:
 //! the silhouette reads as THE helmet, and the comptime budget stays small.
 //!
-//! Tangents are deliberately ABSENT: the corner binds a 1×1 flat normal
+//! Tangents are deliberately ABSENT: the corner binds a 1x1 flat normal
 //! map, so the shader's TBN collapses to the geometric normal and any
-//! placeholder tangent works — the example supplies `(1,0,0,1)`.
+//! placeholder tangent works - the example supplies `(1,0,0,1)`.
 //!
 //! Usage: mesh_bake <in.glb> <out.zig> <grid> <tex_edge>
 
@@ -41,7 +41,7 @@ const DecodedImage = struct {
 };
 
 /// The same texture walk `pbr3d.decodeMaterialMap` does, narrowed to the
-/// base-color slot (this tool can't import pbr3d — it drags the whole
+/// base-color slot (this tool can't import pbr3d - it drags the whole
 /// wgpu surface into a host exe).
 fn decodeBaseColor(
     gpa: Allocator,
@@ -75,7 +75,7 @@ fn decodeBaseColor(
 }
 
 /// Decode the material's base-color image and box-filter it down to
-/// `tex_edge²` RGBA8.  A neutral mid-grey block when the material has no
+/// `tex_edge^2` RGBA8.  A neutral mid-grey block when the material has no
 /// base-color texture (keeps the generated file shape stable).
 fn bakeBaseColor(
     gpa: Allocator,
@@ -93,7 +93,7 @@ fn bakeBaseColor(
         }
         return grey;
     };
-    // Integer box filter, power-of-two factor — same scheme the example's
+    // Integer box filter, power-of-two factor - same scheme the example's
     // runtime CPU half uses, so the corner's texels are a coarser version
     // of the SAME data.
     var factor: u32 = 1;
@@ -139,7 +139,7 @@ const Decimated = struct {
 };
 
 /// Vertex-cluster decimation (the format-neutral core shared by the glTF and
-/// OBJ front-ends): pass 1 bbox, pass 2 snap each vertex to a `grid³` lattice
+/// OBJ front-ends): pass 1 bbox, pass 2 snap each vertex to a `grid^3` lattice
 /// cell and average pos/normal/uv per occupied cell, pass 3 re-index triangles
 /// onto the cluster representatives, dropping degenerate + duplicate tris.
 /// `texcoords` is null for geometry-only sources (OBJ); uv_sum stays zero.
@@ -274,7 +274,7 @@ fn emitProxyGeometry(
 }
 
 /// OBJ front-end: parse + de-index + triangulate, then decimate to a
-/// geometry-only proxy (positions/normals/indices — no material, no UVs).
+/// geometry-only proxy (positions/normals/indices - no material, no UVs).
 /// The Stanford bunny and friends land here; `tex_edge` is unused.
 fn bakeObj(
     gpa: Allocator,

@@ -1,4 +1,4 @@
-//! ecs_solar_system — port of the GL `ecs_solar_system` onto WebGPU.
+//! ecs_solar_system - port of the GL `ecs_solar_system` onto WebGPU.
 //! Same ECS exercise, drawn with the wgpu draw API (drawCircle).
 // A 2D solar system that exercises most of the ecs.zig API in one
 // place.  What's wired up:

@@ -1,4 +1,4 @@
-// examples/life.zig - Conway's Game of Life on an 80×45 grid.
+// examples/life.zig - Conway's Game of Life on an 80x45 grid.
 // A small but substantial demo that exercises shapes + input + text +
 // frame timing in one place.  The generation step is throttled to
 // ~10 Hz so cells are visible; rendering runs at full 60 Hz so the
@@ -22,10 +22,10 @@ const pow = zm.pow;
 
 const grid_w = 80;
 const grid_h = 45;
-const cell_px = 10; // 10×10 pixels per cell → 800×450 canvas
+const cell_px = 10; // 10x10 pixels per cell -> 800x450 canvas
 
 const State = struct {
-    /// Owned shapes-texture state. id=1 → rlgl's internal 1x1 white pixel.
+    /// Owned shapes-texture state. id=1 -> rlgl's internal 1x1 white pixel.
     /// Owned default-font cache. Populated by `loadFontFromTtfBytes` below.
     font: z.Font,
     ui_host: z.UiHost,
@@ -135,7 +135,7 @@ fn update(f: *z.Frame, state: *State) void {
     for (digit_keys, 1..) |k, slot_idx| {
         if (z.isKeyPressed(f.input, k)) {
             const slot: f32 = float(slot_idx);
-            // Slot 1 → 1.0s, Slot 9 → 0.016s (60 Hz).  Geometric.
+            // Slot 1 -> 1.0s, Slot 9 -> 0.016s (60 Hz).  Geometric.
             state.step_interval = pow(0.5, slot - 1) * 0.5;
         }
     }

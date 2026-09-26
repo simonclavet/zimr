@@ -100,7 +100,7 @@ fn update(f: *z.Frame, state: *State) void {
     if (z.isKeyDown(f.input, KEY_S) or z.isKeyDown(f.input, KEY_DOWN)) {
         dy += 1;
     }
-    // Normalise diagonal so it doesn't move √2x faster.
+    // Normalise diagonal so it doesn't move sqrt2x faster.
     if (dx != 0 and dy != 0) {
         const inv: f32 = 1.0 / sqrt(2.0);
         dx *= inv;
@@ -164,7 +164,7 @@ fn update(f: *z.Frame, state: *State) void {
     // ---- HUD text
     // Demos the default font: lazily loaded on first call to
     // `text.draw` via `getFontDefault`.  Glyphs are drawn from a
-    // 128×128 atlas - see `font_default.zig`.  We format into the
+    // 128x128 atlas - see `font_default.zig`.  We format into the
     // per-frame arena so no allocator churn between frames.
     const arena: Allocator = state.scratch.allocator();
     const fps_int: i32 = if (f.time.delta_time > 0.0) @trunc(1.0 / f.time.delta_time) else 0;

@@ -1,4 +1,4 @@
-//! src/shaders/effect_outline_fs.zig — alpha-silhouette outline,
+//! src/shaders/effect_outline_fs.zig - alpha-silhouette outline,
 //! raylib's `outline.fs` ported (their `shaders_texture_outline`).
 //!
 //! The 2D cousin of the inverted hull: sample the ALPHA channel at the
@@ -6,10 +6,10 @@
 //! is opaque, this transparent-ish texel is on the silhouette and gets
 //! painted the outline color.  Opaque texels keep their own color (the
 //! final mix by texel alpha), so the ink only shows in the halo the
-//! sprite doesn't cover.  Needs a source with a real alpha channel —
+//! sprite doesn't cover.  Needs a source with a real alpha channel -
 //! the gallery draws its scene on a TRANSPARENT clear for exactly this.
 //!
-//! All four samples are unconditional (uniform control flow — Tint).
+//! All four samples are unconditional (uniform control flow - Tint).
 
 const zm = @import("zm");
 const Vec = zm.Vec;
@@ -37,7 +37,7 @@ pub fn shaderMain(io_in: Io) Out {
     const outline: f32 = @min(a0 + a1 + a2 + a3, 1.0);
 
     // ink where neighbors are opaque, then the texel wins by its own
-    // alpha — raylib's double mix, unrolled per channel.
+    // alpha - raylib's double mix, unrolled per channel.
     var color: Vec = .{
         io_in.u.outline_color[0] * outline,
         io_in.u.outline_color[1] * outline,

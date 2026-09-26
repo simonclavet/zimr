@@ -1,8 +1,8 @@
-//! doc_sync — check that the code shown in a tutorial is the code that actually ships.
+//! doc_sync - check that the code shown in a tutorial is the code that actually ships.
 //!
 //! A tutorial that quotes drifted source is worse than no tutorial: it teaches a version
 //! of the code that does not exist, and it is confidently wrong. This already happened
-//! once — `robots.html` quoted `Inertia.translate`'s doc comment, the comment was
+//! once - `robots.html` quoted `Inertia.translate`'s doc comment, the comment was
 //! corrected in the source, and the page kept teaching the old (backwards) description
 //! until a one-off script caught it. This tool is that script, made permanent.
 //!
@@ -13,9 +13,9 @@
 //! the paired source file.
 //!
 //! ESCAPE HATCHES, because not every block is a quote:
-//!   * `<pre class="bad">`    — deliberately WRONG code, shown to explain a bug.
-//!   * `<pre class="sketch">` — illustrative usage that is not literally in the source.
-//!   * a line ending in `...` — an elision.
+//!   * `<pre class="bad">`    - deliberately WRONG code, shown to explain a bug.
+//!   * `<pre class="sketch">` - illustrative usage that is not literally in the source.
+//!   * a line ending in `...` - an elision.
 //! Anything else must match, which is the point: the default is "this is real code".
 //!
 //! Zig rather than Python because the house rule is that tooling is Zig (the analysis and
@@ -35,8 +35,8 @@ const allocPrint = std.fmt.allocPrint;
 const File = std.Io.File;
 
 /// The doc/source pairs this checks. Add a row when a tutorial starts quoting code.
-/// ★ SEVERAL SOURCES PER DOC, because a tutorial that covers a subsystem quotes the whole
-/// subsystem. A line passes if it appears in ANY of them — the alternative, one pair per
+/// * SEVERAL SOURCES PER DOC, because a tutorial that covers a subsystem quotes the whole
+/// subsystem. A line passes if it appears in ANY of them - the alternative, one pair per
 /// source, would check every block against every file and report the other file's blocks as
 /// drifted.
 const Pair = struct { doc: []const u8, srcs: []const []const u8 };
@@ -169,7 +169,7 @@ fn checkPair(gpa: Allocator, io: std.Io, pair: Pair) !Report {
 
         // Strip the inner <code> wrapper if present.  It now usually carries a
         // language class (`<code class="zig">`) so docfmt highlights it at build
-        // time, so skip to the tag's `>` rather than matching a fixed opener —
+        // time, so skip to the tag's `>` rather than matching a fixed opener -
         // matching `<code>` exactly made every classed block read as drifted.
         var body: []const u8 = doc[body_start..close];
         if (startsWith(u8, body, "<code")) {

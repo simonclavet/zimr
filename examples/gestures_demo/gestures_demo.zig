@@ -1,6 +1,6 @@
-//! gestures_demo — port of the GL `gestures_demo`: shows the most recent
+//! gestures_demo - port of the GL `gestures_demo`: shows the most recent
 //! gesture name + its data (drag vector, pinch vector/angle, hold duration), a
-//! scrolling history, and a touch-point debug strip. Touch-driven — a graceful
+//! scrolling history, and a touch-point debug strip. Touch-driven - a graceful
 //! no-op on desktop. The recognizers are backend-agnostic input math
 //! (`updateGestures` ticks them on the wgpu input snapshot each frame); no GL.
 //! Mirrors raylib's core_input_gestures.

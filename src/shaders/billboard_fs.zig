@@ -1,4 +1,4 @@
-//! src/shaders/billboard_fs.zig — textured-3D / billboard FS body (IoT).
+//! src/shaders/billboard_fs.zig - textured-3D / billboard FS body (IoT).
 //!
 //! Ported from the direct `@SpirvType` version. Samples the material texture and
 //! tints by the interpolated vertex colour. Schema in `billboard_fs_io.zig`.

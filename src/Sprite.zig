@@ -1,5 +1,5 @@
 //! lint:alias Sprite
-//! Sprite — a portable, pixel-owning 2D image handle drawable on ANY backend
+//! Sprite - a portable, pixel-owning 2D image handle drawable on ANY backend
 //! (immediate GPU, retained DrawList, or CPU Canvas). It owns a copy of the CPU
 //! pixels; each backend caches its own residency (a GPU bind group, or nothing
 //! for Canvas) keyed by the monotonic `.id`. This is the seam that lets one

@@ -65,8 +65,8 @@ test "ShaderUniformDataType wire values match rlSetUniform dispatch" {
 // rlgl.zig) switches on the integer tag; this re-encodes which
 // glUniform* shape each tag MUST map to, so a future edit to that
 // switch that breaks the mapping fails here with a readable name.
-// This mirrors the switch arms: float/vec* → glUniform{N}fv,
-// int/sampler2d → glUniform1iv, ivec* → glUniform{N}iv.
+// This mirrors the switch arms: float/vec* -> glUniform{N}fv,
+// int/sampler2d -> glUniform1iv, ivec* -> glUniform{N}iv.
 test "uniform type tags map to the correctly-shaped GL call" {
     const Shape = enum { f1, f2, f3, f4, i1, i2, i3, i4, u1 };
     const expected = struct {

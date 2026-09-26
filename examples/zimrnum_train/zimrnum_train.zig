@@ -1,21 +1,21 @@
-//! zimrnum_train — the XOR network trained on the GPU and on the CPU in the same page, one step
+//! zimrnum_train - the XOR network trained on the GPU and on the CPU in the same page, one step
 //! per frame, side by side.
 //!
-//! ── ★★★ WHAT THIS DEMONSTRATES THAT THE SWEEP CANNOT ──
+//! -- *** WHAT THIS DEMONSTRATES THAT THE SWEEP CANNOT --
 //!
 //! The sweep compares operations one at a time against zimrnum. This trains a network end to end
 //! with the data never leaving the device: eight dispatches per step over one buffer set, and
 //! only the loss comes back. The CPU side is zimrnum's own `Graph` and `Optimizer`, from the same
-//! seed, stepped in lockstep. If the two loss curves agree, the whole GPU chain — forward,
-//! backward, update — composes correctly; nothing about that is knowable from the operations
+//! seed, stepped in lockstep. If the two loss curves agree, the whole GPU chain - forward,
+//! backward, update - composes correctly; nothing about that is knowable from the operations
 //! passing individually.
 //!
-//! ★★ THE CURVES AGREE TO ABOUT 1e-7 FOR THE FIRST FORTY STEPS AND THEN PART. The kernels'
+//! ** THE CURVES AGREE TO ABOUT 1e-7 FOR THE FIRST FORTY STEPS AND THEN PART. The kernels'
 //! gradients match zimrnum's to one ULP at step 0; XOR with a rate of 0.5 is a chaotic optimiser
 //! and amplifies that ULP. Both converge. The page shows the early agreement and the final
-//! losses, and the early agreement is the check — the final losses are two minima.
+//! losses, and the early agreement is the check - the final losses are two minima.
 //!
-//! ★ One step per frame, because `readLatest` returns the PREVIOUS dispatch's data. Running a
+//! * One step per frame, because `readLatest` returns the PREVIOUS dispatch's data. Running a
 //! step and reading the loss in the same frame would pair step N's loss with step N-1's
 //! weights, which is the stale-readback bug the sweep hit and fixed. A step per frame keeps the
 //! pairing honest and makes the curve visible as it forms.
@@ -40,9 +40,9 @@ const rate: f32 = 0.5;
 const total_steps: usize = 600;
 const seed: u64 = 20260904;
 
-/// ── ★★★ TEN STEPS PER FRAME, SO THE PAGE FINISHES IN ABOUT A SECOND ──
+/// -- *** TEN STEPS PER FRAME, SO THE PAGE FINISHES IN ABOUT A SECOND --
 ///
-/// One step per frame took five seconds on the phone — 600 frames at 60 Hz — which is too long
+/// One step per frame took five seconds on the phone - 600 frames at 60 Hz - which is too long
 /// for a test someone runs by hand. The readback captures one `(loss, step)` per frame, so with
 /// ten steps a frame only every tenth step is sampled; the milestones are chosen to land on
 /// those. Frame 0 runs a single step so that step 0 itself is sampled.
@@ -169,7 +169,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
     s.pipe.deinit();
-    // Everything else — weights, the graph, the optimiser's state — came from the scope.
+    // Everything else - weights, the graph, the optimiser's state - came from the scope.
     s.arena.deinit();
 }
 
@@ -212,7 +212,7 @@ fn update(f: *z.Frame, s: *State) void {
     // Frame 0 runs one step so step 0 is sampled; every later frame runs ten, and the loss
     // read back is the last of them.
     const burst: usize = @min(if (s.dispatched == 0) 1 else steps_per_frame, total_steps - s.dispatched);
-    // ── ★★ THE STEP LABEL IS SET ONCE PER FRAME, TO THE BURST'S LAST STEP ──
+    // -- ** THE STEP LABEL IS SET ONCE PER FRAME, TO THE BURST'S LAST STEP --
     //
     // Only the last step's loss survives in the buffer at frame end, so only its label matters.
     // Setting it per step changed the uniform ten times a frame, and the smoke's queue-timeline

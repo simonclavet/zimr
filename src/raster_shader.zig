@@ -1,10 +1,10 @@
 //! lint:alias raster_shader
-//! src/raster_shader.zig — run zimr fragment shaders on the CPU.
+//! src/raster_shader.zig - run zimr fragment shaders on the CPU.
 //!
 //! Companion to the SPIR-V/GLSL/WebGL2 pipeline.  The same shader
 //! source (`pub fn shaderMain(io: Io) Out`) is dispatched per-pixel
 //! into an `raster.Context`'s color attachment.  Same iface schema,
-//! same logic, same UBO struct — bit-for-bit identical Zig code,
+//! same logic, same UBO struct - bit-for-bit identical Zig code,
 //! just compiled for x86_64/wasm rather than SPIR-V.
 //!
 //! Used by `examples/mandel_sidebyside` (left-half CPU /
@@ -27,7 +27,7 @@
 //!
 //! Performance:
 //!   - Naive scalar.  ~2-5M pixels/sec on a modern x86_64 release
-//!     build for mandelbrot.  Adequate for a 400×450 side-by-side
+//!     build for mandelbrot.  Adequate for a 400x450 side-by-side
 //!     viewer at interactive frame rates.
 //!   - SIMD-batched fast path deferred; the per-pixel branch in the
 //!     mandelbrot loop limits the benefit anyway.
@@ -64,18 +64,18 @@ pub const Rect = struct {
 
 /// Dispatch a fragment shader over every pixel in `rect`.
 ///
-/// `ShaderModule` is comptime — typically the result of `@import(
+/// `ShaderModule` is comptime - typically the result of `@import(
 /// "mandelbrot_fs.zig")`.  It must declare `pub const Io = struct {
 /// ... }`, `pub const Out = struct { out_color: Vec4, ... }`, and
 /// `pub fn shaderMain(io: Io) Out`.  Codegen emits the `Io`/`Out`
 /// types into `io.zig`, and the shader source defines `shaderMain`
-/// — so any shader on the new shape is dispatch-ready for free.
+/// - so any shader on the new shape is dispatch-ready for free.
 ///
 /// `base_io` is the template Io.  The dispatcher overrides
 /// `frag_tex_coord` per-pixel (computed from the rect-relative
 /// position); every other field is copied verbatim.  Typical usage:
 ///   - Set `base_io.u` to the UBO struct you'd push to the GPU.
-///   - Leave `base_io.frag_tex_coord = undefined` — it'll be
+///   - Leave `base_io.frag_tex_coord = undefined` - it'll be
 ///     overwritten.
 ///   - Set `base_io.frag_color = .{1, 1, 1, 1}` (engine default).
 ///
@@ -89,7 +89,7 @@ pub const Rect = struct {
 /// Writes go to the raster context's active color attachment via
 /// `colorBufferBytesMut`.  Rect is clipped to the framebuffer; out-
 /// of-bounds pixels are dropped (not wrapped).  No depth test, no
-/// blending — overwrites whatever's there.
+/// blending - overwrites whatever's there.
 pub fn dispatchFragmentShader(
     ctx: *raster.Context,
     comptime ShaderModule: type,
@@ -103,14 +103,14 @@ pub fn dispatchFragmentShader(
     const fb_format: raster_pixel.PixelFormat = ctx.colorBufferFormat();
 
     // Pick the right writeColor codec.  This is a runtime lookup
-    // because the framebuffer's format isn't known at comptime —
+    // because the framebuffer's format isn't known at comptime -
     // could be color_r8g8b8a8 (default) or any other.
     const writer: raster_pixel.WriteColorFn = blk: {
         if (raster_pixel.write_color_table.get(fb_format)) |fn_ptr| {
             break :blk fn_ptr;
         }
         // Format has no writer (depth-only or unsupported color
-        // format).  Caller error; bail out silently — no pixels are
+        // format).  Caller error; bail out silently - no pixels are
         // written.  Documented behavior: dispatcher is a no-op
         // against an incompatible framebuffer.
         return;
@@ -135,7 +135,7 @@ pub fn dispatchFragmentShader(
     var py: i32 = start_y;
     while (py < end_y) : (py += 1) {
         const local_y: i32 = py - rect.y;
-        // v with screen-BOTTOM = 0, screen-TOP = 1 — matching the GPU fullscreen
+        // v with screen-BOTTOM = 0, screen-TOP = 1 - matching the GPU fullscreen
         // triangle's frag_tex_coord (drawFullscreenTriangle), so a shader that
         // reads frag_tex_coord renders the SAME orientation on the software
         // dispatcher and the GPU. (Row 0 is the top of the framebuffer, hence
@@ -154,7 +154,7 @@ pub fn dispatchFragmentShader(
 
             // Linear vec4 -> framebuffer bytes.  The Out struct's
             // color-output field is the FIRST `Vec` field
-            // — by convention shaders have one such field per pixel
+            // - by convention shaders have one such field per pixel
             // (e.g. `out_color`, `final_color`, `frag_out`).  Discover
             // it at comptime so the dispatcher works against any
             // shader on the new shape without naming conventions.
@@ -242,14 +242,14 @@ pub fn dispatchVertexShader(
 //
 // Takes the dispatchVertexShader output + an index buffer + a
 // fragment ShaderModule, produces pixels.  Edge-function approach
-// (Pineda 1988) — robust against degenerate triangles, easy to
+// (Pineda 1988) - robust against degenerate triangles, easy to
 // SIMD-ify later.  Perspective-correct varying interpolation via
 // 1/w lerping.
 
 /// Rasterize an indexed triangle mesh.  `vertex_outs` comes from
 /// dispatchVertexShader; `indices` references it.  For each
 /// triangle, the rasterizer:
-///   1. Performs clip-space → NDC → screen-space division.
+///   1. Performs clip-space -> NDC -> screen-space division.
 ///   2. Computes triangle bounding box, clips to viewport.
 ///   3. For each pixel in the box, computes barycentric coords
 ///      via edge functions.
@@ -258,11 +258,11 @@ pub fn dispatchVertexShader(
 ///      the FS.
 ///
 /// `connect(vs_out)` builds the FS Io from a single interpolated VS
-/// Out — caller-supplied so the FS can have a different Io shape
+/// Out - caller-supplied so the FS can have a different Io shape
 /// than the VS Out (e.g. additional uniforms not in the VS).
 /// Winding-order convention for `rasterizeTriangles`.
 ///
-/// `.ccw` (default) matches **wgpu's clip-space CCW front face** — the
+/// `.ccw` (default) matches **wgpu's clip-space CCW front face** - the
 /// same convention OpenGL uses with `glFrontFace(GL_CCW)`.  Triangles
 /// wound CCW in clip space are front-facing and rendered; CW are
 /// back-faces and culled.
@@ -284,29 +284,29 @@ pub const RasterizeOpts = struct {
     /// the screen-space Y-flip when laying out vertices.
     front_face: WindingOrder = .ccw,
     /// Depth-test fragments against the context's depth attachment
-    /// (compare `.less`, write on pass — the wgpu 3D pipelines'
+    /// (compare `.less`, write on pass - the wgpu 3D pipelines'
     /// convention).  NDC z is the wgpu [0, 1] range, interpolated
     /// screen-linearly (z/w is affine in screen space, so the raw
-    /// barycentric weights are correct — no perspective division).
+    /// barycentric weights are correct - no perspective division).
     /// Caller clears via `ctx.clearDepth(1.0)` + `ctx.clear(.{ .depth
     /// = true })` between frames, same as the fixed-function path.
     depth_test: bool = false,
     /// Depth comparison used when `depth_test` is on. `.less` (the default)
     /// matches the wgpu 3D pipelines: a fragment passes when it is strictly
-    /// nearer than what's stored. `.less_equal` also passes at EQUAL depth —
+    /// nearer than what's stored. `.less_equal` also passes at EQUAL depth -
     /// needed by overlay passes that re-draw the same geometry (e.g. the decal
     /// receiver, whose fragment depth is bit-identical to the surface it paints
     /// onto), matching the GPU's `.less_equal` decal pipeline.
     depth_compare: DepthCompare = .less,
     /// Whether a passing fragment WRITES its depth back. `true` (default) is the
-    /// opaque convention. `false` leaves the depth buffer untouched — the
+    /// opaque convention. `false` leaves the depth buffer untouched - the
     /// overlay convention (the decal uses `.less_equal_no_write` on the GPU so
     /// stacked decals don't occlude each other or re-fight the surface).
     depth_write: bool = true,
     /// Alpha-blend each fragment OVER the destination using the fixed-
     /// function `src_alpha, one_minus_src_alpha` recipe
-    /// (`out = src·src.a + dst·(1-src.a)`), reading the existing colour
-    /// back per pixel.  `false` overwrites — matching a wgpu pipeline
+    /// (`out = src*src.a + dst*(1-src.a)`), reading the existing colour
+    /// back per pixel.  `false` overwrites - matching a wgpu pipeline
     /// with blending disabled, and leaving the depth-only path bit-for-
     /// bit as it was.  Only alpha-over is wired (the retired fixed-
     /// function `triangleKernel` inlined only that recipe too); a non-
@@ -517,7 +517,7 @@ fn setupTriCoverage(
 
 /// Comptime-generic barycentric interpolation for any varying type.
 /// Handles `@Vector(N, f32)` and `f32`.  Other types will fail to
-/// compile — extend as needed.
+/// compile - extend as needed.
 fn lerpAny(
     comptime T: type,
     v0: T,
@@ -541,7 +541,7 @@ fn lerpAny(
 }
 
 /// `connect(vs_out)` builds the FS Io from a single interpolated VS
-/// Out — caller-supplied so the FS can have a different Io shape
+/// Out - caller-supplied so the FS can have a different Io shape
 /// than the VS Out (e.g. additional uniforms not in the VS).
 pub fn rasterizeTriangles(
     comptime VsModule: type,
@@ -571,7 +571,7 @@ pub fn rasterizeTriangles(
             const rd: ?raster_pixel.ReadDepthFn = raster_pixel.read_depth_table.get(depth_format);
             const wr: ?raster_pixel.WriteDepthFn = raster_pixel.write_depth_table.get(depth_format);
             if (rd == null or wr == null) {
-                // No depth codec for this attachment format — a caller
+                // No depth codec for this attachment format - a caller
                 // error; documented no-op like the color-writer bail.
                 return;
             }
@@ -591,14 +591,14 @@ pub fn rasterizeTriangles(
     const fb_w_f: f32 = float(fb_w_i);
     const fb_h_f: f32 = float(fb_h_i);
     const fb_w_u: u32 = @intCast(fb_w_i);
-    // Effective scissor/clip rect — full colour-buffer bounds when
-    // `.scissor_test` is off (a no-op clamp), the scissor ∩ framebuffer
+    // Effective scissor/clip rect - full colour-buffer bounds when
+    // `.scissor_test` is off (a no-op clamp), the scissor intersect framebuffer
     // when on.  Honoured by clamping each triangle's bbox below, the
     // same way the fixed-function `triangleKernel` does.
     const scissor: raster.Context.PixelRect = ctx.scissorPixelRect();
 
     // Comptime-discover the FS output color field name (same trick as
-    // dispatchFragmentShader — first Vec in Out).
+    // dispatchFragmentShader - first Vec in Out).
     const out_field_name: []const u8 = comptime blk: {
         const oti = @typeInfo(FsModule.Out).@"struct";
         for (oti.field_names, oti.field_types) |fname, ftype| {
@@ -641,10 +641,10 @@ pub fn rasterizeTriangles(
             // (checked on the original w), so perspective-correct interpolation
             // collapses to plain barycentric.  Loop-invariant (per-triangle) so
             // LLVM can unswitch the pixel loop.  The fast path uses the raw
-            // barycentric weights directly — they sum to ≈1 (the same ones the
-            // depth interp uses raw) — skipping the per-pixel normalize-DIVIDE,
-            // worth ≈7% of this path; that shifts ≤1 per channel vs the
-            // normalized form (the factor is 1±~6e-8), within GPU-parity bounds.
+            // barycentric weights directly - they sum to ~1 (the same ones the
+            // depth interp uses raw) - skipping the per-pixel normalize-DIVIDE,
+            // worth ~7% of this path; that shifts <=1 per channel vs the
+            // normalized form (the factor is 1+/-~6e-8), within GPU-parity bounds.
             const affine: bool = (p0[3] == 1.0 and p1[3] == 1.0 and p2[3] == 1.0);
             const ndc_x0: f32 = p0[0] * inv_w0;
             const ndc_y0: f32 = p0[1] * inv_w0;
@@ -652,12 +652,12 @@ pub fn rasterizeTriangles(
             const ndc_y1: f32 = p1[1] * inv_w1;
             const ndc_x2: f32 = p2[0] * inv_w2;
             const ndc_y2: f32 = p2[1] * inv_w2;
-            // NDC z (wgpu [0,1] range) — only the depth test reads these.
+            // NDC z (wgpu [0,1] range) - only the depth test reads these.
             const ndc_z0: f32 = p0[2] * inv_w0;
             const ndc_z1: f32 = p1[2] * inv_w1;
             const ndc_z2: f32 = p2[2] * inv_w2;
 
-            // NDC → screen (Y-flip: GL +Y up, framebuffer +Y down).
+            // NDC -> screen (Y-flip: GL +Y up, framebuffer +Y down).
             const sx0: f32 = (ndc_x0 + 1.0) * 0.5 * fb_w_f;
             const sy0: f32 = (1.0 - (ndc_y0 + 1.0) * 0.5) * fb_h_f;
             const sx1: f32 = (ndc_x1 + 1.0) * 0.5 * fb_w_f;
@@ -665,20 +665,20 @@ pub fn rasterizeTriangles(
             const sx2: f32 = (ndc_x2 + 1.0) * 0.5 * fb_w_f;
             const sy2: f32 = (1.0 - (ndc_y2 + 1.0) * 0.5) * fb_h_f;
 
-            // Triangle area in screen space (2 × signed area).
+            // Triangle area in screen space (2 x signed area).
             //
-            // Sign reasoning: after the NDC→screen Y-flip, a clip-space
+            // Sign reasoning: after the NDC->screen Y-flip, a clip-space
             // CCW triangle becomes CW in screen space, producing
             // negative signed area.  So:
-            //   `opts.front_face == .ccw` → accept area2 < 0
-            //   `opts.front_face == .cw`  → accept area2 > 0
-            //   `opts.front_face == .none` → accept either sign (no cull)
+            //   `opts.front_face == .ccw` -> accept area2 < 0
+            //   `opts.front_face == .cw`  -> accept area2 > 0
+            //   `opts.front_face == .none` -> accept either sign (no cull)
             //
             // Degenerate triangles (area == 0) are always skipped to
             // avoid div-by-zero in the barycentric setup.
             //
             // Coverage uses fixed-point integer edge functions on the subpixel
-            // grid with the top-left rule (§3), so shared edges are covered
+            // grid with the top-left rule (section 3), so shared edges are covered
             // exactly once.  `setupTriCoverage` canonicalises to positive area;
             // `cov.swapped` recovers the original screen winding (per the sign
             // reasoning above) for front-face culling.
@@ -698,7 +698,7 @@ pub fn rasterizeTriangles(
             }
 
             // Bounding box, clamped to the scissor rect (which is the
-            // full viewport when scissor_test is off — so this stays a
+            // full viewport when scissor_test is off - so this stays a
             // viewport clamp in the common case).
             const min_x_f: f32 = @min(@min(sx0, sx1), sx2);
             const min_y_f: f32 = @min(@min(sy0, sy1), sy2);
@@ -736,7 +736,7 @@ pub fn rasterizeTriangles(
                     // the overlay convention (decals re-draw the same surface).
                     // Alpha masking in an overlay FS zeroes out-of-box fragments
                     // via the blend, so skipping the depth write keeps stacked
-                    // overlays from occluding each other — the early test stays
+                    // overlays from occluding each other - the early test stays
                     // sound because no depth is written.
                     if (comptime opts.depth_test) {
                         const frag_z: f32 = w0 * ndc_z0 + w1 * ndc_z1 + w2 * ndc_z2;
@@ -760,7 +760,7 @@ pub fn rasterizeTriangles(
                     // by per-vertex w, normalized by sum.  Saves a per-
                     // varying division by carrying the normalized weights.
                     const pw0: f32, const pw1: f32, const pw2: f32 = if (affine)
-                        .{ w0, w1, w2 } // 2D: raw bw (sum≈1), no normalize-divide
+                        .{ w0, w1, w2 } // 2D: raw bw (sum~1), no normalize-divide
                     else persp_blk: {
                         const persp_w0: f32 = w0 * inv_w0;
                         const persp_w1: f32 = w1 * inv_w1;
@@ -797,7 +797,7 @@ pub fn rasterizeTriangles(
 
                     if (comptime opts.blend) {
                         // Alpha-over (src_alpha, one_minus_src_alpha),
-                        // mirroring triangleKernel: out = src·a + dst·(1-a).
+                        // mirroring triangleKernel: out = src*a + dst*(1-a).
                         var dst: [4]f32 = undefined;
                         color_reader(&dst, fb_bytes, pixel_index);
                         const src_a: f32 = out_color[3];
@@ -824,17 +824,17 @@ pub fn rasterizeTriangles(
     }
 }
 
-/// Runtime-state → comptime-opts dispatcher.  The fixed-function caller
+/// Runtime-state -> comptime-opts dispatcher.  The fixed-function caller
 /// (the immediate-mode `ff_triangle` bridge) holds depth/blend/cull as
 /// RUNTIME `raster.Context` flags, but `rasterizeTriangles` takes `opts`
 /// at comptime.  This mirrors how the retired `triangleKernel` selected
 /// among its monomorphized `RasterCfg` variants via `inline 0...15`:
 /// pack the three booleans into a 3-bit index and `inline`-expand the
 /// switch so every arm calls `rasterizeTriangles` with a comptime
-/// `RasterizeOpts`.  Texture and scissor are NOT comptime opts here —
+/// `RasterizeOpts`.  Texture and scissor are NOT comptime opts here -
 /// `rasterizeTriangles` samples `_texture0` and reads
-/// `ctx.scissorPixelRect()` at runtime — so this is 2³ = 8 variants,
-/// not the kernel's 2⁴ = 16.
+/// `ctx.scissorPixelRect()` at runtime - so this is 2^3 = 8 variants,
+/// not the kernel's 2^4 = 16.
 ///
 /// `cull` true maps to the default `.ccw` front face (clip-space CCW =
 /// front, so clip-space-CW back faces are dropped); false disables
@@ -869,12 +869,12 @@ pub fn rasterizeWithRuntimeOpts(
 }
 
 /// Pure-function sibling of `rasterizeTriangles`: same edge-function math,
-/// same perspective-correct interpolation, same `.less` depth semantics —
+/// same perspective-correct interpolation, same `.less` depth semantics -
 /// but no `raster.Context` and no runtime codec fn pointers, so it runs AT
 /// COMPTIME.  This is what bakes a geometry demo's "third target" corner
 /// (the helmet side-by-side): the compiler itself rasterizes a proxy mesh
 /// through the same `shaderMain` pair the GPU and the live CPU half run.
-/// Depth is an internal z-buffer (always on — a comptime bake of solid
+/// Depth is an internal z-buffer (always on - a comptime bake of solid
 /// geometry without depth would be draw-order soup).  Returns row-major
 /// RGBA8, `clear` as the background.  Runtime-callable too, which is how
 /// the differential test pins it to `rasterizeTriangles`.
@@ -899,8 +899,8 @@ pub fn rasterizeToImage(
 /// The DRAW-CALL core under `rasterizeToImage`: rasterize one object into
 /// CALLER-OWNED color + depth buffers WITHOUT clearing them.  Clearing once
 /// and then calling this N times with different uniforms/geometry is a
-/// software render PASS with per-draw state — the exact shape of a GPU pass
-/// (`beginTextureModeRaw` + N `drawIndexed`) — and it runs at comptime, so a
+/// software render PASS with per-draw state - the exact shape of a GPU pass
+/// (`beginTextureModeRaw` + N `drawIndexed`) - and it runs at comptime, so a
 /// baked corner can draw several objects with per-object uniform blocks just
 /// like the live halves do.  `rasterizeTriangles` is the same multi-draw
 /// idea over a runtime `raster.Context`; this is its pure-function twin.
@@ -936,7 +936,7 @@ pub fn rasterizeToTarget(
         const src1: VsModule.Out = vertex_outs[indices[i + 1]];
         const src2: VsModule.Out = vertex_outs[indices[i + 2]];
 
-        // Near-plane clip — identical to the runtime path so the comptime
+        // Near-plane clip - identical to the runtime path so the comptime
         // bake matches `rasterizeTriangles` (the differential test pins them).
         var clipped_tris: [2][3]VsModule.Out = undefined;
         const n_clipped: usize = clipTriangleNearPlane(VsModule.Out, src0, src1, src2, &clipped_tris);
@@ -957,10 +957,10 @@ pub fn rasterizeToTarget(
             // (checked on the original w), so perspective-correct interpolation
             // collapses to plain barycentric.  Loop-invariant (per-triangle) so
             // LLVM can unswitch the pixel loop.  The fast path uses the raw
-            // barycentric weights directly — they sum to ≈1 (the same ones the
-            // depth interp uses raw) — skipping the per-pixel normalize-DIVIDE,
-            // worth ≈7% of this path; that shifts ≤1 per channel vs the
-            // normalized form (the factor is 1±~6e-8), within GPU-parity bounds.
+            // barycentric weights directly - they sum to ~1 (the same ones the
+            // depth interp uses raw) - skipping the per-pixel normalize-DIVIDE,
+            // worth ~7% of this path; that shifts <=1 per channel vs the
+            // normalized form (the factor is 1+/-~6e-8), within GPU-parity bounds.
             const affine: bool = (p0[3] == 1.0 and p1[3] == 1.0 and p2[3] == 1.0);
             const sx0: f32 = (p0[0] * inv_w0 + 1.0) * 0.5 * fb_w_f;
             const sy0: f32 = (1.0 - (p0[1] * inv_w0 + 1.0) * 0.5) * fb_h_f;
@@ -1010,7 +1010,7 @@ pub fn rasterizeToTarget(
                     depth[pixel_index] = frag_z;
 
                     const pw0: f32, const pw1: f32, const pw2: f32 = if (affine)
-                        .{ w0, w1, w2 } // 2D: raw bw (sum≈1), no normalize-divide
+                        .{ w0, w1, w2 } // 2D: raw bw (sum~1), no normalize-divide
                     else persp_blk: {
                         const persp_w0: f32 = w0 * inv_w0;
                         const persp_w1: f32 = w1 * inv_w1;
@@ -1073,7 +1073,7 @@ pub fn rasterizeToTarget(
 // identically, which the differential test between them relies on.
 
 // ---------------------------------------------------------------------------
-// Fixed-point subpixel coverage (§3 of software_rasterizer_oracle.md).
+// Fixed-point subpixel coverage (section 3 of software_rasterizer_oracle.md).
 //
 // Watertight triangle coverage via integer edge functions on a subpixel grid
 // plus the top-left rule, so shared edges between adjacent triangles are
@@ -1295,7 +1295,7 @@ test "rasterizeTriangles draws a clip-space full-screen triangle" {
     const gpa: Allocator = std.testing.allocator;
 
     // A trivial VS that emits three vertices forming a triangle
-    // covering most of the framebuffer.  No attributes input — the
+    // covering most of the framebuffer.  No attributes input - the
     // vertex_id is the only signal.
     const TrivialVs = struct {
         pub const Io = struct {};
@@ -1326,12 +1326,12 @@ test "rasterizeTriangles draws a clip-space full-screen triangle" {
     ctx.clear(.{ .color = true });
 
     // Triangle covers the lower-left portion of the canvas (after the
-    // NDC→screen Y-flip).  The clip-space winding must be CCW so the
+    // NDC->screen Y-flip).  The clip-space winding must be CCW so the
     // default `.ccw` front-face rule keeps it (a CCW NDC triangle has
     // positive NDC signed area; after the Y-flip it becomes negative
-    // screen area, which `.ccw` accepts).  NDC order (-1,-1) → (+1,-1)
-    // → (-1,+1) is CCW (signed area +4); it maps to screen corners
-    // (0,32) → (32,32) → (0,0) — the triangle below the diagonal y=x.
+    // screen area, which `.ccw` accepts).  NDC order (-1,-1) -> (+1,-1)
+    // -> (-1,+1) is CCW (signed area +4); it maps to screen corners
+    // (0,32) -> (32,32) -> (0,0) - the triangle below the diagonal y=x.
     var vertex_outs: [3]TrivialVs.Out = .{
         .{ .position = .{ -1.0, -1.0, 0, 1.0 }, .vcolor = .{ 0, 1, 0, 1 } },
         .{ .position = .{ 1.0, -1.0, 0, 1.0 }, .vcolor = .{ 0, 1, 0, 1 } },
@@ -1358,12 +1358,12 @@ test "rasterizeTriangles draws a clip-space full-screen triangle" {
     const bytes: []const u8 = ctx.colorBufferBytes();
     // Triangle screen corners are (0,32), (0,0), (32,32): bottom-
     // left triangle below the diagonal y=x.  Inside: y >= x.
-    // Pixel (4, 8): y=8 > x=4, deep inside — should be green.
+    // Pixel (4, 8): y=8 > x=4, deep inside - should be green.
     const inside_off: usize = (8 * 32 + 4) * 4;
     try expectEqual(@as(u8, 0), bytes[inside_off]); // R
     try expectEqual(@as(u8, 255), bytes[inside_off + 1]); // G
     try expectEqual(@as(u8, 0), bytes[inside_off + 2]); // B
-    // Pixel (28, 4): y=4 < x=28, deep outside — should be black.
+    // Pixel (28, 4): y=4 < x=28, deep outside - should be black.
     const outside_off: usize = (4 * 32 + 28) * 4;
     try expectEqual(@as(u8, 0), bytes[outside_off + 1]); // not green
 }
@@ -1497,8 +1497,8 @@ test "rasterizeTriangles: alpha-over blend composites src over dst" {
         .{ .blend = true },
     );
 
-    // Center = green·0.5 over red·0.5 ≈ (0.5, 0.5, 0): NOT pure green
-    // (an overwrite) and NOT pure red (no blend) — proves the composite.
+    // Center = green*0.5 over red*0.5 ~ (0.5, 0.5, 0): NOT pure green
+    // (an overwrite) and NOT pure red (no blend) - proves the composite.
     const bytes: []const u8 = ctx.colorBufferBytes();
     const center_off: usize = (8 * 16 + 8) * 4;
     try expect(bytes[center_off] >= 120 and bytes[center_off] <= 135);
@@ -1531,11 +1531,11 @@ test "rasterizeTriangles: scissor clips fragments to the scissor rect" {
     defer ctx.deinit(gpa);
     ctx.clearColor(.{ .r = 0, .g = 0, .b = 0, .a = 255 });
     ctx.clear(.{ .color = true });
-    // Scissor to the RIGHT half: [8, 16) × [0, 16).
+    // Scissor to the RIGHT half: [8, 16) x [0, 16).
     ctx.enable(.scissor_test);
     ctx.scissor(8, 0, 8, 16);
 
-    // A full-screen GREEN triangle — only the right half may survive.
+    // A full-screen GREEN triangle - only the right half may survive.
     const green: Vec = .{ 0, 1, 0, 1 };
     var vertex_outs: [3]ScVs.Out = .{
         .{ .position = .{ -1.0, -1.0, 0.0, 1.0 }, .vcolor = green },
@@ -1625,7 +1625,7 @@ test "raster.Context.ff_triangle routes immediate-mode triangles through rasteri
     ctx.clear(.{ .color = true });
     ctx.ff_triangle = Hook.tri;
 
-    // Immediate-mode full-screen GREEN triangle — must render via the hook,
+    // Immediate-mode full-screen GREEN triangle - must render via the hook,
     // not the built-in triangleKernel.
     ctx.begin(.triangles);
     ctx.color4ub(0, 255, 0, 255);
@@ -1669,8 +1669,8 @@ test "rasterizeWithRuntimeOpts maps runtime cull/blend flags to comptime opts" {
     const center: usize = (8 * 16 + 8) * 4;
 
     // A clip-space CW triangle (reverse of the usual CCW full-screen
-    // tri).  With cull on (→ .ccw front) it is a BACK face → dropped;
-    // with cull off (→ .none) it must draw.
+    // tri).  With cull on (-> .ccw front) it is a BACK face -> dropped;
+    // with cull off (-> .none) it must draw.
     const green: Vec = .{ 0, 1, 0, 1 };
     const cw_tri: [3]FlatVs.Out = .{
         .{ .position = .{ -1, -1, 0, 1 }, .tint = green },
@@ -1678,7 +1678,7 @@ test "rasterizeWithRuntimeOpts maps runtime cull/blend flags to comptime opts" {
         .{ .position = .{ 3, -1, 0, 1 }, .tint = green },
     };
 
-    // cull = true → back face dropped → center stays background.
+    // cull = true -> back face dropped -> center stays background.
     {
         var ctx: raster.Context = try .init(gpa, 16, 16);
         defer ctx.deinit(gpa);
@@ -1687,7 +1687,7 @@ test "rasterizeWithRuntimeOpts maps runtime cull/blend flags to comptime opts" {
         rasterizeWithRuntimeOpts(FlatVs, FlatFs, &ctx, &cw_tri, &idx, base_io, connect, false, false, true);
         try expectEqual(@as(u8, 0), ctx.colorBufferBytes()[center + 1]);
     }
-    // cull = false → both faces drawn → center is green.
+    // cull = false -> both faces drawn -> center is green.
     {
         var ctx: raster.Context = try .init(gpa, 16, 16);
         defer ctx.deinit(gpa);
@@ -1696,7 +1696,7 @@ test "rasterizeWithRuntimeOpts maps runtime cull/blend flags to comptime opts" {
         rasterizeWithRuntimeOpts(FlatVs, FlatFs, &ctx, &cw_tri, &idx, base_io, connect, false, false, false);
         try expectEqual(@as(u8, 255), ctx.colorBufferBytes()[center + 1]);
     }
-    // blend = true → 50%-alpha green over a red background composites
+    // blend = true -> 50%-alpha green over a red background composites
     // (R falls, G rises toward ~127 each).  CCW (front) winding.
     {
         var ctx: raster.Context = try .init(gpa, 16, 16);
@@ -1716,10 +1716,10 @@ test "rasterizeWithRuntimeOpts maps runtime cull/blend flags to comptime opts" {
     }
 }
 
-/// FNV-1a over raw framebuffer bytes — a stable absolute pin for golden tests
+/// FNV-1a over raw framebuffer bytes - a stable absolute pin for golden tests
 /// (Phase 2.5 Turn-2).  No `@setFloatMode` anywhere in the rasteriser, so float
 /// results are strict-IEEE-identical across optimize modes; this hash is
-/// therefore mode-independent.  Any pixel change flips it — exactly what guards
+/// therefore mode-independent.  Any pixel change flips it - exactly what guards
 /// the upcoming rasteriser gap-closing from silently altering output.
 fn goldenChecksum(bytes: []const u8) u64 {
     var h: u64 = 0xcbf29ce484222325;
@@ -1737,7 +1737,7 @@ test "rasterizeToImage matches rasterizeTriangles pixel-for-pixel" {
     // colors, drawn FAR-LAST so only a correct depth test produces the
     // right image.  The pure rasterizer must reproduce the Context one
     // byte-for-byte: same edge functions, same perspective weights, same
-    // truncating float→u8 quantization as the rgba8 codec.
+    // truncating float->u8 quantization as the rgba8 codec.
     const TrivialVs = struct {
         pub const Io = struct {};
         pub const Out = struct {
@@ -1818,9 +1818,9 @@ test "rasterizeToImage matches rasterizeTriangles pixel-for-pixel" {
     // (the two cores match each other); so is the sw_engine_shader proof.  This
     // pins the ACTUAL pixels, catching a regression that changes both cores
     // together.  Updated ONCE when the W=1 affine fast-path took raw barycentric
-    // weights (skipping the perspective normalize-divide for 2D — ≤1 ULP, see
+    // weights (skipping the perspective normalize-divide for 2D - <=1 ULP, see
     // rasterizeTriangles); output-preserving work (SIMD, refactors) must hold it
     // from here, so a change then means a bug.
-    const golden: u64 = 7380277600522244912; // FNV-1a of the 16×16 render
+    const golden: u64 = 7380277600522244912; // FNV-1a of the 16x16 render
     try expectEqual(golden, goldenChecksum(ctx_bytes));
 }

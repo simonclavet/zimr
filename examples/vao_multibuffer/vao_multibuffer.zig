@@ -1,12 +1,12 @@
-//! vao_multibuffer — a vertex layout split across SEPARATE buffers (one per
+//! vao_multibuffer - a vertex layout split across SEPARATE buffers (one per
 //! attribute) instead of one interleaved buffer. Positions live in slot 0,
 //! colours in slot 1, and the colour buffer is rebound between two palettes
-//! every ~1.2s — proving the slots are independent (swap one without touching
+//! every ~1.2s - proving the slots are independent (swap one without touching
 //! the other). This is the groundwork for instancing.
 //!
 //! No hand-written WGSL. The SHADER is identical to pipeline_uniforms (same
 //! typed schema: vertex_position vec2@0, vertex_color vec3@1, a vertex-stage
-//! transform UBO), so we REUSE those Zig shaders — the lesson here is the buffer
+//! transform UBO), so we REUSE those Zig shaders - the lesson here is the buffer
 //! split, not the shader. The schema is layout-agnostic: `Attributes` says what
 //! the shader reads; whether those bytes arrive interleaved or in two buffers is
 //! purely the host's `vertex_buffer_layouts`. Interleaved gets the derived
@@ -96,7 +96,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // TWO vertex-buffer layouts: slot 0 = positions (loc 0), slot 1 = colours
     // (loc 1). Each is its own buffer, so the shader_location numbering spans
-    // both. (Single-attribute layouts → hand-built, not the interleaved helper.)
+    // both. (Single-attribute layouts -> hand-built, not the interleaved helper.)
     const pos_layout: z.VertexLayout = .{
         .array_stride = @sizeOf(Pos),
         .step_mode = .vertex,

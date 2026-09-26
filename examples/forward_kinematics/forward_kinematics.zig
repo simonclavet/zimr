@@ -4,7 +4,7 @@
 // its PARENT's world transform composed with the joint's local rotation. The
 // angles animate (a phase-shifted sine down the chain) so the arm coils and
 // sways, and the whole rig slowly spins about Y so bones pass in front of each
-// other — a direct test of depth.
+// other - a direct test of depth.
 //
 // It also exercises the custom-pipeline API on a real 3D job: ONE instanced
 // draw renders all N bones. Per-bone data (a clip-space matrix, a rotation-only

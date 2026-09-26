@@ -2225,7 +2225,7 @@ The `LoadedShader(SchemaT)` struct now carries `vs_module + fs_module` rather th
 **Regression guard test** (`src/shader_runtime_wgpu.zig`):
 
 ```zig
-test "ShaderDesc carries vs_wgsl_source + fs_wgsl_source (Phase D1 — pre-translated WGSL)" {
+test "ShaderDesc carries vs_wgsl_source + fs_wgsl_source (Phase D1 - pre-translated WGSL)" {
     const _Desc = ShaderDesc(TestSchema);
     try std.testing.expect(@hasField(_Desc, "vs_wgsl_source"));
     try std.testing.expect(@hasField(_Desc, "fs_wgsl_source"));

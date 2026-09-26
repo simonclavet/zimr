@@ -1,4 +1,4 @@
-//! examples/pipeline_basic_vs.zig — pipeline_basic vertex shader body, in Zig.
+//! examples/pipeline_basic_vs.zig - pipeline_basic vertex shader body, in Zig.
 //!
 //! Pass-through: forwards the clip-space position with w=1 and hands the
 //! per-vertex colour to the fragment stage. Compiles to SPIR-V -> WGSL at build

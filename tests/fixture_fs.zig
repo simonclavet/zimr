@@ -1,6 +1,6 @@
-//! tests/fixture.fs.zig — minimal smoke shader for the addShader
+//! tests/fixture.fs.zig - minimal smoke shader for the addShader
 //! build helper.  Exercises the four-stage pipeline (zig build-obj
-//! → spirv-opt → spirv-val → spirv-cross) on a shader that uses
+//! -> spirv-opt -> spirv-val -> spirv-cross) on a shader that uses
 //! every shadermath feature we ship in S1.2:
 //!
 //!   - Vec2/Vec3/Vec types
@@ -24,14 +24,14 @@ extern const frag_tex_coord: zm.Vec2 addrspace(.input);
 // Stage outputs
 extern var out_color: zm.Vec addrspace(.output);
 
-// Uniforms (individual extern style — pre-UBO; the fixture validates
+// Uniforms (individual extern style - pre-UBO; the fixture validates
 // the build pipeline can still compile this shape even though
 // production shaders use UBO blocks instead).
 extern const u_time: f32 addrspace(.uniform);
 extern const u_resolution: zm.Vec2 addrspace(.uniform);
 extern const u_tint: zm.Vec addrspace(.uniform);
 
-/// Helper function — proves `pub fn` (NOT `pub inline fn`) is the
+/// Helper function - proves `pub fn` (NOT `pub inline fn`) is the
 /// right shape (forcing inline at the Zig level breaks the SPIR-V
 /// structured-control-flow markers).
 fn brightness(c: zm.Vec3) f32 {

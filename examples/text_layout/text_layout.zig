@@ -1,4 +1,4 @@
-//! text_layout — text rendering + measurement showcase on the wgpu
+//! text_layout - text rendering + measurement showcase on the wgpu
 //! backend. A baked TTF atlas (Atkinson Mono) drives: a per-letter rainbow
 //! heading (each glyph advanced by its measured width), a word-wrapped
 //! paragraph (wrap point chosen with `measureText` per trial line), the same

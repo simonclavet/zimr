@@ -5,7 +5,7 @@ const Vec2 = zm.Vec2;
 // Spike: prove the @SpirvType sampled-image SAMPLE operation assembles to
 // SPIR-V. The prior spike got "failed to assemble" because it bound SPIR-V
 // types as VALUE operands; the fix is the "t" (type) asm constraint, which
-// resolves to the module's real (deduped) type id — matching the @extern
+// resolves to the module's real (deduped) type id - matching the @extern
 // variable's pointee type for OpLoad.
 
 const Image = @SpirvType(.{ .image = .{

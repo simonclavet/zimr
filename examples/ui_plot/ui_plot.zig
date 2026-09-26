@@ -1,10 +1,10 @@
-// examples/ui_plot/ui_plot.zig — interactive plotting demo.
+// examples/ui_plot/ui_plot.zig - interactive plotting demo.
 //
 // An ImPlot-style plot living inside a real zimr frame: a live sine and
 // damped-cosine driven by sliders, with drag-to-pan and wheel-zoom on the
 // plot area, and a "Fit" button to re-frame the data. Renders through
 // `z.plot_ui` -> `ui.DrawList` -> the WebGPU pipeline, so it is fully
-// interactive on the web — the thing a static image can't be.
+// interactive on the web - the thing a static image can't be.
 
 const std = @import("std");
 const zm = @import("zm");

@@ -1,10 +1,10 @@
-//! examples/pipeline_uniforms_vs_io.zig — typed interface for the
+//! examples/pipeline_uniforms_vs_io.zig - typed interface for the
 //! pipeline_uniforms vertex shader. Companion to `pipeline_uniforms_vs.zig`.
 //!
 //! Demonstrates a VERTEX-STAGE uniform: the only uniform is a 4x4 transform the
 //! host rewrites every frame, so the triangle spins and stays aspect-correct.
 //! Because the `Ubo` is declared here (the vertex schema), the codegen binds it
-//! at @group(0) and `loadShaderVF` routes it there automatically — the host
+//! at @group(0) and `loadShaderVF` routes it there automatically - the host
 //! never names a group.
 
 const zm = @import("zm");
@@ -26,7 +26,7 @@ pub const Ubo = struct {
     transform: [4]Vec,
 };
 
-/// Varying to the fragment stage — the interpolated colour (inlined, not shared,
+/// Varying to the fragment stage - the interpolated colour (inlined, not shared,
 /// so the vs/fs io files stay in separate modules; the match is structural).
 pub const Outputs = struct {
     frag_color: Vec,

@@ -1,11 +1,11 @@
-//! src/shaders/shapes_filter_fs.zig — a user 2D shader, run over the ordinary 2D batch.
+//! src/shaders/shapes_filter_fs.zig - a user 2D shader, run over the ordinary 2D batch.
 //!
 //! raylib's `shaders_shapes_textures` draws shapes and a texture and puts SOME of them inside
 //! `BeginShaderMode(grayscale)`. This is that shader.
 //!
 //! Note what it does NOT do: it never samples a render target, and it is not a post-process. It
 //! is the fragment stage of the shapes pipeline itself, so it sees each primitive as it is
-//! rasterized — a circle is grey because the circle's own fragments went through here.
+//! rasterized - a circle is grey because the circle's own fragments went through here.
 const zm = @import("zm");
 const Vec = zm.Vec;
 const dot = zm.dot;
@@ -19,7 +19,7 @@ pub const TextureRef = shader_externs.TextureRef;
 /// raylib's exact weights, from `resources/shaders/glsl330/grayscale.fs`.
 ///
 /// These are Rec. 601 luma. Modern sRGB content technically wants Rec. 709
-/// (0.2126, 0.7152, 0.0722), and the difference is visible on saturated reds and blues — but
+/// (0.2126, 0.7152, 0.0722), and the difference is visible on saturated reds and blues - but
 /// this is a PORT, and matching raylib's output pixel for pixel is the point. A shader that
 /// looked "more correct" than the thing it claims to reproduce would make the side-by-side a
 /// lie.

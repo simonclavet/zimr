@@ -1,14 +1,14 @@
 // examples/bouncing_ball.zig - gravity-driven ball with wall-bounce,
 // pause, and gravity toggle.
 // Direct port of raylib's `examples/shapes/shapes_bouncing_ball.c`
-// (★1, ~93 LOC).  The mechanics are the simplest a "physics" demo
+// (*1, ~93 LOC).  The mechanics are the simplest a "physics" demo
 // can get without actually using `physics.zig`: a single ball with
 // (vx, vy), a constant downward acceleration, and walls that flip
 // the relevant velocity component on contact.
 // What this exercises in zimr:
 //   - `f.gl.circle` for the filled ball (takes
 //     `&state.shapes_texture` so the GPU rasterizer can sample the
-//     1×1 white texture - same convention as raylib's `DrawCircleV`).
+//     1x1 white texture - same convention as raylib's `DrawCircleV`).
 //   - `f.gl.text` for the HUD strings.
 //   - `z.isKeyPressed` for the two rising-edge toggles (G for
 //     gravity, SPACE for pause).
@@ -83,7 +83,7 @@ fn update(f: *z.Frame, state: *State) void {
     state.frame_count += 1;
 
     // ---- Input toggles ----------------------------------------------------
-    // Rising-edge: only fires on the transition from up→down, not
+    // Rising-edge: only fires on the transition from up->down, not
     // every frame the key is held.
     if (z.isKeyPressed(f.input, .g)) {
         state.use_gravity = !state.use_gravity;
@@ -93,10 +93,10 @@ fn update(f: *z.Frame, state: *State) void {
     }
 
     // ---- Physics ----------------------------------------------------------
-    // Scale by 60·dt so the per-frame deltas match raylib's
+    // Scale by 60*dt so the per-frame deltas match raylib's
     // intended tuning (raylib runs at SetTargetFPS(60) without any
     // scaling).  zimr's `f.time.delta_time` returns real-seconds,
-    // so `60 * dt ≈ 1` at 60fps.
+    // so `60 * dt ~ 1` at 60fps.
     const dt: f32 = @floatCast(f.time.delta_time);
     const k: f32 = dt * 60.0;
 

@@ -54,7 +54,7 @@ const State = struct {
     /// not a pointer so that pushing new balls into the list
     /// (which might reallocate in principle) doesn't invalidate
     /// the reference.  In practice the list's capacity is reserved
-    /// to `max_balls` at init so growth never happens — but indexing
+    /// to `max_balls` at init so growth never happens - but indexing
     /// stays index-based to keep the spawn path obviously correct.
     grabbed: ?usize = null,
     press_offset: Vec2 = .{ 0, 0 },
@@ -92,7 +92,7 @@ fn initState(
         .font = font,
     };
     // Reserve full capacity up front so the per-frame spawn path
-    // never reallocates — a 5000-element realloc in the middle of a
+    // never reallocates - a 5000-element realloc in the middle of a
     // burst would chunk the framerate.
     try s.balls.ensureTotalCapacity(gpa, max_balls);
     // Seed with one big blue ball at center, matches the raylib
@@ -121,7 +121,7 @@ fn spawnBallAt(state: *State, at: Vec2) void {
     }
     const rand: std.Random = state.rng.random();
     // `ensureTotalCapacity(max_balls)` already ran in initState, so
-    // appendAssumeCapacity is correct here — we just checked the cap
+    // appendAssumeCapacity is correct here - we just checked the cap
     // above, and the reserved capacity never shrinks.
     state.balls.appendAssumeCapacity(.{
         .position = at,
@@ -196,7 +196,7 @@ fn update(f: *z.Frame, state: *State) void {
     const mouse: Vec2 = .{ mp[0], mp[1] };
     // Live canvas dims for the physics box.  Under `.responsive`
     // mode (set in `main`) these track CSS-pixel resizes every
-    // frame — the simulation box is exactly the window, no aspect-
+    // frame - the simulation box is exactly the window, no aspect-
     // ratio enforcement.  UI is absolute-pixel under `.responsive`
     // so the Physics panel keeps its physical size.  The
     // `screen_w` / `screen_h` consts at the top of this file are

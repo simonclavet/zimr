@@ -1,4 +1,4 @@
-//! 64-bit integer arithmetic within 2^53 (mul/shl/shr/div/mod — these used to be
+//! 64-bit integer arithmetic within 2^53 (mul/shl/shr/div/mod - these used to be
 //! computed in 32 bits via Math.imul / JS `<<` / `>>`, wrong above 2^32) and f32
 //! single-precision rounding (f32 math used to run at f64 precision, off by an
 //! ULP). run_test() returns 0 on success, or a nonzero code for the first failed
@@ -43,7 +43,7 @@ export fn run_test() i32 {
     if (v / 1_000_000 != 4_398_046) return 4;
     if (v % 1_000_000 != 511_111) return 5;
 
-    // f32: 0.1 added ten times is NOT 1.0 in single precision — its rounded bit
+    // f32: 0.1 added ten times is NOT 1.0 in single precision - its rounded bit
     // pattern is 0x3F800001 (slightly above 1.0); f64 precision gives < 1.0.
     var f: f32 = 0.0;
     var d: u32 = 0;

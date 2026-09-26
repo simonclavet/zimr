@@ -1,9 +1,9 @@
-//! examples/bloom_blur_fs.zig — bloom separable-Gaussian blur FS body.
+//! examples/bloom_blur_fs.zig - bloom separable-Gaussian blur FS body.
 //!
 //! A 5-tap Gaussian along the per-pass `dir` (already scaled by texel size in
 //! the UBO): centre tap plus two symmetric pairs at the standard linear-
 //! sampling offsets. The same compiled shader runs both the horizontal and
-//! vertical passes — only the UBO's `dir` differs. Schema in
+//! vertical passes - only the UBO's `dir` differs. Schema in
 //! `bloom_blur_fs_io.zig`.
 
 const zm = @import("zm");
@@ -19,7 +19,7 @@ pub const Out = shader_externs.Out;
 //
 // NORMALIZED so w0 + 2*w1 + 2*w2 == 1.0. These are the inner three weights of a
 // 9-tap Gaussian; used as-is (a 5-tap) they summed to ~0.859, so every blur pass
-// lost ~14% brightness — compounding to a much dimmer bloom across the x4 passes.
+// lost ~14% brightness - compounding to a much dimmer bloom across the x4 passes.
 // Dividing each by that 0.859 sum restores an energy-preserving blur.
 const w0: f32 = 0.264150;
 const w1: f32 = 0.226413;

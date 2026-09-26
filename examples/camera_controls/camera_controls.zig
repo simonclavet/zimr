@@ -1,13 +1,13 @@
-//! camera_controls — a demo of the shared `z.OrbitCamera` controller.
+//! camera_controls - a demo of the shared `z.OrbitCamera` controller.
 //!
 //! A small scene of colored cubes on a grid that you can fully navigate
 //! with one controller doing all three moves, on mouse AND touch:
-//!   * ORBIT — drag with one finger / the left mouse button.
-//!   * PAN   — drag with two fingers / the right (or middle) mouse button.
-//!   * ZOOM  — pinch / the mouse wheel.
+//!   * ORBIT - drag with one finger / the left mouse button.
+//!   * PAN   - drag with two fingers / the right (or middle) mouse button.
+//!   * ZOOM  - pinch / the mouse wheel.
 //! The camera is gated on the UI, so dragging the reset button never
 //! spins the scene. This is the reference for how any 3D example should
-//! take input now — no more hand-rolled orbit math per demo.
+//! take input now - no more hand-rolled orbit math per demo.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

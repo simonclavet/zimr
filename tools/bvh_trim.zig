@@ -1,18 +1,18 @@
-//! tools/bvh_trim.zig — cut a frame range out of a BVH file.
+//! tools/bvh_trim.zig - cut a frame range out of a BVH file.
 //!
 //! Mocap captures are large: `dance1_subject2.bvh` is 43 MB of motion matrix, which cannot be
 //! `@embedFile`d into an example that ships in a 13 MB launcher. This produces the trimmed clip
 //! the `mocap_viewer` example embeds, so that asset has a recorded provenance and can be
 //! regenerated rather than being a mystery blob someone once made by hand.
 //!
-//! It runs on zimr's OWN codec — `codecs.bvh.parse` then `codecs.bvh.encode`. That is
+//! It runs on zimr's OWN codec - `codecs.bvh.parse` then `codecs.bvh.encode`. That is
 //! deliberate: it makes the shipped asset a product of the round trip the tests assert, so a
 //! parser or writer regression shows up as a broken example rather than as a silent difference
 //! between the fixture and the library that reads it.
 //!
 //!     bvh_trim <input.bvh> <output.bvh> <first_frame> <frame_count>
 //!
-//! Frames are indices, not seconds — the file's own `Frame Time:` decides what those mean, and
+//! Frames are indices, not seconds - the file's own `Frame Time:` decides what those mean, and
 //! 60 fps and 120 fps captures both occur. Divide seconds by `Frame Time` yourself; the tool
 //! prints the resulting duration so the arithmetic is checkable.
 
@@ -81,7 +81,7 @@ pub fn main(init: std.process.Init) !void {
         keep[j] = !parent_dropped and !named;
     }
 
-    // The trimmed clip shares the hierarchy verbatim and takes a contiguous slice of rows —
+    // The trimmed clip shares the hierarchy verbatim and takes a contiguous slice of rows -
     // `motion` is row-major, so the range is one slice rather than a per-row copy.
     // Which kept joints still have a kept child? One that doesn't would be a childless JOINT -
     // not a well-formed BVH, and a body whose direction the retarget can no longer see (a hand

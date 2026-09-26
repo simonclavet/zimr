@@ -1,14 +1,14 @@
-//! scenes.zig — the robot demo's scene table.
+//! scenes.zig - the robot demo's scene table.
 //!
 //! Same shape as `examples/zimrphysics2d_demo/scenes.zig`: one table, one row per scene,
 //! and the host knows nothing about any individual scene. Adding a scene is adding a row.
 //!
-//! Every scene is PLANAR — hinges about Z, so the machine swings in the screen plane and
+//! Every scene is PLANAR - hinges about Z, so the machine swings in the screen plane and
 //! the host can draw it in 2D with no camera. That is not a limitation of the engine (it
 //! is fully 3D); it is what makes the demo readable on a phone.
 //!
 //! A scene owns a `robot.Model` and a `robot.Data`. It may install a `control` hook, which
-//! runs once per frame BEFORE the physics — the same position in the pipeline a real
+//! runs once per frame BEFORE the physics - the same position in the pipeline a real
 //! controller occupies, between "everything derived from state is known" and "no force has
 //! been committed yet".
 
@@ -65,7 +65,7 @@ pub const Scene = struct {
     /// Which body/offset the tip marker and trail follow. Null draws no trail.
     tip: ?struct { body: u32, local: Vec } = null,
     /// Optional live readout, drawn under the blurb. Lets a scene surface the numbers it is
-    /// actually about — an IMU's reading, a tendon's length — rather than leaving the
+    /// actually about - an IMU's reading, a tendon's length - rather than leaving the
     /// interesting quantity invisible inside `Data`.
     readout: ?*const fn (live: *const Live, buf: []u8) []const u8 = null,
     /// Farthest the mechanism can reach from the origin, in metres. The host scales the
@@ -78,7 +78,7 @@ pub const Scene = struct {
 // Model builders. Each returns a fresh Live; the host owns exactly one at a time.
 // ============================================================================
 
-/// A chain of `n` identical links hanging along −Y, hinged about Z. Covers the whole
+/// A chain of `n` identical links hanging along -Y, hinged about Z. Covers the whole
 /// Basics category: one link is a pendulum, two is chaos, three is more chaos.
 fn Chain(comptime n: usize, comptime armature: f32) type {
     return struct {
@@ -129,7 +129,7 @@ fn Chain(comptime n: usize, comptime armature: f32) type {
 /// A two-link arm with a site at its tip.
 ///
 /// TWO models, not one, and the difference matters: an arm with motors is a different
-/// machine from an arm without. A position servo is ALWAYS acting — leave its control at
+/// machine from an arm without. A position servo is ALWAYS acting - leave its control at
 /// zero and it drives the joint to zero with all its gain, which silently overrules any
 /// other controller you layer on top. So the Kinematics scenes get an unactuated arm and
 /// drive it with joint forces, and the Actuators scenes get the servos.
@@ -228,7 +228,7 @@ const Arm = struct {
 /// steadily into a limit instead of the arm settling somewhere the constraint never
 /// engages. `soft` widens the impedance ramp and lengthens the time constant, which is
 /// visible as the arm sinking further past its stop and easing into it rather than
-/// catching — the same model, one parameter apart.
+/// catching - the same model, one parameter apart.
 fn LimitedArm(comptime soft: bool) type {
     return struct {
         const softness: rbt.Softness = if (soft)
@@ -305,7 +305,7 @@ const LimitSoft = LimitedArm(true);
 /// A pendulum wearing an inertial measurement unit at its tip.
 ///
 /// The instrument is the point of the scene. An accelerometer does not measure coordinate
-/// acceleration — it measures PROPER acceleration, the force per unit mass its case applies
+/// acceleration - it measures PROPER acceleration, the force per unit mass its case applies
 /// to the proof mass. So one at rest reads 9.81 upward and one in free fall reads zero,
 /// which is exactly backwards from the intuition most people start with.
 const Imu = struct {
@@ -350,7 +350,7 @@ const Imu = struct {
         return live;
     }
 
-    /// The instrument's own reading, in its own frame — which is what makes it an
+    /// The instrument's own reading, in its own frame - which is what makes it an
     /// instrument rather than a derived quantity.
     fn readout(live: *const Live, buf: []u8) []const u8 {
         const sensor: []const f32 = live.data.sensor_data;
@@ -370,7 +370,7 @@ const Imu = struct {
 /// Free fall: nothing to control. Present so the table reads uniformly.
 fn noControl(_: *Live, _: Input) void {}
 
-/// No controller, but dragging pushes the tip — so you can drive the arm into its limits
+/// No controller, but dragging pushes the tip - so you can drive the arm into its limits
 /// and feel the constraint push back rather than watching it settle.
 fn dragOnly(live: *Live, in: Input) void {
     if (!in.pointing) {
@@ -384,7 +384,7 @@ fn dragOnly(live: *Live, in: Input) void {
 }
 
 /// Cancel gravity exactly. `bias_force` IS the force needed to hold still, so applying it
-/// leaves the arm weightless — it stays wherever you leave it, in any pose.
+/// leaves the arm weightless - it stays wherever you leave it, in any pose.
 ///
 /// This is the cheapest genuinely useful thing an engine like this does, and it needs no
 /// tuning, no gains and no target: it is inverse dynamics evaluated at zero acceleration.
@@ -405,8 +405,8 @@ fn gravityCompensation(live: *Live, in: Input) void {
 
 /// Jacobian-transpose reach: pull the tip toward the target.
 ///
-/// The whole algorithm is `τ = Jᵀ·(target − tip)`. It works because the transpose converts
-/// a task-space pull into the joint torques that produce it — no matrix inverse, no
+/// The whole algorithm is `tau = J^T*(target - tip)`. It works because the transpose converts
+/// a task-space pull into the joint torques that produce it - no matrix inverse, no
 /// iteration, and it degrades gracefully at singularities instead of blowing up the way an
 /// inverse-Jacobian method does.
 fn reachToTarget(live: *Live, in: Input) void {
@@ -442,7 +442,7 @@ fn servoSweep(live: *Live, in: Input) void {
     live.data.ctrl[1] = -1.1 * c;
 }
 
-/// Hold a fixed pose against gravity using ONLY the servos — no gravity compensation. The
+/// Hold a fixed pose against gravity using ONLY the servos - no gravity compensation. The
 /// steady-state droop is the point: a finite-gain servo settles where its restoring torque
 /// balances the load, and that error is a real property of proportional control.
 fn servoHold(live: *Live, _: Input) void {

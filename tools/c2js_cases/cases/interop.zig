@@ -1,6 +1,6 @@
 //! JS interop through the raw kernel (the helper layer is covered by the demo
 //! scenario). Exercises property reads, numeric/float args, and a string
-//! argument — the string travels through js_str + js_call, the path where the
+//! argument - the string travels through js_str + js_call, the path where the
 //! pointer-field load once returned an address instead of the string pointer.
 //! Runs against a `fixture` object the test runner installs on globalThis.
 //! run_test() returns 0 on success.

@@ -1,4 +1,4 @@
-//! measure — run a command and record wall time, peak RSS, cache delta and free-disk delta.
+//! measure - run a command and record wall time, peak RSS, cache delta and free-disk delta.
 //!
 //! Replaces `scripts/measure.sh`. Same output format, same `/tmp/measure.log` append, so the
 //! numbers already quoted across `claude.md` and the plans stay comparable.
@@ -86,7 +86,7 @@ pub fn main(init: std.process.Init) !void {
 
     // The child's own output goes to a fixed file, NOT to this process's stdout.
     //
-    // ★ That is a trap worth naming: redirecting the `measure` invocation captures only this
+    // * That is a trap worth naming: redirecting the `measure` invocation captures only this
     // summary line, so a `grep 'error:'` on it reports nothing whatever the build did. The log
     // to read is /tmp/b.log, and it is overwritten by the next measured command.
     const log_file: File = try std.Io.Dir.cwd().createFile(io, child_log_path, .{});
@@ -96,7 +96,7 @@ pub fn main(init: std.process.Init) !void {
         .argv = command,
         .stdout = .{ .file = log_file },
         .stderr = .{ .file = log_file },
-        // ★ The kernel already tracks peak RSS. `measure.sh` polled /proc every 250 ms and
+        // * The kernel already tracks peak RSS. `measure.sh` polled /proc every 250 ms and
         // summed across the `zig` process tree because it had no other way; asking for
         // `rusage` is both exact and free, and it counts the build runner's children too
         // (wait4 folds terminated descendants into RUSAGE_CHILDREN).

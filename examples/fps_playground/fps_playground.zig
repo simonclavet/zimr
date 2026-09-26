@@ -1,4 +1,4 @@
-//! fps_playground — a first-person character walking a world of physics cubes.
+//! fps_playground - a first-person character walking a world of physics cubes.
 //! The player is a `CharacterVirtual` (the engine's ported Jolt capsule character
 //! controller): a capsule that sweeps through the world, slides along walls, walks
 //! up small steps, sticks to the floor on slopes, and reports whether it is on the

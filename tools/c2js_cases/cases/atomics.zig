@@ -2,7 +2,7 @@
 // ordering is a no-op). The C backend emits them as function-like macros the
 // preprocessor ignores; pre-fix, isTypeQualifierOrSpecifier treated the helper names
 // (zig_atomic_store/_load, zig_atomicrmw_*) as TYPE specifiers, so each statement was
-// mis-parsed as a declaration and SILENTLY DROPPED — the store/RMW never happened and
+// mis-parsed as a declaration and SILENTLY DROPPED - the store/RMW never happened and
 // an atomic load left a stale temp. Fix: exclude the atomic helper functions from the
 // type-specifier set (so they parse as calls) and lower them to load/store/RMW, with
 // the RMW result written to the first arg (the old value).

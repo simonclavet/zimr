@@ -3,7 +3,7 @@
 // A CPU particle fountain on WebGPU with a REAL ui.zig control panel. Particles
 // spawn from an emitter (drag with the mouse on the canvas), fall under gravity,
 // fade out. The ImGui window controls emission rate, gravity, and particle size,
-// plus a reset button — proving "scene + real Dear ImGui" on the wgpu backend
+// plus a reset button - proving "scene + real Dear ImGui" on the wgpu backend
 // (the pattern every ported UI example follows: scene draw via gl: anytype, UI
 // via z.UiHost).
 //

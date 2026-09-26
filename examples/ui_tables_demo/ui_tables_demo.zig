@@ -304,7 +304,7 @@ fn update(f: *z.Frame, s: *State) void {
             .row_bg = true,
             .outer_height = 140,
         })) {
-            // No per-column `sizing` override — every column inherits
+            // No per-column `sizing` override - every column inherits
             // from the table's policy.  Switching the mode above
             // shows how the same data lays out under each policy.
             u.tableSetupColumn("Id", .{});

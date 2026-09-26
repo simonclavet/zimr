@@ -2,8 +2,8 @@
 // pointer-to-union (`for (&arr) |*s| switch (s.*) { .rect => |*rc| ... }`). The C
 // backend lowers the capture to `(struct RectT *)&s->payload.rect`. Pre-fix, the
 // &-address-of walker resolved only the first hop (`->payload`) and left the trailing
-// `.rect` to be applied to the CAST result as a JS property access — `(addr).rect`
-// -> undefined -> a read at address ~0 — so the captured payload silently read as 0.
+// `.rect` to be applied to the CAST result as a JS property access - `(addr).rect`
+// -> undefined -> a read at address ~0 - so the captured payload silently read as 0.
 // Fix: walk the whole `ptr->field(.member)*` chain (like the &v.field.member case),
 // summing offsets, so a union payload member resolves to its real address.
 const Shape = union(enum) {

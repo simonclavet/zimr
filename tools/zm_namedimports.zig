@@ -1,4 +1,4 @@
-//! zm_namedimports — migrate `zm.X` bodies to named imports (reserved-math P4).
+//! zm_namedimports - migrate `zm.X` bodies to named imports (reserved-math P4).
 //!
 //! Usage: zm_namedimports <file>...
 //!
@@ -12,7 +12,7 @@
 //! AST-based, so `zm.X` inside strings/comments is untouched (not an identifier
 //! field-access node). Idempotent: a second run finds no body `zm.X` left to
 //! rewrite (the binding inits are excluded) and adds nothing. Files with zero or
-//! more than one top-level `zm` alias are skipped untouched — this is how the
+//! more than one top-level `zm` alias are skipped untouched - this is how the
 //! namespace-local `zm`s in runtime.zig (each indented inside a `struct`) opt
 //! out automatically. Same `std.Io` conventions as rename_local.
 const std = @import("std");
@@ -90,7 +90,7 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
             }
             const ft: u32 = ast.firstToken(node);
             const ft_off: usize = starts[ft];
-            // Column 0 ⇒ the char before the first token is a newline (or BOF).
+            // Column 0 => the char before the first token is a newline (or BOF).
             if (ft_off != 0 and buf[ft_off - 1] != '\n') {
                 continue;
             }
@@ -139,7 +139,7 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
     //     params).  Inserting a top-level `const X = zm.X` for any of these would
     //     duplicate a file-scope member or shadow a local/param (both Zig errors),
     //     so such names stay qualified.  Canonical `const X = zm.X` bindings are
-    //     exempt — they are the legal home for the name.
+    //     exempt - they are the legal home for the name.
     var declared: ArrayList([]const u8) = .empty;
     defer declared.deinit(gpa);
     {
@@ -201,7 +201,7 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
         return false; // nothing to migrate (already done, or no body zm.X)
     }
 
-    // 4) New bindings to add = distinct(used) − already_bound, sorted.
+    // 4) New bindings to add = distinct(used) - already_bound, sorted.
     std.mem.sort([]const u8, used.items, {}, ltStr);
     var to_add: ArrayList([]const u8) = .empty;
     defer to_add.deinit(gpa);

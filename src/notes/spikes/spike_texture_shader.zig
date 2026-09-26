@@ -1,4 +1,4 @@
-// Spike: a realistic textured fragment shader using the NEW zm helpers — the
+// Spike: a realistic textured fragment shader using the NEW zm helpers - the
 // no-zspv_rewrite path. Separate texture + sampler bindings (WGSL's model),
 // paired by OpSampledImage inside the inline `sampleLod`. Compiling this and
 // running it through spv2wgsl yields native `textureSample(tex, samp, uv)`.

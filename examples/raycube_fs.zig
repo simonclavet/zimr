@@ -1,11 +1,11 @@
-//! examples/raycube_fs.zig — a ray-traced-cube FRAGMENT SHADER.
+//! examples/raycube_fs.zig - a ray-traced-cube FRAGMENT SHADER.
 //!
 //! Per pixel: build the camera ray from the host-supplied basis, rotate it INTO
 //! the cube's local frame (the cube spins by `u.time` about Y), slab-method
 //! ray-box intersect the unit cube [-1,1]^3, and shade the hit by its face axis
-//! (red/green/blue) with a fixed-light lambert term — or a vertical gradient sky
+//! (red/green/blue) with a fixed-light lambert term - or a vertical gradient sky
 //! on a miss. Compiles three ways (the zimr shader contract): WGSL (GPU), native
-//! Zig (raster CPU dispatcher), and SPIR-V — and is cheap enough to also run at
+//! Zig (raster CPU dispatcher), and SPIR-V - and is cheap enough to also run at
 //! comptime (no loops, just three unrolled slabs).
 //!
 //! SPIR-V / WGSL safe: no recursion, no pointers-into-scene, no dynamic loops;
@@ -30,7 +30,7 @@ pub fn shaderMain(io_in: Io) Out {
 
     // Primary ray through this pixel, from the host-built (orbiting) camera
     // basis. The cube is a fixed axis-aligned box and the CAMERA orbits, so no
-    // per-fragment rotation is needed — we ray-box directly in world space.
+    // per-fragment rotation is needed - we ray-box directly in world space.
     const ro: Vec = io_in.u.cam_origin;
     const pixel_center: Vec = io_in.u.px00 +
         io_in.u.pdu * splat(px) +
@@ -38,13 +38,13 @@ pub fn shaderMain(io_in: Io) Out {
     const rd: Vec = safeNormalize3(pixel_center - ro, vec(0, 0, -1));
 
     // Slab ray-box against the unit cube [-1, 1]^3. Track the entry axis for the
-    // surface normal. Axis-aligned rays give inf via 1/0 — the min/max ordering
+    // surface normal. Axis-aligned rays give inf via 1/0 - the min/max ordering
     // and comparisons stay correct (standard robust-slab behaviour).
     var tmin: f32 = -1.0e30;
     var tmax: f32 = 1.0e30;
     var hit_axis: u32 = 0;
 
-    // Three slabs. The SPIR-V→WGSL lowering flattens Zig block scopes without
+    // Three slabs. The SPIR-V->WGSL lowering flattens Zig block scopes without
     // renaming, so each axis uses DISTINCT locals (shared names would become a
     // WGSL redeclaration). @min/@max avoid a swap branch.
     const invx: f32 = 1.0 / rd[0];
@@ -120,7 +120,7 @@ pub fn shaderMain(io_in: Io) Out {
         const lit: f32 = 0.25 + 0.75 * ndl;
         color = face * splat(lit);
     } else {
-        // Gradient sky on a miss (warm horizon → deep-blue zenith).
+        // Gradient sky on a miss (warm horizon -> deep-blue zenith).
         const t: f32 = 0.5 * (rd[1] + 1.0);
         const bot: Vec = vec(0.85, 0.52, 0.32);
         const top: Vec = vec(0.12, 0.20, 0.48);

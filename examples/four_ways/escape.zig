@@ -1,11 +1,11 @@
-//! examples/four_ways/escape.zig — THE function.
+//! examples/four_ways/escape.zig - THE function.
 //!
 //! Read it. There is nothing here about threads, or GPUs, or compile time. No annotation,
 //! no attribute, no `#pragma`, no `__device__`, no `[numthreads]`. It is a Zig function.
 //!
 //! It runs on four machines:
 //!
-//!   * at COMPILE TIME, producing an ASCII fractal that is baked into the binary — the
+//!   * at COMPILE TIME, producing an ASCII fractal that is baked into the binary - the
 //!     program never executes this loop at all;
 //!   * on the CPU's main thread, where it is expensive enough to visibly hitch the frame;
 //!   * on a CPU worker thread, doing the same work without hitching anything;

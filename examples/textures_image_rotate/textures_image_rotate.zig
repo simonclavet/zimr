@@ -1,6 +1,6 @@
-//! textures_image_rotate — port of raylib [textures] example.
+//! textures_image_rotate - port of raylib [textures] example.
 //! Load the raylib logo three times, rotate each on the CPU (imageRotate,
-//! arbitrary angle) by 45°, 90°, and -90°, upload to GPU textures, and cycle
+//! arbitrary angle) by 45 deg, 90 deg, and -90 deg, upload to GPU textures, and cycle
 //! between them on left-click / RIGHT. Rotation happens once at init in RAM;
 //! the frame loop only draws the currently selected texture.
 const std = @import("std");

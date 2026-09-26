@@ -1,10 +1,10 @@
-//! src/shaders/effect_grade_fs.zig — color correction (contrast /
+//! src/shaders/effect_grade_fs.zig - color correction (contrast /
 //! brightness / saturation), raylib's `color_correction.fs` ported.
 //!
 //! Three classic grading knobs applied in raylib's order: pivot the
 //! color around mid-gray for contrast, shift for brightness, then push
 //! away from (or toward) the NTSC luminance for saturation.  At
-//! saturation −1 this IS raylib's `grayscale.fs` — one shader, two of
+//! saturation -1 this IS raylib's `grayscale.fs` - one shader, two of
 //! their examples.
 
 const zm = @import("zm");
@@ -37,7 +37,7 @@ pub fn shaderMain(io_in: Io) Out {
     texel[2] += brightness;
 
     // Saturation: push away from the NTSC luminance (raylib's
-    // (rgb-I)*s + rgb — at s = -1 the color collapses onto I: grayscale).
+    // (rgb-I)*s + rgb - at s = -1 the color collapses onto I: grayscale).
     const lum: f32 = 0.299 * texel[0] + 0.587 * texel[1] + 0.114 * texel[2];
     texel[0] = (texel[0] - lum) * saturation + texel[0];
     texel[1] = (texel[1] - lum) * saturation + texel[1];

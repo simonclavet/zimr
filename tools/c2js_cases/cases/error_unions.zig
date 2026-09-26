@@ -2,7 +2,7 @@
 // `{ T payload; uint16_t error; }` built with designated initializers, and the
 // error codes to a C `enum { zig_error_Bad = 1u, ... }`. Regression for two
 // gaps: designated-initializer compound literals, and unresolved enum constants
-// (the error names) — both fixed (parseCompoundLiteral by-name routing +
+// (the error names) - both fixed (parseCompoundLiteral by-name routing +
 // prescanEnums recording the constants).
 const E = error{ TooBig, Negative };
 fn checked(x: i32) E!i32 {

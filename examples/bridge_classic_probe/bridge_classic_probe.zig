@@ -1,4 +1,4 @@
-//! bridge_classic_probe — ZIG_BRIDGE Phase 3a validator. A wasm32-wasi
+//! bridge_classic_probe - ZIG_BRIDGE Phase 3a validator. A wasm32-wasi
 //! REACTOR speaking the CLASSIC zimr contract (`_initialize` + `update(dt)`)
 //! against the new Zig bridge: device/queue/surface singletons, buffer
 //! create + queue write, WGSL shader module, sampler, and a per-frame
@@ -106,7 +106,7 @@ const ProbeState = struct {
     banner_shown: bool = false,
 };
 
-/// Little-endian writer for the render-pipeline descriptor blob — the same
+/// Little-endian writer for the render-pipeline descriptor blob - the same
 /// packed format pipeline_cache.zig emits and the bridge's Cursor decodes.
 const BlobWriter = struct {
     buf: [128]u8 = undefined,
@@ -154,7 +154,7 @@ export fn _initialize() void {
         @sizeOf(@TypeOf(vertices)),
     );
 
-    // One WGSL module carrying BOTH entry points — the historical
+    // One WGSL module carrying BOTH entry points - the historical
     // Renderer2D shape, so vs_module == fs_module is exercised too.
     const wgsl: []const u8 =
         "@vertex fn vs(@location(0) p: vec2f) -> @builtin(position) vec4f {" ++
@@ -173,7 +173,7 @@ export fn _initialize() void {
     );
     _ = wgpu.js_device_create_sampler(probe.device, 1, 1, 0);
 
-    // Empty pipeline layout (no bind groups — positions only).
+    // Empty pipeline layout (no bind groups - positions only).
     const no_bgls = [0]u32{};
     const layout_label: []const u8 = "probe-layout";
     const layout: u32 = wgpu.js_device_create_pipeline_layout(
@@ -219,7 +219,7 @@ export fn _initialize() void {
 }
 
 fn wave(t: f32, phase: f32) f32 {
-    // Bhaskara sine approximation on a wrapped angle — freestanding-friendly.
+    // Bhaskara sine approximation on a wrapped angle - freestanding-friendly.
     var x: f32 = t + phase;
     const tau: f32 = 6.28318;
     x = x - tau * @floor(x / tau);
@@ -237,7 +237,7 @@ export fn update(dt: f64) void {
     const t: f32 = @floatCast(probe.elapsed);
 
     // The visible heartbeat: clear the whole surface to a slowly cycling
-    // color every frame — unmistakable proof the pass/submit path is live.
+    // color every frame - unmistakable proof the pass/submit path is live.
     const view: u32 = wgpu.js_surface_get_current_texture(probe.surface);
     const encoder: u32 = wgpu.js_device_create_command_encoder(probe.device);
     const pass: u32 = wgpu.js_encoder_begin_render_pass(

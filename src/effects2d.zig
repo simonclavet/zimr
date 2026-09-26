@@ -1,5 +1,5 @@
 //! lint:alias effects2d
-//! src/effects2d.zig — the 2D fullscreen fragment-effect runner.
+//! src/effects2d.zig - the 2D fullscreen fragment-effect runner.
 //!
 //! raylib does post-processing like this:
 //!
@@ -8,7 +8,7 @@
 //!         DrawTextureRec(target.texture, ..., WHITE);
 //!     EndShaderMode();
 //!
-//! This module is that, for the wgpu backend — and it exists because the shape of
+//! This module is that, for the wgpu backend - and it exists because the shape of
 //! it was previously HAND-ROLLED in the example: every effect gallery had to build
 //! its own bind-group layouts, uniform buffers, pipeline layout, fullscreen quad,
 //! and then drive `setPipeline` / `setBindGroup` x3 / `setVertexBuffer` / `draw`
@@ -18,10 +18,10 @@
 //! The binding contract every effect fragment shader must satisfy (it is what
 //! `effect_common_io.zig` declares, so any shader in that family already does):
 //!
-//!     @group(0)             — empty (reserved for the engine's per-frame slot)
-//!     @group(1) @binding(0) — source texture      (the thing being post-processed)
-//!     @group(1) @binding(1) — its sampler
-//!     @group(2) @binding(0) — the effect's own uniform block
+//!     @group(0)             - empty (reserved for the engine's per-frame slot)
+//!     @group(1) @binding(0) - source texture      (the thing being post-processed)
+//!     @group(1) @binding(1) - its sampler
+//!     @group(2) @binding(0) - the effect's own uniform block
 //!
 //! The vertex stage is supplied by the caller as WGSL (in practice the engine's
 //! fullscreen-quad VS). The engine cannot `@embedFile` it here: the generated
@@ -45,7 +45,7 @@ const Backend = gpu_iface.WgpuBackend;
 ///
 /// No UVs. The shared vertex stage (`deferred_shading_vs`) derives the UV from
 /// the clip position itself, so shipping a UV attribute here would not just be
-/// redundant — it would not match the VS's declared inputs, and the pipeline
+/// redundant - it would not match the VS's declared inputs, and the pipeline
 /// would fail validation.
 const quad_verts = [_][2]f32{
     .{ -1.0, -1.0 }, .{ 1.0, -1.0 }, .{ 1.0, 1.0 },
@@ -66,7 +66,7 @@ pub const Effect = struct {
     fs_mod: wgpu.ShaderModuleHandle = .invalid,
 
     /// raylib's `SetShaderValue`, but typed and whole-struct: push the effect's
-    /// entire uniform block. Partial updates are a bug farm — the block is small
+    /// entire uniform block. Partial updates are a bug farm - the block is small
     /// and std140-padded, so there is nothing to gain by writing it piecemeal.
     pub fn setValues(self: Effect, queue: wgpu.QueueHandle, values: anytype) void {
         wgpu.queueWriteBuffer(queue, self.ubo, 0, std.mem.asBytes(values));
@@ -97,8 +97,8 @@ pub const Effect = struct {
 /// How many source textures the effects read. One is the common case (a post
 /// effect over the scene); a mask/blend shader wants two or three.
 pub const HostOptions = struct {
-    /// Source textures bound into @group(1). Each takes TWO bindings —
-    /// texture at 2i, its sampler at 2i+1 — which is exactly the layout the
+    /// Source textures bound into @group(1). Each takes TWO bindings -
+    /// texture at 2i, its sampler at 2i+1 - which is exactly the layout the
     /// shader DSL generates for N `Sampler2D` fields (verified against the PBR
     /// shader's WGSL, which binds texture0/1/2 at 0,2,4 and their samplers at
     /// 1,3,5).
@@ -114,9 +114,9 @@ pub const Host = struct {
     quad_layout: gpu.VertexBufferLayout,
     vbo: wgpu.BufferHandle,
     empty_bg: wgpu.BindGroupHandle,
-    /// How many textures @group(1) expects — the bind group must match exactly.
+    /// How many textures @group(1) expects - the bind group must match exactly.
     tex_count: u32 = 1,
-    /// The depth format of the passes these effects will be bound into — read
+    /// The depth format of the passes these effects will be bound into - read
     /// from the app, NOT assumed. A pipeline built with a depth attachment cannot
     /// be bound into a depth-less pass (WebGPU rejects the setPipeline), and an
     /// effect renders into a render texture whose depth comes from the SAME app
@@ -198,7 +198,7 @@ pub const Host = struct {
     }
 
     /// Compile one effect: its own uniform layout, pipeline layout, pipeline, ubo.
-    /// `ubo_size` is `@sizeOf(TheShader.Ubo)` — pass it and the layout's `min_size`
+    /// `ubo_size` is `@sizeOf(TheShader.Ubo)` - pass it and the layout's `min_size`
     /// will reject a shader whose block is bigger than the buffer, at creation
     /// rather than as corrupt uniforms later.
     pub fn load(
@@ -210,7 +210,7 @@ pub const Host = struct {
         label: []const u8,
     ) !Effect {
         // `device` stays a parameter for symmetry with the rest of the wgpu API,
-        // but the DEPTH state comes from the Host — see `depth_format` above.
+        // but the DEPTH state comes from the Host - see `depth_format` above.
         const u_entries = [_]shader_introspect.BindGroupLayoutEntry{
             .{
                 .binding = 0,
@@ -272,7 +272,7 @@ pub const Host = struct {
     }
 
     /// Point the effects at new source textures (call on resize / target swap).
-    /// `views.len` MUST equal the `textures` the Host was built with — a bind group
+    /// `views.len` MUST equal the `textures` the Host was built with - a bind group
     /// that doesn't match its layout is a WebGPU validation error, so it is caught
     /// here as a plain error instead.
     /// The old bind group is destroyed, so re-targeting cannot leak.
@@ -335,7 +335,7 @@ pub const Host = struct {
     }
 };
 
-/// raylib's `BeginShaderMode(shader)` — bind the effect's pipeline, the source
+/// raylib's `BeginShaderMode(shader)` - bind the effect's pipeline, the source
 /// texture, and the effect's uniforms into the OPEN pass.
 ///
 /// Silently no-ops when no source is bound: an effect with an unbound source would
@@ -358,7 +358,7 @@ pub fn beginShaderMode(gl: *WgpuGl, host: *const Host, fx: Effect) void {
     });
 }
 
-/// raylib's `DrawTextureRec(target.texture, ...)` inside a shader mode — the
+/// raylib's `DrawTextureRec(target.texture, ...)` inside a shader mode - the
 /// fullscreen blit the effect actually runs over.
 pub fn drawFullscreen(gl: *WgpuGl) void {
     wgpu.render_pass.draw(gl.pass.pass, .{
@@ -370,7 +370,7 @@ pub fn drawFullscreen(gl: *WgpuGl) void {
 }
 
 /// raylib's `EndShaderMode()`. The 2D renderer re-binds its own pipeline on the
-/// next shape it draws, so there is nothing to restore — but the call exists so
+/// next shape it draws, so there is nothing to restore - but the call exists so
 /// the begin/end pairing reads the way raylib's does, and so a future
 /// state-restoring implementation has a place to live.
 pub fn endShaderMode(gl: *WgpuGl) void {

@@ -1,20 +1,20 @@
-//! deferred_render — raylib's `shaders_deferred_rendering`, the zimr way.
+//! deferred_render - raylib's `shaders_deferred_rendering`, the zimr way.
 //!
 //! Two passes, zero lighting math wasted on overdraw:
 //!
-//!   PASS A (geometry → G-buffer): one MRT render pass fills THREE
-//!   textures at once through `gbuffer_vs/fs` — world position
+//!   PASS A (geometry -> G-buffer): one MRT render pass fills THREE
+//!   textures at once through `gbuffer_vs/fs` - world position
 //!   (rgba16_float), world normal (rgba16_float), albedo+spec
 //!   (rgba8_unorm).  36 objects, one walk.
 //!
 //!   PASS B (lighting): a fullscreen quad through `deferred_shading_fs`
 //!   reads the three maps back and runs Blinn-Phong for four point
-//!   lights — once per screen pixel, however many cubes overdrew it.
+//!   lights - once per screen pixel, however many cubes overdrew it.
 //!
 //! Phone-first upgrades over the raylib original: drag to orbit, pinch
 //! or wheel to zoom; the four lights slowly circle the scene (motion is
 //! what makes deferred lighting legible) with little glowing lamp cubes
-//! riding along; and the keyboard toggles became a proper UI panel —
+//! riding along; and the keyboard toggles became a proper UI panel -
 //! four light checkboxes plus a POSITION / NORMAL / ALBEDO / SHADING
 //! mode switch that blits the raw G-buffer maps for inspection.
 
@@ -37,7 +37,7 @@ const scaling = zm.scaling;
 const translation = zm.translation;
 const vec = zm.vec;
 
-/// Plain white tint for the fullscreen blits — the maps ARE the picture.
+/// Plain white tint for the fullscreen blits - the maps ARE the picture.
 const white: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
 const gbuf_vs = z.deferred_shaders.gbuffer_vs;
@@ -52,7 +52,7 @@ const shading_vs_wgsl = @embedFile("deferred_shading_vs.wgsl");
 const shading_fs_wgsl = @embedFile("deferred_shading_fs.wgsl");
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
-// Uniform block types come FROM the shader Io schemas — the GPU buffers
+// Uniform block types come FROM the shader Io schemas - the GPU buffers
 // and any future software run of these shaderMains cannot drift apart.
 const GbufVsUbo = @FieldType(gbuf_vs.Io, "u");
 const GbufFsUbo = @FieldType(gbuf_fs.Io, "u");
@@ -65,7 +65,7 @@ const tumbling_cubes: usize = 30;
 const ViewMode = enum { position, normal, albedo, shading };
 
 // ============================================================================
-// Geometry — the same position+normal layout the whole engine speaks.
+// Geometry - the same position+normal layout the whole engine speaks.
 // ============================================================================
 
 const MeshVertex = extern struct {
@@ -75,7 +75,7 @@ const MeshVertex = extern struct {
 
 const up_n: [3]f32 = .{ 0, 1, 0 };
 
-/// 10×10 ground plane, matching raylib's GenMeshPlane(10, 10).
+/// 10x10 ground plane, matching raylib's GenMeshPlane(10, 10).
 const plane_verts = [_]MeshVertex{
     .{ .position = .{ -5, 0, -5 }, .normal = up_n },
     .{ .position = .{ 5, 0, -5 }, .normal = up_n },
@@ -121,7 +121,7 @@ const cube_indices = [_]u32{
     20, 21, 22, 20, 22, 23,
 };
 
-/// Fullscreen quad, positions ALREADY in NDC — `deferred_shading_vs`
+/// Fullscreen quad, positions ALREADY in NDC - `deferred_shading_vs`
 /// passes them straight through, no matrix, nothing to get wrong.
 const fullscreen_verts = [_][2]f32{
     .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 },
@@ -129,7 +129,7 @@ const fullscreen_verts = [_][2]f32{
 };
 
 // ============================================================================
-// Staging — the seeded cube field + the light carousel.
+// Staging - the seeded cube field + the light carousel.
 // ============================================================================
 
 /// One drawable: which mesh, where, what material, how it tumbles.
@@ -138,11 +138,11 @@ const Placement = struct {
     center: [3]f32,
     half: [3]f32,
     spin_rate: f32, // radians/sec about Y; 0 = static
-    albedo_spec: [4]f32, // rgb albedo + a spec strength — the G-buffer vec4
+    albedo_spec: [4]f32, // rgb albedo + a spec strength - the G-buffer vec4
 };
 
 /// Tiny deterministic PRNG (xorshift) so the cube field is the SAME
-/// composed scatter on every run — raylib reseeds rand() and gets a new
+/// composed scatter on every run - raylib reseeds rand() and gets a new
 /// jumble each launch, which makes screenshots impossible to compare.
 fn nextRand(state: *u32) f32 {
     var x: u32 = state.*;
@@ -175,7 +175,7 @@ fn buildPlacements() [2 + tumbling_cubes]Placement {
     };
     var rng: u32 = 0xC0FFEE;
     for (out[2..]) |*p| {
-        // Scatter like raylib (x,z ∈ [-5,5), y ∈ [0,5)) but seeded, and
+        // Scatter like raylib (x,z in [-5,5), y in [0,5)) but seeded, and
         // with per-cube tumble rates so the normals are alive on screen.
         const x: f32 = nextRand(&rng) * 10.0 - 5.0;
         const y: f32 = nextRand(&rng) * 4.0 + 0.25;
@@ -193,7 +193,7 @@ fn buildPlacements() [2 + tumbling_cubes]Placement {
 }
 
 /// Light homes + colors, straight from raylib's four CreateLight calls
-/// (yellow/red/green/blue at the ±2 corners) — but ours ORBIT: each
+/// (yellow/red/green/blue at the +/-2 corners) - but ours ORBIT: each
 /// circles the scene center at its home radius with its own phase, so
 /// shadow-free deferred lighting still reads as motion.
 const light_color_table = [max_lights][3]f32{
@@ -206,7 +206,7 @@ const light_orbit_speed: f32 = 0.35;
 const light_reach: f32 = 4.0;
 
 fn lightPosition(i: usize, t: f32) [3]f32 {
-    // Radius √8 ≈ raylib's (±2,±2) corner distance; quarter-turn phase
+    // Radius sqrt8 ~ raylib's (+/-2,+/-2) corner distance; quarter-turn phase
     // per light keeps the original square formation, just rotating.
     const phase: f32 = float(i) * 1.5707964; // quarter turn per light
     const a: f32 = t * light_orbit_speed + phase;
@@ -217,7 +217,7 @@ fn lightPosition(i: usize, t: f32) [3]f32 {
 }
 
 // ============================================================================
-// GPU plumbing — a G-buffer of three RTTs, two pipelines, per-object
+// GPU plumbing - a G-buffer of three RTTs, two pipelines, per-object
 // uniforms (shadowmap_sw's Obj pattern, two UBOs here instead of three).
 // ============================================================================
 
@@ -438,7 +438,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         try uniformLayout(gpa, device, @sizeOf(LightsUbo), .{ .fragment = true }, "dfr_lights_g2");
 
     // Pass B's group 1: three {texture, sampler} pairs, interleaved exactly as
-    // the generated WGSL declares them — texture at binding 2i, its sampler at
+    // the generated WGSL declares them - texture at binding 2i, its sampler at
     // 2i+1 (the schema solver spaces each Sampler2D pair 2 apart). This MUST
     // match `deferred_shading_fs_io.Samplers` (g_world_pos, g_world_normal,
     // g_albedo_spec); the old "textures 0/1/2, samplers 3/4/5" block scheme
@@ -462,7 +462,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createBindGroupLayout(device, g1_layout_blob, "dfr_g1");
 
     // The shading VS declares NO group-0 uniforms, but the pipeline layout
-    // array is positional — group 2 exists only if slots 0 and 1 do.  An
+    // array is positional - group 2 exists only if slots 0 and 1 do.  An
     // empty layout + empty bind group fills the hole honestly.
     const empty_blob: []const u8 = try z.gpu.encodeBindGroupLayoutEntries(gpa, &.{});
     defer gpa.free(empty_blob);
@@ -473,7 +473,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const empty_bg: z.wgpu.BindGroupHandle =
         z.wgpu.createBindGroup(device, empty_bgl, empty_bg_blob, "dfr_empty_bg");
 
-    // Nearest sampling: the G-buffer is data, not a picture — bilinearly
+    // Nearest sampling: the G-buffer is data, not a picture - bilinearly
     // mixing two world positions across a silhouette invents a third
     // position that exists on neither surface.
     const g_sampler: z.wgpu.SamplerHandle = z.wgpu.createSampler(device, .{
@@ -494,7 +494,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, gbuffer_fs_wgsl, "gbuffer_fs");
     const gbuf_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
         .triangle_list,
-        .none, // no blend — G-buffers store data
+        .none, // no blend - G-buffers store data
         .less,
         .none,
         .rgba16_float, // location 0: world position
@@ -518,7 +518,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         "dfr_gbuf_pipe",
     );
 
-    // ---- PASS B pipeline: fullscreen quad → the rgba8 canvas RTT ----
+    // ---- PASS B pipeline: fullscreen quad -> the rgba8 canvas RTT ----
     const shade_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.createPipelineLayout(
         device,
         &.{ empty_bgl, g1_bgl, lights_bgl },
@@ -531,7 +531,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const shade_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
         .triangle_list,
         .none,
-        .less, // quad at z=0 vs cleared depth 1.0 — always passes
+        .less, // quad at z=0 vs cleared depth 1.0 - always passes
         .none,
         .rgba8_unorm,
         .depth24_plus,
@@ -576,7 +576,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     const lights_bg = try uniformBindGroup(gpa, device, lights_bgl, lights_ubo, @sizeOf(LightsUbo), "dfr_lights_bg");
 
-    // Build-only intermediates consumed above — release (pipelines are direct/uncached → owned).
+    // Build-only intermediates consumed above - release (pipelines are direct/uncached -> owned).
     z.wgpu.destroyBindGroupLayout(bgls.gbuf_g0);
     z.wgpu.destroyBindGroupLayout(bgls.gbuf_g2);
     z.wgpu.destroyBindGroupLayout(lights_bgl);
@@ -640,7 +640,7 @@ fn ensureTargets(f: *z.Frame, s: *State) void {
         });
     }
 
-    // Fresh views → fresh pass B bind group. Interleaved to match the layout
+    // Fresh views -> fresh pass B bind group. Interleaved to match the layout
     // and WGSL: g_rts[i]'s texture at binding 2i, the shared sampler at 2i+1.
     const g1_entries = [_]z.gpu.BindGroupEntry{
         .{ .binding = 0, .resource = .{ .texture_view = s.g_rts[0].asTexture().view } },
@@ -689,7 +689,7 @@ fn handleInput(f: *z.Frame, s: *State, ui_wants_mouse: bool) void {
     }
 }
 
-/// Model matrix for a placement: place ∘ spin ∘ scale.
+/// Model matrix for a placement: place o spin o scale.
 fn placementModel(p: Placement, t: f32) Mat {
     const spin: Mat = rotationY(p.spin_rate * t);
     const scale_it: Mat = scaling(p.half[0], p.half[1], p.half[2]);
@@ -715,7 +715,7 @@ fn writeObjUniforms(f: *z.Frame, s: *State, t: f32, cam_vp: Mat) void {
             model = mulMat(translation(lp[0], lp[1], lp[2]), scaling(0.12, 0.12, 0.12));
             normal_mat = zm.identity();
             // Over-bright when on (reads emissive under its own light),
-            // dim husk when toggled off — the lamp itself tells you.
+            // dim husk when toggled off - the lamp itself tells you.
             const gain: f32 = if (s.light_on[li]) 1.8 else 0.12;
             material = .{ c[0] * gain, c[1] * gain, c[2] * gain, 0.0 };
         }
@@ -782,7 +782,7 @@ fn update(f: *z.Frame, s: *State) void {
         cam_target[2] + s.cam_dist * cp * cy,
     );
     const cam_view: Mat = lookAtRh(cam_eye, cam_target, vec(0, 1, 0));
-    const cam_proj: Mat = perspectiveFovRh(1.05, vw / vh, 0.1, 100.0); // ~raylib's 60° fovy
+    const cam_proj: Mat = perspectiveFovRh(1.05, vw / vh, 0.1, 100.0); // ~raylib's 60 deg fovy
     const cam_vp: Mat = mulMat(cam_proj, cam_view);
 
     writeObjUniforms(f, s, t, cam_vp);

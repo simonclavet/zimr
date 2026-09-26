@@ -1,20 +1,20 @@
-//! shaders_lightmap_rendering — port of raylib's lightmap demo, expanded into a
+//! shaders_lightmap_rendering - port of raylib's lightmap demo, expanded into a
 //! proper "why lightmaps exist" showcase: a STATIC scene lit by ~30 coloured
-//! point lights whose lighting — including the SHADOWS the static cubes cast on
-//! the floor — is BAKED into a texture once at load, then sampled for free at
+//! point lights whose lighting - including the SHADOWS the static cubes cast on
+//! the floor - is BAKED into a texture once at load, then sampled for free at
 //! runtime. Runtime lighting cost: one texture fetch. Zero lights are evaluated
 //! per frame.
 //!
 //! The floor still demonstrates the engine's uv2 path (the reason this example
 //! exists): a ground quad carries pos + uv + uv2 (the reserved texcoord2 attr at
 //! location 5); the primary uv tiles a subtle checker, the second uv2 samples
-//! the baked lightmap, and the fragment shader multiplies them —
-//! base(uv) × lightmap(uv2). The static cubes are drawn with the ordinary 3D
+//! the baked lightmap, and the fragment shader multiplies them -
+//! base(uv) x lightmap(uv2). The static cubes are drawn with the ordinary 3D
 //! immediate path in the SAME pass (shared depth), each tinted by the baked
-//! light sampled at its position — so a cube sitting in a red pool glows red.
+//! light sampled at its position - so a cube sitting in a red pool glows red.
 //!
 //! The bake (`bakeLightmapPixels`) is the star: for every lightmap texel it sums
-//! all lights with distance falloff AND ray-marches each texel→light segment
+//! all lights with distance falloff AND ray-marches each texel->light segment
 //! against every cube AABB to carve out shadows. That's the expensive
 //! precomputation a real lightmapper does offline; here it runs once at init.
 const std = @import("std");
@@ -56,8 +56,8 @@ const LightmapSchema = struct {
     };
 };
 
-const plane_half: f32 = 4.0; // floor spans [-4, 4] → 8×8 units
-const base_tiles: f32 = 8.0; // subtle checker repeats 8× across the floor
+const plane_half: f32 = 4.0; // floor spans [-4, 4] -> 8x8 units
+const base_tiles: f32 = 8.0; // subtle checker repeats 8x across the floor
 const tex_dim: u32 = 256; // lightmap resolution
 const num_lights: usize = 30;
 const num_cubes: usize = 11;
@@ -144,7 +144,7 @@ fn buildCubes() [num_cubes]Cube {
     return cubes;
 }
 
-/// Slab test: does the segment origin→(origin + dir·max_t) pierce the AABB?
+/// Slab test: does the segment origin->(origin + dir*max_t) pierce the AABB?
 fn segmentHitsAabb(
     origin: Vec,
     dir: Vec,
@@ -183,8 +183,8 @@ fn segmentHitsAabb(
     return true;
 }
 
-/// Accumulate all lights at a world point, with distance falloff and — if
-/// requested — shadows from every cube except `skip` (self). This is the
+/// Accumulate all lights at a world point, with distance falloff and - if
+/// requested - shadows from every cube except `skip` (self). This is the
 /// per-texel work the bake repeats hundreds of thousands of times.
 fn lightAt(
     world: Vec,
@@ -229,7 +229,7 @@ fn lightAt(
 
 const cube_fill: Vec = f32x4(0.10, 0.11, 0.15, 0); // per-face floor so no face is pure black
 
-/// The 6 cube faces: outward unit normal + 4 corner sign-vectors (±1 per axis).
+/// The 6 cube faces: outward unit normal + 4 corner sign-vectors (+/-1 per axis).
 /// Windings yield outward normals so the immediate renderer's Lambert shades
 /// them correctly; the solid pipeline is no-cull so visibility is winding-safe
 /// regardless. A world corner is `center + corner * half`.
@@ -257,7 +257,7 @@ const cube_faces = [6]CubeFace{
 
 /// Baked colour for one cube face: sum only the lights on this face's side (so
 /// opposite faces differ), each attenuated by distance and BLOCKED by any other
-/// cube in the way — that occlusion is the cube-on-cube shadow. A fill floor
+/// cube in the way - that occlusion is the cube-on-cube shadow. A fill floor
 /// keeps a fully-blocked face dim-grey rather than pure black. No Lambert weight
 /// here: the immediate renderer folds in its own directional shade.
 fn faceColor(
@@ -372,7 +372,7 @@ fn bakeLightmapPixels(
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const lights: [num_lights]Light = buildLights();
     var cubes: [num_cubes]Cube = buildCubes();
-    // Bake 6 per-face colours per cube (each shadowed by the OTHER cubes) — the
+    // Bake 6 per-face colours per cube (each shadowed by the OTHER cubes) - the
     // face-level cube-on-cube shadowing.
     var ci: usize = 0;
     while (ci < num_cubes) : (ci += 1) {
@@ -475,7 +475,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     z.clearViewport(f, .{ .r = 6, .g = 7, .b = 12, .a = 255 });
 
-    // 1. the lit floor — custom uv2 pipeline, bracketed inside f.gl's pass.
+    // 1. the lit floor - custom uv2 pipeline, bracketed inside f.gl's pass.
     const ps: *z.PassState = f.gl.pass;
     f.gl.flushBeforeMaterialSwap();
     s.shader.bindForDraw(ps);
@@ -484,7 +484,7 @@ fn update(f: *z.Frame, s: *State) void {
     s.shader.drawIndexed(ps, 6, 1);
     f.gl.renderer().bindForPass(ps);
 
-    // 2. the static cubes — ordinary 3D immediate path, SAME pass + depth + the
+    // 2. the static cubes - ordinary 3D immediate path, SAME pass + depth + the
     //    SAME view_proj as the floor. Each is tinted by the baked light at its
     //    position.
     z.beginMode3DMatrix(f.gl, vp);

@@ -1,4 +1,4 @@
-//! net_rtc_smoke — the WebRTC half of zimr P2P: two browser tabs open a DIRECT
+//! net_rtc_smoke - the WebRTC half of zimr P2P: two browser tabs open a DIRECT
 //! peer-to-peer data-channel connection, using the signaling server only for
 //! discovery and the SDP/ICE handshake. Once connected, the game data would
 //! flow browser-to-browser with no server in the middle.
@@ -133,7 +133,7 @@ fn signalPeer(s: *State, kind: []const u8, data: []const u8) void {
 fn handleWsMessage(s: *State, msg: []const u8) void {
     if (std.mem.startsWith(u8, msg, "WELCOME ")) {
         // WELCOME <my_id> [existing ids...]. Existing peers joined first (lower
-        // ids), so by convention they offer to us — we create + wait.
+        // ids), so by convention they offer to us - we create + wait.
         const a: Split = splitFirst(msg[8..]);
         s.my_id = std.fmt.parseInt(u32, a.tok, 10) catch 0;
         logf(s, "joined as peer {d}", .{s.my_id});
@@ -145,7 +145,7 @@ fn handleWsMessage(s: *State, msg: []const u8) void {
             }
         }
     } else if (std.mem.startsWith(u8, msg, "JOINED ")) {
-        // A newcomer (higher id) — we offer.
+        // A newcomer (higher id) - we offer.
         const id: u32 = std.fmt.parseInt(u32, splitFirst(msg[7..]).tok, 10) catch 0;
         if (id != 0) {
             startPeer(s, id, true); // we offer
@@ -157,7 +157,7 @@ fn handleWsMessage(s: *State, msg: []const u8) void {
             teardownPeer(s);
         }
     } else if (std.mem.startsWith(u8, msg, "FROM ")) {
-        // FROM <from> <kind> <data> — the peer's half of the handshake.
+        // FROM <from> <kind> <data> - the peer's half of the handshake.
         const a: Split = splitFirst(msg[5..]); // from id
         const b: Split = splitFirst(a.rest); // kind
         const kind: []const u8 = b.tok;

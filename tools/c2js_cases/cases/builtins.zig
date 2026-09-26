@@ -1,7 +1,7 @@
 //! Bit / abs / saturating / overflow builtins that lower to zig.h runtime
 //! helpers (zig_abs, zig_clz, zig_ctz, zig_popcount, zig_byte_swap,
 //! zig_bit_reverse, zig_adds/subs, zig_addo, ...). These used to be emitted as
-//! verbatim calls to undefined JS functions — a SILENT runtime ReferenceError.
+//! verbatim calls to undefined JS functions - a SILENT runtime ReferenceError.
 //! This case pins their correct lowering. run_test() returns 0 on success, or a
 //! nonzero code identifying the first failed check. Inputs come from loop
 //! counters so the builtins survive into the C output (aren't constant-folded).

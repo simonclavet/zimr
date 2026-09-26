@@ -1,12 +1,12 @@
-//! waving_cubes — raylib's `models_waving_cubes`, the zimr way.
+//! waving_cubes - raylib's `models_waving_cubes`, the zimr way.
 //!
-//! A 15×15×15 field of cubes breathes: a global `scale` pulses on a
+//! A 15x15x15 field of cubes breathes: a global `scale` pulses on a
 //! slow sine, and each cube gets a per-cube `scatter` offset from
 //! `sin(blockScale*20 + time*4)`, so the grid ripples like a wave
 //! travelling through it. Color is an HSV rainbow keyed to (x+y+z), and
-//! each cube's size shrinks with the same diagonal index — the far
+//! each cube's size shrinks with the same diagonal index - the far
 //! corner cubes are the biggest and most saturated. raylib's numbers
-//! (the 3375-cube grid, the 0.7 pulse, the ×20/×4 wave frequencies) are
+//! (the 3375-cube grid, the 0.7 pulse, the x20/x4 wave frequencies) are
 //! kept verbatim; this is a pure immediate-mode 3D batch, so it also
 //! stress-tests that path at a few thousand cubes per frame.
 //!

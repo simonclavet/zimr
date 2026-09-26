@@ -4,29 +4,29 @@
 //
 // What this decodes: baseline JPEG (SOF0), 8-bit precision, Huffman entropy
 // coding.  Grayscale (1 component) or YCbCr (3 components) with chroma
-// sampling factors up to 2x2 on luma — covers 4:4:4, 4:4:0, 4:2:2, 4:2:0
+// sampling factors up to 2x2 on luma - covers 4:4:4, 4:4:0, 4:2:2, 4:2:0
 // which is ~every consumer JPEG.  Output is always RGBA8 to match png.Image
 // so callers don't notice which codec ran.
 //
 // What this does NOT do: progressive JPEG (SOF2), arithmetic coding (SOF9+),
 // 12-bit precision (SOF1), lossless modes (SOF3, SOF7), hierarchical (SOF5,
 // SOF6), CMYK, EXIF/ICC handling.  Hitting any of these returns a specific
-// Error.Unsupported* — callers fall back to "warn + leave untextured" rather
+// Error.Unsupported* - callers fall back to "warn + leave untextured" rather
 // than aborting whole loads.  We surfaced that fallback path while debugging
 // DamagedHelmet's JPEG textures; this section's job is to remove the need
 // for the fallback in the common case.
 //
 // Pipeline, top to bottom:
-//   1. marker scan      — walk FF-prefixed markers, dispatch on type
-//   2. segment parse    — DQT (quant), DHT (Huffman), SOF0 (frame), SOS (scan)
-//   3. entropy decode   — Huffman + run-length-zero + inline dequantize, per
+//   1. marker scan      - walk FF-prefixed markers, dispatch on type
+//   2. segment parse    - DQT (quant), DHT (Huffman), SOF0 (frame), SOS (scan)
+//   3. entropy decode   - Huffman + run-length-zero + inline dequantize, per
 //                         MCU block
-//   4. inverse DCT      — Loeffler-style fixed-point, 8x8 frequency -> spatial
-//   5. chroma upsample  — nearest-neighbor Cb/Cr to Y resolution
-//   6. YCbCr → RGB      — fixed-point 16.16 matrix; clamp; alpha=255
+//   4. inverse DCT      - Loeffler-style fixed-point, 8x8 frequency -> spatial
+//   5. chroma upsample  - nearest-neighbor Cb/Cr to Y resolution
+//   6. YCbCr -> RGB      - fixed-point 16.16 matrix; clamp; alpha=255
 //
 // References studied (not copied):
-//   - stb_image.h JPEG decoder (raylib's external/, lines 1914-4080) — single
+//   - stb_image.h JPEG decoder (raylib's external/, lines 1914-4080) - single
 //     fat struct + manual SIMD.  Borrowed the 9-bit fast Huffman lookup idea.
 //     Skipped its SIMD kernels (LLVM auto-vec is fine for our use).
 //   - zigimg src/formats/jpeg/ (modular Zig port, ~1400 lines).  Borrowed the
@@ -74,7 +74,7 @@ pub const jpeg = struct {
 
     // JPEG zig-zag scan order.  Coefficients in the bitstream arrive in this
     // sequence because low-frequency (visually-important) coefficients
-    // cluster near linear index 0 after zig-zagging — which means the
+    // cluster near linear index 0 after zig-zagging - which means the
     // run-length encoding gets long trails of zeros to crunch at the end.
     // We index INTO this from k=0..63 during entropy decode to find where in
     // the natural-order 8x8 block each coefficient actually goes.
@@ -93,12 +93,12 @@ pub const jpeg = struct {
     // in JPEG are <= 9 bits, so a single 9-bit peek tells us both the symbol
     // and how many bits to consume.  Codes longer than 9 bits leave their
     // slots with fast_len = 0 (sentinel) and we fall back to a per-bit walk.
-    // 9 bits is the sweet spot per stb_image — 512 entries (small) but covers
+    // 9 bits is the sweet spot per stb_image - 512 entries (small) but covers
     // ~99% of real-world codes (big speedup).
     const fast_bits: u5 = 9;
     const fast_size: usize = 1 << fast_bits;
 
-    // One Huffman table per (class, table_id) — JPEG allows up to 4 DC + 4 AC
+    // One Huffman table per (class, table_id) - JPEG allows up to 4 DC + 4 AC
     // for baseline (per spec, only 2 of each in practice, but we provision 4).
     const HuffmanTable = struct {
         // Fast path: 9-bit prefix -> (symbol, code length).
@@ -119,7 +119,7 @@ pub const jpeg = struct {
     // Component info from SOF0.  Up to 4 are allowed by spec; we accept 1
     // (grayscale) or 3 (YCbCr).  CMYK (4 components) returns Unsupported.
     const Component = struct {
-        id: u8, // glyph id from SOF0 — usually 1=Y, 2=Cb, 3=Cr but not always
+        id: u8, // glyph id from SOF0 - usually 1=Y, 2=Cb, 3=Cr but not always
         h: u8, // horizontal sampling factor (1..4 per spec; we only do 1..2)
         v: u8, // vertical sampling factor (same)
         quant_id: u8, // which quant table index to dequantize with
@@ -129,13 +129,13 @@ pub const jpeg = struct {
         // (image_w / max_h * h, rounded up to 8x8 blocks).  Owned by the
         // decoder, freed at the end.
         pixels: []u8 = &.{},
-        stride: usize = 0, // row stride in pixels — may exceed actual width
+        stride: usize = 0, // row stride in pixels - may exceed actual width
         blocks_w: usize = 0, // number of 8x8 blocks horizontally
         blocks_h: usize = 0, // number of 8x8 blocks vertically
     };
 
     // Sniff a JPEG magic by SOI marker. Used as a defense-in-depth check when
-    // mime_type isn't set — see drawing.zig materialsFromGltf.
+    // mime_type isn't set - see drawing.zig materialsFromGltf.
     pub fn isJpeg(bytes: []const u8) bool {
         // The SOI marker is FF D8; real JPEGs immediately follow with FF
         // (the start of the next marker), so a 3-byte check is more robust
@@ -189,7 +189,7 @@ pub const jpeg = struct {
             out.mincode[length] = code;
             out.valptr[length] = sym_idx;
             if (count == 0) {
-                // No codes of this length — make maxcode impossible so the
+                // No codes of this length - make maxcode impossible so the
                 // slow-path walk skips this length entirely.
                 out.maxcode[length] = 0xFFFFFFFF;
             } else {
@@ -219,7 +219,7 @@ pub const jpeg = struct {
             // Huffman construction)
             code <<= 1;
         }
-        // mincode/maxcode for length 17 is the sentinel — we initialize
+        // mincode/maxcode for length 17 is the sentinel - we initialize
         // maxcode to 0xFFFFFFFF in the default value and never read past
         // length 16, so no extra work needed.
     }
@@ -232,7 +232,7 @@ pub const jpeg = struct {
     //   1. Byte-stuffing: any literal 0xFF byte in the entropy stream is
     //      followed by a 0x00 stuffing byte (which we silently drop).  This
     //      lets the decoder distinguish data from markers.
-    //   2. Markers: a 0xFF followed by NON-zero is a marker — usually
+    //   2. Markers: a 0xFF followed by NON-zero is a marker - usually
     //      restart (0xD0..0xD7) or EOI (0xD9).  We stash the marker byte
     //      and stop refilling so the caller can decide what to do.
     //
@@ -269,12 +269,12 @@ pub const jpeg = struct {
                     const next: u8 = self.bytes[self.cursor];
                     self.cursor += 1;
                     if (next == 0x00) {
-                        // Stuffing byte — the real data is just 0xFF.
+                        // Stuffing byte - the real data is just 0xFF.
                         // Push 0xFF onto the accumulator and continue.
                         self.acc |= @as(u32, 0xFF) << @intCast(24 - self.bits);
                         self.bits += 8;
                     } else {
-                        // It's a marker — stop refilling.  Common ones are
+                        // It's a marker - stop refilling.  Common ones are
                         // EOI (0xD9), restart markers (0xD0..0xD7).
                         self.marker = next;
                         return;
@@ -313,7 +313,7 @@ pub const jpeg = struct {
             return v;
         }
 
-        // JPEG "extend" — convert an N-bit unsigned magnitude into a signed
+        // JPEG "extend" - convert an N-bit unsigned magnitude into a signed
         // value using the convention that the high bit indicates sign.
         // If the high bit is 0, the value is negative: extend = bits - (2^N - 1).
         // If the high bit is 1, the value is positive: extend = bits.
@@ -326,7 +326,7 @@ pub const jpeg = struct {
             const v: u32 = try self.readBits(s);
             const threshold: u32 = @as(u32, 1) << @intCast(s - 1);
             if (v < threshold) {
-                // Negative branch — extend with leading 1s and the +1 offset
+                // Negative branch - extend with leading 1s and the +1 offset
                 const offset: i32 = (@as(i32, -1) << @intCast(s)) + 1;
                 return @as(i32, @intCast(v)) + offset;
             }
@@ -344,7 +344,7 @@ pub const jpeg = struct {
             const bit: u32 = try br.readBits(1);
             code = (code << 1) | bit;
             if (code <= t.maxcode[length]) {
-                // Found it — symbol index is valptr[length] + (code - mincode[length])
+                // Found it - symbol index is valptr[length] + (code - mincode[length])
                 const idx: usize = t.valptr[length] + @as(usize, @intCast(code - t.mincode[length]));
                 return t.symbols[idx];
             }
@@ -355,7 +355,7 @@ pub const jpeg = struct {
     fn huffDecode(br: *BitReader, t: *const HuffmanTable) Error!u8 {
         br.refill();
         // Try the 9-bit fast lookup first.  If we have fewer than 9 bits
-        // (near EOF), the lookup might still hit a short code — peek a partial
+        // (near EOF), the lookup might still hit a short code - peek a partial
         // count.  But the simplest robust thing is: if we have >= 9 bits, fast
         // path; else, slow path which reads one at a time.
         if (br.bits >= fast_bits) {
@@ -371,7 +371,7 @@ pub const jpeg = struct {
 
     // ------------------------------------------------------------------------
     // Block decode: read one 8x8 block of dequantized coefficients in natural
-    // (not zig-zag) order.  Updates prev_dc in place — DC coefficients are
+    // (not zig-zag) order.  Updates prev_dc in place - DC coefficients are
     // differentially coded across blocks of the same component.
     // ------------------------------------------------------------------------
     fn decodeBlock(
@@ -428,7 +428,7 @@ pub const jpeg = struct {
     }
 
     // ------------------------------------------------------------------------
-    // IDCT — Loeffler-style fixed-point inverse DCT.  Operates in place on a
+    // IDCT - Loeffler-style fixed-point inverse DCT.  Operates in place on a
     // [64]i32 block.  Two passes: columns first, then rows.  Output is signed
     // i32 samples; caller adds 128 and clamps for u8 output.
     // ------------------------------------------------------------------------
@@ -436,7 +436,7 @@ pub const jpeg = struct {
     // The Loeffler 8-point IDCT decomposes the 8x8 DCT into a small graph of
     // multiplications and rotations.  The constants below come from the
     // standard form (12 fractional bits of precision).  We use a 1-D function
-    // and call it twice — once per column, once per row — like the textbook.
+    // and call it twice - once per column, once per row - like the textbook.
     // After the first pass we have an intermediate scaled by 2^10 (the 1024
     // bias absorbs the rounding).  After the second pass we scale by 2^17
     // (output bits) and round to integer samples.
@@ -444,10 +444,10 @@ pub const jpeg = struct {
     // I wrote the constants and operations out by hand from the Loeffler '89
     // paper rather than copying from zigimg or stb_image to make sure I
     // understand them.  Cross-checked the numeric output on a few sample
-    // blocks against zigimg's IDCT — agreement to within 1 LSB which is the
+    // blocks against zigimg's IDCT - agreement to within 1 LSB which is the
     // expected rounding-equivalence ceiling.
     fn f2f(comptime x: f32) i32 {
-        // round(x * 4096) — 12 fractional bits
+        // round(x * 4096) - 12 fractional bits
         return @round(x * 4096.0);
     }
 
@@ -582,7 +582,7 @@ pub const jpeg = struct {
     // Main entry: decode a JPEG byte stream into an RGBA8 Image.
     // ------------------------------------------------------------------------
     //
-    // This function is intentionally LONG — Carmack-style flat code with
+    // This function is intentionally LONG - Carmack-style flat code with
     // local state instead of struct fields, and inline switch on markers.
     // Easier to follow as one read-through than spread across many tiny
     // methods.  Allocations are tracked with errdefer/defer so failure paths
@@ -597,7 +597,7 @@ pub const jpeg = struct {
             return Error.InvalidSignature;
         }
 
-        // Per-decoder state, all local — no struct fields, no globals.
+        // Per-decoder state, all local - no struct fields, no globals.
         var quant_tables: [4][64]u16 = @splat(@splat(0));
         var quant_defined: [4]bool = @splat(false);
         var dc_huff: [4]HuffmanTable = @splat(.{});
@@ -625,7 +625,7 @@ pub const jpeg = struct {
         }
 
         // Walk markers starting at byte 2 (just past SOI).  We stop when we
-        // hit SOS — at that point the entropy stream begins and we switch to
+        // hit SOS - at that point the entropy stream begins and we switch to
         // bit-level reading.
         var cursor: usize = 2;
         var sof_seen: bool = false;
@@ -633,7 +633,7 @@ pub const jpeg = struct {
 
         scan: while (cursor + 1 < bytes.len) {
             // Every segment starts with FF + marker_byte.  Some encoders
-            // emit padding FFs (FF FF FF...) — skip them.
+            // emit padding FFs (FF FF FF...) - skip them.
             while (cursor < bytes.len and bytes[cursor] == 0xFF) {
                 cursor += 1;
             }
@@ -646,12 +646,12 @@ pub const jpeg = struct {
             // Markers without a following segment payload: SOI (already past),
             // EOI, restart markers (RST0..RST7 = D0..D7), TEM (01).
             if (marker == 0xD9) {
-                // EOI — end of image, we're done (this happens after SOS
+                // EOI - end of image, we're done (this happens after SOS
                 // entropy decode is over, but defensively handle it here too)
                 break :scan;
             }
             if (marker >= 0xD0 and marker <= 0xD7) {
-                // Stray restart marker outside a scan — shouldn't happen but
+                // Stray restart marker outside a scan - shouldn't happen but
                 // we'll just skip it
                 continue :scan;
             }
@@ -672,7 +672,7 @@ pub const jpeg = struct {
             cursor += seg_len;
 
             switch (marker) {
-                // SOF0 — baseline DCT.  This is the only frame mode we accept.
+                // SOF0 - baseline DCT.  This is the only frame mode we accept.
                 0xC0 => {
                     if (sof_seen) {
                         return Error.InvalidMarker;
@@ -749,12 +749,12 @@ pub const jpeg = struct {
                     }
                 },
 
-                // SOF1, SOF2, SOF3, SOF5-7, SOF9-15 — all unsupported modes
+                // SOF1, SOF2, SOF3, SOF5-7, SOF9-15 - all unsupported modes
                 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF => {
                     return Error.UnsupportedMode;
                 },
 
-                // DQT — Define Quantization Tables.  Can pack multiple tables
+                // DQT - Define Quantization Tables.  Can pack multiple tables
                 // into one segment.  Each table is preceded by a precision+id
                 // byte (high nibble = precision, low nibble = table id).
                 0xDB => {
@@ -776,7 +776,7 @@ pub const jpeg = struct {
                             if (p + 64 > payload.len) {
                                 return Error.InvalidQuantTable;
                             }
-                            // Stored in zig-zag order — un-zigzag while reading
+                            // Stored in zig-zag order - un-zigzag while reading
                             // so quant_tables[i] is in natural order, ready
                             // to use directly inside decodeBlock.
                             for (0..64) |k| {
@@ -800,7 +800,7 @@ pub const jpeg = struct {
                     }
                 },
 
-                // DHT — Define Huffman Tables.  Same pack-multiple convention.
+                // DHT - Define Huffman Tables.  Same pack-multiple convention.
                 0xC4 => {
                     var p: usize = 0;
                     while (p < payload.len) {
@@ -835,7 +835,7 @@ pub const jpeg = struct {
                     }
                 },
 
-                // DRI — Define Restart Interval.  After this many MCUs, the
+                // DRI - Define Restart Interval.  After this many MCUs, the
                 // entropy stream is reset (DC predictors zeroed) and a restart
                 // marker is inserted.  Most JPEGs don't use restart; in those
                 // it stays 0.
@@ -846,7 +846,7 @@ pub const jpeg = struct {
                     restart_interval = (@as(u32, payload[0]) << 8) | payload[1];
                 },
 
-                // SOS — Start Of Scan.  The entropy stream starts immediately
+                // SOS - Start Of Scan.  The entropy stream starts immediately
                 // after the SOS segment header.  We process it inline here
                 // rather than continuing the marker loop.
                 0xDA => {
@@ -895,7 +895,7 @@ pub const jpeg = struct {
                     // The trailing 3 bytes (Ss, Se, Ah_Al) describe the
                     // spectral selection for progressive scans.  Baseline
                     // requires Ss=0, Se=63, Ah=Al=0.  We accept anything but
-                    // ignore — non-conforming baseline encoders sometimes
+                    // ignore - non-conforming baseline encoders sometimes
                     // emit junk here.
 
                     // Set up the bit reader on the entropy-coded stream that
@@ -966,7 +966,7 @@ pub const jpeg = struct {
                                 if (br.marker) |m| {
                                     if (m != rst_expected) {
                                         // Out-of-order or missing restart
-                                        // marker — be lenient and just clear
+                                        // marker - be lenient and just clear
                                         // the marker, reset DCs and continue
                                     }
                                     br.marker = null;
@@ -994,18 +994,18 @@ pub const jpeg = struct {
                     // consumed by the refill; we just need to look for the
                     // FF prefix on the next iteration.  Move cursor back so
                     // the FF is re-read.  Actually the simplest thing: stop
-                    // here — JPEGs after baseline SOS are almost always just
+                    // here - JPEGs after baseline SOS are almost always just
                     // EOI.  Break out of the scan loop and finalize.
                     break :scan;
                 },
 
-                // Application markers (APP0..APP15), comment (COM), DNL — skip
+                // Application markers (APP0..APP15), comment (COM), DNL - skip
                 0xE0...0xEF, 0xFE, 0xDC => {
                     // Length-prefixed; already consumed by `cursor += seg_len`
                 },
 
                 else => {
-                    // Unknown marker — be lenient and skip it.  Real-world
+                    // Unknown marker - be lenient and skip it.  Real-world
                     // encoders occasionally emit private/reserved markers.
                 },
             }
@@ -1043,7 +1043,7 @@ pub const jpeg = struct {
                 }
             }
         } else {
-            // YCbCr -> RGB.  Chroma channels may be subsampled — we replicate
+            // YCbCr -> RGB.  Chroma channels may be subsampled - we replicate
             // (nearest-neighbor upsample) by scaling the source index by the
             // ratio of max to component sampling factor.  Bilinear upsample
             // would be slightly nicer but nearest is what stb_image uses by
@@ -1090,7 +1090,7 @@ pub const jpeg = struct {
             }
         }
 
-        // Components' pixel buffers can be freed now — output is built.
+        // Components' pixel buffers can be freed now - output is built.
         // (errdefer was tracking these; we explicitly free + clear so the
         // errdefer no-ops on success.)
         for (&allocated) |*buf| {

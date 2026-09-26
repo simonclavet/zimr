@@ -1,10 +1,10 @@
-//! tools/zspv.zig — pure-Zig SPIR-V binary reader/writer.
+//! tools/zspv.zig - pure-Zig SPIR-V binary reader/writer.
 //!
 //! Phase 1 of the S1.4.5b-followup work: replace the textual-surgery
 //! comptime approach (`shader_post.rewriteSamplers`) with semantic
 //! SPIR-V binary surgery.  See `src/notes/claude.md` for plan pointers.
 //!
-//! This file is the foundation — a SPIR-V reader + writer that can
+//! This file is the foundation - a SPIR-V reader + writer that can
 //! round-trip a SPIR-V binary byte-for-byte without change.  No
 //! transformation logic yet; that lands in Phase 2.
 //!
@@ -31,7 +31,7 @@
 //!     [1..wc]  = operands (each is one u32 word; strings are null-terminated
 //!                bytes packed little-endian into words and padded out)
 //!
-//! Every operand is a u32 — IDs are u32, literal integers are u32,
+//! Every operand is a u32 - IDs are u32, literal integers are u32,
 //! string char-groups are packed u32s.  This makes the parser
 //! straightforward: we don't need to know each opcode's operand
 //! types to read+write losslessly; we only need to know the word
@@ -88,7 +88,7 @@ pub const Module = struct {
 
 pub const ReadError = error{
     /// File doesn't start with 0x07230203.  Wrong file format, or
-    /// big-endian binary (we only support little-endian — every
+    /// big-endian binary (we only support little-endian - every
     /// real-world SPIR-V producer emits LE).
     BadMagic,
 
@@ -100,7 +100,7 @@ pub const ReadError = error{
     HeaderTruncated,
 
     /// An instruction's claimed word count would read past the end
-    /// of the file, or word_count is 0 (which is illegal — every
+    /// of the file, or word_count is 0 (which is illegal - every
     /// instruction has at least the header word).
     InstructionTruncated,
 
@@ -205,7 +205,7 @@ fn writeWord(w: *std.Io.Writer, value: u32) !void {
 /// little-endian u32 words into `w` (which is the `.writer` of a
 /// caller-owned `std.Io.Writer.Allocating`).  Caller deinits the
 /// Allocating.  Output is always little-endian, no padding, no
-/// debug-info massaging — pure round-trip semantics.
+/// debug-info massaging - pure round-trip semantics.
 pub fn write(mod: Module, w: *std.Io.Writer) WriteError!void {
     // Header: magic + the 4 header words.
     writeWord(w, spv_magic) catch return WriteError.WriteFailed;
@@ -233,7 +233,7 @@ pub fn write(mod: Module, w: *std.Io.Writer) WriteError!void {
 test "identity round-trip on a tiny hand-crafted module" {
     // Minimal valid-looking SPIR-V: header + one OpNop (opcode=0, wc=1).
     // OpNop has zero operands.  This isn't a fully-valid SPIR-V module
-    // (no OpMemoryModel, etc.) but the reader/writer don't care —
+    // (no OpMemoryModel, etc.) but the reader/writer don't care -
     // they're format-level, not validity-level.
     const input_words = [_]u32{
         spv_magic, // magic

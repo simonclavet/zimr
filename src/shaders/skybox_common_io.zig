@@ -1,4 +1,4 @@
-//! src/shaders/skybox_common_io.zig — the varyings shared by `skybox_vs` and
+//! src/shaders/skybox_common_io.zig - the varyings shared by `skybox_vs` and
 //! `skybox_fs`. The VS forwards the world-space view ray plus the two sky
 //! gradient colours; the FS reads only these varyings, so it needs no UBO of
 //! its own. That keeps the whole skybox pipeline on a single group-0 uniform

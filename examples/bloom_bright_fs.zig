@@ -1,4 +1,4 @@
-//! examples/bloom_bright_fs.zig — bloom bright-pass FS body.
+//! examples/bloom_bright_fs.zig - bloom bright-pass FS body.
 //!
 //! Keeps only the part of each pixel brighter than `thresh`, remapped so the
 //! threshold maps to black and white stays white (a soft knee). Feeds the blur

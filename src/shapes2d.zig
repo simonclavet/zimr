@@ -1,7 +1,7 @@
 //! lint:alias shapes2d
-//! src/shapes2d.zig — the backend-generic 2D shape primitives, MOVED
+//! src/shapes2d.zig - the backend-generic 2D shape primitives, MOVED
 //! VERBATIM out of drawing.zig (GL retirement P1, t1173): rectangles,
-//! ellipses, polys, rings, splines, lines — all over `gl: anytype`, drawn
+//! ellipses, polys, rings, splines, lines - all over `gl: anytype`, drawn
 //! by both backends (ui's widget rendering, wgpu_app's ShapesTextureState).
 //! GL-free since GL-retirement P5d.
 const std = @import("std");
@@ -21,7 +21,7 @@ const seg_step36: f32 = 1.0 / 36.0;
 const pow = zm.pow;
 /// Inert renderer for the no-panic smoke tests below (GL-retirement P5d:
 /// they used to replay into rlgl.GlState, whose host build was no-op
-/// anyway).  Also re-exported as ui.TestGlStub — the one stub for the
+/// anyway).  Also re-exported as ui.TestGlStub - the one stub for the
 /// whole replay trait.
 pub const TestGl = struct {
     pub fn setTexture(_: *TestGl, _: anytype) void {}
@@ -98,14 +98,14 @@ const Texture = z.Texture;
 
 // Shapes texture state
 //
-// The "shapes texture" is a 1×1 white pixel by default - every solid-color
+// The "shapes texture" is a 1x1 white pixel by default - every solid-color
 // shape samples from it so a single texture binding can serve filled and
 // textured drawing in the same vertex batch (avoids a flush). The C side
-// initializes this in rlglInit() to a magic 1×1 white pixel uploaded at
+// initializes this in rlglInit() to a magic 1x1 white pixel uploaded at
 // texture id 1; we mirror that initial value here.
 
 /// State for the "shapes texture" - the GPU texture that solid-color
-/// shape draws sample from.  Default is a 1×1 white pixel uploaded by
+/// shape draws sample from.  Default is a 1x1 white pixel uploaded by
 /// `rlglInit`; user can swap to a custom atlas tile via
 /// `setShapesTexture` (e.g. SDF mask).
 pub const ShapesTextureState = struct {
@@ -196,7 +196,7 @@ pub fn getSplinePointCatmullRom(
     };
 }
 
-/// Quadratic Bézier point. Curve passes through `startPos` at t=0 and
+/// Quadratic Bezier point. Curve passes through `startPos` at t=0 and
 /// `endPos` at t=1; `controlPos` shapes the curvature.
 pub fn getSplinePointBezierQuad(
     startPos: Vec2,
@@ -213,7 +213,7 @@ pub fn getSplinePointBezierQuad(
     };
 }
 
-/// Cubic Bézier point. Curve passes through `startPos` at t=0 and `endPos`
+/// Cubic Bezier point. Curve passes through `startPos` at t=0 and `endPos`
 /// at t=1; `startControlPos` and `endControlPos` shape the curvature.
 pub fn getSplinePointBezierCubic(
     startPos: Vec2,
@@ -271,7 +271,7 @@ pub fn checkCollisionPointTriangle(
 
 /// Test if a point lies inside a polygon. Uses the Jordan-curve ray-cast
 /// algorithm: count how many polygon edges the half-line going right from
-/// `point` crosses; odd → inside, even → outside.
+/// `point` crosses; odd -> inside, even -> outside.
 pub fn checkCollisionPointPoly(
     point: Vec2,
     points: []const Vec2,
@@ -527,7 +527,7 @@ pub fn drawPixelV(
     );
 }
 
-/// Draw a single pixel (1×1 textured quad). The integer overload forwards
+/// Draw a single pixel (1x1 textured quad). The integer overload forwards
 /// to the float version.
 pub fn drawPixel(
     gl: anytype,
@@ -571,7 +571,7 @@ pub fn drawLineV(
 
 /// Draw a triangle ribbon (sequence of pairs of vertices on opposite
 /// edges) as a strip of quads.  Used by drawLineThick + drawSpline*
-/// + drawLineBezier — all of which produce ribbon-style strips of
+/// + drawLineBezier - all of which produce ribbon-style strips of
 /// 4+ vertices where pairs `(2k, 2k+1)` are the two ends of one
 /// cross-section.
 ///
@@ -585,7 +585,7 @@ pub fn drawLineV(
 /// "Texturing is only supported on RL_QUADS."  zimr inherits the
 /// same WebGL2 batch shader so the same constraint applies.
 ///
-/// Ribbon → quads mapping: vertices `[i, i+1]` form one cross-
+/// Ribbon -> quads mapping: vertices `[i, i+1]` form one cross-
 /// section, `[i+2, i+3]` form the next_turns, and together they make one
 /// quad in order `(i, i+1, i+3, i+2)` to keep consistent winding.
 /// The loop strides by 2 since each iteration advances by one
@@ -637,7 +637,7 @@ pub fn drawLineThick(
     }
 
     const scale: f32 = thick / (2 * len);
-    // Perpendicular offset: rotate (dx, dy) by 90° and scale to thick/2.
+    // Perpendicular offset: rotate (dx, dy) by 90 deg and scale to thick/2.
     const rx: f32 = -scale * dy;
     const ry: f32 = scale * dx;
     const strip = [_]Vec2{
@@ -758,10 +758,10 @@ pub fn drawTriangle(
     // pre-filled index buffer `(0,1,2, 0,2,3)`.  We emit the
     // triangle TWICE with opposite winding rather than using a
     // degenerate fourth vertex: `(v1, v2, v3, v2)`.
-    //   - First triangle (0,1,2) = (v1, v2, v3) — REAL.
-    //   - Second triangle (0,2,3) = (v1, v3, v2) — REAL, same area,
+    //   - First triangle (0,1,2) = (v1, v2, v3) - REAL.
+    //   - Second triangle (0,2,3) = (v1, v3, v2) - REAL, same area,
     //     opposite winding.
-    // The two triangles overlap exactly; on a 1×1 white texture
+    // The two triangles overlap exactly; on a 1x1 white texture
     // with face culling off (raylib default for 2D), this draws
     // the same pixels twice.  Slightly wasteful but matches the
     // pattern `drawPoly` uses for its wedges, which is the only
@@ -1068,7 +1068,7 @@ pub fn drawCircleGradient(
 // wrappers that forward to the sector versions with start=0, end=360.
 
 /// Maximum chord error rate (in pixels) the adaptive tessellation aims for.
-/// Smaller → more segments → smoother arc. 0.5 px is raylib's default and
+/// Smaller -> more segments -> smoother arc. 0.5 px is raylib's default and
 /// looks crisp at any reasonable display density.
 const smooth_circle_error_rate: f32 = 0.5;
 
@@ -1227,7 +1227,7 @@ pub fn drawCircleV(
     drawCircleSector(gl, shapes_state, center, radius, 0, 1.0, 36, color);
 }
 
-/// Draw a filled circle (full 360° sector with 36 segments).
+/// Draw a filled circle (full 360 deg sector with 36 segments).
 pub fn drawCircle(
     gl: anytype,
     shapes_state: *const ShapesTextureState,
@@ -1431,7 +1431,7 @@ pub fn drawLineStrip(
 }
 
 /// Draw a thick line that bows along a cubic-eased curve from `startPos` to
-/// `endPos`. Despite the name this is NOT a Bézier - only the y-axis is
+/// `endPos`. Despite the name this is NOT a Bezier - only the y-axis is
 /// eased; the x-axis is linear. Matches raylib's behaviour for backward
 /// compatibility.
 pub fn drawLineBezier(
@@ -1561,7 +1561,7 @@ pub fn drawRectangleGradientEx(
     gl.setTexture(0);
 }
 
-/// Draw a vertical-gradient rectangle (top color → bottom color).
+/// Draw a vertical-gradient rectangle (top color -> bottom color).
 pub fn drawRectangleGradientV(
     gl: anytype,
     shapes_state: *const ShapesTextureState,
@@ -1588,7 +1588,7 @@ pub fn drawRectangleGradientV(
     );
 }
 
-/// Draw a horizontal-gradient rectangle (left color → right color).
+/// Draw a horizontal-gradient rectangle (left color -> right color).
 pub fn drawRectangleGradientH(
     gl: anytype,
     shapes_state: *const ShapesTextureState,
@@ -2355,7 +2355,7 @@ pub fn drawSplineBezierCubic(
     }
 }
 
-/// Draw a single B-spline segment (4 control points → 1 curve segment).
+/// Draw a single B-spline segment (4 control points -> 1 curve segment).
 pub fn drawSplineSegmentBasis(
     gl: anytype,
     shapes_state: *const ShapesTextureState,
@@ -2401,7 +2401,7 @@ pub fn drawSplineSegmentBasis(
     drawTriangleStrip(gl, shapes_state, &points, color);
 }
 
-/// Draw a single Catmull-Rom segment (4 control points → 1 curve segment;
+/// Draw a single Catmull-Rom segment (4 control points -> 1 curve segment;
 /// curve passes through p2 at t=0 and p3 at t=1).
 pub fn drawSplineSegmentCatmullRom(
     gl: anytype,
@@ -2519,7 +2519,7 @@ test "Linear spline at endpoints" {
 }
 
 test "Catmull-Rom passes through interior control points" {
-    // CatmullRom: t=0 → p2, t=1 → p3
+    // CatmullRom: t=0 -> p2, t=1 -> p3
     const p1 = Vec2{ 0, 0 };
     const p2 = Vec2{ 10, 0 };
     const p3 = Vec2{ 20, 0 };
@@ -2578,7 +2578,7 @@ test "checkCollisionPointCircle" {
     const center = Vec2{ 0, 0 };
     try expect(checkCollisionPointCircle(.{ 0, 0 }, center, 5.0));
     try expect(checkCollisionPointCircle(.{ 3, 4 }, center, 5.0)); // 3-4-5 triangle, exactly on
-    try expect(!checkCollisionPointCircle(.{ 4, 4 }, center, 5.0)); // length √32 > 5
+    try expect(!checkCollisionPointCircle(.{ 4, 4 }, center, 5.0)); // length sqrt32 > 5
 }
 
 test "checkCollisionPointTriangle" {
@@ -2619,9 +2619,9 @@ test "checkCollisionPointLine: point exactly on segment" {
 test "checkCollisionPointLine: threshold lets nearby points hit" {
     const p1 = Vec2{ 0, 0 };
     const p2 = Vec2{ 10, 0 };
-    // 2 units off; threshold 5 → hit
+    // 2 units off; threshold 5 -> hit
     try expect(checkCollisionPointLine(.{ 5, 2 }, p1, p2, 5));
-    // 2 units off; threshold 1 → miss
+    // 2 units off; threshold 1 -> miss
     try expect(!checkCollisionPointLine(.{ 5, 2 }, p1, p2, 1));
 }
 
@@ -2691,7 +2691,7 @@ test "checkCollisionLines: meeting at endpoint" {
 
 test "checkCollisionLines: segments far apart (extensions cross, segments don't)" {
     // The infinite lines y=x and y=-x+100 cross at (50, 50), but only
-    // segments that span x∈[0..10] and x∈[60..70] respectively.
+    // segments that span xin[0..10] and xin[60..70] respectively.
     const hit: ?Vec2 = checkCollisionLines(
         .{ 0, 0 },
         .{ 10, 10 },
@@ -2762,7 +2762,7 @@ test "drawTriangleStrip: too-short slice is a silent no-op" {
     // 2 vertices.
     const two: [2]Vec2 = .{ .{ 0, 0 }, .{ 1, 0 } };
     drawTriangleStrip(&gl, &shapes_state, &two, test_red);
-    // 3 vertices — one cross-section is not yet a quad.  Ribbon
+    // 3 vertices - one cross-section is not yet a quad.  Ribbon
     // semantics require pairs of pairs (4+ verts) before any
     // geometry is emitted.
     const three: [3]Vec2 = .{ .{ 0, 0 }, .{ 1, 0 }, .{ 0, 1 } };
@@ -2879,7 +2879,7 @@ test "checkCollisionPointPoly: edge case at exact polygon bound" {
 
 // ===========================================================================
 // Scissor dispatch (moved from drawing.zig's shaders namespace,
-// GL-retirement P4): generic over `gl: anytype` — drives WgpuGl and
+// GL-retirement P4): generic over `gl: anytype` - drives WgpuGl and
 // raster; the comptime rlgl arm dies with rlgl in P5d.
 // ===========================================================================
 
@@ -2903,7 +2903,7 @@ pub fn beginScissorMode(
     // changing scissor state) died with the backend; WgpuGl and raster both
     // take the scissor through the generic trait directly.
     gl.enable(.scissor_test);
-    // Caller passes coords in the app's LOGICAL space — the same space as `rect`/`circle` and
+    // Caller passes coords in the app's LOGICAL space - the same space as `rect`/`circle` and
     // as the UI's clip rects. Getting to framebuffer pixels is TWO transforms, not one:
     //
     //   1. logical -> CSS   : the `.fit` letterbox (scale + centring offset). Identity under
@@ -2913,7 +2913,7 @@ pub fn beginScissorMode(
     // This function used to do only step_turns 2, which is why it was correct in `.responsive` and
     // silently wrong in `.fit`: the UI's window clipped to a rectangle shifted sideways by the
     // letterbox offset it never applied. Both factors now come from `WindowState`, derived ONCE
-    // in wgpu_app — this must not re-derive them (see `logicalToCss`).
+    // in wgpu_app - this must not re-derive them (see `logicalToCss`).
     const core_mod = runtime.core;
     const screen_w: i32 = core_mod.getScreenWidth(window);
     const screen_h_logical: i32 = core_mod.getScreenHeight(window);

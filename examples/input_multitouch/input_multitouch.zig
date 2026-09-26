@@ -1,6 +1,6 @@
 // examples/input_multitouch.zig - basic multi-touch visualisation:
 // one circle per finger, labelled with its slot index.
-// Port of raylib's `examples/core/core_input_multitouch.c` (★1,
+// Port of raylib's `examples/core/core_input_multitouch.c` (*1,
 // ~81 LOC).  Simplest demo of the touch API; on a phone, each
 // finger gets its own coloured circle at the touch coordinate
 // with a big number above it showing the touch slot index.

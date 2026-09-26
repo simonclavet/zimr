@@ -1,19 +1,19 @@
 //! lint:alias serialize
-//! serialize.zig — comptime protobuf-style serialization for plain Zig structs.
+//! serialize.zig - comptime protobuf-style serialization for plain Zig structs.
 //!
 //! Reimplemented in pure Zig for zimr, inspired by zoto (Zephyr Proto). You hand
 //! `encode` a struct value and get bytes; you hand `decode` a type and bytes and
-//! get a value back — no wrapper types, no codegen, no `.proto` files. Field
+//! get a value back - no wrapper types, no codegen, no `.proto` files. Field
 //! numbers are assigned in declaration order (1, 2, 3...), so the wire format is
 //! versioned: add, drop, or reorder-by-number fields and old data still reads
 //! (unknown fields are skipped, missing fields keep their struct default). It's
-//! slice-based (works in wasm — no filesystem needed) and the wire bytes are
+//! slice-based (works in wasm - no filesystem needed) and the wire bytes are
 //! protobuf-compatible.
 //!
 //! Supported field types: ints (varint), floats (fixed 32/64), bool, enums,
 //! `[]const u8` (string/bytes), nested structs (recursive, length-delimited),
-//! optionals (`?T` — absent when null), repeated slices `[]const T` (encode +
-//! decode, allocating), and fixed vectors/arrays (`@Vector`, `[N]T`) — so the
+//! optionals (`?T` - absent when null), repeated slices `[]const T` (encode +
+//! decode, allocating), and fixed vectors/arrays (`@Vector`, `[N]T`) - so the
 //! zm math types (Vec, Vec2/3, Quat = @Vector; Mat = [4]Vec; Color = u8 struct)
 //! all serialize directly.
 //!
@@ -38,7 +38,7 @@ pub const Error = error{
 
 // ===========================================================================
 // A tiny byte cursor. We compute encodedSize() up front, so the write cursor
-// never has to grow — it just marches through a caller-sized buffer.
+// never has to grow - it just marches through a caller-sized buffer.
 // ===========================================================================
 const WriteCursor = struct {
     buf: []u8,
@@ -109,7 +109,7 @@ const ReadCursor = struct {
 
 // ===========================================================================
 // Varint helpers for signed/unsigned ints. We store ints as plain varints
-// (two's-complement widened to u64) — simple and matches protobuf int32/int64.
+// (two's-complement widened to u64) - simple and matches protobuf int32/int64.
 // ===========================================================================
 fn intToVarint(value: anytype) u64 {
     const T = @TypeOf(value);
@@ -157,7 +157,7 @@ fn fieldNumber(
 }
 
 // ===========================================================================
-// SIZE — walk the value at comptime + runtime and sum the encoded byte count,
+// SIZE - walk the value at comptime + runtime and sum the encoded byte count,
 // so we can allocate/validate the buffer before writing a single byte.
 // ===========================================================================
 pub fn encodedSize(value: anytype) usize {
@@ -308,7 +308,7 @@ pub fn decode(comptime T: type, bytes: []const u8, gpa: Allocator) Error!T {
     return result;
 }
 
-/// Is this a repeated field — a `[]const T` slice of something other than u8?
+/// Is this a repeated field - a `[]const T` slice of something other than u8?
 /// (u8 slices are strings/bytes and take the single length-delimited path.)
 fn isRepeatedSlice(comptime FT: type) bool {
     const info: std.builtin.Type = @typeInfo(FT);
@@ -318,7 +318,7 @@ fn isRepeatedSlice(comptime FT: type) bool {
 /// Append one decoded element to a repeated field's slice, growing it. Protobuf
 /// emits repeated elements as separate wire entries, so we grow one at a time.
 /// The static empty default (`&.{}`) is handled specially since it isn't ours
-/// to realloc. (One-at-a-time growth is O(n^2) — fine for typical save data.)
+/// to realloc. (One-at-a-time growth is O(n^2) - fine for typical save data.)
 fn appendDecoded(
     comptime Elem: type,
     gpa: Allocator,
@@ -590,7 +590,7 @@ fn decodeBare(comptime T: type, dst: *T, cursor: *ReadCursor) Error!void {
 }
 
 // ===========================================================================
-// tests — headless roundtrips
+// tests - headless roundtrips
 // ===========================================================================
 const testing = std.testing;
 
@@ -777,7 +777,7 @@ test "roundtrip: empty repeated slice stays empty" {
 }
 
 const Numbered = struct {
-    // pinned, out-of-order field numbers via _fields — lets you rename a field
+    // pinned, out-of-order field numbers via _fields - lets you rename a field
     // in Zig without changing the wire number (schema stability)
     alpha: u32 = 0,
     beta: []const u8 = "",

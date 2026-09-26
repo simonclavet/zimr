@@ -1,14 +1,14 @@
 // examples/ui_dev_tools.zig - P2.4 demo for the developer tools
 // surface introduced in P2 (turns 385-387):
-//   - `UiContext.metrics: Metrics` (P2.2, turn 386) — frame counters,
+//   - `UiContext.metrics: Metrics` (P2.2, turn 386) - frame counters,
 //     time history, drawlist + cmd accumulators, window counts.
 //   - `UiContext.debug_log: BoundedArray(DebugEvent, 256)` (P2.1,
-//     turn 385) — internal event ring populated by openPopup,
+//     turn 385) - internal event ring populated by openPopup,
 //     closeCurrentPopup, drag-threshold-cross, and dropAccepted.
 //
 // What this demo shows:
 //
-//   1. The marquee payoff of P1's inspector arriving early — the
+//   1. The marquee payoff of P1's inspector arriving early - the
 //      Metrics panel is literally `u.inspect("Metrics", &ctx.metrics)`.
 //      Field discovery is automatic; no per-field widget code in the
 //      example.
@@ -22,8 +22,8 @@
 //
 //   3. A few interactive trigger widgets that generate events so
 //      the viewer isn't empty:
-//        - "Open popup" button → popup_opened entry.
-//        - Drag-drop source row + target slot → drag_started +
+//        - "Open popup" button -> popup_opened entry.
+//        - Drag-drop source row + target slot -> drag_started +
 //          drop_accepted entries.
 //        - "Bad slider" with `min == max` deliberately triggers
 //          the P2.3 lint #1 warning.  Look at the browser console
@@ -44,12 +44,12 @@ const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
 
-    // Drag-source payload — gets dropped onto the slot below to
+    // Drag-source payload - gets dropped onto the slot below to
     // exercise the drag_started + drop_accepted log entries.
     drag_value: i32 = 7,
     slot_value: i32 = 0,
 
-    // Bad slider value — feeding it to a slider with min == max
+    // Bad slider value - feeding it to a slider with min == max
     // exercises lint #1.  Value is just a placeholder; the slider
     // returns false because the range is degenerate.
     bad_value: f32 = 0.5,
@@ -88,8 +88,8 @@ fn update(f: *z.Frame, s: *State) void {
         // ---- Section 1: Metrics panel ------------------------------
         // The whole point of P1 shipping early: this is one line.
         // `inspect` walks the Metrics struct fields, opens its own
-        // tree node, and dispatches each field (u32 → read-only int,
-        // f32 → read-only float, history array → readonly preview).
+        // tree node, and dispatches each field (u32 -> read-only int,
+        // f32 -> read-only float, history array -> readonly preview).
         _ = u.inspect("Metrics (live)", &s.ui_host.ctx.metrics);
 
         // ---- Section 2: DebugLog viewer ----------------------------
@@ -107,7 +107,7 @@ fn update(f: *z.Frame, s: *State) void {
                     events.len,
                     ui.debug_log_cap,
                 });
-                // Walk newest → oldest.  10 rows max so phone
+                // Walk newest -> oldest.  10 rows max so phone
                 // viewport stays usable.
                 const show_n: usize = @min(events.len, 10);
                 var i: usize = 0;
@@ -132,7 +132,7 @@ fn update(f: *z.Frame, s: *State) void {
         if (u.treeNode("Triggers (generate events)", .{ .default_open = true })) {
             defer u.treePop();
 
-            // Button → openPopup.  Two adjacent clicks within the
+            // Button -> openPopup.  Two adjacent clicks within the
             // same frame would also exercise lint #4 (double-open),
             // but that's hard to do from a UI: it'd take submitting
             // two `openPopup` calls in the same widget tree pass.
@@ -176,7 +176,7 @@ fn update(f: *z.Frame, s: *State) void {
                 }
             }
 
-            // Slider with degenerate bounds → lint #1.
+            // Slider with degenerate bounds -> lint #1.
             // Fires once at process startup; subsequent submissions
             // skip the warn.
             u.separator();

@@ -1,14 +1,14 @@
-//! models_animation_blend_custom — port of raylib's per-bone animation
-//! blending. The CC0 `greenman.glb` plays TWO clips at once — `2_move` (walk)
-//! and `3_attack` — and blends them PER BONE: the upper body (torso, arms,
+//! models_animation_blend_custom - port of raylib's per-bone animation
+//! blending. The CC0 `greenman.glb` plays TWO clips at once - `2_move` (walk)
+//! and `3_attack` - and blends them PER BONE: the upper body (torso, arms,
 //! hands) follows the attack while the lower body (hips, legs) keeps walking,
 //! so the character strides forward mid-swing. A checkbox flips to a uniform
 //! 50/50 blend of the whole skeleton for comparison.
 //!
-//! Built on the same hierarchical CPU-skinning path as `bone_socket`: parse →
-//! per-node local TRS (bind, overridden by each clip's sampled channels) →
-//! blend the two clips' local TRS per node (lerp T/S, nlerp R) → walk the node
-//! hierarchy → skin. Matrix order follows zm's convention (see the `Mat` docs):
+//! Built on the same hierarchical CPU-skinning path as `bone_socket`: parse ->
+//! per-node local TRS (bind, overridden by each clip's sampled channels) ->
+//! blend the two clips' local TRS per node (lerp T/S, nlerp R) -> walk the node
+//! hierarchy -> skin. Matrix order follows zm's convention (see the `Mat` docs):
 //! transforms are built with `composeN`/`compose`, which read in application
 //! order. raylib bakes GLOBAL poses and blends those; blending LOCAL TRS then
 //! accumulating the hierarchy (as here) is the same idea and a touch cleaner.
@@ -107,7 +107,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 /// True if a joint node belongs to the upper body (torso/arms/hands/head),
-/// matched by name — greenman uses `body_up`, `hand_*`, `socket_hand_*`,
+/// matched by name - greenman uses `body_up`, `hand_*`, `socket_hand_*`,
 /// `socket_hat`; everything else (hips, legs, root) is lower body.
 fn nameIsUpper(name: []const u8) bool {
     const keys = [_][]const u8{ "up", "hand", "hat", "arm", "head", "chest", "spine", "neck", "shoulder" };
@@ -377,7 +377,7 @@ fn update(f: *z.Frame, s: *State) void {
         world[ni] = if (p < 0) local else compose(local, world[@intCast(p)]);
     }
 
-    // ---- skin: v' = Σ wₖ · (v · invBindₖ · worldₖ) ----
+    // ---- skin: v' = sum w_k * (v * invBind_k * world_k) ----
     var skin_mat: [max_joints]Mat = undefined;
     for (0..s.joint_count) |ji| {
         skin_mat[ji] = compose(s.inverse_bind[ji], world[s.joint_nodes[ji]]);

@@ -1,34 +1,34 @@
-//! rocket — landing on an engine you are not allowed to switch off.
+//! rocket - landing on an engine you are not allowed to switch off.
 //!
 //! Two identical vehicles get the same descent. The near one runs PD on altitude and attitude;
 //! the far one plans. Same thrust range, same gimbal limit, same start.
 //!
-//! ── ★★★ THE LOWER THRUST BOUND IS THE PROBLEM ──
+//! -- *** THE LOWER THRUST BOUND IS THE PROBLEM --
 //!
 //! The engine cannot throttle below **40% of weight**, so "cut it and coast" does not exist.
 //! A vehicle that needs less deceleration than the minimum provides has exactly one move:
-//! **lean over and waste some thrust sideways.** Watch the flame — it never goes out.
+//! **lean over and waste some thrust sideways.** Watch the flame - it never goes out.
 //!
 //! That manoeuvre is not something a gain can represent, and it falls out of the box solve for
-//! free because the bound is ASYMMETRIC: `[0.4·W, 2.0·W]`, not a symmetric clamp.
+//! free because the bound is ASYMMETRIC: `[0.4*W, 2.0*W]`, not a symmetric clamp.
 //!
-//! ── ★★ IT LANDS ALL FOUR STARTS; THE PD LANDS NONE ──
+//! -- ** IT LANDS ALL FOUR STARTS; THE PD LANDS NONE --
 //!
 //!     controller   touchdown vy    tilt      verdict
 //!     PD                 -1.10     0.002     0 of 4
 //!     MPC                -0.11     0.005     4 of 4
 //!
-//! An order of magnitude inside every criterion, from every offset — and the PD is not bad, it
+//! An order of magnitude inside every criterion, from every offset - and the PD is not bad, it
 //! simply descends at 1.10 m/s against a 0.5 bar with no way to correct laterally.
 //!
-//! ★ AND THE FIRST VERSION FAILED IN A WAY THAT VALIDATED THE MODEL. Told to be AT the pad —
-//! 100 m away, with a 3 s horizon — it found that unreachable, settled for zero VELOCITY, and
+//! * AND THE FIRST VERSION FAILED IN A WAY THAT VALIDATED THE MODEL. Told to be AT the pad -
+//! 100 m away, with a 3 s horizon - it found that unreachable, settled for zero VELOCITY, and
 //! leaned 0.474 rad to waste thrust so it could hover below minimum throttle. Exactly the
 //! manoeuvre this example exists to show, applied to the wrong goal. **A reference has to be
 //! reachable inside the horizon**, so the planner now tracks a descent PROFILE instead.
 //!
-//! ★★ THE THRUST READOUT IS THE NEXT MEASUREMENT, ON PURPOSE. If the planner is not saturating
-//! high in the last seconds, it does not believe it needs to flare — and that is a reference
+//! ** THE THRUST READOUT IS THE NEXT MEASUREMENT, ON PURPOSE. If the planner is not saturating
+//! high in the last seconds, it does not believe it needs to flare - and that is a reference
 //! problem, not a weights problem. The panel shows commanded throttle so the question is
 //! answerable by looking.
 
@@ -108,8 +108,8 @@ const State = struct {
     transform: [1]Mat,
 };
 
-// ★ LEANING IS NEARLY FREE MID-HORIZON AND EXPENSIVE AT THE LAST KNOT. A vehicle 30 m off the
-// pad HAS to translate, and the only way to translate is to lean — `ax = T·sin(θ+δ)/m`. Weighting
+// * LEANING IS NEARLY FREE MID-HORIZON AND EXPENSIVE AT THE LAST KNOT. A vehicle 30 m off the
+// pad HAS to translate, and the only way to translate is to lean - `ax = T*sin(theta+delta)/m`. Weighting
 // tilt heavily along the whole path made the lean cost more than the miss, and the planner flew
 // down beside the pad and hovered there with 5.65 m/s of drift still on it.
 const state_weight = [_]f32{ 3.0, 0.02, 4.0, 4.0, 5.0, 8.0 };
@@ -178,7 +178,7 @@ fn resetAll(s: *State) void {
         v.down = false;
         v.good = false;
         v.trail_count = 0;
-        // ★ AND THE PLAN, NOT ONLY THE VEHICLE. `solveRocket` warm-starts from `plan.ctrl`;
+        // * AND THE PLAN, NOT ONLY THE VEHICLE. `solveRocket` warm-starts from `plan.ctrl`;
         // leaving the last descent's commands there means the first tick of the next one
         // applies them. That exact oversight explained both "it explodes" and "reset does not
         // reset" in the humanoid.
@@ -195,18 +195,18 @@ fn advance(v: *Vehicle) void {
         return;
     }
     if (v.planned) {
-        // ── ★★★ A DESCENT PROFILE, NOT A DESTINATION ──
+        // -- *** A DESCENT PROFILE, NOT A DESTINATION --
         //
-        // `v = −√(2·a·h)` is the fastest descent from which a given deceleration still brings you
-        // to rest at the ground. That shape is kinematics, not a tuning choice — a linear
-        // `−0.4·h` commands −2.2 m/s with 5 m left, and the vehicle faithfully delivers −2.2.
+        // `v = -sqrt(2*a*h)` is the fastest descent from which a given deceleration still brings you
+        // to rest at the ground. That shape is kinematics, not a tuning choice - a linear
+        // `-0.4*h` commands -2.2 m/s with 5 m left, and the vehicle faithfully delivers -2.2.
         var altitude: f32 = v.state[mpc.rocket_y_offset];
         var lateral: f32 = v.state[mpc.rocket_x_offset];
         for (0..v.plan.horizon + 1) |k| {
             const want_vy: f32 = -@min(35.0, @sqrt(2.0 * 0.6 * @max(0.0, altitude)) + 0.15);
-            // ★★★ AND THE LATERAL AXIS GETS A PROFILE TOO. Fixing only the vertical one left `x`
+            // *** AND THE LATERAL AXIS GETS A PROFILE TOO. Fixing only the vertical one left `x`
             // as a STEP target of zero at every knot, so a vehicle 30 m out was told to be over
-            // the pad IMMEDIATELY — the same unreachable reference that made the first version
+            // the pad IMMEDIATELY - the same unreachable reference that made the first version
             // hover, left in place on the other axis. It is exactly why the centred start landed
             // and the offset ones never did.
             const fall_speed: f32 = @max(0.5, -want_vy);
@@ -220,16 +220,16 @@ fn advance(v: *Vehicle) void {
             lateral += want_vx * sim_timestep;
         }
         _ = mpc.solveRocket(body, &v.plan, &v.state, weights(), limits, sim_timestep, 4);
-        // ★★★ SLIDE THE PLAN A KNOT FORWARD. The tutorial has said to since it was written, and
+        // *** SLIDE THE PLAN A KNOT FORWARD. The tutorial has said to since it was written, and
         // this planner did not: every tick warm-started from a sequence stale by one knot.
         // Measured without it, the commanded throttle chattered between its bounds on the way
-        // down — 163%, 109%, 88%, 61%, 132%, 192%, 200%, 77% — which is not a flare, it is a
+        // down - 163%, 109%, 88%, 61%, 132%, 192%, 200%, 77% - which is not a flare, it is a
         // solver re-deriving from a seed that no longer describes its problem.
         mpc.shiftRocketPlan(&v.plan);
         v.thrust = v.plan.ctrl[mpc.rocket_thrust_offset];
         v.gimbal = v.plan.ctrl[mpc.rocket_gimbal_offset];
     } else {
-        // ★ THE HONEST BASELINE: PD on altitude and attitude, same bounds. Nothing in it can say
+        // * THE HONEST BASELINE: PD on altitude and attitude, same bounds. Nothing in it can say
         // "lean over to waste thrust I am not allowed to switch off", because there is nowhere
         // sensible to put such a term.
         const want_vy: f32 = -0.15 * v.state[mpc.rocket_y_offset] - 1.0;
@@ -296,7 +296,7 @@ fn update(f: *z.Frame, s: *State) void {
 fn drawVehicle(s: *State, gl: *z.WgpuGl, v: *const Vehicle, depth: f32) void {
     const at: Vec = vec(v.state[mpc.rocket_x_offset], v.state[mpc.rocket_y_offset], depth);
     const tilt: f32 = v.state[mpc.rocket_tilt_offset];
-    // ★ +tilt LEANS TOWARD +x, and the render's Z rotation turns +y toward −x — hence the
+    // * +tilt LEANS TOWARD +x, and the render's Z rotation turns +y toward -x - hence the
     // negation. Getting this backwards draws a vehicle leaning away from where it is going.
     const lean: Mat = rotationZ(-tilt);
 
@@ -306,7 +306,7 @@ fn drawVehicle(s: *State, gl: *z.WgpuGl, v: *const Vehicle, depth: f32) void {
     else
         hull_colour);
 
-    // ★ THE FLAME LENGTH IS THE THROTTLE, AND IT NEVER GOES OUT. That is the whole constraint,
+    // * THE FLAME LENGTH IS THE THROTTLE, AND IT NEVER GOES OUT. That is the whole constraint,
     // drawn: the minimum is 40% of weight, so there is always a flame, and a vehicle that needs
     // less deceleration has to lean instead.
     if (!v.down) {
@@ -318,8 +318,8 @@ fn drawVehicle(s: *State, gl: *z.WgpuGl, v: *const Vehicle, depth: f32) void {
         z.drawLine3D(gl, nozzle, exhaust, if (throttle > 0.7) flame_high else flame_low);
     }
 
-    // ★ GUARDED, BECAUSE `1..0` IS AN INTEGER UNDERFLOW, NOT AN EMPTY RANGE. On the first frame
-    // the trail is empty and `for (1..0)` traps in debug wasm — which is how this surfaced: it
+    // * GUARDED, BECAUSE `1..0` IS AN INTEGER UNDERFLOW, NOT AN EMPTY RANGE. On the first frame
+    // the trail is empty and `for (1..0)` traps in debug wasm - which is how this surfaced: it
     // ran fine in release on the host and died instantly in the smoke run.
     if (v.trail_count < 2) {
         return;
@@ -330,12 +330,12 @@ fn drawVehicle(s: *State, gl: *z.WgpuGl, v: *const Vehicle, depth: f32) void {
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
-    // ★ THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
+    // * THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
     // know how tall the viewport is. Kept in the signature because every example shares it.
     _ = viewport_h;
     const captured: bool = u.wantCaptureMouse();
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
-    // ★ AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
+    // * AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,
     // which on a phone left the thing the demo is ABOUT as a sliver at the bottom. Letting the
     // window size to its content keeps it as small as it can be, and capping the width stops it
     // spanning the screen.
@@ -383,8 +383,8 @@ fn report(u: ui.Ui, label: []const u8, v: *const Vehicle) void {
         v.state[mpc.rocket_vy_offset],
         v.state[mpc.rocket_x_offset],
     });
-    // ★ THROTTLE IS THE MEASUREMENT THAT MATTERS RIGHT NOW. If the planner is not saturating
-    // high in the last seconds, it does not think it needs to flare — a reference problem, not
+    // * THROTTLE IS THE MEASUREMENT THAT MATTERS RIGHT NOW. If the planner is not saturating
+    // high in the last seconds, it does not think it needs to flare - a reference problem, not
     // a weights problem.
     const throttle: f32 = 100.0 * v.thrust / weight;
     u.text("     throttle {d:>5.0}%%{s}  gimbal {d:>6.3}  tilt {d:>6.3}", .{

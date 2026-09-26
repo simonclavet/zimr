@@ -1,15 +1,15 @@
-//! pipeline_settings — pipeline STATE: the same translucent geometry drawn
+//! pipeline_settings - pipeline STATE: the same translucent geometry drawn
 //! twice, left with `.blend = .alpha`, right with `.blend = .additive`, so the
 //! difference is unmistakable (alpha occludes back-to-front; additive sums to
 //! white where the three triangles overlap).
 //!
 //! No hand-written WGSL. The shaders are authored in Zig: a bespoke VS
 //! (`pipeline_settings_vs.zig`) plus the SHARED pass-through fragment shader
-//! (`pipeline_uniforms_fs.zig`) — a reminder that "emit the interpolated colour"
+//! (`pipeline_uniforms_fs.zig`) - a reminder that "emit the interpolated colour"
 //! is one shader, reused. The two pipelines come from two `loadShaderVF` calls
 //! that differ ONLY by `.blend_state`; everything else (schema, layout, UBO) is
 //! identical. The per-pipeline x-offset rides in the UBO (`p.z`) rather than a
-//! pipeline-override constant — overrides are pipeline_constants' story.
+//! pipeline-override constant - overrides are pipeline_constants' story.
 //!
 //! Build:  zig build wgpu-pipeline-settings
 //! Device: zig build wgpu-pipeline-settings-standalone -Dmode=release

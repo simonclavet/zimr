@@ -1,11 +1,11 @@
-//! examples/shader_chroma_fs.zig — chroma-shift fragment shader.
+//! examples/shader_chroma_fs.zig - chroma-shift fragment shader.
 //!
 //! Same effect across two pipelines: sample R/G/B channels at
 //! horizontally-offset UV positions where the offset is animated
 //! sinusoidally by `u_time` and scaled by `u_offset`.  At `t=0` (or
 //! whenever sin(t)=0) the output collapses to the un-shifted sample.
 //!
-//! The same `shaderMain` runs on GPU (via SPIR-V → GLSL) and CPU
+//! The same `shaderMain` runs on GPU (via SPIR-V -> GLSL) and CPU
 //! (via `raster_shader.dispatchFragmentShader`).  See
 //! `examples/shader_chroma_split.zig` for the side-by-side composite.
 //!
@@ -17,7 +17,7 @@ const Vec2 = zm.Vec2;
 const shader_io = @import("shader_chroma_fs_io.zig");
 const shader_externs = @import("shader_chroma_fs_externs");
 
-// IoT(void) — chroma has no Ubo.  Sampler bindings + loose uniforms
+// IoT(void) - chroma has no Ubo.  Sampler bindings + loose uniforms
 // (col_diffuse, u_offset, u_time) live directly on Io.
 pub const Io = shader_externs.IoT(void);
 pub const Out = shader_externs.Out;

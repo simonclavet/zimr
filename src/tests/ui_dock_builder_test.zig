@@ -24,7 +24,7 @@ const ui = @import("../ui.zig");
 fn testCtx(gpa: Allocator) ui.UiContext {
     return .{
         .gpa = gpa,
-        // ★ `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
+        // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
         // live-byte tripwire that catches a dropped per-frame reset). These four test
         // files were imported by nothing, so they never compiled against the change.
         .frame_arena = ui.FrameArena.init(gpa, ui.ui_frame_arena_ceiling, "ui"),

@@ -1,5 +1,5 @@
 //! lint:alias zimrphysics
-//! physics.zig — a single-file, single-threaded rigid-body engine.
+//! physics.zig - a single-file, single-threaded rigid-body engine.
 //!
 //! v2: the contact solver, friction model, restitution bias, and integration are
 //! now reconciled to match Jolt's algorithms term for term (see the parity notes
@@ -11,20 +11,20 @@
 //! ----------------------------------------------------------------------------
 //! We match Jolt *algorithmically*: same constraint model (sequential impulse with
 //! soft/speculative contacts), same per-step formulas, same constants, same
-//! integration. A scene behaves the same — a stack settles the same way, a ball
+//! integration. A scene behaves the same - a stack settles the same way, a ball
 //! bounces to the same height, a box slides the same distance.
 //!
 //! Our solve is also *deterministic*: a fixed-iteration sequential-impulse solver is
 //! order dependent, so we give contacts a total order (sorted by body index in
 //! findPairs) before solving. This is exactly how Jolt makes ITS result independent
-//! of multithreaded contact discovery — Jolt sorts by a body-pair hash key. Same
+//! of multithreaded contact discovery - Jolt sorts by a body-pair hash key. Same
 //! lever, different key.
 //!
 //! We do NOT reproduce a *specific* Jolt build's exact floating-point trajectory.
 //! That would require adopting Jolt's hash-based sort key (an arbitrary order that is
 //! no more physically correct than ours) AND Jolt's exact body-ID allocation AND the
 //! same FP operation order. The sort key here is deliberately one swappable function
-//! (BroadPhase.pairLess) — point it at Jolt's hash and align body IDs and the orders
+//! (BroadPhase.pairLess) - point it at Jolt's hash and align body IDs and the orders
 //! converge, but that buys cross-validation, not better physics. The intended
 //! differences from Jolt are exactly: (1) single threaded, (2) more opinionated
 //! (fewer toggles; we bake in the defaults Jolt ships with). Everything else is the
@@ -131,7 +131,7 @@ pub const Body = struct {
     /// The narrow phase normally drops static/static, static/kinematic and
     /// kinematic/kinematic pairs, because no impulse this solver could compute would go
     /// anywhere. That reasoning is about THIS solver. A body whose motion is decided
-    /// elsewhere — driven by an external integrator, an animation, another simulation —
+    /// elsewhere - driven by an external integrator, an animation, another simulation -
     /// still needs to know what it is touching, and the impulse is that owner's business.
     ///
     /// Distinct from `is_sensor`, which also bypasses the gate but additionally suppresses
@@ -200,18 +200,18 @@ pub const Mat3 = zm.Mat3;
 pub const Mat2 = zm.Mat2;
 
 // -----------------------------------------------------------------------------
-// Physics math surface — everything this port adds on top of zm, all gathered at
+// Physics math surface - everything this port adds on top of zm, all gathered at
 // the top of the file (here and the relocated-helpers section just below the
 // inertia helpers) so the eventual lift into zimrmath is a contiguous cut. See
 // PLAN_MATH_UNIFICATION.md. Inventory:
 //
-//   Types:    Mat3 (col:[3]Vec)            — above; world inverse inertia, K matrices
-//             Mat2 (scalar m00..m11)       — above; 2-DOF joint blocks (→ [2]Vec2 in zm)
+//   Types:    Mat3 (col:[3]Vec)            - above; world inverse inertia, K matrices
+//             Mat2 (scalar m00..m11)       - above; 2-DOF joint blocks (-> [2]Vec2 in zm)
 //   Inertia:  applyInvInertia, bakeInvInertiaWorld, mat3Outer
 //   Rotation: integrateRotation (quat exp), clampMagnitude, applyGyroscopic
 //   Quats:    quatAngleAbout, quatNormalize (guarded normalize4),
 //             quatGetAngularVelocity, quatGetSwingTwist (+SwingTwistPair),
-//             quatFromBasis (Shepperd; canonical basis→quat, used over matToQuat)
+//             quatFromBasis (Shepperd; canonical basis->quat, used over matToQuat)
 //   Scalars:  signNonZero, signSelect
 //   Vectors:  normalizedPerpendicular (Jolt-faithful; the sole perpendicular helper)
 //   Geometry: Aabb (+ overlaps/expandedBy/combine), transformAabb,
@@ -221,8 +221,8 @@ pub const Mat2 = zm.Mat2;
 //   Domain (NOT general math, stay in physics): SoftConstraint/softConstraint*,
 //             CurvePoint/LinearCurve.
 //
-// Unified onto zm where zm already had the primitive: quaternion 4-dot →
-// dot4, normalize-or-fallback → safeNormalize3. (Removed the local quatDot,
+// Unified onto zm where zm already had the primitive: quaternion 4-dot ->
+// dot4, normalize-or-fallback -> safeNormalize3. (Removed the local quatDot,
 // normalizeOr, and the redundant second perpendicular helper.)
 //
 // Still grouped with the collision code (geometry, but coupled to the ray-test
@@ -230,12 +230,12 @@ pub const Mat2 = zm.Mat2;
 // boxFace, and the GJK/EPA cores. These are the next candidate batch.
 // -----------------------------------------------------------------------------
 
-/// Outer product a·bᵀ as a column-major 3x3 (used to assemble inertia tensors).
+/// Outer product a*b^T as a column-major 3x3 (used to assemble inertia tensors).
 fn mat3Outer(a: Vec, b: Vec) Mat3 {
     return .{ .col = .{ a * splat(b[0]), a * splat(b[1]), a * splat(b[2]) } };
 }
 
-/// Jolt's Sign: −1 for negative, +1 for zero or positive (so it never returns 0, which matters
+/// Jolt's Sign: -1 for negative, +1 for zero or positive (so it never returns 0, which matters
 /// for the slip-ratio denominator).
 fn signNonZero(x: f32) f32 {
     return if (x < 0.0) -1.0 else 1.0;
@@ -243,7 +243,7 @@ fn signNonZero(x: f32) f32 {
 
 /// Fixed-capacity DFS stack of node indices, shared by every BVH traversal (broad-phase tree and
 /// mesh BVH alike). It owns only the stack/push/pop bookkeeping; each walk keeps its own prune test
-/// and leaf work inline, since those differ per traversal. `push` is a no-op when full — the depth
+/// and leaf work inline, since those differ per traversal. `push` is a no-op when full - the depth
 /// (256) is far beyond any balanced tree these builders produce, so this never triggers in practice.
 const BvhStack = struct {
     items: [256]u32 = undefined,
@@ -381,7 +381,7 @@ fn applyGyroscopic(
 }
 
 // -----------------------------------------------------------------------------
-// Relocated general math & geometry (continued) — moved up here so the whole
+// Relocated general math & geometry (continued) - moved up here so the whole
 // math surface is contiguous and easy to lift into zimrmath. Pure: no Shape/
 // Body/World/constraint coupling. See PLAN_MATH_UNIFICATION.md.
 //   - Symmetric-3x3 eigensolver (EigenResult, jacobiRotate,
@@ -631,7 +631,7 @@ fn aabbContainsPoint(box: Aabb, p: Vec) bool {
         p[1] >= box.min[1] and p[1] <= box.max[1] and
         p[2] >= box.min[2] and p[2] <= box.max[2];
 }
-/// Max dimension of the clutch coupling matrix: engine + up to this many − 1 driven wheels.
+/// Max dimension of the clutch coupling matrix: engine + up to this many - 1 driven wheels.
 const clutch_max_n: usize = 16;
 
 /// Solve a*x = b (b a column vector) in place by Gauss-Jordan elimination with full pivoting,
@@ -775,7 +775,7 @@ pub const Mesh = struct {
     tri_order: []const u32, // triangle indices grouped by BVH leaf
     bounds: Aabb, // local AABB of the whole mesh
     // Per-triangle surface id (indexed by triangle index, the low bits of a contact's `sub`).
-    // Opaque to the engine — the user maps it to friction/sound/etc. Empty = every triangle 0.
+    // Opaque to the engine - the user maps it to friction/sound/etc. Empty = every triangle 0.
     // Owned and freed by ShapeStore.deinit when non-empty.
     materials: []const u16,
 };
@@ -968,7 +968,7 @@ pub const Motion = struct {
     lin_lock: Vec,
     ang_lock: Vec,
 
-    force: Vec, // accumulated; reset in the sleep phase (NOT after gravity — Jolt
+    force: Vec, // accumulated; reset in the sleep phase (NOT after gravity - Jolt
     torque: Vec, //   reads it during contact setup for the restitution correction)
 
     // Sleep tracking: three points (COM + the two largest local bounding-box axes)
@@ -1225,11 +1225,11 @@ fn shapeMass(shape: *const Shape, density: f32) MassProperties {
             const mass: f32 = cylinder_mass + caps_mass;
             // Axis Y runs along the capsule; X and Z are the two perpendicular axes.
             const inertia_along_axis: f32 = 0.5 * cylinder_mass * radius_sq + 0.4 * caps_mass * radius_sq;
-            // ★★ THE CAPS SIT AT THE ENDS, NOT AT THE CENTRE. Each hemisphere's COM is h/2 + 3r/8
+            // ** THE CAPS SIT AT THE ENDS, NOT AT THE CENTRE. Each hemisphere's COM is h/2 + 3r/8
             // from the middle, and about the middle a hemisphere of mass m has
-            // m·(2r²/5 + h²/4 + 3hr/8) — the flat-face term plus the parallel-axis shift, minus the
-            // shift back to its own COM, which cancels the 9r²/64 exactly. This used to be
-            // 0.4·caps_mass·r² alone, as if the caps were one sphere at the centre: a limb's
+            // m*(2r^2/5 + h^2/4 + 3hr/8) - the flat-face term plus the parallel-axis shift, minus the
+            // shift back to its own COM, which cancels the 9r^2/64 exactly. This used to be
+            // 0.4*caps_mass*r^2 alone, as if the caps were one sphere at the centre: a limb's
             // tumbling inertia came out 20-58% low (the humanoid's shin: 0.0188 against 0.0326,
             // which MuJoCo's own formula gives). Found by `robot_maximal`'s mass-property test.
             const inertia_perpendicular: f32 =
@@ -1267,7 +1267,7 @@ fn shapeMass(shape: *const Shape, density: f32) MassProperties {
         },
         .tapered_capsule => |tc| {
             // Collision is exact; inertia is approximated by a capsule of the average
-            // radius (the true COM also shifts toward the larger end — folded into this
+            // radius (the true COM also shifts toward the larger end - folded into this
             // documented approximation). Refine later if a tapered body needs it.
             const r: f32 = 0.5 * (tc.top_radius + tc.bottom_radius);
             const cyl_h: f32 = 2.0 * tc.half_height;
@@ -2093,7 +2093,7 @@ pub const ShapeStore = struct {
             .inner_radius = shapeInnerRadius(cs),
             .volume = cmp.mass,
             .inertia_diagonal = reciprocal3(cmp.inv_inertia_diagonal),
-            // principal frame in the RT shape = rotation ∘ child principal (Jolt rotates the
+            // principal frame in the RT shape = rotation o child principal (Jolt rotates the
             // child inertia by `rotation`); Hamilton qmul applies child principal first.
             .inertia_rotation = qmul(rotation, cmp.inertia_rotation),
         };
@@ -2415,7 +2415,7 @@ pub fn buildHeightField(
 /// Locking is enforced by zeroing the corresponding velocity components each step
 /// (see Motion.lin_lock / ang_lock), so locked axes never accumulate motion. The
 /// solver still computes effective masses with the full inverse inertia, so contacts
-/// pushing along a locked axis are slightly less accurate than Jolt's masked solver —
+/// pushing along a locked axis are slightly less accurate than Jolt's masked solver -
 /// fine for the usual uses (2D-plane bodies, no-tip-over capsules).
 pub const AllowedDofs = packed struct {
     translation_x: bool = true,
@@ -2977,13 +2977,13 @@ pub const DualAxisPart = struct {
 };
 
 /// 1-DOF gear coupling between two bodies' rotations about their (world) hinge axes
-/// (Jolt's GearConstraintPart). Constraint C = θ1 + r·θ2; velocity form w1·a + r·w2·b = 0,
-/// Jacobian J = [a, r·b]. The impulse is applied to both bodies as +λ·(I⁻¹·axis) (Jolt applies
+/// (Jolt's GearConstraintPart). Constraint C = theta 1 + r*theta 2; velocity form w1*a + r*w2*b = 0,
+/// Jacobian J = [a, r*b]. The impulse is applied to both bodies as +lambda*(I^-1*axis) (Jolt applies
 /// no extra ratio in the body-2 step; the ratio lives in the effective mass and the velocity
 /// error, matched verbatim).
 pub const GearConstraintPart = struct {
-    inv_i_a: Vec = vec_zero, // I1⁻¹·a
-    inv_i_b: Vec = vec_zero, // I2⁻¹·b
+    inv_i_a: Vec = vec_zero, // I1^-1*a
+    inv_i_b: Vec = vec_zero, // I2^-1*b
     effective_mass: f32 = 0.0,
     ratio: f32 = 0.0,
     total_lambda: f32 = 0.0,
@@ -3000,7 +3000,7 @@ pub const GearConstraintPart = struct {
     }
 
     /// inv_i_a_mat/inv_i_b_mat are the bodies' world inverse-inertia tensors; axis_a/axis_b the
-    /// world hinge axes (normalized). K⁻¹ = 1/(a·I1⁻¹·a + r²·b·I2⁻¹·b).
+    /// world hinge axes (normalized). K^-1 = 1/(a*I1^-1*a + r^2*b*I2^-1*b).
     pub fn prepare(
         part: *GearConstraintPart,
         inv_i_a_mat: Mat3,
@@ -3056,7 +3056,7 @@ pub const GearConstraintPart = struct {
         part.applyVelocityStep(ma, mb, lambda);
     }
 
-    /// Drift correction; `c` is the gear angle error. Rotates both dynamic bodies by ±λ·(I⁻¹·axis).
+    /// Drift correction; `c` is the gear angle error. Rotates both dynamic bodies by +/-lambda*(I^-1*axis).
     pub fn solvePosition(
         part: *const GearConstraintPart,
         body_a: *Body,
@@ -3079,11 +3079,11 @@ pub const GearConstraintPart = struct {
 
 /// 1-DOF rack-and-pinion coupling (Jolt's RackAndPinionConstraintPart): ties body 1's rotation
 /// about its hinge axis to body 2's translation along its slider axis. Velocity form
-/// w₁·a − r·b·v₂ = 0, Jacobian J = [a, −r·b]. Impulse adds +λ·(I₁⁻¹·a) to body 1's spin and
-/// −λ·(r·invM₂·b) to body 2's linear velocity.
+/// w_1*a - r*b*v_2 = 0, Jacobian J = [a, -r*b]. Impulse adds +lambda*(I_1^-1*a) to body 1's spin and
+/// -lambda*(r*invM_2*b) to body 2's linear velocity.
 pub const RackAndPinionConstraintPart = struct {
-    inv_i_a: Vec = vec_zero, // I1⁻¹·hingeAxis
-    ratio_inv_m2_b: Vec = vec_zero, // ratio·invM2·sliderAxis
+    inv_i_a: Vec = vec_zero, // I1^-1*hingeAxis
+    ratio_inv_m2_b: Vec = vec_zero, // ratio*invM2*sliderAxis
     effective_mass: f32 = 0.0,
     total_lambda: f32 = 0.0,
 
@@ -3099,7 +3099,7 @@ pub const RackAndPinionConstraintPart = struct {
     }
 
     /// inv_i_a_mat is body 1's world inverse-inertia tensor; inv_m2 body 2's inverse mass;
-    /// hinge_axis/slider_axis the world axes. K⁻¹ = 1/(a·I1⁻¹·a + invM2·r²).
+    /// hinge_axis/slider_axis the world axes. K^-1 = 1/(a*I1^-1*a + invM2*r^2).
     pub fn prepare(
         part: *RackAndPinionConstraintPart,
         inv_i_a_mat: Mat3,
@@ -3176,14 +3176,14 @@ pub const RackAndPinionConstraintPart = struct {
 };
 
 /// Couples body 1 moving along world axis n1 to body 2 moving along world axis n2, by a ratio
-/// (Jolt's IndependentAxisConstraintPart): C̈ = n1·v1 + (r1×n1)·w1 + r·n2·v2 + r·(r2×n2)·w2.
-/// Used by the pulley. The Jacobian geometry (r1×n1, r·r2×n2) is built unconditionally so a
+/// (Jolt's IndependentAxisConstraintPart): C_ddot = n1*v1 + (r1xn1)*w1 + r*n2*v2 + r*(r2xn2)*w2.
+/// Used by the pulley. The Jacobian geometry (r1xn1, r*r2xn2) is built unconditionally so a
 /// kinematic endpoint's motion still enters the velocity error; the inverse mass/inertia terms
 /// are zero for non-dynamic bodies, and only dynamic bodies are moved.
 pub const IndependentAxisConstraintPart = struct {
     r1xn1: Vec = vec_zero,
     inv_i1_r1xn1: Vec = vec_zero,
-    ratio_r2xn2: Vec = vec_zero, // r·(r2×n2)
+    ratio_r2xn2: Vec = vec_zero, // r*(r2xn2)
     inv_i2_ratio_r2xn2: Vec = vec_zero,
     effective_mass: f32 = 0.0,
     total_lambda: f32 = 0.0,
@@ -4317,7 +4317,7 @@ pub const Constraint = struct {
 
     // --- .swing_twist (ragdoll cone + twist joint) ---
     swing_type: SwingType = .cone,
-    // ★ Jolt's meaning, which is NOT "about" the named axis: each half-cone bounds the swing of
+    // * Jolt's meaning, which is NOT "about" the named axis: each half-cone bounds the swing of
     // the twist axis WITHIN the plane it names. So normal_half_cone limits rotation about the
     // PLANE (Y) axis, and plane_half_cone rotation about the NORMAL (Z) axis. Measured by
     // robot_maximal's one-hinge probe after the reading these comments used to give got it wrong.
@@ -4524,7 +4524,7 @@ pub const VehicleCollisionTester = union(enum) {
     };
 
     /// Casts a cylinder shaped like the wheel (its axis along the wheel's axle), giving the most
-    /// accurate contact. Jolt's VehicleCollisionTesterCastCylinder (no slope test — the cylinder
+    /// accurate contact. Jolt's VehicleCollisionTesterCastCylinder (no slope test - the cylinder
     /// shape itself avoids catching on walls).
     pub const CastCylinderTester = struct {
         object_mask: u32 = 0xFFFF_FFFF,
@@ -4702,7 +4702,7 @@ pub const VehicleTransmission = struct {
 
 /// One differential: which two wheels it drives, the gear-to-wheel ratio, the left/right torque
 /// split, the per-differential limited-slip ratio, and the share of engine torque it receives.
-/// Jolt's VehicleDifferentialSettings. Wheel indices are into the vehicle's wheel array (−1 = none).
+/// Jolt's VehicleDifferentialSettings. Wheel indices are into the vehicle's wheel array (-1 = none).
 pub const VehicleDifferentialSettings = struct {
     left_wheel: i32 = -1,
     right_wheel: i32 = -1,
@@ -5497,7 +5497,7 @@ fn vehicleWheelLocalBasis(s: *const WheelSettings, steer_angle: f32) WheelBasis 
 
 /// Fill a wheel's contact-derived state once a tester has found a hit: the tire basis
 /// (longitudinal/lateral), the axle contact plane, and the cached ground velocity. Shared by all
-/// collision testers — only the hit body/point/normal/suspension-length differ between them.
+/// collision testers - only the hit body/point/normal/suspension-length differ between them.
 fn setWheelContact(
     world: *const World,
     w: *Wheel,
@@ -6482,7 +6482,7 @@ pub const Vehicle = struct {
             w.contact_body = none_body;
             w.suspension_length = s.suspension_max_length;
 
-            // The cast sphere carries its own radius, so the sweep is shortened by (wheel − sphere).
+            // The cast sphere carries its own radius, so the sweep is shortened by (wheel - sphere).
             const cast_length: f32 = s.suspension_max_length + s.radius - tester.radius;
             if (cast_length <= 0.0) {
                 continue;
@@ -6525,7 +6525,7 @@ pub const Vehicle = struct {
 
     /// Cylinder-cast each wheel against the ground (Jolt's VehicleCollisionTesterCastCylinder).
     /// The cylinder is shaped like the wheel and oriented along its axle, giving the most accurate
-    /// contact. No slope test — the cylinder shape itself avoids catching on walls.
+    /// contact. No slope test - the cylinder shape itself avoids catching on walls.
     fn collideWheelsCastCylinder(
         self: *Vehicle,
         world: *const World,
@@ -7240,7 +7240,7 @@ pub const Vehicle = struct {
     // common speed, and steers by a left/right speed difference. Enable via VehicleSettings.tracks.
 
     /// Set tank driver input. `forward` is throttle/reverse [-1,1]; `left_ratio`/`right_ratio` are
-    /// per-track speed multipliers [-1,1] (steering; never 0 — 0 is clamped to 1); `brake` [0,1].
+    /// per-track speed multipliers [-1,1] (steering; never 0 - 0 is clamped to 1); `brake` [0,1].
     pub fn setTrackedInput(
         self: *Vehicle,
         world: *World,
@@ -7258,7 +7258,7 @@ pub const Vehicle = struct {
         }
     }
 
-    /// A wheel's spin follows its track: ω = track_ω · driven_wheel_radius / wheel_radius.
+    /// A wheel's spin follows its track: omega = track_omega * driven_wheel_radius / wheel_radius.
     fn calcWheelAngularVelocityFromTrack(self: *Vehicle, w: *Wheel) void {
         if (w.track_index < 0) {
             return;
@@ -7283,7 +7283,7 @@ pub const Vehicle = struct {
     }
 
     /// Per-wheel update for a tank (Jolt's WheelTV::Update): spin from the track, advance the
-    /// angle, reset the brake budget, and set the combined (scalar tire × terrain) friction.
+    /// angle, reset the brake budget, and set the combined (scalar tire x terrain) friction.
     fn trackedUpdateWheels(self: *Vehicle, world: *const World, dt: f32) void {
         var i: usize = 0;
         while (i < self.wheels.len) : (i += 1) {
@@ -7303,7 +7303,7 @@ pub const Vehicle = struct {
     }
 
     /// Enforce the steering ratio between the two tracks (Jolt's SyncLeftRightTracks): transfer
-    /// spin between them, inertia-weighted, so left_ω/right_ω matches left_ratio/right_ratio.
+    /// spin between them, inertia-weighted, so left_omega/right_omega matches left_ratio/right_ratio.
     fn syncLeftRightTracks(self: *Vehicle) void {
         const tracks: *[2]VehicleTrack = &(self.tracks.?);
         const tl: *VehicleTrack = &tracks[0];
@@ -7373,7 +7373,7 @@ pub const Vehicle = struct {
         const can_shift_up: bool = (self.left_ratio * self.right_ratio > 0.0) and can_engine_apply_torque;
         self.transmission.update(dt, self.engine.getCurrentRpm(), self.forward_input, can_shift_up);
 
-        // Transmission torque → each track's driven wheel (capped by the engine's max spin).
+        // Transmission torque -> each track's driven wheel (capped by the engine's max spin).
         const transmission_ratio: f32 = self.transmission.getCurrentRatio();
         const clutch_torque: f32 = self.transmission.getClutchFriction() * transmission_ratio;
         const transmission_torque: f32 = clutch_torque * self.engine.getTorque(@abs(self.forward_input));
@@ -7424,8 +7424,8 @@ pub const Vehicle = struct {
                     }
                 }
                 if (total_radius > 0.0) {
-                    // p = torque/radius·dt with torque ∝ radius, so the radius cancels: every
-                    // grounded wheel gets the same impulse brake_torque·dt/total_radius (Jolt).
+                    // p = torque/radius*dt with torque ~ radius, so the radius cancels: every
+                    // grounded wheel gets the same impulse brake_torque*dt/total_radius (Jolt).
                     const per_impulse: f32 = brake_torque * dt / total_radius;
                     var k2: usize = 0;
                     while (k2 < track.wheel_count) : (k2 += 1) {
@@ -8295,7 +8295,7 @@ pub const SoftEdge = struct {
 
 /// A dihedral-bend constraint (Jolt's DihedralBend): resists folding along the edge shared by two
 /// triangles. `vertex[0..1]` are the shared edge; `vertex[2]`/`vertex[3]` are the opposite corners of
-/// the two triangles. `initial_angle` (pi − dihedral angle, signed) is filled in by the builder.
+/// the two triangles. `initial_angle` (pi - dihedral angle, signed) is filled in by the builder.
 pub const SoftDihedralBend = struct {
     vertex: [4]u32,
     compliance: f32 = 0.0,
@@ -8303,7 +8303,7 @@ pub const SoftDihedralBend = struct {
 };
 
 /// A tetrahedral volume-preservation constraint over four vertices (Jolt's Volume).
-/// `six_rest_volume` (6× the rest volume) is filled in by the builder.
+/// `six_rest_volume` (6x the rest volume) is filled in by the builder.
 pub const SoftVolume = struct {
     vertex: [4]u32,
     six_rest_volume: f32 = 0.0,
@@ -8347,7 +8347,7 @@ const SoftVertex = struct {
 
     // Collision state (Stage 2), reset at the start of each update.
     collision_normal: Vec = vec(0, 1, 0), // plane normal, out of the rigid shape
-    collision_dist: f32 = 0.0, // plane constant d (normal·x + d = 0), soft-local
+    collision_dist: f32 = 0.0, // plane constant d (normal*x + d = 0), soft-local
     colliding_body: i32 = -1, // index into the per-update colliding-body list (-1 = none)
     largest_penetration: f32 = -3.0e38, // deepest penetration found so far this update
     has_contact: bool = false,
@@ -8476,7 +8476,7 @@ pub const Manifold = struct {
 pub const ContactSettings = struct {
     friction: ?f32 = null, // null = sqrt(friction_a * friction_b)
     restitution: ?f32 = null, // null = @max(restitution_a, restitution_b)
-    /// Target relative contact velocity (v_a - v_b) along the surface, world space — a
+    /// Target relative contact velocity (v_a - v_b) along the surface, world space - a
     /// conveyor belt. `a` is the lower body index; flip the sign if the belt is body `b`.
     /// The friction constraint drives the surface toward this (capped by the friction cone).
     relative_linear_surface_velocity: Vec = vec_zero,
@@ -8490,7 +8490,7 @@ pub const ContactValidate = enum { accept, reject };
 /// Optional contact callbacks invoked during try step(). Set `world.contact_listener`.
 /// Every field is optional; `context` is an opaque pointer handed back to each callback
 /// (point it at your own event buffer). Callbacks must treat the world as read-only and
-/// should only RECORD events to act on after try step() returns — mutating bodies mid-step
+/// should only RECORD events to act on after try step() returns - mutating bodies mid-step
 /// is unsupported. `sub` identifies the sub-shape pair (mesh-triangle / compound-child,
 /// packed as in the warm-start cache); it is 0 for a simple convex-vs-convex pair.
 ///
@@ -8641,7 +8641,7 @@ pub const World = struct {
 
     /// Free everything the World owns: the init allocations plus the persistent
     /// lists and caches grown while stepping. After this the World is invalid.
-    /// Registered vehicles are NOT owned (see addVehicle) — only the list is
+    /// Registered vehicles are NOT owned (see addVehicle) - only the list is
     /// freed. Soft bodies have no per-body deinit, so only their list is freed.
     pub fn deinit(world: *World, gpa: std.mem.Allocator) void {
         world.scratch_arena.deinit();
@@ -8800,18 +8800,18 @@ pub const World = struct {
         return handle;
     }
 
-    /// Remove a body and free its slot — the inverse of addBody. Drops the broadphase proxy, takes
+    /// Remove a body and free its slot - the inverse of addBody. Drops the broadphase proxy, takes
     /// the body out of the active set, removes any joints (point / six-DOF / path) that reference
     /// it, purges its warm-start cache and contact-event bookkeeping, then frees the ECS slot
     /// (bumping the generation, so any stale BodyHandle now derefs to null). Returns false if `idx`
-    /// is not a live body (never added, or already removed — a cheap double-remove guard).
+    /// is not a live body (never added, or already removed - a cheap double-remove guard).
     ///
     /// Caller-owned preconditions (NOT auto-cleaned): the body must not be a vehicle's chassis or
-    /// referenced by a soft body — remove those first. After this returns, the BodyIndex is dead;
+    /// referenced by a soft body - remove those first. After this returns, the BodyIndex is dead;
     /// do not touch it again (a later addBody may recycle the slot for an unrelated body).
     ///
     /// LOUD WARNING: removing a body auto-removes the joints that reference it (otherwise the solver
-    /// would dereference a dead slot — silent corruption). That is a safety-first deviation from
+    /// would dereference a dead slot - silent corruption). That is a safety-first deviation from
     /// Jolt's "remove the constraints first" contract, and because the joint lists are compacted by
     /// swap-remove it INVALIDATES the `usize` indices returned by createSixDofJoint /
     /// createPathJoint for joints that were moved or removed. Re-query any joint indices you hold
@@ -9110,7 +9110,7 @@ pub const World = struct {
     }
 };
 
-/// `createBody` is exposed as a free function — `zimrphysics.createBody(world, def)` — so the
+/// `createBody` is exposed as a free function - `zimrphysics.createBody(world, def)` - so the
 /// 3D creation surface mirrors the 2D engine (`zimrphysics2d.createBody(world, def)`) and the
 /// query/constraint free functions below exactly. `world.createBody(def)` also works.
 pub const createBody = World.createBody;
@@ -9237,7 +9237,7 @@ pub fn createRevoluteJoint(
         .local_anchor_b = rotate(conjugate(body_b.rot), spec.anchor - body_b.com_pos),
         .local_axis_a = rotate(conjugate(body_a.rot), axis_world),
         .local_axis_b = rotate(conjugate(body_b.rot), axis_world),
-        // ★★★ JOLT'S CONVENTION, WORLD FRAME: B0^-1 A0 here, and the current angle is taken from
+        // *** JOLT'S CONVENTION, WORLD FRAME: B0^-1 A0 here, and the current angle is taken from
         // diff = B inv_initial A^-1 about the WORLD hinge axis. This used to store A0 B0^-1 and
         // measure conj(A) inv_initial B - a relative rotation in the PARENT's local frame - about
         // the world axis. The two agree only while the parent is unrotated, so every hinge limit
@@ -9298,7 +9298,7 @@ pub const SwingTwistSpec = struct {
     twist_axis: Vec, // world-space twist axis (a bone's long axis); need not be unit
     plane_axis: Vec, // world-space reference axis perpendicular to twist; re-orthonormalized
     swing_type: SwingType = .cone,
-    // ★ Each half-cone bounds the swing WITHIN the plane it names (Jolt's meaning):
+    // * Each half-cone bounds the swing WITHIN the plane it names (Jolt's meaning):
     // normal_half_cone limits rotation ABOUT `plane_axis`, plane_half_cone rotation ABOUT the
     // normal (twist x plane). Reading them as "about the named axis" swaps the two.
     normal_half_cone: f32 = 0.0, // half swing within the twist/normal plane (about plane_axis), radians
@@ -10309,12 +10309,12 @@ fn collideSphereBox(
         return null;
     }
 
-    // ★★ THE POINT ON THE BOX, WHICH FOR AN INTERIOR CENTRE IS NOT `clamped`.
+    // ** THE POINT ON THE BOX, WHICH FOR AN INTERIOR CENTRE IS NOT `clamped`.
     //
     // `clamp` leaves a point already inside the box exactly where it was, so `point_on_box`
-    // came out AT the sphere's own centre and the reported depth was a constant **−radius**
-    // however deep it had sunk. Invisible while only spheres used this path — a sphere fully
-    // inside a box is rare — and load-bearing the moment `collideCapsuleBox` began asking about
+    // came out AT the sphere's own centre and the reported depth was a constant **-radius**
+    // however deep it had sunk. Invisible while only spheres used this path - a sphere fully
+    // inside a box is rare - and load-bearing the moment `collideCapsuleBox` began asking about
     // segment points that routinely are. Projecting onto the nearest FACE makes the depth true.
     var surface: Vec = clamped;
     var local_normal: Vec = undefined;
@@ -10459,7 +10459,7 @@ fn collideBoxBox(
     const center_delta: Vec = pos_b - pos_a;
 
     // SAT minimum-translation-vector: among all candidate axes the contact
-    // normal is the one of LEAST penetration (smallest positive overlap) — see
+    // normal is the one of LEAST penetration (smallest positive overlap) - see
     // Jolt's EPAPenetrationDepth ("direction of least penetration"). Track the
     // MINIMUM overlap, not the maximum: a small box on a wide floor overlaps the
     // floor's horizontal extent by ~its width but the vertical axis by only the
@@ -10541,7 +10541,7 @@ fn collideBoxBox(
     // Supporting face on each box for the penetration `normal`. Jolt's
     // CollideConvexVsConvex builds the manifold from each shape's SUPPORTING
     // FACE relative to the penetration axis (GetSupportingFace +
-    // ManifoldBetweenTwoFaces) — NOT from the SAT's face/edge classification.
+    // ManifoldBetweenTwoFaces) - NOT from the SAT's face/edge classification.
     // For a box GetSupportingFace always returns a 4-vertex face (the axis most
     // parallel to the direction), so a near-flat box-box contact stays a
     // multi-point face manifold even when an edge cross-axis marginally won the
@@ -10579,7 +10579,7 @@ fn collideBoxBox(
 
     // --- genuine edge-edge fallback: one point, the closest points of the two
     // extreme edges. Only when NEITHER box presents a face perpendicular to the
-    // normal (cos(18°) ~= 0.95) — e.g. a box balanced corner/edge-first. A
+    // normal (cos(18 deg) ~= 0.95) - e.g. a box balanced corner/edge-first. A
     // near-flat resting contact has alignment ~1 and never takes this path. ---
     if (best_kind == .edge and @max(align_a, align_b) < 0.95) {
         const axis_index_a: u32 = best_index / 3;
@@ -11241,19 +11241,19 @@ fn faceManifold(
 
 /// Closest point between a segment and a solid box, in the box's local frame.
 ///
-/// ── ★★ TERNARY SEARCH, because the distance is CONVEX along the segment ──
+/// -- ** TERNARY SEARCH, because the distance is CONVEX along the segment --
 ///
 /// Point-to-box distance is a convex function of the point, so along a segment it is convex in
-/// the parameter `t` — and ternary search on a convex function is guaranteed to reach the global
+/// the parameter `t` - and ternary search on a convex function is guaranteed to reach the global
 /// minimum. Sixty halvings take the bracket below f32's resolution.
 ///
-/// ★ A FIRST VERSION USED ALTERNATING PROJECTION — clamp into the box, project back onto the
-/// segment, repeat — which converges for two convex sets in general and **stalls at a
+/// * A FIRST VERSION USED ALTERNATING PROJECTION - clamp into the box, project back onto the
+/// segment, repeat - which converges for two convex sets in general and **stalls at a
 /// non-optimal fixed point when the segment runs nearly tangent to a face**. Measured against
 /// brute force, every failure sat on a box EDGE, off by up to 2 cm. Convexity in one variable
 /// is a stronger property than convexity in two sets, and it is the one worth using here.
 ///
-/// ★ AND WHY THE SEGMENT AT ALL, not the two end-caps: a capsule standing against a wall
+/// * AND WHY THE SEGMENT AT ALL, not the two end-caps: a capsule standing against a wall
 /// touches on its SHAFT. A previous attempt tested only the end-caps, returned "no contact" for
 /// exactly that, and walked the character controller through walls.
 /// Where along a segment the closest approach to a box happens, and how far away it is.
@@ -11271,9 +11271,9 @@ fn segmentBoxClosest(
     he: Vec,
 ) SegmentBoxHit {
     const d: Vec = p1 - p0;
-    // ★★ SIGNED distance, negative inside. Using the UNSIGNED one made every interior point
+    // ** SIGNED distance, negative inside. Using the UNSIGNED one made every interior point
     // look identical at zero, so the search could not tell a graze from a deep embed and the
-    // code below had to fall back to a whole-capsule MTV — which reported 17 cm of penetration
+    // code below had to fall back to a whole-capsule MTV - which reported 17 cm of penetration
     // for a capsule barely touching. Signed distance is still convex, so the same search
     // handles both cases and the depth is measured AT the deepest point, which is what a
     // contact's depth means.
@@ -11314,14 +11314,14 @@ fn segmentBoxClosest(
 
 /// Capsule against box, without GJK or EPA.
 ///
-/// ── ★★★ WHY THIS PAIR EARNS ITS OWN ROUTINE ──
+/// -- *** WHY THIS PAIR EARNS ITS OWN ROUTINE --
 ///
 /// MuJoCo dispatches a closed-form function for every primitive pair and sends only ellipsoids
 /// and meshes to an iterative solver. We special-cased four pairs and sent the rest to GJK/EPA
-/// — including **capsule against box, which is every foot, shin and forearm contact a humanoid
+/// - including **capsule against box, which is every foot, shin and forearm contact a humanoid
 /// makes with the ground**.
 ///
-/// ★ AND EPA IS WRONG AT DEPTH. Measured, lowering a foot-sized capsule through a 12 m floor:
+/// * AND EPA IS WRONG AT DEPTH. Measured, lowering a foot-sized capsule through a 12 m floor:
 ///
 ///     lowest point -0.2670   EPA depth -0.2670    exact
 ///     lowest point -0.2870   EPA depth -8.5449    *** out through the SIDE of the floor
@@ -11329,7 +11329,7 @@ fn segmentBoxClosest(
 /// Past about 27 cm of overlap the nearest face is no longer the one EPA's polytope grew
 /// toward. A humanoid landing on its side reaches those depths and gets a sideways shove.
 ///
-/// ── ★★ THE TWO CASES, EACH EXACT ──
+/// -- ** THE TWO CASES, EACH EXACT --
 ///
 /// **Separated or shallow:** the closest point between the SEGMENT and the box gives the normal
 /// and the distance directly. No iteration over a polytope, and it sees shaft contacts.
@@ -11346,9 +11346,9 @@ fn collideCapsuleBox(
     flip: bool,
 ) ?Manifold {
     const box_rot_inv: Quat = conjugate(box_rot);
-    // ★★ THE CAPSULE'S AXIS IS LOCAL **Y**, which the `Shape` declaration states outright:
-    // "segment along local Y + radius". A first version assumed Z — MuJoCo's convention, and
-    // the natural guess when porting its `mjc_PlaneCapsule` — and every result was wrong by a
+    // ** THE CAPSULE'S AXIS IS LOCAL **Y**, which the `Shape` declaration states outright:
+    // "segment along local Y + radius". A first version assumed Z - MuJoCo's convention, and
+    // the natural guess when porting its `mjc_PlaneCapsule` - and every result was wrong by a
     // rotation. **The randomised harness reported 1678 existence mismatches on the first run,
     // before any of this reached the dispatch.**
     const axis_world: Vec = rotate(capsule_rot, vec(0, 1, 0));
@@ -11372,8 +11372,8 @@ fn collideCapsuleBox(
         local_normal = (on_seg_local - on_box_local) / splat(closest.dist);
         separation = closest.dist - radius;
     } else {
-        // ★ INSIDE at the deepest point: a box has three face normals, so the way out is
-        // whichever face that point is nearest — exact, and the step EPA has to discover.
+        // * INSIDE at the deepest point: a box has three face normals, so the way out is
+        // whichever face that point is nearest - exact, and the step EPA has to discover.
         on_seg_local = p0 + (p1 - p0) * splat(closest.t);
         var best_axis: usize = 0;
         var best_sign: f32 = 1;
@@ -11402,15 +11402,15 @@ fn collideCapsuleBox(
     }
 
     const normal_world: Vec = rotate(box_rot, local_normal); // box -> capsule
-    // ── ★★★ TWO POINTS WHEN THE CAPSULE LIES ALONG THE FACE ──
+    // -- *** TWO POINTS WHEN THE CAPSULE LIES ALONG THE FACE --
     //
     // A single contact under a capsule lets it PIVOT. Wired in with one point, this routine was
-    // exact to 89 microns against brute force and the humanoid still collapsed — torso 0.269 m
-    // against 1.282 — because a foot resting on one point is a foot on a knife edge.
+    // exact to 89 microns against brute force and the humanoid still collapsed - torso 0.269 m
+    // against 1.282 - because a foot resting on one point is a foot on a knife edge.
     //
     // MuJoCo's `mjc_PlaneCapsule` returns two for the same reason: it runs a sphere-plane test
     // at each end of the capsule. Here the second point is only added when the capsule is
-    // roughly PARALLEL to the contact face — if it is standing on one end, one point is the
+    // roughly PARALLEL to the contact face - if it is standing on one end, one point is the
     // honest answer and a second would be invented.
     var m: Manifold = .{ .normal = undefined, .count = 0, .points = undefined };
     const along_face: f32 = 1.0 - @abs(dot3(axis_local_unit, local_normal));
@@ -11465,15 +11465,15 @@ fn collideCapsuleBox(
 
 /// Closest approach between two segments, as parameters along each.
 ///
-/// ── ★★ THE PARALLEL CASE IS THE WHOLE DIFFICULTY ──
+/// -- ** THE PARALLEL CASE IS THE WHOLE DIFFICULTY --
 ///
-/// For skew segments the closest pair is a single point on each, found by solving a 2×2 system.
-/// When the axes are PARALLEL that system is singular — its determinant is zero — and there is
+/// For skew segments the closest pair is a single point on each, found by solving a 2x2 system.
+/// When the axes are PARALLEL that system is singular - its determinant is zero - and there is
 /// no unique answer: every point of the overlapping span is equally close.
 ///
-/// ★ THAT IS EXACTLY HOW TWO LEGS REST AGAINST EACH OTHER, and it is where GJK gives up. Two
+/// * THAT IS EXACTLY HOW TWO LEGS REST AGAINST EACH OTHER, and it is where GJK gives up. Two
 /// coincident capsule axes make a degenerate simplex, and `collideConvexGeneric` measured
-/// **9.8 cm of overlap and returned no contact at all** — the legs pass through one another.
+/// **9.8 cm of overlap and returned no contact at all** - the legs pass through one another.
 ///
 /// Handled by picking the MIDDLE of the overlapping span, which is stable frame to frame and
 /// is what a pair of parallel capsules physically touches along.
@@ -11493,7 +11493,7 @@ fn segmentSegmentClosest(p0: Vec, p1: Vec, q0: Vec, q1: Vec) SegmentPair {
     const e: f32 = dot3(d2, d2);
     const f: f32 = dot3(d2, r);
 
-    // Degenerate segments — a capsule with zero half-height is a sphere.
+    // Degenerate segments - a capsule with zero half-height is a sphere.
     if (a <= 1.0e-12 and e <= 1.0e-12) {
         return .{ .s = 0, .t = 0 };
     }
@@ -11511,9 +11511,9 @@ fn segmentSegmentClosest(p0: Vec, p1: Vec, q0: Vec, q1: Vec) SegmentPair {
     if (denom > 1.0e-12) {
         s = clamp((b * f - c * e) / denom, 0, 1);
     } else {
-        // ★ PARALLEL. Project each of the other segment's ends onto this one and take the
+        // * PARALLEL. Project each of the other segment's ends onto this one and take the
         // midpoint of the overlap, so the contact sits along the shared span rather than at an
-        // arbitrary end — which is what keeps it stable as the legs shift.
+        // arbitrary end - which is what keeps it stable as the legs shift.
         const t0: f32 = clamp(-c / a, 0, 1);
         const t1: f32 = clamp((dot3(d1, q1 - p0)) / a, 0, 1);
         s = (t0 + t1) * 0.5;
@@ -11529,11 +11529,11 @@ fn segmentSegmentClosest(p0: Vec, p1: Vec, q0: Vec, q1: Vec) SegmentPair {
     return .{ .s = s, .t = t };
 }
 
-/// Capsule against capsule, analytically — the second pair a humanoid makes constantly.
+/// Capsule against capsule, analytically - the second pair a humanoid makes constantly.
 ///
-/// ── ★ WHY THIS PAIR NEEDS ITS OWN ROUTINE ──
+/// -- * WHY THIS PAIR NEEDS ITS OWN ROUTINE --
 ///
-/// After capsule×ground, capsule×capsule is what a walking robot collides most: thigh against
+/// After capsulexground, capsulexcapsule is what a walking robot collides most: thigh against
 /// thigh, forearm against torso. It was reaching `collideConvexGeneric`, which **fails exactly
 /// where two legs press together**:
 ///
@@ -11545,7 +11545,7 @@ fn segmentSegmentClosest(p0: Vec, p1: Vec, q0: Vec, q1: Vec) SegmentPair {
 /// MuJoCo has `mjc_CapsuleCapsule` in its table for the same reason it has every other
 /// primitive pair: an iterative solver has no answer for a configuration with no unique one.
 ///
-/// ★ ONCE THE CLOSEST PAIR OF POINTS IS KNOWN THIS IS A SPHERE-SPHERE TEST, which is closed
+/// * ONCE THE CLOSEST PAIR OF POINTS IS KNOWN THIS IS A SPHERE-SPHERE TEST, which is closed
 /// form and cannot fail.
 fn collideCapsuleCapsule(
     half_a: f32,
@@ -11558,7 +11558,7 @@ fn collideCapsuleCapsule(
     rot_b: Quat,
     speculative_distance: f32,
 ) ?Manifold {
-    // ★★ A CAPSULE'S AXIS IS ITS LOCAL +Y, not +Z — `supportPoint` returns `vec(0, up, 0)`.
+    // ** A CAPSULE'S AXIS IS ITS LOCAL +Y, not +Z - `supportPoint` returns `vec(0, up, 0)`.
     //
     // Written as +Z first, this put both thighs lying ACROSS the body instead of down it, and
     // the two then overlapped by 12 cm in a pose where MuJoCo measures them 6 cm apart. The
@@ -11583,7 +11583,7 @@ fn collideCapsuleCapsule(
         return null;
     }
 
-    // ★ A FALLBACK DIRECTION FOR COINCIDENT AXES, where `delta` is zero and has no direction to
+    // * A FALLBACK DIRECTION FOR COINCIDENT AXES, where `delta` is zero and has no direction to
     // normalise. Any axis perpendicular to the capsules separates them; the cross product gives
     // one, and when even that degenerates the capsules are collinear and any perpendicular does.
     var normal: Vec = if (dist > 1.0e-6) delta / splat(dist) else blk: {
@@ -11728,11 +11728,11 @@ fn collide(
     }
 
     // --- everything else: generic convex (GJK/EPA) ---
-    // ★★ CAPSULE AGAINST BOX, BOTH ORDERS — the pair a walking robot makes constantly, and the
+    // ** CAPSULE AGAINST BOX, BOTH ORDERS - the pair a walking robot makes constantly, and the
     // one where EPA returns a depth of 8.5 m once the overlap passes 27 cm. See
     // `collideCapsuleBox`.
-    // ★★ CAPSULE AGAINST CAPSULE. Thigh against thigh, forearm against torso — the pair a
-    // humanoid makes most after capsule×ground, and the generic path returns NOTHING when the
+    // ** CAPSULE AGAINST CAPSULE. Thigh against thigh, forearm against torso - the pair a
+    // humanoid makes most after capsulexground, and the generic path returns NOTHING when the
     // two axes are coincident, which is exactly how legs rest together. See
     // `collideCapsuleCapsule`.
     if (shape_a.* == .capsule and shape_b.* == .capsule) {
@@ -11776,7 +11776,7 @@ fn collide(
         );
     }
 
-    // ★★ CAPSULE AGAINST BOX, BOTH ORDERS — the pair a walking robot makes constantly, and the
+    // ** CAPSULE AGAINST BOX, BOTH ORDERS - the pair a walking robot makes constantly, and the
     // one where GJK/EPA reports a depth of 8.5 m once the overlap passes about 27 cm. See
     // `collideCapsuleBox`, and the randomised test at the bottom of this file that checks it
     // against brute-force ground truth rather than against the path it replaces.
@@ -12385,7 +12385,7 @@ fn collideShapes(
 // --- box-box helpers ---
 
 /// Generic convex-convex via the support seam (GJK closest point + EPA depth).
-/// SKETCH — next pass. Runs entirely through supportCore(shape, dir) + convexRadius,
+/// SKETCH - next pass. Runs entirely through supportCore(shape, dir) + convexRadius,
 /// emitting the same Manifold (two points per contact) as the routines above.
 // -----------------------------------------------------------------------------
 // Generic convex-convex, ported from Jolt's ConvexShape::sCollideConvexVsConvex:
@@ -12395,7 +12395,7 @@ fn collideShapes(
 // is exact for round shapes); EPA handles deep core overlap. Output is the same
 // two-point Manifold; round shapes contact at a single point, which is correct.
 // Multi-point manifolds for FLAT-faced cores (hull/cylinder) come from clipping the
-// two supporting faces (the same machinery as collideBoxBox) — flagged, next pass.
+// two supporting faces (the same machinery as collideBoxBox) - flagged, next pass.
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
@@ -12461,7 +12461,7 @@ fn shapeCastCores(
 // =============================================================================
 // Warm-start cache: last frame's accumulated impulses keyed by body pair + feature.
 // Per manifold we cache the friction triple; per point the normal impulse. A plain
-// double-buffered hash map (no lock-free machinery — single threaded). SKETCHED.
+// double-buffered hash map (no lock-free machinery - single threaded). SKETCHED.
 // =============================================================================
 
 // =============================================================================
@@ -12681,8 +12681,8 @@ pub fn overlapShape(
 /// First contact of a swept convex `shape_a` against `shape_b` of ANY type, decomposing
 /// compounds / meshes / height fields / decorators / planes into convex leaves the same way
 /// collideShapes does (the cores cast alone only understands convex shapes). Returns the earliest
-/// hit with the contact normal pointing toward the cast shape A — active-edge fixed for mesh and
-/// height-field leaves, exactly like the collide path — plus the sub-shape discriminator on B.
+/// hit with the contact normal pointing toward the cast shape A - active-edge fixed for mesh and
+/// height-field leaves, exactly like the collide path - plus the sub-shape discriminator on B.
 /// `shape_a` must be convex. Used by scene shape casts and the character's swept move.
 const CastContact = struct {
     fraction: f32,
@@ -13068,7 +13068,7 @@ pub fn castShapeClosest(
             continue;
         }
         const other: *const Shape = world.shapes.get(body.shape);
-        // `shape` (the probe) must be convex; `other` may be any type — castConvexVsShape
+        // `shape` (the probe) must be convex; `other` may be any type - castConvexVsShape
         // decomposes compounds / meshes / height fields / planes into convex leaves.
         const hit: CastContact = try castConvexVsShape(
             &world.shapes,
@@ -13102,10 +13102,10 @@ pub fn castShapeClosest(
 /// (`sub` from a Contact / SubCollision / ShapeCastHit / CharacterContact). For a mesh or height
 /// field with per-triangle materials, the triangle index is the low 16 bits of `sub`; otherwise
 /// (or out of range, or a single-surface shape) the body's material is returned. The id is opaque
-/// to the engine — map it to friction / restitution / footstep sounds in your own table.
+/// to the engine - map it to friction / restitution / footstep sounds in your own table.
 pub fn materialAt(world: *const World, body_idx: BodyIndex, sub: u32) u16 {
     const body: *const Body = &world.bodies.data[body_idx];
-    // Peel decorators without needing a transform — only the leaf shape type/material matters.
+    // Peel decorators without needing a transform - only the leaf shape type/material matters.
     var s: *const Shape = world.shapes.get(body.shape);
     while (true) {
         switch (s.*) {
@@ -13138,7 +13138,7 @@ pub fn materialAt(world: *const World, body_idx: BodyIndex, sub: u32) u16 {
 // should be left alone, the open ones are bugs waiting for a symptom.
 //
 // JUSTIFIED (our engine lacks the underlying feature; leave them):
-//   * single collision normal — no separate geometry "surface normal", so back-facing /
+//   * single collision normal - no separate geometry "surface normal", so back-facing /
 //     active-edge / enhanced-internal-edge handling is absent;
 //   * the swept padding correction uses Jolt's simple fraction pull-back instead of the
 //     GJK face-inflation path (sCorrectFractionForCharacterPadding). Note Jolt itself
@@ -13150,13 +13150,13 @@ pub fn materialAt(world: *const World, body_idx: BodyIndex, sub: u32) u16 {
 // The contact listener DOES support the simulation-affecting hooks (validate,
 // added/settings, solve, adjust-body-velocity) plus added/removed events via a key diff.
 //
-// OPEN — known-unjustified, fix when a symptom appears:
+// OPEN - known-unjustified, fix when a symptom appears:
 //   * cvGetContactsAtPosition takes no movement direction, so Jolt's
 //     mActiveEdgeMovementDirection never reaches active-edge detection. We HAVE that
 //     machinery, so this is a real gap rather than an absent feature.
 //   * the cast collector never calls cvValidateContact; Jolt validates cast hits as well
 //     as collide hits. Ours only consults the ignored list.
-//   * Jolt's cast filter is `distance + normal·displacement < -collision_tolerance`. Our
+//   * Jolt's cast filter is `distance + normal*displacement < -collision_tolerance`. Our
 //     cast reports no penetration depth, so distance is 0 and we apply the reduced form.
 //
 // Regression coverage for the move loop: src/tests/character_walk_test.zig.
@@ -13168,7 +13168,7 @@ pub fn materialAt(world: *const World, body_idx: BodyIndex, sub: u32) u16 {
 pub const GroundState = enum {
     on_ground, // supported by a surface no steeper than max_slope (incl. wedged between steep slopes)
     on_steep_ground, // touching ground-facing geometry too steep to stand on (slides off)
-    not_supported, // touching only walls/ceilings — nothing to stand on
+    not_supported, // touching only walls/ceilings - nothing to stand on
     in_air, // no contacts at all
 };
 
@@ -13251,7 +13251,7 @@ pub const ExtendedUpdateSettings = struct {
     walk_stairs_step_up: Vec = vec(0.0, 0.4, 0.0),
     walk_stairs_min_step_forward: f32 = 0.02,
     walk_stairs_step_forward_test: f32 = 0.15,
-    walk_stairs_cos_angle_forward_contact: f32 = 0.258819, // cos(75°)
+    walk_stairs_cos_angle_forward_contact: f32 = 0.258819, // cos(75 deg)
     walk_stairs_step_down_extra: Vec = vec_zero,
 };
 
@@ -13266,7 +13266,7 @@ pub const CharacterVirtual = struct {
     // local-space plane below which contacts can support
     supporting_volume_normal: Vec = vec(0.0, 1.0, 0.0),
     supporting_volume_constant: f32 = -1.0e10, // default: permissive (everything supports)
-    max_slope_cos: f32 = 0.642787, // cos(50°): steepest slope you can stand on
+    max_slope_cos: f32 = 0.642787, // cos(50 deg): steepest slope you can stand on
     shape_offset: Vec = vec_zero, // offset of the shape from `position`
     predictive_distance: f32 = 0.1, // how far to scan past the shape for predictive contacts
     character_padding: f32 = 0.02, // skin kept between the shape and geometry for robust sweeping
@@ -13276,7 +13276,7 @@ pub const CharacterVirtual = struct {
     max_collision_iterations: u32 = 5, // outer collide/solve passes per update
     max_constraint_iterations: u32 = 15, // inner velocity-solve iterations
     max_num_hits: u32 = 256, // contact-collection cap (hit reduction past this)
-    hit_reduction_cos_max_angle: f32 = 0.999, // merge same-body contacts within ~2.5°; -1 disables
+    hit_reduction_cos_max_angle: f32 = 0.999, // merge same-body contacts within ~2.5 deg; -1 disables
     mass: f32 = 70.0, // used to push bodies and to load the ground
     max_strength: f32 = 100.0, // max push force (N); 0 disables pushing
     filter: QueryFilter = .{}, // which bodies block the character
@@ -13319,7 +13319,7 @@ fn cvNorm(v: Vec, fallback: Vec) Vec {
     return v / splat(len);
 }
 
-/// A constraint plane derived from a contact: signedDistance(displacement) = n·d + constant.
+/// A constraint plane derived from a contact: signedDistance(displacement) = n*d + constant.
 const CharConstraint = struct {
     contact: usize, // index into the contacts list this constraint was built from
     linear_velocity: Vec, // contact (+penetration recovery) velocity
@@ -13478,7 +13478,7 @@ fn cvGetContactsAtPosition(
             var i: u8 = 0;
             while (i < m.count) : (i += 1) {
                 const point: Vec = m.points[i].point_on_b;
-                // separation = (pob - poa)·normal: >0 predictive gap, <0 penetrating.
+                // separation = (pob - poa)*normal: >0 predictive gap, <0 penetrating.
                 const separation: f32 = dot3(m.points[i].point_on_b - m.points[i].point_on_a, m.normal);
                 // manifold normal is char -> world, so the contact normal toward the character is -normal.
                 const contact_normal: Vec = cvNorm(-m.normal, char.up);
@@ -13974,7 +13974,7 @@ fn cvGetFirstContactForSweep(
         ) orelse continue;
         // Ignore the specific (body, sub-shape) contacts that conflicting-contact pruning or the
         // validate callback removed (body+sub, matching Jolt). If the earliest hit on a body is
-        // an ignored sub we skip the whole body rather than probing the next sub — slightly
+        // an ignored sub we skip the whole body rather than probing the next sub - slightly
         // coarser than Jolt's per-sub collector, documented.
         var skip: bool = false;
         for (ignored) |k| {
@@ -13993,11 +13993,11 @@ fn cvGetFirstContactForSweep(
             continue;
         }
         // (b) "Ignore penetrations that we're moving away from": Jolt tests
-        //     `penetration_axis · displacement > 0`, and its contact normal is
+        //     `penetration_axis * displacement > 0`, and its contact normal is
         //     `-penetration_axis`, so the equivalent test on the normal is
-        //     `normal · displacement < 0`. Jolt then also requires the approach
+        //     `normal * displacement < 0`. Jolt then also requires the approach
         //     to exceed the collision tolerance
-        //     (`distance + normal·displacement < -collision_tolerance`); our cast
+        //     (`distance + normal*displacement < -collision_tolerance`); our cast
         //     does not report a penetration depth, so `distance` is 0 here and
         //     that check reduces to the tolerance-strengthened form below.
         //     Perpendicular contact cannot block, so this must be strict.
@@ -14105,7 +14105,7 @@ fn cvMoveShape(
 }
 /// Jolt UpdateSupportingContact: classify what we are standing on from the active contacts.
 /// Marks newly-touching contacts, applies the supporting-volume cull, averages the ground
-/// normal/velocity, and decides OnGround / OnSteepGround / NotSupported / InAir — including the
+/// normal/velocity, and decides OnGround / OnSteepGround / NotSupported / InAir - including the
 /// wedged-between-steep-slopes case (a -up constraint solve that can't move counts as supported).
 fn cvUpdateSupportingContact(
     world: *World,
@@ -14682,7 +14682,7 @@ pub fn characterExtendedUpdate(
 
 // =============================================================================
 // Character (simple): a real rigid body in the world (usually a capsule) plus ground-state
-// detection on top. Unlike CharacterVirtual it is a normal body — the solver does the movement and
+// detection on top. Unlike CharacterVirtual it is a normal body - the solver does the movement and
 // collision response, and you drive it by setting its velocity. After each World.step, call
 // characterPostSimulation to refresh the ground state from the surrounding contacts. (Jolt's
 // Character / CharacterBase.) Deferred follow-up: SetShape with penetration check, and using the
@@ -14697,7 +14697,7 @@ pub const Character = struct {
 
     // Tuning.
     up: Vec = vec(0.0, 1.0, 0.0), // the character's up direction
-    max_slope_cos: f32 = 0.642787, // cos(50°): steepest slope you can stand on (<= -2 accepts any)
+    max_slope_cos: f32 = 0.642787, // cos(50 deg): steepest slope you can stand on (<= -2 accepts any)
     // Supporting volume plane in character-local space (Jolt's mSupportingVolume): a ground contact
     // whose position is on the +normal side of this plane is "not supported". The default plane
     // (up, very negative distance) supports everything.
@@ -14841,7 +14841,7 @@ pub fn characterSetLinearVelocity(
     try world.setLinearVelocity(gpa, handleOf(world, char.body), v);
 }
 
-/// Add an impulse to the character body (Jolt's Character::AddImpulse): Δv = impulse · invMass.
+/// Add an impulse to the character body (Jolt's Character::AddImpulse): dv = impulse * invMass.
 pub fn characterAddImpulse(
     world: *World,
     gpa: std.mem.Allocator,
@@ -14883,10 +14883,10 @@ fn hingeCurrentAngle(world: *const World, h: *const Constraint) f32 {
 }
 
 /// Gear joint (Jolt's GearConstraint): meshes two bodies' rotations so that
-/// w_a·axis_a + ratio·w_b·axis_b = 0. `local_axis_a`/`local_axis_b` are the rotation axes in each
+/// w_a*axis_a + ratio*w_b*axis_b = 0. `local_axis_a`/`local_axis_b` are the rotation axes in each
 /// body's local frame; `ratio` = teeth_b/teeth_a (use a negative ratio to counter-rotate).
 /// `hinge_ref_a`/`hinge_ref_b` are the indices (in `world.constraints`) of the two hinge joints
-/// the gears turn about — used only for slow position-drift correction; pass -1 for both to get
+/// the gears turn about - used only for slow position-drift correction; pass -1 for both to get
 /// pure velocity coupling (Jolt's behaviour when the gear constraints aren't set).
 //
 // FIXED (2026-06): the velocity part was missing the `ratio` factor when applying the impulse to
@@ -14929,7 +14929,7 @@ pub fn createGearJoint(
 
 /// Rack-and-pinion joint (Jolt's RackAndPinionConstraint): couples body `a`'s rotation about
 /// `local_hinge_axis` to body `b`'s translation along `local_slider_axis`, so the pinion turns as
-/// the rack slides. `ratio` = 2π·teeth_rack / (rack_length·teeth_pinion). `pinion_hinge` and
+/// the rack slides. `ratio` = 2 pi*teeth_rack / (rack_length*teeth_pinion). `pinion_hinge` and
 /// `rack_slider` are the indices (in `world.constraints`) of the hinge and slider this couples,
 /// used for slow position-drift correction; pass -1 for both to get pure velocity coupling.
 pub fn createRackAndPinionJoint(
@@ -14960,8 +14960,8 @@ pub fn createRackAndPinionJoint(
 
 /// Pulley joint (Jolt's PulleyConstraint): a rope of fixed total length running from
 /// `world_anchor_a` on body `a`, over the fixed world point `fixed_a`, to `fixed_b`, to
-/// `world_anchor_b` on body `b`. The constrained length is |anchor_a − fixed_a| +
-/// ratio·|anchor_b − fixed_b|, kept within [min_length, max_length]; pass a negative min/max to
+/// `world_anchor_b` on body `b`. The constrained length is |anchor_a - fixed_a| +
+/// ratio*|anchor_b - fixed_b|, kept within [min_length, max_length]; pass a negative min/max to
 /// default it to the length at creation (Jolt's behaviour). With min == max the rope is rigid.
 pub fn createPulleyJoint(
     world: *World,
@@ -15449,9 +15449,9 @@ fn solveSixDofPosition(world: *World, c: *SixDofConstraint, baumgarte: f32) void
 }
 
 /// Add a fully-configurable 6-DOF joint between two bodies. `pivot` is the common world-space
-/// joint position; `axis_x`/`axis_y` define the constraint frame (world space; z = x×y). The six
+/// joint position; `axis_x`/`axis_y` define the constraint frame (world space; z = xxy). The six
 /// limit pairs are translation X/Y/Z (metres) then rotation X/Y/Z (radians); for each axis,
-/// min > max = fixed, a full range (±FLT_MAX / ±pi) = free, otherwise limited. Returns the index
+/// min > max = fixed, a full range (+/-FLT_MAX / +/-pi) = free, otherwise limited. Returns the index
 /// of the new joint in world.six_dof (for later motor/target updates).
 pub fn createSixDofJoint(
     world: *World,
@@ -15896,11 +15896,11 @@ fn prepareConstraint(
             }
             if (c.axis_active) {
                 // Jolt's DistanceConstraint measures BOTH moment arms from the
-                // far anchor p2: body A uses r1+u = (p1−x1)+(p2−p1) = p2−x1, not
-                // p1−x1. With off-COM anchors on a stretched link (e.g. a rope at
+                // far anchor p2: body A uses r1+u = (p1-x1)+(p2-p1) = p2-x1, not
+                // p1-x1. With off-COM anchors on a stretched link (e.g. a rope at
                 // its max limit) the bare-r1 arm gives the wrong effective mass /
                 // torque coupling and the constraint fails to hold under load.
-                // `delta` here is exactly u = p2 − p1.
+                // `delta` here is exactly u = p2 - p1.
                 c.axis_part.prepare(ma, inv_i_a, r1 + delta, mb, inv_i_b, r2, c.axis, 0.0);
                 if (c.axis_part.isActive()) {
                     c.axis_part.warmStart(ma, mb, c.axis, warm_ratio);
@@ -16299,7 +16299,7 @@ fn solveConstraintPosition(world: *World, c: *Constraint, baumgarte: f32) void {
                     if (gated) {
                         const axis: Vec = delta * splat(1.0 / dist);
                         // Re-derive the constraint properties (moment arm r1+u,
-                        // effective mass) from the CURRENT pose — Jolt calls
+                        // effective mass) from the CURRENT pose - Jolt calls
                         // CalculateConstraintProperties inside SolvePositionConstraint.
                         // Without it the off-COM moment arm goes stale across the
                         // position sweep, and an off-centre anchor under a heavy
@@ -16427,7 +16427,7 @@ fn solveConstraintPosition(world: *World, c: *Constraint, baumgarte: f32) void {
         },
         .gear => {
             // Slow drift correction from the two meshed hinges' current angles (Jolt); skipped
-            // (velocity coupling only) when the hinge references aren't set — Jolt's null path.
+            // (velocity coupling only) when the hinge references aren't set - Jolt's null path.
             if (c.gear_ref_a >= 0 and c.gear_ref_b >= 0 and c.gear_part.isActive()) {
                 const g1: *const Constraint = &world.constraints.items[@intCast(c.gear_ref_a)];
                 const g2: *const Constraint = &world.constraints.items[@intCast(c.gear_ref_b)];
@@ -16678,8 +16678,8 @@ fn setupContactFromManifold(
 // body), and CreateConstraints (auto-generating constraints from a mesh).
 // =============================================================================
 
-/// The signed dihedral measure used by the bend constraint: `sign · acos(n1·n2 / |n1||n2|)` where n1,
-/// n2 are the two triangle normals about the shared edge x0→x1. Used to seed each constraint's rest
+/// The signed dihedral measure used by the bend constraint: `sign * acos(n1*n2 / |n1||n2|)` where n1,
+/// n2 are the two triangle normals about the shared edge x0->x1. Used to seed each constraint's rest
 /// angle so the rest configuration is a no-op.
 fn softBodyBendAngle(
     x0: Vec,
@@ -17168,7 +17168,7 @@ fn softBodyDetermineCollidingShapes(
 }
 
 /// The nearest collision plane of a rigid leaf to a soft-body vertex, in soft-local space. `normal`
-/// points out of the shape; `dist` is the plane constant (normal·x + dist = 0); `penetration` is how
+/// points out of the shape; `dist` is the plane constant (normal*x + dist = 0); `penetration` is how
 /// far the vertex is inside (positive) or outside (negative). null for unsupported shapes.
 const VertexPlane = struct { normal: Vec, dist: f32, penetration: f32 };
 

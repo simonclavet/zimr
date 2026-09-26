@@ -1,13 +1,13 @@
-//! directional_billboard — raylib's `models_directional_billboard`.
+//! directional_billboard - raylib's `models_directional_billboard`.
 //!
 //! A character sprite that (a) always faces the camera as a flat billboard
 //! and (b) picks its frame from a sprite ATLAS by the camera's angle around
-//! it — an 8-direction sprite, like the enemies in Doom: orbit the scene
+//! it - an 8-direction sprite, like the enemies in Doom: orbit the scene
 //! and you see the robot's front, side, back, etc. A second axis of the
 //! atlas is a 4-frame walk cycle advancing over time.
 //!
 //! raylib loads `skillbot.png`; standalones can't fetch external files, so
-//! the atlas here is generated procedurally (8 rows × 4 columns of a little
+//! the atlas here is generated procedurally (8 rows x 4 columns of a little
 //! directional robot). The engine addition this drove is a source-rect +
 //! anchor billboard (`z.drawBillboardRec`, raylib's `DrawBillboardPro`), so
 //! a billboard can frame one atlas cell and plant its feet on the ground.
@@ -67,7 +67,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
-/// Build the 4×8 procedural sprite atlas: for each (direction, frame) cell,
+/// Build the 4x8 procedural sprite atlas: for each (direction, frame) cell,
 /// draw a simple robot whose body orientation and a walk-bob depend on the cell.
 fn makeAtlas(gpa: Allocator) !z.Image {
     const w: u32 = anims * cell;

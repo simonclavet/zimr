@@ -1,21 +1,21 @@
-//! ssao_blur_fs — separable BILATERAL blur for the SSAO buffer.
+//! ssao_blur_fs - separable BILATERAL blur for the SSAO buffer.
 //!
 //! Seven taps at stride 2 along one axis, weighted by how much each neighbour looks like it
 //! belongs to the same surface:
 //!
 //!     w = exp(-dist2 * falloff) * pow(max(dot(n, n_centre), 0), normal_power)
 //!
-//! ★ THE TWO WEIGHTS DO DIFFERENT JOBS. The POSITION term rejects a neighbour that is simply
-//! far away in world space — the ground behind a character, seen right next to it on screen.
-//! The NORMAL term rejects one that is close but facing elsewhere — the two sides of a sharp
+//! * THE TWO WEIGHTS DO DIFFERENT JOBS. The POSITION term rejects a neighbour that is simply
+//! far away in world space - the ground behind a character, seen right next to it on screen.
+//! The NORMAL term rejects one that is close but facing elsewhere - the two sides of a sharp
 //! crease, which are adjacent in space and must not average together. Either alone leaves a
 //! visible class of bleed.
 //!
-//! ★ EVERY SAMPLE USES `...Level(uv, 0)`. Implicit-LOD sampling needs screen-space derivatives
+//! * EVERY SAMPLE USES `...Level(uv, 0)`. Implicit-LOD sampling needs screen-space derivatives
 //! and is illegal under non-uniform control flow; the tap loop is unrolled with `inline for`
 //! and samples explicitly, exactly as `ssao_fs` does. See `zimrlint`'s `sampler-in-branch`.
 //!
-//! ★ COVERAGE IS A MULTIPLIER, NOT A BRANCH. A tap that landed on background contributes zero
+//! * COVERAGE IS A MULTIPLIER, NOT A BRANCH. A tap that landed on background contributes zero
 //! weight rather than being skipped, keeping the shader branch-free.
 
 const zm = @import("zm");

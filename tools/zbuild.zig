@@ -1,7 +1,7 @@
-//! zbuild — a build-log distiller for `zig build`.
+//! zbuild - a build-log distiller for `zig build`.
 //!
 //! `zig build`'s failure summary is a DAG of "transitive failure" nodes, and
-//! the ONE line that actually matters — the first `path:line:col: error:` — is
+//! the ONE line that actually matters - the first `path:line:col: error:` - is
 //! buried mid-log, often re-printed, and sits next to unrelated tool nodes
 //! (c2js, spv2wgsl) that also say "transitive failure". Reading it by eye or by
 //! ad-hoc `grep` is how a three-line fix turns into a long hunt (see the
@@ -10,14 +10,14 @@
 //! This tool reads a captured build log and prints ONLY the roots: the real
 //! compile-error and lint blocks (each error line + its source snippet +
 //! attached notes), de-duplicated, with the DAG tree / reused-dependency /
-//! command-echo noise suppressed. "transitive failure" is NEVER a root — it's
-//! always a downstream node — so those lines are dropped on sight.
+//! command-echo noise suppressed. "transitive failure" is NEVER a root - it's
+//! always a downstream node - so those lines are dropped on sight.
 //!
 //! Usage (pairs with the existing capture-to-log pattern):
 //!     timeout 175 zig build <step> -Dmode=release -Dautofix=false -j1 >/tmp/b.log 2>&1
 //!     zig run tools/zbuild.zig -- /tmp/b.log
 //! Pass `-` (or no path) to read stdin instead:
-//!     … 2>&1 | zig run tools/zbuild.zig -- -
+//!     ... 2>&1 | zig run tools/zbuild.zig -- -
 //!
 //! The distiller (`distill`) is a pure function over the log text so it can be
 //! unit-tested (see the tests at the bottom) without running a build.
@@ -38,20 +38,20 @@ fn trimmed(s: []const u8) []const u8 {
 }
 
 const Kind = enum {
-    err, // path:line:col: error:  → a real compile error (root)
-    note, // path:line:col: note:   → context for the error above it
-    lint, // path:line:col: [rule]  → a lint violation (root)
+    err, // path:line:col: error:  -> a real compile error (root)
+    note, // path:line:col: note:   -> context for the error above it
+    lint, // path:line:col: [rule]  -> a lint violation (root)
     snippet, // indented source / caret under a diagnostic
-    dag, // transitive-failure tree, reused deps, command echoes → noise
-    summary, // "Build Summary: …"     → kept as a footer
+    dag, // transitive-failure tree, reused deps, command echoes -> noise
+    summary, // "Build Summary: ..."     -> kept as a footer
     blank,
-    meta_err, // bare "error: …" that isn't the boilerplate command-failed line
+    meta_err, // bare "error: ..." that isn't the boilerplate command-failed line
     other,
 };
 
 /// Classify a single log line. Order matters: noise patterns are tested before
 /// the diagnostic patterns so a DAG line that happens to contain "error" (e.g.
-/// "compile exe X … 1 errors") is dropped, not surfaced.
+/// "compile exe X ... 1 errors") is dropped, not surfaced.
 fn classify(line: []const u8) Kind {
     const t: []const u8 = trimmed(line);
     if (t.len == 0) {
@@ -71,7 +71,7 @@ fn classify(line: []const u8) Kind {
         return .dag;
     }
     // A compiler / lint invocation echo: a very long line that isn't a
-    // diagnostic (the `zig build-exe … -M… -I…` or `lint_zimr ./a ./b …` blob).
+    // diagnostic (the `zig build-exe ... -M... -I...` or `lint_zimr ./a ./b ...` blob).
     if (line.len > 280 and !contains(line, ": error:") and !contains(line, ": note:")) {
         return .dag;
     }
@@ -94,14 +94,14 @@ fn classify(line: []const u8) Kind {
     }
     if (std.mem.startsWith(u8, t, "error:")) {
         // Drop the boilerplate that precedes a command echo; keep genuine short
-        // meta errors (FileNotFound, OutOfMemory, unable to spawn, …).
+        // meta errors (FileNotFound, OutOfMemory, unable to spawn, ...).
         if (contains(line, "the following") or contains(line, "command failed")) {
             return .dag;
         }
         return .meta_err;
     }
 
-    // Indented, not otherwise classified → a source snippet or caret. Only
+    // Indented, not otherwise classified -> a source snippet or caret. Only
     // meaningful when it sits under a surfaced diagnostic (handled by caller).
     if (line[0] == ' ' or line[0] == '\t') {
         return .snippet;
@@ -218,7 +218,7 @@ pub fn distill(gpa: Allocator, input: []const u8, out: *std.ArrayList(u8)) !void
         try out.appendSlice(gpa, bar_end);
         try out.appendSlice(gpa, body.items);
     } else if (saw_failure) {
-        // Nothing structured recognized, but the build failed — show a tail so
+        // Nothing structured recognized, but the build failed - show a tail so
         // an unknown failure mode still yields something actionable.
         try out.appendSlice(gpa, bar);
         try out.appendSlice(gpa, "zbuild: no structured error recognized \u{2014} tail");
@@ -284,7 +284,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 // ============================================================================
-// Tests — feed realistic captured logs through `distill`, assert the root
+// Tests - feed realistic captured logs through `distill`, assert the root
 // surfaces and the cascade is gone.
 // ============================================================================
 const testing = std.testing;

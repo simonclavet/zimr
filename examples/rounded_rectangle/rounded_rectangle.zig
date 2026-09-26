@@ -1,9 +1,9 @@
-//! rounded_rectangle — a rounded rectangle whose roundness, size, outline thickness and
+//! rounded_rectangle - a rounded rectangle whose roundness, size, outline thickness and
 //! corner-segment count all animate, cycling three render modes: filled rounded rect, rounded
 //! outline, and a plain rectangle for contrast. Tap advances the mode (auto-advances too); a
 //! panel reads back roundness / segments / MANUAL-AUTO. Ported from raylib
 //! examples/shapes/shapes_rounded_rectangle_drawing.c, whose raygui sliders drove the same
-//! parameters — animated here so the sample drives itself on a phone.
+//! parameters - animated here so the sample drives itself on a phone.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -57,7 +57,7 @@ fn update(f: *z.Frame, s: *State) void {
     const rx: f32 = (w - rw) * 0.5;
     const ry: f32 = (h - rh) * 0.5;
 
-    // Roundness sweeps 0→1 (sharp corners → full pill); segments and thickness animate too.
+    // Roundness sweeps 0->1 (sharp corners -> full pill); segments and thickness animate too.
     const roundness: f32 = 0.5 + 0.5 * @sin(s.time * 0.5);
     const segments: i32 = @trunc(4.0 + 12.0 * (0.5 + 0.5 * @sin(s.time * 0.8)));
     const thick: f32 = 2.0 + 6.0 * (0.5 + 0.5 * @sin(s.time * 1.1));
