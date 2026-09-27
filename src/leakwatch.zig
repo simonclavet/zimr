@@ -47,14 +47,24 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
+const expect = std.testing.expect;
 
 /// One live allocation, and the scope that made it.
-const Entry = struct {
+pub const Entry = struct {
     len: usize,
     label: []const u8,
     /// Monotonic counter, so a report can be read in allocation order - which usually
     /// reconstructs the call sequence better than sorting by address.
     ordinal: u64,
+    /// The OUTERMOST scope when it was made - the phase a host pushed first ("init",
+    /// "frame", "deinit") - so a report reads "frame: glyph_cache", not just the leaf.
+    phase: []const u8 = "",
+    /// Which counter it came through ("example" / "engine"), when a `CountingAllocator`
+    /// sits on top and says so (`side_hint`). Empty otherwise.
+    side: []const u8 = "",
+    /// Non-zero when this allocation was PROBABLY a container growing: the very next call
+    /// freed an older block with the same label, of this many bytes (see `free`).
+    grew_from: usize = 0,
 };
 
 pub const LeakWatch = struct {
@@ -67,6 +77,14 @@ pub const LeakWatch = struct {
     /// go from "3324 bytes leaked" to "this call made it". Zero disables.
     watch_size: usize = 0,
     watch_hits: u32 = 0,
+    /// `reportSinceMark` lists only allocations made at or after this ordinal (see `mark`).
+    mark_ordinal: u64 = 0,
+    /// Set by a `CountingAllocator` layered on top just before it forwards a call, so each
+    /// entry records which counter (example / engine) it came through.
+    side_hint: []const u8 = "",
+    /// The address the PREVIOUS vtable call allocated, if that call was an `alloc` - zero
+    /// otherwise. It is what lets `free` spot the grow-by-copy shape (see `free`).
+    previous_call_allocated: usize = 0,
 
     /// `bookkeeping` holds the tracking tables.
     ///
@@ -160,6 +178,60 @@ pub const LeakWatch = struct {
         return self.live.count();
     }
 
+    /// Everything allocated from now on is what `reportSinceMark` will list. The smoke gate
+    /// marks just before an example's SECOND lifecycle, so the report holds only what that
+    /// lifecycle made and did not give back.
+    pub fn mark(self: *LeakWatch) void {
+        self.mark_ordinal = self.next_ordinal;
+    }
+
+    /// Print every allocation made since `mark` that is still live, in allocation order,
+    /// with its side, phase, scope and - when it looks like one - the container growth that
+    /// made it. Returns how many there were.
+    pub fn reportSinceMark(self: *const LeakWatch, comptime who: []const u8) usize {
+        var ordered: std.ArrayListUnmanaged(Entry) = .empty;
+        defer ordered.deinit(self.bookkeeping);
+        var it: @TypeOf(self.live).ValueIterator = self.live.valueIterator();
+        while (it.next()) |entry| {
+            if (entry.ordinal < self.mark_ordinal) {
+                continue;
+            }
+            ordered.append(self.bookkeeping, entry.*) catch break;
+        }
+        if (ordered.items.len == 0) {
+            return 0;
+        }
+        std.mem.sort(Entry, ordered.items, {}, struct {
+            fn before(_: void, a: Entry, b: Entry) bool {
+                return a.ordinal < b.ordinal;
+            }
+        }.before);
+        std.log.warn(who ++ ": {d} allocation(s) made since the mark are still live:", .{ordered.items.len});
+        for (ordered.items) |entry| {
+            const side: []const u8 = if (entry.side.len == 0) "?" else entry.side;
+            const phase: []const u8 = if (entry.phase.len == 0) "(no phase)" else entry.phase;
+            const scope: []const u8 = if (entry.label.len == 0) "(no scope pushed)" else entry.label;
+            if (entry.grew_from != 0) {
+                std.log.warn(
+                    who ++ ":   {s} +{d} bytes  {s}: {s}  - replaced a {d}-byte block of the same scope: " ++
+                        "probably a container that GREW (something appends, nothing clears), not a missed free",
+                    .{ side, entry.len, phase, scope, entry.grew_from },
+                );
+            } else {
+                std.log.warn(who ++ ":   {s} +{d} bytes  {s}: {s}", .{ side, entry.len, phase, scope });
+            }
+        }
+        return ordered.items.len;
+    }
+
+    /// The outermost scope - the phase a host pushed first.
+    fn currentPhase(self: *const LeakWatch) []const u8 {
+        if (self.scopes.items.len == 0) {
+            return "";
+        }
+        return self.scopes.items[0];
+    }
+
     fn currentLabel(self: *const LeakWatch) []const u8 {
         // The innermost scope. A deeper join would need to allocate, and an allocator that
         // allocates to describe an allocation is a bad idea in a leak tracker.
@@ -190,9 +262,12 @@ pub const LeakWatch = struct {
             .len = len,
             .label = self.currentLabel(),
             .ordinal = self.next_ordinal,
+            .phase = self.currentPhase(),
+            .side = self.side_hint,
             // lint:off catch-suppression: diagnostics must never abort the run they diagnose
         }) catch {};
         self.next_ordinal += 1;
+        self.previous_call_allocated = @intFromPtr(out);
         return out;
     }
 
@@ -204,6 +279,7 @@ pub const LeakWatch = struct {
         ra: usize,
     ) bool {
         const self: *LeakWatch = @ptrCast(@alignCast(ctx));
+        self.previous_call_allocated = 0;
         if (!self.child.rawResize(buf, alignment, new_len, ra)) {
             return false;
         }
@@ -224,6 +300,7 @@ pub const LeakWatch = struct {
         ra: usize,
     ) ?[*]u8 {
         const self: *LeakWatch = @ptrCast(@alignCast(ctx));
+        self.previous_call_allocated = 0;
         const out: [*]u8 = self.child.rawRemap(buf, alignment, new_len, ra) orelse return null;
         // * A REMAP IS A FREE AND AN ALLOC AT ONCE, and forgetting the free half makes the
         // tracker report a leak for memory that merely moved. The label is carried across here
@@ -252,7 +329,26 @@ pub const LeakWatch = struct {
         ra: usize,
     ) void {
         const self: *LeakWatch = @ptrCast(@alignCast(ctx));
-        _ = self.live.remove(@intFromPtr(buf.ptr));
+        const freed: ?Entry = if (self.live.fetchRemove(@intFromPtr(buf.ptr))) |kv| kv.value else null;
+        // ** THE GROW-BY-COPY SHAPE: `alloc(new)` immediately followed by `free(old)`, where
+        // `old` is OLDER and carries the same scope. That is how ArrayList and HashMap grow
+        // (allocate, copy, free - three unlinked calls, see the growth test below). Nothing
+        // PROVES the two belong together, so the report says "probably"; but in a leak hunt
+        // it is exactly the difference between "a deinit forgot a free" and "something keeps
+        // appending to a container nobody clears", and those are fixed in different places.
+        const just_allocated: usize = self.previous_call_allocated;
+        self.previous_call_allocated = 0;
+        if (freed) |old| {
+            if (just_allocated != 0) {
+                if (self.live.getPtr(just_allocated)) |new| {
+                    const old_is_older: bool = old.ordinal < new.ordinal;
+                    const same_scope: bool = std.mem.eql(u8, old.label, new.label);
+                    if (old_is_older and same_scope and new.len > old.len) {
+                        new.grew_from = old.len;
+                    }
+                }
+            }
+        }
         self.child.rawFree(buf, alignment, ra);
     }
 };
@@ -331,4 +427,60 @@ test "leakwatch: a grown buffer is attributed to where it GREW, and why" {
     try expectEqual(@as(usize, 1), watch.live.count());
     var it: @TypeOf(watch.live).ValueIterator = watch.live.valueIterator();
     try expectEqualStrings("grew here", it.next().?.label);
+}
+
+test "leakwatch: since a mark, a container that grew is told apart from a missed free" {
+    // The smoke gate's shape, in miniature: lifecycle 1 fills a table, the gate marks,
+    // lifecycle 2 appends more to the SAME table (it grows by copying) and also forgets one
+    // plain allocation. The report must list both, flag the first as growth, and not the second.
+    const gpa: Allocator = std.testing.allocator;
+    var watch: LeakWatch = .init(gpa, gpa);
+    defer watch.deinit();
+    const a: Allocator = watch.allocator();
+    var table: std.AutoHashMapUnmanaged(u32, u64) = .empty;
+    defer table.deinit(a);
+
+    watch.push("frame");
+    watch.push("glyph_cache");
+    for (0..20) |i| {
+        try table.put(a, @intCast(i), i);
+    }
+    watch.pop();
+    watch.pop();
+
+    watch.mark();
+
+    watch.push("frame");
+    watch.push("glyph_cache");
+    for (20..200) |i| {
+        try table.put(a, @intCast(i), i);
+    }
+    watch.pop();
+    watch.push("forgotten");
+    const missed: []u8 = try a.alloc(u8, 48);
+    defer a.free(missed);
+    watch.pop();
+    watch.pop();
+
+    const saved_log_level: std.log.Level = std.testing.log_level;
+    std.testing.log_level = .err; // the report IS the behaviour; keep a passing test silent
+    defer std.testing.log_level = saved_log_level;
+    try expectEqual(@as(usize, 2), watch.reportSinceMark("test"));
+
+    var saw_growth: bool = false;
+    var saw_missed_free: bool = false;
+    var it: @TypeOf(watch.live).ValueIterator = watch.live.valueIterator();
+    while (it.next()) |entry| {
+        if (entry.ordinal < watch.mark_ordinal) {
+            continue;
+        }
+        if (std.mem.eql(u8, entry.label, "glyph_cache")) {
+            saw_growth = entry.grew_from != 0 and entry.grew_from < entry.len;
+            try expectEqualStrings("frame", entry.phase);
+        } else if (std.mem.eql(u8, entry.label, "forgotten")) {
+            saw_missed_free = entry.grew_from == 0 and entry.len == 48;
+        }
+    }
+    try expect(saw_growth);
+    try expect(saw_missed_free);
 }

@@ -682,7 +682,7 @@ const rule_notes = [_]RuleNote{
         \\
         \\The shapes it takes, and the fix for each:
         \\  * shared TYPES living in the file that also holds the entry point -
-        \\    move the entry point up into its own file (zspv's CLI, zspv_main.zig);
+        \\    move the entry point up into its own file;
         \\  * a TEST that needs a higher-level file - move the test up, into a file
         \\    that already depends on both (the Go1 gate, into robot_physics);
         \\  * a file importing ITSELF to qualify its own names - `@This()`.
@@ -5526,8 +5526,8 @@ fn isSamplerCallOn(
     return true;
 }
 
-/// True if `node` is a call to an IMPLICIT-LOD sampler helper by NAME -
-/// `zsample2d(...)`, `zm.zsample2d(...)`, `sampleLod(...)`, or `zm.sampleLod(...)`.
+/// True if `node` is a call to the IMPLICIT-LOD sampler helper by NAME -
+/// `sampleLod(...)` or `<module>.sampleLod(...)`.
 /// These lower to `textureSample`, which WGSL/Tint permit only in UNIFORM
 /// control flow, so they must be caught outside shaderMain's uniform top.
 /// `sampleLevel(...)` takes an EXPLICIT LOD (no derivatives) and lowers to
@@ -5540,15 +5540,15 @@ fn isBareSamplerCall(ctx: Ctx, node: Index) bool {
         .call_one, .call_one_comma => ast.nodeData(node).node_and_opt_node[0],
         else => return false,
     };
-    // Resolve the callee's trailing name: either a bare identifier `zsample2d`
-    // or a field access `zm.zsample2d`.
+    // Resolve the callee's trailing name: either a bare identifier `sampleLod`
+    // or a field access `sb.sampleLod`.
     const name_tok: u32 = switch (ast.nodeTag(fn_expr)) {
         .identifier => ast.nodeMainToken(fn_expr),
         .field_access => ast.nodeData(fn_expr).node_and_token[1],
         else => return false,
     };
     const name: []const u8 = ast.tokenSlice(name_tok);
-    return eql(u8, name, "zsample2d") or eql(u8, name, "sampleLod");
+    return eql(u8, name, "sampleLod");
 }
 
 /// Recursively flag sampler calls that aren't at the uniform top of
@@ -5737,7 +5737,7 @@ fn runSamplerDiscipline(ctx: Ctx) !void {
         } else if (eql(u8, fn_name, "entry")) {
             // Direct `@SpirvType` shader (billboard/skybox/points/decal ...): the
             // exported `entry` fn has no Io param, so the IoT path skips it. It
-            // can still call `zsample2d(...)` - which must sit at uniform control
+            // can still call `sampleLod(...)` - which must sit at uniform control
             // flow just the same. Scan it treating `entry` as the main body; the
             // empty io_name means only bare sampler calls match.
             try scanMainBody(ctx, body, "");

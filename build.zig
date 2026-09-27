@@ -620,8 +620,8 @@ pub fn build(b: *std.Build) void {
 
     // ---- Shader pipeline.  Declared early because the examples loop below
     // uses `shader_pipeline.addShaderImport` for examples that have a
-    // `<name>_fs.zig` sibling. The pipeline is now pure Zig (zspv + spv2wgsl
-    // artifacts, built above) - the old `tools/build.zig` sub-build that built
+    // `<name>_fs.zig` sibling. The pipeline is pure Zig (the spv2wgsl
+    // artifact, built above) - the old `tools/build.zig` sub-build that built
     // the C++ SPIR-V tools (spirv-opt/val/cross) is gone, along with the GLSL
     // path that used them. WGSL is the only target and never touches C++.
     // Walk src/, examples/, tests/ for shader source files.  Picks
@@ -681,7 +681,6 @@ pub fn build(b: *std.Build) void {
     const tools: Tools = buildTools(b, host_target, zimrmath_mod);
     const spv2wgsl_tool_exe: *Compile = tools.spv2wgsl;
     const spv2wgsl_check_exe: *Compile = tools.spv2wgsl_check;
-    const zspv_tool_exe: *Compile = tools.zspv;
     const zimrlint_exe: *Compile = tools.lint;
     const c2js_exe: *Compile = tools.c2js;
     const serve_exe: *Compile = tools.serve;
@@ -901,7 +900,6 @@ pub fn build(b: *std.Build) void {
     );
     // Pure-Zig shader tools as real artifact edges (no sub-build, no C++).
     shader_pipeline.spv2wgsl_exe = spv2wgsl_tool_exe;
-    shader_pipeline.zspv_exe = zspv_tool_exe;
     shader_pipeline.wgsl_walker = wgsl_walker;
 
     const zls_shader_paths: [][]const u8 = collectShaderFiles(b) catch &.{};
@@ -948,9 +946,6 @@ pub fn build(b: *std.Build) void {
     const glsl_gravestone: LazyPath = b.path("src/shaders/_deleted_glsl_placeholder.glsl");
     for (zls_shader_paths) |path| {
         if (!startsWith(u8, path, "src/shaders/")) {
-            continue;
-        }
-        if (startsWith(u8, path, "src/shaders/probes/")) {
             continue;
         }
 
@@ -1041,23 +1036,6 @@ pub fn build(b: *std.Build) void {
             .externs_path = out.externs,
             .source_path = b.path(path),
             .sh_name = sh_name,
-        }) catch @panic("OOM");
-    }
-
-    // Explicit registration block for sampler-probe shaders.  Lives
-    // under `src/shaders/probes/`; skipped by the auto-discovery loop
-    // above because we want them findable as a group.  Same pipeline
-    // as everything else now.
-    const sampler_probes = [_][]const u8{
-        "src/shaders/probes/sampler_test_fs.zig",
-    };
-    for (sampler_probes) |path| {
-        const base: []const u8 = std.fs.path.basename(path);
-        const sh_name: []const u8 = base[0 .. base.len - ".zig".len];
-        const import_name: []const u8 = b.fmt("{s}.glsl", .{sh_name});
-        engine_shaders.append(b.allocator, .{
-            .path = glsl_gravestone,
-            .name = import_name,
         }) catch @panic("OOM");
     }
 
@@ -1178,7 +1156,7 @@ pub fn build(b: *std.Build) void {
     // The gate is fed the SAME list the loop below installs, one addFileArg per
     // page, so a page cannot be published without being checked.
     const doc_gate_run: *Run = b.addRunArtifact(tools.doc_gate);
-    doc_gate_run.step.name = "doc-gate (one stylesheet, no script, no network)";
+    doc_gate_run.step.name = "doc-gate (one stylesheet, no script, no network, no id twice)";
     const doc_gate_step: *Step = b.step("doc-gate", "Check every published page against the shared doc style");
     doc_gate_step.dependOn(&doc_gate_run.step);
 
@@ -3314,7 +3292,7 @@ pub fn build(b: *std.Build) void {
 
     // ---- wgpu-check: the minimal wgpu-migration audit gate. ----------
     // Runs the test surface that matters for changes touching
-    // `src/spv2wgsl.zig`, `src/wgpu.zig`, `tools/zspv_rewrite.zig`, the
+    // `src/spv2wgsl.zig`, `src/wgpu.zig`, `tools/gen_shader_externs.zig`, the
     // engine shapes shader, or anything else in the wgpu plan.  Skips
     // the ~100-example gallery rebuild that `zig build test` triggers.
     //
@@ -4052,9 +4030,9 @@ pub fn build(b: *std.Build) void {
         // accumulate there unseen.  Recursion closes that hole.
         //
         // tools/ was a SECOND blind spot: it holds first-class authored
-        // code (the linter itself, the SPIR-V reader `zspv`, the
-        // transpiler CLIs `spv2wgsl`/`spv2wgsl_check`, the extern-gen
-        // and rewrite tools, and tools/build.zig) that was never linted
+        // code (the linter itself, the transpiler CLIs
+        // `spv2wgsl`/`spv2wgsl_check`, the extern-gen tool, and
+        // tools/build.zig) that was never linted
         // because the walk only covered src/ and examples/.  It is now
         // a scan root.
         //
@@ -4375,11 +4353,11 @@ pub fn build(b: *std.Build) void {
             // `examples/` that don't exist in the dependency).
             if (b.pkg_hash.len == 0 and s.tag == .compile and s != &zimrlint_exe.step) {
                 // Gate ONLY the wasm app compiles (examples + runtime), NOT the
-                // native build tools (spv2wgsl, zspv, c2js, gen_shader_externs...).
+                // native build tools (spv2wgsl, c2js, gen_shader_externs...).
                 // Gating the tools bought no correctness - lint scans every file
                 // and fails the build regardless of order - but it made every
                 // tool compile, and the entire shader fan-out that runs through
-                // them (dozens of spv2wgsl/zspv Runs per example), transitively
+                // them (dozens of spv2wgsl Runs per example), transitively
                 // depend on lint. One lint failure then detonated into ~100
                 // "transitive failure" lines that buried the real error (the
                 // whole reason `tools/zbuild.zig` had to exist). Left ungated,
@@ -4564,7 +4542,6 @@ pub fn addLint(b: *std.Build, zimr_dep: *std.Build.Dependency, opts: LintOptions
 const Tools = struct {
     spv2wgsl: *Compile,
     spv2wgsl_check: *Compile,
-    zspv: *Compile,
     lint: *Compile,
     c2js: *Compile,
     serve: *Compile,
@@ -4606,16 +4583,8 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         }),
     });
     spv2wgsl_check_exe.root_module.addImport("spv2wgsl", spv2wgsl_lib_mod);
-    const zspv_tool_exe: *Compile = b.addExecutable(.{
-        .name = "zspv",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/zspv_main.zig"),
-            .target = host_target,
-            .optimize = .ReleaseSafe,
-        }),
-    });
     // The remaining tools, built DIRECTLY by the main build (pure Zig, like
-    // spv2wgsl/zspv above) instead of the old `tools/build.zig` sub-build. That
+    // spv2wgsl above) instead of the old `tools/build.zig` sub-build. That
     // sub-build was cwd-relative and wrote into a (read-only-as-a-dependency)
     // cache - incompatible with zimr being consumed as a package. Installed as
     // named artifacts so an external consumer can `dep.artifact("c2js")` etc.
@@ -4819,7 +4788,6 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
     return .{
         .spv2wgsl = spv2wgsl_tool_exe,
         .spv2wgsl_check = spv2wgsl_check_exe,
-        .zspv = zspv_tool_exe,
         .lint = zimrlint_exe,
         .c2js = c2js_exe,
         .serve = serve_exe,

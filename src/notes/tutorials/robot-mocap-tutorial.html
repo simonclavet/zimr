@@ -59,7 +59,7 @@ trained on the GPU. This document covers the code as it exists in <code>src/robo
 <li><a href="#learn">Learning to track: the gym, PPO and SAC</a>
   <ol><li><a href="#task">The tracking task</a></li><li><a href="#residual">What a residual policy sees, and what it may do</a></li><li><a href="#ppotrack">Training it with PPO</a></li><li><a href="#tricks">Two tricks every learner gets</a></li><li><a href="#phonebench">Training on the device in your hand</a></li><li><a href="#gym">The humanoid gym</a></li><li><a href="#ppo">PPO</a></li><li><a href="#sac">SAC</a></li><li><a href="#learnx">Examples</a></li></ol></li>
 <li><a href="#supertrack">SuperTrack: a world model and a policy through it</a>
-  <ol><li><a href="#idea">The idea</a></li><li><a href="#worldmodel">The world model</a></li><li><a href="#policy">The policy</a></li><li><a href="#data">Data: rings and segments</a></li><li><a href="#trackstate">On a humanoid: the state a tracker sees</a></li><li><a href="#actions">Actions: offsets on the reference</a></li><li><a href="#replay">Collecting it: rings, segments and a fleet</a></li><li><a href="#worldmodel">What the world model is asked, and how it is judged</a></li><li><a href="#worldmodelnet">The model itself</a></li><li><a href="#latentworld">A world model in its own feature space</a></li><li><a href="#stpolicy">A policy trained through the model</a></li><li><a href="#pastwindow">Credit past the window</a></li><li><a href="#cartpole">On the cartpole</a></li><li><a href="#humanoidnext">Toward the humanoid</a></li><li><a href="#supertrackx">Example</a></li></ol></li>
+  <ol><li><a href="#idea">The idea</a></li><li><a href="#worldmodel">The world model</a></li><li><a href="#policy">The policy</a></li><li><a href="#data">Data: rings and segments</a></li><li><a href="#trackstate">On a humanoid: the state a tracker sees</a></li><li><a href="#actions">Actions: offsets on the reference</a></li><li><a href="#replay">Collecting it: rings, segments and a fleet</a></li><li><a href="#worldmodeljudged">What the world model is asked, and how it is judged</a></li><li><a href="#worldmodelnet">The model itself</a></li><li><a href="#latentworld">A world model in its own feature space</a></li><li><a href="#stpolicy">A policy trained through the model</a></li><li><a href="#pastwindow">Credit past the window</a></li><li><a href="#learning">How you know it is learning</a></li><li><a href="#cartpole">On the cartpole</a></li><li><a href="#humanoidnext">Toward the humanoid</a></li><li><a href="#supertrackx">Example</a></li></ol></li>
 <li><a href="#kit">The GPU training kit</a>
   <ol><li><a href="#kitwhat">What the kit is</a></li><li><a href="#families">The kernels</a></li><li><a href="#host">Submitting work</a></li><li><a href="#kitmlp">An ordinary network on the kit</a></li><li><a href="#kitlearners">The learners on the kit</a></li><li><a href="#wherephone">What runs where on a phone</a></li><li><a href="#latentkit">The latent world model on the kit</a></li><li><a href="#resident">Keeping the data on the GPU</a></li><li><a href="#policykit">The policy on the kit</a></li><li><a href="#residentloop">The loop, resident</a></li></ol></li>
 <li><a href="#pages">Running it in a page</a>
@@ -4048,13 +4048,25 @@ neural networks trained against the simulator.</p>
 <p>Before any of the learners, the task: what counts as tracking, what it is worth, and when an
 attempt is over. All three are in <code>robot_track</code>, so every method in this document is scored the
 same way.</p>
-<p>Being wrong is measured in six parts, split into <em>pose</em> and <em>place</em>. The pose terms —
-positions, rotations, velocities and angular velocities of every body — are measured in the root's
-own frame, so they ask "is the body making the right shape, moving the right way?" The root terms
-ask the rest: "and is it in the right place, facing the right way?" A character that made perfect
-shapes while drifting across the room would pass the first four and fail the last two, which is
-exactly the distinction a tracking reward needs.</p>
-<details class="src-fold" data-src="src/robot_track.zig" data-decl="pub const TrackingError ="><summary><code>TrackingError</code></summary><pre><code class="zig">/// How far the simulated character is from the reference, in the six ways that matter.
+<p>Being wrong is measured in eleven parts: <em>pose</em>, <em>place</em>, <em>gravity</em> and
+<em>contact</em>. The pose
+terms — positions, rotations, velocities and angular velocities of every body — are measured in the
+root's own frame, so they ask "is the body making the right shape, moving the right way?" They are
+averages over the bodies, and an average forgives one limb far off, so one more pose term keeps the
+<em>worst</em> single body's distance: an arm pinned under the body barely moves the mean, and moves the
+worst body by a metre. The root
+terms ask the next question: "and is it in the right place, facing the right way?" A character that
+made perfect shapes while drifting across the room would pass the pose terms and fail the root's.
+The gravity terms ask what the root's own frame cannot see: how high each body is above the floor,
+how high the <em>head</em> is against the reference's head, and which way is up. A body lying on the floor with exactly the right joint angles makes the right
+<em>shape</em> — only the height and up terms notice that it is lying down. And the last asks what
+touches the floor that should not: of the bodies the character has put down, the highest the
+reference holds its counterpart. A knee going down while the reference stands reads the reference
+knee's height; a get-up's hands and knees on the floor read nothing, because the reference's are
+down too — so no list of which bodies may touch is needed for any motion. Only the bodies a robot
+stands on are exempt: a foot is down through every stance while the reference lifts it into its
+swing, and a character a few frames behind still has it down.</p>
+<details class="src-fold" data-src="src/robot_track.zig" data-decl="pub const TrackingError ="><summary><code>TrackingError</code></summary><pre><code class="zig">/// How far the simulated character is from the reference, in the eight ways that matter.
 ///
 /// Split deliberately into POSE and PLACE. The pose terms are measured in the root's own frame, so
 /// they answer "is the body making the right shape, moving the right way?" without caring where it
@@ -4064,6 +4076,11 @@ exactly the distinction a tracking reward needs.</p>
 pub const TrackingError = struct {
     /// Mean over bodies of the distance between them, in the root's frame (metres).
     pose_position: f32,
+    /// ...and the WORST single body's distance, same measure (metres). The mean hides one limb far off: an arm
+    /// pinned under the body is a metre out while the other bodies are fine, and the mean barely moves. MimicKit
+    /// ends an episode on exactly this - its worst body - rather than on an average. Root frame, like the mean:
+    /// the body being in the wrong PLACE is the root terms' job, this is the body being the wrong SHAPE.
+    worst_body: f32,
     /// Mean over bodies of the angle between them, root-relative (radians).
     pose_rotation: f32,
     /// Mean over bodies of the velocity difference, in the root's frame (m/s).
@@ -4081,47 +4098,23 @@ pub const TrackingError = struct {
     /// ...and how far the UP direction, as each root sees it, differs (the distance between two unit vectors,
     /// 0 to 2): tilt against gravity, what SuperTrack's L_up measures.
     up: f32,
+    /// UNEXPECTED CONTACT (metres): of the bodies the character has ON the floor (lowest point within
+    /// `contact_band`), the highest the REFERENCE holds its counterpart - 0 when nothing unexpected touches.
+    /// A knee down while the reference stands reads the reference knee's height (~0.45 m on Geno); the get-up's
+    /// hands and knees on the floor read 0, because the reference's are down too. MimicKit's fastest fall signal
+    /// is contact, but through a list of bodies allowed to touch PER MOTION; measured against the reference it
+    /// needs no list - only the bodies a robot always stands on are exempt (`Task.contact_exempt`).
+    /// Needs `State.lowest` (filled by `stateOf`); a state without geometry never touches, so this reads 0.
+    unexpected_contact: f32,
+    /// The HEAD's height off the reference head's (metres, world z) - SuperTrack's whole failure rule: an episode
+    /// ends when this passes 25 cm (plan F3b). 0 when no head was given (`trackingError`); a judge names the head
+    /// per robot (`Task.head_body`) and asks `trackingErrorWithHead`.
+    head_height: f32,
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn trackingError("><summary><code>trackingError</code></summary><pre><code class="zig">/// Measure one against the other. Both states are whole-body states in world space (`stateOf`);
 /// `root` is the character's root body.
 pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
-    const bodies: usize = sim.bodies();
-    assertf(bodies &gt; 1 and reference.bodies() == bodies, @src(), "{d} bodies against {d}", .{
-        bodies,
-        reference.bodies(),
-    });
-    const to_local: Quat = conjugate(sim.rotations[root]);
-    const to_local_ref: Quat = conjugate(reference.rotations[root]);
-    var out: TrackingError = .{
-        .pose_position = 0.0,
-        .pose_rotation = 0.0,
-        .velocity = 0.0,
-        .angular = 0.0,
-        .root_position = length3(sim.positions[root] - reference.positions[root]),
-        .root_rotation = angleBetween(sim.rotations[root], reference.rotations[root]),
-        .height = 0.0,
-        .up = length3(rotate(to_local, vec(0.0, 0.0, 1.0)) - rotate(to_local_ref, vec(0.0, 0.0, 1.0))),
-    };
-    // Body 0 is the world, and the root's own pose terms are zero by construction; both are still
-    // counted so the mean is over the same number of bodies every time, which keeps a reward
-    // comparable between models.
-    const count: f32 = float(bodies - 1);
-    for (1..bodies) |b| {
-        const p: Vec = rotate(to_local, sim.positions[b] - sim.positions[root]);
-        const p_ref: Vec = rotate(to_local_ref, reference.positions[b] - reference.positions[root]);
-        const r: Quat = qmul(to_local, sim.rotations[b]);
-        const r_ref: Quat = qmul(to_local_ref, reference.rotations[b]);
-        const v: Vec = rotate(to_local, sim.velocities[b]);
-        const v_ref: Vec = rotate(to_local_ref, reference.velocities[b]);
-        const w: Vec = rotate(to_local, sim.angular[b]);
-        const w_ref: Vec = rotate(to_local_ref, reference.angular[b]);
-        out.pose_position += length3(p - p_ref) / count;
-        out.height += @abs(sim.positions[b][2] - reference.positions[b][2]) / count;
-        out.pose_rotation += angleBetween(r, r_ref) / count;
-        out.velocity += length3(v - v_ref) / count;
-        out.angular += length3(w - w_ref) / count;
-    }
-    return out;
+    return trackingErrorWithHead(sim, reference, root, null);
 }</code></pre></details>
 <p>The reward turns those into one number: each term as <code>weight · exp(−error / scale)</code>, summed, so
 it is 1 when the characters coincide and falls smoothly from there. A weighted sum rather than a
@@ -4175,7 +4168,10 @@ pub fn reward(err: TrackingError, w: RewardWeights) f32 {
 }</code></pre></details>
 <p>An episode ends when the reference is lost, and by nothing else. The obvious test — has the head
 dropped below some height? — is wrong for this set of clips: a fall-and-get-up spends ten seconds
-on the floor, and a height test would call the best possible tracking a failure.</p>
+on the floor, and a height test would call the best possible tracking a failure. So every limit is
+measured against the reference: each one caps the error term of the same name, and the episode is
+over when any term passes its cap — including the worst single body, which catches the limb an
+average would let through.</p>
 <details class="src-fold" data-src="src/robot_track.zig" data-decl="pub const Termination ="><summary><code>Termination</code></summary><pre><code class="zig">/// When to give up on an episode.
 ///
 /// By tracking error, and by nothing else. The obvious test - "has the head dropped below some
@@ -4195,6 +4191,17 @@ pub const Termination = struct {
     /// vectors' distance, each in its own root's frame: 0.8 is ~47 degrees) - falling over, whatever the
     /// heading. Off by default.
     up: f32 = 1.0e30,
+    /// ...and when any ONE body is further than this from its reference counterpart, in the root's frame (metres)
+    /// - the limb the mean cannot see (`TrackingError.worst_body`). Off by default.
+    worst_body: f32 = 1.0e30,
+    /// ...and when a body touches the floor while the reference holds it higher than this (metres) - a knee, a
+    /// hand, the hips going down where the reference's are not (`TrackingError.unexpected_contact`). Off by
+    /// default.
+    unexpected_contact: f32 = 1.0e30,
+    /// ...and when the HEAD's height is further than this from the reference head's (metres) - SuperTrack's rule
+    /// (25 cm), clip-agnostic and relative, so a get-up's floor is fine while the reference lies there too
+    /// (`TrackingError.head_height`; the head resolved from `Task.head_body`). Off by default.
+    head_height: f32 = 1.0e30,
 
     /// Steps after a reset during which losing the reference does not end the episode. A policy bad enough
     /// to fail within a training window's length leaves NO window in its data - training then stops for
@@ -4202,17 +4209,32 @@ pub const Termination = struct {
     /// grace of the window's length guarantees every episode one. 0 for the old robot's fleets.
     grace_steps: u32 = 0,
 
-    /// Every limit scaled by `fraction` (the grace kept) - a looser leash (&gt; 1) or an early warning (&lt; 1). The
-    /// ONE place limits are copied: copies written out field by field forgot the limits added later (Sep 26:
-    /// geno_train's watching leash dropped the tilt limit).
+    // ==== THE STRUCT IS THE LIST ====
+    //
+    // Every limit here is an `f32` named EXACTLY like the `TrackingError` field it limits, and `scaled`,
+    // `terminated` and the tests walk the fields instead of naming them. So adding a limit is adding it HERE and
+    // the error it limits THERE - nothing else. Lists written out by hand drifted twice: geno_train's leash
+    // dropped the tilt limit when `up` was added (Sep 26), and `scaled` / `terminated` each had to be edited for
+    // every new limit. The comptime check below turns a limit with no matching error into a compile error that
+    // says so, instead of an `@field` error somewhere else.
+    comptime {
+        const info = @typeInfo(Termination).@"struct";
+        for (info.field_names, info.field_types) |name, field_type| {
+            if (field_type == f32 and !@hasField(TrackingError, name)) {
+                @compileError("Termination." ++ name ++ " limits nothing: TrackingError has no field of that name");
+            }
+        }
+    }
+
+    /// Every limit scaled by `fraction` (the grace kept) - a looser leash (&gt; 1) or an early warning (&lt; 1).
     pub fn scaled(self: Termination, fraction: f32) Termination {
         var out: Termination = self;
-        out.pose_position *= fraction;
-        out.pose_rotation *= fraction;
-        out.root_position *= fraction;
-        out.root_rotation *= fraction;
-        out.height *= fraction;
-        out.up *= fraction;
+        const info = @typeInfo(Termination).@"struct";
+        inline for (info.field_names, info.field_types) |name, field_type| {
+            if (field_type == f32) {
+                @field(out, name) *= fraction;
+            }
+        }
         return out;
     }
 };</code></pre></details>
@@ -4233,6 +4255,74 @@ standing start, instead of having to survive everything before them first.</p>
     d.stage = .stale;
     rbt.forward(m, d);
 }</code></pre></details>
+
+<p>All of this travels as one value, a <code>Task</code>: the servo that drives the body, the floor it
+stands on, whether every episode starts resting on that floor, the reward weights and the failure
+rule — everything that decides what the character is asked to do and when it has failed. Every fleet
+and every trainer takes the task whole, so a policy is always trained and judged against the same
+rules, and a robot's task is written down in exactly one place. One thing is deliberately left out:
+the action scale. That belongs to the learner, because different methods reach for different amounts
+of offset per unit of action — DReCon's filtered student asks for large offsets and hands them over a
+fifth at a time, while SuperTrack's policy acts on the targets directly.</p>
+<details class="src-fold" data-src="src/robot_track.zig" data-decl="pub const Task ="><summary><code>Task</code></summary><pre><code class="zig">/// The TASK a fleet trains and judges: everything that decides what the character is asked to do and when it
+/// has failed - its servo, the floor, how every episode starts, the reward and the failure rule. One value, so a
+/// robot's task is defined ONCE (`robot_geno.tracking_task` for Geno) and handed whole to every fleet and trainer
+/// that trains or judges it: spelled out field by field at each call site, it drifted (plan T1).
+///
+/// NOT part of it: the action scale (each learner has its own - DReCon's student and SuperTrack differ), the
+/// sizes, the episode cap and the seed. Those are how a run is set up, not what the character is asked to do.
+///
+/// The defaults are the OLD robot's, whose tests pin its exact behaviour.
+pub const Task = struct {
+    gains: Gains = .{},
+    /// The floor's friction (a contact's is the geometric mean with the robot's shapes'). The old robot's 0.7;
+    /// Geno's feet skate at that under its servo, and use `robot_geno.floor_friction`.
+    floor_friction: f32 = 0.7,
+    /// Rest every reset ON the floor (`rbt.restOnFloor`, 1 mm clear): a pose copied from a capture sinks its feet
+    /// into the simulated floor, and the solver kicks the body out of it on the first step - at every episode
+    /// start. Off for the old robot; Geno's task sets it.
+    rest_on_floor: bool = false,
+    weights: RewardWeights = .{},
+    termination: Termination = .{},
+    /// Bodies whose floor contact is never UNEXPECTED (`TrackingError.unexpected_contact`): the ones the robot
+    /// stands on. A foot is down through every stance while the reference lifts it into each swing, and a
+    /// character a few frames behind still has it down - that is lag, not a fall. Named per ROBOT, never per
+    /// motion; a fleet resolves them through `Fleet.Options.body_names`. Empty by default.
+    contact_exempt: []const []const u8 = &amp;.{},
+    /// The body that is the robot's HEAD, for `TrackingError.head_height` (SuperTrack's failure rule, plan F3b).
+    /// Named per robot, resolved like `contact_exempt`. Empty: no head term.
+    head_body: []const u8 = "",
+};</code></pre></details>
+<p>Geno's task is where gravity enters the reward and the failure rule: its weights give the height
+and up terms a say, and its failure rule is SuperTrack's own — an episode ends when the head is more
+than 25 cm above or below the reference's head, or the root strays more than a metre from the
+reference's or turns more than 90 degrees from it. The head says what matters about falling in one
+number, relative to the reference, so it works the same for a dance and for a get-up, where the
+reference's head is on the floor too; lying down with the right joint angles neither scores nor
+passes. The worst-body
+and contact terms are measured but, for Geno, not limited: a character that rises a little behind
+the reference still has an arm pushing the floor after the reference's has lifted, and a limit on
+either would end that rise. That is fine, because episodes start at random moments of the clip, in
+step with the reference — a rise is learned stretch by stretch from starts inside it, and an episode
+that falls behind simply ends, which is the signal to do better there. Its DReCon policy's
+watched and actuated bodies are named once the same way, as one value.</p>
+<details class="src-fold" data-src="src/robot_geno.zig" data-decl="pub const tracking_task:"><summary><code>tracking_task</code></summary><pre><code class="zig">/// Geno's task. What every fleet and trainer that trains or judges Geno must see.
+pub const tracking_task: robot_track.Task = .{
+    .gains = servo_gains,
+    .floor_friction = floor_friction,
+    .rest_on_floor = true,
+    .weights = task_weights,
+    .termination = task_termination,
+    .contact_exempt = &amp;foot_bodies,
+    // The head, for the head-height term (SuperTrack's failure rule - plan F3b).
+    .head_body = "Head",
+};</code></pre></details>
+<details class="src-fold" data-src="src/robot_geno.zig" data-decl="pub const drecon_bodies:"><summary><code>drecon_bodies</code></summary><pre><code class="zig">/// Geno's DReCon bodies: the ones its policy watches and the ones it actuates, as one value
+/// (`.bodies = geno.drecon_bodies` on a PPO trainer).
+pub const drecon_bodies: robot_policy.Bodies = .{
+    .watched = &amp;drecon_watched,
+    .actuated = &amp;drecon_actuated,
+};</code></pre></details>
 
 <h3 id="residual">10.2 What a residual policy sees, and what it may do<a class="anchor" href="#residual">#</a></h3>
 <p>The reference already drives the character: its joint angles are the servo's targets, and that
@@ -4379,10 +4469,7 @@ pub const Controller = struct {
         const dofs: usize = self.subset.dofs;
         assertf(raw.len == self.envs * dofs, @src(), "actions are {d}, want {d}", .{ raw.len, self.envs * dofs });
         if (self.wantsAction()) {
-            const beta: f32 = self.options.beta;
-            for (self.filtered, raw) |*y, a| {
-                y.* = beta * a + (1.0 - beta) * y.*;
-            }
+            track.filterAction(self.options.beta, raw, self.filtered);
         }
         self.held +%= 1;
         // Spread the subset over the model's action: everything else stays exactly zero, which is
@@ -4491,23 +4578,16 @@ is not credited to the decision that failed.</p>
     /// shorter than the clip would end good episodes early, and counting those as anything but
     /// survival would make the clip look harder than it is.
     max_episode_steps: u32 = 600,
-    /// The servo's spring and the floor's friction, passed to every fleet the trainer builds (training and
-    /// judging). The old robot's defaults; Geno uses `robot_geno.servo_gains` and `robot_geno.floor_friction`.
-    gains: track.Gains = .{},
-    floor_friction: f32 = 0.7,
     /// Radians per unit of the policy's action - the fleet's own default (0.2) unless set. Passed to every
     /// fleet the trainer builds, so the scale a policy was trained under is the one it is judged under.
     action_scale: f32 = 0.2,
-    /// Rest every reset on the floor (`robot_track.Fleet.Options.rest_on_floor`); Geno's copied clips need it.
-    rest_on_floor: bool = false,
-    /// The task's reward weights and termination (`robot_track.RewardWeights`, `Termination`) - passed to every
-    /// fleet the trainer builds, so a policy is trained and judged by the same rules. Geno's gate gravity in:
-    /// `robot_geno.task_weights`, `task_termination`.
-    weights: track.RewardWeights = .{},
-    termination: track.Termination = .{},
-    /// DReCon's watched and actuated bodies, in this robot's names (the old robot's by default).
-    watched: []const []const u8 = &amp;policy.watched_bodies,
-    actuated: []const []const u8 = &amp;policy.actuated_bodies,
+    /// The task (`robot_track.Task`: servo, floor, floor rest, reward, failure rule), handed WHOLE to every fleet
+    /// the trainer builds - training and judging - so a policy is trained and judged by the same rules. The old
+    /// robot's by default; Geno's is `robot_geno.tracking_task`.
+    task: track.Task = .{},
+    /// DReCon's watched and actuated bodies, in this robot's names (the old robot's by default; Geno's is
+    /// `robot_geno.drecon_bodies`).
+    bodies: policy.Bodies = .{},
     /// What this network is trained FOR - an opaque number the caller chooses (a clip, say). It
     /// travels in the weights file, and a file with another tag is refused: a get-up policy and a
     /// dance policy have identical shapes, so nothing else would notice the difference.
@@ -4540,12 +4620,9 @@ reference is the honest number.</p>
         .envs = envs,
         .capacity = 16,
         .seed = evaluation_seed,
-        .gains = self.options.gains,
-        .floor_friction = self.options.floor_friction,
         .action_scale = self.options.action_scale,
-        .rest_on_floor = self.options.rest_on_floor,
-        .weights = self.options.weights,
-        .termination = self.options.termination,
+        .task = self.options.task,
+        .body_names = self.body_names,
     });
     defer judge.deinit();
     var controller: policy.Controller = try policy.Controller.init(self.gpa, self.m, self.subset, envs, .{
@@ -6631,6 +6708,11 @@ pub const State = struct {
     /// Angular velocities in WORLD axes (robot.zig's `cvel.ang` already is; a body's own frame
     /// would need a rotation, and every formula below wants world).
     angular: []Vec,
+    /// Each body's LOWEST POINT above the floor (world z of its collision shapes' lowest point,
+    /// `rbt.bodyLowestPoints`) - which body touches the floor, for `TrackingError.unexpected_contact`.
+    /// Only `stateOf` knows the geometry, so `init` fills `rbt.no_shape_height`: a state built any other
+    /// way (a world model's prediction has frames but no shapes) never reads as touching anything.
+    lowest: []f32,
 
     pub fn init(gpa: Allocator, count: usize) !State {
         const positions: []Vec = try gpa.alloc(Vec, count);
@@ -6639,11 +6721,16 @@ pub const State = struct {
         errdefer gpa.free(rotations);
         const velocities: []Vec = try gpa.alloc(Vec, count);
         errdefer gpa.free(velocities);
+        const angular: []Vec = try gpa.alloc(Vec, count);
+        errdefer gpa.free(angular);
+        const lowest: []f32 = try gpa.alloc(f32, count);
+        @memset(lowest, rbt.no_shape_height);
         return .{
             .positions = positions,
             .rotations = rotations,
             .velocities = velocities,
-            .angular = try gpa.alloc(Vec, count),
+            .angular = angular,
+            .lowest = lowest,
         };
     }
 
@@ -6652,6 +6739,7 @@ pub const State = struct {
         gpa.free(self.rotations);
         gpa.free(self.velocities);
         gpa.free(self.angular);
+        gpa.free(self.lowest);
     }
 
     pub fn bodies(self: State) usize {
@@ -6663,6 +6751,7 @@ pub const State = struct {
         @memcpy(self.rotations, other.rotations);
         @memcpy(self.velocities, other.velocities);
         @memcpy(self.angular, other.angular);
+        @memcpy(self.lowest, other.lowest);
     }
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn localSize("><summary><code>localSize</code></summary><pre><code class="zig">/// How many numbers `local` writes for a model with `bodies` bodies.
@@ -6859,6 +6948,12 @@ pub const Gains = struct {
     /// learner fades it to zero on a schedule (residual force control's idea, with the curriculum
     /// that retires it), and a policy is only ever judged at zero.
     assist: f32 = 0.0,
+    /// VELOCITY FEEDFORWARD (plan F3): damp each joint toward the reference's velocity over the step
+    /// (`referenceVelocity`) instead of toward zero - a servo following MOTION should not brake it
+    /// (`pdTorquesToward`). Off: the zero-velocity spring. SuperTrack's paper used the reference's joint
+    /// velocities as targets in PhysX and zero in Havok and Bullet, with "final performance reasonably
+    /// similar" (sec. 5.1.3) - and F3 measured +1% survival here - so off is the paper-consistent choice.
+    velocity_feedforward: bool = false,
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn pdTorques("><summary><code>pdTorques</code></summary><pre><code class="zig">/// The torques that drive the robot toward `target` - the law the policy acts through.
 ///
@@ -7116,22 +7211,17 @@ pub const Fleet = struct {
     pub const Options = struct {
         envs: usize = 16,
         capacity: usize = 1024,
-        /// How far one unit of action reaches, in radians.
+        /// How far one unit of action reaches, in radians. The LEARNER's (see `Task` for why it is not the task's).
         action_scale: f32 = 0.2,
-        gains: Gains = .{},
-        weights: RewardWeights = .{},
-        termination: Termination = .{},
-        /// Frames between shoves (0 never shoves). A shove is an impulse on the root, which is what
-        /// "small perturbations" means when it is time to measure robustness.
-        /// The floor's friction (a contact's is the geometric mean with the robot's shapes'). The old
-        /// robot's 0.7; Geno's feet skate at that under its servo, and use `robot_geno.floor_friction`.
-        floor_friction: f32 = 0.7,
-        /// Rest every reset ON the floor (`rbt.restOnFloor`, 1 mm clear): a pose copied from a capture sinks
-        /// its feet into the simulated floor, and the solver kicks the body out of it on the first step - at
-        /// every episode start. Off for the old robot, whose tests pin its exact behaviour; Geno's fleets set it.
-        rest_on_floor: bool = false,
+        /// What the characters are asked to do and when they have failed - see `Task`.
+        task: Task = .{},
+        /// The model's body names, indexed like its bodies (`robot_mjcf.Imported.names`) - needed only to resolve
+        /// `task.contact_exempt`, which names bodies; a task that exempts nothing needs none.
+        body_names: []const []const u8 = &amp;.{},
         /// Every reset pushed off the reference (`perturbStart`) - D5.5's perturbed starts. None by default.
         start_noise: StartNoise = .{},
+        /// Frames between shoves (0 never shoves). A shove is an impulse on the root, which is what
+        /// "small perturbations" means when it is time to measure robustness.
         shove_every: u32 = 0,
         /// How hard, as a velocity added to the root, in m/s.
         shove_speed: f32 = 0.6,
@@ -7175,7 +7265,13 @@ pub const Fleet = struct {
     reference_data: rbt.Data,
     sim_state: State,
     reference_state: State,
+    /// Per body: exempt from `unexpected_contact` (`Task.contact_exempt`, resolved at init).
+    contact_exempt: []bool,
+    /// The head's body index (`Task.head_body`, resolved at init), or null: no head term.
+    head: ?usize,
     targets: []f32,
+    /// The reference's velocity over the step, for the servo's feedforward (`Gains.velocity_feedforward`).
+    target_velocity: []f32,
     accel: []f32,
     torque: []f32,
     scratch: []f32,
@@ -7249,7 +7345,10 @@ pub const Fleet = struct {
             .reference_data = undefined,
             .sim_state = undefined,
             .reference_state = undefined,
+            .contact_exempt = undefined,
+            .head = undefined,
             .targets = undefined,
+            .target_velocity = undefined,
             .accel = undefined,
             .torque = undefined,
             .scratch = undefined,
@@ -7293,7 +7392,10 @@ pub const Fleet = struct {
             .reference_data = try rbt.Data.init(owned, m),
             .sim_state = try State.init(owned, m.nbody),
             .reference_state = try State.init(owned, m.nbody),
+            .contact_exempt = try contactExemptMask(owned, m.nbody, options.task.contact_exempt, options.body_names),
+            .head = try headBody(options.task.head_body, options.body_names),
             .targets = try owned.alloc(f32, m.nq),
+            .target_velocity = try owned.alloc(f32, m.nv),
             .accel = try owned.alloc(f32, m.nv),
             .torque = try owned.alloc(f32, m.nv),
             .scratch = try owned.alloc(f32, m.nv),
@@ -7307,7 +7409,7 @@ pub const Fleet = struct {
             state.* = try State.init(owned, m.nbody);
         }
         for (fleet.worlds, fleet.bridges, fleet.data) |*world, *bridge, *d| {
-            world.* = try floorWorld(owned, options.floor_friction);
+            world.* = try floorWorld(owned, options.task.floor_friction);
             bridge.* = try robot_physics.Bridge.init(owned, world, m, d, 256);
             bridge.listen(world);
         }
@@ -7333,16 +7435,30 @@ pub const Fleet = struct {
     }
 
     /// Start an environment somewhere new: a random clip, a random frame, a fresh segment.
+    /// A new episode for `env` at a RANDOM clip and frame - reference-state initialisation (`startAt`).
     fn restart(self: *Fleet, env: usize) void {
         const random: std.Random = self.rng.random();
-        self.clip_of[env] = random.uintLessThan(usize, self.clips.len);
-        const clip: *const dance.Clip = self.clips[self.clip_of[env]];
-        const frame: usize = 1 + random.uintLessThan(usize, clip.frame_count - 2);
+        const clip_index: usize = random.uintLessThan(usize, self.clips.len);
+        const frame: usize = 1 + random.uintLessThan(usize, self.clips[clip_index].frame_count - 2);
+        self.startAt(env, clip_index, frame);
+    }
+
+    /// A new episode for `env` EXACTLY at `frame` of clip `clip_index`: the character put on the reference there
+    /// (and rested on the floor, and pushed off it by `start_noise`, as the task says), its clock at that frame.
+    /// `restart` calls it with a random clip and frame - the random draws in the same order as always, so a fleet's
+    /// runs are bit-for-bit what they were; a JUDGE calls it with chosen ones (`judge`).
+    pub fn startAt(self: *Fleet, env: usize, clip_index: usize, frame: usize) void {
+        const clip: *const dance.Clip = self.clips[clip_index];
+        assertf(frame &gt;= 1 and frame + 1 &lt; clip.frame_count, @src(), "start frame {d} of a {d}-frame clip", .{
+            frame,
+            clip.frame_count,
+        });
+        self.clip_of[env] = clip_index;
         resetToFrame(self.m, &amp;self.data[env], clip, frame);
-        if (self.options.rest_on_floor) {
+        if (self.options.task.rest_on_floor) {
             _ = rbt.restOnFloor(self.m, &amp;self.data[env], 0.001);
         }
-        perturbStart(self.m, &amp;self.data[env], self.options.start_noise, random, self.scratch);
+        perturbStart(self.m, &amp;self.data[env], self.options.start_noise, self.rng.random(), self.scratch);
         self.frame[env] = @intCast(frame);
         self.steps[env] = 0;
         self.segment[env] = self.next_segment;
@@ -7489,11 +7605,21 @@ pub const Fleet = struct {
         try zimrphysics.step(world, clip.frame_time);
         bridge.harvest(d);
         rbt.biasForce(self.m, d);
-        pdTorques(
+        const gains: Gains = self.options.task.gains;
+        // With feedforward, the velocity of the step the servo aims along: `frame` -&gt; `frame + 1`. At the clip's end
+        // the aim is clamped to the last pose - held still - and `referenceVelocity` is zero there, as it must be.
+        // (It once asked for `at - 1`: at the end that was the last MOVING step's velocity, telling a joint that
+        // should come to rest to keep going - and a one-frame clip underflowed.)
+        const moving: ?[]const f32 = if (gains.velocity_feedforward) blk: {
+            referenceVelocity(self.m, clip, frame, self.target_velocity);
+            break :blk self.target_velocity;
+        } else null;
+        pdTorquesToward(
             self.m,
             d,
             self.targets,
-            self.options.gains,
+            moving,
+            gains,
             clip.frame_time,
             self.accel,
             self.scratch,
@@ -7564,9 +7690,11 @@ pub const Fleet = struct {
             self.steps[env] += 1;
             self.steps_total += 1;
             stateOf(self.m, d, &amp;self.sim_state);
+            exemptFromContact(&amp;self.sim_state, self.contact_exempt);
             self.referenceStateAt(clip, self.frame[env]);
-            const err: TrackingError = trackingError(self.sim_state, self.reference_state, self.root);
-            const earned: f32 = reward(err, self.options.weights);
+            const sim: State = self.sim_state;
+            const err: TrackingError = trackingErrorWithHead(sim, self.reference_state, self.root, self.head);
+            const earned: f32 = reward(err, self.options.task.weights);
             self.rewards[env] = earned;
             self.dones[env] = false;
             reward_total += earned;
@@ -7575,8 +7703,8 @@ pub const Fleet = struct {
             // with NaN is false, so the limits alone would let it run on - poisoning the world - forever.
             const broken: bool = !(err.pose_position == err.pose_position and err.pose_rotation == err.pose_rotation and
                 err.root_position == err.root_position and err.root_rotation == err.root_rotation);
-            const graced: bool = self.steps[env] &lt; self.options.termination.grace_steps;
-            const lost: bool = broken or (!graced and terminated(err, self.options.termination));
+            const graced: bool = self.steps[env] &lt; self.options.task.termination.grace_steps;
+            const lost: bool = broken or (!graced and terminated(err, self.options.task.termination));
             const finished: bool = lost or
                 self.steps[env] &gt;= self.options.max_steps or
                 self.frame[env] + 1 &gt;= clip.frame_count;
@@ -7588,7 +7716,7 @@ pub const Fleet = struct {
                 // Why it ended, and where - before `restart` replaces the state just measured.
                 const capped: bool = self.steps[env] &gt;= self.options.max_steps;
                 self.ends[env] = if (lost) .lost else if (capped) .cap else .clip_end;
-                copyState(&amp;self.terminal[env], self.sim_state);
+                self.terminal[env].copyFrom(self.sim_state);
                 self.terminal_frame[env] = self.frame[env];
                 self.terminal_clip[env] = self.clip_of[env];
                 if (lost) {
@@ -7613,7 +7741,7 @@ pub const Fleet = struct {
     }
 };</code></pre></details>
 
-<h3 id="worldmodel">11.8 What the world model is asked, and how it is judged<a class="anchor" href="#worldmodel">#</a></h3>
+<h3 id="worldmodeljudged">11.8 What the world model is asked, and how it is judged<a class="anchor" href="#worldmodeljudged">#</a></h3>
 <p>The question is: given the character as it is, and what the servo has been told to reach for, how
 does every body accelerate? The state goes in as <a href="#trackstate">§11.5</a>'s representation.
 The targets go in as two numbers a hinge (sine and cosine, because an angle wraps) and six a ball —
@@ -7874,7 +8002,10 @@ features that already mean something. Three choices carry it:</p>
 <p><strong>Everything lives in normalised feature space.</strong> Positions, velocities, rotations and
 angular velocities have spreads that differ by orders of magnitude; standardised once from data,
 every feature counts alike in the rollout, in the model's loss, and in the tracking loss a policy
-will later be trained on. <strong>The action goes in as itself</strong>, beside the reference's encoded
+will later be trained on. The data is the <em>reference clips themselves</em>: every frame of the
+motion, posed exactly as the reference is posed during training. So one unit of any feature means
+"as far as the dance itself ranges", fixed before the first step — not whatever a character
+happened to do while it was still falling over, which would make every normal pose look extreme. <strong>The action goes in as itself</strong>, beside the reference's encoded
 targets, rather than being folded into the targets first — so the path from a policy's output to
 the model's input is linear, and a tracking loss flows back into the policy with nothing
 hand-derived in between. <strong>The first layer is three matrix products summed</strong>, one each
@@ -7938,6 +8069,16 @@ The policy is shown that goal too (SuperTrack's K<sub>i+1</sub>), and the world 
 input is the pose the servo actually used. An action is the raw policy output plus its noise; one
 scale, applied by the fleet where the action becomes a PD offset, turns it into radians — so the
 world model learns from exactly what the fleet records.</p>
+<p><strong>The policy decides thirty times a second, and its hands are filtered.</strong> Physics
+steps sixty times a second; the policy is asked only on every second step and its decision is held
+for both. What it asks for is not applied directly either: each decision is blended into the action
+already being applied, a fifth of the new and four fifths of the old (DReCon's filter), so no joint's
+target ever jumps and a policy that wants a joint to move quickly must ask for more, for longer. Both
+live inside the training rollouts too, not just in the simulator: a held step reuses the decision, and
+the blend is differentiated like everything else, so a decision is credited with every later step it
+still shapes. And the world model is taught with the action that was actually <em>applied</em> — the
+filtered one the servo received — because that, not what the policy asked for, is what moved the
+body.</p>
 <p>One principle governs all of it: <strong>a policy trained through a model can only be as right as
 the model.</strong> Where the model cannot yet say what an action does, the policy learns to exploit
 its mistakes — large actions that look good in prediction and do nothing in the simulator. So the
@@ -7988,7 +8129,76 @@ real signal. A critic pays for itself only with a large training budget — many
 target networks, multi-step targets — which is why this implementation has none, and why, if one is
 added, it belongs on the GPU, where such budgets exist.</p>
 
-<h3 id="cartpole">11.13 On the cartpole<a class="anchor" href="#cartpole">#</a></h3>
+<h3 id="learning">11.13 How you know it is learning<a class="anchor" href="#learning">#</a></h3>
+<p>A policy trained through a world model can look excellent and be useless: it is scored by the model, and a
+policy that finds where the model is wrong in its favour improves in the model while falling in reality. So three
+numbers are read together, every evaluation, and never one alone.</p>
+<p>The <em>judge</em> says how good the policy is in the real simulator. Starts are fixed and spread evenly over the
+clip — every half second — and each runs with the policy's mean action, no exploration, until the task's rule
+loses the reference or the clip ends. It reports the mean time to failure, the share of starts that reach the
+clip's end and the mean reward, beside the servo alone on the very same starts. Nothing in it is random, so two
+evaluations of the same policy agree exactly, and a difference between two is the policy's.</p>
+<details class="src-fold" data-src="src/robot_track.zig" data-decl="pub fn judge("><summary><code>judge</code></summary><pre><code class="zig">/// Judge `actor` - or, with `actor` null, the SERVO ALONE (zero offsets) - on `clip` from `starts` (frames), start to
+/// finish (`Judging`, run to the end).
+pub fn judge(
+    gpa: Allocator,
+    m: *rbt.Model,
+    clip: *const dance.Clip,
+    options: Fleet.Options,
+    starts: []const usize,
+    actor: ?Actor,
+) !Judgement {
+    var judging: Judging = try .init(gpa, m, clip, options, starts);
+    defer judging.deinit();
+    // Every start's episode ends within the clip's length (the judge caps nothing before it), so one clip's worth of
+    // steps finishes any judgement.
+    const done: bool = judging.advance(actor, clip.frame_count);
+    assertf(done, @src(), "a judgement unfinished after {d} steps", .{clip.frame_count});
+    return judging.result;
+}</code></pre></details>
+<p><em>Trust</em> asks whether the world model can follow where the policy really goes. From the judge's starts,
+the model is rolled forward on the actions the policy actually took, and compared with what the simulator did.
+The yardstick is the most naive prediction there is — "it tracks the reference" — whose error on those states is
+simply their tracking loss. A model under that bar knows something about what actions do; a model above it is
+worse than assuming the character tracks, and a policy trained through it learns from fiction.</p>
+<p><em>Exploitation</em> asks whether the model keeps its promises. The model says how much the policy gains over
+doing nothing; the simulator says how much it really gains, on the same starts. The difference, as a share of
+doing nothing's loss, is near zero when the promises are kept and positive when the policy has found a flaw to
+lean on.</p>
+<details class="src-fold" data-src="src/robot_latent.zig" data-decl="pub const Diagnosis ="><summary><code>Diagnosis</code></summary><pre><code class="zig">/// Plan F2's numbers (`Learner.diagnose`), all mean squared distances per feature, in normalised units, averaged
+/// over the steps compared.
+pub const Diagnosis = struct {
+    horizon: usize,
+    compared_steps: usize = 0,
+    /// Real tracking losses - zero action (a) and the policy (b).
+    real_zero: f32 = 0.0,
+    real_policy: f32 = 0.0,
+    /// The tracking losses the WORLD MODEL predicts - zero action (c) and the policy acting on it (e).
+    model_zero: f32 = 0.0,
+    model_policy: f32 = 0.0,
+    /// How far the model's open-loop rollout lands from the real one, on the policy's recorded actions (d vs b) and
+    /// on zero action (c vs a).
+    follow_error: f32 = 0.0,
+    follow_error_zero: f32 = 0.0,
+
+    /// TRUST: the model's error following where the policy really went, over the trivial predictor's ("it tracks
+    /// the reference" - whose error on those same states IS their tracking loss). Under 1: the model knows
+    /// something beyond "it tracks"; over 1: worse than assuming it does - a policy trained through it learns from
+    /// fiction.
+    pub fn trust(self: Diagnosis) f32 {
+        return self.follow_error / @max(self.real_policy, 1.0e-9);
+    }
+
+    /// EXPLOITATION: what the model thinks the policy gains over doing nothing, minus what it really gains, as a
+    /// share of the real zero-action loss. Near 0: the model's promises are kept. Positive: it over-promises - the
+    /// policy found where the model is wrong in its favour.
+    pub fn exploitation(self: Diagnosis) f32 {
+        const promised: f32 = self.model_zero - self.model_policy;
+        const delivered: f32 = self.real_zero - self.real_policy;
+        return (promised - delivered) / @max(self.real_zero, 1.0e-9);
+    }
+};</code></pre></details>
+<h3 id="cartpole">11.14 On the cartpole<a class="anchor" href="#cartpole">#</a></h3>
 <p>The cartpole is where the recipe is proven: eight cartpoles, a push to each pole every
 <code>push_every</code> steps, the world model on 8-frame windows, the policy on 32. With no reward
 anywhere, a few thousand iterations of training hold the pole upright through every push, for whole
@@ -8023,14 +8233,14 @@ pub fn evaluate(st: ?*SuperTrack, episodes: u32, seed: u64) f32 {
     return float(total) / float(episodes);
 }</code></pre></details>
 
-<h3 id="humanoidnext">11.14 Toward the humanoid<a class="anchor" href="#humanoidnext">#</a></h3>
+<h3 id="humanoidnext">11.15 Toward the humanoid<a class="anchor" href="#humanoidnext">#</a></h3>
 <p>The humanoid is the same recipe with the larger state of <a href="#trackstate">§11.5</a>: the world
 model predicts every body's accelerations from that representation, its actions are offsets to the
 servo's targets as in the gym, and its loss is the distance between the predicted bodies and the
 clip's, measured the same way. The representation and the integrator are in place; the world model
 and the policy on top of them are what this code is working on now.</p>
 
-<h3 id="supertrackx">11.15 Example<a class="anchor" href="#supertrackx">#</a></h3>
+<h3 id="supertrackx">11.16 Example<a class="anchor" href="#supertrackx">#</a></h3>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 11:"><code class="zig">test "tutorial 11: SuperTrack on the cartpole - supervised, with no reward and no critic" {
     const gpa: Allocator = std.testing.allocator;
     const st: *supertrack.SuperTrack = try .init(gpa, .{});

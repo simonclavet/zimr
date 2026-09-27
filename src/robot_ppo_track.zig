@@ -70,23 +70,16 @@ pub const Options = struct {
     /// shorter than the clip would end good episodes early, and counting those as anything but
     /// survival would make the clip look harder than it is.
     max_episode_steps: u32 = 600,
-    /// The servo's spring and the floor's friction, passed to every fleet the trainer builds (training and
-    /// judging). The old robot's defaults; Geno uses `robot_geno.servo_gains` and `robot_geno.floor_friction`.
-    gains: track.Gains = .{},
-    floor_friction: f32 = 0.7,
     /// Radians per unit of the policy's action - the fleet's own default (0.2) unless set. Passed to every
     /// fleet the trainer builds, so the scale a policy was trained under is the one it is judged under.
     action_scale: f32 = 0.2,
-    /// Rest every reset on the floor (`robot_track.Fleet.Options.rest_on_floor`); Geno's copied clips need it.
-    rest_on_floor: bool = false,
-    /// The task's reward weights and termination (`robot_track.RewardWeights`, `Termination`) - passed to every
-    /// fleet the trainer builds, so a policy is trained and judged by the same rules. Geno's gate gravity in:
-    /// `robot_geno.task_weights`, `task_termination`.
-    weights: track.RewardWeights = .{},
-    termination: track.Termination = .{},
-    /// DReCon's watched and actuated bodies, in this robot's names (the old robot's by default).
-    watched: []const []const u8 = &policy.watched_bodies,
-    actuated: []const []const u8 = &policy.actuated_bodies,
+    /// The task (`robot_track.Task`: servo, floor, floor rest, reward, failure rule), handed WHOLE to every fleet
+    /// the trainer builds - training and judging - so a policy is trained and judged by the same rules. The old
+    /// robot's by default; Geno's is `robot_geno.tracking_task`.
+    task: track.Task = .{},
+    /// DReCon's watched and actuated bodies, in this robot's names (the old robot's by default; Geno's is
+    /// `robot_geno.drecon_bodies`).
+    bodies: policy.Bodies = .{},
     /// What this network is trained FOR - an opaque number the caller chooses (a clip, say). It
     /// travels in the weights file, and a file with another tag is refused: a get-up policy and a
     /// dance policy have identical shapes, so nothing else would notice the difference.
@@ -183,6 +176,9 @@ pub fn Trainer(comptime M: type) type {
         gpa: Allocator,
         arena: std.heap.ArenaAllocator,
         m: *rbt.Model,
+        /// The caller's body names (it owns them, like `m`) - kept for the judge's fleet, which resolves the
+        /// task's contact exemptions by name (`robot_track.Task.contact_exempt`) the same way the training one does.
+        body_names: []const []const u8,
         options: Options,
         fleet: *track.Fleet,
         subset: policy.Subset,
@@ -240,6 +236,7 @@ pub fn Trainer(comptime M: type) type {
                 .gpa = undefined,
                 .arena = undefined,
                 .m = undefined,
+                .body_names = undefined,
                 .options = undefined,
                 .fleet = undefined,
                 .subset = undefined,
@@ -271,7 +268,8 @@ pub fn Trainer(comptime M: type) type {
             self.arena = .init(gpa);
             errdefer self.arena.deinit();
             const owned: Allocator = self.arena.allocator();
-            const subset: policy.Subset = try policy.subsetFor(owned, m, body_names, options.watched, options.actuated);
+            const bodies: policy.Bodies = options.bodies;
+            const subset: policy.Subset = try policy.subsetFor(owned, m, body_names, bodies.watched, bodies.actuated);
             const n_obs: usize = policy.observationSize(subset);
             const envs: usize = options.envs;
             const transitions: usize = options.horizon * envs;
@@ -279,18 +277,16 @@ pub fn Trainer(comptime M: type) type {
                 .gpa = gpa,
                 .arena = self.arena,
                 .m = m,
+                .body_names = body_names,
                 .options = options,
                 .fleet = try track.Fleet.init(owned, m, clips, .{
                     .envs = envs,
                     .capacity = 16,
                     .seed = options.seed,
                     .max_steps = options.max_episode_steps,
-                    .gains = options.gains,
-                    .floor_friction = options.floor_friction,
                     .action_scale = options.action_scale,
-                    .rest_on_floor = options.rest_on_floor,
-                    .weights = options.weights,
-                    .termination = options.termination,
+                    .task = options.task,
+                    .body_names = body_names,
                 }),
                 .subset = subset,
                 .controller = try policy.Controller.init(owned, m, subset, envs, .{
@@ -330,7 +326,7 @@ pub fn Trainer(comptime M: type) type {
             @memset(self.episode_steps, 0);
             @memset(self.obs_mean, 0.0);
             @memset(self.obs_m2, 0.0);
-            self.fleet.options.gains.assist = options.assist_start;
+            self.fleet.options.task.gains.assist = options.assist_start;
             for (self.order, 0..) |*slot, i| {
                 slot.* = @intCast(i);
             }
@@ -692,10 +688,10 @@ pub fn Trainer(comptime M: type) type {
             const batch: Batch = self.batch;
             self.batch = .{};
             self.cursor = 0;
-            const assist_now: f32 = self.fleet.options.gains.assist;
+            const assist_now: f32 = self.fleet.options.task.gains.assist;
             // The next batch's helping hand: linearly down to nothing over `assist_batches`.
             const fade: f32 = float(self.iterations) / float(@max(self.options.assist_batches, 1));
-            self.fleet.options.gains.assist = self.options.assist_start * @max(0.0, 1.0 - fade);
+            self.fleet.options.task.gains.assist = self.options.assist_start * @max(0.0, 1.0 - fade);
             return .{
                 .exposure = batch.exposure,
                 .failures = batch.failures,
@@ -807,12 +803,9 @@ pub fn Trainer(comptime M: type) type {
                 .envs = envs,
                 .capacity = 16,
                 .seed = evaluation_seed,
-                .gains = self.options.gains,
-                .floor_friction = self.options.floor_friction,
                 .action_scale = self.options.action_scale,
-                .rest_on_floor = self.options.rest_on_floor,
-                .weights = self.options.weights,
-                .termination = self.options.termination,
+                .task = self.options.task,
+                .body_names = self.body_names,
             });
             defer judge.deinit();
             var controller: policy.Controller = try policy.Controller.init(self.gpa, self.m, self.subset, envs, .{

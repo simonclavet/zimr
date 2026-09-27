@@ -9,6 +9,8 @@
 //!   - Single mode: --wasm=<path>  (default zig-out/wgpu/wgpu_bringup.wasm)
 //!   - Dir mode:    --web-dir=<dir> [--focus=a,b*] - smoke every *.wasm
 //!   - --frames=N (default 10)
+//!   - --leak-trace: attribute the second lifecycle's surviving allocations (side,
+//!     phase, scope, container growth) and print them - see `printLeakTrace`.
 //!   For each wasm: build the wgpu/wasi/dom/audio shim namespaces (runner
 //!   provides the shim bodies; we provide the NAME LISTS), instantiate,
 //!   require exports {memory,_initialize,update}, run _initialize + N
@@ -101,22 +103,22 @@ const wgpu_handle = [_][]const u8{
 };
 // void verbs:
 const wgpu_void = [_][]const u8{
-    "js_surface_present",                  "js_queue_write_buffer",
-    "js_buffer_destroy",                   "js_texture_destroy",
-    "js_bind_group_destroy",               "js_bind_group_layout_destroy",
-    "js_pipeline_layout_destroy",          "js_render_pipeline_destroy",
-    "js_compute_pipeline_destroy",         "js_sampler_destroy",
-    "js_shader_module_destroy",            "js_texture_view_destroy",
-    "js_queue_write_texture",              "js_queue_write_texture_region",
-    "js_encoder_copy_buffer_to_buffer",
-    "js_encoder_copy_texture_to_buffer",   "js_buffer_read_into",
-    "js_buffer_read_release",              "js_queue_submit",
-    "js_render_pass_set_pipeline",         "js_render_pass_set_bind_group",
-    "js_render_pass_set_vertex_buffer",    "js_render_pass_set_index_buffer",
-    "js_render_pass_draw",                 "js_render_pass_draw_indexed",
-    "js_render_pass_set_scissor_rect",     "js_render_pass_end",
-    "js_compute_pass_set_pipeline",        "js_compute_pass_set_bind_group",
-    "js_compute_pass_dispatch_workgroups", "js_compute_pass_end",
+    "js_surface_present",               "js_queue_write_buffer",
+    "js_buffer_destroy",                "js_texture_destroy",
+    "js_bind_group_destroy",            "js_bind_group_layout_destroy",
+    "js_pipeline_layout_destroy",       "js_render_pipeline_destroy",
+    "js_compute_pipeline_destroy",      "js_sampler_destroy",
+    "js_shader_module_destroy",         "js_texture_view_destroy",
+    "js_queue_write_texture",           "js_queue_write_texture_region",
+    "js_encoder_copy_buffer_to_buffer", "js_encoder_copy_texture_to_buffer",
+    "js_buffer_read_into",              "js_buffer_read_release",
+    "js_queue_submit",                  "js_render_pass_set_pipeline",
+    "js_render_pass_set_bind_group",    "js_render_pass_set_vertex_buffer",
+    "js_render_pass_set_index_buffer",  "js_render_pass_draw",
+    "js_render_pass_draw_indexed",      "js_render_pass_set_scissor_rect",
+    "js_render_pass_end",               "js_compute_pass_set_pipeline",
+    "js_compute_pass_set_bind_group",   "js_compute_pass_dispatch_workgroups",
+    "js_compute_pass_end",
 };
 // specials handled by runner (packed size / advancing clock):
 const wgpu_special = [_][]const u8{
@@ -259,12 +261,25 @@ const State = struct {
     has_web_dir: bool = false,
     has_focus: bool = false,
     all_ok: bool = true,
+    /// `--leak-trace`: run the second lifecycle under the SUT's allocation tracer and
+    /// print what it made and kept. Off by default - the tracer costs a map entry per
+    /// allocation.
+    leak_trace: bool = false,
 };
 // lint:off module-var: the one driver-state singleton for this test harness
 var st: State = .{};
 
 fn webDir() []const u8 {
     return st.web_dir_buf[0..st.web_dir_len];
+}
+
+/// Call a numeric SUT export, or 0 when this build does not export it (an older wasm,
+/// or a non-runner build) - so every optional counter reads the same way.
+fn sutNumberOrZero(exports: Handle, id_h: Handle, comptime name: []const u8) f64 {
+    if (!hasExport(exports, name)) {
+        return 0;
+    }
+    return js_to_num(js_call2(host(), "sutCall", 7, id_h, s(name)));
 }
 
 fn hasExport(exports: Handle, name: []const u8) bool {
@@ -486,6 +501,30 @@ var last_init_calls: u32 = 0;
 /// returns it, or null if no assert fired. This is what turns a runtime assert
 /// into a smoke FAIL - the CI catch for the "forgot ensureFrame / bad phase"
 /// class that otherwise only shows up as a black screen on a device.
+/// `--leak-trace`: ask the SUT for its tracer report, then print every line of it. The
+/// SUT logs through `js_log`; the runner forwards each report line into the call log as
+/// `!TRACE <line>` (as it does `!ASSERT`), which is where this reads them from.
+fn printLeakTrace(id_h: Handle) void {
+    _ = js_call2(host(), "sutCall", 7, id_h, s("runnerTraceReport"));
+    const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
+    const len: u32 = @trunc(js_get_num(log, "length", 6));
+    var buf: [512]u8 = undefined;
+    var printed: u32 = 0;
+    var i: u32 = 0;
+    while (i < len) : (i += 1) {
+        const item: Handle = js_get_index(log, i);
+        const entry: []const u8 = jsStrInto(item, &buf);
+        if (startsWith(u8, entry, "!TRACE ")) {
+            var line_buf: [560]u8 = undefined;
+            print(bufPrint(&line_buf, "    {s}", .{entry["!TRACE ".len..]}) catch entry);
+            printed += 1;
+        }
+    }
+    if (printed == 0) {
+        print("    leak-trace: nothing allocated in the second lifecycle is still live");
+    }
+}
+
 fn assertMsg(id_h: Handle, out: []u8) ?[]const u8 {
     const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
     const len: u32 = @trunc(js_get_num(log, "length", 6));
@@ -522,6 +561,11 @@ fn smoke(path: []const u8, label: []const u8) bool {
         }
     }
     _ = js_call2(host(), "sutCall", 7, id_h, s("_initialize"));
+    // `--leak-trace` starts recording NOW, before the first lifecycle's frames, so a block
+    // the second lifecycle replaces (a container growing) is one the tracer already knows.
+    if (st.leak_trace and hasExport(exports, "runnerTraceBegin")) {
+        _ = js_call2(host(), "sutCall", 7, id_h, s("runnerTraceBegin"));
+    }
     const init_calls: u32 = logLen(id_h);
     var f: u32 = 0;
     var clobber: ClobberScan = .{};
@@ -570,15 +614,19 @@ fn smoke(path: []const u8, label: []const u8) bool {
     if (hasExport(exports, "runnerDeinit")) {
         _ = js_call2(host(), "sutCall", 7, id_h, s("runnerDeinit"));
         const c1: [res_types.len]i32 = printLiveHandles("    GPU handles after deinit:  ");
-        const b1: f64 = if (hasExport(exports, "runnerLiveBytes"))
-            js_to_num(js_call2(host(), "sutCall", 7, id_h, s("runnerLiveBytes")))
-        else
-            0;
+        const b1: f64 = sutNumberOrZero(exports, id_h, "runnerLiveBytes");
+        const engine_b1: f64 = sutNumberOrZero(exports, id_h, "runnerEngineLiveBytes");
         if (hasExport(exports, "runnerReinit")) {
             // TWICE-LIFECYCLE: re-init -> re-tick -> re-deinit. The engine
             // persists (its lazy init is guarded), so a census that GROWS over
             // the first teardown is a per-lifecycle leak - isolated from the
             // fixed engine baseline, which the single-deinit line can't separate.
+            // The mark: the report lists what the second lifecycle allocates and keeps -
+            // nothing from before - with its side, phase and scope.
+            const tracing: bool = st.leak_trace and hasExport(exports, "runnerTraceMark");
+            if (tracing) {
+                _ = js_call2(host(), "sutCall", 7, id_h, s("runnerTraceMark"));
+            }
             _ = js_call2(host(), "sutCall", 7, id_h, s("runnerReinit"));
             var rf: u32 = 0;
             while (rf < st.frames) : (rf += 1) {
@@ -586,10 +634,20 @@ fn smoke(path: []const u8, label: []const u8) bool {
             }
             _ = js_call2(host(), "sutCall", 7, id_h, s("runnerDeinit"));
             const c2: [res_types.len]i32 = printLiveHandles("    GPU handles after 2nd deinit: ");
-            const b2: f64 = if (hasExport(exports, "runnerLiveBytes"))
-                js_to_num(js_call2(host(), "sutCall", 7, id_h, s("runnerLiveBytes")))
-            else
-                0;
+            const b2: f64 = sutNumberOrZero(exports, id_h, "runnerLiveBytes");
+            const engine_b2: f64 = sutNumberOrZero(exports, id_h, "runnerEngineLiveBytes");
+            const wrong_side_frees: f64 = sutNumberOrZero(exports, id_h, "runnerWrongSideFrees");
+            if (tracing) {
+                printLeakTrace(id_h);
+            }
+            // Always print both sides, pass or fail: when a check fails the reader wants to
+            // know which side moved, and when one passes, that it measured something.
+            var sides_buf: [200]u8 = undefined;
+            print(bufPrint(
+                &sides_buf,
+                "    live bytes after each deinit: example {d:.0} -> {d:.0}, engine {d:.0} -> {d:.0}",
+                .{ b1, b2, engine_b1, engine_b2 },
+            ) catch "    live bytes: (format overflow)");
             // ENFORCE for `.managed` examples: the census must be FLAT across the
             // two lifecycles; any positive growth (c2 > c1) is a per-lifecycle leak.
             const managed: bool = hasExport(exports, "runnerMemoryMode") and
@@ -643,7 +701,44 @@ fn smoke(path: []const u8, label: []const u8) bool {
                 // CountingAllocator's exact net-live accounting - zero fragmentation
                 // noise, so the comparison is strict.
                 if (b2 > b1) {
-                    printFail(label, "CPU LEAK (managed): deinit did not free every allocation (net live bytes grew)");
+                    // Say HOW MUCH: 16 bytes and 16 MB point at different causes, and the
+                    // two baselines let a reader redo the subtraction.
+                    var leak_buf: [200]u8 = undefined;
+                    const leak_msg: []const u8 = bufPrint(
+                        &leak_buf,
+                        "CPU LEAK (managed): deinit did not free every allocation - net live bytes " ++
+                            "grew by {d:.0} ({d:.0} -> {d:.0}) across the second lifecycle",
+                        .{ b2 - b1, b1, b2 },
+                    ) catch "CPU LEAK (managed): deinit did not free every allocation (net live bytes grew)";
+                    printFail(label, leak_msg);
+                    return false;
+                }
+                // The ENGINE side: the engine's own allocator must also end a lifecycle
+                // where it started. Growth here is memory the engine kept on the example's
+                // behalf - by zimr's rule a bug in the ENGINE, not in the example.
+                if (engine_b2 > engine_b1) {
+                    var engine_buf: [240]u8 = undefined;
+                    const engine_msg: []const u8 = bufPrint(
+                        &engine_buf,
+                        "ENGINE LEAK (managed): the engine kept {d:.0} bytes the example caused " ++
+                            "({d:.0} -> {d:.0} across the second lifecycle) - engine memory must not " ++
+                            "outlive the example that caused it",
+                        .{ engine_b2 - engine_b1, engine_b1, engine_b2 },
+                    ) catch "ENGINE LEAK (managed): engine live bytes grew across the second lifecycle";
+                    printFail(label, engine_msg);
+                    return false;
+                }
+                // Memory freed through the other side's allocator: an ownership mix-up
+                // that the two tallies above cannot see on their own.
+                if (wrong_side_frees > 0) {
+                    var wrong_buf: [200]u8 = undefined;
+                    const wrong_msg: []const u8 = bufPrint(
+                        &wrong_buf,
+                        "WRONG-ALLOCATOR FREE: {d:.0} block(s) freed through the other side's allocator " ++
+                            "(example vs engine) - free with the allocator that made it",
+                        .{wrong_side_frees},
+                    ) catch "WRONG-ALLOCATOR FREE: memory freed through the other side's allocator";
+                    printFail(label, wrong_msg);
                     return false;
                 }
             }
@@ -877,6 +972,8 @@ fn parseArgs() void {
         } else if (startsWith(u8, a, "--frames=")) {
             const v: []const u8 = a["--frames=".len..];
             st.frames = std.fmt.parseInt(u32, v, 10) catch 10;
+        } else if (std.mem.eql(u8, a, "--leak-trace")) {
+            st.leak_trace = true;
         }
     }
 }

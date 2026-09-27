@@ -6,6 +6,7 @@
 //! `bakeFontAtlas`; ui renders through `drawWithFont`).
 //! GL-free since GL-retirement P5d.
 const std = @import("std");
+const memwatch = @import("memwatch.zig");
 const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
 const expect = std.testing.expect;
@@ -672,8 +673,10 @@ pub fn unloadFontOwned(gpa: Allocator, font: Font) void {
     if (font.recs != null) {
         allocator_mod.freeMany(gpa, font.recs, @intCast(font.glyphCount));
     }
-    // The face's glyphs may still sit in the shared atlas; they are keyed by a
-    // never-reused face id, so they simply go unused until it starts over.
+    // The face's glyphs may still sit in the shared atlas, keyed by a never-reused
+    // face id. The engine starts the atlas over when the example that owned the font
+    // is torn down (`Renderer2D.resetRegistryFrom` / `releaseOwner`), so they do not
+    // accumulate across example lifecycles.
     if (fontFace(font)) |face| {
         destroyFontFace(gpa, face);
     }
@@ -1562,6 +1565,10 @@ pub fn cachedGlyph(
     if (atlas.find(key)) |entry| {
         return entry;
     }
+    // `--leak-trace` attributes what the atlas allocates below to "glyph_cache" (a no-op in
+    // every normal run - see `memwatch.pushScope`).
+    memwatch.pushScope(gpa, "glyph_cache");
+    defer memwatch.popScope(gpa);
     const size_px: f32 = float(key.size_quarters) / 4.0;
     const shift_x: f32 = float(key.phase) / 4.0;
     const scale: f32 = face.pixelsPerUnit(size_px);

@@ -107,6 +107,24 @@ pub const GlyphAtlas = struct {
         return atlas.entries.get(key);
     }
 
+    /// Ask the atlas to start over at the next `beginFrame`: every entry and shelf is
+    /// forgotten (capacity kept), so the next glyph drawn is rasterized fresh.
+    ///
+    /// Called when an example is torn down (`Renderer2D.resetRegistryFrom` /
+    /// `releaseOwner`). Entries are keyed by `FontFace.id`, a counter that is never
+    /// reused, so a font unloaded with its example would otherwise leave its glyphs
+    /// here until the pages fill - and a reloaded font adds a fresh set every time. The
+    /// engine must not keep memory an example caused once that example is gone.
+    ///
+    /// Deferred rather than immediate on purpose: a teardown can happen mid-frame (the
+    /// launcher releasing one child of several), and quads already recorded this frame
+    /// still point into the pages - `beginFrame` is the first moment nothing does.
+    /// Glyphs of fonts that are still alive are simply rasterized again on their next
+    /// draw, which costs one frame's worth of rasterization.
+    pub fn requestReset(atlas: *GlyphAtlas) void {
+        atlas.reset_requested = true;
+    }
+
     pub fn remember(
         atlas: *GlyphAtlas,
         gpa: Allocator,
@@ -246,4 +264,32 @@ test "find/remember: entries are keyed by face, slot, size and phase" {
     try expect(atlas.find(other_phase) == null);
     const other_face: Key = .{ .face_id = 4, .slot = 12, .size_quarters = 64, .phase = 2 };
     try expect(atlas.find(other_face) == null);
+}
+
+test "requestReset: a reloaded font's glyphs replace the old ones instead of piling up" {
+    // The smoke gate's lifecycle shape: a font's glyphs are cached, the example is torn
+    // down (its font unloaded), and the next lifecycle loads the font again under a NEW
+    // face id. Without the reset the second set sits beside the first and the table
+    // grows; with it the old entries go and the new ones reuse the kept capacity.
+    const gpa: Allocator = std.testing.allocator;
+    var atlas: GlyphAtlas = .{};
+    defer atlas.deinit(gpa);
+    const glyphs_per_font: u32 = 40;
+    var slot: u32 = 0;
+    while (slot < glyphs_per_font) : (slot += 1) {
+        try atlas.remember(gpa, .{ .face_id = 1, .slot = slot, .size_quarters = 64, .phase = 0 }, .{});
+    }
+    const capacity_after_first_font: u32 = atlas.entries.capacity();
+
+    atlas.requestReset(); // the example's teardown
+    try expect(atlas.find(.{ .face_id = 1, .slot = 0, .size_quarters = 64, .phase = 0 }) != null); // not yet
+    atlas.beginFrame(); // the next frame - nothing in flight any more
+    try expect(atlas.find(.{ .face_id = 1, .slot = 0, .size_quarters = 64, .phase = 0 }) == null);
+
+    slot = 0;
+    while (slot < glyphs_per_font) : (slot += 1) {
+        try atlas.remember(gpa, .{ .face_id = 2, .slot = slot, .size_quarters = 64, .phase = 0 }, .{});
+    }
+    try expectEqual(glyphs_per_font, atlas.entries.count());
+    try expectEqual(capacity_after_first_font, atlas.entries.capacity());
 }

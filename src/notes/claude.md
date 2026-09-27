@@ -470,18 +470,22 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
 
 **ACTIVE**
 
-- `rl_track_plan.md` - **THE CURRENT PLAN (v3, Sep 26); `C` resumes it.** One Geno policy for every
-  clip, trained overnight on a desktop GPU: the first night learns the whole dance and the whole get-up, then
-  ~100 LaFAN clips with get-ups hidden in some. Sections: standing rules (turn discipline, build/test traps),
-  the goal stated so it can fail, the principles (one task for every clip; the task defines failure; gravity
-  everywhere; root motion followed and SEEN; Simon's filter; judged in reality), where we stand (robot, task,
-  observation, action, learners, teacher, pages, known answers), the lessons, then THE WORK in order - Phase T
-  (the task finished), P (PPO hygiene), S (SuperTrack as published, safe from its model), ON (the night: page,
-  CPU mini-night, rehearsal, morning protocol), A (ADD, the 100-clip library, D5 revisited), X (the phone), M
-  (motion matching) - decisions, risks, the file map, and the SuperTrack / MimicKit comparison tables.
-  Archived: v2 (Sep 23-26, every measurement of Phases R, S, D1-D5, ST, ON, MK2) is
-  `src/notes/archive/rl_track_plan_v2.md`; v1 (T1-T9b) is `src/notes/archive/rl_track_plan_v1.md`;
-  `rl_track_journal.md` is the dated history.
+- `rl_track_plan.md` - **THE CURRENT PLAN (v4, Sep 27 evening); `C` resumes it.** SuperTrack on the 10-second
+  dance, fundamentals first, then the first night. Sections: standing rules (turn discipline; build/test traps -
+  `check` does not compile pages, insert declarations above doc comments; engineering rules - known answers, one
+  definition per concept, graph-vs-rows parity, the recipe as one value), the goal stated so it can fail, the
+  principles (P1-P7: one task; SuperTrack's failure rule; gravity; root motion seen; Simon's filter and 30 Hz clock
+  inside training; judged in reality), where we stand (the task, the judge's baselines - servo 1.53 s on
+  `dance_5_15` -, the CPU and GPU learners), what is DONE (Phase T, F1-F6a, the SuperTrack comparison, the Sep 27
+  review), lessons L1-L13, then THE WORK AHEAD in stages: A the action path (the policy sees its applied action; the
+  recipe as one value), B THE BENCH (`zig build st-bench`, a deterministic CPU learning curve with the judge and
+  trust/exploitation rows) and its baseline curve, C recipe decisions on the bench (offset scale and noise, the
+  paper's losses, the optimiser), D the world model's form (rigid-body graph ops, `AccelWorld`, the A/B), E scale and
+  drift, F the feasible reference, G the kit's parity, H the gate; then Phases R, ON, C, P, A, X, M; decisions,
+  risks, where things live.
+  Archived: v3 (Sep 26-27: Phases T and F in full, the MimicKit table, Phase R's workflow study) is
+  `src/notes/archive/rl_track_plan_v3.md`; v2 (Sep 23-26) and v1 (T1-T9b) beside it; `rl_track_journal.md` is the
+  dated history; `supertrack_comparison.md` tables the paper, an unofficial repo and ours.
 
 - `ragdoll_compare_plan.md` - **PAUSED (it was the current plan at 2163).** A `ragdoll_compare`
   example: the MJCF humanoid dropped twice, once in reduced coordinates (`robot.zig` +
@@ -597,6 +601,23 @@ before merging). The repo file is canonical, not the `/mnt/user-data/outputs/`
 delivery copy.
 
 ## Show Simon the code — every turn, no exceptions
+★★★ **SHOW AND EXPLAIN, IN THE REPLY ITSELF (Simon, Sep 27).** Every turn's reply contains the new or
+changed code - as it stands in the tree after `zig fmt`, not as it was first typed - and says what each
+piece does and WHY it is shaped that way. Tool calls do not count: a Python patcher or a `str_replace`
+buried in the transcript is not "shown". Print the final regions (`sed -n`) before writing the reply;
+doing so caught two stale doc references in the same turn this rule was written.
+
+★★ **INSERT A DECLARATION ABOVE THE NEXT ONE'S DOC COMMENT, NEVER BETWEEN THEM (Sep 27, three times in one
+session).** Anchoring a new `pub const X` on the line `pub const Y = struct {` puts X between Y's `///` block and Y:
+Y's documentation silently becomes the start of X's, and Y is left undocumented - it compiles, lints and tests clean.
+It happened to `Fleet` (under `Task`), to `InModel` (under `Diagnosis`) and nearly again. Anchor on the first `///`
+line of the next declaration's comment, then print the region and read both headers before moving on.
+
+★★ **NO `anytype` UNLESS IT IS GENUINELY NECESSARY (Simon, Sep 27).** A function that only ever means one
+type takes that type. If the obstacle is an import edge, fix the structure (a shared type in the lower
+module, a new file) - that is what turned `ppoTaskOptions(base: anytype)` into `robot_track.Task`. When
+`anytype` IS right (real genericity), add a comptime test pinning which types it accepts.
+
 **ALL new or changed code appears in the chat, in full.** This is a hard rule and
 the most common way to fail Simon. Concretely:
 - A new file: its COMPLETE source must be visible in the conversation. A
@@ -892,7 +913,7 @@ minutes. Total under 4 minutes when nothing is wrong:
     zig build launcher-standalone   -Dmode=release -Dautofix=false -j1   # 90s
 
 `hello-world-standalone` is the cheap failure probe: it pulls the ENTIRE tool chain (spv2wgsl,
-zspv, gen_externs, c2js, per-shader transpiles, the engine wasm) for a fraction of the launcher's
+gen_externs, c2js, per-shader transpiles, the engine wasm) for a fraction of the launcher's
 link. If it is green the launcher almost certainly is too. Do NOT pre-warm anything else.
 
 **`measure <label> <cmd...>`** (built once by `zig build measure`; `.zenv.sh` puts it on PATH)
@@ -1048,7 +1069,6 @@ constant. Reverted; it carries the directive instead.
 
     src/spv2wgsl.zig      std + builtin ONLY — fully extractable as-is
     tools/spv2wgsl.zig    std + the `spv2wgsl` module (it is a thin CLI over the above)
-    tools/zspv.zig        std + zspv_rewrite.zig (relative, same tool)
     tools/c2js.zig        std + `jobs_abi` (73 lines, std-free) — effectively two files
 
 Keeping these extractable is worth something concrete: `spv2wgsl` is useful to anyone
@@ -1314,6 +1334,23 @@ mid-walk because it never has two spaces to be between.
 ★★ The same applies to any value with two consumers wanting different units: converting early
 forces one of them to convert back, and **a value that is converted, unconverted and reconverted
 is one whose frame nobody can state.**
+
+★★★ **A SMOKE "LEAK": READ BOTH SIDES, THEN RUN `--leak-trace` - DO NOT HAND-INSTRUMENT.**
+Every managed smoke prints `live bytes after each deinit: example X -> Y, engine A -> B`. The
+example and the engine have SEPARATE counters (`App.gpa` / `App.engine_gpa`): example growth is a
+deinit that missed something; ENGINE growth is the engine keeping memory an example caused, which
+zimr forbids (examples own their memory). A `WRONG-ALLOCATOR FREE` is memory freed through the other
+side's allocator. To see WHAT survived, run the smoke runner by hand with `--leak-trace` (the command
+is printed in a failing smoke's `failed command:` line; a passing one does not print it):
+
+    node webtests/runner.mjs <bundle> --web-dir=zig-out/wgpu-smoke/web --frames=5 --focus=<ex> --leak-trace
+
+It prints each block the second lifecycle made and kept, with side, phase and subsystem scope, and
+flags a container that GREW (an allocation that replaced an older same-scope block). The glyph-atlas
+leak that took an hour by hand reads as one line:
+`engine +11532 bytes  frame: glyph_cache - replaced a 5772-byte block ... probably a container that GREW`.
+Give a subsystem its scope with `memwatch.pushScope(gpa, "name")` / `popScope(gpa)` at its entry
+point (a no-op unless tracing). Plan and history: `src/notes/memory_ownership_plan.md`.
 
 ★★★ **INSTALL A PANIC HANDLER BEFORE DEBUGGING ANY WASM BUILD.**
 
@@ -2732,7 +2769,8 @@ are invisible to it — and it lives in `tier-a-check`, which nothing runs, so e
     robot_mjcf <-> robot_physics   the Go1 standing gate lived in robot_mjcf and needed
                                    robot_physics; moved UP into robot_physics. robot_mjcf's
                                    test artifact: 411 -> 364 tests, 17.2 -> 14.0 MB
-    zspv <-> zspv_rewrite          the CLI shared a file with the SPIR-V reader the rewriter
+    zspv <-> zspv_rewrite          (all three files deleted in 2307 - the pass is obsolete)
+                                   the CLI shared a file with the SPIR-V reader the rewriter
                                    needs; CLI moved to tools/zspv_main.zig. Old and new zspv
                                    give byte-identical output on all 56 cached shaders
     wgpu.zig -> wgpu.zig           a nested namespace imported its own file to qualify names;
@@ -2772,6 +2810,48 @@ Applying a deletion of `const float = zm.float;` in the same pass as `float-from
 suppressed pair does not, a file whose partner is outside the run does not; and an independent
 scan of all 788 `.zig` files under src/examples/tools/webtests agrees — zero cycles, exactly
 those three suppressed edges.
+
+### 2307 — EVERY GATE GREEN, EVERY GRAPHICS PIPELINE BROKEN
+
+`0.17.0-dev.2307+392b17125`, from 2163. **This bump was first recorded here as a no-op, and it was
+not.** fmt clean, `c2js-canary` PASS, 102/102 C sweep, both standalones built, `check` green,
+`wgpu_bringup` smoke 202 / ~28 per frame - and on the device EVERY render pipeline failed:
+`Binding doesn't exist in [BindGroupLayout "resources_bgl"] ... @group(0) @binding(1) ... "shapes_fs"`.
+
+★★★ **WHAT BROKE.** 2307 rewrote the SPIR-V linker (`b3727d9bd1`). It links each declaration's MIR on
+its own and copies an annotation only when its target is defined in THAT unit (`src/link/Spirv/
+Flush.zig`, read at 392b17125). zimr decorated every Location / DescriptorSet / Binding with inline
+asm (`OpDecorate %target ...`) inside the entry function, targeting a GLOBAL - another unit - so every
+one was silently dropped. spv2wgsl then numbered the leftovers from `@group(0)`: 69 of 69 modules in
+group 0, 20 with two resources on one slot.
+
+★★★ **THE FIX IS THE LANGUAGE'S OWN SPELLING, not a workaround.** Every interface variable is a
+file-scope `@extern(..., .{ .decoration = .{ .location | .descriptor } })` - `ExternOptions.decoration`,
+what upstream's own `test/behavior/spirv.zig` uses. `tools/gen_shader_externs.zig` emits them; the old
+`setup()`, `zm_location` / `zm_binding` asm helpers, the `u32` sampler placeholder and the whole
+`zspv --rewrite-samplers-wgsl` pass are GONE (2307 also rejects a non-opaque `.constant` extern; the
+native `@SpirvType` texture + sampler handles work now). Loose uniforms are one-field uniform blocks
+(2307 requires a `.uniform` extern to point at a struct; same bytes). Full account, probes and
+measurements: `src/notes/spirv_2307_decorations_plan.md`.
+
+★★★ **WHY NOTHING SAW IT, AND WHAT SEES IT NOW.** Nothing in the sandbox compared a shader's bindings
+to the host's layout - the WGSL was perfectly valid, it just no longer matched. Two build-time guards
+now do, both proven red on the 2307 output and green on the tree:
+  * spv2wgsl `checkGraphicsInterfaceDecorated` - a vertex/fragment variable with no DescriptorSet +
+    Binding, or no Location / BuiltIn, fails the build by name (compute is exempt: kompute's externs are
+    undecorated by design and `compute_host.parseBindings` reads the numbers back by name).
+  * `checkWgsl` in the generator, run by each shader's own bootstrap exe after spv2wgsl - every WGSL
+    binding must be the (group, binding, kind, name) the schema promised. The embedded WGSL is its output.
+
+★★ **AND A CACHE LESSON.** `spv2wgsl_check` walks EVERY `.spv` in `.zig-cache`. After the fix, stale
+pre-fix SPIR-V (genuinely broken) made `check` red while every module the build produced passed.
+**After a change to the generator or the transpiler, `rm -rf .zig-cache` before trusting a red OR a
+green from a cache-walking gate.** Likewise a failed shader compile leaves a zero-byte `shader.spv`;
+the corpus now counts and skips those instead of calling them transpiler failures.
+
+★ **Standing rule for the next bump: a green sandbox says nothing about bindings.** Look at the
+emitted WGSL's `@group` lines (or trust the two guards above, which is what they are for), and let the
+device have the final word.
 
 ## ★★★ A SELF-REFERENTIAL `State` MUST BE BUILT IN THE GLOBAL, NEVER COPIED INTO IT
 
@@ -3200,7 +3280,7 @@ column holds the translation, which was the assumption that produced the wrong a
   fmt/API migration BEFORE chasing build errors** — see "SURVIVING A COMPILER
   BUMP" above. A cold sandbox on a bumped compiler spent 3 of its first 4 build
   rounds on that, and the first failure named no file at all.
-  There is NO `tools/build.zig`: the Zig tools (zimrlint, spv2wgsl, c2js, zspv,
+  There is NO `tools/build.zig`: the Zig tools (zimrlint, spv2wgsl, c2js,
   gen_externs) are steps of the ROOT `build.zig` and are built on demand.
   If something is missing, ASK — don't hunt the network.
 

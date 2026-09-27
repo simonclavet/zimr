@@ -160,7 +160,29 @@ const col = @extern(*addrspace(.output) @Vector(4, f32), .{ .name = "color", .de
 ```
 
 The `.descriptor` decoration emits `OpDecorate DescriptorSet/Binding` — it
-**replaces** the old hand-written `zm.binding(&v, set, bind)` asm helper.
+**replaces** the old hand-written `zm.binding(&v, set, bind)` asm helper, which is
+deleted (see "2307: asm decorations on globals are dropped" below for why it had to go).
+Only three decorations exist: `.location`, `.flat` and `.descriptor`.
+
+### ★★★ 2307: asm decorations on globals are dropped — declare them on the `@extern`
+
+Since `0.17.0-dev.2307` (linker rewrite `b3727d9bd1`), `src/link/Spirv/Flush.zig` links
+each declaration's MIR on its own and copies an annotation ONLY when its target is a
+result defined in that same unit. An inline-asm `OpDecorate %target ...` inside a
+function whose `%target` is a global (another unit) is collected and silently dropped -
+Debug and ReleaseFast alike. What still works:
+
+- a decoration on the `@extern` itself (`.decoration = ...`) - the supported spelling;
+- an asm `OpDecorate` on an id created in the SAME asm block (`std.spirv.specConst`'s
+  `SpecId`, the one asm decoration left in std).
+
+(`OpName` in such a block only APPEARS to survive: the assembler places debug-class ops in
+the function body, which is copied verbatim - an OpName in an invalid position.) Two more
+2307 rules the generator follows: a `.uniform` extern must point at a STRUCT, and a
+`.constant` extern must point at an OPAQUE type (image/sampler), so loose uniforms are
+one-field blocks and the old `u32` sampler placeholder is gone. spv2wgsl now fails a
+vertex/fragment module with any undecorated interface variable
+(`checkGraphicsInterfaceDecorated`). Full account: `src/notes/spirv_2307_decorations_plan.md`.
 
 ### Address-space → SPIR-V storage-class map
 
@@ -173,7 +195,11 @@ The `.descriptor` decoration emits `OpDecorate DescriptorSet/Binding` — it
 | `.storage_buffer`    | StorageBuffer        | SSBOs (runtime arrays)         |
 | (function locals)    | Function             | —                              |
 
-### ⚠ KNOWN BLOCKER (956): `@extern` opaque descriptors fold to `OpUndef`
+### ✅ RESOLVED by 2307 (was a blocker on 956): `@extern` opaque descriptors fold to `OpUndef`
+
+**Status on 2307:** opaque texture and sampler `@extern`s materialize as real descriptor
+variables and zimr ships them - every schema sampler is one. The history below is kept
+because the failure shape (a binding that silently vanishes) is worth recognizing.
 
 Using an `@extern` whose **pointee is a zero-bit opaque type** (an `@SpirvType`
 image or sampler) produces **`OpUndef`** instead of a descriptor `OpVariable` —
@@ -212,6 +238,8 @@ next time / when the compiler is bumped):
   routes therefore need a **compiler fix**; revisit on the next nightly.
 - **Stay on `zsample2d`/`zspv_rewrite`** (the u32-placeholder path, which
   materializes because u32 has runtime bits) until one of the above lands.
+  (That is what zimr did until 2307, which both fixed the blocker and dropped the
+  asm decorations the placeholder path depended on. The path is deleted.)
 
 ---
 
@@ -350,25 +378,18 @@ These have each already shifted at least once; expect more:
 
 ---
 
-## 10. The two shader paths (migration status)
+## 10. The shader path (one, since 2307)
 
-- **OLD (`zspv_rewrite`)** — shader declares `extern const s: u32`, decorates
-  with `zm.binding`, samples with `zm.zsample2d` (placeholder). `tools/zspv_rewrite.zig`
-  post-processes the `.spv` into real sampler machinery, under a **limited
-  spirv-opt pass list** (so the placeholder survives to be rewritten). Fragile,
-  version-sensitive, blocks full `-O`.
-- **NEW (`@SpirvType`)** — shader uses `zm.texture2D` + `zm.sampleLod`; the real
-  `OpTypeSampledImage` + `OpImageSampleImplicitLod` are emitted directly. No
-  rewrite, full `spirv-opt -O` runs again.
+- **`@SpirvType` + decorated `@extern`s** — `tools/gen_shader_externs.zig` declares every
+  interface variable as a file-scope `@extern` carrying its decoration; each schema sampler
+  is a real texture handle at (group, N) plus a real sampler at (group, N+1), sampled with
+  `shader_builtins.sampleLod` / `sampleLevel` (native `OpSampledImage` +
+  `OpImageSample*`). The SPIR-V the compiler writes is final: `build-obj -> spv2wgsl`, no
+  rewrite stage. Handles must be declared at FILE SCOPE - a function that returns one,
+  called at runtime, becomes WGSL that returns a texture type, which WGSL forbids (spv2wgsl
+  refuses it: `checkNoHandleValues`).
+- **The old placeholder path is deleted** — `extern const s: u32` + asm `zm.binding` +
+  `zm.zsample2d` + `tools/zspv_rewrite.zig`. It died with 2307 (see section 4).
 
-**Status:** P0 (sample/store ops) ✅. P1 (zm helpers) ✅. **Storage buffers
-(runtime arrays) ✅ END-TO-END** — the OpUndef blocker is opaque-specific, so a
-runtime-array struct's @extern materializes as a real `var<storage>` binding;
-spv2wgsl now handles `OpTypeRuntimeArray`, and `zm.ssboLoad`/`ssboStore` index via
-asm `OpAccessChain` (plain-Zig field access mis-lowers on 956). The OpName rule was
-generalized to "prefer `kbuf_`, else last-wins" so two buffers through one inline
-helper keep distinct names. **Samplers/storage-images ❌ BLOCKED** by the opaque
-`@extern` → OpUndef issue above (needs a compiler fix or the asm-OpVariable
-workaround). Next: migrate a real storage-buffer example onto the helpers +
-device-verify; then the sampler path once unblocked, then retire
-`tools/zspv_rewrite.zig` + `zm.zsample2d` (see `claude.md` PHASES P3–P5).
+Storage buffers were already on `@extern` (kompute) and are unchanged; compute bindings are
+still auto-numbered by spv2wgsl and read back by name on the host.

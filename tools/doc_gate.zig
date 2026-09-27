@@ -14,6 +14,9 @@
 //!   3. NO `<script>`.  Highlighting happens at build time; the one exception is
 //!      listed below and is application code, not presentation.
 //!   4. NO webfont fetch.  A doc page reaches across the network for nothing.
+//!   5. NO id used twice in a page.  An anchor two headings share sends every link to
+//!      the first - the robot tutorial's 11.2 and 11.8 were both `worldmodel` until
+//!      Sep 27, and nothing noticed.
 //!
 //! A fifth property - "every code block carries a language class" - is NOT
 //! gated, because it is not mechanically decidable: shell transcripts, MJCF and
@@ -107,6 +110,13 @@ pub fn main(init: std.process.Init) !void {
             );
             failures += 1;
         }
+        if (try firstDuplicateId(gpa, src)) |id| {
+            try w.print(
+                "doc-gate: {s}: id=\"{s}\" is used more than once - every link to it lands on the first\n",
+                .{ path, id },
+            );
+            failures += 1;
+        }
         if (indexOf(u8, src, "fonts.googleapis") != null or
             indexOf(u8, src, "fonts.gstatic") != null)
         {
@@ -119,11 +129,49 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (failures == 0) {
-        try w.print("doc-gate: {d} pages, one stylesheet, no script, no network.\n", .{checked});
+        try w.print("doc-gate: {d} pages, one stylesheet, no script, no network, no id twice.\n", .{checked});
         try File.stdout().writeStreamingAll(io, aw.written());
         return;
     }
     try w.print("doc-gate: {d} violation(s) across {d} pages.\n", .{ failures, checked });
     try File.stderr().writeStreamingAll(io, aw.written());
     std.process.exit(1);
+}
+
+const expect = std.testing.expect;
+const expectEqualStrings = std.testing.expectEqualStrings;
+
+/// The first `id` attribute value a page uses twice, or null. Only attributes INSIDE a tag count (the nearest `<`
+/// before the match comes after the nearest `>`), so a code sample that merely contains the text `id="` cannot
+/// trip it.
+fn firstDuplicateId(gpa: Allocator, src: []const u8) !?[]const u8 {
+    const IdSet = std.StringHashMapUnmanaged(void);
+    var seen: IdSet = .empty;
+    defer seen.deinit(gpa);
+    const needle: []const u8 = " id=\"";
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, src, at, needle)) |found| {
+        at = found + needle.len;
+        const last_open: ?usize = std.mem.lastIndexOfScalar(u8, src[0..found], '<');
+        const last_close: ?usize = std.mem.lastIndexOfScalar(u8, src[0..found], '>');
+        const inside_tag: bool = if (last_open) |open| (last_close == null or open > last_close.?) else false;
+        if (!inside_tag) {
+            continue;
+        }
+        const end: usize = std.mem.indexOfScalarPos(u8, src, at, '"') orelse break;
+        const id: []const u8 = src[at..end];
+        const entry: IdSet.GetOrPutResult = try seen.getOrPut(gpa, id);
+        if (entry.found_existing) {
+            return id;
+        }
+    }
+    return null;
+}
+
+test "doc_gate: a duplicate id is found; ids in text, or once each, are not" {
+    const gpa: Allocator = std.testing.allocator;
+    try expectEqualStrings("a", (try firstDuplicateId(gpa, "<h3 id=\"a\">x</h3><h3 id=\"a\">y</h3>")).?);
+    try expect((try firstDuplicateId(gpa, "<h3 id=\"a\">x</h3><h3 id=\"b\">y</h3>")) == null);
+    // In a code sample the text is not an attribute.
+    try expect((try firstDuplicateId(gpa, "<h3 id=\"a\">x</h3><pre>f( id=\"a\")</pre>")) == null);
 }

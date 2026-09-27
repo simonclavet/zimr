@@ -90,6 +90,14 @@ pub const actuated_bodies = [_][]const u8{
     "upper_arm_right",
 };
 
+/// Which bodies a DReCon policy WATCHES (its observation) and which it ACTUATES (its action), as one value - so a
+/// robot names its pair once (`robot_geno.drecon_bodies`) instead of every trainer spelling out both lists. The
+/// defaults are the old robot's.
+pub const Bodies = struct {
+    watched: []const []const u8 = &watched_bodies,
+    actuated: []const []const u8 = &actuated_bodies,
+};
+
 /// Resolve those names against a model. Fails loudly: a policy quietly actuating the wrong joints
 /// is a very long debugging session.
 pub fn defaultSubset(
@@ -416,10 +424,7 @@ pub const Controller = struct {
         const dofs: usize = self.subset.dofs;
         assertf(raw.len == self.envs * dofs, @src(), "actions are {d}, want {d}", .{ raw.len, self.envs * dofs });
         if (self.wantsAction()) {
-            const beta: f32 = self.options.beta;
-            for (self.filtered, raw) |*y, a| {
-                y.* = beta * a + (1.0 - beta) * y.*;
-            }
+            track.filterAction(self.options.beta, raw, self.filtered);
         }
         self.held +%= 1;
         // Spread the subset over the model's action: everything else stays exactly zero, which is

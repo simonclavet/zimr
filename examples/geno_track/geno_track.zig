@@ -193,7 +193,9 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
     const m: *const rbt.Model = &s.imported.model;
     s.data = try rbt.Data.init(gpa, m);
-    s.check = try .init(gpa, m);
+    // The judge resolves the task's per-robot names (the feet it exempts, the head it watches) through the model's
+    // body names - the same list the fleets get.
+    s.check = try .init(gpa, m, s.imported.names);
     s.reference = try rbt.Data.init(gpa, m);
     s.hips = s.imported.bodyIndex("Hips") orelse return error.NoHips;
 

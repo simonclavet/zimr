@@ -29,7 +29,7 @@
 // BUILD: `zig build-obj s.zig -target spirv32-vulkan -mcpu vulkan_v1_2 -fno-llvm
 //   -fno-lld -O ReleaseFast -ofmt=spirv`. The LLVM backend segfaults on spirv;
 //   `-fno-llvm -fno-lld` are mandatory. zimr's pipeline is pure-Zig
-//   (build-obj -> zspv -> spv2wgsl) - there is NO spirv-opt inlining pass.
+//   (build-obj -> spv2wgsl) - there is NO spirv-opt inlining pass.
 //
 // @SpirvType (declares opaque resource types; valid ONLY on the spirv target):
 //   Image  = @SpirvType(.{ .image = .{ .usage = .{ .sampled = f32 } | .storage,
@@ -1858,6 +1858,78 @@ fn storageArrayType(arena: Allocator, t: []const u8, is_atomic: bool) !?[]const 
     return null;
 }
 
+/// ---- GUARD: a graphics shader's interface must be fully decorated ----
+///
+/// In a vertex or fragment module, every resource (uniform, texture, sampler, storage
+/// buffer) must carry its own DescriptorSet AND Binding, and every stage input/output
+/// its own Location (or be a BuiltIn). Anything missing fails the build here, with the
+/// variable named - instead of being quietly numbered by `resolveBinding`'s fallback.
+///
+/// Why this exists: that fallback (group 0, next free binding) is what turned Zig
+/// 0.17.0-dev.2307 dropping every asm `OpDecorate` into a device-only failure. All 69
+/// shaders came out at @group(0), twenty with two resources on one slot, and nothing in
+/// the sandbox complained - the WGSL was perfectly valid, it just no longer matched the
+/// host's bind-group layouts. Dawn then rejected every pipeline. A graphics shader in
+/// zimr never has a legitimate reason to lack a decoration: the generator puts one on
+/// every `@extern` it emits (src/notes/spirv_2307_decorations_plan.md).
+///
+/// COMPUTE IS EXEMPT, on purpose. kompute's `kbuf_*` / `P` externs carry no decoration;
+/// they take the auto-numbered binding, and `compute_host.parseBindings` reads those
+/// numbers back out of the WGSL by name (and checks every kernel agrees). The host
+/// follows the shader there, so the fallback is sound for compute and only for compute.
+fn checkGraphicsInterfaceDecorated(s: *State) !void {
+    // No entry point selected (a filter that matched nothing, a library module): there is no stage to
+    // judge. Checked explicitly because `exec_model` DEFAULTS to 0, which is Vertex - without this, such a
+    // module would be judged as a vertex shader and its undecorated variables refused for the wrong reason.
+    const has_selected_entry: bool = s.entry.func_id != 0;
+    if (!has_selected_entry) {
+        return;
+    }
+    const exec_model: types.ExecModel = @fromBackingInt(s.entry.exec_model);
+    const is_graphics_stage: bool = exec_model == .Vertex or exec_model == .Fragment;
+    if (!is_graphics_stage) {
+        return;
+    }
+    var undecorated_count: u32 = 0;
+    for (s.inst_off.items) |off| {
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(s.spirv[off])));
+        if (op != .Variable) {
+            continue;
+        }
+        const ops: []const u32 = types.operandsAt(s.spirv, off);
+        const variable_id: u32 = ops[1];
+        const storage: types.StorageClass = @fromBackingInt(ops[2]);
+        const needs_descriptor: bool = storage == .Uniform or
+            storage == .UniformConstant or
+            storage == .StorageBuffer;
+        const needs_location: bool = storage == .Input or storage == .Output;
+        if (!needs_descriptor and !needs_location) {
+            continue; // Function / Private / Workgroup storage has nothing to bind
+        }
+        const deco: DecoInfo = if (variable_id < s.decos.len) s.decos[variable_id] else .{};
+        const has_descriptor: bool = deco.has_group and deco.has_binding;
+        const has_location_or_builtin: bool = deco.has_location or deco.has_builtin;
+        const is_missing: bool = (needs_descriptor and !has_descriptor) or
+            (needs_location and !has_location_or_builtin);
+        if (!is_missing) {
+            continue;
+        }
+        undecorated_count += 1;
+        const variable_name: []const u8 = if (variable_id < s.ids.len) s.ids[variable_id].wgsl_name else "";
+        const what_is_missing: []const u8 = if (needs_descriptor) "DescriptorSet + Binding" else "Location";
+        // `std.log.warn`, like the other diagnostics here: this also runs inside the wasm
+        // transpiler, where a raw-stderr print traps.
+        std.log.warn(
+            "spv2wgsl: {s} shader '{s}': {s} variable '{s}' (id {d}) has no {s}. Declare it as an " ++
+                "`@extern` with its decoration - see tools/gen_shader_externs.zig.",
+            .{ @tagName(exec_model), s.entry.name, @tagName(storage), variable_name, variable_id, what_is_missing },
+        );
+    }
+    if (undecorated_count > 0) {
+        return error.UndecoratedShaderInterface;
+    }
+}
+
 fn emitModuleVariable(s: *State, ops: []const u32) !void {
     // Layout: ptr_type, result_id, storage_class[, initializer]
     const ptr_tid: u32 = ops[0];
@@ -2172,6 +2244,94 @@ fn rootVariableOf(s: *State, def_off: []const u32, start_id: u32) u32 {
 /// the bare token is - the fold happens before anyone asks whether a device could cope. Only a
 /// value that reaches the bitcast through runtime storage survives, which is why `nonFiniteName`
 /// emits a function with a `var` in it.
+/// Refuse WGSL that treats a texture or sampler HANDLE as an ordinary value: returned from a
+/// function (`-> texture_2d<f32>`) or held in a function-scope `var`. WGSL forbids both - a
+/// handle can only be a module-scope binding, passed as a parameter, or bound with `let`.
+///
+/// How it gets emitted: a shader that CALLS a function returning an `@extern` handle at
+/// runtime (e.g. `shader_builtins.texture2D(...)` inside `main`) instead of declaring the
+/// handle at file scope. The SPIR-V is fine; the WGSL is not, and Tint would reject it at
+/// pipeline creation with a message naming neither the function nor the fix.
+///
+/// Text-level, like `checkNonFiniteConstants`, and it reads only the TYPE: the text after `->` of a
+/// function signature, and after the `:` of an indented `var`. Matching anywhere on the line was the
+/// first version's bug - a local merely NAMED `sampler_count` or `texture_uv` (spv2wgsl carries Zig
+/// locals' names over) would have failed the build. A module-scope binding is at column 0 and legal.
+fn checkNoHandleValues(wgsl: []const u8) !void {
+    var lines = std.mem.splitScalar(u8, wgsl, '\n');
+    while (lines.next()) |line| {
+        const trimmed: []const u8 = std.mem.trimStart(u8, line, " ");
+        const is_indented: bool = trimmed.len < line.len;
+        const return_type: ?[]const u8 = returnTypeOf(line);
+        const var_type: ?[]const u8 = if (is_indented) localVarTypeOf(trimmed) else null;
+        const returns_handle: bool = if (return_type) |t| isHandleType(t) else false;
+        const holds_handle: bool = if (var_type) |t| isHandleType(t) else false;
+        if (returns_handle or holds_handle) {
+            std.log.warn("spv2wgsl: texture/sampler handle used as a value: `{s}`. Declare the " ++
+                "handle as a file-scope `@extern` instead of calling a function for it.", .{trimmed});
+            return error.WgslHandleUsedAsValue;
+        }
+    }
+}
+
+/// A WGSL handle type: a texture of any kind, or a sampler. Exact names, not substrings - a
+/// struct or a variable that merely contains the letters is not a handle.
+fn isHandleType(type_text: []const u8) bool {
+    const t: []const u8 = std.mem.trim(u8, type_text, " ");
+    const is_texture: bool = std.mem.startsWith(u8, t, "texture_");
+    const is_sampler: bool = std.mem.eql(u8, t, "sampler") or std.mem.eql(u8, t, "sampler_comparison");
+    return is_texture or is_sampler;
+}
+
+/// The return type of a function signature line (`fn f(...) -> T {`), or null for any other line.
+fn returnTypeOf(line: []const u8) ?[]const u8 {
+    if (std.mem.indexOf(u8, line, "fn ") == null) {
+        return null;
+    }
+    const arrow: usize = std.mem.indexOf(u8, line, "-> ") orelse return null;
+    const rest: []const u8 = line[arrow + "-> ".len ..];
+    const end: usize = std.mem.indexOfAny(u8, rest, " {") orelse rest.len;
+    return rest[0..end];
+}
+
+/// The declared type of a function-scope `var name: T;` (or `var name: T = ...;`), or null.
+fn localVarTypeOf(trimmed: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, trimmed, "var ")) {
+        return null;
+    }
+    const colon: usize = std.mem.indexOfScalar(u8, trimmed, ':') orelse return null;
+    const rest: []const u8 = trimmed[colon + 1 ..];
+    const end: usize = std.mem.indexOfAny(u8, rest, ";=") orelse rest.len;
+    return rest[0..end];
+}
+
+test "checkNoHandleValues: a handle returned or held in a function var is refused" {
+    const saved_log_level: std.log.Level = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = saved_log_level;
+    // The two shapes the runtime-called `texture2D()` probe actually produced.
+    try expectError(
+        error.WgslHandleUsedAsValue,
+        checkNoHandleValues("fn f() -> texture_2d<f32> {\n  return t;\n}\n"),
+    );
+    try expectError(
+        error.WgslHandleUsedAsValue,
+        checkNoHandleValues("fn g() {\n  var _25: sampler;\n}\n"),
+    );
+    // A local merely NAMED like a handle is not one - the first version of this check refused these.
+    try checkNoHandleValues(
+        "fn f() -> vec4<f32> {\n  var sampler_count: u32;\n  var texture_uv: vec2<f32> = vec2<f32>(0.0);\n" ++
+            "  return vec4<f32>(0.0);\n}\nfn sampler_weight() -> f32 {\n  return 1.0;\n}\n",
+    );
+    // The legal shapes every real shader has: a module-scope binding, and a `let` of one.
+    try checkNoHandleValues(
+        "@group(1) @binding(0) var texture0: texture_2d<f32>;\n" ++
+            "@group(1) @binding(1) var texture0_sampler: sampler;\n" ++
+            "fn h() -> vec4<f32> {\n  let _1: texture_2d<f32> = texture0;\n" ++
+            "  let _2: sampler = texture0_sampler;\n  return textureSample(_1, _2, vec2<f32>(0.0));\n}\n",
+    );
+}
+
 fn checkNonFiniteConstants(wgsl: []const u8) !void {
     // 1. A bare `nan` / `inf` / `-inf` where a value belongs. Anchored on `return ` and `= ` so
     //    an identifier that merely CONTAINS the letters - `nan_helper`, `infinity_mask` - does
@@ -10877,6 +11037,9 @@ pub fn convertSpirvToWgslEntry(
 
     try pass1_walk(&state);
     try pass2_decorations(&state);
+    // Decorations and names are known from here on - fail a graphics shader with an
+    // undecorated interface variable before anything gets auto-numbered.
+    try checkGraphicsInterfaceDecorated(&state);
     try markAtomicBindings(&state);
     try checkBarrierUniformity(&state);
     try pass3_types_globals(&state);
@@ -10895,6 +11058,9 @@ pub fn convertSpirvToWgslEntry(
     // round-trips were spent on a NaN literal. There is no use for WGSL that cannot compile, so
     // this one fails the build, in every mode.
     try checkNonFiniteConstants(out);
+    // Same kind of hard check: a texture/sampler handle returned from a function or held in
+    // a function-scope `var` is WGSL no device will compile.
+    try checkNoHandleValues(out);
 
     // ---------------------------------------------------------------------------
     // GUARD RAIL: every `var phiN` declared must be ASSIGNED at least once.
@@ -11058,6 +11224,45 @@ test "sampler-uniformity gate: a sample at uniform scope is accepted" {
     @memcpy(std.mem.sliceAsBytes(words), bytes[0 .. words.len * 4]);
 
     try sampler_uniformity.check(arena.allocator(), words, "decal_fs (fixed)");
+}
+
+test "graphics-interface gate: fires on the ssao_blur module 2307 shipped undecorated" {
+    // The fixture is ssao_blur_fs exactly as it reached the device on Zig 0.17.0-dev.2307:
+    // its Location / DescriptorSet / Binding decorations were written through inline asm
+    // inside the entry function, and 2307's rewritten SPIR-V linker dropped every one of
+    // them. (The old sampler-rewrite pass had stamped fallback bindings on the textures,
+    // so what is left undecorated is the UBO and both varyings.) spv2wgsl numbered the
+    // leftovers from @group(0) and Dawn rejected the pipeline. This must be a build error.
+    const bytes: []const u8 = @embedFile("tests/fixtures/decorations/ssao_blur_2307_undecorated.spv");
+
+    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const words: []u32 = try arena.allocator().alloc(u32, bytes.len / 4);
+    @memcpy(std.mem.sliceAsBytes(words), bytes[0 .. words.len * 4]);
+
+    // The gate names each undecorated variable at `warn`; that is the diagnostic working, not
+    // noise, but a passing test must print nothing - so raise the bar for this one call only.
+    const saved_log_level: std.log.Level = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = saved_log_level;
+    try expectError(error.UndecoratedShaderInterface, convertSpirvToWgsl(arena.allocator(), words));
+}
+
+test "graphics-interface gate: the same shader with @extern decorations is accepted" {
+    // ssao_blur_fs as the current generator emits it: every interface variable a
+    // file-scope `@extern` carrying its decoration. It must pass - and land where the
+    // host layout expects it - or the gate is just a build-breaker.
+    const bytes: []const u8 = @embedFile("tests/fixtures/decorations/ssao_blur_decorated.spv");
+
+    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const words: []u32 = try arena.allocator().alloc(u32, bytes.len / 4);
+    @memcpy(std.mem.sliceAsBytes(words), bytes[0 .. words.len * 4]);
+
+    const wgsl: []const u8 = try convertSpirvToWgsl(arena.allocator(), words);
+    try expect(std.mem.indexOf(u8, wgsl, "@group(2) @binding(0) var<uniform> u:") != null);
+    try expect(std.mem.indexOf(u8, wgsl, "@group(1) @binding(0) var src: texture_2d<f32>;") != null);
+    try expect(std.mem.indexOf(u8, wgsl, "@group(1) @binding(1) var src_sampler: sampler;") != null);
 }
 
 test "rejects non-spirv input" {

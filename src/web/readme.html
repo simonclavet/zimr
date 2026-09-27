@@ -608,8 +608,11 @@ comptime { _ = shader_externs.installSpirvEntry(shaderMain); }</code></pre>
                 exact <code>@extern</code> declaration SPIR-V needs &mdash; an
                 <code>addrspace(.input)</code> for an attribute, an
                 <code>addrspace(.uniform)</code> block for the <code>Ubo</code>, a
-                sampler placeholder, a storage-buffer handle &mdash; each already
-                decorated with its <code>@group</code> and <code>@binding</code>.
+                real texture handle plus its sampler, a storage-buffer handle
+                &mdash; each carrying its own decoration
+                (<code>.location</code>, or <code>.descriptor</code> for its
+                <code>@group</code> and <code>@binding</code>) right on the
+                <code>@extern</code>.
                 It also emits the typed <code>io_in</code> wrapper your
                 <code>shaderMain</code> receives, the <code>Out</code> struct, and
                 the entry trampoline. The body file never writes an
@@ -617,10 +620,12 @@ comptime { _ = shader_externs.installSpirvEntry(shaderMain); }</code></pre>
             </p>
 
             <p>
-                That generated Zig is compiled to SPIR-V, lightly rewritten by
-                <code>zspv</code> (sampler bindings, and a few things Tint is
-                strict about), and translated to WGSL by <code>spv2wgsl</code>.
-                The host <code>@embedFile</code>s the WGSL and builds the pipeline.
+                That generated Zig is compiled to SPIR-V and translated to WGSL by
+                <code>spv2wgsl</code>, which refuses a vertex or fragment shader
+                with any undecorated resource or varying. Then the shader's own
+                codegen tool reads the WGSL's bindings back and fails the build
+                unless every one is exactly the slot its schema promised. The host
+                <code>@embedFile</code>s the checked WGSL and builds the pipeline.
                 So one struct field &mdash; say
                 <code>positions: StorageBuf(Vec2, .read)</code> &mdash; becomes a
                 decorated SPIR-V global, a

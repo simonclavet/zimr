@@ -51,6 +51,7 @@ pub const ibo_ring_indices = @import("gpu_iface.zig").ibo_ring_indices;
 const wgpu = @import("wgpu.zig");
 const wgpu_texture = @import("wgpu_texture.zig");
 const glyph_atlas = @import("glyph_atlas.zig");
+const memwatch = @import("memwatch.zig");
 const shader = @import("shader_interface");
 const shader_runtime = @import("shader_runtime_wgpu.zig");
 const assertf = zm.assertf;
@@ -384,7 +385,9 @@ pub const Renderer2D = struct {
     // CPU bookkeeping plus the GPU pages it packs into. Engine-owned and OUTSIDE
     // the texture-id registry on purpose: the launcher releases registrations
     // per child (`releaseOwner`, `resetRegistryFrom`), and these pages are
-    // shared by every child's fonts - a child reset must not destroy them.
+    // shared by every child's fonts - a child reset must not destroy them. It
+    // does start the atlas over (`requestReset`), so no torn-down example's
+    // glyphs stay behind; the pages themselves are reused.
     glyph_cache: glyph_atlas.GlyphAtlas = .{},
     glyph_pages: [glyph_atlas.page_max]GlyphPage = @splat(.{}),
 
@@ -562,6 +565,8 @@ pub const Renderer2D = struct {
         } else {
             return 0;
         }
+        memwatch.pushScope(self.gpa, "texture_registry"); // `--leak-trace` attribution
+        defer memwatch.popScope(self.gpa);
         const bg: wgpu.BindGroupHandle = buildMaterialBindGroup(
             self.gpa,
             self.resources.f.device,
@@ -640,6 +645,9 @@ pub const Renderer2D = struct {
             self.reg_free_len += 1;
         }
         self.shapes_batch.current_texture_bind_group = self.resources.bind_groups[1];
+        // The released child's fonts had glyphs in the shared atlas; start it over
+        // (next frame) so they do not outlive the child. See `GlyphAtlas.requestReset`.
+        self.glyph_cache.requestReset();
     }
 
     /// Release every per-example texture registration - destroy each material
@@ -705,6 +713,10 @@ pub const Renderer2D = struct {
         self.reg_free_len = 0;
         // The batch may still point at a now-destroyed group; re-arm to white.
         self.shapes_batch.current_texture_bind_group = self.resources.bind_groups[1];
+        // The torn-down example's fonts had glyphs in the shared atlas, keyed by face
+        // ids that are never reused - start it over (next frame) so the engine keeps
+        // nothing the example caused. See `GlyphAtlas.requestReset`.
+        self.glyph_cache.requestReset();
     }
 
     /// Register a texture the ENGINE owns (destroyed on resetRegistry), e.g. a

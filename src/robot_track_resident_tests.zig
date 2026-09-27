@@ -9,6 +9,7 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const track = @import("robot_track.zig");
+const dance = @import("robot_dance.zig");
 const kit_mod = @import("robot_latent_kit.zig");
 /// The fleet on the baked get-up clip is a test-only helper, so it lives with the kit's tests.
 const kit_tests = @import("robot_latent_kit_tests.zig");
@@ -154,4 +155,64 @@ test "robot_track_resident: the mirror acts as the GPU's policy would" {
         largest,
     });
     try expect(worst < 1.0e-5 * @max(largest, 1.0e-3));
+}
+
+test "robot_track_resident: the judge's actor - zero weights ARE the servo, trained ones act, training untouched" {
+    // Plan F1b's known answers. With every mirrored weight zero the policy's output is exactly zero, so judging the
+    // learner must give the servo's judgement to the bit. After a few rounds the policy has moved, and its judgement
+    // must differ - the actor really acts. And judging borrows only the learner's scratch: its own fleet and its
+    // random stream are byte-for-byte what they were, so a judged run trains exactly as an unjudged one.
+    const gpa: Allocator = std.testing.allocator;
+    var setup: kit_tests.FleetSetup = undefined;
+    try setup.init(gpa);
+    defer setup.deinit();
+    const fleet: *track.Fleet = setup.fleet;
+    const f: usize = track.localSize(fleet.m.nbody);
+    const mean: []f32 = try gpa.alloc(f32, f);
+    defer gpa.free(mean);
+    const spread: []f32 = try gpa.alloc(f32, f);
+    defer gpa.free(spread);
+    @memset(mean, 0.0);
+    @memset(spread, 1.0);
+    var host: compute_host.Compute(zn_mlp) = .initCpu();
+    const learner: *Resident(zn_mlp) = try .init(gpa, &host, fleet, .{ .mean = mean, .spread = spread }, .{
+        .rows = 8,
+        .window = 8,
+        .hidden = 32,
+        .policy_hidden = 32,
+        .collect = 32,
+    });
+    defer learner.deinit();
+    host.element_count = @max(learner.data.end, learner.kit.param_count + learner.kit.policy_count);
+
+    const clip: *const dance.Clip = fleet.clips[0];
+    const starts: []usize = try track.evenStarts(gpa, clip, 90);
+    defer gpa.free(starts);
+    const servo: track.Judgement = try track.judge(gpa, fleet.m, clip, fleet.options, starts, null);
+
+    // Zero weights: the servo, exactly.
+    @memset(learner.mirror, 0.0);
+    const silent: track.Judgement = try track.judge(gpa, fleet.m, clip, fleet.options, starts, learner.judgeActor());
+    try expect(std.meta.eql(silent, servo));
+
+    // Trained weights: a different judgement - and the learner's own fleet and random stream untouched by judging.
+    for (0..12) |_| {
+        learner.round();
+    }
+    learner.syncMirror();
+    const rng_before: @TypeOf(learner.rng) = learner.rng;
+    const fleet_rng_before: @TypeOf(fleet.rng) = fleet.rng;
+    const frames_before: []u32 = try gpa.dupe(u32, fleet.frame);
+    defer gpa.free(frames_before);
+    const acting: track.Judgement = try track.judge(gpa, fleet.m, clip, fleet.options, starts, learner.judgeActor());
+    try expect(!std.meta.eql(acting, servo));
+    try expect(std.meta.eql(learner.rng, rng_before));
+    try expect(std.meta.eql(fleet.rng, fleet_rng_before));
+    try expect(std.mem.eql(u32, fleet.frame, frames_before));
+    report.print("\n  judge's actor after 12 rounds: MTTF {d:.2} s (servo {d:.2} s), reward {d:.3} (servo {d:.3})\n", .{
+        acting.meanTimeToFailure(),
+        servo.meanTimeToFailure(),
+        acting.meanReward(),
+        servo.meanReward(),
+    });
 }

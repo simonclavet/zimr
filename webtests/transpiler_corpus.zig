@@ -5,9 +5,9 @@
 //! runner.mjs only does WebAssembly.instantiate + fs + the host primitives.
 //!
 //! What it does (mirrors the .ts so output is byte-identical):
-//!   1. Walk a corpus root (default .zig-cache) for *.rewritten.spv inputs
-//!      (the zspv output that the shipping WGSL path feeds into spv2wgsl;
-//!      spirv-opt is disabled so .opt.spv is no longer produced).
+//!   1. Walk a corpus root (default .zig-cache) for `shader.spv` inputs -
+//!      the compiler's own SPIR-V, which the shipping WGSL path feeds straight
+//!      into spv2wgsl (compute kernels are `compute.spv` and are not in scope).
 //!   2. Dedup by MD5 of the SPIR-V bytes (md5File via runner), size-sorted.
 //!   3. For each: write the SPIR-V into the transpiler wasm's input buffer,
 //!      call transpile(len) -> packed ptr|len, read the WGSL back out of the
@@ -287,14 +287,21 @@ export fn _start() void {
     const cap_str: []const u8 = jsStrInto(cap_str_h, &capnum);
     printf("\u{2713} loaded transpiler wasm (capacity {s} bytes)", .{cap_str});
 
-    // ---- find + dedup .rewritten.spv (the real spv2wgsl input) ----
+    // ---- find + dedup shader.spv (the real spv2wgsl input) ----
     var sbuf: [256]u8 = undefined;
     print(bufPrint(&sbuf, "scanning {s}/ for .spv files...", .{root}) catch "scanning");
-    const listing_h: Handle = js_call2(host(), "listFiles", 9, s(root), s(".rewritten.spv"));
+    const listing_h: Handle = js_call2(host(), "listFiles", 9, s(root), s("shader.spv"));
     var lbuf: [65536]u8 = undefined;
     const listing: []const u8 = jsStrInto(listing_h, &lbuf);
 
     var total_files: u32 = 0;
+    // A shader compile that FAILS still leaves its `-femit-bin` output behind as a
+    // zero-byte `shader.spv`. That is not a transpiler input - the compile step that
+    // made it already failed on its own - so it is counted and skipped, never
+    // transpiled and reported as a spv2wgsl failure. (This only became visible once
+    // spv2wgsl started reading the compiler's own output: the old sampler-rewrite
+    // pass in between only ever wrote a file when its input was valid.)
+    var failed_compile_leftovers: u32 = 0;
     var it = std.mem.splitScalar(u8, listing, '\n');
     // First pass: dedup by md5 of spv bytes (md5File via host), collect.
     while (it.next()) |path| {
@@ -302,6 +309,13 @@ export fn _start() void {
             continue;
         }
         total_files += 1;
+        const sz_h: Handle = js_call1(host(), "fileSize", 8, s(path));
+        const sz: u32 = @trunc(js_to_num(sz_h));
+        const is_failed_compile_leftover: bool = sz == 0;
+        if (is_failed_compile_leftover) {
+            failed_compile_leftovers += 1;
+            continue;
+        }
         if (st.n >= max_shaders) {
             continue;
         }
@@ -323,8 +337,6 @@ export fn _start() void {
         if (dup) {
             continue;
         }
-        const sz_h: Handle = js_call1(host(), "fileSize", 8, s(path));
-        const sz: u32 = @trunc(js_to_num(sz_h));
         var r: ShaderResult = .{};
         @memcpy(r.md5[0..@min(md5.len, 32)], md5[0..@min(md5.len, 32)]);
         r.size_bytes = sz;
@@ -347,6 +359,14 @@ export fn _start() void {
     }
     var fbuf: [128]u8 = undefined;
     print(bufPrint(&fbuf, "  found {d} files, {d} unique by md5", .{ total_files, st.n }) catch "  found");
+    if (failed_compile_leftovers > 0) {
+        var lbuf2: [128]u8 = undefined;
+        print(bufPrint(
+            &lbuf2,
+            "  skipped {d} zero-byte shader.spv (left by a failed shader compile, not a transpiler input)",
+            .{failed_compile_leftovers},
+        ) catch "  skipped zero-byte inputs");
+    }
     print("");
 
     // ---- transpile each ----

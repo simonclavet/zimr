@@ -324,7 +324,7 @@ pub fn samplerFieldCount(comptime SamplersT: type) usize {
 /// collision and a texture/sampler type mismatch.)
 ///
 /// Each `Sampler2D` takes TWO bindings - texture at N, paired sampler at N+1
-/// (zspv_rewrite synthesizes the sampler half there; the host mirrors it). A
+/// (the generated shader declares both; the host mirrors it). A
 /// free (unpinned/unshared) sampler takes the lowest N in `sampler_group`
 /// where BOTH N and N+1 are unclaimed, then advances by 2. Without reserving
 /// N+1, the next texture would land on the previous sampler's slot - the

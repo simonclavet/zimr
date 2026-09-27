@@ -1,7 +1,7 @@
-//! shader_builtins.zig - the SPIR-V shader DSL: stage-IO decorators, opaque
-//! texture / sampler / storage types, and the texture-sampling + storage-buffer
-//! intrinsics. These emit SPIR-V inline asm (or `@SpirvType` declarations) that
-//! only the SPIR-V backend lowers, so they are SHADER-ONLY.
+//! shader_builtins.zig - the SPIR-V shader DSL: opaque texture / sampler /
+//! storage types, and the texture-sampling + storage-buffer intrinsics. These
+//! emit SPIR-V inline asm (or `@SpirvType` declarations) that only the SPIR-V
+//! backend lowers, so they are SHADER-ONLY.
 //!
 //! They used to live at the tail of `zimrmath.zig` so a shader needed one
 //! import - but `zm` is imported by the whole host too, so editing a shader
@@ -13,132 +13,40 @@ const builtin = @import("builtin");
 const zm = @import("zm");
 const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
-const float = zm.float;
-
-// ---- SPIR-V shader decorators ---------------------------------------
-//
-// `location` / `binding` / `zsample2d` emit SPIR-V inline asm that only the
-// SPIR-V backend lowers. On host targets the asm bodies are never analyzed -
-// Zig's lazy compilation only reaches them on a SPIR-V build - so they are not
-// a host-portability concern. See the module doc above for why they live here
-// (split out of zimrmath so host edits don't rebuild the world).
-
-/// Set the SPIR-V `Location` decoration on a stage input/output
-/// variable.  Called with comptime-known args; the body emits
-/// `OpDecorate %target Location N` and gets stripped during dead-
-/// code elimination.
-///
-/// `n` is the location number (0-based).  For vertex attributes,
-/// match the raylib reserved layout: position=0, texcoord=1,
-/// normal=2, color=3, tangent=4, texcoord2=5.
-pub fn location(comptime ptr: anytype, comptime n: u32) void {
-    asm volatile (
-        \\OpDecorate %target Location $n
-        :
-        : [target] "" (ptr),
-          [n] "c" (n),
-    );
-}
-
-/// Set the SPIR-V `DescriptorSet` + `Binding` decorations on a
-/// sampler or UBO variable.  Same call-site rule as `location`.
-///
-/// `set` is the descriptor set number (usually 0 for shader-local
-/// resources, 1+ for shared engine resources).  `bind` is the
-/// binding number within the set.
-pub fn binding(
-    comptime ptr: anytype,
-    comptime set: u32,
-    comptime bind: u32,
-) void {
-    asm volatile (
-        \\OpDecorate %target DescriptorSet $set
-        \\OpDecorate %target Binding $bind
-        :
-        : [target] "" (ptr),
-          [set] "c" (set),
-          [bind] "c" (bind),
-    );
-}
-
-/// Sample a 2D texture.  In shader source, looks like:
-/// ```zig
-/// extern const s_albedo_sampler2d: u32 addrspace(.constant);
-/// const c = zm.zsample2d(s_albedo_sampler2d, frag_uv);
-/// ```
-/// The `tools/zspv_rewrite.zig` post-process rewrites the call site
-/// to a real `OpImageSampleImplicitLod` and the helper body becomes
-/// `return texture(_s, _uv);` in the emitted GLSL.
-///
-/// CRITICAL: MUST be `noinline`.  `spirv-opt -O` would inline
-/// through DontInline anyway, which is why sampler shaders use a
-/// custom limited pass list (see `tools/zspv_rewrite.zig`).  With
-/// the limited pass list, `noinline` ensures the function survives
-/// dead-strip and `rewriteSamplers` has something to grab onto.
-///
-/// Body uses a direct `Vec{ ... }` struct literal (NOT `vec4(...)`)
-/// so spirv-cross emits the construction inline rather than as a
-/// call to a helper function that would survive the limited
-/// spirv-opt pass list and pollute the output GLSL.
-pub noinline fn zsample2d(handle: u32, uv: Vec2) Vec {
-    return Vec{ uv[0], uv[1], float(handle), 0.0 };
-}
-
-/// Sample a 2D texture at an EXPLICIT level-of-detail - the vertex-stage-safe
-/// twin of `zsample2d`.  In shader source, looks like:
-/// ```zig
-/// const c = zm.zsample2d_level(s_height_sampler2d, frag_uv, 0.0);
-/// ```
-/// `tools/zspv_rewrite.zig` rewrites the call site to `OpImageSampleExplicitLod`
-/// (with the `lod` as the `Lod` image operand) instead of the implicit form.
-/// Unlike `zsample2d`'s implicit LOD, the explicit op needs no derivatives, so
-/// it is legal in a VERTEX shader (e.g. sampling a height map to displace a
-/// vertex).  Same `noinline` + `Vec{...}` literal constraints as `zsample2d`
-/// (the `lod` rides in the w lane purely so the placeholder body uses the arg).
-pub noinline fn zsample2d_level(handle: u32, uv: Vec2, lod: f32) Vec {
-    return Vec{ uv[0], uv[1], float(handle), lod };
-}
 
 // ===========================================================================
-// @SpirvType-backed texture sampling (the no-zspv_rewrite path, Zig 0.17+)
+// @SpirvType-backed textures, samplers and sampling
 // ===========================================================================
 //
-// Background: the `zsample2d`/`location`/`binding` trio above is the OLD path.
-// A shader declares a `u32` handle, samples a placeholder, and the
-// `tools/zspv_rewrite.zig` post-process rebuilds the SPIR-V into a real
-// OpTypeSampledImage + OpImageSampleImplicitLod (and a custom limited
-// spirv-opt pass list keeps the placeholder alive long enough to rewrite).
-// That whole machine exists only because the pre-0.17 SPIR-V backend could
-// not declare or operate on opaque image types from Zig.
+// `@SpirvType` declares the opaque image / sampler / sampled-image types, and
+// `@extern(..., .{ .decoration = .{ .descriptor = ... } })` binds a texture or a
+// sampler to its (group, binding). `sampleLod` / `sampleLevel` then emit the
+// real `OpSampledImage` + `OpImageSample*` ops, which spv2wgsl lowers to
+// `textureSample(tex, samp, uv)` / `textureSampleLevel(...)`. Nothing rewrites
+// the SPIR-V after the compiler: what it writes is final.
 //
-// 0.17-dev.956 can. `@SpirvType` declares the image/sampled-image types and
-// `@extern(..., .{ .decoration = .{ .descriptor = ... } })` binds them, so the
-// helpers below emit the REAL ops directly - no placeholder, no rewrite, and
-// the full `spirv-opt -O` can run again. See `src/notes/spikes/` for the
-// minimal proofs and `src/notes/zig-spirv-compiler-interface.md` for the
-// complete compiler-interface contract + a recovery playbook for when the
-// compiler changes (it WILL - every field name and constraint below is a thing
-// that has already moved once).
+// Declarations are NOT made here - `tools/gen_shader_externs.zig` emits one
+// decorated file-scope `@extern` per texture and per sampler from the shader's
+// schema. They must stay FILE-SCOPE: calling a function that returns the
+// handle at runtime leaves a WGSL function returning a texture type, which WGSL
+// forbids.
 //
-// WHY THESE ARE FUNCTIONS, NOT FILE-SCOPE CONSTS: `@SpirvType` is only valid on
-// the SPIR-V target, but zimrmath also compiles to host/wasm32. A file-scope
-// `const T = @SpirvType(...)` would be analyzed EAGERLY and break every host
-// build. Wrapping each type in a `fn ... type` keeps it behind Zig's lazy
-// analysis (a `pub fn` is only analyzed when referenced - and only shaders,
+// Why there is no `location(ptr, n)` / `binding(ptr, set, bind)` helper any
+// more: they decorated a global through inline asm from inside a function, and
+// Zig 0.17.0-dev.2307's rewritten SPIR-V linker drops an annotation whose target
+// is defined in a different declaration - silently. The decoration belongs on
+// the `@extern` itself; see src/notes/spirv_2307_decorations_plan.md. The
+// compiler-interface contract, and a recovery playbook for when the compiler
+// moves again, is src/notes/zig-spirv-compiler-interface.md.
+//
+// WHY THE TYPES ARE FUNCTIONS, NOT FILE-SCOPE CONSTS: `@SpirvType` is only valid
+// on the SPIR-V target, but this module also compiles to host/wasm32. A
+// file-scope `const T = @SpirvType(...)` would be analyzed EAGERLY and break
+// every host build. Wrapping each type in a `fn ... type` keeps it behind Zig's
+// lazy analysis (a `pub fn` is only analyzed when referenced - and only shaders,
 // built for SPIR-V, ever reference these). The asm bodies are lazy for the same
-// reason `zsample2d`'s is. RULE: never reference any of the four decls below
-// from host code or a host `test`, or you force eager SPIR-V analysis on host.
-
-// !! P3 STATUS (956): the SAMPLE OP works - `sampleLod` inlines to native
-// `OpSampledImage` + `OpImageSampleImplicitLod`, and spv2wgsl lowers it to
-// `textureSample(tex, samp, uv)` with separate `texture_2d<f32>` + `sampler`.
-// But the @extern DESCRIPTOR BINDING does NOT yet materialize: an @extern whose
-// pointee is a zero-bit opaque type folds to OpUndef (compiler `constantNavRef`
-// bails for `!hasRuntimeBits` before registering the global - see the interface
-// doc / spv2wgsl.zig header). So these helpers are the correct target shape and
-// compile, but are NOT usable end-to-end until that blocker is resolved (compiler
-// fix, or an asm-declared-OpVariable workaround). The old `zsample2d`/zspv_rewrite
-// path remains the working sampler path meanwhile.
+// reason. RULE: never reference any of these from host code or a host `test`,
+// or you force eager SPIR-V analysis on host.
 
 /// The SPIR-V 2D texture type - a SAMPLED `OpTypeImage` (NOT a combined
 /// sampled-image). WGSL has no combined sampler: a texture and its sampler are
@@ -202,8 +110,8 @@ pub fn SamplerPtr() type {
 
 /// Declare a 2D texture descriptor binding. Pair it with a `sampler(...)`
 /// binding and sample the two together with `sampleLod`. The `@extern`
-/// `.descriptor` decoration emits the `OpDecorate DescriptorSet/Binding` that
-/// the old `zm.binding(&s, set, bind)` did - on a real texture, not a `u32`.
+/// `.descriptor` decoration puts the DescriptorSet/Binding on the variable
+/// itself. Call it at FILE SCOPE only (see the section header above).
 ///
 /// ```zig
 /// const albedo_tex = zm.texture2D("albedo_tex", 0, 1);
@@ -234,11 +142,10 @@ pub fn sampler(
 }
 
 /// Sample a 2D texture with a sampler, implicit LOD (FRAGMENT stage only -
-/// implicit LOD needs screen-space derivatives). Replaces `zm.zsample2d` and the
-/// entire `zspv_rewrite` path.
+/// implicit LOD needs screen-space derivatives).
 ///
 /// `inline` is REQUIRED: the zimr shader pipeline is pure-Zig
-/// (build-obj -> zspv -> spv2wgsl) with NO spirv-opt inlining pass, so the ops
+/// (build-obj -> spv2wgsl) with NO spirv-opt inlining pass, so the ops
 /// must land at the call site referencing the global texture + sampler directly.
 /// A non-inline helper would leave a function taking texture/sampler parameters,
 /// which does not lower cleanly.

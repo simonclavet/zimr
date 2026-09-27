@@ -98,6 +98,7 @@ implementation and a matching set of GPU kernels. This document covers the libra
         <li><a href="#rlppo">The clip is pessimistic</a></li>
         <li><a href="#rlreplay">A ring that forgets</a></li></ol></li>
   <li><a href="#training">A network that learns</a></li>
+  <li><a href="#rlpolicies">Reinforcement learning: teaching a policy to act</a></li>
   <li><a href="#gpu">The GPU relationship</a>
     <ol><li><a href="#kernelshape">What a kernel looks like</a></li>
         <li><a href="#dispatchgap">Where the two backends differ</a></li>
@@ -21438,7 +21439,7 @@ individually and the whole allocation goes when the scope closes. The transposes
 <em>output</em>, not <code>pre1</code>. Passing the input compiles, runs, and produces a network
 that learns far too slowly &mdash; the kind of error only an end-to-end check finds.</p>
 
-<h2 id="rl">18b. Reinforcement learning<a class="anchor" href="#rl">#</a></h2>
+<h2 id="rlpolicies">18b. Reinforcement learning<a class="anchor" href="#rlpolicies">#</a></h2>
 
 <p>This chapter is about teaching a policy to act. It covers what zimrnum gives you, how the
 pieces fit, and the intuition behind each algorithm &mdash; enough to build PPO, SAC or AWR, and

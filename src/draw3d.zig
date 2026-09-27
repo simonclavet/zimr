@@ -218,8 +218,8 @@ const cube_fs_wgsl = @embedFile("cube3d_fs.wgsl");
 // pass as the solid cube batch. Group 0 reuses Cube3D's camera UBO (shared,
 // compatible layout); group 1 is a per-texture {texture, sampler} bind group.
 // WGSL is generated from typed pure-Zig shaders (src/shaders/billboard_{vs,fs}.zig,
-// entry-point `entry`) via the .zig->SPIR-V->spv2wgsl pipeline - the FS through the
-// sampler-rewrite path (zsample2d + zspv). No inline WGSL remains.
+// entry-point `entry`) via the .zig->SPIR-V->spv2wgsl pipeline, the FS sampling a
+// native texture + sampler pair. No inline WGSL remains.
 const TexVertex = extern struct { pos: [3]f32, uv: [2]f32, color: [4]f32 };
 const TexDraw = struct {
     bind_group: wgpu.BindGroupHandle,
@@ -272,10 +272,10 @@ const vp_ubo_stride: u64 = 256;
 const decal_ubo_stride: u32 = 256;
 
 // WGSL emitted by the typed shader_runtime pipeline from `src/shaders/billboard_vs.zig`
-// and `billboard_fs.zig` (pure-Zig `@SpirvType` -> SPIR-V -> spv2wgsl). The FS goes
-// through the proven sampler path - `zsample2d` + `zm.binding(&tex_sampler2d,1,0)`
-// + `zspv --rewrite-samplers-wgsl` -> real `@group(1)@binding(0) texture_2d<f32>`
-// and `@group(1)@binding(1) sampler`, matching the per-texture bind group below.
+// and `billboard_fs.zig` (pure-Zig `@SpirvType` -> SPIR-V -> spv2wgsl). The FS's
+// texture and sampler are decorated `@extern`s from its schema -> real
+// `@group(1)@binding(0) texture_2d<f32>` and `@group(1)@binding(1) sampler`,
+// matching the per-texture bind group below.
 // Auto-discovered + wired as anonymous imports by build.zig. Entry point `entry`.
 const billboard_vs_wgsl = @embedFile("billboard_vs.wgsl");
 const billboard_fs_wgsl = @embedFile("billboard_fs.wgsl");

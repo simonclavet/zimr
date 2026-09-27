@@ -402,6 +402,9 @@ function makeShim(log, names, voidNames, unhandled, state) {
         const ptr = args[args.length - 2] | 0;
         const msg = readLabel(ptr, len);
         if (msg.indexOf("assert failed") !== -1) emit("!ASSERT " + msg);
+        // `--leak-trace` report lines (the SUT's LeakWatch.reportSinceMark, `who` =
+        // "leak-trace") go into the call log where the smoke logic reads them.
+        if (msg.startsWith("leak-trace")) emit("!TRACE " + msg);
       };
     } else if (name === "js_device_create_bind_group_layout") {
       // (device, entriesPtr, entriesLen, labelPtr, labelLen)

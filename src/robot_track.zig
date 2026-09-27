@@ -54,11 +54,13 @@ const clamp = zm.clamp;
 const asinRad = zm.asinRad;
 const isFinite = zm.isFinite;
 const float = zm.float;
+const float64 = zm.float64;
 const pi = zm.pi;
 const qmul = zm.qmul;
 const conjugate = zm.conjugate;
 const rotate = zm.rotate;
 const quatFromAxisAngle = zm.quatFromAxisAngle;
+const qidentity = zm.qidentity;
 const cross = zm.cross;
 const dot3 = zm.dot3;
 const length3 = zm.length3;
@@ -67,6 +69,8 @@ const normalize4 = zm.normalize4;
 const quatFromNormAxisAngle = zm.quatFromNormAxisAngle;
 const assertf = zm.assertf;
 const expect = std.testing.expect;
+const expectError = std.testing.expectError;
+const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 
 /// Every body's world pose and velocity: the whole state a tracker cares about.
 ///
@@ -81,6 +85,11 @@ pub const State = struct {
     /// Angular velocities in WORLD axes (robot.zig's `cvel.ang` already is; a body's own frame
     /// would need a rotation, and every formula below wants world).
     angular: []Vec,
+    /// Each body's LOWEST POINT above the floor (world z of its collision shapes' lowest point,
+    /// `rbt.bodyLowestPoints`) - which body touches the floor, for `TrackingError.unexpected_contact`.
+    /// Only `stateOf` knows the geometry, so `init` fills `rbt.no_shape_height`: a state built any other
+    /// way (a world model's prediction has frames but no shapes) never reads as touching anything.
+    lowest: []f32,
 
     pub fn init(gpa: Allocator, count: usize) !State {
         const positions: []Vec = try gpa.alloc(Vec, count);
@@ -89,11 +98,16 @@ pub const State = struct {
         errdefer gpa.free(rotations);
         const velocities: []Vec = try gpa.alloc(Vec, count);
         errdefer gpa.free(velocities);
+        const angular: []Vec = try gpa.alloc(Vec, count);
+        errdefer gpa.free(angular);
+        const lowest: []f32 = try gpa.alloc(f32, count);
+        @memset(lowest, rbt.no_shape_height);
         return .{
             .positions = positions,
             .rotations = rotations,
             .velocities = velocities,
-            .angular = try gpa.alloc(Vec, count),
+            .angular = angular,
+            .lowest = lowest,
         };
     }
 
@@ -102,6 +116,7 @@ pub const State = struct {
         gpa.free(self.rotations);
         gpa.free(self.velocities);
         gpa.free(self.angular);
+        gpa.free(self.lowest);
     }
 
     pub fn bodies(self: State) usize {
@@ -113,11 +128,66 @@ pub const State = struct {
         @memcpy(self.rotations, other.rotations);
         @memcpy(self.velocities, other.velocities);
         @memcpy(self.angular, other.angular);
+        @memcpy(self.lowest, other.lowest);
     }
 };
 
 /// Read the state out of a forward-current `Data` - the simulator's, or a clip frame's after
 /// `rbt.forward`.
+/// Which bodies are exempt from `unexpected_contact`: `exempt` names resolved against `body_names` (indexed like the
+/// model's bodies). A name that is not a body is an ERROR - a typo in a robot's exempt list would otherwise
+/// silently exempt nothing, and its feet would end every stance's swing. The empty name never matches (it is the
+/// world's, and every anonymous body's).
+pub fn contactExemptMask(
+    gpa: Allocator,
+    body_count: usize,
+    exempt: []const []const u8,
+    body_names: []const []const u8,
+) ![]bool {
+    const mask: []bool = try gpa.alloc(bool, body_count);
+    errdefer gpa.free(mask); // a typo returns an error - without leaking the half-built mask
+    @memset(mask, false);
+    if (exempt.len == 0) {
+        return mask;
+    }
+    assertf(body_names.len == body_count, @src(), "{d} body names for {d} bodies", .{ body_names.len, body_count });
+    for (exempt) |wanted| {
+        const found: usize = bodyIndexByName(body_names, wanted) orelse return error.UnknownExemptBody;
+        mask[found] = true;
+    }
+    return mask;
+}
+
+/// The robot's head (`Task.head_body`) as a body index, or null when the task names none. A name that is not a body is
+/// an ERROR - the head rule would otherwise silently judge nothing.
+pub fn headBody(head_body: []const u8, body_names: []const []const u8) !?usize {
+    if (head_body.len == 0) {
+        return null;
+    }
+    return bodyIndexByName(body_names, head_body) orelse error.UnknownHeadBody;
+}
+
+/// A body's index by name. The empty name never matches (it is the world's, and every anonymous body's). One
+/// search for every per-robot name a task carries (`contact_exempt`, `head_body`).
+fn bodyIndexByName(body_names: []const []const u8, wanted: []const u8) ?usize {
+    for (body_names, 0..) |name, b| {
+        if (name.len > 0 and std.mem.eql(u8, name, wanted)) {
+            return b;
+        }
+    }
+    return null;
+}
+
+/// Take the exempt bodies out of contact judgement: their lowest point reads as "no shape", which never touches.
+/// Applied to the CHARACTER's state only - the reference's heights stay, for the bodies that are judged.
+pub fn exemptFromContact(state: *State, exempt: []const bool) void {
+    for (exempt, 0..) |is_exempt, b| {
+        if (is_exempt) {
+            state.lowest[b] = rbt.no_shape_height;
+        }
+    }
+}
+
 pub fn stateOf(m: *const rbt.Model, d: *const rbt.Data, out: *State) void {
     assertf(out.bodies() == m.nbody, @src(), "state has {d} bodies, model has {d}", .{ out.bodies(), m.nbody });
     for (0..m.nbody) |b| {
@@ -126,6 +196,7 @@ pub fn stateOf(m: *const rbt.Model, d: *const rbt.Data, out: *State) void {
         out.velocities[b] = dance.pointVelocity(m, d, b, d.body_xpos[b]);
         out.angular[b] = d.cvel[b].ang;
     }
+    rbt.bodyLowestPoints(m, d, out.lowest);
 }
 
 /// How many numbers `local` writes for a model with `bodies` bodies.
@@ -315,6 +386,17 @@ pub fn actionSize(m: *const rbt.Model) usize {
     return m.nv - rootDofs(m);
 }
 
+/// SIMON'S FILTER (DReCon's action smoothing): what the policy asked for, blended into what was applied -
+/// `applied = beta * asked + (1 - beta) * applied`, in place. 0.2 is DReCon's: a fifth of the new action, four
+/// fifths of the old - so no joint's target ever jumps, and the policy must ask for more than it wants to move one
+/// quickly. 1 is no filter (`applied` becomes `asked` exactly). ONE definition: `robot_policy.Controller` and the
+/// SuperTrack learner (`robot_latent`, whose training graph writes the same blend with tensors) both use it.
+pub fn filterAction(beta: f32, asked: []const f32, applied: []f32) void {
+    for (applied, asked) |*y, a| {
+        y.* = beta * a + (1.0 - beta) * y.*;
+    }
+}
+
 /// The servo's targets for one step: the reference pose, nudged by the policy's action.
 ///
 /// The action is a DISPLACEMENT IN VELOCITY SPACE, which is why `integratePos` applies it - that
@@ -392,7 +474,31 @@ pub const Gains = struct {
     /// learner fades it to zero on a schedule (residual force control's idea, with the curriculum
     /// that retires it), and a policy is only ever judged at zero.
     assist: f32 = 0.0,
+    /// VELOCITY FEEDFORWARD (plan F3): damp each joint toward the reference's velocity over the step
+    /// (`referenceVelocity`) instead of toward zero - a servo following MOTION should not brake it
+    /// (`pdTorquesToward`). Off: the zero-velocity spring. SuperTrack's paper used the reference's joint
+    /// velocities as targets in PhysX and zero in Havok and Bullet, with "final performance reasonably
+    /// similar" (sec. 5.1.3) - and F3 measured +1% survival here - so off is the paper-consistent choice.
+    velocity_feedforward: bool = false,
 };
+
+/// The reference's velocity over frames `f` -> `f + 1` - `rbt.differentiatePos`, the tangent difference
+/// `resetToFrame` launches with (a rotation's rate is a quaternion logarithm, not a subtraction). Zero at the
+/// clip's end. The velocity a body should END a step with to land on `f + 1`: semi-implicit Euler moves it by its
+/// NEW velocity. One definition for every servo (the fleet's, `robot_geno.ServoRun`'s).
+pub fn referenceVelocity(
+    m: *const rbt.Model,
+    clip: *const dance.Clip,
+    f: usize,
+    out: []f32,
+) void {
+    if (f + 1 >= clip.frame_count) {
+        @memset(out, 0.0);
+        return;
+    }
+    const root_len: usize = clip.nq - m.nq;
+    rbt.differentiatePos(m, out, clip.pose(f)[root_len..], clip.pose(f + 1)[root_len..], clip.frame_time);
+}
 
 /// The torques that drive the robot toward `target` - the law the policy acts through.
 ///
@@ -437,7 +543,8 @@ pub fn pdTorques(
 /// Euler moves a body by its new velocity and that is the one that lands exactly on g): each joint's
 /// spring damps toward the reference's velocity instead of zero (`rmx.stableSpringAccelToward`). A servo
 /// that follows MOTION should not brake it: damping toward zero treats every moving joint as an error. With
-/// `null` it is `pdTorques` to the bit - the zero-velocity spring, as DReCon's and SuperTrack's servos are.
+/// `null` it is `pdTorques` to the bit - the zero-velocity spring (DReCon's; SuperTrack's paper used target
+/// velocities in PhysX and zero elsewhere, with similar results - see `Gains.velocity_feedforward`).
 pub fn pdTorquesToward(
     m: *const rbt.Model,
     d: *rbt.Data,
@@ -504,7 +611,7 @@ fn rootAssist(
     }
 }
 
-/// How far the simulated character is from the reference, in the six ways that matter.
+/// How far the simulated character is from the reference, in the eight ways that matter.
 ///
 /// Split deliberately into POSE and PLACE. The pose terms are measured in the root's own frame, so
 /// they answer "is the body making the right shape, moving the right way?" without caring where it
@@ -514,6 +621,11 @@ fn rootAssist(
 pub const TrackingError = struct {
     /// Mean over bodies of the distance between them, in the root's frame (metres).
     pose_position: f32,
+    /// ...and the WORST single body's distance, same measure (metres). The mean hides one limb far off: an arm
+    /// pinned under the body is a metre out while the other bodies are fine, and the mean barely moves. MimicKit
+    /// ends an episode on exactly this - its worst body - rather than on an average. Root frame, like the mean:
+    /// the body being in the wrong PLACE is the root terms' job, this is the body being the wrong SHAPE.
+    worst_body: f32,
     /// Mean over bodies of the angle between them, root-relative (radians).
     pose_rotation: f32,
     /// Mean over bodies of the velocity difference, in the root's frame (m/s).
@@ -531,11 +643,39 @@ pub const TrackingError = struct {
     /// ...and how far the UP direction, as each root sees it, differs (the distance between two unit vectors,
     /// 0 to 2): tilt against gravity, what SuperTrack's L_up measures.
     up: f32,
+    /// UNEXPECTED CONTACT (metres): of the bodies the character has ON the floor (lowest point within
+    /// `contact_band`), the highest the REFERENCE holds its counterpart - 0 when nothing unexpected touches.
+    /// A knee down while the reference stands reads the reference knee's height (~0.45 m on Geno); the get-up's
+    /// hands and knees on the floor read 0, because the reference's are down too. MimicKit's fastest fall signal
+    /// is contact, but through a list of bodies allowed to touch PER MOTION; measured against the reference it
+    /// needs no list - only the bodies a robot always stands on are exempt (`Task.contact_exempt`).
+    /// Needs `State.lowest` (filled by `stateOf`); a state without geometry never touches, so this reads 0.
+    unexpected_contact: f32,
+    /// The HEAD's height off the reference head's (metres, world z) - SuperTrack's whole failure rule: an episode
+    /// ends when this passes 25 cm (plan F3b). 0 when no head was given (`trackingError`); a judge names the head
+    /// per robot (`Task.head_body`) and asks `trackingErrorWithHead`.
+    head_height: f32,
 };
+
+/// How close to the floor a body's lowest point must be to count as touching it (metres). Resting contact
+/// sits within a few millimetres (Geno's soles 4.5 mm into the floor when copied from a capture); a body a
+/// centimetre up is clearly not bearing on it.
+pub const contact_band: f32 = 0.01;
 
 /// Measure one against the other. Both states are whole-body states in world space (`stateOf`);
 /// `root` is the character's root body.
 pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
+    return trackingErrorWithHead(sim, reference, root, null);
+}
+
+/// `trackingError` with the head's height gap measured too (`TrackingError.head_height`) - what a judge asks, having
+/// resolved the robot's head (`Task.head_body`). One implementation: `trackingError` is this with no head.
+pub fn trackingErrorWithHead(
+    sim: State,
+    reference: State,
+    root: usize,
+    head: ?usize,
+) TrackingError {
     const bodies: usize = sim.bodies();
     assertf(bodies > 1 and reference.bodies() == bodies, @src(), "{d} bodies against {d}", .{
         bodies,
@@ -545,6 +685,7 @@ pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
     const to_local_ref: Quat = conjugate(reference.rotations[root]);
     var out: TrackingError = .{
         .pose_position = 0.0,
+        .worst_body = 0.0,
         .pose_rotation = 0.0,
         .velocity = 0.0,
         .angular = 0.0,
@@ -552,6 +693,8 @@ pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
         .root_rotation = angleBetween(sim.rotations[root], reference.rotations[root]),
         .height = 0.0,
         .up = length3(rotate(to_local, vec(0.0, 0.0, 1.0)) - rotate(to_local_ref, vec(0.0, 0.0, 1.0))),
+        .unexpected_contact = 0.0,
+        .head_height = if (head) |h| @abs(sim.positions[h][2] - reference.positions[h][2]) else 0.0,
     };
     // Body 0 is the world, and the root's own pose terms are zero by construction; both are still
     // counted so the mean is over the same number of bodies every time, which keeps a reward
@@ -566,11 +709,20 @@ pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
         const v_ref: Vec = rotate(to_local_ref, reference.velocities[b]);
         const w: Vec = rotate(to_local, sim.angular[b]);
         const w_ref: Vec = rotate(to_local_ref, reference.angular[b]);
-        out.pose_position += length3(p - p_ref) / count;
+        const body_distance: f32 = length3(p - p_ref);
+        out.pose_position += body_distance / count;
+        out.worst_body = @max(out.worst_body, body_distance);
         out.height += @abs(sim.positions[b][2] - reference.positions[b][2]) / count;
         out.pose_rotation += angleBetween(r, r_ref) / count;
         out.velocity += length3(v - v_ref) / count;
         out.angular += length3(w - w_ref) / count;
+        // A body down that the reference holds up. An unknown reference height (no geometry) cannot accuse
+        // anything, so it is skipped rather than read as "very high".
+        const touching: bool = sim.lowest[b] < contact_band;
+        const reference_known: bool = reference.lowest[b] < rbt.no_shape_height;
+        if (touching and reference_known) {
+            out.unexpected_contact = @max(out.unexpected_contact, reference.lowest[b]);
+        }
     }
     return out;
 }
@@ -651,6 +803,17 @@ pub const Termination = struct {
     /// vectors' distance, each in its own root's frame: 0.8 is ~47 degrees) - falling over, whatever the
     /// heading. Off by default.
     up: f32 = 1.0e30,
+    /// ...and when any ONE body is further than this from its reference counterpart, in the root's frame (metres)
+    /// - the limb the mean cannot see (`TrackingError.worst_body`). Off by default.
+    worst_body: f32 = 1.0e30,
+    /// ...and when a body touches the floor while the reference holds it higher than this (metres) - a knee, a
+    /// hand, the hips going down where the reference's are not (`TrackingError.unexpected_contact`). Off by
+    /// default.
+    unexpected_contact: f32 = 1.0e30,
+    /// ...and when the HEAD's height is further than this from the reference head's (metres) - SuperTrack's rule
+    /// (25 cm), clip-agnostic and relative, so a get-up's floor is fine while the reference lies there too
+    /// (`TrackingError.head_height`; the head resolved from `Task.head_body`). Off by default.
+    head_height: f32 = 1.0e30,
 
     /// Steps after a reset during which losing the reference does not end the episode. A policy bad enough
     /// to fail within a training window's length leaves NO window in its data - training then stops for
@@ -658,28 +821,46 @@ pub const Termination = struct {
     /// grace of the window's length guarantees every episode one. 0 for the old robot's fleets.
     grace_steps: u32 = 0,
 
-    /// Every limit scaled by `fraction` (the grace kept) - a looser leash (> 1) or an early warning (< 1). The
-    /// ONE place limits are copied: copies written out field by field forgot the limits added later (Sep 26:
-    /// geno_train's watching leash dropped the tilt limit).
+    // ==== THE STRUCT IS THE LIST ====
+    //
+    // Every limit here is an `f32` named EXACTLY like the `TrackingError` field it limits, and `scaled`,
+    // `terminated` and the tests walk the fields instead of naming them. So adding a limit is adding it HERE and
+    // the error it limits THERE - nothing else. Lists written out by hand drifted twice: geno_train's leash
+    // dropped the tilt limit when `up` was added (Sep 26), and `scaled` / `terminated` each had to be edited for
+    // every new limit. The comptime check below turns a limit with no matching error into a compile error that
+    // says so, instead of an `@field` error somewhere else.
+    comptime {
+        const info = @typeInfo(Termination).@"struct";
+        for (info.field_names, info.field_types) |name, field_type| {
+            if (field_type == f32 and !@hasField(TrackingError, name)) {
+                @compileError("Termination." ++ name ++ " limits nothing: TrackingError has no field of that name");
+            }
+        }
+    }
+
+    /// Every limit scaled by `fraction` (the grace kept) - a looser leash (> 1) or an early warning (< 1).
     pub fn scaled(self: Termination, fraction: f32) Termination {
         var out: Termination = self;
-        out.pose_position *= fraction;
-        out.pose_rotation *= fraction;
-        out.root_position *= fraction;
-        out.root_rotation *= fraction;
-        out.height *= fraction;
-        out.up *= fraction;
+        const info = @typeInfo(Termination).@"struct";
+        inline for (info.field_names, info.field_types) |name, field_type| {
+            if (field_type == f32) {
+                @field(out, name) *= fraction;
+            }
+        }
         return out;
     }
 };
 
+/// Has the reference been lost? True when ANY error exceeds its limit - each `Termination` field against the
+/// `TrackingError` field of the same name (see "THE STRUCT IS THE LIST" in `Termination`).
 pub fn terminated(err: TrackingError, limits: Termination) bool {
-    return err.pose_position > limits.pose_position or
-        err.pose_rotation > limits.pose_rotation or
-        err.root_position > limits.root_position or
-        err.root_rotation > limits.root_rotation or
-        err.height > limits.height or
-        err.up > limits.up;
+    const info = @typeInfo(Termination).@"struct";
+    inline for (info.field_names, info.field_types) |name, field_type| {
+        if (field_type == f32 and @field(err, name) > @field(limits, name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Put the simulation exactly on the clip at `frame` - the pose, and the velocity the clip has
@@ -733,14 +914,6 @@ pub fn perturbStart(
 /// How an episode ended: its reference LOST (a failure - no future), the step CAP reached, or its CLIP ran
 /// out (both cut short - a future the episode would have had).
 pub const End = enum { lost, cap, clip_end };
-
-/// One state into another of the same size.
-pub fn copyState(to: *State, from: State) void {
-    @memcpy(to.positions, from.positions);
-    @memcpy(to.rotations, from.rotations);
-    @memcpy(to.velocities, from.velocities);
-    @memcpy(to.angular, from.angular);
-}
 
 pub fn resetToFrame(
     m: *const rbt.Model,
@@ -954,6 +1127,36 @@ pub fn observationSize(m: *const rbt.Model) usize {
     return 2 * localSize(m.nbody);
 }
 
+/// The TASK a fleet trains and judges: everything that decides what the character is asked to do and when it
+/// has failed - its servo, the floor, how every episode starts, the reward and the failure rule. One value, so a
+/// robot's task is defined ONCE (`robot_geno.tracking_task` for Geno) and handed whole to every fleet and trainer
+/// that trains or judges it: spelled out field by field at each call site, it drifted (plan T1).
+///
+/// NOT part of it: the action scale (each learner has its own - DReCon's student and SuperTrack differ), the
+/// sizes, the episode cap and the seed. Those are how a run is set up, not what the character is asked to do.
+///
+/// The defaults are the OLD robot's, whose tests pin its exact behaviour.
+pub const Task = struct {
+    gains: Gains = .{},
+    /// The floor's friction (a contact's is the geometric mean with the robot's shapes'). The old robot's 0.7;
+    /// Geno's feet skate at that under its servo, and use `robot_geno.floor_friction`.
+    floor_friction: f32 = 0.7,
+    /// Rest every reset ON the floor (`rbt.restOnFloor`, 1 mm clear): a pose copied from a capture sinks its feet
+    /// into the simulated floor, and the solver kicks the body out of it on the first step - at every episode
+    /// start. Off for the old robot; Geno's task sets it.
+    rest_on_floor: bool = false,
+    weights: RewardWeights = .{},
+    termination: Termination = .{},
+    /// Bodies whose floor contact is never UNEXPECTED (`TrackingError.unexpected_contact`): the ones the robot
+    /// stands on. A foot is down through every stance while the reference lifts it into each swing, and a
+    /// character a few frames behind still has it down - that is lag, not a fall. Named per ROBOT, never per
+    /// motion; a fleet resolves them through `Fleet.Options.body_names`. Empty by default.
+    contact_exempt: []const []const u8 = &.{},
+    /// The body that is the robot's HEAD, for `TrackingError.head_height` (SuperTrack's failure rule, plan F3b).
+    /// Named per robot, resolved like `contact_exempt`. Empty: no head term.
+    head_body: []const u8 = "",
+};
+
 /// A fleet of characters tracking clips, stepping together and filling a `Replay`.
 ///
 /// The loop per character per frame: take an action, turn it into PD targets on the reference
@@ -968,22 +1171,17 @@ pub const Fleet = struct {
     pub const Options = struct {
         envs: usize = 16,
         capacity: usize = 1024,
-        /// How far one unit of action reaches, in radians.
+        /// How far one unit of action reaches, in radians. The LEARNER's (see `Task` for why it is not the task's).
         action_scale: f32 = 0.2,
-        gains: Gains = .{},
-        weights: RewardWeights = .{},
-        termination: Termination = .{},
-        /// Frames between shoves (0 never shoves). A shove is an impulse on the root, which is what
-        /// "small perturbations" means when it is time to measure robustness.
-        /// The floor's friction (a contact's is the geometric mean with the robot's shapes'). The old
-        /// robot's 0.7; Geno's feet skate at that under its servo, and use `robot_geno.floor_friction`.
-        floor_friction: f32 = 0.7,
-        /// Rest every reset ON the floor (`rbt.restOnFloor`, 1 mm clear): a pose copied from a capture sinks
-        /// its feet into the simulated floor, and the solver kicks the body out of it on the first step - at
-        /// every episode start. Off for the old robot, whose tests pin its exact behaviour; Geno's fleets set it.
-        rest_on_floor: bool = false,
+        /// What the characters are asked to do and when they have failed - see `Task`.
+        task: Task = .{},
+        /// The model's body names, indexed like its bodies (`robot_mjcf.Imported.names`) - needed only to resolve
+        /// `task.contact_exempt`, which names bodies; a task that exempts nothing needs none.
+        body_names: []const []const u8 = &.{},
         /// Every reset pushed off the reference (`perturbStart`) - D5.5's perturbed starts. None by default.
         start_noise: StartNoise = .{},
+        /// Frames between shoves (0 never shoves). A shove is an impulse on the root, which is what
+        /// "small perturbations" means when it is time to measure robustness.
         shove_every: u32 = 0,
         /// How hard, as a velocity added to the root, in m/s.
         shove_speed: f32 = 0.6,
@@ -1027,7 +1225,13 @@ pub const Fleet = struct {
     reference_data: rbt.Data,
     sim_state: State,
     reference_state: State,
+    /// Per body: exempt from `unexpected_contact` (`Task.contact_exempt`, resolved at init).
+    contact_exempt: []bool,
+    /// The head's body index (`Task.head_body`, resolved at init), or null: no head term.
+    head: ?usize,
     targets: []f32,
+    /// The reference's velocity over the step, for the servo's feedforward (`Gains.velocity_feedforward`).
+    target_velocity: []f32,
     accel: []f32,
     torque: []f32,
     scratch: []f32,
@@ -1101,7 +1305,10 @@ pub const Fleet = struct {
             .reference_data = undefined,
             .sim_state = undefined,
             .reference_state = undefined,
+            .contact_exempt = undefined,
+            .head = undefined,
             .targets = undefined,
+            .target_velocity = undefined,
             .accel = undefined,
             .torque = undefined,
             .scratch = undefined,
@@ -1145,7 +1352,10 @@ pub const Fleet = struct {
             .reference_data = try rbt.Data.init(owned, m),
             .sim_state = try State.init(owned, m.nbody),
             .reference_state = try State.init(owned, m.nbody),
+            .contact_exempt = try contactExemptMask(owned, m.nbody, options.task.contact_exempt, options.body_names),
+            .head = try headBody(options.task.head_body, options.body_names),
             .targets = try owned.alloc(f32, m.nq),
+            .target_velocity = try owned.alloc(f32, m.nv),
             .accel = try owned.alloc(f32, m.nv),
             .torque = try owned.alloc(f32, m.nv),
             .scratch = try owned.alloc(f32, m.nv),
@@ -1159,7 +1369,7 @@ pub const Fleet = struct {
             state.* = try State.init(owned, m.nbody);
         }
         for (fleet.worlds, fleet.bridges, fleet.data) |*world, *bridge, *d| {
-            world.* = try floorWorld(owned, options.floor_friction);
+            world.* = try floorWorld(owned, options.task.floor_friction);
             bridge.* = try robot_physics.Bridge.init(owned, world, m, d, 256);
             bridge.listen(world);
         }
@@ -1185,16 +1395,30 @@ pub const Fleet = struct {
     }
 
     /// Start an environment somewhere new: a random clip, a random frame, a fresh segment.
+    /// A new episode for `env` at a RANDOM clip and frame - reference-state initialisation (`startAt`).
     fn restart(self: *Fleet, env: usize) void {
         const random: std.Random = self.rng.random();
-        self.clip_of[env] = random.uintLessThan(usize, self.clips.len);
-        const clip: *const dance.Clip = self.clips[self.clip_of[env]];
-        const frame: usize = 1 + random.uintLessThan(usize, clip.frame_count - 2);
+        const clip_index: usize = random.uintLessThan(usize, self.clips.len);
+        const frame: usize = 1 + random.uintLessThan(usize, self.clips[clip_index].frame_count - 2);
+        self.startAt(env, clip_index, frame);
+    }
+
+    /// A new episode for `env` EXACTLY at `frame` of clip `clip_index`: the character put on the reference there
+    /// (and rested on the floor, and pushed off it by `start_noise`, as the task says), its clock at that frame.
+    /// `restart` calls it with a random clip and frame - the random draws in the same order as always, so a fleet's
+    /// runs are bit-for-bit what they were; a JUDGE calls it with chosen ones (`judge`).
+    pub fn startAt(self: *Fleet, env: usize, clip_index: usize, frame: usize) void {
+        const clip: *const dance.Clip = self.clips[clip_index];
+        assertf(frame >= 1 and frame + 1 < clip.frame_count, @src(), "start frame {d} of a {d}-frame clip", .{
+            frame,
+            clip.frame_count,
+        });
+        self.clip_of[env] = clip_index;
         resetToFrame(self.m, &self.data[env], clip, frame);
-        if (self.options.rest_on_floor) {
+        if (self.options.task.rest_on_floor) {
             _ = rbt.restOnFloor(self.m, &self.data[env], 0.001);
         }
-        perturbStart(self.m, &self.data[env], self.options.start_noise, random, self.scratch);
+        perturbStart(self.m, &self.data[env], self.options.start_noise, self.rng.random(), self.scratch);
         self.frame[env] = @intCast(frame);
         self.steps[env] = 0;
         self.segment[env] = self.next_segment;
@@ -1341,11 +1565,21 @@ pub const Fleet = struct {
         try zimrphysics.step(world, clip.frame_time);
         bridge.harvest(d);
         rbt.biasForce(self.m, d);
-        pdTorques(
+        const gains: Gains = self.options.task.gains;
+        // With feedforward, the velocity of the step the servo aims along: `frame` -> `frame + 1`. At the clip's end
+        // the aim is clamped to the last pose - held still - and `referenceVelocity` is zero there, as it must be.
+        // (It once asked for `at - 1`: at the end that was the last MOVING step's velocity, telling a joint that
+        // should come to rest to keep going - and a one-frame clip underflowed.)
+        const moving: ?[]const f32 = if (gains.velocity_feedforward) blk: {
+            referenceVelocity(self.m, clip, frame, self.target_velocity);
+            break :blk self.target_velocity;
+        } else null;
+        pdTorquesToward(
             self.m,
             d,
             self.targets,
-            self.options.gains,
+            moving,
+            gains,
             clip.frame_time,
             self.accel,
             self.scratch,
@@ -1416,9 +1650,11 @@ pub const Fleet = struct {
             self.steps[env] += 1;
             self.steps_total += 1;
             stateOf(self.m, d, &self.sim_state);
+            exemptFromContact(&self.sim_state, self.contact_exempt);
             self.referenceStateAt(clip, self.frame[env]);
-            const err: TrackingError = trackingError(self.sim_state, self.reference_state, self.root);
-            const earned: f32 = reward(err, self.options.weights);
+            const sim: State = self.sim_state;
+            const err: TrackingError = trackingErrorWithHead(sim, self.reference_state, self.root, self.head);
+            const earned: f32 = reward(err, self.options.task.weights);
             self.rewards[env] = earned;
             self.dones[env] = false;
             reward_total += earned;
@@ -1427,8 +1663,8 @@ pub const Fleet = struct {
             // with NaN is false, so the limits alone would let it run on - poisoning the world - forever.
             const broken: bool = !(err.pose_position == err.pose_position and err.pose_rotation == err.pose_rotation and
                 err.root_position == err.root_position and err.root_rotation == err.root_rotation);
-            const graced: bool = self.steps[env] < self.options.termination.grace_steps;
-            const lost: bool = broken or (!graced and terminated(err, self.options.termination));
+            const graced: bool = self.steps[env] < self.options.task.termination.grace_steps;
+            const lost: bool = broken or (!graced and terminated(err, self.options.task.termination));
             const finished: bool = lost or
                 self.steps[env] >= self.options.max_steps or
                 self.frame[env] + 1 >= clip.frame_count;
@@ -1440,7 +1676,7 @@ pub const Fleet = struct {
                 // Why it ended, and where - before `restart` replaces the state just measured.
                 const capped: bool = self.steps[env] >= self.options.max_steps;
                 self.ends[env] = if (lost) .lost else if (capped) .cap else .clip_end;
-                copyState(&self.terminal[env], self.sim_state);
+                self.terminal[env].copyFrom(self.sim_state);
                 self.terminal_frame[env] = self.frame[env];
                 self.terminal_clip[env] = self.clip_of[env];
                 if (lost) {
@@ -1809,6 +2045,243 @@ const Rig = struct {
         rbt.forward(m, d);
     }
 };
+
+// ==== THE JUDGE (plan F1) ====
+//
+// One way to say how good a controller is, used for every learner: fixed starts spread over a clip, the controller's
+// MEAN action (no exploration), each start run until the task's rule loses the reference or the clip ends - and the
+// servo alone on the same starts, in the same units, beside it.
+//
+// Why not the training fleet's own numbers: its starts are random, so two evaluations differ by where the starts
+// happened to land, and a change that "helped" may only have drawn easier stretches. Here the starts are the same
+// every time and nothing is random, so two calls give identical numbers - a difference between two runs is the
+// controller's.
+
+/// Whoever acts during a judgement: fill `actions` (one row of `actionSize` per environment) for the fleet's current
+/// state - the controller's MEAN action, no exploration. A context pointer and a function, so any learner can be
+/// judged without the judge knowing its type.
+pub const Actor = struct {
+    context: *anyopaque,
+    act: *const fn (context: *anyopaque, fleet: *Fleet, actions: []f32) void,
+};
+
+/// What a judgement found. Every start's FIRST episode is counted, to its end.
+pub const Judgement = struct {
+    starts: usize,
+    /// Starts whose episode the task's rule ended - the reference lost.
+    failures: usize,
+    /// Starts that ran to the clip's end still with the reference.
+    reached_end: usize,
+    /// Steps watched, over every start's episode.
+    watched_steps: usize,
+    reward_sum: f64,
+    frame_time: f32,
+
+    /// Mean time to failure (seconds): the time watched per failure - the number that says how long a character
+    /// keeps the reference. With no failure at all it is the whole time watched: a lower bound.
+    pub fn meanTimeToFailure(self: Judgement) f32 {
+        const seconds: f32 = float(self.watched_steps) * self.frame_time;
+        return seconds / float(@max(self.failures, 1));
+    }
+
+    /// The share of starts that reached the clip's end.
+    pub fn shareToEnd(self: Judgement) f32 {
+        return float(self.reached_end) / float(@max(self.starts, 1));
+    }
+
+    /// The task's reward per watched step.
+    pub fn meanReward(self: Judgement) f32 {
+        return @floatCast(self.reward_sum / float64(@max(self.watched_steps, 1)));
+    }
+};
+
+/// A judgement IN PROGRESS - so a page can spread one over frames (`advance` with a step budget each frame) instead of
+/// stalling for the second or more a whole judgement takes on a phone. `judge` is the same thing run to the end.
+///
+/// Its fleet is `judgeOptions`'s; `options` supplies the task, the action scale and the body names, as the controller
+/// was trained with.
+pub const Judging = struct {
+    gpa: Allocator,
+    fleet: *Fleet,
+    actions: []f32,
+    finished: []bool,
+    remaining: usize,
+    result: Judgement,
+
+    pub fn init(
+        gpa: Allocator,
+        m: *rbt.Model,
+        clip: *const dance.Clip,
+        options: Fleet.Options,
+        starts: []const usize,
+    ) !Judging {
+        const fleet: *Fleet = try Fleet.init(gpa, m, &.{clip}, judgeOptions(options, starts.len, clip));
+        errdefer fleet.deinit();
+        for (starts, 0..) |frame, env| {
+            fleet.startAt(env, 0, frame);
+        }
+        const actions: []f32 = try gpa.alloc(f32, starts.len * actionSize(m));
+        errdefer gpa.free(actions);
+        @memset(actions, 0.0);
+        const finished: []bool = try gpa.alloc(bool, starts.len);
+        @memset(finished, false);
+        return .{
+            .gpa = gpa,
+            .fleet = fleet,
+            .actions = actions,
+            .finished = finished,
+            .remaining = starts.len,
+            .result = .{
+                .starts = starts.len,
+                .failures = 0,
+                .reached_end = 0,
+                .watched_steps = 0,
+                .reward_sum = 0.0,
+                .frame_time = clip.frame_time,
+            },
+        };
+    }
+
+    pub fn deinit(self: *Judging) void {
+        self.gpa.free(self.finished);
+        self.gpa.free(self.actions);
+        self.fleet.deinit();
+    }
+
+    /// Step the judged fleet up to `budget` times with `actor` acting (null: the servo alone). True once every
+    /// start's first episode has ended - `result` is then final.
+    pub fn advance(self: *Judging, actor: ?Actor, budget: usize) bool {
+        var left: usize = budget;
+        while (self.remaining > 0 and left > 0) : (left -= 1) {
+            if (actor) |who| {
+                who.act(who.context, self.fleet, self.actions);
+            }
+            _ = self.fleet.step(self.actions);
+            // After its first ending an environment restarts somewhere random; it keeps being stepped (the
+            // fleet steps them all) but is no longer counted.
+            for (self.finished, 0..) |*done, env| {
+                if (done.*) {
+                    continue;
+                }
+                self.result.watched_steps += 1;
+                self.result.reward_sum += self.fleet.rewards[env];
+                if (!self.fleet.dones[env]) {
+                    continue;
+                }
+                done.* = true;
+                self.remaining -= 1;
+                switch (self.fleet.ends[env]) {
+                    .lost => self.result.failures += 1,
+                    .clip_end => self.result.reached_end += 1,
+                    .cap => {},
+                }
+            }
+        }
+        return self.remaining == 0;
+    }
+};
+
+/// The judge's fleet options: the caller's task, action scale and body names; one environment per start, no
+/// perturbation, no shoves, no grace (the task's rule from the first step - a training window's grace is a learner's
+/// aid, not part of the rule), no step cap before the clip's end. One definition, so every judged fleet - `Judging`'s
+/// and a learner's diagnostics' - is the same fleet.
+pub fn judgeOptions(
+    options: Fleet.Options,
+    envs: usize,
+    clip: *const dance.Clip,
+) Fleet.Options {
+    var judged: Fleet.Options = options;
+    judged.envs = envs;
+    judged.capacity = 16;
+    judged.start_noise = .{};
+    judged.shove_every = 0;
+    judged.max_steps = @intCast(clip.frame_count);
+    judged.task.termination.grace_steps = 0;
+    return judged;
+}
+
+/// Judge `actor` - or, with `actor` null, the SERVO ALONE (zero offsets) - on `clip` from `starts` (frames), start to
+/// finish (`Judging`, run to the end).
+pub fn judge(
+    gpa: Allocator,
+    m: *rbt.Model,
+    clip: *const dance.Clip,
+    options: Fleet.Options,
+    starts: []const usize,
+    actor: ?Actor,
+) !Judgement {
+    var judging: Judging = try .init(gpa, m, clip, options, starts);
+    defer judging.deinit();
+    // Every start's episode ends within the clip's length (the judge caps nothing before it), so one clip's worth of
+    // steps finishes any judgement.
+    const done: bool = judging.advance(actor, clip.frame_count);
+    assertf(done, @src(), "a judgement unfinished after {d} steps", .{clip.frame_count});
+    return judging.result;
+}
+
+/// Starts every `every` frames across `clip`, from its first startable frame, while a step remains after them -
+/// the judge's usual starts (every 0.5 s: `every` = 30 at 60 Hz).
+pub fn evenStarts(gpa: Allocator, clip: *const dance.Clip, every: usize) ![]usize {
+    assertf(every > 0 and clip.frame_count > 2, @src(), "every {d} frames of {d}", .{ every, clip.frame_count });
+    const count: usize = (clip.frame_count - 3) / every + 1;
+    const starts: []usize = try gpa.alloc(usize, count);
+    for (starts, 0..) |*start, i| {
+        start.* = 1 + i * every;
+    }
+    return starts;
+}
+
+test "robot_track: the judge - the same starts every time, identical twice, every start counted once" {
+    // Plan F1's known answers, on the rig and the walk. Evenly spaced starts land where they should; two judgements
+    // of the same controller are IDENTICAL (nothing in the judge is random); every start's first episode is counted
+    // exactly once, ended by the rule or by the clip (the judge caps nothing before the clip's end); and the servo
+    // alone (no actor) is exactly an actor that asks for no offsets.
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    var walk: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 10.0) catch
+        return error.SkipZigTest;
+    defer walk.deinit();
+    var rig: Rig = undefined;
+    try rig.init(gpa, 1.0 / 60.0);
+    defer rig.deinit();
+    const m: *rbt.Model = rig.model();
+    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    defer scratch_data.deinit();
+    _ = try liftPerFrame(gpa, m, &walk, &scratch_data, 3.0);
+
+    const starts: []usize = try evenStarts(gpa, &walk, 60);
+    defer gpa.free(starts);
+    try expect(starts[0] == 1 and starts[1] == 61);
+    try expect(starts[starts.len - 1] + 1 < walk.frame_count);
+    try expect(starts[starts.len - 1] + 60 + 1 >= walk.frame_count); // and no room for one more
+
+    const servo: Judgement = try judge(gpa, m, &walk, .{}, starts, null);
+    const again: Judgement = try judge(gpa, m, &walk, .{}, starts, null);
+    try expect(std.meta.eql(servo, again));
+    try expect(servo.failures + servo.reached_end == servo.starts);
+
+    const NoOffsets = struct {
+        fn act(context: *anyopaque, fleet: *Fleet, actions: []f32) void {
+            _ = context;
+            _ = fleet;
+            @memset(actions, 0.0);
+        }
+    };
+    var unused: u8 = 0;
+    const zero: Judgement = try judge(gpa, m, &walk, .{}, starts, .{ .context = &unused, .act = NoOffsets.act });
+    try expect(std.meta.eql(servo, zero));
+
+    // Spread over "frames" - 7 steps at a time, as a page would - it is the same judgement.
+    var judging: Judging = try .init(gpa, m, &walk, .{}, starts);
+    defer judging.deinit();
+    var calls: usize = 0;
+    while (!judging.advance(null, 7)) {
+        calls += 1;
+    }
+    try expect(calls > 1);
+    try expect(std.meta.eql(judging.result, servo));
+}
 
 test "robot_track: two axes and back" {
     var rng: std.Random.DefaultPrng = .init(4);
@@ -2197,6 +2670,203 @@ test "robot_track: the reward is 1 on the reference and falls from there" {
     }
     // And far enough off, the episode is over - by error, with the character still upright.
     try expect(terminated(trackingError(sim, reference, root), .{}));
+}
+
+test "robot_track: worst_body - one limb far off, which the mean cannot see, ends the episode at the limit" {
+    // The known answer for plan T2, on synthetic states so every number is exact. Six bodies (0 the world, 1 the
+    // root, 2..5 limbs), every rotation the identity; the simulation is the reference with ONE body moved 0.8 m
+    // along x. In the root's frame that body is 0.8 m off and the rest exact, so the mean is 0.8 / 5 = 0.16 -
+    // comfortably inside the default pose limit (0.35) - while the worst body is 0.8. Height and tilt unchanged.
+    const gpa: Allocator = std.testing.allocator;
+    const bodies: usize = 6;
+    var reference: State = try .init(gpa, bodies);
+    defer reference.deinit(gpa);
+    var sim: State = try .init(gpa, bodies);
+    defer sim.deinit(gpa);
+    for (0..bodies) |b| {
+        reference.positions[b] = vec(0.1 * float(b), 0.0, 1.0);
+        reference.rotations[b] = qidentity();
+        reference.velocities[b] = vec(0.0, 0.0, 0.0);
+        reference.angular[b] = vec(0.0, 0.0, 0.0);
+        sim.positions[b] = reference.positions[b];
+        sim.rotations[b] = reference.rotations[b];
+        sim.velocities[b] = reference.velocities[b];
+        sim.angular[b] = reference.angular[b];
+    }
+    const displaced: usize = 3;
+    const offset: f32 = 0.8;
+    sim.positions[displaced] += vec(offset, 0.0, 0.0);
+
+    const root: usize = 1;
+    const err: TrackingError = trackingError(sim, reference, root);
+    try expect(@abs(err.worst_body - offset) < 1.0e-6);
+    try expect(@abs(err.pose_position - offset / float(bodies - 1)) < 1.0e-6);
+    try expect(err.height == 0.0 and err.up == 0.0);
+
+    // The mean-based rule lets it through; a worst-body limit catches it - exactly at the limit.
+    try expect(!terminated(err, .{}));
+    try expect(terminated(err, .{ .worst_body = offset - 0.01 }));
+    try expect(!terminated(err, .{ .worst_body = offset + 0.01 }));
+    // `scaled` carries the new limit with every other one: halving 0.9 gives 0.45, under the 0.8 error.
+    const leash: Termination = .{ .worst_body = 0.9 };
+    try expect(terminated(err, leash.scaled(0.5)));
+}
+
+test "robot_track: unexpected contact - a knee down while the reference stands, and nothing else" {
+    // The known answer for plan T3, on synthetic states so every number is exact. Five bodies: 0 the world, 1 the
+    // root (hips), 2 a thigh, 3 a hand, 4 a foot. Standing, the reference holds the thigh's lowest point (its knee
+    // end) at 0.45 m, the hand at 0.75 m, the foot on the floor. Frames and rotations match exactly, so every
+    // other term is zero and only the floor heights differ between the cases.
+    const gpa: Allocator = std.testing.allocator;
+    const bodies: usize = 5;
+    var reference: State = try .init(gpa, bodies);
+    defer reference.deinit(gpa);
+    var sim: State = try .init(gpa, bodies);
+    defer sim.deinit(gpa);
+    for (0..bodies) |b| {
+        reference.positions[b] = vec(0.0, 0.1 * float(b), 1.0);
+        reference.rotations[b] = qidentity();
+        reference.velocities[b] = vec(0.0, 0.0, 0.0);
+        reference.angular[b] = vec(0.0, 0.0, 0.0);
+    }
+    const standing = [_]f32{ rbt.no_shape_height, 0.80, 0.45, 0.75, 0.0 };
+    @memcpy(reference.lowest, &standing);
+    sim.copyFrom(reference);
+    const root: usize = 1;
+    const thigh: usize = 2;
+    const foot: usize = 4;
+
+    // Standing like the reference: the foot is down, but so is the reference's - nothing unexpected.
+    try expect(trackingError(sim, reference, root).unexpected_contact == 0.0);
+
+    // The character's knee goes down while the reference stands: the reference's knee height is the reading,
+    // and the limit catches it - exactly at the limit.
+    sim.lowest[thigh] = 0.0;
+    const kneeling: TrackingError = trackingError(sim, reference, root);
+    try expect(kneeling.unexpected_contact == 0.45);
+    try expect(terminated(kneeling, .{ .unexpected_contact = 0.44 }));
+    try expect(!terminated(kneeling, .{ .unexpected_contact = 0.46 }));
+
+    // Both kneeling (a get-up's floor phase): the reference's knee is down too - never flagged.
+    reference.lowest[thigh] = 0.0;
+    try expect(trackingError(sim, reference, root).unexpected_contact == 0.0);
+    reference.lowest[thigh] = 0.45;
+    sim.lowest[thigh] = 0.45;
+
+    // A swing the character lags: the reference lifts the foot 0.2 m while the character's is still down. Counted
+    // when the foot is judged - and nothing once the foot is exempt, as a robot's feet are.
+    reference.lowest[foot] = 0.2;
+    try expect(trackingError(sim, reference, root).unexpected_contact == 0.2);
+    var exempt: [bodies]bool = @splat(false);
+    exempt[foot] = true;
+    exemptFromContact(&sim, &exempt);
+    try expect(trackingError(sim, reference, root).unexpected_contact == 0.0);
+
+    // A reference with no geometry (a world model's prediction has frames, no shapes) accuses nothing.
+    sim.lowest[thigh] = 0.0;
+    reference.lowest[thigh] = rbt.no_shape_height;
+    try expect(trackingError(sim, reference, root).unexpected_contact == 0.0);
+}
+
+test "robot_track: filterAction - a fifth of the new, four fifths of the old; 1 is no filter" {
+    // Plan F6's formula, exactly: from rest, asking for 1 three times at DReCon's 0.2 applies 0.2, 0.36, 0.488; at 1
+    // the applied action IS the asked one, whatever was applied before.
+    var applied = [_]f32{ 0.0, 0.0 };
+    const asked = [_]f32{ 1.0, -1.0 };
+    filterAction(0.2, &asked, &applied);
+    try expectApproxEqAbs(@as(f32, 0.2), applied[0], 1.0e-7);
+    filterAction(0.2, &asked, &applied);
+    try expectApproxEqAbs(@as(f32, 0.36), applied[0], 1.0e-7);
+    filterAction(0.2, &asked, &applied);
+    try expectApproxEqAbs(@as(f32, 0.488), applied[0], 1.0e-7);
+    try expectApproxEqAbs(@as(f32, -0.488), applied[1], 1.0e-7);
+    filterAction(1.0, &asked, &applied);
+    try expect(applied[0] == 1.0 and applied[1] == -1.0);
+}
+
+test "robot_track: head height - SuperTrack's rule, on the head alone" {
+    // Plan F3b's known answers, on synthetic states: the head's height gap is exact and flips the verdict at the
+    // limit; any OTHER body's height leaves it at zero; without a head (`trackingError`) there is no head term.
+    const gpa: Allocator = std.testing.allocator;
+    const bodies: usize = 5;
+    var reference: State = try .init(gpa, bodies);
+    defer reference.deinit(gpa);
+    var sim: State = try .init(gpa, bodies);
+    defer sim.deinit(gpa);
+    for (0..bodies) |b| {
+        reference.positions[b] = vec(0.0, 0.1 * float(b), 1.0);
+        reference.rotations[b] = qidentity();
+        reference.velocities[b] = vec(0.0, 0.0, 0.0);
+        reference.angular[b] = vec(0.0, 0.0, 0.0);
+    }
+    sim.copyFrom(reference);
+    const root: usize = 1;
+    const head: usize = 4;
+    sim.positions[head][2] = 1.25; // 25 cm up: exact in binary
+    const err: TrackingError = trackingErrorWithHead(sim, reference, root, head);
+    try expect(err.head_height == 0.25);
+    try expect(terminated(err, .{ .head_height = 0.24 }));
+    try expect(!terminated(err, .{ .head_height = 0.26 }));
+    try expect(trackingError(sim, reference, root).head_height == 0.0);
+
+    sim.positions[head][2] = 1.0;
+    sim.positions[2][2] = 0.5; // another body falls; the head does not
+    try expect(trackingErrorWithHead(sim, reference, root, head).head_height == 0.0);
+
+    const names = [_][]const u8{ "", "Hips", "Spine", "Neck", "Head" };
+    try expect((try headBody("Head", &names)).? == 4);
+    try expect((try headBody("", &names)) == null);
+    try expectError(error.UnknownHeadBody, headBody("Haed", &names));
+}
+
+test "robot_track: contactExemptMask resolves names, refuses a typo, never matches the world's empty name" {
+    const gpa: Allocator = std.testing.allocator;
+    const names = [_][]const u8{ "", "Hips", "LeftFoot", "RightFoot" };
+    const mask: []bool = try contactExemptMask(gpa, names.len, &.{ "LeftFoot", "RightFoot" }, &names);
+    defer gpa.free(mask);
+    try expect(!mask[0] and !mask[1] and mask[2] and mask[3]);
+    // A name that is not a body is an error, not a silent no-op (the feet would then end every swing).
+    try expectError(error.UnknownExemptBody, contactExemptMask(gpa, names.len, &.{"LeftFoott"}, &names));
+    // The empty name is the world's (and every anonymous body's): it can never be exempted by accident.
+    try expectError(error.UnknownExemptBody, contactExemptMask(gpa, names.len, &.{""}, &names));
+    // Nothing to exempt needs no names at all.
+    const none: []bool = try contactExemptMask(gpa, names.len, &.{}, &.{});
+    defer gpa.free(none);
+    try expect(std.mem.indexOfScalar(bool, none, true) == null);
+}
+
+test "robot_track: stateOf's per-body lowest points agree with the whole body's lowest point" {
+    // The geometry is ONE function (`rbt.geomLowestPoint`); the per-body split must not change what the
+    // whole-model minimum is, on a real posed model.
+    const gpa: Allocator = std.testing.allocator;
+    var rig: Rig = undefined;
+    try rig.init(gpa, 1.0 / 60.0);
+    defer rig.deinit();
+    const m: *rbt.Model = rig.model();
+    var rng: std.Random.DefaultPrng = .init(7);
+    rig.scatter(rng.random(), 0.5);
+    var state: State = try .init(gpa, m.nbody);
+    defer state.deinit(gpa);
+    stateOf(m, &rig.data, &state);
+    var lowest_of_bodies: f32 = rbt.no_shape_height;
+    for (state.lowest) |height| {
+        lowest_of_bodies = @min(lowest_of_bodies, height);
+    }
+    try expect(lowest_of_bodies == rbt.lowestPoint(m, &rig.data));
+    try expect(state.lowest[0] == rbt.no_shape_height); // the world body is the floor, never "touching" it
+}
+
+test "robot_track: Termination.scaled scales EVERY limit and keeps the grace" {
+    // The struct is the list: a limit added to `Termination` must be scaled without anyone editing `scaled`.
+    const limits: Termination = .{ .height = 0.4, .up = 0.8, .worst_body = 1.0, .grace_steps = 32 };
+    const half: Termination = limits.scaled(0.5);
+    const info = @typeInfo(Termination).@"struct";
+    inline for (info.field_names, info.field_types) |name, field_type| {
+        if (field_type == f32) {
+            try expect(@field(half, name) == @field(limits, name) * 0.5);
+        }
+    }
+    try expect(half.grace_steps == 32);
 }
 
 test "robot_track: reference-state initialisation lands on the clip" {
@@ -2911,7 +3581,7 @@ test "robot_track: the root assist holds the character up, and nothing at zero" 
     for ([_]f32{ 0.0, 1.0 }, 0..) |assist, i| {
         const fleet: *Fleet = try .init(gpa, m, &.{&walk}, .{ .envs = 4, .capacity = 16, .seed = 3 });
         defer fleet.deinit();
-        fleet.options.gains.assist = assist;
+        fleet.options.task.gains.assist = assist;
         for (0..300) |_| {
             _ = fleet.step(zero);
         }

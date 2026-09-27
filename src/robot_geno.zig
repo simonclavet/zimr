@@ -2169,9 +2169,8 @@ pub const ServoRun = struct {
     goal: []f32,
     /// Lift every start onto the floor (`rbt.restOnFloor`, 1 mm clear) - off only to measure what it prevents.
     rest_on_floor: bool = true,
-    /// VELOCITY FEEDFORWARD: the servo damps toward the reference's velocity, not zero
-    /// (`robot_track.pdTorquesToward`) - only through `step`, which knows the clip.
-    feedforward: bool = false,
+    /// The reference's velocity over a step, for the servo's feedforward (`Gains.velocity_feedforward`, in
+    /// `gains` - honoured only through `step`, which knows the clip).
     reference_velocity: []f32,
     /// Collide with the floor and itself - off ONLY to measure what contacts do to a step.
     collide: bool = true,
@@ -2218,7 +2217,7 @@ pub const ServoRun = struct {
         self.reflex = try .init(imported, self.hips);
         self.data = try rbt.Data.init(gpa, m);
         self.reference = try rbt.Data.init(gpa, m);
-        self.check = try .init(gpa, m);
+        self.check = try .init(gpa, m, imported.names);
         @memcpy(self.data.pos, m.qpos0);
         @memset(self.data.vel, 0);
         self.data.stage = .stale;
@@ -2235,7 +2234,6 @@ pub const ServoRun = struct {
         self.friction = friction;
         self.balance_gain = 0.0;
         self.rest_on_floor = true;
-        self.feedforward = false;
         self.collide = true;
         self.lift = 0.0;
         self.reference_velocity = try gpa.alloc(f32, m.nv);
@@ -2307,29 +2305,6 @@ pub const ServoRun = struct {
         self.reflex.forget();
     }
 
-    /// The reference's velocity over frames f -> f+1 - `rbt.differentiatePos`, the tangent difference
-    /// `robot_track.resetToFrame` launches with (a rotation's rate is a quaternion logarithm, not a
-    /// subtraction). Zero at the clip's end.
-    pub fn referenceVelocity(
-        self: *ServoRun,
-        clip: *const dance.Clip,
-        f: usize,
-        out: []f32,
-    ) void {
-        if (f + 1 >= clip.frame_count) {
-            @memset(out, 0.0);
-            return;
-        }
-        const nq: usize = self.model.nq;
-        rbt.differentiatePos(
-            self.model,
-            out,
-            clip.targets[f * nq ..][0..nq],
-            clip.targets[(f + 1) * nq ..][0..nq],
-            clip.frame_time,
-        );
-    }
-
     /// A saved moment of the simulation: what the next step reads (positions, velocities) and the balance
     /// reflex's memory. Solver warm starts and cached contacts are NOT saved - `restore` forgets them, exactly
     /// as a clean start does - so every rollout from one snapshot starts identically (the sampling planner's
@@ -2389,14 +2364,14 @@ pub const ServoRun = struct {
     /// the dynamics - and how far the hips then are from where the clip has them.
     pub fn step(self: *ServoRun, clip: *const dance.Clip, f: usize) !f32 {
         const target: []const f32 = clip.targets[f * clip.nq ..][0..clip.nq];
-        if (!self.feedforward) {
+        if (!self.gains.velocity_feedforward) {
             return self.stepMoving(target, null, clip.frame_time);
         }
         // The velocity the body should END this step with. Semi-implicit Euler moves a body by its NEW
         // velocity, `x_end = x + dt * v_end`, so the end velocity that lands exactly on frame f is the
         // difference f-1 -> f - consistent with the position target. (Onward from f, f -> f+1, is a frame
         // ahead: the spring then trades position for velocity, and misses both.)
-        self.referenceVelocity(clip, if (f > 0) f - 1 else 0, self.reference_velocity);
+        robot_track.referenceVelocity(self.model, clip, if (f > 0) f - 1 else 0, self.reference_velocity);
         return self.stepMoving(target, self.reference_velocity, clip.frame_time);
     }
 
@@ -2624,6 +2599,14 @@ pub const Planner = struct {
         posture_body: []const u8 = "Head",
         posture_low: f32 = 0.5,
         posture_high: f32 = 0.9,
+        /// How much a metre of the root's wandering across the floor counts against a metre of shape. Shape first,
+        /// as tracking rewards weigh it: scored in the world, a body that has drifted gets bent toward where the
+        /// dance IS on the floor, and loses the dance itself. But the task holds the root to the reference's again
+        /// (1 m / 90 degrees, Sep 26), so a teacher that barely weighs drift ends its runs by drifting (plan T4).
+        across_weight: f32 = 0.3,
+        /// The limits the early warning (`danger`) scales - null is the check's own, the task's whole rule.
+        /// `d5_teacher` sets `teacher_warning`: the task's rule without its EVENT limits (plan T4b).
+        warning: ?robot_track.Termination = null,
         /// The fall penalty's EARLY WARNING: a rollout pays it once it comes within this fraction of the task's
         /// own limits (`FailureCheck.within`) - the one failure criterion, with a margin. At the full limits the
         /// search only learned of a fall once it was under way (the root 60 cm off or tilted 86 degrees) and the
@@ -2818,11 +2801,6 @@ pub const Planner = struct {
         gravity: f32,
     };
 
-    /// How much a metre of the root's wandering counts against a metre of shape. Shape first, as tracking
-    /// rewards weigh it: scored in the world, a body that has drifted gets bent toward where the dance IS on
-    /// the floor, and loses the dance itself.
-    const across_weight: f32 = 0.3;
-
     fn strayFrom(
         self: *Planner,
         clip: *const dance.Clip,
@@ -2940,8 +2918,10 @@ pub const Planner = struct {
             const stray: Stray = self.strayFrom(clip, g);
             const gravity: f32 = self.options.height_weight * stray.height + self.options.up_weight * stray.up +
                 self.options.root_height_weight * stray.root_height;
-            total += stray.shape + across_weight * stray.across + stray.gravity * gravity;
-            if (self.run.check.within(self.run.model, &self.run.data, clip, g, self.options.danger)) {
+            total += stray.shape + self.options.across_weight * stray.across + stray.gravity * gravity;
+            const warning_rule: robot_track.Termination = self.options.warning orelse self.run.check.termination;
+            const warning: robot_track.Termination = warning_rule.scaled(self.options.danger);
+            if (self.run.check.withinLimits(self.run.model, &self.run.data, clip, g, warning)) {
                 total += fall_penalty * float(self.options.horizon - h);
                 break;
             }
@@ -4747,9 +4727,8 @@ fn trackTrial(
         .envs = envs,
         .capacity = 256,
         .action_scale = source.action_scale,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
-        .rest_on_floor = true,
+        // The D-phase condition (servo, floor, rest; default reward and limits) - see `servo_task`.
+        .task = servo_task,
         .seed = seed,
     });
     defer fleet.deinit();
@@ -4960,8 +4939,12 @@ test "robot_geno: S2b - SAC holds Geno's T-pose, model-free" {
     const fleet: *robot_track.Fleet = try .init(gpa, m, &.{&held}, .{
         .envs = envs,
         .capacity = 16,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
+        // The D-phase condition, and this test never rested its resets on the floor - kept exactly as recorded.
+        .task = blk: {
+            var recorded: robot_track.Task = servo_task;
+            recorded.rest_on_floor = false;
+            break :blk recorded;
+        },
     });
     defer fleet.deinit();
     var subset: robot_policy.Subset = try robot_policy.subsetFor(
@@ -5167,7 +5150,7 @@ test "robot_geno: the dance's first 5 s - the servo alone, with light joints and
         try run.init(gpa, &imported, floor_friction);
         defer run.deinit();
         for ([_]bool{ false, true }) |feedforward| {
-            run.feedforward = feedforward;
+            run.gains.velocity_feedforward = feedforward;
             var total: f32 = 0.0;
             var starts: usize = 0;
             var from: usize = 0;
@@ -5411,7 +5394,7 @@ test "robot_geno: a launch at a random dance frame - every body onto the next fr
         var misses: [4]struct { worst: f32, mean: f32, body: usize } = undefined;
         for (variants, 0..) |variant, k| {
             const moving: bool = variant.moving;
-            run.feedforward = variant.feedforward;
+            run.gains.velocity_feedforward = variant.feedforward;
             run.collide = variant.collide;
             try run.start(&clip, f);
             if (!moving) {
@@ -5519,7 +5502,7 @@ test "robot_geno: the whole 30 s dance - the servo alone, strong joints, with an
     try run.init(gpa, &imported, floor_friction);
     defer run.deinit();
     for ([_]bool{ false, true }) |feedforward| {
-        run.feedforward = feedforward;
+        run.gains.velocity_feedforward = feedforward;
         var total: f32 = 0.0;
         var starts: usize = 0;
         var to_the_end: usize = 0;
@@ -6109,9 +6092,8 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
         .envs = 8,
         .capacity = 512,
         .action_scale = scale,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
-        .rest_on_floor = true,
+        // The D-phase condition (servo, floor, rest; default reward and limits) - see `servo_task`.
+        .task = servo_task,
     };
     const size: usize = robot_track.actionSize(m);
     const io: std.Io = threaded.io();
@@ -6187,9 +6169,8 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
         .envs = 1,
         .capacity = 64,
         .action_scale = scale,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
-        .rest_on_floor = true,
+        // The D-phase condition (servo, floor, rest; default reward and limits) - see `servo_task`.
+        .task = servo_task,
     });
     defer probe_fleet.deinit();
     var moment: ServoRun.Snapshot = try .init(gpa, m);
@@ -6406,7 +6387,7 @@ test "robot_geno: the GPU page's SuperTrack, on its CPU twin - how jittery is th
             .from_seconds = 5.0,
             .seconds = 10.0,
             .armature = standing_armature,
-            .action_scale = 0.6,
+            .action_scale = supertrack_action_scale,
         });
         report.print("\n  the page's SuperTrack on its CPU twin, smoothness {d:.1}: " ++
             "world loss {d:.3}, policy loss {d:.3};\n" ++
@@ -6504,9 +6485,8 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
         .envs = envs,
         .capacity = 2048,
         .action_scale = clone_scale,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
-        .rest_on_floor = true,
+        // The D-phase condition (servo, floor, rest; default reward and limits) - see `servo_task`.
+        .task = servo_task,
     });
     defer fleet.deinit();
     // The teacher: the planner, limited to its measured reach (0.6 rad a freedom - 3 action units here).
@@ -6804,6 +6784,9 @@ pub const d5_teacher: Planner.Options = blk: {
     // label was plan memory the student cannot see, and the clone could only memorise.
     o.markov = true;
     o.iterations = 2;
+    // Its early warning: a margin on the task's gradual limits, none on its event limits (`teacher_warning`, T4b).
+    o.danger = teacher_danger;
+    o.warning = teacher_warning;
     // GRAVITY - one cost for EVERY clip (Simon, Sep 26: ~100 clips, get-ups hidden in some; no per-motion
     // switch). Without it the teacher never rises: its shape is measured from the root's own pose, so lying with
     // the right joint angles costs what kneeling with them costs. Measured on D1's dance yardstick and the
@@ -6844,22 +6827,39 @@ pub const FailureCheck = struct {
     root: usize,
     /// The error behind the latest verdict - which limit it crossed, for anyone asking why.
     last: robot_track.TrackingError = undefined,
+    /// Per body: exempt from unexpected contact - the task's feet (`tracking_task.contact_exempt`), resolved by
+    /// name exactly as the fleet resolves them, so the two judge contact identically.
+    contact_exempt: []bool,
+    /// The head (`tracking_task.head_body`), resolved the same way - for the head-height term.
+    head: ?usize,
 
-    pub fn init(gpa: Allocator, m: *const rbt.Model) !FailureCheck {
+    pub fn init(
+        gpa: Allocator,
+        m: *const rbt.Model,
+        model_body_names: []const []const u8,
+    ) !FailureCheck {
         var judge: rbt.Data = try .init(gpa, m);
         errdefer judge.deinit();
         var sim_state: robot_track.State = try .init(gpa, m.nbody);
         errdefer sim_state.deinit(gpa);
-        const ref_state: robot_track.State = try .init(gpa, m.nbody);
+        var ref_state: robot_track.State = try .init(gpa, m.nbody);
+        errdefer ref_state.deinit(gpa);
+        const exempt_names: []const []const u8 = tracking_task.contact_exempt;
+        const exempt: []bool = try robot_track.contactExemptMask(gpa, m.nbody, exempt_names, model_body_names);
+        errdefer gpa.free(exempt);
+        const head: ?usize = try robot_track.headBody(tracking_task.head_body, model_body_names);
         return .{
             .judge = judge,
             .sim_state = sim_state,
             .ref_state = ref_state,
             .root = robot_track.rootBody(m),
+            .contact_exempt = exempt,
+            .head = head,
         };
     }
 
     pub fn deinit(self: *FailureCheck, gpa: Allocator) void {
+        gpa.free(self.contact_exempt);
         self.ref_state.deinit(gpa);
         self.sim_state.deinit(gpa);
         self.judge.deinit();
@@ -6876,7 +6876,7 @@ pub const FailureCheck = struct {
     }
 
     /// The same criterion with every limit scaled by `fraction` - an EARLY WARNING for anyone who must steer
-    /// away before the end (the teacher's fall penalty): the one rule, with a margin, never a rule of its own.
+    /// away before the end: the one rule, with a margin.
     pub fn within(
         self: *FailureCheck,
         m: *const rbt.Model,
@@ -6884,6 +6884,20 @@ pub const FailureCheck = struct {
         clip: *const dance.Clip,
         f: usize,
         fraction: f32,
+    ) bool {
+        return self.withinLimits(m, data, clip, f, self.termination.scaled(fraction));
+    }
+
+    /// The criterion against `limits` instead of the check's own - for an early warning built from the task's rule
+    /// with some limits left out (`teacher_warning`, plan T4b). The error is measured exactly as always; only the
+    /// verdict's limits change.
+    pub fn withinLimits(
+        self: *FailureCheck,
+        m: *const rbt.Model,
+        data: *const rbt.Data,
+        clip: *const dance.Clip,
+        f: usize,
+        limits: robot_track.Termination,
     ) bool {
         // Posed EXACTLY as the fleet poses its reference (`Fleet.referenceStateInto`) - positions, and velocities
         // by differencing from the frame before - so the error is the task's to the last field. (Until Sep 26 only
@@ -6896,9 +6910,10 @@ pub const FailureCheck = struct {
         self.judge.stage = .stale;
         rbt.forward(m, &self.judge);
         robot_track.stateOf(m, data, &self.sim_state);
+        robot_track.exemptFromContact(&self.sim_state, self.contact_exempt);
         robot_track.stateOf(m, &self.judge, &self.ref_state);
-        self.last = robot_track.trackingError(self.sim_state, self.ref_state, self.root);
-        return robot_track.terminated(self.last, self.termination.scaled(fraction));
+        self.last = robot_track.trackingErrorWithHead(self.sim_state, self.ref_state, self.root, self.head);
+        return robot_track.terminated(self.last, limits);
     }
 };
 
@@ -6931,11 +6946,64 @@ pub const task_weights: robot_track.RewardWeights = .{ .height_scale = 0.2, .up_
 /// one adds 1 m / 90 degrees). The teacher's wandering was the teacher's to fix (its cost barely weighs drift), not
 /// the task's to forgive. So: 1 m for the root's place, 90 degrees for its rotation (relative to the reference's,
 /// so lying is fine while the reference lies) - and the observation now SHOWS the policy where the reference is.
+///
+/// And the WORST BODY (plan T2, Sep 27): the pose limits are means over the bodies, which forgive one limb far off -
+/// an arm pinned under the body barely moves the mean. MimicKit fails on the worst body instead; here it is 0.8 m,
+/// measured: the servo alone never bends a limb over 0.16 m from the reference's shape (it fails whole), the
+/// teacher - the best tracker - swings limbs out to 0.69 m WHILE SUCCEEDING, and nothing either of them does is cut
+/// from 0.7 m up. 0.8 leaves 11 cm over that largest good swing and still catches a limb that is truly lost.
+///
+/// And UNEXPECTED CONTACT (plan T3, Sep 27): a body on the floor that the reference holds higher than 0.3 m - chosen
+/// on the geometry, not measured: Geno's knee end stands at ~0.45 m and its hands and hips at 0.7-0.9 m, so each
+/// touching down while the reference stands reads well over 0.3; a get-up's hands and knees read 0 (the
+/// reference's are down too); and a hand lagging the reference's lift off the floor (~0.5-1 m/s) is tolerated for
+/// ~0.3-0.6 s. The feet are exempt (`tracking_task.contact_exempt`). A crouch deeper than a 0.3 m knee is its
+/// blind spot - nearly kneeling anyway. If it ever ends good runs, the overnight rehearsal (ON) shows it.
+///
+/// BOTH EVENT LIMITS ARE OFF FOR NOW (Sep 27, T3 revisit) - the worst body and unexpected contact above are kept as
+/// mechanism, not used. Judged silently, they would have ended ALL THREE of the teacher's good rises from the floor
+/// within 0.8 s (head reaching 0.77 / 0.90 / 1.12 m): from 509 the worst body (0.83 > 0.8), from 530 the chest down
+/// while the reference's is 0.30 m up, from 554 the right arm still pushing the floor while the reference's has
+/// lifted 0.6 m. A rise that LAGS the reference - as every learner's first rises will - is ended before it can
+/// succeed, so the night could never learn to get up. T3's own bar was "no false failures, or rejected with the
+/// numbers recorded": rejected, in this frame-by-frame form. A lag-tolerant form (unexpected only if the reference
+/// has not had that body down within the last ~0.5 s) is in the plan for later.
+///
+/// SUPERTRACK'S RULE, ADOPTED (Sep 27, plan F3b): the HEAD's height more than 25 cm off the reference head's, plus the
+/// root held within 1 m / 90 degrees (the paper's drift variant, and Simon's root-motion requirement) - every other
+/// limit OFF, our old pose defaults (mean 0.35 m / 1.2 rad) included. Judged side by side the two were equally
+/// strict: servo alone on the 10-second dance MTTF 1.53 s (ours 1.61), on the get-up 2.75 s (ours 2.89); the teacher
+/// on the dance 1.66 s (ours 1.56). The servo and the teacher fail by FALLING, and the head's height says so as soon
+/// as five limits did. So the simpler rule - one clip-agnostic limit plus the root, the one SuperTrack's published
+/// results were measured under - wins. (The paper's minimum episode length, 48 frames, is our training grace -
+/// a learner's aid, set where the learner's windows are; the judge keeps none.)
 pub const task_termination: robot_track.Termination = .{
+    .pose_position = 1.0e30,
+    .pose_rotation = 1.0e30,
     .root_position = 1.0,
     .root_rotation = 1.57,
-    .height = 0.4,
-    .up = 0.8,
+    .head_height = 0.25,
+};
+
+/// How early the teacher's fall penalty warns: a rollout pays it within this fraction of its warning limits
+/// (`Planner.Options.danger`, `teacher_warning`). Named once because `teacher_warning` is built around it.
+pub const teacher_danger: f32 = 0.6;
+
+/// The TEACHER's early warning (plan T4b): a MARGIN on the task's gradual limits, NONE on its event limits.
+///
+/// The teacher pays its fall penalty within `teacher_danger` (0.6) of every limit it is given. For the GRADUAL limits
+/// - drift, heading, height, tilt - that margin is the point: steer away before the end. For the EVENT limits - the
+/// worst body (T2), unexpected contact (T3) - a margin forbids the teacher's own good moves: 0.6 x 0.8 put the worst
+/// body's warning at 0.48 m, under the 0.69 m balance swings T2 measured it making while SUCCEEDING, and 0.6 x 0.3
+/// put contact's at 0.18 m, where a hand pushing the floor in a rise already is - the lift regressed (T4). Leaving
+/// them OUT of the warning brought the lift back but let the teacher walk straight into them, and the task - which
+/// judges with its whole rule - ended its dances (T4b: 1.13 s, the servo's). So the event limits are here divided by
+/// the margin: scaled by it they land exactly ON the task's values - warned AT the event, never before it.
+pub const teacher_warning: robot_track.Termination = blk: {
+    var limits: robot_track.Termination = task_termination;
+    limits.worst_body = task_termination.worst_body / teacher_danger;
+    limits.unexpected_contact = task_termination.unexpected_contact / teacher_danger;
+    break :blk limits;
 };
 
 /// D5.5's calibrated start perturbation (Sep 25): where the SERVO ALONE lasts 1 s from about half of the starts
@@ -6944,8 +7012,69 @@ pub const d5_start_noise: robot_track.StartNoise = .{ .pose = 0.05, .velocity = 
 /// Geno's AXIS: the chain from the hips to the head (names this robot lacks are skipped where they are used).
 pub const axis_bodies = [_][]const u8{ "Hips", "Spine", "Spine1", "Spine2", "Spine3", "Neck", "Neck1", "Head" };
 
-/// The student's action scale: radians of raw offset per unit, actions in [-1, 1] (D5.0).
+/// The DReCon student's action scale: radians of raw pose offset per unit, actions in [-1, 1] (D5.0).
+///
+/// 1.2 rad a unit sounds huge; here is why it isn't. Every decision goes through DReCon's filter: a joint
+/// receives a FIFTH of the new action and keeps four fifths of what it had, and a decision is held for 2
+/// physics steps (30 Hz). So the joint never jumps - to move an offset quickly the policy must ASK for much more
+/// than it wants, and the filter hands it over gently. The planner that teaches this policy measured exactly
+/// that: capped at 0.6 rad raw it barely beats the servo (1.4 s vs 1.05 on the hard starts), allowed 1.2 it
+/// holds 3.48 s - while the offsets the joints actually RECEIVE average 0.24 rad (14 degrees), because of the
+/// filter. Set as `.action_scale = student_scale` beside `.task = tracking_task` - the learner's, not the task's.
 pub const student_scale: f32 = 1.2;
+
+/// SuperTrack's action scale on Geno (radians per unit): the value `geno_train` has always used. Half the DReCon
+/// student's - and 0.6 is exactly where the teacher "barely beat the servo" (see `student_scale`), though that was
+/// measured THROUGH DReCon's filter, which SuperTrack does not have yet (plan S8). Named here so it exists ONCE;
+/// Phase S re-measures it with the rest of the learner's settings.
+pub const supertrack_action_scale: f32 = 0.6;
+
+// ==== ONE DEFINITION OF GENO'S TASK (plan T1) ====
+//
+// Geno's task - its servo, its floor, resets rested on that floor, the gated reward (gravity in the reward: lying
+// with the right joint angles must not score) and the task's own failure rule - is ONE typed value, handed
+// whole to every fleet and trainer that trains or judges Geno (`.task = geno.tracking_task`). Spelled out field
+// by field at each call site, it drifted: D5 step 3's trainer and the end-to-end PPO test never got the gravity
+// gate, the T-pose test never got the floor rest.
+//
+// Not part of it (see `robot_track.Task`): the action scale, which is each learner's (`student_scale`,
+// `supertrack_action_scale`), and a run's sizes, episode cap and seed.
+
+/// Geno's task. What every fleet and trainer that trains or judges Geno must see.
+pub const tracking_task: robot_track.Task = .{
+    .gains = servo_gains,
+    .floor_friction = floor_friction,
+    .rest_on_floor = true,
+    .weights = task_weights,
+    .termination = task_termination,
+    .contact_exempt = &foot_bodies,
+    // The head, for the head-height term (SuperTrack's failure rule - plan F3b).
+    .head_body = "Head",
+};
+
+/// The bodies Geno stands on - never an UNEXPECTED floor contact: a foot is down through every stance while the
+/// reference lifts it into each swing, and a character a few frames behind still has it down. Everything else
+/// that touches while the reference holds it up is a fall starting: a knee (the thigh's lowest point is its knee
+/// end), a hand, the hips. (The shins need no exemption: their lowest point is the ankle end, a few centimetres up
+/// even standing, so they can never be "held up" by the reference.)
+pub const foot_bodies = [_][]const u8{ "LeftFoot", "LeftToeBase", "RightFoot", "RightToeBase" };
+
+/// Geno's servo, floor and floor rest WITHOUT the gated reward and the task's failure rule - the default reward
+/// and limits. The condition the D-phase experiments (D3, D4, D5, S2b) were run and recorded under: their tests
+/// keep it, so the numbers in the journal still reproduce, and the difference from `tracking_task` is visible by NAME
+/// rather than by a missing line. Moving them to `tracking_task` means re-measuring them; that is its own step.
+pub const servo_task: robot_track.Task = .{
+    .gains = servo_gains,
+    .floor_friction = floor_friction,
+    .rest_on_floor = true,
+};
+
+/// Geno's DReCon bodies: the ones its policy watches and the ones it actuates, as one value
+/// (`.bodies = geno.drecon_bodies` on a PPO trainer).
+pub const drecon_bodies: robot_policy.Bodies = .{
+    .watched = &drecon_watched,
+    .actuated = &drecon_actuated,
+};
 
 /// D5's demonstrations: the teacher's decisions as DReCon's policy would see and make them - rows of an
 /// observation (`robot_policy.observe`, built exactly as PPO's trainer builds one) and a label (the raw first
@@ -7144,9 +7273,8 @@ test "robot_geno: D5 recorder - each observation's last action is what DReCon's 
         .envs = 1,
         .capacity = 16,
         .action_scale = student_scale,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
-        .rest_on_floor = true,
+        // The D-phase condition (servo, floor, rest; default reward and limits) - see `servo_task`.
+        .task = servo_task,
     });
     defer fleet.deinit();
 
@@ -7342,9 +7470,8 @@ test "robot_geno: D5 (i) - the teacher's decisions replayed in the trainer's fle
         .envs = 1,
         .capacity = 16,
         .action_scale = student_scale,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
-        .rest_on_floor = true,
+        // The D-phase condition (servo, floor, rest; default reward and limits) - see `servo_task`.
+        .task = servo_task,
     });
     defer fleet.deinit();
     var run: ServoRun = undefined;
@@ -7960,6 +8087,11 @@ const LiftVariant = struct {
     axis: bool = false,
     /// Gravity gated by the reference's posture (`Planner.Options.posture_gate`).
     posture: bool = false,
+    /// The root's drift against the shape (`Planner.Options.across_weight`).
+    across_weight: f32 = 0.3,
+    /// The teacher's check WITHOUT T2's worst-body and T3's contact limits (`FailureCheck.termination`) - the rule
+    /// its early warning (`danger` x every limit) was tuned under.
+    without_t2_t3_limits: bool = false,
 };
 
 /// ON.2.1's floor-lift trial: from three floor starts of the get-up (509 lying, 530, 554 the rise beginning),
@@ -8025,6 +8157,12 @@ fn floorLift(
             teacher.height_bodies = &axis_bodies;
         }
         teacher.posture_gate = variant.posture;
+        teacher.across_weight = variant.across_weight;
+        run.check.termination = task_termination;
+        if (variant.without_t2_t3_limits) {
+            run.check.termination.worst_body = 1.0e30;
+            run.check.termination.unexpected_contact = 1.0e30;
+        }
         var planner: Planner = try .init(gpa, &run, &task.imported, teacher);
         defer planner.deinit();
         report.print("\n  {s} {s} ({d} joints):", .{ label, variant.name, planner.joint_adr.len });
@@ -8227,8 +8365,8 @@ test "robot_geno: ON.0b - which limit of the one failure criterion ends the serv
     // Under the task's own termination the teacher's dance fell from 3.43 s (the old hips-35-cm rule) to 1.24 s, so
     // the task's rule is much stricter. If one of its limits fires during NORMAL tracking, every learner's episodes
     // end for nothing. The servo alone from 12 starts in each clip, run until the reference is lost: at that
-    // moment, which limits are crossed, and by how much (the limits: pose 0.35 m / 1.2 rad, root 0.6 m / 1.5 rad,
-    // height 0.2 m).
+    // moment, which limits are crossed, and by how much - EVERY limit of `task_termination`, found by walking the
+    // struct (a hand-written list here had silently skipped the tilt limit).
     const options = @import("build_options");
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
@@ -8244,9 +8382,9 @@ test "robot_geno: ON.0b - which limit of the one failure criterion ends the serv
         try run.init(gpa, &task.imported, floor_friction);
         defer run.deinit();
         const limits: robot_track.Termination = run.check.termination;
-        const names = [_][]const u8{ "pose position", "pose rotation", "root position", "root rotation", "height" };
-        var crossed: [5]usize = @splat(0);
-        var sums: [5]f32 = @splat(0.0);
+        const info = @typeInfo(robot_track.Termination).@"struct";
+        var crossed: [info.field_names.len]usize = @splat(0);
+        var sums: [info.field_names.len]f32 = @splat(0.0);
         var ended: usize = 0;
         var frames: usize = 0;
         const starts: usize = 12;
@@ -8258,24 +8396,13 @@ test "robot_geno: ON.0b - which limit of the one failure criterion ends the serv
                 _ = try run.step(clip, f);
                 if (run.lost(clip, f)) {
                     const e: robot_track.TrackingError = run.check.last;
-                    const values = [_]f32{
-                        e.pose_position,
-                        e.pose_rotation,
-                        e.root_position,
-                        e.root_rotation,
-                        e.height,
-                    };
-                    const caps = [_]f32{
-                        limits.pose_position,
-                        limits.pose_rotation,
-                        limits.root_position,
-                        limits.root_rotation,
-                        limits.height,
-                    };
-                    for (values, caps, 0..) |value, cap, i| {
-                        sums[i] += value;
-                        if (value > cap) {
-                            crossed[i] += 1;
+                    inline for (info.field_names, info.field_types, 0..) |name, field_type, i| {
+                        if (field_type == f32) {
+                            const value: f32 = @field(e, name);
+                            sums[i] += value;
+                            if (value > @field(limits, name)) {
+                                crossed[i] += 1;
+                            }
                         }
                     }
                     ended += 1;
@@ -8286,8 +8413,11 @@ test "robot_geno: ON.0b - which limit of the one failure criterion ends the serv
         }
         report.print("\n  ON.0b {s}: the servo alone lost the reference in {d} of {d} runs (mean {d:.2} s); " ++
             "at that moment -", .{ @tagName(motion), ended, starts, float(frames) / float(starts) / 60.0 });
-        for (names, crossed, sums) |name, count, sum| {
-            report.print(" {s}: crossed {d}x (mean {d:.2});", .{ name, count, sum / float(@max(ended, 1)) });
+        inline for (info.field_names, info.field_types, 0..) |name, field_type, i| {
+            if (field_type == f32) {
+                const mean_at_loss: f32 = sums[i] / float(@max(ended, 1));
+                report.print(" {s}: crossed {d}x (mean {d:.2});", .{ name, crossed[i], mean_at_loss });
+            }
         }
     }
     report.print("\n", .{});
@@ -8341,6 +8471,469 @@ test "robot_geno: ON.0b - which limit ends the TEACHER's dance runs?" {
     report.print("\n", .{});
 }
 
+test "robot_geno: T2 - where would a worst-body limit end the servo's and the teacher's runs?" {
+    // How `task_termination.worst_body` was chosen (plan T2; 0.8 m, Sep 27). A worst-body limit only CHANGES
+    // anything when it fires BEFORE the rest of the rule does - so for every run we note when the worst body first
+    // crosses each candidate, and when the task's rule WITHOUT a worst-body limit loses the reference (pinned below,
+    // so this measures the same thing it did when the value was chosen). A crossing earlier than that loss is a run
+    // the candidate would have cut short, by the difference.
+    //
+    // Two trackers, because the answer means different things for each: the servo alone is a weak tracker (a
+    // cut there may be a real limb going wrong a little sooner), the teacher is the best tracking we have (a cut
+    // there is more likely a FALSE failure). And both clips: the get-up spends seconds on the floor, where a
+    // limb's shape can differ a lot from the reference's while the character is doing fine - each cut is also
+    // tagged with whether the REFERENCE was lying low at that moment (root under half a metre).
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const candidates = [_]f32{ 0.4, 0.5, 0.6, 0.7, 0.8, 1.0 };
+    const low_root: f32 = 0.5; // metres: the reference's root below this is "lying low"
+    const run_frames: usize = 300; // 5 s at 60 Hz
+    for ([_]Motion{ .dance, .getup }) |motion| {
+        const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), motion)) orelse return error.SkipZigTest;
+        defer task.deinit();
+        const clip: *const dance.Clip = &task.clip;
+        var run: ServoRun = undefined;
+        try run.init(gpa, &task.imported, floor_friction);
+        defer run.deinit();
+        // The rule the candidates are measured against: the task's, with its worst-body limit switched OFF.
+        run.check.termination.worst_body = 1.0e30;
+        var planner: Planner = try .init(gpa, &run, &task.imported, d5_teacher);
+        defer planner.deinit();
+        for ([_]bool{ false, true }) |teacher| {
+            const starts: usize = if (teacher) 4 else 12;
+            var cut_runs: [candidates.len]usize = @splat(0);
+            var cut_frames: [candidates.len]usize = @splat(0);
+            var cut_while_low: [candidates.len]usize = @splat(0);
+            var lost_runs: usize = 0;
+            var tracked_frames: usize = 0;
+            var peak_sum: f32 = 0.0;
+            var peak_max: f32 = 0.0;
+            for (0..starts) |k| {
+                const from: usize = 20 + k * ((clip.frame_count - run_frames - 40) / starts);
+                try run.start(clip, from);
+                if (teacher) {
+                    @memset(planner.applied, 0.0);
+                    planner.phase = 0;
+                    @memset(planner.nominal, 0.0);
+                }
+                var first_cross: [candidates.len]?usize = @splat(null);
+                var crossed_low: [candidates.len]bool = @splat(false);
+                var lost_at: ?usize = null;
+                var peak: f32 = 0.0;
+                var f: usize = from + 1;
+                while (f <= from + run_frames) : (f += 1) {
+                    if (teacher) {
+                        _ = try planner.step(clip, f);
+                    } else {
+                        _ = try run.step(clip, f);
+                    }
+                    const lost: bool = run.lost(clip, f);
+                    const worst: f32 = run.check.last.worst_body;
+                    const reference_low: bool = run.check.ref_state.positions[run.check.root][2] < low_root;
+                    for (candidates, 0..) |limit, i| {
+                        if (first_cross[i] == null and worst > limit) {
+                            first_cross[i] = f;
+                            crossed_low[i] = reference_low;
+                        }
+                    }
+                    if (lost) {
+                        lost_at = f;
+                        break;
+                    }
+                    peak = @max(peak, worst);
+                }
+                // The frame the current rule's run ends: where it lost the reference, or the budget's end.
+                const end: usize = lost_at orelse from + run_frames;
+                if (lost_at != null) {
+                    lost_runs += 1;
+                }
+                tracked_frames += end - from;
+                peak_sum += peak;
+                peak_max = @max(peak_max, peak);
+                for (first_cross, crossed_low, 0..) |crossing, low, i| {
+                    const at: usize = crossing orelse continue;
+                    if (at < end) {
+                        cut_runs[i] += 1;
+                        cut_frames[i] += end - at;
+                        if (low) {
+                            cut_while_low[i] += 1;
+                        }
+                    }
+                }
+            }
+            report.print("\n  T2 {s}, {s} ({d} starts): the current rule lost {d}, mean run {d:.2} s; " ++
+                "worst body before any loss: mean peak {d:.2} m, max {d:.2} m\n   ", .{
+                @tagName(motion),
+                if (teacher) "teacher" else "servo alone",
+                starts,
+                lost_runs,
+                float(tracked_frames) / float(starts) / 60.0,
+                peak_sum / float(starts),
+                peak_max,
+            });
+            for (candidates, cut_runs, cut_frames, cut_while_low) |limit, runs, frames, low| {
+                const mean_cut_seconds: f32 = if (runs == 0) 0.0 else float(frames) / float(runs) / 60.0;
+                report.print(" {d:.1} m: cuts {d} earlier ({d:.2} s, {d} lying low);", .{
+                    limit,
+                    runs,
+                    mean_cut_seconds,
+                    low,
+                });
+            }
+        }
+    }
+    report.print("\n", .{});
+}
+
+test "robot_geno: T4 - how much should the teacher weigh the root's drift?" {
+    // Plan T4. The task holds the root to the reference's again (1 m / 90 degrees, Sep 26), while the teacher's cost
+    // weighs a metre of drift at 0.3 of a metre of shape - so its runs can end by DRIFTING. Measured at 0.3 (today),
+    // 1.0 and 2.0 on the two yardsticks every teacher change is judged by: D1's dance starts (360 / 720 / 1080 /
+    // 1440, each until the task's rule loses the reference, capped at 5 s; the servo alone for scale) and the
+    // get-up's floor lift (ON.2.1h's three floor starts and `d5_teacher`'s own gravity: the head's best height
+    // against the reference's). The value that keeps the dance at ~3 s or more AND the lift goes into `d5_teacher`;
+    // if none does, it is recorded and the night moves on - its learner is not the teacher.
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const weights = [_]f32{ 0.3, 1.0, 2.0 };
+    const names = [_][]const u8{ "drift weight 0.3", "drift weight 1.0", "drift weight 2.0" };
+
+    // The dance.
+    const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance)) orelse return error.SkipZigTest;
+    defer task.deinit();
+    var run: ServoRun = undefined;
+    try run.init(gpa, &task.imported, floor_friction);
+    defer run.deinit();
+    var servo_frames: usize = 0;
+    for (planner_starts) |from| {
+        servo_frames += @min(try run.survive(&task.clip, from), planner_cap);
+    }
+    const starts: f32 = float(planner_starts.len);
+    report.print("\n  T4 dance, servo alone: {d:.2} s on average", .{float(servo_frames) / starts / 60.0});
+    // Each weight under today's rule - and today's weight once more with T2's and T3's limits switched OFF in the
+    // teacher's check: its early warning pays the fall penalty within `danger` (0.6) of EVERY limit, which puts the
+    // worst body's warning at 0.48 m, under the 0.69 m swings T2 measured the teacher making while succeeding.
+    for ([_]f32{ 0.3, 1.0, 2.0, 0.3 }, 0..) |weight, row| {
+        const without_t2_t3: bool = row == 3;
+        run.check.termination = task_termination;
+        if (without_t2_t3) {
+            run.check.termination.worst_body = 1.0e30;
+            run.check.termination.unexpected_contact = 1.0e30;
+        }
+        var teacher: Planner.Options = d5_teacher;
+        teacher.across_weight = weight;
+        var planner: Planner = try .init(gpa, &run, &task.imported, teacher);
+        defer planner.deinit();
+        var frames: usize = 0;
+        report.print("\n  T4 dance, drift weight {d:.1}{s}:", .{
+            weight,
+            if (without_t2_t3) " WITHOUT T2/T3 limits" else "",
+        });
+        for (planner_starts) |from| {
+            const held: usize = try planner.survive(&task.clip, from, planner_cap);
+            frames += held;
+            report.print(" {d:.2} s from {d};", .{ float(held) / 60.0, from });
+        }
+        report.print(" mean {d:.2} s", .{float(frames) / starts / 60.0});
+    }
+
+    // The lift: d5_teacher's own gravity (ON.2.1h's variant), one row per weight, and the same A/B.
+    var variants: [weights.len + 1]LiftVariant = undefined;
+    for (weights, names, 0..) |weight, name, i| {
+        variants[i] = .{
+            .name = name,
+            .every_joint = false,
+            .armature = standing_armature,
+            .height_weight = 1.0,
+            .up_weight = 0.3,
+            .axis = true,
+            .posture = true,
+            .across_weight = weight,
+        };
+    }
+    variants[weights.len] = variants[0];
+    variants[weights.len].name = "drift weight 0.3, WITHOUT T2/T3 limits in the teacher's check";
+    variants[weights.len].without_t2_t3_limits = true;
+    try floorLift(gpa, threaded.io(), "T4 lift", &variants);
+}
+
+test "robot_geno: F1 - the judge's servo baseline on the 10-second dance" {
+    // Plan F1: the number every later foundation step is compared with - the servo alone on `dance_5_15`, from 20
+    // starts every 0.5 s, judged by the task's rule. Printed with -Dtest-report.
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
+    defer task.deinit();
+    const starts: []usize = try robot_track.evenStarts(gpa, &task.clip, 30);
+    defer gpa.free(starts);
+    const servo: robot_track.Judgement = try robot_track.judge(gpa, &task.imported.model, &task.clip, .{
+        .action_scale = supertrack_action_scale,
+        .task = tracking_task,
+        .body_names = task.imported.names,
+    }, starts, null);
+    report.print("\n  F1 judge, servo alone on the 10-second dance ({d} starts every 0.5 s): mean time to failure " ++
+        "{d:.2} s; {d} of {d} reached the clip's end; {d} lost; mean reward {d:.3}\n", .{
+        starts.len,
+        servo.meanTimeToFailure(),
+        servo.reached_end,
+        servo.starts,
+        servo.failures,
+        servo.meanReward(),
+    });
+    try expect(servo.failures + servo.reached_end == servo.starts);
+}
+
+test "robot_geno: F3b - the paper's failure rule against ours, servo and teacher" {
+    // Plan F3b. SuperTrack ends an episode when the HEAD is more than 25 cm off the reference head's height (after
+    // a minimum length - our grace, a training aid, zero in the judge). Ours has five limits. The paper's rule here
+    // keeps the root limits (1 m / 90 degrees - Simon's root-motion requirement; the paper's drift variant has the
+    // same) and turns every other limit OFF, including our pose defaults. The servo alone through F1's judge on the
+    // 10-second dance and on the get-up; the teacher on the dance, its early warning built from the rule judging it.
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const paper_rule: robot_track.Termination = .{
+        .pose_position = 1.0e30,
+        .pose_rotation = 1.0e30,
+        .root_position = 1.0,
+        .root_rotation = 1.57,
+        .head_height = 0.25,
+    };
+    const rules = [_]robot_track.Termination{ task_termination, paper_rule };
+    const rule_names = [_][]const u8{ "ours ", "paper" };
+
+    // The servo alone, both clips.
+    for ([_]Motion{ .dance_5_15, .getup }) |motion| {
+        const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), motion)) orelse return error.SkipZigTest;
+        defer task.deinit();
+        const starts: []usize = try robot_track.evenStarts(gpa, &task.clip, 30);
+        defer gpa.free(starts);
+        for (rules, rule_names) |rule, name| {
+            var judged: robot_track.Task = tracking_task;
+            judged.termination = rule;
+            const servo: robot_track.Judgement = try robot_track.judge(gpa, &task.imported.model, &task.clip, .{
+                .action_scale = supertrack_action_scale,
+                .task = judged,
+                .body_names = task.imported.names,
+            }, starts, null);
+            report.print("\n  F3b {s}, servo alone, {s} rule: MTTF {d:.2} s, {d}/{d} to the end, reward {d:.3}", .{
+                @tagName(motion),
+                name,
+                servo.meanTimeToFailure(),
+                servo.reached_end,
+                servo.starts,
+                servo.meanReward(),
+            });
+        }
+    }
+
+    // The teacher on the dance.
+    const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
+    defer task.deinit();
+    var run: ServoRun = undefined;
+    try run.init(gpa, &task.imported, floor_friction);
+    defer run.deinit();
+    const starts: []usize = try robot_track.evenStarts(gpa, &task.clip, 60);
+    defer gpa.free(starts);
+    for (rules, rule_names, 0..) |rule, name, r| {
+        run.check.termination = rule;
+        var teacher: Planner.Options = d5_teacher;
+        // Ours: the teacher's own warning (T4b). The paper's rule is all gradual limits: its margin is the point.
+        teacher.warning = if (r == 0) teacher_warning else rule;
+        var planner: Planner = try .init(gpa, &run, &task.imported, teacher);
+        defer planner.deinit();
+        var frames: usize = 0;
+        var held_to_cap: usize = 0;
+        for (starts) |from| {
+            const held: usize = try planner.survive(&task.clip, from, planner_cap);
+            frames += held;
+            if (held >= planner_cap or from + held + 2 >= task.clip.frame_count) {
+                held_to_cap += 1;
+            }
+        }
+        report.print("\n  F3b dance_5_15, teacher, {s} rule: {d:.2} s on average over {d} starts, " ++
+            "{d} held to the cap or the clip's end", .{
+            name,
+            float(frames) / float(starts.len) / 60.0,
+            starts.len,
+            held_to_cap,
+        });
+    }
+    report.print("\n", .{});
+}
+
+test "robot_geno: F3 - the servo alone, with and without velocity feedforward" {
+    // Plan F3: does the servo last clearly longer when it damps toward the reference's velocity instead of toward
+    // zero? Sep 24 said no on survival (1.74 vs 1.73 s, the old rule) though each step's lag fell 14.3 -> 4.8 mm at
+    // the fastest frame - "the limit is balance". Asked again with F1's judge and the task's rule as it is now:
+    // mean time to failure, the share reaching the end, and the gated reward, which lag costs directly.
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
+    defer task.deinit();
+    const starts: []usize = try robot_track.evenStarts(gpa, &task.clip, 30);
+    defer gpa.free(starts);
+    for ([_]bool{ false, true }) |feedforward| {
+        var judged_task: robot_track.Task = tracking_task;
+        judged_task.gains.velocity_feedforward = feedforward;
+        const servo: robot_track.Judgement = try robot_track.judge(gpa, &task.imported.model, &task.clip, .{
+            .action_scale = supertrack_action_scale,
+            .task = judged_task,
+            .body_names = task.imported.names,
+        }, starts, null);
+        report.print("\n  F3 servo alone, {s}: MTTF {d:.2} s, {d}/{d} to the end, reward {d:.3}", .{
+            if (feedforward) "velocity feedforward" else "zero-velocity damping",
+            servo.meanTimeToFailure(),
+            servo.reached_end,
+            servo.starts,
+            servo.meanReward(),
+        });
+    }
+    report.print("\n", .{});
+}
+
+test "robot_geno: T3 revisit - what would end the teacher's rise from the floor?" {
+    // T4b's suspicion: the teacher rises well from the floor only when free to cross an EVENT limit - so the task's
+    // rule may end a slow-but-real get-up. Run the teacher that rises (event limits out of its warning) from the
+    // three floor starts for 4 s, and JUDGE silently with the task's whole rule every frame without stopping: at
+    // the first frame the rule would end the run - which limits are crossed, by how much, and for contact, which
+    // bodies are down while the reference holds them up, and how high. The head's best height says whether the
+    // rise itself happened.
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .getup)) orelse return error.SkipZigTest;
+    defer task.deinit();
+    const clip: *const dance.Clip = &task.clip;
+    const names: []const []const u8 = task.imported.names;
+    const head: usize = for (names, 0..) |name, body| {
+        if (std.mem.eql(u8, name, "Head")) {
+            break body;
+        }
+    } else return error.NoHead;
+    var run: ServoRun = undefined;
+    try run.init(gpa, &task.imported, floor_friction);
+    defer run.deinit();
+    var teacher: Planner.Options = d5_teacher;
+    teacher.warning = blk: {
+        var free: robot_track.Termination = teacher_warning;
+        free.worst_body = 1.0e30;
+        free.unexpected_contact = 1.0e30;
+        break :blk free;
+    };
+    var planner: Planner = try .init(gpa, &run, &task.imported, teacher);
+    defer planner.deinit();
+    const limits: robot_track.Termination = run.check.termination;
+    const info = @typeInfo(robot_track.Termination).@"struct";
+    const cap: usize = 240;
+    for ([_]usize{ 509, 530, 554 }) |from| {
+        try run.start(clip, from);
+        @memset(planner.applied, 0.0);
+        planner.phase = 0;
+        @memset(planner.nominal, 0.0);
+        var head_best: f32 = 0.0;
+        var judged_lost_at: ?usize = null;
+        var f: usize = from + 1;
+        while (f <= from + cap) : (f += 1) {
+            _ = try planner.step(clip, f);
+            head_best = @max(head_best, run.data.body_xpos[head][2]);
+            if (judged_lost_at != null or !run.lost(clip, f)) {
+                continue;
+            }
+            judged_lost_at = f;
+            const e: robot_track.TrackingError = run.check.last;
+            report.print("\n  T3 revisit from {d}: the task's rule would end it after {d:.2} s (frame {d}) -", .{
+                from,
+                float(f - from) / 60.0,
+                f,
+            });
+            inline for (info.field_names, info.field_types) |name, field_type| {
+                if (field_type == f32 and @field(e, name) > @field(limits, name)) {
+                    report.print(" {s} {d:.2} > {d:.2};", .{ name, @field(e, name), @field(limits, name) });
+                }
+            }
+            // For contact: the bodies down (and not exempt) that the reference holds above the limit.
+            for (run.check.sim_state.lowest, run.check.ref_state.lowest, 0..) |sim_low, ref_low, b| {
+                const touching: bool = sim_low < robot_track.contact_band;
+                if (touching and ref_low < rbt.no_shape_height and ref_low > limits.unexpected_contact) {
+                    report.print(" [{s} down, reference's {d:.2} m up]", .{ names[b], ref_low });
+                }
+            }
+        }
+        if (judged_lost_at == null) {
+            report.print("\n  T3 revisit from {d}: the task's rule never ends it in {d:.1} s", .{
+                from,
+                float(cap) / 60.0,
+            });
+        }
+        report.print(" - head up to {d:.2} m", .{head_best});
+    }
+    report.print("\n", .{});
+}
+
+test "robot_geno: T4b - the teacher's early warning without the event limits" {
+    // Plan T4b, measured on T4's two yardsticks with `d5_teacher` as it now is (its warning is `teacher_warning`: a
+    // margin on the gradual limits, none on the event limits - leaving the event limits out altogether gave the lift
+    // back, 0.77 / 0.90 / 1.12 m, but the dance 1.13 s, the servo's):
+    // the dance JUDGED BY THE TASK'S WHOLE RULE (D1's four starts, cap 5 s - T4 had 1.37 s with the event limits in
+    // the warning), and the floor lift (ON.2.1h's three starts, 4 s - T4 had 0.62 / 0.63 / 0.66 m; Sep 26, before
+    // T2/T3, 0.75 / 0.91 / 1.19 m).
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = std.testing.allocator;
+    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance)) orelse return error.SkipZigTest;
+    defer task.deinit();
+    var run: ServoRun = undefined;
+    try run.init(gpa, &task.imported, floor_friction);
+    defer run.deinit();
+    try expect(std.meta.eql(run.check.termination, task_termination)); // judged by the whole rule
+    var planner: Planner = try .init(gpa, &run, &task.imported, d5_teacher);
+    defer planner.deinit();
+    var frames: usize = 0;
+    report.print("\n  T4b dance, the whole rule judging:", .{});
+    for (planner_starts) |from| {
+        const held: usize = try planner.survive(&task.clip, from, planner_cap);
+        frames += held;
+        report.print(" {d:.2} s from {d};", .{ float(held) / 60.0, from });
+    }
+    report.print(" mean {d:.2} s", .{float(frames) / float(planner_starts.len) / 60.0});
+    try floorLift(gpa, threaded.io(), "T4b lift", &.{
+        .{
+            .name = "d5_teacher, warning without the event limits",
+            .every_joint = false,
+            .armature = standing_armature,
+            .height_weight = 1.0,
+            .up_weight = 0.3,
+            .axis = true,
+            .posture = true,
+        },
+    });
+}
+
 test "robot_geno: FailureCheck's error IS the fleet's - every field, velocities included" {
     // "One failure criterion through one function" is only true if FailureCheck measures exactly what the fleet
     // measures. A fleet character stepped a few frames; the error computed as the fleet computes it (its state,
@@ -8355,9 +8948,10 @@ test "robot_geno: FailureCheck's error IS the fleet's - every field, velocities 
     const fleet: *robot_track.Fleet = try .init(gpa, m, &.{&task.clip}, .{
         .envs = 1,
         .capacity = 16,
-        .gains = servo_gains,
-        .floor_friction = floor_friction,
-        .rest_on_floor = true,
+        // The full task: this test compares the ERROR the check computes with the fleet's, which no part of the
+        // task changes - and a parity test should run the configuration everything else runs.
+        .task = tracking_task,
+        .body_names = task.imported.names,
     });
     defer fleet.deinit();
     const idle: []f32 = try gpa.alloc(f32, robot_track.actionSize(m));
@@ -8372,26 +8966,21 @@ test "robot_geno: FailureCheck's error IS the fleet's - every field, velocities 
     defer reference.deinit(gpa);
     var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
+    // The fleet's step, by hand: its state, its contact exemption (the feet, resolved by name at init), its
+    // reference, its error.
     robot_track.stateOf(m, &fleet.data[0], &sim);
+    robot_track.exemptFromContact(&sim, fleet.contact_exempt);
     fleet.referenceStateInto(&task.clip, fleet.frame[0], &probe, &reference);
-    const fleets: robot_track.TrackingError = robot_track.trackingError(sim, reference, fleet.root);
-    var check: FailureCheck = try .init(gpa, m);
+    const fleets: robot_track.TrackingError = robot_track.trackingErrorWithHead(sim, reference, fleet.root, fleet.head);
+    var check: FailureCheck = try .init(gpa, m, task.imported.names);
     defer check.deinit(gpa);
     _ = check.lost(m, &fleet.data[0], &task.clip, fleet.frame[0]);
     const mine: robot_track.TrackingError = check.last;
-    const pairs = [_][2]f32{
-        .{ fleets.pose_position, mine.pose_position },
-        .{ fleets.pose_rotation, mine.pose_rotation },
-        .{ fleets.velocity, mine.velocity },
-        .{ fleets.angular, mine.angular },
-        .{ fleets.root_position, mine.root_position },
-        .{ fleets.root_rotation, mine.root_rotation },
-        .{ fleets.height, mine.height },
-        .{ fleets.up, mine.up },
-    };
+    // EVERY field, by walking the struct - a list written out here went stale the day a field was added.
     var worst: f32 = 0.0;
-    for (pairs) |pair| {
-        worst = @max(worst, @abs(pair[0] - pair[1]));
+    const info = @typeInfo(robot_track.TrackingError).@"struct";
+    inline for (info.field_names) |name| {
+        worst = @max(worst, @abs(@field(fleets, name) - @field(mine, name)));
     }
     report.print("\n  FailureCheck vs the fleet: every field of the error at most {e:.2} apart " ++
         "(velocity {d:.4} vs {d:.4})\n", .{
@@ -8400,4 +8989,49 @@ test "robot_geno: FailureCheck's error IS the fleet's - every field, velocities 
         mine.velocity,
     });
     try expect(worst < 1.0e-5);
+}
+
+test "teacher_warning: a margin on the gradual limits, none on the event limits" {
+    // Plan T4b's known answer, on the warning AS THE TEACHER APPLIES IT (scaled by its danger): every gradual limit is
+    // the task's times the margin; the worst-body and contact limits land back on the task's own values. Walking the
+    // struct, so a limit added to the task later is covered too.
+    const applied: robot_track.Termination = teacher_warning.scaled(teacher_danger);
+    const info = @typeInfo(robot_track.Termination).@"struct";
+    inline for (info.field_names, info.field_types) |name, field_type| {
+        if (field_type != f32) {
+            continue;
+        }
+        const is_event_limit: bool = comptime std.mem.eql(u8, name, "worst_body") or
+            std.mem.eql(u8, name, "unexpected_contact");
+        const want: f32 = if (is_event_limit)
+            @field(task_termination, name)
+        else
+            @field(task_termination, name) * teacher_danger;
+        try expect(@abs(@field(applied, name) - want) <= 1.0e-6 * @max(1.0, @abs(want)));
+    }
+    try expect(std.meta.eql(d5_teacher.warning.?, teacher_warning));
+    try expect(d5_teacher.danger == teacher_danger);
+}
+
+test "tracking_task: the gravity gate and the failure rule; servo_task differs in exactly those" {
+    // The known answer for plan T1. `tracking_task` is what trains and judges Geno, so it must be the gated
+    // reward and the task's termination - the two things the drifted call sites had lost. `servo_task` is the
+    // D-phase condition: the same servo, floor and rest, and the DEFAULT reward and limits, nothing else changed.
+    // (Since T3 the failure rule includes WHICH bodies may touch the floor - Geno's feet - which only the contact
+    // limit reads, so it belongs to the rule `servo_task` leaves out.)
+    try expect(std.meta.eql(tracking_task.weights, task_weights));
+    try expect(std.meta.eql(tracking_task.termination, task_termination));
+    try expect(std.meta.eql(tracking_task.gains, servo_gains));
+    try expect(tracking_task.floor_friction == floor_friction and tracking_task.rest_on_floor);
+
+    const defaults: robot_track.Task = .{};
+    try expect(std.meta.eql(servo_task.weights, defaults.weights));
+    try expect(std.meta.eql(servo_task.termination, defaults.termination));
+    var servo_task_with_the_gates: robot_track.Task = servo_task;
+    servo_task_with_the_gates.weights = task_weights;
+    servo_task_with_the_gates.termination = task_termination;
+    servo_task_with_the_gates.contact_exempt = tracking_task.contact_exempt;
+    servo_task_with_the_gates.head_body = tracking_task.head_body;
+    try expect(std.meta.eql(servo_task_with_the_gates, tracking_task));
+    try expect(tracking_task.contact_exempt.len == foot_bodies.len);
 }

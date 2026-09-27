@@ -37,7 +37,7 @@ pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();
 // Zig's SPIR-V backend (0.17.0-dev.704) does NOT implement `@atomicRmw` /
 // `@atomicLoad` / `@atomicStore` for the spirv target ("TODO (SPIR-V):
 // implement AIR tag atomic_*"), so a kernel cannot use the builtins directly.
-// The route around it mirrors `zsample2d` (zimrmath.zig): a `noinline` helper
+// The route around it: a `noinline` helper
 // with a DUMMY body. On GPU, Zig emits a real `OpFunctionCall` to the helper;
 // `spv2wgsl` then INTERCEPTS that call by name (substring `zatomicAdd` /
 // `zatomicLoad` / `zatomicStore`), emits the WGSL atomic builtin

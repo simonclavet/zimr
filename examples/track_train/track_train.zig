@@ -224,7 +224,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.servo_mttf = meanTimeToFailure(envs * warmup_steps, servo_failures);
     s.norm = try latent.measureNormalizer(gpa, fleet);
     s.learner = try resident.Resident(zn_mlp).init(gpa, &s.pipe, fleet, s.norm, learner_options);
-    s.training_limits = fleet.options.termination;
+    s.training_limits = fleet.options.task.termination;
     setStatus(s, "learning from nothing", .{});
 }
 
@@ -408,7 +408,11 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
             s.watching = !s.watching;
             // A longer leash while watching, and the training one back afterwards.
             const fleet: *track.Fleet = s.learner.fleet;
-            fleet.options.termination = if (s.watching) s.training_limits.scaled(watching_leash) else s.training_limits;
+            const leash: track.Termination = if (s.watching)
+                s.training_limits.scaled(watching_leash)
+            else
+                s.training_limits;
+            fleet.options.task.termination = leash;
         }
         if (!s.watching) {
             const label: []const u8 = if (s.train_only) "show the character" else "train only (stop drawing)";

@@ -31,6 +31,13 @@
 
 const std = @import("std");
 const shader_iface = @import("shader_interface");
+const wgsl_reflect = @import("wgsl_reflect");
+const allocPrint = std.fmt.allocPrint;
+
+/// The `.decoration` half of every descriptor-bound `@extern` this file emits,
+/// as a `print` format fragment - takes the set, then the binding. One spelling
+/// for the Ubo, loose uniforms, textures and samplers, so they cannot drift.
+const descriptor_decoration_fmt = ".decoration = .{{ .descriptor = .{{ .set = {d}, .binding = {d} }} }}";
 const eql = std.mem.eql;
 
 /// Map a `shader_interface.ElemKind` (used in VS Attributes) to its
@@ -271,6 +278,27 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         \\
     );
 
+    // ==== HOW EVERY DECL BELOW GETS ITS DECORATION ====================
+    //
+    // Every stage-interface variable is a FILE-SCOPE `@extern` that carries its
+    // own decoration - `.location` for varyings and attributes, `.descriptor`
+    // for uniforms, textures and samplers. The binding is part of the
+    // declaration, so a variable simply cannot exist without one.
+    //
+    // It used to be two steps: a bare `extern const x: T addrspace(...)`, then
+    // an inline-asm `OpDecorate %x Location N` inside the entry function. Zig
+    // 0.17.0-dev.2307's rewritten SPIR-V linker links each declaration on its
+    // own and only copies a decoration whose target was defined in the SAME
+    // unit - an asm decoration aimed at a global from inside a function is
+    // collected and silently dropped. Every shader came out at @group(0) with
+    // no locations and the device rejected every pipeline. `ExternOptions.
+    // decoration` is the language's own spelling of this, and it is what the
+    // compiler's behavior tests use. See src/notes/spirv_2307_decorations_plan.md.
+    //
+    // Consequence for readers of this file: each of these is a POINTER, so the
+    // entry wrapper reads `x.*` and writes `x.* = v`. Struct fields auto-deref
+    // (`u.step` works as-is).
+
     // ---- VS Attributes: location explicit on each Attr type
     if (@hasDecl(IfaceMod, "Attributes")) {
         try writer.writeAll("// Vertex attributes (locations from Attr type).\n");
@@ -281,12 +309,9 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             const elem = @field(AttrT, "element");
             const loc = @field(AttrT, "location");
             try writer.print(
-                "pub extern const {s}: {s} addrspace(.input);\n",
-                .{ field_name, zigTypeForElem(elem) },
-            );
-            try writer.print(
-                "pub const _location_{s}: u32 = {d};\n",
-                .{ field_name, loc },
+                "pub const {s} = @extern(*addrspace(.input) const {s}, " ++
+                    ".{{ .name = \"{s}\", .decoration = .{{ .location = {d} }} }});\n",
+                .{ field_name, zigTypeForElem(elem), field_name, loc },
             );
         }
         try writer.writeAll("\n");
@@ -299,12 +324,9 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         const info = @typeInfo(T).@"struct";
         inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
             try writer.print(
-                "pub extern const {s}: {s} addrspace(.input);\n",
-                .{ field_name, zigTypeForType(field_type) },
-            );
-            try writer.print(
-                "pub const _location_{s}: u32 = {d};\n",
-                .{ field_name, i },
+                "pub const {s} = @extern(*addrspace(.input) const {s}, " ++
+                    ".{{ .name = \"{s}\", .decoration = .{{ .location = {d} }} }});\n",
+                .{ field_name, zigTypeForType(field_type), field_name, i },
             );
         }
         try writer.writeAll("\n");
@@ -323,14 +345,19 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         const info = @typeInfo(T).@"struct";
         comptime var out_loc: u32 = 0;
         inline for (info.field_names, info.field_types) |field_name, field_type| {
-            try writer.print(
-                "pub extern var {s}: {s} addrspace(.output);\n",
-                .{ field_name, zigTypeForType(field_type) },
-            );
-            if (comptime !std.mem.eql(u8, field_name, "frag_depth")) {
+            const is_frag_depth: bool = comptime std.mem.eql(u8, field_name, "frag_depth");
+            if (is_frag_depth) {
+                // No decoration at all - the backend maps this exact extern name to
+                // the FragDepth builtin, exactly like std.spirv's "position".
                 try writer.print(
-                    "pub const _location_{s}: u32 = {d};\n",
-                    .{ field_name, out_loc },
+                    "pub const {s} = @extern(*addrspace(.output) {s}, .{{ .name = \"{s}\" }});\n",
+                    .{ field_name, zigTypeForType(field_type), field_name },
+                );
+            } else {
+                try writer.print(
+                    "pub const {s} = @extern(*addrspace(.output) {s}, " ++
+                        ".{{ .name = \"{s}\", .decoration = .{{ .location = {d} }} }});\n",
+                    .{ field_name, zigTypeForType(field_type), field_name, out_loc },
                 );
                 out_loc += 1;
             }
@@ -339,33 +366,57 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     }
 
     // ---- Uniforms: loose, .constant storage class, no location
+    // Each loose uniform is its own one-field uniform BLOCK: the compiler
+    // insists a `.uniform` extern points at a struct (a bare vec4 or array is
+    // rejected), and the old `.constant` spelling is now reserved for opaque
+    // image/sampler handles. `extern struct { value: T }` has exactly T's bytes,
+    // so the host's buffers bind unchanged - WGSL just sees
+    // `var<uniform> col_diffuse: S { field_0: vec4<f32> }` instead of a bare vec4.
+    //
+    // Group: the SAME authority the Ubo uses (VS -> 0, FS -> 2, or a schema's
+    // `ubo_group`). Bindings count 0, 1, 2... in declaration order.
     if (@hasDecl(IfaceMod, "Uniforms")) {
-        try writer.writeAll("// Uniforms (loose, .constant storage class).\n");
+        try writer.writeAll("// Uniforms (loose; each one a one-field uniform block).\n");
+        const uniform_set: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
         const T = IfaceMod.Uniforms;
         const info = @typeInfo(T).@"struct";
-        inline for (info.field_names, info.field_types) |field_name, field_type| {
+        inline for (info.field_names, info.field_types, 0..) |field_name, field_type, binding| {
             try writer.print(
-                "pub extern const {s}: {s} addrspace(.constant);\n",
-                .{ field_name, zigTypeForType(field_type) },
+                "pub const _{s}_block = @extern(*addrspace(.uniform) const extern struct {{ value: {s} }}, " ++
+                    ".{{ .name = \"{s}\", " ++ descriptor_decoration_fmt ++ " }});\n",
+                .{ field_name, zigTypeForType(field_type), field_name, uniform_set, binding },
             );
         }
         try writer.writeAll("\n");
     }
 
-    // ---- Samplers: `<name>_sampler2d: u32 addrspace(.constant)` plus
-    //               a `<name>(uv)` accessor method that wraps the
-    //               zsample2d call.  Shader body calls `io.albedo(uv)`
-    //               instead of `zm.zsample2d(io.albedo_sampler2d, uv)`.
+    // ---- Samplers: each schema field becomes TWO real opaque handles - a
+    //               texture at (group, N) and its sampler at (group, N+1).
+    //               That pairing is the host's convention (shader_runtime.zig
+    //               expands a `.sampler_2d` into exactly those two entries), and
+    //               the slots come from `solveSamplerSlots`, the same solver the
+    //               host layout calls, so the two sides cannot disagree.
+    //
+    //               The texture's extern name is the field name and the
+    //               sampler's is `<name>_sampler` - the WGSL globals come out as
+    //               `texture0` / `texture0_sampler`, same as before. The Zig decls
+    //               are `_tex_<name>` / `_smp_<name>` so they never collide with
+    //               the `io.<name>(uv)` accessor methods.
+    //
+    //               These used to be a `u32` placeholder that zspv rewrote into a
+    //               real texture + sampler after compilation. The compiler now
+    //               declares opaque image and sampler types itself (`@SpirvType`)
+    //               and refuses anything else in the `.constant` address space,
+    //               so the placeholder and the rewrite are both obsolete.
     if (@hasDecl(IfaceMod, "Samplers")) {
         try writer.writeAll(
-            "// Samplers — `_sampler2d` suffix stripped by zspv at SPIR-V level.\n" ++
-                "// Each sampler gets a companion accessor function `<name>(uv)`\n" ++
-                "// so the shader body can call `io.<name>(uv)` instead of\n" ++
-                "// hand-writing `zsample2d(<name>_sampler2d, uv)`.\n",
+            "// Samplers - a real texture at (group, N) + its sampler at (group, N+1).\n" ++
+                "// The shader body samples through `io.<name>(uv)` / `io.<name>Level(uv, lod)`.\n",
         );
         const T = IfaceMod.Samplers;
         const info = @typeInfo(T).@"struct";
-        inline for (info.field_names, info.field_types) |field_name, field_type| {
+        const slots = shader_iface.solveSamplerSlots(IfaceMod.Samplers);
+        inline for (info.field_names, info.field_types, 0..) |field_name, field_type, i| {
             // Sanity-check: the field type must be a Sampler2D-shaped
             // marker (has both `slot` AND `sampler_config` decls).
             // Anything else is a schema error - most commonly:
@@ -390,25 +441,31 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
                         "(move custom structs out of the schema sections)",
                 );
             }
+            const group: u32 = slots[i].group;
+            const texture_binding: u32 = slots[i].binding;
+            const sampler_binding: u32 = texture_binding + 1;
             try writer.print(
-                "pub extern const {s}_sampler2d: u32 addrspace(.constant);\n",
-                .{field_name},
+                "pub const _tex_{s} = @extern(_sb.Texture2DPtr(), " ++
+                    ".{{ .name = \"{s}\", " ++ descriptor_decoration_fmt ++ " }});\n",
+                .{ field_name, field_name, group, texture_binding },
+            );
+            try writer.print(
+                "pub const _smp_{s} = @extern(_sb.SamplerPtr(), " ++
+                    ".{{ .name = \"{s}_sampler\", " ++ descriptor_decoration_fmt ++ " }});\n",
+                .{ field_name, field_name, group, sampler_binding },
             );
         }
         try writer.writeAll("\n");
     }
 
-    // ---- Ubo: single uniform buffer block at descriptor set 0,
-    //          binding 0.  See header comment for the design.
+    // ---- Ubo: single uniform buffer block at binding 0 of the stage's
+    //          uniform group.  See header comment for the design.
     //
     // Split between layers: the `Ubo` STRUCT TYPE def lives at
     // MODULE level (it's a pure type, target-independent, must be
     // visible to consumer code that does `shader_externs.Ubo`).
-    // The `extern const u: Ubo addrspace(.uniform)` extern decl
-    // lives INSIDE `_Spirv` (only valid on SPIR-V targets).  The
-    // `_binding_u: u32` const stays inside `_Spirv` too - only the
-    // entry-point Wrapper needs to reference it, and that access
-    // is already `_Spirv._binding_u`.
+    // The decorated `u` `@extern` lives INSIDE `_Spirv` (only valid
+    // on SPIR-V targets); only the entry-point Wrapper reads it.
     //
     // Ubo is emitted as a duplicate `extern struct` definition rather
     // than aliasing iface.Ubo.  Rationale: io.zig must NOT import
@@ -444,8 +501,15 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             );
         }
         try writer.writeAll("};\n");
-        try writer.writeAll("pub extern const u: UboWire addrspace(.uniform);\n");
-        try writer.writeAll("pub const _binding_u: u32 = 0;\n");
+        // Always binding 0 of its group; the group comes from the one shared
+        // authority, so a schema's `ubo_group` override reaches the WGSL and the
+        // host layout together.
+        const ubo_set: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
+        try writer.print(
+            "pub const u = @extern(*addrspace(.uniform) const UboWire, " ++
+                ".{{ .name = \"u\", " ++ descriptor_decoration_fmt ++ " }});\n",
+            .{ ubo_set, 0 },
+        );
         try writer.writeAll("\n");
     }
 
@@ -494,196 +558,13 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             }
         }
     }
-    //               shader body invokes at the top of main.  Replaces
-    //               the hand-written `zm.location(&io.x, io._location_x)`
-    //               and `zm.binding(&io.u, 0, io._binding_u)` calls
-    //               that used to live in every shader body - the
-    //               codegen knows every needed decoration already.
-    //               `noinline` so spirv-opt keeps the call shape stable
-    //               (decorations attach to the variables, not the call).
-    //
-    // The function is unconditionally emitted (no `@hasDecl` guards).
-    // A schema with no Inputs/Outputs/Samplers/Ubo produces a
-    // setup() with zero bodies - still callable, still no-op.  The
-    // empty case matters for probe shaders and depth-only passes.
-    try writer.writeAll(
-        \\// ---- setup() ----------------------------------------------
-        \\//
-        \\// Install all the SPIR-V `OpDecorate` calls this shader needs.
-        \\// Call once at the top of `main` BEFORE touching any of the
-        \\// extern decls above.  Replaces the boilerplate that used to
-        \\// open every shader body:
-        \\//
-        \\//     zm.location(&io.frag_tex_coord, io._location_frag_tex_coord);
-        \\//     zm.location(&io.out_color, io._location_out_color);
-        \\//     zm.binding(&io.u, 0, io._binding_u);
-        \\//
-        \\// `noinline` keeps spirv-opt from folding the call into main
-        \\// — the asm decorations attach to the referenced variables,
-        \\// not to the call site, so call elision is safe but the
-        \\// stable function boundary helps when reading optimized SPIR-V.
-        \\pub noinline fn setup() void {
-        \\    @setRuntimeSafety(false);
-        \\
-    );
-
-    // Vertex attributes -> location.
-    if (@hasDecl(IfaceMod, "Attributes")) {
-        const info = @typeInfo(IfaceMod.Attributes).@"struct";
-        inline for (info.field_names) |field_name| {
-            try writer.print(
-                "    zm_location(&{s}, _location_{s});\n",
-                .{ field_name, field_name },
-            );
-        }
-    }
-    // FS inputs -> location.
-    if (@hasDecl(IfaceMod, "Inputs")) {
-        const info = @typeInfo(IfaceMod.Inputs).@"struct";
-        inline for (info.field_names) |field_name| {
-            try writer.print(
-                "    zm_location(&{s}, _location_{s});\n",
-                .{ field_name, field_name },
-            );
-        }
-    }
-    // Stage outputs -> location (frag_depth is a builtin: no location).
-    if (@hasDecl(IfaceMod, "Outputs")) {
-        const info = @typeInfo(IfaceMod.Outputs).@"struct";
-        inline for (info.field_names) |field_name| {
-            if (comptime std.mem.eql(u8, field_name, "frag_depth")) {
-                continue;
-            }
-            try writer.print(
-                "    zm_location(&{s}, _location_{s});\n",
-                .{ field_name, field_name },
-            );
-        }
-    }
-    // UBO -> descriptor set + binding.
-    if (@hasDecl(IfaceMod, "Ubo")) {
-        // Stage-segregated, same scheme as loose Uniforms below: a VS
-        // Ubo block lands in descriptor set 0, an FS Ubo block in set 2.
-        // A two-stage pipeline that uses a Ubo block in BOTH stages then
-        // never collides at (group,binding).  Stage is detected
-        // structurally - a VS schema declares `Attributes`.
-        // Group from the SINGLE SOURCE OF TRUTH shared with the runtime layout
-        // solver (shader_introspect.solveLayout via the same function), so the
-        // emitted @group can never drift from the host bind groups.
-        const ubo_set: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
-        try writer.print("    zm_binding(&u, {d}, _binding_u);\n", .{ubo_set});
-    }
-    // Loose `Uniforms` -> descriptor set + binding, SEGREGATED BY STAGE.
-    //
-    // The VS and FS are translated to WGSL as SEPARATE modules, each
-    // numbering its uniforms from binding 0.  Without explicit
-    // decorations they COLLIDE when linked into one pipeline - e.g.
-    // lambert's VS `mat_model` and FS `col_diffuse` both land at
-    // group(0)/binding(1), which WebGPU rejects (one resource per
-    // (group,binding) across stages).  The GL path never hit this
-    // (GL binds uniforms by name); WebGPU surfaced it.
-    //
-    // Fix: give each STAGE its own descriptor set so the two uniform
-    // spaces are physically disjoint and can never collide, for any
-    // shader.  Stage is detected structurally - a VS schema declares
-    // `Attributes`, an FS schema declares `Inputs` (verified across
-    // every engine shader).  Convention:
-    //   - VS `Uniforms`  -> set 0  (the vertex-stage uniform group)
-    //   - samplers       -> set 1  (already, via the Samplers solver)
-    //   - FS `Uniforms`  -> set 2  (the fragment-stage uniform group)
-    // Bindings run 0,1,2,... within each set in declaration order, which
-    // the host mirrors when building the per-group bind-group layout.
-    if (@hasDecl(IfaceMod, "Uniforms")) {
-        const uniform_set: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
-        const uinfo = @typeInfo(IfaceMod.Uniforms).@"struct";
-        var ubind: u32 = 0;
-        inline for (uinfo.field_names) |field_name| {
-            try writer.print(
-                "    zm_binding(&{s}, {d}, {d});\n",
-                .{ field_name, uniform_set, ubind },
-            );
-            ubind += 1;
-        }
-    }
-    // Sampler descriptor set + binding.  Reads each sampler field's
-    // `sampler_config` from its marker type (set by the user via the
-    // DSL).  When no override is set, falls back to "lowest unclaimed
-    // binding in group 1" - same algorithm as
-    // `shader_introspect.solveLayout`, inlined here because the
-    // codegen library has no host-side imports.  See
-    // `src/notes/finishing_new_gpu_foundations.md` turn 1 section C.
-    if (@hasDecl(IfaceMod, "Samplers")) {
-        const sinfo = @typeInfo(IfaceMod.Samplers).@"struct";
-        // Pass 0: verify every field is a recognized sampler marker.
-        // Without this, a typo like `texture0: Sample2D(.albedo, .{})`
-        // (missing the `r`) would silently produce a non-marker type
-        // with no `sampler_config` decl - and `@field` would
-        // @compileError with an obscure message far from the user's
-        // typo.  Catch it loudly here with the field name + offending
-        // type spelled out.
-        inline for (sinfo.field_names, sinfo.field_types) |field_name, field_type| {
-            if (!@hasDecl(field_type, "sampler_config")) {
-                @compileError(
-                    "Schema's `Samplers` struct contains field `" ++ field_name ++
-                        "` of type `" ++ @typeName(field_type) ++ "` which is not " ++
-                        "a recognized sampler marker.  Use `shader.Sampler2D(.<tag>, " ++
-                        "<config>)` or `shader.Sampler2D_atSlot(<slot>, <config>)`.  " ++
-                        "Auxiliary types in `Samplers` are not supported — put them " ++
-                        "in a separate decl if you need them in host code.",
-                );
-            }
-        }
-        // Pass 1: collect (group, binding) cells claimed by pinned/shared.
-        // Emit a `zm_binding` decoration per sampler. The (group, binding)
-        // assignment is delegated to the ONE shared authority in
-        // shader_interface - the SAME function shader_introspect.solveLayout
-        // (host bind-group layout) calls - so the emitted WGSL and the host
-        // layout can never drift. Each Sampler2D is a texture at N + a paired
-        // sampler at N+1 (zspv_rewrite synthesizes the sampler half).
-        const slots = shader_iface.solveSamplerSlots(IfaceMod.Samplers);
-        inline for (sinfo.field_names, 0..) |field_name, i| {
-            try writer.print(
-                "    zm_binding(&{s}_sampler2d, {d}, {d});\n",
-                .{ field_name, slots[i].group, slots[i].binding },
-            );
-        }
-    }
-    try writer.writeAll("}\n\n");
-
-    // ---- Sampler accessor methods --------------------------------
-    // Per-sampler `pub fn <name>(uv: Vec2) Vec` that wraps the
-    // `zsample2d` call.  Lets the shader body call `io.albedo(uv)`
-    // directly instead of passing the placeholder sampler u32 to
-    // `zm.zsample2d`.  Reads as "fetch from albedo at uv".  noinline
-    // for the same reason as setup().
-    if (@hasDecl(IfaceMod, "Samplers")) {
-        const info = @typeInfo(IfaceMod.Samplers).@"struct";
-        inline for (info.field_names) |field_name| {
-            try writer.print(
-                \\pub noinline fn {s}(uv: @Vector(2, f32)) @Vector(4, f32) {{
-                \\    return zm_zsample2d({s}_sampler2d, uv);
-                \\}}
-                \\
-                \\
-            ,
-                .{ field_name, field_name },
-            );
-            try writer.print(
-                \\pub noinline fn {s}Level(uv: @Vector(2, f32), lod: f32) @Vector(4, f32) {{
-                \\    return zm_zsample2d_level({s}_sampler2d, uv, lod);
-                \\}}
-                \\
-                \\
-            ,
-                .{ field_name, field_name },
-            );
-        }
-    }
+    // No `setup()` and no top-level sampler accessors any more: every decoration
+    // now lives on its `@extern` declaration above, and shaders sample through
+    // the `IoT` methods below. Nothing in the tree called either.
 
     // ---- Close _Spirv namespace.  Everything above this point is
-    //      SPIR-V-only: extern decls + setup() + top-level sampler
-    //      accessors.  Below this point lives at module scope and
-    //      must compile on both targets.
+    //      SPIR-V-only: the decorated `@extern` decls.  Below this point
+    //      lives at module scope and must compile on both targets.
     try writer.writeAll("} else struct {};\n\n");
 
     // ---- Module-level Ubo type ----------------------------------
@@ -988,25 +869,28 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     if (@hasDecl(IfaceMod, "Samplers")) {
         const info = @typeInfo(IfaceMod.Samplers).@"struct";
         inline for (info.field_names) |field_name| {
+            // SPIR-V: `sampleLod` is `inline`, so OpSampledImage + the implicit-LOD
+            // sample land right here, reading the two global handles directly -
+            // spv2wgsl turns that into `textureSample(texture0, texture0_sampler, uv)`.
             try writer.print(
                 "        pub fn {s}(self: @This(), uv: @Vector(2, f32)) @Vector(4, f32) {{\n" ++
                     "            if (comptime _builtin.target.cpu.arch.isSpirV()) {{\n" ++
-                    "                return zm_zsample2d(_Spirv.{s}_sampler2d, uv);\n" ++
+                    "                return zm_mod.sampleLod(_Spirv._tex_{s}, _Spirv._smp_{s}, uv);\n" ++
                     "            }}\n" ++
                     "            return sampleTextureRgba8(self._{s}, uv);\n" ++
                     "        }}\n",
-                .{ field_name, field_name, field_name },
+                .{ field_name, field_name, field_name, field_name },
             );
             // Explicit-LOD twin - legal in a VERTEX shader (no derivatives).
             // CPU path ignores `lod` and samples the base level.
             try writer.print(
                 "        pub fn {s}Level(self: @This(), uv: @Vector(2, f32), lod: f32) @Vector(4, f32) {{\n" ++
                     "            if (comptime _builtin.target.cpu.arch.isSpirV()) {{\n" ++
-                    "                return zm_zsample2d_level(_Spirv.{s}_sampler2d, uv, lod);\n" ++
+                    "                return zm_mod.sampleLevel(_Spirv._tex_{s}, _Spirv._smp_{s}, uv, lod);\n" ++
                     "            }}\n" ++
                     "            return sampleTextureRgba8(self._{s}, uv);\n" ++
                     "        }}\n",
-                .{ field_name, field_name, field_name },
+                .{ field_name, field_name, field_name, field_name },
             );
         }
     }
@@ -1129,112 +1013,16 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         );
     }
     try writer.writeAll("            @setRuntimeSafety(false);\n");
-    // OpDecorate calls for inputs.
-    if (@hasDecl(IfaceMod, "Inputs")) {
-        const info = @typeInfo(IfaceMod.Inputs).@"struct";
-        inline for (info.field_names) |field_name| {
-            try writer.print(
-                "            zm_location(&_Spirv.{s}, _Spirv._location_{s});\n",
-                .{ field_name, field_name },
-            );
-        }
-    }
-    if (@hasDecl(IfaceMod, "Attributes")) {
-        const info = @typeInfo(IfaceMod.Attributes).@"struct";
-        inline for (info.field_names) |field_name| {
-            try writer.print(
-                "            zm_location(&_Spirv.{s}, _Spirv._location_{s});\n",
-                .{ field_name, field_name },
-            );
-        }
-    }
-    // OpDecorate calls for outputs (frag_depth is a builtin: no location).
-    if (@hasDecl(IfaceMod, "Outputs")) {
-        const info = @typeInfo(IfaceMod.Outputs).@"struct";
-        inline for (info.field_names) |field_name| {
-            if (comptime std.mem.eql(u8, field_name, "frag_depth")) {
-                continue;
-            }
-            try writer.print(
-                "            zm_location(&_Spirv.{s}, _Spirv._location_{s});\n",
-                .{ field_name, field_name },
-            );
-        }
-    }
-    // OpDecorate calls for the Ubo block, SEGREGATED BY STAGE exactly
-    // like the loose Uniforms below (VS Ubo -> set 0, FS Ubo -> set 2;
-    // samplers own set 1).  This is the path installSpirvEntry actually
-    // emits, so the descriptor set MUST be decided here to reach the
-    // SPIR-V - setup() is the legacy hand-call API.
-    if (@hasDecl(IfaceMod, "Ubo")) {
-        // Group via the SINGLE SOURCE OF TRUTH (honors a schema's `ubo_group`
-        // override, e.g. the decal FS pinning its projector UBO to group 1) so
-        // this - the path installSpirvEntry actually emits - can never drift
-        // from setup()/solveLayout.
-        const ubo_set_e: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
-        try writer.print("            zm_binding(&_Spirv.u, {d}, _Spirv._binding_u);\n", .{ubo_set_e});
-    }
-    // OpDecorate calls for loose `Uniforms`, SEGREGATED BY STAGE so the
-    // VS and FS uniform spaces never collide when linked into one
-    // WebGPU pipeline.  VS schemas declare `Attributes`, FS schemas
-    // declare `Inputs`; VS uniforms -> set 0, FS uniforms -> set 2
-    // (samplers own set 1).  See the matching block in setup() for the
-    // full rationale - this is the path `installSpirvEntry` actually
-    // emits (setup() is the legacy hand-call API), so the decoration
-    // MUST be here to reach the SPIR-V.
-    if (@hasDecl(IfaceMod, "Uniforms")) {
-        const is_vs_e: bool = @hasDecl(IfaceMod, "Attributes");
-        const uniform_set_e: u32 = if (is_vs_e) 0 else 2;
-        const uinfo_e = @typeInfo(IfaceMod.Uniforms).@"struct";
-        comptime var ubind_e: u32 = 0;
-        inline for (uinfo_e.field_names) |field_name| {
-            try writer.print(
-                "            zm_binding(&_Spirv.{s}, {d}, {d});\n",
-                .{ field_name, uniform_set_e, ubind_e },
-            );
-            ubind_e += 1;
-        }
-    }
-    // OpDecorate calls for samplers.
-    //
-    // Reads each sampler field's `sampler_config` from its marker
-    // type.  Pinned/shared use override; free fields take the
-    // lowest unclaimed slot in group 1 (same algorithm as
-    // `shader_introspect.solveLayout`).  See
-    // `src/notes/finishing_new_gpu_foundations.md` turn 1.
-    //
-    // The same field-type check from setup()'s emission also runs
-    // here - defensive duplication so a refactor that breaks the
-    // setup() path still catches malformed Samplers schemas.
-    if (@hasDecl(IfaceMod, "Samplers")) {
-        const sinfo = @typeInfo(IfaceMod.Samplers).@"struct";
-        inline for (sinfo.field_names, sinfo.field_types) |field_name, field_type| {
-            if (!@hasDecl(field_type, "sampler_config")) {
-                @compileError(
-                    "Schema's `Samplers` struct contains field `" ++ field_name ++
-                        "` of type `" ++ @typeName(field_type) ++ "` which is not " ++
-                        "a recognized sampler marker.  Use `shader.Sampler2D(.<tag>, " ++
-                        "<config>)` or `shader.Sampler2D_atSlot(<slot>, <config>)`.",
-                );
-            }
-        }
-        // Same shared authority as the module-level branch and
-        // shader_introspect.solveLayout - one solver, zero drift.
-        const slots_e = shader_iface.solveSamplerSlots(IfaceMod.Samplers);
-        inline for (sinfo.field_names, 0..) |field_name, i| {
-            try writer.print(
-                "            zm_binding(&_Spirv.{s}_sampler2d, {d}, {d});\n",
-                .{ field_name, slots_e[i].group, slots_e[i].binding },
-            );
-        }
-    }
+    // No decoration calls here: every `_Spirv` variable read below was declared
+    // as an `@extern` with its decoration attached (the "HOW EVERY DECL BELOW GETS
+    // ITS DECORATION" block). They are pointers, hence the `.*` on each read.
     // Build the Io struct from externs.
     try writer.writeAll("            const io: _IoT = .{\n");
     if (@hasDecl(IfaceMod, "Inputs")) {
         const info = @typeInfo(IfaceMod.Inputs).@"struct";
         inline for (info.field_names) |field_name| {
             try writer.print(
-                "                .{s} = _Spirv.{s},\n",
+                "                .{s} = _Spirv.{s}.*,\n",
                 .{ field_name, field_name },
             );
         }
@@ -1243,20 +1031,20 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         const info = @typeInfo(IfaceMod.Attributes).@"struct";
         inline for (info.field_names) |field_name| {
             try writer.print(
-                "                .{s} = _Spirv.{s},\n",
+                "                .{s} = _Spirv.{s}.*,\n",
                 .{ field_name, field_name },
             );
         }
     }
-    // Loose Uniforms: each becomes an Io field.  Read from the
-    // module-level extern decls (declared above in the legacy
-    // section).  The Uniforms field type may include defaults (e.g.
-    // `col_diffuse: Vec = .{1,1,1,1}`); the read is just `= name`.
+    // Loose Uniforms: each becomes an Io field, read out of its one-field
+    // uniform block (`_<name>_block.value`). The Uniforms field type may carry a
+    // default (e.g. `col_diffuse: Vec = .{1,1,1,1}`) - that only matters on the
+    // CPU side; on the GPU the value always comes from the bound buffer.
     if (@hasDecl(IfaceMod, "Uniforms")) {
         const info = @typeInfo(IfaceMod.Uniforms).@"struct";
         inline for (info.field_names) |field_name| {
             try writer.print(
-                "                .{s} = _Spirv.{s},\n",
+                "                .{s} = _Spirv._{s}_block.value,\n",
                 .{ field_name, field_name },
             );
         }
@@ -1321,7 +1109,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         const info = @typeInfo(IfaceMod.Outputs).@"struct";
         inline for (info.field_names) |field_name| {
             try writer.print(
-                "            _Spirv.{s} = out.{s};\n",
+                "            _Spirv.{s}.* = out.{s};\n",
                 .{ field_name, field_name },
             );
         }
@@ -1358,16 +1146,12 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
     // import below alongside the shadermath forwarding decls.
 
     // ---- Forwarding decls to keep the generated file dep-free ----
-    // The setup() body and sampler accessors reference `zm_location`,
-    // `zm_binding`, `zm_zsample2d` - we forward those to `zm` (the
-    // unified math module) via @import inline.  `_builtin` is now
-    // declared in the prologue (so `_is_spirv` can reference it for
-    // the `_Spirv` wrap), but `zm_*` forwarding still lives at the
-    // bottom so the file's top reads as a "what's in here" inventory.
-    //
-    // Stage 5 of math-unification: changed from `shadermath` to `zm`.
-    // math.zig absorbed the SPIR-V decorators (`location`, `binding`,
-    // `zsample2d`) so shaders need only one import.
+    // The IoT accessors reach the GPU helpers through `zm_mod` -
+    // `sampleLod` / `sampleLevel` for textures and `ssboLoad` for
+    // storage buffers. `_builtin` is declared in the prologue (so
+    // `_is_spirv` can reference it for the `_Spirv` wrap), but this
+    // import lives at the bottom so the file's top reads as a
+    // "what's in here" inventory.
     const needs_shadermath = @hasDecl(IfaceMod, "Attributes") or
         @hasDecl(IfaceMod, "Inputs") or
         @hasDecl(IfaceMod, "Outputs") or
@@ -1379,14 +1163,149 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
             \\// ---- Imports (kept at the bottom so the top of the file
             \\//             reads as a stage-interface inventory) -------
             \\const zm_mod = @import("shader_builtins");
-            \\const zm_location = zm_mod.location;
-            \\const zm_binding = zm_mod.binding;
-            \\const zm_zsample2d = zm_mod.zsample2d;
-            \\const zm_zsample2d_level = zm_mod.zsample2d_level;
             \\const zm_ssboLoad = zm_mod.ssboLoad;
             \\
         );
     }
+}
+
+// ==== BUILD-TIME CHECK: the WGSL a shader became vs. the slots its schema promised ====
+//
+// `emit` decides where every resource lives - its (group, binding) and its name - and
+// writes that decision onto each `@extern`. After the shader goes through the compiler,
+// the SPIR-V linker and spv2wgsl, `checkWgsl` reads the resulting WGSL's own
+// `@group/@binding` declarations back and demands they are exactly those decisions.
+//
+// Why a second check when spv2wgsl already refuses undecorated variables: that one catches
+// a decoration that went MISSING. This one catches a decoration that is PRESENT BUT WRONG -
+// a linker that renumbers, a transpiler that reorders, a generator edit that drifts from
+// the host's rule. Either way the result is Dawn rejecting the pipeline on a device, which
+// is exactly what Zig 0.17.0-dev.2307 did to every graphics shader in the tree.
+//
+// The expected cells come from the SAME functions `emit` uses, which are also the ones the
+// host's layout solver calls (`uniformGroupForSchema`, `solveSamplerSlots`,
+// `solveStorageSlots`), plus the loose-`Uniforms` rule (the uniform group, bindings 0, 1,
+// 2... in declaration order) that the host builds by hand for the four shaders that use it.
+//
+// Direction: every WGSL binding must be an expected cell, of the right kind, with the right
+// name, and no cell may hold two. An expected cell the WGSL does NOT declare is fine - the
+// compiler drops a resource the shader never reads, and WebGPU allows a layout to offer more
+// than a pipeline uses.
+
+const WgslKind = wgsl_reflect.WgslBinding.Kind;
+
+const ExpectedCell = struct {
+    group: u32,
+    binding: u32,
+    kind: WgslKind,
+    name: []const u8,
+};
+
+fn expectedCellCount(comptime IfaceMod: type) usize {
+    comptime var count: usize = 0;
+    if (@hasDecl(IfaceMod, "Ubo")) {
+        count += 1;
+    }
+    if (@hasDecl(IfaceMod, "Uniforms")) {
+        count += @typeInfo(IfaceMod.Uniforms).@"struct".field_names.len;
+    }
+    if (@hasDecl(IfaceMod, "Storage")) {
+        count += @typeInfo(IfaceMod.Storage).@"struct".field_names.len;
+    }
+    if (@hasDecl(IfaceMod, "Samplers")) {
+        count += 2 * @typeInfo(IfaceMod.Samplers).@"struct".field_names.len; // texture + sampler
+    }
+    return count;
+}
+
+/// Every (group, binding, kind, name) cell `emit` puts on this schema's `@extern`s.
+fn expectedCells(comptime IfaceMod: type) [expectedCellCount(IfaceMod)]ExpectedCell {
+    return comptime blk: {
+        var cells: [expectedCellCount(IfaceMod)]ExpectedCell = undefined;
+        var next: usize = 0;
+        const uniform_group: u32 = shader_iface.uniformGroupForSchema(IfaceMod);
+        if (@hasDecl(IfaceMod, "Ubo")) {
+            cells[next] = .{ .group = uniform_group, .binding = 0, .kind = .uniform, .name = "u" };
+            next += 1;
+        }
+        if (@hasDecl(IfaceMod, "Uniforms")) {
+            for (@typeInfo(IfaceMod.Uniforms).@"struct".field_names, 0..) |field_name, binding| {
+                cells[next] = .{ .group = uniform_group, .binding = binding, .kind = .uniform, .name = field_name };
+                next += 1;
+            }
+        }
+        if (@hasDecl(IfaceMod, "Storage")) {
+            const storage_slots = shader_iface.solveStorageSlots(IfaceMod);
+            for (@typeInfo(IfaceMod.Storage).@"struct".field_names, storage_slots) |field_name, slot| {
+                cells[next] = .{ .group = slot.group, .binding = slot.binding, .kind = .storage, .name = field_name };
+                next += 1;
+            }
+        }
+        if (@hasDecl(IfaceMod, "Samplers")) {
+            const sampler_slots = shader_iface.solveSamplerSlots(IfaceMod.Samplers);
+            for (@typeInfo(IfaceMod.Samplers).@"struct".field_names, sampler_slots) |field_name, slot| {
+                cells[next] = .{ .group = slot.group, .binding = slot.binding, .kind = .texture, .name = field_name };
+                cells[next + 1] = .{
+                    .group = slot.group,
+                    .binding = slot.binding + 1,
+                    .kind = .sampler,
+                    .name = field_name ++ "_sampler",
+                };
+                next += 2;
+            }
+        }
+        break :blk cells;
+    };
+}
+
+/// Check the WGSL `IfaceMod`'s shader became against the slots `emit` promised. Returns null
+/// when it matches, otherwise a description of the FIRST disagreement (owned by `gpa`).
+pub fn checkWgsl(
+    comptime IfaceMod: type,
+    gpa: std.mem.Allocator,
+    wgsl: []const u8,
+) !?[]u8 {
+    const expected = comptime expectedCells(IfaceMod);
+    const actual: []wgsl_reflect.WgslBinding = try wgsl_reflect.reflectWgslBindings(gpa, wgsl);
+    defer wgsl_reflect.freeWgslBindings(gpa, actual);
+
+    for (actual, 0..) |found, i| {
+        // Two WGSL resources on one slot: the exact shape of the 2307 failure.
+        for (actual[0..i]) |earlier| {
+            const same_cell: bool = earlier.group == found.group and earlier.binding == found.binding;
+            if (same_cell) {
+                return try allocPrint(
+                    gpa,
+                    "@group({d}) @binding({d}) holds both '{s}' and '{s}' - one slot, two resources",
+                    .{ found.group, found.binding, earlier.name, found.name },
+                );
+            }
+        }
+        var match: ?ExpectedCell = null;
+        for (expected) |cell| {
+            if (cell.group == found.group and cell.binding == found.binding) {
+                match = cell;
+                break;
+            }
+        }
+        const cell: ExpectedCell = match orelse {
+            return try allocPrint(
+                gpa,
+                "'{s}' ({s}) is at @group({d}) @binding({d}), where the schema puts nothing",
+                .{ found.name, found.kindLabel(), found.group, found.binding },
+            );
+        };
+        const kind_matches: bool = cell.kind == found.kind;
+        const name_matches: bool = std.mem.eql(u8, cell.name, found.name);
+        if (!kind_matches or !name_matches) {
+            return try allocPrint(
+                gpa,
+                "@group({d}) @binding({d}) should be '{s}' ({s}) but the WGSL declares '{s}' ({s}) there",
+                .{ found.group, found.binding, cell.name, @tagName(cell.kind), found.name, found.kindLabel() },
+            );
+        }
+    }
+    return null;
 }
 
 // ---- Unit tests
@@ -1428,22 +1347,22 @@ test "emit handles VS schema (attrs + outputs + uniforms)" {
     try emit(Iface, &aw.writer);
     const out: []const u8 = aw.written();
 
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const pos: @Vector(3, f32) addrspace(.input)") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub const _location_pos: u32 = 0") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const uv: @Vector(2, f32) addrspace(.input)") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub const _location_uv: u32 = 1") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub extern var frag_uv: @Vector(2, f32) addrspace(.output)") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub const _location_frag_uv: u32 = 0") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const mvp: [4]@Vector(4, f32) addrspace(.constant)") != null);
-    // No .input on a uniform.
-    try t.expect(std.mem.indexOf(u8, out, "mvp: [4]@Vector(4, f32) addrspace(.input)") == null);
+    // Attributes: the Attr type's own location rides on the declaration.
+    try t.expect(std.mem.indexOf(u8, out, "pub const pos = @extern(*addrspace(.input) const @Vector(3, f32), " ++
+        ".{ .name = \"pos\", .decoration = .{ .location = 0 } });") != null);
+    try t.expect(std.mem.indexOf(u8, out, "pub const uv = @extern(*addrspace(.input) const @Vector(2, f32), " ++
+        ".{ .name = \"uv\", .decoration = .{ .location = 1 } });") != null);
+    // Outputs: writable pointer, location by declaration order.
+    try t.expect(std.mem.indexOf(u8, out, "pub const frag_uv = @extern(*addrspace(.output) [2]f32, " ++
+        ".{ .name = \"frag_uv\", .decoration = .{ .location = 0 } });") != null);
+    // A VS loose uniform: one-field block in group 0, binding 0.
+    try t.expect(std.mem.indexOf(u8, out, "pub const _mvp_block = @extern(*addrspace(.uniform) const extern struct " ++
+        "{ value: [4]@Vector(4, f32) }, .{ .name = \"mvp\", .decoration = .{ .descriptor = " ++
+        ".{ .set = 0, .binding = 0 } } });") != null);
+    // Nothing is decorated through asm any more.
+    try t.expect(std.mem.indexOf(u8, out, "zm_location") == null);
+    try t.expect(std.mem.indexOf(u8, out, "zm_binding") == null);
 }
-
-/// Test-only Sampler2D stub.  Mirrors `shader_interface.Sampler2D(.X)`'s
-/// public shape (`slot`) without depending on the real type.
-const FakeSampler = struct {
-    pub const slot: u32 = 0;
-};
 
 test "emit handles FS schema (inputs + samplers + uniforms + outputs)" {
     const t: type = std.testing;
@@ -1456,8 +1375,8 @@ test "emit handles FS schema (inputs + samplers + uniforms + outputs)" {
             frag_normal: [3]f32,
         };
         pub const Samplers = struct {
-            albedo: FakeSampler,
-            normal_map: FakeSampler,
+            albedo: shader_iface.Sampler2D(.albedo, .{}),
+            normal_map: shader_iface.Sampler2D(.normal, .{}),
         };
         pub const Uniforms = struct {
             col: [4]f32 = .{ 1, 1, 1, 1 },
@@ -1470,20 +1389,132 @@ test "emit handles FS schema (inputs + samplers + uniforms + outputs)" {
     try emit(Iface, &aw.writer);
     const out: []const u8 = aw.written();
 
-    // Inputs: sequential locations.
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const frag_uv: @Vector(2, f32) addrspace(.input)") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub const _location_frag_uv: u32 = 0") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const frag_normal: @Vector(3, f32) addrspace(.input)") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub const _location_frag_normal: u32 = 1") != null);
-    // Samplers: `_sampler2d` suffix, u32, .constant.
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const albedo_sampler2d: u32 addrspace(.constant)") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const normal_map_sampler2d: u32 addrspace(.constant)") != null);
-    // Uniforms.
-    try t.expect(std.mem.indexOf(u8, out, "pub extern const col: @Vector(4, f32) addrspace(.constant)") != null);
-    // Outputs: extern VAR (writeable), not const.
-    try t.expect(std.mem.indexOf(u8, out, "pub extern var out_color: @Vector(4, f32) addrspace(.output)") != null);
+    // Inputs: sequential locations, carried on the declaration.
+    try t.expect(std.mem.indexOf(u8, out, "pub const frag_uv = @extern(*addrspace(.input) const [2]f32, " ++
+        ".{ .name = \"frag_uv\", .decoration = .{ .location = 0 } });") != null);
+    try t.expect(std.mem.indexOf(u8, out, "pub const frag_normal = @extern(*addrspace(.input) const [3]f32, " ++
+        ".{ .name = \"frag_normal\", .decoration = .{ .location = 1 } });") != null);
+    // Samplers: a REAL texture at (group, N) and its sampler at (group, N+1),
+    // with the slots from the same solver the host layout uses.
+    const slots = comptime shader_iface.solveSamplerSlots(Iface.Samplers);
+    inline for (.{ "albedo", "normal_map" }, 0..) |name, i| {
+        const texture_decl: []const u8 = std.fmt.comptimePrint(
+            "pub const _tex_{s} = @extern(_sb.Texture2DPtr(), .{{ .name = \"{s}\", .decoration = " ++
+                ".{{ .descriptor = .{{ .set = {d}, .binding = {d} }} }} }});",
+            .{ name, name, slots[i].group, slots[i].binding },
+        );
+        const sampler_decl: []const u8 = std.fmt.comptimePrint(
+            "pub const _smp_{s} = @extern(_sb.SamplerPtr(), .{{ .name = \"{s}_sampler\", .decoration = " ++
+                ".{{ .descriptor = .{{ .set = {d}, .binding = {d} }} }} }});",
+            .{ name, name, slots[i].group, slots[i].binding + 1 },
+        );
+        try t.expect(std.mem.indexOf(u8, out, texture_decl) != null);
+        try t.expect(std.mem.indexOf(u8, out, sampler_decl) != null);
+    }
+    // The u32 placeholder is gone for good.
+    try t.expect(std.mem.indexOf(u8, out, "_sampler2d") == null);
+    // An FS loose uniform: one-field block in group 2.
+    try t.expect(std.mem.indexOf(u8, out, "pub const _col_block = @extern(*addrspace(.uniform) const extern struct " ++
+        "{ value: [4]f32 }, .{ .name = \"col\", .decoration = .{ .descriptor = " ++
+        ".{ .set = 2, .binding = 0 } } });") != null);
+    // Outputs: writable pointer.
+    try t.expect(std.mem.indexOf(u8, out, "pub const out_color = @extern(*addrspace(.output) [4]f32, " ++
+        ".{ .name = \"out_color\", .decoration = .{ .location = 0 } });") != null);
     // No Attributes block emitted (FS has no @hasDecl(_, "Attributes")).
     try t.expect(std.mem.indexOf(u8, out, "// Vertex attributes") == null);
+}
+
+test "checkWgsl: ssao_blur's WGSL as 2307 produced it is refused, the fixed one accepted" {
+    const t: type = std.testing;
+    // Mirrors src/shaders/ssao_blur_fs_io.zig: an FS Ubo plus three free samplers.
+    const Iface = struct {
+        pub const Inputs = struct {
+            frag_uv: [2]f32,
+        };
+        pub const Samplers = struct {
+            src: shader_iface.Sampler2D(.albedo, .{}),
+            g_world_pos: shader_iface.Sampler2D(.normal, .{}),
+            g_world_normal: shader_iface.Sampler2D(.emission, .{}),
+        };
+        pub const Ubo = struct {
+            step: [4]f32,
+        };
+        pub const Outputs = struct {
+            blurred: [4]f32,
+        };
+    };
+    // The binding header ssao_blur_fs really had on 2307, decorations dropped: everything
+    // in group 0, the Ubo and `src` sharing one slot.
+    const broken_2307: []const u8 =
+        \\@group(0) @binding(0) var<uniform> u: S36;
+        \\@group(0) @binding(0) var src: texture_2d<f32>;
+        \\@group(0) @binding(3) var src_sampler: sampler;
+        \\@group(0) @binding(1) var g_world_pos: texture_2d<f32>;
+        \\@group(0) @binding(4) var g_world_pos_sampler: sampler;
+        \\@group(0) @binding(2) var g_world_normal: texture_2d<f32>;
+        \\@group(0) @binding(5) var g_world_normal_sampler: sampler;
+        \\
+    ;
+    const problem: ?[]u8 = try checkWgsl(Iface, t.allocator, broken_2307);
+    try t.expect(problem != null);
+    defer if (problem) |p| t.allocator.free(p);
+    // The FIRST thing wrong is the UBO: the schema puts it at group 2.
+    try t.expect(std.mem.indexOf(u8, problem.?, "@group(0) @binding(0)") != null);
+
+    // The same shader as the current generator emits it.
+    const fixed: []const u8 =
+        \\@group(2) @binding(0) var<uniform> u: S12;
+        \\@group(1) @binding(2) var g_world_pos: texture_2d<f32>;
+        \\@group(1) @binding(3) var g_world_pos_sampler: sampler;
+        \\@group(1) @binding(0) var src: texture_2d<f32>;
+        \\@group(1) @binding(1) var src_sampler: sampler;
+        \\@group(1) @binding(4) var g_world_normal: texture_2d<f32>;
+        \\@group(1) @binding(5) var g_world_normal_sampler: sampler;
+        \\
+    ;
+    try t.expect(try checkWgsl(Iface, t.allocator, fixed) == null);
+
+    // Right slots, wrong names: a texture and sampler pair swapped between two fields.
+    const swapped: []const u8 =
+        \\@group(2) @binding(0) var<uniform> u: S12;
+        \\@group(1) @binding(0) var g_world_pos: texture_2d<f32>;
+        \\@group(1) @binding(2) var src: texture_2d<f32>;
+        \\
+    ;
+    const swap_problem: ?[]u8 = try checkWgsl(Iface, t.allocator, swapped);
+    try t.expect(swap_problem != null);
+    t.allocator.free(swap_problem.?);
+}
+
+test "checkWgsl: loose Uniforms are expected at the uniform group, bindings in order" {
+    const t: type = std.testing;
+    // Mirrors lambert's VS: two loose uniforms, which the host binds at group 0, 0 and 1.
+    const Iface = struct {
+        pub const Attributes = struct {
+            vertex_position: FakeAttr(.vec3, 0),
+        };
+        pub const Uniforms = struct {
+            mvp: [16]f32 = @splat(0),
+            mat_model: [16]f32 = @splat(0),
+        };
+        pub const Outputs = struct {
+            frag_normal: [3]f32,
+        };
+    };
+    const good: []const u8 =
+        \\@group(0) @binding(0) var<uniform> mvp: S1;
+        \\@group(0) @binding(1) var<uniform> mat_model: S2;
+        \\
+    ;
+    try t.expect(try checkWgsl(Iface, t.allocator, good) == null);
+    const reordered: []const u8 =
+        \\@group(0) @binding(0) var<uniform> mat_model: S2;
+        \\@group(0) @binding(1) var<uniform> mvp: S1;
+        \\
+    ;
+    const problem: ?[]u8 = try checkWgsl(Iface, t.allocator, reordered);
+    try t.expect(problem != null);
+    t.allocator.free(problem.?);
 }
 
 test "emit rejects unsupported types with a clear compileError" {

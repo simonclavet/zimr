@@ -124,9 +124,9 @@ pub var zimr_app: z.App = .{};
 
 const State = struct {
 
-    // The engine emits each uniform as its own binding (loose .constant
-    // storage), so lambert's VS UBO is TWO bindings at group 0 - `mvp`
-    // @binding(0) + `mat_model` @binding(1) - not one struct buffer.
+    // The engine emits each loose uniform as its own binding (a one-field
+    // uniform block per field), so lambert's VS uniforms are TWO bindings at
+    // group 0 - `mvp` @binding(0) + `mat_model` @binding(1) - not one buffer.
     // (Confirmed in the emitted WGSL.)  `Resources` models one UBO
     // buffer per group, so it can't drive this; we build the bind
     // groups explicitly: two uniform buffers at group 0, texture+sampler

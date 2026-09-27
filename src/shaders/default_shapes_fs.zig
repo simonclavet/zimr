@@ -34,10 +34,10 @@ pub const TextureRef = shader_externs.TextureRef;
 ///   let sample = textureSample(t_albedo, s_albedo, in.uv);
 ///   return sample * in.color;
 ///
-/// On SPIR-V this becomes `OpImageSampleImplicitLod` after the
-/// `zspv --rewrite-samplers` pass turns the texture0 accessor into
-/// a proper combined texture+sampler load.  On wgpu via spv2wgsl
-/// the same SPIR-V translates to `textureSample(t_albedo, s_albedo, uv)`
+/// On SPIR-V the texture0 accessor is a native `OpSampledImage` +
+/// `OpImageSampleImplicitLod` on the generated texture0 / texture0_sampler
+/// handles.  On wgpu via spv2wgsl that translates to
+/// `textureSample(texture0, texture0_sampler, uv)`
 /// - handled by spv2wgsl's `emitImageSample`.  On CPU via
 /// `raster_shader.dispatchFragmentShader` this calls
 /// `io_in.texture0(uv)` which the raster pixel pipeline implements

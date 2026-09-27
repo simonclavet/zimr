@@ -29,6 +29,9 @@ pub var zimr_app: z.App = .{};
 /// before opening the screen - the runner just calls `update`. Once every
 /// example is migrated, this branch and the flag are deleted.
 fn runnerUpdate(f: *z.Frame, s: *State) void {
+    // `--leak-trace` labels this frame's allocations "frame" (no-op otherwise).
+    zimr_app.pushTracePhase("frame");
+    defer zimr_app.popTracePhase();
     if (spec.manages_own_frame) {
         spec.update(f, s);
     } else {
@@ -53,6 +56,8 @@ pub fn main() !void {
 /// leak). No-op if the example never initialized. A standalone never calls this
 /// (it runs forever); only the harness does.
 pub export fn runnerDeinit() void {
+    zimr_app.pushTracePhase("deinit");
+    defer zimr_app.popTracePhase();
     if (zimr_app.state) |st| {
         const sp: *State = @ptrCast(@alignCast(st));
         spec.deinit(zimr_app.gpa, sp);
@@ -131,6 +136,8 @@ pub export fn runnerReinit() void {
     if (zimr_app.state != null) {
         return;
     }
+    zimr_app.pushTracePhase("init");
+    defer zimr_app.popTracePhase();
     const state_ptr: *State = zimr_app.gpa.create(State) catch return;
     var f: z.Frame = zimr_app.makeFrame();
     z.initInto(spec, zimr_app.gpa, &f, state_ptr) catch {
@@ -150,10 +157,49 @@ pub export fn runnerMemoryMode() i32 {
 /// precise, fragmentation-free CPU twin of the GPU handle census. Growth across
 /// the twice-lifecycle probe is exactly a per-lifecycle CPU leak.
 pub export fn runnerLiveBytes() i32 {
-    const lb: usize = zimr_app.counting.live_bytes;
+    return clampToI32(zimr_app.counting.live_bytes);
+}
+
+/// `--leak-trace`: put the allocation tracer under both counters. The smoke harness calls
+/// this right after `_initialize`, so the first lifecycle's blocks are known. A standalone
+/// never does.
+pub export fn runnerTraceBegin() void {
+    zimr_app.beginLeakTrace();
+}
+
+/// `--leak-trace`: everything allocated from here is what the report lists. The harness
+/// calls it just before `runnerReinit` (the second lifecycle).
+pub export fn runnerTraceMark() void {
+    zimr_app.markLeakTrace();
+}
+
+/// `--leak-trace`: log every allocation made since `runnerTraceMark` that is still live
+/// (the harness prints them). No-op if tracing never began.
+pub export fn runnerTraceReport() void {
+    zimr_app.reportLeakTrace();
+}
+
+/// Net live bytes held by the ENGINE's own allocator (`App.engine_gpa`): the pipeline
+/// and bind-group caches, `Renderer2D`, `Cube3D`. Across an example's lifecycle this
+/// must not grow either - growth here means the engine kept memory the example caused.
+pub export fn runnerEngineLiveBytes() i32 {
+    return clampToI32(zimr_app.engine_counting.live_bytes);
+}
+
+/// How many frees (or shrinks) took more bytes than the counter they went through had
+/// handed out - memory freed through the other side's allocator. Both counters summed;
+/// the gate fails on any.
+pub export fn runnerWrongSideFrees() i32 {
+    // Saturating: a counter of mistakes must not itself trap on overflow in a safety build.
+    const total: u32 = zimr_app.counting.wrong_side_frees +| zimr_app.engine_counting.wrong_side_frees;
+    const i32_max: u32 = (1 << 31) - 1;
+    return @intCast(@min(total, i32_max));
+}
+
+fn clampToI32(bytes: usize) i32 {
     const i32_max: usize = (1 << 31) - 1;
-    if (lb > i32_max) {
+    if (bytes > i32_max) {
         return @intCast(i32_max);
     }
-    return @intCast(lb);
+    return @intCast(bytes);
 }

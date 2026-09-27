@@ -23,18 +23,14 @@
 //!
 //! ---- 1. The shader pipeline (BUILD-TIME ONLY) -------------------------
 //! Shaders are authored in Zig (NOT WGSL, NOT GLSL).  At BUILD time each
-//! shader compiles down a four-stage pipeline; the SHIPPED wasm carries
+//! shader compiles down a two-step pipeline; the SHIPPED wasm carries
 //! ZERO transpiler - only the final WGSL, `@embedFile`'d.  The chain:
 //!
 //!     shader.zig                         (author writes this)
 //!       |  zig build-obj -target spirv32-vulkan
 //!       v
-//!     shader.spv                         (raw SPIR-V)
-//!       |  zspv  (tools/zspv.zig - pure-Zig SPIR-V rewriter)
-//!       |        * combined-image-sampler -> split texture+sampler
-//!       |        * stamps DescriptorSet/Binding decorations
-//!       v
-//!     shader.spv  (rewritten)
+//!     shader.spv                         (final SPIR-V: every resource
+//!       |                                 and varying already decorated)
 //!       |  spv2wgsl  (src/spv2wgsl.zig - pure-Zig SPIR-V->WGSL)
 //!       v
 //!     shader.wgsl                        (@embedFile'd into the wasm)
@@ -60,12 +56,11 @@
 //! detection drives the binding model in section 3.  `Ubo` and `Uniforms` are
 //! mutually exclusive in practice - `Ubo` = one struct buffer, `Uniforms`
 //! = loose fields.  Codegen (tools/gen_shader_externs.zig) turns the schema
-//! into `extern` decls + an `installSpirvEntry` wrapper that emits every
-//! `OpDecorate` (location + binding) the shader needs.  NOTE: there are TWO
-//! emission paths in that file - `setup()` (legacy hand-call) and the
-//! `installSpirvEntry` wrapper.  Shaders use `installSpirvEntry`, so any
-//! decoration change MUST land in the wrapper to reach the SPIR-V; `setup()`
-//! alone is dead code.
+//! into one file-scope `@extern` per interface variable, each carrying its own
+//! decoration (`.location`, or `.descriptor` for uniforms, textures and
+//! samplers), plus an `installSpirvEntry` wrapper that reads and writes them.
+//! Decorations are NEVER applied through inline asm: Zig's SPIR-V linker drops
+//! an asm `OpDecorate` aimed at a global from inside a function (2307).
 //!
 //! ---- 3. THE BINDING MODEL (read this twice) ---------------------------
 //! WebGPU rejects a pipeline where one (group, binding) slot holds
@@ -81,9 +76,10 @@
 //!
 //! Bindings run 0,1,2,... within each group in declaration order.  Two stages
 //! -> two disjoint uniform groups -> collision is impossible, for any shader.
-//! This is enforced in tools/gen_shader_externs.zig (the `installSpirvEntry`
-//! wrapper emits `zm.binding(&field, set, bind)` with set = 0 for VS
-//! uniforms, 1 for samplers, 2 for FS uniforms) and the `lambert_demo`
+//! This is enforced in tools/gen_shader_externs.zig (every emitted `@extern`
+//! takes its set from `shader_interface.uniformGroupForSchema` or the sampler
+//! solver - 0 for VS uniforms, 1 for samplers, 2 for FS uniforms - the same
+//! functions the host layout calls) and the `lambert_demo`
 //! is the worked multi-group example.  A host building bind-group layouts
 //! MUST mirror this grouping.
 //!

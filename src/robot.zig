@@ -563,41 +563,70 @@ pub const JointSpec = struct {
 /// corners, a hull's points.
 pub fn lowestPoint(m: *const Model, d: *const Data) f32 {
     // Higher than any robot will ever stand: the first shape replaces it.
-    var lowest: f32 = 1.0e30;
+    var lowest: f32 = no_shape_height;
+    for (0..m.ngeom) |g| {
+        if (m.geom_body[g] == 0) {
+            continue;
+        }
+        lowest = @min(lowest, geomLowestPoint(m, d, g));
+    }
+    return lowest;
+}
+
+/// What a body with no collision shape reports as its lowest point: higher than any robot will ever stand, so it
+/// never reads as touching the floor, and any real shape replaces it in a minimum.
+pub const no_shape_height: f32 = 1.0e30;
+
+/// Each body's own lowest point, the same geometry as `lowestPoint` (run `forward` first): `out[b]` is the lowest
+/// point of body `b`'s collision shapes, `no_shape_height` for a body with none (the world body always - it is the
+/// floor). What lets a tracker ask WHICH body touches the floor, not just whether something does.
+pub fn bodyLowestPoints(m: *const Model, d: *const Data, out: []f32) void {
+    assertf(out.len == m.nbody, @src(), "{d} heights for {d} bodies", .{ out.len, m.nbody });
+    @memset(out, no_shape_height);
     for (0..m.ngeom) |g| {
         const body: u32 = m.geom_body[g];
         if (body == 0) {
             continue;
         }
-        const rot: Quat = qmul(d.body_xrot[body], m.geom_rot[g]);
-        const center: Vec = d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[g]);
-        switch (m.geom_shape[g]) {
-            .sphere => |shape| lowest = @min(lowest, center[2] - shape.radius),
-            .capsule => |shape| {
-                const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
-                lowest = @min(lowest, center[2] - @abs(axis[2]) - shape.radius);
-            },
-            .cylinder => |shape| {
-                const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
-                lowest = @min(lowest, center[2] - @abs(axis[2]) - shape.radius);
-            },
-            .box => |shape| {
-                for (0..8) |corner| {
-                    const h: Vec = shape.half_extent;
-                    const x: f32 = if (corner & 1 == 0) -h[0] else h[0];
-                    const y: f32 = if (corner & 2 == 0) -h[1] else h[1];
-                    const z: f32 = if (corner & 4 == 0) -h[2] else h[2];
-                    lowest = @min(lowest, center[2] + rotate(rot, vec(x, y, z))[2]);
-                }
-            },
-            .hull => |shape| {
-                for (shape.points) |point| {
-                    lowest = @min(lowest, center[2] + rotate(rot, point)[2]);
-                }
-            },
-        }
+        out[body] = @min(out[body], geomLowestPoint(m, d, g));
     }
-    return lowest;
+}
+
+/// The lowest point (world z) of one collision shape at the current kinematics. Plain geometry: the lowest of a
+/// sphere's, a capsule's or cylinder's (along local Y), a box's corners, a hull's points.
+fn geomLowestPoint(m: *const Model, d: *const Data, g: usize) f32 {
+    const body: u32 = m.geom_body[g];
+    const rot: Quat = qmul(d.body_xrot[body], m.geom_rot[g]);
+    const center: Vec = d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[g]);
+    switch (m.geom_shape[g]) {
+        .sphere => |shape| return center[2] - shape.radius,
+        .capsule => |shape| {
+            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
+            return center[2] - @abs(axis[2]) - shape.radius;
+        },
+        .cylinder => |shape| {
+            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
+            return center[2] - @abs(axis[2]) - shape.radius;
+        },
+        .box => |shape| {
+            var lowest: f32 = no_shape_height;
+            for (0..8) |corner| {
+                const h: Vec = shape.half_extent;
+                const x: f32 = if (corner & 1 == 0) -h[0] else h[0];
+                const y: f32 = if (corner & 2 == 0) -h[1] else h[1];
+                const z: f32 = if (corner & 4 == 0) -h[2] else h[2];
+                lowest = @min(lowest, center[2] + rotate(rot, vec(x, y, z))[2]);
+            }
+            return lowest;
+        },
+        .hull => |shape| {
+            var lowest: f32 = no_shape_height;
+            for (shape.points) |point| {
+                lowest = @min(lowest, center[2] + rotate(rot, point)[2]);
+            }
+            return lowest;
+        },
+    }
 }
 
 /// Lift a free-rooted robot so its lowest point sits `clearance` above the floor - a pose copied from a

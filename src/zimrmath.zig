@@ -64,9 +64,9 @@
 //! `lerp(a, b, t)`, `fract(x)`, `smoothstep(e0, e1, x)`,
 //! `pow(x, y)`, `sw(v, "yzx")`, ...) live at the top level so
 //! shader code reads idiomatically.
-//! - **Shader decorators** (`location`, `binding`, `zsample2d`)
-//! live here too - they're SPIR-V-only inline-asm helpers,
-//! placed at the bottom of the file under their own section.
+//! - **Shader intrinsics** (texture/sampler types, sampling, storage
+//! buffers) are NOT here - they live in `shader_builtins.zig`, so a
+//! shader-only edit does not rebuild the host.
 //!
 //! ### Lineage
 //!
@@ -77,8 +77,8 @@
 //! - Stage 1 of math-unification: target-conditional veneer for
 //! assert + scalar trig polynomials, originally in a separate
 //! `math_intrinsic.zig`, inlined here at end of Stage 3.
-//! - Stage 5: shadermath retired in favor of this file.  SPIR-V
-//! decorators (`location`, `binding`, `zsample2d`) absorbed.
+//! - Stage 5: shadermath retired in favor of this file.  Its SPIR-V
+//! helpers were absorbed, later moved out to `shader_builtins.zig`.
 //! File renamed `math.zig` -> `zimrmath.zig` for unambiguous
 //! branding (no collision with std's internal `math` module -
 //! see "build wiring" below).

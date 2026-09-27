@@ -513,12 +513,14 @@ test "robot_ppo_track: Geno holds the T-pose - the model-free baseline (S2b)" {
     defer held.deinit();
     const clips = [_]*const dance.Clip{&held};
     var host: Host = .initCpu();
-    const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, &imported.model, imported.names, &clips, .{
-        .gains = geno.servo_gains,
-        .floor_friction = geno.floor_friction,
-        .watched = &geno.drecon_watched,
-        .actuated = &geno.drecon_actuated,
-    });
+    // Geno's whole task (plan T1) - this test used to set only the servo, floor and bodies, and so ran
+    // without the action scale, the floor rest, the gated reward and the task's failure rule.
+    const geno_options: Options = .{
+        .task = geno.tracking_task,
+        .bodies = geno.drecon_bodies,
+        .action_scale = geno.student_scale,
+    };
+    const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, &imported.model, imported.names, &clips, geno_options);
     defer trainer.deinit();
     const budget_seconds: f32 = 100.0;
     const started: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
@@ -567,14 +569,13 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     const m: *rbt.Model = &task.imported.model;
     const clips = [_]*const dance.Clip{&task.clip};
     var host: Host = .initCpu();
+    // Geno's whole task (plan T1): this trainer used to be judged WITHOUT the gravity gate and with the old
+    // limits, because it spelled the task out by hand and predated both.
     const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, m, task.imported.names, &clips, .{
-        .envs = 8,
-        .gains = geno.servo_gains,
-        .floor_friction = geno.floor_friction,
-        .watched = &geno.drecon_watched,
-        .actuated = &geno.drecon_actuated,
+        .task = geno.tracking_task,
+        .bodies = geno.drecon_bodies,
         .action_scale = geno.student_scale,
-        .rest_on_floor = true,
+        .envs = 8,
         .normalize = true,
         .initial_log_std = -1.2,
         .max_episode_steps = 700,
@@ -796,21 +797,29 @@ test "robot_ppo_track: episodes CUT by the step cap are bootstrapped from where 
     const m: *rbt.Model = &task.imported.model;
     const clips = [_]*const dance.Clip{&task.clip};
     var host: Host = .initCpu();
+    // Under Geno's WHOLE task since plan T1 (the gated reward and the task's failure rule included - it used to
+    // run with the old limits). The task's rule has no grace and COULD end an episode on its first step; it does
+    // not here because every episode starts on the reference's own pose, rested on the floor, and six steps are
+    // nowhere near its limits (1 m, 90 degrees, 0.4 m relative height). So episodes still end by the cap - the
+    // thing under test - and the counts below would say so if that ever changed.
     const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, m, task.imported.names, &clips, .{
+        .task = geno.tracking_task,
+        .bodies = geno.drecon_bodies,
+        .action_scale = geno.student_scale,
         .envs = 2,
         .horizon = 8,
         .epochs = 1,
         .minibatch = 8,
-        .gains = geno.servo_gains,
-        .floor_friction = geno.floor_friction,
-        .watched = &geno.drecon_watched,
-        .actuated = &geno.drecon_actuated,
-        .action_scale = geno.student_scale,
-        .rest_on_floor = true,
         .normalize = true,
         .max_episode_steps = 6,
     });
     defer trainer.deinit();
+    // The known answer for plan T1 on the PPO path: the task the trainer was given is the one its FLEET runs,
+    // whole - the trainer hands it over in one assignment instead of copying it field by field. (Equal here
+    // because `assist_start` is 0: the trainer writes its root assist into the fleet's `task.gains.assist`, so
+    // with assist on, the TRAINING fleet's task differs by that one field on purpose; the judge's never does.)
+    try expect(std.meta.eql(trainer.fleet.options.task, geno.tracking_task));
+    try expect(trainer.fleet.options.action_scale == geno.student_scale);
     while (!trainer.collect(4)) {}
     var cut: usize = 0;
     var stopped: usize = 0;

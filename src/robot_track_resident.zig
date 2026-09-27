@@ -461,7 +461,12 @@ pub fn Resident(comptime M: type) type {
         /// A character's features and its goal - where the reference is going, the frame the servo aims
         /// at - both normalised, as the policy reads them. Left in `z` and `goal`.
         pub fn features(self: *Self, env: usize) void {
-            const fleet: *track.Fleet = self.fleet;
+            self.featuresOf(self.fleet, env);
+        }
+
+        /// The same for a character of ANY fleet on this model - the judge's (`judgeActor`), not only the
+        /// learner's own. Everything read comes from `fleet`; only the scratch is the learner's.
+        pub fn featuresOf(self: *Self, fleet: *track.Fleet, env: usize) void {
             track.stateOf(fleet.m, &fleet.data[env], &self.sim);
             track.local(self.sim, fleet.root, self.raw_features);
             self.norm.toNormal(self.raw_features, self.z);
@@ -469,6 +474,27 @@ pub fn Resident(comptime M: type) type {
             fleet.referenceStateInto(clip, fleet.frame[env] + 1, &self.probe, &self.reference);
             track.local(self.reference, fleet.root, self.raw_features);
             self.norm.toNormal(self.raw_features, self.goal);
+        }
+
+        /// The JUDGE's actor (plan F1): the policy's MEAN action - no exploration - for every character of the
+        /// judge's fleet, from the mirror (the weights as of the last readback). Call `syncMirror` first to judge the
+        /// latest policy. The learner is only borrowed for its scratch: judging does not touch its fleet, its ring or
+        /// its random stream, so a judged run trains exactly as an unjudged one would.
+        pub fn judgeActor(self: *Self) track.Actor {
+            return .{ .context = self, .act = actOnJudgedFleet };
+        }
+
+        fn actOnJudgedFleet(context: *anyopaque, fleet: *track.Fleet, actions: []f32) void {
+            const self: *Self = @ptrCast(@alignCast(context));
+            const per_character: usize = self.raw.len;
+            for (0..fleet.options.envs) |env| {
+                self.featuresOf(fleet, env);
+                self.policyRow();
+                for (actions[env * per_character ..][0..per_character], self.raw) |*slot, raw| {
+                    // Never a non-finite action into the physics (as `act`): the judge's fleet is as easily poisoned.
+                    slot.* = if (raw == raw and @abs(raw) < 1.0e30) raw else 0.0;
+                }
+            }
         }
 
         /// The policy's raw action for one character, from whatever `z` and `goal` hold, left in `raw`.

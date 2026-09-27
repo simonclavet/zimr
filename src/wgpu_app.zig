@@ -71,6 +71,7 @@ const wgpu = @import("wgpu.zig");
 const Shader2D = @import("shader2d.zig").Shader2D;
 const profiler = @import("profiler.zig");
 const memwatch = @import("memwatch.zig");
+const leakwatch = @import("leakwatch.zig");
 const gpu_iface = @import("gpu_iface.zig");
 const BindGroupCache = @import("BindGroupCache.zig");
 const assertf = zm.assertf;
@@ -469,8 +470,27 @@ pub const App = struct {
     /// Debug-only frame phase (see `FramePhase`); transitions are checked with
     /// `zm.assertf` and compiled out when asserts are off.
     frame_phase: FramePhase = .idle,
+    // ---- Two allocators, two counters: who holds what ----
+    //
+    // `gpa` is the EXAMPLE's allocator: it is what `init` / `deinit` receive and what
+    // an example hands to engine calls that make things FOR it (`loadFont(f, gpa, ...)`).
+    // `engine_gpa` is the ENGINE's own: the long-lived subsystems that exist whatever
+    // example runs - the pipeline and bind-group caches, `Renderer2D`, `Cube3D`.
+    //
+    // Both sit on the same backing allocator; each is wrapped in its own counter, so
+    // the leak gate can say WHICH side grew across an example's lifecycle. "The example
+    // grew" means its deinit missed something. "The ENGINE grew" means the engine kept
+    // memory an example caused - which zimr does not allow (examples own and control
+    // their memory; nothing hidden). The shared glyph atlas keeping unloaded fonts'
+    // glyphs was exactly that, and took an hour to pin down with one counter.
     gpa: Allocator = undefined,
     counting: memwatch.CountingAllocator = undefined,
+    engine_gpa: Allocator = undefined,
+    engine_counting: memwatch.CountingAllocator = undefined,
+    /// The `--leak-trace` tracer, when the smoke harness asked for one (`beginLeakTrace`).
+    /// It sits UNDER both counters, so every allocation - example or engine - is recorded
+    /// with its side, phase and scope. Null in every normal run.
+    leak_trace: ?*leakwatch.LeakWatch = null,
 
     // Input state, advanced once per frame (current->previous) after the user's
     // update. The JS bridge pushes events into it via the input_push_* exports.
@@ -541,10 +561,13 @@ pub const App = struct {
             return error.WgpuRequiresWasm;
         }
 
-        self.counting = .{ .backing = std.heap.wasm_allocator };
+        self.counting = .{ .backing = std.heap.wasm_allocator, .label = "example" };
         const gpa: Allocator = self.counting.allocator();
+        self.engine_counting = .{ .backing = std.heap.wasm_allocator, .label = "engine" };
+        const engine_gpa: Allocator = self.engine_counting.allocator();
         self.config = cfg;
         self.gpa = gpa;
+        self.engine_gpa = engine_gpa;
         self.rng = std.Random.DefaultPrng.init(resolveRngSeed(cfg.rng_seed));
 
         const device: wgpu.DeviceHandle = wgpu.initDevice();
@@ -552,8 +575,8 @@ pub const App = struct {
         const surface: wgpu.SurfaceHandle = wgpu.getSurface();
         const fmt: wgpu.TextureFormat = wgpu.getSurfaceFormat(surface);
 
-        self.pipeline_cache = gpu.PipelineCache.init(gpa, device);
-        self.bind_group_cache = BindGroupCache.init(gpa, device);
+        self.pipeline_cache = gpu.PipelineCache.init(engine_gpa, device);
+        self.bind_group_cache = BindGroupCache.init(engine_gpa, device);
         self.gpu_frame = GpuFrame.init(device, queue, surface, fmt, &self.pipeline_cache, &self.bind_group_cache);
         self.gpu_frame.depth_format = cfg.window.depth_format;
 
@@ -662,6 +685,78 @@ pub const App = struct {
         return self.gpu_frame.encoder;
     }
 
+    /// Put a tracer under both counters: from here on, every allocation is recorded. The
+    /// smoke harness begins it right after the app initializes - EARLY, so the blocks the
+    /// first lifecycle makes are known, and a second-lifecycle container growth can be
+    /// matched to the older block it replaced - and marks just before the second lifecycle
+    /// (`markLeakTrace`). Idempotent.
+    ///
+    /// Swapping the counters' backing mid-run is safe because the tracer forwards to the
+    /// SAME wasm allocator: a block allocated before it existed is freed straight through
+    /// (the tracer simply has no record of it).
+    pub fn beginLeakTrace(self: *App) void {
+        if (self.leak_trace != null) {
+            return;
+        }
+        // The tracer's own tables go straight to the wasm allocator, not through a counter,
+        // so they never show up in the thing they are measuring.
+        const bookkeeping: Allocator = std.heap.wasm_allocator;
+        const watch: *leakwatch.LeakWatch = bookkeeping.create(leakwatch.LeakWatch) catch return;
+        watch.* = .init(std.heap.wasm_allocator, bookkeeping);
+        self.counting.backing = watch.allocator();
+        self.counting.watch = watch;
+        self.engine_counting.backing = watch.allocator();
+        self.engine_counting.watch = watch;
+        self.leak_trace = watch;
+    }
+
+    /// From here on is what `reportLeakTrace` lists. No-op without a tracer.
+    pub fn markLeakTrace(self: *App) void {
+        if (self.leak_trace) |watch| {
+            watch.mark();
+        }
+    }
+
+    /// Log (via `std.log.warn`, which the harness forwards) every allocation made since
+    /// `markLeakTrace` that is still live. No-op without a tracer.
+    pub fn reportLeakTrace(self: *App) void {
+        if (self.leak_trace) |watch| {
+            _ = watch.reportSinceMark("leak-trace");
+        }
+    }
+
+    /// Label what follows with a lifecycle PHASE ("init", "frame", "deinit") - the
+    /// outermost scope in a trace report. No-op without a tracer.
+    pub fn pushTracePhase(self: *App, phase: []const u8) void {
+        if (self.leak_trace) |watch| {
+            watch.push(phase);
+        }
+    }
+
+    /// End the phase `pushTracePhase` began. No-op without a tracer.
+    pub fn popTracePhase(self: *App) void {
+        if (self.leak_trace) |watch| {
+            watch.pop();
+        }
+    }
+
+    /// The ONE place the engine's 2D renderer is created (lazily - the first frame, or
+    /// earlier if an example loads a font or registers a texture in `init`). Always on
+    /// `engine_gpa`: the renderer is the engine's and outlives every example.
+    ///
+    /// It used to be created at each of five call sites with whatever allocator was at
+    /// hand - and three passed the EXAMPLE's, so an example that loaded a font in `init`
+    /// made the engine's renderer (glyph atlas and all) live in the example's allocator.
+    /// Harmless-looking with a counting gpa; a use-after-free waiting for any example
+    /// running on an arena, which frees it wholesale at teardown. Found by splitting the
+    /// engine and example counters.
+    fn ensureRenderer2D(self: *App) !*Renderer2D {
+        if (self.renderer_2d == null) {
+            self.renderer_2d = try Renderer2D.init(self.engine_gpa, &self.gpu_frame);
+        }
+        return &self.renderer_2d.?;
+    }
+
     /// Ensure this frame's encoder + Renderer2D exist, idempotently. Called
     /// by beginDrawing AND by the first offscreen pass (beginTextureMode),
     /// so RTT can run before the screen opens; the encoder is created ONCE
@@ -670,9 +765,7 @@ pub const App = struct {
         if (self.frame_begun) {
             return;
         }
-        if (self.renderer_2d == null) {
-            self.renderer_2d = try Renderer2D.init(self.gpa, &self.gpu_frame);
-        }
+        _ = try self.ensureRenderer2D();
         // Reset the per-frame VBO/IBO ring base at TRUE frame start (here), NOT
         // at beginDrawing. Offscreen-first RTT geometry is written before
         // beginDrawing; resetting the base to 0 there would make the main pass
@@ -1101,7 +1194,7 @@ pub fn beginMode3DMatrix(gl: *WgpuGl, view_proj: Mat) void {
     // order means.
     Backend.flushBatch(&app.pass);
     if (app.cube3d == null) {
-        app.cube3d = draw3d.Cube3D.init(app.gpa, &app.gpu_frame) catch null;
+        app.cube3d = draw3d.Cube3D.init(app.engine_gpa, &app.gpu_frame) catch null;
     }
     if (app.cube3d) |*c3d| {
         c3d.beginFrame3D(view_proj);
@@ -1423,7 +1516,7 @@ pub fn uploadDecalReceiver(gl: *WgpuGl, mesh: types.Mesh) ?u32 {
     // cube3d is created lazily (normally on first beginMode3D). Receivers are
     // typically uploaded at init, BEFORE any 3D block, so ensure it exists here.
     if (app.cube3d == null) {
-        app.cube3d = draw3d.Cube3D.init(app.gpa, &app.gpu_frame) catch null;
+        app.cube3d = draw3d.Cube3D.init(app.engine_gpa, &app.gpu_frame) catch null;
     }
     if (app.cube3d) |*c3d| {
         return c3d.uploadDecalReceiver(app.gpu_frame.queue, mesh);
@@ -1588,7 +1681,7 @@ pub fn uploadMeshGpu(gl: *WgpuGl, mesh: *types.Mesh) ?draw3d.MeshGpu {
     // every later pass draws nothing - a black screen and an empty shadow map, with no error.
     // `uploadDecalReceiver` guards the same way for the same reason.
     if (app.cube3d == null) {
-        app.cube3d = draw3d.Cube3D.init(app.gpa, &app.gpu_frame) catch null;
+        app.cube3d = draw3d.Cube3D.init(app.engine_gpa, &app.gpu_frame) catch null;
     }
     if (app.cube3d) |*c3d| {
         return c3d.uploadMeshGpu(mesh, app.gpu_frame.queue);
@@ -3111,10 +3204,8 @@ pub fn registerTexture(gl: *WgpuGl, tex: WgpuTexture) u32 {
     // frame), where it is still null - loadFont ensures it the same way. Without
     // this, registerTexture silently returned 0 (an invalid id), so every
     // `drawTexturePro`/`drawTextureNPatch` with a user texture drew nothing.
-    if (app.renderer_2d == null) {
-        app.renderer_2d = Renderer2D.init(app.gpa, &app.gpu_frame) catch return 0;
-    }
-    return app.renderer_2d.?.registerTexture(tex);
+    const renderer: *Renderer2D = app.ensureRenderer2D() catch return 0;
+    return renderer.registerTexture(tex);
 }
 
 /// Redirect 2D drawing to the offscreen `rt`. Flushes the current pass, opens a fresh
@@ -3832,9 +3923,7 @@ fn bakeAtlasFont(
 ) !Font {
     const app: *App = appOf(f.gl);
     // Ensure the Renderer2D (which owns the texture registry + device) exists.
-    if (app.renderer_2d == null) {
-        app.renderer_2d = try Renderer2D.init(gpa, &app.gpu_frame);
-    }
+    _ = try app.ensureRenderer2D();
     const r: *Renderer2D = &app.renderer_2d.?;
 
     const tt: codecs.truetype.Font = try codecs.truetype.loadFontFromTtf(gpa, ttf_bytes);
@@ -3903,9 +3992,7 @@ pub fn loadFontSdf(
     sdf_size: i32,
 ) !Font {
     const app: *App = appOf(f.gl);
-    if (app.renderer_2d == null) {
-        app.renderer_2d = try Renderer2D.init(gpa, &app.gpu_frame);
-    }
+    _ = try app.ensureRenderer2D();
     const r: *Renderer2D = &app.renderer_2d.?;
 
     var codepoints: [95]u21 = undefined;
@@ -4017,9 +4104,7 @@ pub fn loadFontFromImage(
     // Upload as a NEAREST atlas (pixel fonts stay crisp at integer scale) and
     // register it engine-owned (freed with the renderer's registry at teardown).
     const app: *App = appOf(gl);
-    if (app.renderer_2d == null) {
-        app.renderer_2d = try Renderer2D.init(gpa, &app.gpu_frame);
-    }
+    _ = try app.ensureRenderer2D();
     const r: *Renderer2D = &app.renderer_2d.?;
     const tex: WgpuTexture = WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
         .pixels = cleaned,

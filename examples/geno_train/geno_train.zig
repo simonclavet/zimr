@@ -101,12 +101,14 @@ const learner_options: resident.Options = .{
     .w_smooth = 1.0,
 };
 
-/// The fleet's termination while training: Geno's (tracking error, and the bodies' height relative to the
-/// reference's), with a training window's grace after every reset.
-const training_termination: track.Termination = blk: {
-    var t: track.Termination = geno.task_termination;
-    t.grace_steps = learner_options.window;
-    break :blk t;
+/// Geno's task (`geno.tracking_task`: servo, floor, floor rest, the gated reward, the task's failure rule) with
+/// one change the LEARNER needs: a training window's grace after every reset. Every episode then yields at least
+/// one window however bad the policy - without it, a policy failing within a window's length leaves nothing to
+/// train on, and training stops for good.
+const training_task: track.Task = blk: {
+    var graced: track.Task = geno.tracking_task;
+    graced.termination.grace_steps = learner_options.window;
+    break :blk graced;
 };
 
 /// Steps of servo-only simulation before the learner exists: the normaliser is measured from them, so
@@ -231,16 +233,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const fleet: *track.Fleet = try .init(gpa, m, &clips, .{
         .envs = envs,
         .capacity = 256,
-        .action_scale = 0.6,
-        .gains = geno.servo_gains,
-        .floor_friction = geno.floor_friction,
-        .rest_on_floor = true,
-        // Every episode must yield at least one training window, however bad the policy: without this a
-        // policy failing within a window's length leaves nothing to train on, and training stops for good.
-        // Gravity in the reward and the termination (lying with the right joint angles must not score), and a
-        // training window's grace after every reset.
-        .weights = geno.task_weights,
-        .termination = training_termination,
+        .action_scale = geno.supertrack_action_scale,
+        .task = training_task,
+        // Geno's task exempts its feet from unexpected contact BY NAME; the fleet resolves them through these.
+        .body_names = s.imported.names,
     });
     // The servo alone, counted exactly as the learner counts itself: a step watched per character,
     // and a failure for each that lost its reference on that step.
@@ -254,9 +250,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         }
     }
     s.servo_mttf = meanTimeToFailure(envs * warmup_steps, servo_failures);
-    s.norm = try latent.measureNormalizer(gpa, fleet);
+    // The feature normaliser from the REFERENCE clip itself (the paper's way, plan F4), not from the warm-up's few
+    // seconds of the servo falling: fixed before the first step, and in units of "how far from typical dancing".
+    s.norm = try latent.measureClipNormalizer(gpa, m, &clips);
     s.learner = try resident.Resident(zn_mlp).init(gpa, &s.pipe, fleet, s.norm, learner_options);
-    s.training_limits = fleet.options.termination;
+    s.training_limits = fleet.options.task.termination;
     setStatus(s, "learning from nothing", .{});
 }
 
@@ -445,7 +443,11 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
             s.watching = !s.watching;
             // A longer leash while watching, and the training one back afterwards.
             const fleet: *track.Fleet = s.learner.fleet;
-            fleet.options.termination = if (s.watching) s.training_limits.scaled(watching_leash) else s.training_limits;
+            const leash: track.Termination = if (s.watching)
+                s.training_limits.scaled(watching_leash)
+            else
+                s.training_limits;
+            fleet.options.task.termination = leash;
         }
         if (!s.watching) {
             const label: []const u8 = if (s.train_only) "show the character" else "train only (stop drawing)";

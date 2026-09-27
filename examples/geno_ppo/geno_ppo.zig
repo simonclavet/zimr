@@ -3,7 +3,7 @@
 //! `getup_train` on the robot built from Geno's skeleton and mesh: standing armature on every joint,
 //! self-collision off, every reset rested on the floor, DReCon's watched and actuated bodies in Geno's
 //! names, and the dance from 5 s to 15 s (baked for `geno_train`). The action scale is stated, not
-//! inherited: 1.2 rad per unit, filtered (a fifth new, four fifths held) - see `action_scale` below.
+//! inherited: 1.2 rad per unit, filtered (a fifth new, four fifths held) - see `robot_geno.student_scale`.
 //!
 //! What follows is `getup_train`'s own description.
 //!
@@ -78,19 +78,10 @@ const ground_col: Color = .{ .r = 74, .g = 80, .b = 92, .a = 255 };
 /// How many characters train at once: a phone's CPU is the bottleneck, and eight keeps a decision
 /// inside a frame while still giving PPO a varied batch.
 const envs: u32 = 8;
-/// ACTION SCALE - radians of pose offset per unit of the policy's action, stated here rather than inherited.
-///
-/// 1.2 rad a unit, and the actions live in [-1, 1]. That sounds huge, so here's why it isn't. Every decision
-/// goes through DReCon's filter: a joint receives a FIFTH of the new action and keeps four fifths of what it
-/// had, and a decision is held for 2 physics steps (30 Hz). So the joint never jumps - to move an offset
-/// quickly the policy must ASK for much more than it wants, and the filter hands it over gently. The planner
-/// that teaches this policy measured exactly that: capped at 0.6 rad raw it barely beats the servo (1.4 s vs
-/// 1.05 on the hard starts), allowed 1.2 it holds 3.48 s - while the offsets the joints actually RECEIVE
-/// average 0.24 rad (14 degrees), because of the filter.
+/// The action scale (1.2 rad per unit) is `robot_geno.student_scale`, where the reasoning for the value lives.
 ///
 /// Exploration starts small to match: PPO's Gaussian begins at log sigma -1.2 (0.3 units), so a young policy's
 /// random asks are 0.36 rad raw and 0.072 rad (4 degrees) at the joint a decision.
-const action_scale: f32 = 1.2;
 const initial_log_std: f32 = -1.2;
 
 /// Batches of history kept for the curve and the failure-rate window.
@@ -121,8 +112,13 @@ const Task = enum {
         };
     }
 
+    /// The learner's choices, plus Geno's task, DReCon bodies and the student's action scale - each ONE named
+    /// value from robot_geno, never spelled out here (plan T1).
     fn options(task: Task) ppo_track.Options {
         return .{
+            .task = geno.tracking_task,
+            .bodies = geno.drecon_bodies,
+            .action_scale = geno.student_scale,
             .envs = envs,
             .horizon = 64,
             // The two tricks every learner gets: inputs scaled to unit spread, and a helping hand
@@ -130,16 +126,6 @@ const Task = enum {
             .normalize = true,
             .assist_start = 1.0,
             .assist_batches = 300,
-            // Geno: its DReCon bodies, its servo and floor, resets on the floor, and the action scale.
-            .watched = &geno.drecon_watched,
-            .actuated = &geno.drecon_actuated,
-            .gains = geno.servo_gains,
-            .floor_friction = geno.floor_friction,
-            .rest_on_floor = true,
-            .action_scale = action_scale,
-            // Gravity in the reward and the termination: lying with the right joint angles must not score.
-            .weights = geno.task_weights,
-            .termination = geno.task_termination,
             .initial_log_std = initial_log_std,
             // Long enough for the whole clip: a cap shorter than the dance would end good episodes.
             .max_episode_steps = 700,

@@ -2128,3 +2128,285 @@ testing details, war stories or development anecdotes (Simon's standing preferen
   work in order - T (task finished), P (PPO hygiene), S (SuperTrack as published, safe from its model), ON (the night), A (ADD, 100
   clips, D5 revisited), X (phone), M - with decisions, risks, file map and comparison tables. v2 archived.
 
+- **Sep 26 — step 0: the Geno pages on toolchain 2307.** After the 2307 shader fix (spirv_2307_decorations_plan.md),
+  geno_train (3.7 MB), geno_ppo (3.6 MB) and geno_track (11.8 MB) build through both new shader gates, and their smokes
+  RUN: frames execute, GPU validation passes (train init 4564 calls / ~2258 per frame, ppo 4550 / ~325, track 4179 /
+  ~855). But every managed smoke now FAILS the lifecycle leak check - hello_world and fluid_gpu too, so it is the engine,
+  not Geno. The original uploaded tree fails identically on 2307, so the session's shader changes are cleared;
+  claude.md records fluid_gpu's smoke PASSING on 2163, so 2307 is the prime suspect (not yet proven: the check may be
+  newer than that record). The harness now prints the size: a CONSTANT per lifecycle (5760 bytes for hello_world at 1,
+  10, 60 or 240 frames), always a multiple of 2880 - fluid_gpu 1x, hello_world and geno_ppo 2x, geno_train and
+  geno_track ~4x (+128). One fixed-size engine allocation per init-something, never freed by deinit. Pages never
+  deinit in a browser, so the pages themselves are usable; the smoke gate is red until found. Next: find the 2880.
+- **Sep 26 — the smoke "leak" found: the shared glyph atlas.** Pre-existing, as Simon guessed - not 2307. Method: a
+  temporary allocation trace (every alloc/remap/resize/free during the second lifecycle, paired by pointer; removed
+  after). hello_world: exactly ONE block outlives lifecycle 2 - an 11532-byte hash-map table that replaced a 5772-byte
+  one - allocated in the example's UPDATE, during its third `text` call (0 frames = no growth; 1 or 240 = the same).
+  Cause: `Renderer2D.glyph_cache` (src/glyph_atlas.zig) keys glyphs by `FontFace.id`, "a counter, never reused". Each
+  lifecycle reloads its font, gets a new face id, and rasterizes new entries; unloading the font leaves the old ones
+  (documented in `unloadFontOwned`: they "go unused until it starts over" - the atlas resets only when its 4 pages
+  fill). A bounded cache, but it grows on every font reload, which the managed lifecycle gate (flat live bytes)
+  correctly flags - and the launcher switching apps is the production case. Every example draws text, hence every
+  example "leaks" a hash-map growth step (2880 / 5760 / 11648). `resetRegistryFrom` (the launcher's per-child teardown,
+  and `runnerDeinit`) is where the atlas should start over. Awaiting Simon's pick of the fix.
+- **Sep 27 — T1: one definition of Geno's task.** `robot_geno.ppoTaskOptions(base)` stamps the task (DReCon
+  bodies, servo gains, floor, rest-on-floor, the student's action scale, the gated reward, the task's failure rule)
+  onto a PPO trainer's options; `robot_geno.fleetTaskOptions(envs, capacity, grace)` builds a raw fleet's (the
+  SuperTrack path). `anytype` for the PPO one on purpose: naming `robot_ppo_track.Options` would pull the GPU compute
+  host into robot_geno's shader-free test tier - and every assignment is a named field, so a rename is a compile error,
+  never a silent skip. Migrated: geno_ppo, geno_train and the three Geno trainers in robot_ppo_track_tests - two of
+  which (D5 step 3's, and the end-to-end cut-path test) had been running WITHOUT the gravity gate and with the old
+  limits, and the T-pose one without the action scale and the floor rest. `grep` finds no hand-set Geno task field
+  outside robot_geno. The action scales now exist once each: `student_scale` 1.2 (its reasoning moved there from
+  geno_ppo: 0.6 barely beat the servo through DReCon's filter) and `supertrack_action_scale` 0.6 (unexplained;
+  Phase S re-measures). Known answers: both helpers' fields equal the constants, the caller's knobs survive - each
+  test proven live by a planted failure. The cut-path test passes under the full task (2/2, not skipped). Pages
+  smoke green with call profiles IDENTICAL to before (ppo 4550 / 325.1, train 4564 / 2258.3). Left of T1's DONE
+  WHEN: re-measure D5 step 3's judge numbers under the gated reward (a long measurement - detached, next turn).
+- **Sep 27 — T1 redone TYPED: the task is a value, not a helper.** Simon: no `anytype` unless necessary.
+  `ppoTaskOptions(base: anytype)` was avoiding an import edge, not being generic - so it is gone, with
+  `fleetTaskOptions`. Now `robot_track.Task` (servo gains, floor friction, floor rest, reward weights, termination -
+  what the character is asked to do and when it failed) is embedded as `task` in BOTH `Fleet.Options` and
+  `robot_ppo_track.Options`; the PPO trainer hands it to its training and judging fleets in ONE assignment each
+  (it copied six fields, twice). `robot_policy.Bodies` groups DReCon's watched/actuated lists the same way.
+  robot_geno holds typed constants: `tracking_task` (the gated reward and the task's failure rule),
+  `servo_task` (the D-phase condition: default reward and limits - kept so recorded experiment numbers
+  reproduce, visible by NAME), `drecon_bodies`; action scales stay per learner (`student_scale`,
+  `supertrack_action_scale`, now also used by the jitter test's literal 0.6). The constant is `tracking_task`, not
+  `task`: 12 locals/params in robot_geno are named `task` and Zig rejects shadowing.
+  CORRECTION to the previous entry: robot_geno ITSELF built nine Geno fleets by hand (my grep excluded it); now
+  seven experiments use `servo_task` (S2b keeps its no-rest setting explicitly), the FailureCheck parity test
+  `tracking_task`. Known answers: `tracking_task` carries the gates, `servo_task` differs in exactly those two
+  fields; the cut-path test asserts the trainer's FLEET runs `geno.tracking_task` whole. PPO test root unfiltered:
+  483 pass / 68 skip / 0 fail; pages geno_ppo, geno_train, getup_train, track_train smoke green, the Geno pages
+  with identical call profiles. Left of T1: move the D-phase experiments to `tracking_task` and re-measure D5 step 3.
+- **Sep 27 — adversarial review of the session's code; tutorial and plan brought up to date.** Found and fixed:
+  (1) spv2wgsl `checkNoHandleValues` matched `texture_`/`sampler` ANYWHERE on a line - a local merely NAMED
+  `sampler_count` failed the build (proven with a probe first); it now reads only the TYPE (after `->` / the `var`'s
+  `:`), exact handle names; innocent-name cases added to its test; runtime-handle probe still refused, 217 cached
+  modules pass. (2) `checkGraphicsInterfaceDecorated` judged a module with no SELECTED entry point as a vertex shader
+  (`exec_model` defaults to 0 = Vertex); it now skips when no entry was selected. (3) `runnerWrongSideFrees` summed
+  with `+` (traps on overflow) - now `+|`. (4) The Task refactor had put `pub const Task` BETWEEN `Fleet`'s doc
+  comment and `Fleet`, so Fleet's documentation silently became Task's - caught by regenerating the tutorial's folds;
+  Task moved above it. (5) `TrackingError` said "six ways" with eight fields (height, up) - source doc and tutorial
+  prose fixed. Checked and found sound: no other root reads the moved option fields; the allocator split, atlas
+  reset, leak trace and checkWgsl hold under the cases tried. Tutorial 10.1: eight parts (pose, place, gravity), and
+  the task as ONE value with folds for `Task`, `tracking_task`, `drecon_bodies`. Plan T1: typed design as built,
+  status, what remains. claude.md: show AND explain code in the reply every turn; no `anytype` unless necessary.
+- **Sep 27 — D5 step 3 re-measured: the first completed 10x-data clone, under Geno's full task.** (The 10x rerun queued on
+  Sep 25 had died with its turn, so this is also that result.) 17.7 min wall. Teacher: 12916 frames over 216 starts (clean +
+  perturbed) -> 6461 demonstrations. Clone error 0.0749 -> 0.0575 over 2000 minibatches. HELD OUT (43 starts, 1287 rows):
+  0.0675 vs always-zero 0.0770 - now ~12% better than predicting nothing (Sep 25, 660 rows: worse than zero - it had
+  memorised); the curve flattens after ~1000 updates (0.0760 at 25 -> 0.0674 at 1000 -> 0.0675 at 2000). JUDGED (600
+  decisions x 8, `tracking_task`): servo 90 failures / MTTF 107 / reward 0.493; clone 103 / 93 / 0.367. The clone still
+  loses to the servo alone, but by 14% more failures where Sep 25's lost by 2x (184 vs 96). Two things changed since Sep 25
+  (10x data AND the gated reward) - compare clone to servo WITHIN a run; rewards across the two runs are different
+  quantities. Normaliser healthy (0 of 180 inputs flat; 0.06% / 0.10% pinned). T1 done.
+- **Sep 27 — T2 mechanism: the worst body.** `TrackingError.worst_body` - the largest single body's distance in the
+  root frame, the same per-body measure the mean averages, computed in the same loop - and `Termination.worst_body`
+  (off by default, 1e30). The mean hides one limb far off; MimicKit ends on the worst body. And the field-list drift
+  is closed for good: `Termination.scaled` and `terminated` now WALK the struct (every f32 limit, against the
+  `TrackingError` field of the same name), with a comptime check that fails the build - "Termination.bogus limits
+  nothing: TrackingError has no field of that name" (proven by planting one) - so a new limit is two lines in two
+  structs, nothing else. The FailureCheck parity test walks every TrackingError field the same way (its list had
+  been hand-written) - still 0.00e0, worst_body included. Known answer (synthetic states, one body moved 0.8 m of
+  six): mean 0.16 passes the default rule, worst 0.8; the verdict flips between limits 0.79 and 0.81; `scaled`
+  carries it. Next: measure the value on the servo and the teacher, both clips.
+- **Sep 27 — T2 measured: where a worst-body limit would cut.** The servo alone (12 starts) and the teacher (`d5_teacher`,
+  4 starts) on both clips, run until the current rule (`task_termination`, worst_body off) loses the reference or 5 s;
+  each candidate's first crossing noted. The servo alone NEVER bends a limb far off: its worst body peaks at 0.05 m mean,
+  0.10 m (dance) / 0.16 m (get-up) max, before any loss - it fails by falling WHOLE (root, height, tilt), never by one
+  limb: a PD servo pulled straight to the reference pose follows its shape. The teacher, the best tracker, swings limbs
+  far WHILE SUCCEEDING: mean peak 0.57 / 0.51 m, max 0.69 / 0.67 m. So a limit at 0.4 / 0.5 / 0.6 m cuts the teacher's
+  good runs (dance 4 / 3 / 1, get-up 3 / 2 / 2 - some while the reference lay low); from 0.7 m NOTHING is cut by either
+  tracker. 0.7 is 1 cm above the largest excursion seen - too tight on 4 teacher starts a clip. Recommended 0.8 m (11 cm
+  of margin over the best tracker's largest good excursion; still catches a limb truly lost); MimicKit's 1.0 m is the
+  safe alternative. Also: the ON.0b servo attribution test's hand-written limit list (it skipped the tilt limit) now walks
+  `Termination`. Awaiting Simon's pick for `task_termination.worst_body`.
+- **Sep 27 — T2 done: Geno's worst body capped at 0.8 m** (Simon's pick of the measured candidates).
+  `task_termination.worst_body = 0.8`, with the measurement's reasoning in its doc. The T2 measurement test is pinned to
+  the rule WITHOUT the limit (`run.check.termination.worst_body = 1e30`) and reproduced its numbers byte for byte; the
+  FailureCheck parity test is still 0.00e0 with the limit included; tutorial 10.1 says what the cap is for.
+- **Sep 27 — T3 code complete: unexpected contact** (verified by known answers and argument; no long runs, per Simon).
+  GEOMETRY, the same for character and reference: `rbt.lowestPoint` split into `geomLowestPoint` (one shape's math) and
+  `bodyLowestPoints`; `State.lowest` per body, filled by `stateOf`, `no_shape_height` from `init` (a world model's
+  prediction never touches). `TrackingError.unexpected_contact` = of the bodies the character has within `contact_band`
+  (1 cm) of the floor, the highest the reference holds its counterpart; an unknown reference height accuses nothing.
+  `Termination.unexpected_contact` off by default (T2's rule: two fields, nothing else). Per-ROBOT exemption:
+  `Task.contact_exempt` names (Geno's `foot_bodies`: both feet and toes - a foot is down in stance while a lagging
+  character's reference lifts it into swing), resolved by `contactExemptMask` (a typo is an error; the world's empty
+  name never matches) in the fleet (`Fleet.Options.body_names`; the PPO trainer keeps its caller's names for its judge)
+  and in FailureCheck; `exemptFromContact` applies it to the CHARACTER's state only. Known answers: knee down vs a
+  standing reference reads 0.45 and flips at the limit; both kneeling 0; a lagged foot swing 0.2, 0 once exempt; an
+  unknown reference 0; per-body minimum == lowestPoint on the rig. The known answers FOUND two bugs before they shipped:
+  the mask leaked on a typo (errdefer), and `feet` / `body_names` shadowed existing names. robot_track 433 pass / 0
+  leaks; parity 0.00e0 with the contact term and exemption on both sides; PPO cut-path passes; geno_train builds.
+  Geno's value is NOT set yet: 0.3 m recommended on the geometry (knee end 0.45 m standing, hands and hips 0.7-0.9 m,
+  a hand lagging a get-up's lift tolerated for ~0.3-0.6 s) - Simon's call.
+- **Sep 27 — T3 value set; Phase R (runs) planned.** Simon let me decide T3: `task_termination.unexpected_contact =
+  0.3` on the geometry (reasoning in its doc; the overnight rehearsal is its measurement). The `tracking_task` known
+  answer then FAILED, correctly: `servo_task` now differs from `tracking_task` in three fields (the feet exemption is
+  part of the failure rule it leaves out) - the test states that now. Parity 0.00e0 with the contact limit live.
+  PHASE R written into the plan (Simon: one run a night on the laptop, tested in the morning, prepared by day; old
+  school; programmatic setup, UI for runtime things). MimicKit studied: one program `--mode train|test`, three YAML
+  configs copied into a self-describing out_dir, evaluation (deterministic test episodes) INSIDE training as the
+  curve, runs compared by overlaying log.txt; its model.pt omits the optimizer and counters - a warm start. Ours: a
+  typed `RunConfig` in code + a snapshot zip (run.json, state.bin with Adam moments / counters / RNG / sampler stats,
+  curves.csv, events.log, README.txt) that alone tests or CONTINUES the run exactly; Train (headless) / Test (training
+  paused) / Pause; the judge as a curve. FOUND: ON-a's "IndexedDB via zimr's storage" does not exist - zimr has
+  localStorage (~5 MB strings), a drop queue and a click-to-download anchor; OPFS proposed. And a laptop trap: a hidden
+  tab stops the frame loop (training halts) - wake lock + visibility guard. Decisions U1-U6 to ask.
+- **Sep 27 — T4: no drift weight passes; the A/B found why the teacher regressed.** `across_weight` is now
+  `Planner.Options.across_weight` (0.3 default, behaviour unchanged). Measured under today's `task_termination`
+  (D1's dance starts, until the rule loses the reference, cap 5 s; ON.2.1h's floor lift, 4 s fixed): servo alone
+  1.14 s; drift weight 0.3 / 1.0 / 2.0 -> dance 1.37 / 1.65 / 1.48 s, lift head best (ref 0.99 / 1.24 / 1.43)
+  0.62/0.63/0.66, 0.53/0.50/0.94, 0.63/0.79/0.82 m. None reaches 3 s: `d5_teacher` keeps 0.3 (T4's timebox).
+  But the lift had REGRESSED from Sep 26's 0.75/0.91/1.19 with no teacher change - and the A/B (0.3, T2's worst-body
+  and T3's contact limits switched off in the teacher's CHECK) brings the rise back from 530/554: 0.90 / 1.12 m
+  (509: 0.45, worse - single runs). Why: the teacher's early warning pays the fall penalty within `danger` (0.6) of
+  EVERY limit - the worst body at 0.48 m (under the 0.69 m swings T2 saw it make while succeeding) and contact at
+  0.18 m (a hand pushing the floor while the reference's lifts) - so it plans away from its own balance moves and
+  from pushing off the floor. (The dance A/B is confounded: without the limits the run is also JUDGED more loosely.)
+  Proposed T4b: the teacher's early warning without the EVENT limits (worst body, contact) - the task's rule still
+  judges; P2: the teacher may shape.
+- **Sep 27 — T4b: the teacher's early warning, three ways.** `FailureCheck.withinLimits` (the check against given
+  limits; `within(fraction)` wraps it), `Planner.Options.warning` (null = the check's own rule), `teacher_danger`
+  (0.6) and `teacher_warning`. Measured (dance judged by the task's WHOLE rule, D1's four starts, cap 5 s; lift from
+  509/530/554, head best vs 0.99/1.24/1.43 m):
+      warning                                  dance     lift              mean shortfall
+      margin on every limit (T4)               1.37 s    0.62/0.63/0.66    0.38 m
+      event limits left OUT                    1.13 s    0.77/0.90/1.12    0.28 m   (dance = the servo's 1.14)
+      event limits warned AT the event (kept)  1.94 s    0.66/0.36/1.13    0.37 m   (dance 1.85-2.08 every start)
+  Kept: a margin on the gradual limits (drift, heading, height, tilt), none on the event ones (worst body, contact) -
+  `teacher_warning` divides them by the margin so they land ON the task's values. The best dance yet, consistent;
+  the lift no worse than T4's overall. SUSPECTED: T3's contact limit (0.3 m, chosen on geometry) blocks SLOW get-ups -
+  the teacher rises well from 530 only when free to cross an event limit, and it rises slower than the reference
+  (head 0.3-0.5 m below it), so its hands still push the floor after the reference's are 0.3 m up. If so, the task
+  would end a learner's slow-but-real get-up too. Next: measure which limit the lift from 530 crosses (T3 revisit).
+- **Sep 27 — T3 revisit: the event limits are off; lag is RSI's job.** Judged silently with the task's whole rule, the
+  teacher's three good rises (event limits free in its warning; head to 0.77 / 0.90 / 1.12 m) would ALL end within
+  0.8 s: from 509 the worst body (0.83 > 0.8), from 530 contact (Spine3 down, reference's 0.30 m up), from 554
+  contact (RightArm + RightForeArm down, reference's 0.6 m up) - a rise LAGGING the reference, not a fall. Both event
+  limits OFF in `task_termination` (mechanism kept, tested; T3 rejected in its frame form by its own bar). Then the
+  gradual limits end the same rises at 1.03-1.68 s (tilt 0.95 / 0.83 > 0.8; pose rotation 1.24 > 1.2) - and that is
+  fine: DeepMimic's reference-state initialisation starts episodes in step with the reference, so the rise is learned
+  stretch by stretch; falling behind just ends an episode. Consequences: T5 (adaptive starts) carries the get-up; the
+  teacher's 4-second open-loop "lift" is not what the night needs - survival under the rule from starts spread
+  through the clip is. A lag-tolerant contact rule (the reference's lowest point over the last ~0.5 s) is noted for
+  later. Tutorial 10.1 updated: the event terms are measured, not limited, and why.
+- **Sep 27 — the plan reordered: foundations before curriculum** (Simon: "a good SuperTrack training on the 10-second
+  dance that is always similarly difficult; critical things before tweaking the curriculum"). New order: T (done) ->
+  F (SuperTrack foundations on `dance_5_15`) -> R -> ON (first night: the 10-second dance ONLY, uniform starts, no
+  perturbations) -> C (curriculum: T5 adaptive starts, the get-up / S13, perturbation ramps, more clips) -> P -> A.
+  Phase F, in its order: F1 the judge (deterministic: mean action, 20 starts every 0.5 s, MTTF / share reaching the
+  end / gated reward, the servo on the same starts) - first, because everything after is measured by it; F2 the
+  exploitation index and trust, measured every evaluation; F3 the servo's target velocities, measured on the servo
+  alone (a free win if it holds longer); F4 the paper's inputs and losses (normaliser from the clip, L1, noise units);
+  F5 Simon's filter in the graph; F6 drift in the policy's input and loss; F7 windows / data / scale; F8 the world
+  model's form (optionally a buffer pre-filled with the teacher's demonstrations); F9 a CPU mini-run - the gate before
+  GPU time. S10's control and S12 only if F2 shows exploitation. The first night's success: MTTF >= 5x the servo's,
+  >= 60% of the judge's starts reaching the clip's end, reward above the servo's, exploitation bounded.
+- **Sep 27 — F1a: the judge.** `robot_track.judge(gpa, m, clip, options, starts, actor)`: its own fleet, one
+  environment per start, placed EXACTLY (`Fleet.startAt`, split out of `restart` with the same random draws - every
+  fleet test still passes, 434), the actor's mean action (an `Actor`: context pointer + function, no anytype; null =
+  the servo alone), no noise, no shoves, no grace, no cap before the clip's end; every start's FIRST episode counted
+  to its end. `Judgement`: MTTF (watched time per failure), share reaching the clip's end, mean gated reward.
+  `evenStarts(clip, every)`. Known answers on the rig: identical twice; every start counted once; the servo IS the
+  zero actor. BASELINE on `dance_5_15`, 20 starts every 0.5 s: servo alone MTTF 1.61 s, 1/20 to the end, reward
+  0.476 - the first night's bar is now >= 8 s. Review catch: `copyState` duplicated `State.copyFrom` and missed T3's
+  `lowest` array (a copied terminal state kept stale floor heights) - deleted; the one caller uses `copyFrom`.
+- **Sep 27 — F1b: SuperTrack judged.** `Resident.judgeActor()` acts on the judge's fleet with the policy mirror's MEAN
+  action (the learner's `features` now `featuresOf(fleet, env)`; non-finite actions zeroed as in `act`). The judge
+  became INCREMENTAL - `robot_track.Judging` (`init`, `advance(actor, budget) -> done`, `result`), `judge` = run to
+  the end, bounded by the clip's length - because a whole judgement is ~1 s native, seconds on a phone, and the
+  night's judge (R4) must not stall frames. Known answers: zero mirror == servo EXACTLY; trained != servo; judging
+  leaves the learner's rng, its fleet's rng and frames byte-identical; chunks of 7 == one shot. The panel wiring goes
+  to the night page (R4), not the phone page. F1 complete for the foundations.
+- **Sep 27 — F2: trust and exploitation, on the judge's starts.** `latent.Learner.diagnose` (the CPU learner - F9's):
+  five rollouts from every judge start (real zero / real policy / model zero / model on the policy's recorded actions
+  / model closed-loop policy), compared over the steps BOTH real rollouts lived. TRUST = the model's error following
+  where the policy really went, over the trivial predictor "it tracks the reference" (whose error on those states is
+  their tracking loss - so e_0 costs nothing). EXPLOITATION = promised gain (model zero - model policy) minus delivered
+  (real zero - real policy), over real zero. The judge's rollouts are held out by construction. A bug caught in
+  review before any run: on the step an episode ends, the fleet has ALREADY restarted it - its state there is the next
+  episode's; such a step is not compared. Refactors that removed duplication: `LatentWorld.targetsOf` (the servo's
+  aimed-at target, one definition for recorded and live steps), `goalOf` / `liveFeaturesOf` take a fleet,
+  `robot_track.judgeOptions` (one definition of a judged fleet). Known answers: zero policy -> exploitation exactly 0,
+  identical twice, the learner's fleet untouched. robot_latent 437 pass unfiltered. The CPU learner has its judge actor
+  too. Tutorial: 11.13 "How you know it is learning" (the judge, trust, exploitation). Two documentation bugs found:
+  the robot tutorial's 11.2 and 11.8 shared the anchor `worldmodel`; the zimrnum tutorial's chapters 16 and 18b shared
+  `rl` (18b was unreachable from the contents). Fixed, and doc-gate gained property 5 - no id twice in a page.
+- **Sep 27 — F3: velocity feedforward judged, and dropped.** Made a servo option the fleet honours
+  (`Gains.velocity_feedforward`, so it travels in `Task`; `ServoRun`'s separate flag retired into it) with the reference's
+  velocity from ONE helper, `robot_track.referenceVelocity` - the old ServoRun copy indexed the clip with the model's
+  nq (right only while clip.nq == m.nq: T6's fault class), fixed in the move. The judge on `dance_5_15`, servo alone:
+  zero-velocity damping MTTF 1.61 s / reward 0.476 (F1's baseline, exactly); feedforward 1.63 s / 0.498. Survival +1%:
+  balance is the limit (Sep 24 said the same under the old rule). Dropped by F3's own bar - and it would make part of
+  the servo invisible to the world model, whose reference input is the next pose, not the reference's velocity.
+- **Sep 27 — F5 added: a FEASIBLE reference (Simon's idea).** Bake the dance into a physically possible version with a
+  strong OFFLINE search, so the learner only learns feedback. Precedent: SAMCON (Liu et al. 2010) turns mocap into an
+  open-loop control trajectory the simulator performs; "Guided Learning of Control Graphs" (Liu et al. 2016) learns only
+  the feedback around such trajectories. Refinements recorded in F5: save TWO channels - the achieved states (the new
+  reference) and the servo targets actually used (mocap + planned offsets; the world model's reference input) - so the
+  servo alone replays the dance from any exact start; the replay is a knife-edge off exact states, which is exactly
+  the feedback to learn; the search must beat today's teacher (~2 s) with a beam, many samples per short window and
+  BACKTRACKING (SAMCON's core), under a STRICTER shape cost (the teacher's 0.7 m balance swings must not be baked in);
+  fidelity to the original mocap reported and gated. F10's mini-run A/Bs original vs feasible for the first night.
+  Phase F renumbered: F5 feasible reference, F6 filter, F7 drift, F8 windows/data/scale, F9 world model form, F10 mini-run.
+- **Sep 27 — F4a: the normaliser from the clip.** `latent.measureClipNormalizer(owned, m, clips)`: every frame of every
+  clip posed exactly as the fleet poses a reference, in the model's local features - the paper's way. Before: measured
+  over the replay after geno_train's 200-step servo warm-up, i.e. ~3 s of FALLING, so "one spread" meant "typical of
+  falling". Now it means "typical of the dance", fixed before the first step. The two measures share one `Moments`
+  accumulator (sums, squares, the 1e-3 spread floor, the Normalizer - with an errdefer the old code lacked).
+  `WorldOptions.normalize_from_clips` off by default; geno_train switched. Known answer: its own frames come out mean 0,
+  variance 1 (to 1e-3), floored features exactly 0; identical twice. robot_latent 438 pass; geno_train smoke green.
+- **Sep 27 — SuperTrack studied three ways: the paper, an unofficial repo, ours** (`src/notes/supertrack_comparison.md`).
+  The repo (Simon's upload) has NO physics simulator - its world model learns mocap kinematics - and five bugs (no root
+  subtraction in Local, angular velocity logged after dividing the matrix by dt, explicit-Euler order, acos(w) as the
+  rotation loss, alpha = 120 used as radians); read for shape, not choices. The PAPER, read in full, changed the plan:
+  its failure rule is the HEAD's height 25 cm off the reference's after a minimum of 48 frames (ours: five limits, an
+  8-frame grace) -> F3b; it simulates at 240 Hz, four steps a frame (ours 60 Hz) -> F3c; losses are L1 in WORLD space
+  (world model) and LOCAL space per group (policy) with equal-contribution weights - ours one L2 over normalised
+  features, which down-weights fast features -> F4b; alpha 120 degrees, sigma 0.1 (0.21 rad; ours 0.6 / 0.06) -> F4c;
+  RAdam and gradient clipping -> F4d. Confirmed: our Local(X), policy inputs, off-policy buffer use, and F4a's
+  normaliser-from-kinematic-data. Corrected: my F3 doc claimed SuperTrack's servo is zero-velocity - the paper used the
+  reference's joint velocities in PhysX, zero in Havok/Bullet, with similar results (so F3's "off" stands, reworded).
+  Review catch: `InModel`'s doc comment had been swallowed by `Diagnosis` (inserted between them) - fixed; claude.md
+  now carries the rule (third time this session).
+- **Sep 27 — F3b: SuperTrack's failure rule, adopted.** The head's height gap as an error term and a limit
+  (`TrackingError.head_height`, `Termination.head_height`), the head named per robot (`Task.head_body = "Head"` for
+  Geno) and resolved like the feet (`headBody`; one `bodyIndexByName` for both); `trackingErrorWithHead` for the two
+  judges, `trackingError` = it without a head (18 call sites untouched). Judged side by side on the servo alone (F1's
+  judge) and the teacher: dance 1.61 vs 1.53 s, get-up 2.89 vs 2.75 s, teacher 1.56 vs 1.66 s - equally strict; both
+  fail by falling and the head says so. Adopted: head 25 cm + root 1 m / 90 deg, everything else OFF (our pose
+  defaults 0.35 m / 1.2 rad included) - one clip-agnostic limit, the one the paper's results were measured under.
+  The paper's minimum episode (48 frames) is our training grace - to be max(48, the policy window) on the night.
+  Known answers: the head gap exact (1.0 -> 1.25 reads 0.25, flips between 0.24 and 0.26), other bodies' heights
+  leave it 0, a misspelt head is an error; parity 0.00e0 with the head on both sides. F1's baseline: 1.53 s.
+- **Sep 27 — F4e: the policy's clock, 30 Hz (Simon: physics stays 60 Hz, the policy acts at 30).** Checking it found
+  SuperTrack acting EVERY physics step here (60 Hz, as the paper) while DReCon / PPO decide every second step. F3c
+  (240 Hz physics) dropped. The CPU learner now has `decide_every` (default 1 = unchanged): decisions on the even steps
+  of each episode, held between - collecting, in the policy's rollouts through the model (the held step applies the
+  decision's own graph node; penalties priced on decisions only), in `modelLoss`, `diagnose` and the judge's actor
+  (the judge's action buffer persists, so an actor that does not write holds). The world model stays per physics step,
+  learning from the action actually applied. Plan: the remaining F steps ordered by fundamentals - the action path
+  (F4e, F6 filter, F4c scale/noise), the world model (F9 + its F4b loss), the policy's loss (F4b), the optimiser (F4d),
+  scale (F8, F7), the feasible reference (F5), the mini-run (F10). Kit clock + parity before R/ON.
+- **Sep 27 — F6a: Simon's filter inside SuperTrack's training.** `robot_track.filterAction` (applied = beta asked +
+  (1 - beta) applied) is now the one definition - DReCon's controller calls it. The CPU learner: `filter` (1 = none;
+  0.2 on the night), `decideInto` - ONE definition of a decision shared by collecting, the judge and `diagnose` (noise
+  only when asked, never a non-finite action, rest at an episode's first step, then the filter) - and the rollout
+  graph blending with tensors from the replay's action before the window (`appliedBefore`), so a decision's gradient
+  reaches every later step it still shapes. The world model learns from what was APPLIED. The known answer that
+  matters: noise off, the graph's loss = the same rollout row by row (policyRow, filterAction, stepRow) to 1e-5, with
+  held steps and a non-rest starting state. F6b (the policy seeing its last applied action) is next - it changes the
+  policy's parameter layout, so it gets its own step.
+- **Sep 27 — review of the last six steps, and plan v4.** Found: `geno_track` had not COMPILED since T3
+  (`FailureCheck.init` gained the body names; pages are outside `check`) - fixed, smoked; feedforward's target
+  velocity at a clip's end was the last moving step's (and a one-frame clip underflowed) - now `referenceVelocity(frame)`,
+  zero at the end; the CPU learner now refuses a filter outside (0, 1] or a clock under 1; the tutorial caught up with
+  F4a / F4e / F6a (11.10, 11.11). Clean on inspection: FailureCheck's error paths, the normaliser's posing against the
+  goals', the clock's episode alignment, `appliedBefore`, the graph's holds and penalties. Re-run: robot_geno 457 pass
+  under the new rule; robot_latent 442; every Geno page smoked green and leak-free; F3 re-measured (1.53 vs 1.52 s,
+  reward 0.499 vs 0.527). Plan v4 written (v3 archived): the done work summarised; what remains in stages A-H with
+  the BENCH (a deterministic CPU learning curve) moved ahead of every recipe decision.

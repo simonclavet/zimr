@@ -5,7 +5,7 @@
 //! typed-shader codegen (`src/notes/typesafe_zig_shaders.md`) in front.
 //! zimr's own `build.zig` imports this file directly
 //! (`@import("src/shader_codegen.zig")`) and constructs ONE pipeline,
-//! whose pure-Zig tools (`zspv`, `spv2wgsl`) are artifacts of that build.
+//! whose pure-Zig tool (`spv2wgsl`) is an artifact of that build.
 //!
 //! The pipeline resolves its own sources (`src/zimrmath.zig`,
 //! `tools/gen_shader_externs.zig`, ...) against the builder it was made
@@ -36,37 +36,21 @@ const LazyPath = std.Build.LazyPath;
 // ============================================================================
 // Zig-shader pipeline helpers (S1.2 of the Zig-shader-pipeline arc).
 // ============================================================================
-// Author shaders as `_fs.zig` / `_vs.zig`, compile them through
-// SPIR-V to GLSL ES 3.0, and expose the result as an anonymous
+// Author shaders as `_fs.zig` / `_vs.zig` (with a `_io.zig` schema), compile
+// them to SPIR-V, translate to WGSL, and expose the result as an anonymous
 // import for `@embedFile` at the call site.
 //
-//   examples/foo_fs.zig
+//   examples/foo_fs.zig  (+ foo_fs_io.zig)
+//       |  gen_externs: schema -> foo_fs_externs (decorated @externs)
 //       |  zig build-obj -target spirv32-vulkan ...
 //       v
-//   foo.fs.spv
-//       |  spirv-opt -O --skip-validation
+//   shader.spv            (final: every interface variable decorated)
+//       |  spv2wgsl       (refuses undecorated graphics interfaces)
 //       v
-//   foo.fs.opt.spv
-//       |  spirv-val   (build-time safety net)
-//       |
-//       |  spirv-cross --version 300 --es
+//   shader.wgsl
+//       |  gen_externs --check-wgsl  (bindings == the schema's slots)
 //       v
-//   foo_fs.glsl
-//
-// Usage from inside `pub fn build`:
-//
-//     // hoisted ShaderPipeline (one per build, shared by all addShader calls)
-//     var sp = ShaderPipeline.init(b, &tools_subbuild.step);
-//
-//     // simple form: returns LazyPath to the generated .glsl
-//     const glsl_path = sp.addShader(b.path("examples/foo_fs.zig"));
-//
-//     // common form: compiles + wires as @embedFile-able import
-//     sp.addShaderImport(exe_mod, b.path("examples/foo_fs.zig"), "foo_fs.glsl");
-//
-// And then in your example source:
-//
-//     const fs = @embedFile("foo_fs.glsl");
+//   foo_fs.wgsl           (what the host @embedFile's)
 //
 // See `src/notes/zig-shader-tutorial.md` for usage examples and
 // the locked design decisions; `src/notes/zig-shader-pipeline-plan.md`
@@ -79,19 +63,10 @@ const LazyPath = std.Build.LazyPath;
 pub const ShaderPipeline = struct {
     b: *std.Build,
     tools_dep: ?*std.Build.Step = null,
-    /// `zspv` - SPIR-V binary rewriter.  Operates on the raw .spv
-    /// from `zig build-obj`: replaces placeholder sampler uniforms
-    /// with real OpTypeSampledImage, replaces `zsample2d` calls
-    /// with OpImageSampleImplicitLod, strips the helper definition.
-    /// See `tools/zspv.zig` and `tools/zspv_rewrite.zig`.  Always
-    /// runs in the pipeline - it's a no-op for shaders without
-    /// samplers (discovery returns empty).
-    zspv_path: []const u8 = "tools/zig-out/bin/zspv",
     /// `spv2wgsl` - pure-Zig SPIR-V -> WGSL translator.  Operates on
-    /// the post-spirv-opt `shader.opt.spv`: emits a WGSL artifact
-    /// parallel to spirv-cross's GLSL.  Foundation of the wgpu
-    /// migration's Rule 2 (no Naga / Tint in the shipped wasm; our
-    /// own Zig translates SPIR-V at build time).  See `tools/spv2wgsl.zig`
+    /// the compiler's raw `shader.spv` directly.  No Naga / Tint in
+    /// the shipped wasm: our own Zig translates SPIR-V at build time.
+    /// See `tools/spv2wgsl.zig`
     /// for the CLI wrapper, `src/spv2wgsl.zig` for the library,
     /// `src/notes/webgpu-migration-plan.md` for the migration plan.
     /// Only invoked when `addShaderWgsl` is called (or when
@@ -120,7 +95,6 @@ pub const ShaderPipeline = struct {
     /// fall back to the `*_path` + tools_dep behavior (the C++ SPIR-V
     /// tools always use that; they're genuinely external).
     spv2wgsl_exe: ?*std.Build.Step.Compile = null,
-    zspv_exe: ?*std.Build.Step.Compile = null,
     /// `shader_interface` named module - wired into per-shader IO
     /// modules so IO files' `@import("shader_interface")` resolves.
     /// Only used by `addShader` when `opts.shader_io != null` (typed-
@@ -173,12 +147,9 @@ pub const ShaderPipeline = struct {
         /// symbol.  The shader source must use the matching
         /// `@import("<basename>_externs")`.
         shader_basename: ?[]const u8 = null,
-        /// When true, also produce a `.wgsl` artifact via spv2wgsl
-        /// alongside the `.glsl` artifact.  Used by the wgpu migration
-        /// - engine shaders and any consumer that wants WebGPU support
-        /// opts in.  Default off so the GLSL-only path costs nothing
-        /// extra during the side-by-side transition.  See
-        /// `src/notes/webgpu-migration-plan.md` section 3 Phase B.
+        /// When true, translate the SPIR-V to a `.wgsl` artifact via
+        /// spv2wgsl (and, for a schema'd shader, check it against the
+        /// schema). WebGPU is the only backend, so every real caller sets it.
         emit_wgsl: bool = false,
         /// When `emit_wgsl` is on, run spv2wgsl in --strict mode.  Any
         /// `// ERROR:` marker in the WGSL output (e.g. combined-sampler
@@ -188,54 +159,30 @@ pub const ShaderPipeline = struct {
         wgsl_strict: bool = true,
     };
 
-    /// Run all pipeline stages on `source` and return the LazyPath of
-    /// the generated `.glsl`.  Caller decides what to do with the
-    /// result (typically `addShaderImport` wires it into an
+    /// Run all pipeline stages on `source` and return its outputs (the
+    /// generated externs module and the checked WGSL). Caller decides what
+    /// to do with them (typically `addShaderImport` wires the WGSL into an
     /// executable's import table; see below).
     ///
     /// The pipeline:
     ///   0. (optional, when `opts.shader_io != null`) Bootstrap codegen
     ///      exe -> `<basename>_extern.zig`.  Passed to the spirv
     ///      compile as `-Mio=...`; shader body `@import("io")`s it.
-    ///   1. `zig build-obj` -> raw SPIR-V (with `zsample2d` helper if
-    ///      the shader uses samplers, with `Target_Cpu` dead-struct
-    ///      regardless).
-    ///   2. `zspv --rewrite-samplers` -> SPIR-V binary surgery:
-    ///      placeholder `_sampler2d` uniforms become real
-    ///      OpTypeSampledImage; `OpFunctionCall %zsample2d` becomes
-    ///      `OpImageSampleImplicitLod`; the helper function body is
-    ///      stripped.  No-op for shaders without samplers.
-    ///   3. `spirv-opt -O --remove-duplicates --trim-capabilities
-    ///      --skip-validation` -> full optimization.  --skip-validation
-    ///      because Target_Cpu lingers until later passes strip it.
-    ///      --remove-duplicates dedupes the OpTypeFloat that zspv
-    ///      always allocates fresh.  --trim-capabilities drops
-    ///      capability declarations that became unused.
-    ///   4. `spirv-val` -> safety net.  Catches malformed shaders
-    ///      before they hit WebGL.
-    ///   5. `spirv-cross --version 300 --es` -> GLSL ES 3.0.
-    ///   6. `zglsl` -> textual GLSL cleanups: rewrite `uniform vec4
-    ///      NAME[4];` to `uniform mat4 NAME;` (Zig has no @Matrix
-    ///      builtin); strip the GL_EXT_int8 extension block + rewrite
-    ///      `uint8_t` -> `uint` (Zig represents bool as u8 in SPIR-V).
+    ///   1. `zig build-obj -target spirv32-vulkan` -> SPIR-V.  Final
+    ///      as emitted: every interface variable is a decorated
+    ///      `@extern` (Location / DescriptorSet + Binding) and textures
+    ///      are real opaque handles sampled with OpSampledImage.
+    ///   2. (when `opts.emit_wgsl`) `spv2wgsl` -> WGSL.
+    ///   3. (schema'd shaders) the bootstrap exe again, `--check-wgsl`:
+    ///      every WGSL binding must be the slot the schema promised.
     ///
     /// Every stage's output is inspectable in `.zig-cache/o/<hash>/`.
-    /// Result of `addShaderEx` - both the final GLSL (for `@embedFile`)
-    /// AND the generated `io.zig` module path (for CPU-side imports).
-    ///
-    /// The GPU pipeline uses `glsl` only.  The CPU dispatcher pattern
-    /// (see `src/notes/software_shaders.md`) uses BOTH:
-    ///   - `glsl` to feed the GPU half.
-    ///   - `io` to feed the CPU half - the importing module wires it
-    ///     as `--dep io` so the shader source's `@import("io")` works
-    ///     on the CPU target too.
-    ///
-    /// Result of `addShaderEx` - both the final GLSL (for `@embedFile`)
+    /// Result of `addShaderEx` - both the checked WGSL (for `@embedFile`)
     /// AND the generated externs module path (for CPU-side imports).
     ///
-    /// The GPU pipeline uses `glsl` only.  The CPU dispatcher pattern
+    /// The GPU pipeline uses `wgsl` only.  The CPU dispatcher pattern
     /// (see `src/notes/software_shaders.md`) uses BOTH:
-    ///   - `glsl` to feed the GPU half.
+    ///   - `wgsl` to feed the GPU half.
     ///   - `externs` to feed the CPU half - the importing module
     ///     wires it as `--dep <basename>_externs` so the shader
     ///     source's `@import("<basename>_externs")` works on the
@@ -252,8 +199,8 @@ pub const ShaderPipeline = struct {
         wgsl: ?std.Build.LazyPath = null,
     };
 
-    /// Same as `addShader` but returns the codegen-generated `io.zig`
-    /// path alongside the GLSL.  Use this when an example wants to
+    /// Same as `addShader` but returns the codegen-generated externs
+    /// path alongside the WGSL.  Use this when an example wants to
     /// import the shader source directly (`@import("foo_fs.zig")`)
     /// and call `shader.shaderMain(io)` on the CPU - that import
     /// transitively does `@import("io")`, so the example's exe_mod
@@ -261,7 +208,7 @@ pub const ShaderPipeline = struct {
     ///
     /// Implemented as a thin wrapper to keep `addShader`'s contract
     /// (returns `LazyPath`) backward-compatible for the many call
-    /// sites that only need the GLSL.
+    /// sites that only need the WGSL.
     pub fn addShaderEx(
         self: *const ShaderPipeline,
         source: std.Build.LazyPath,
@@ -320,6 +267,9 @@ pub const ShaderPipeline = struct {
         // External users of zimr hit this exact same path from their
         // own build.zig: `pipeline.addShader(body, .{ .shader_io = ... })`
         // is the public API.
+        // The per-shader bootstrap exe, kept so the same binary can also check this
+        // shader's translated WGSL against its schema (see the end of this function).
+        var schema_checker_exe: ?*Compile = null;
         const externs_module: ?std.Build.LazyPath = if (opts.shader_io) |shader_io_path| blk: {
             // The bootstrap source is the same for every shader; only
             // the shader_io module wired in differs.  Stored once as
@@ -330,7 +280,13 @@ pub const ShaderPipeline = struct {
                 \\const shader_io = @import("shader_io");
                 \\const gen = @import("gen");
                 \\
-                \\pub fn main(init: std.process.Init) !void {
+                \\// Two modes, one binary per shader (its schema is compiled in):
+                \\//   <externs.zig>                           generate the interface file
+                \\//   --check-wgsl <in.wgsl> <out.wgsl> <name> check the translated WGSL
+                \\//       against the slots the schema promised, then pass it through.
+                \\// Returns an exit code rather than calling std.process.exit, which
+                \\// would skip the allocator's leak check.
+                \\pub fn main(init: std.process.Init) !u8 {
                 \\    const gpa = init.gpa;
                 \\    const io = init.io;
                 \\
@@ -345,20 +301,39 @@ pub const ShaderPipeline = struct {
                 \\    while (arg_it.next()) |arg| {
                 \\        try args_list.append(gpa, try gpa.dupe(u8, arg));
                 \\    }
-                \\    if (args_list.items.len < 2) {
-                \\        std.debug.print("usage: <output_path>\n", .{});
-                \\        std.process.exit(2);
-                \\    }
-                \\    const out_path = args_list.items[1];
+                \\    const args = args_list.items;
                 \\
+                \\    const is_check_mode = args.len == 5 and std.mem.eql(u8, args[1], "--check-wgsl");
+                \\    if (is_check_mode) {
+                \\        const wgsl = try std.Io.Dir.cwd().readFileAlloc(io, args[2], gpa, .unlimited);
+                \\        defer gpa.free(wgsl);
+                \\        if (try gen.checkWgsl(shader_io, gpa, wgsl)) |problem| {
+                \\            defer gpa.free(problem);
+                \\            std.debug.print(
+                \\                "shader layout check: {s}: {s}\n" ++
+                \\                    "  The WGSL does not match the (group, binding) its schema promised, so the\n" ++
+                \\                    "  host's bind-group layout will not match it either and the device will\n" ++
+                \\                    "  reject the pipeline. See tools/gen_shader_externs.zig `checkWgsl`.\n",
+                \\                .{ args[4], problem },
+                \\            );
+                \\            return 1;
+                \\        }
+                \\        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args[3], .data = wgsl });
+                \\        return 0;
+                \\    }
+                \\
+                \\    if (args.len != 2) {
+                \\        std.debug.print("usage: <externs.zig> | --check-wgsl <in> <out> <name>\n", .{});
+                \\        return 2;
+                \\    }
                 \\    var aw: std.Io.Writer.Allocating = .init(gpa);
                 \\    defer aw.deinit();
                 \\    try gen.emit(shader_io, &aw.writer);
-                \\
                 \\    try std.Io.Dir.cwd().writeFile(io, .{
-                \\        .sub_path = out_path,
+                \\        .sub_path = args[1],
                 \\        .data = aw.written(),
                 \\    });
+                \\    return 0;
                 \\}
                 \\
             );
@@ -387,6 +362,12 @@ pub const ShaderPipeline = struct {
             // so the emitted WGSL @group decorations can never drift from the
             // host bind groups. shader_interface is dependency-free (std only).
             gen_mod.addImport("shader_interface", self.shader_interface_mod);
+            // `checkWgsl` reads the translated WGSL's bindings back. std-only and
+            // host-only, so it costs nothing to link into every bootstrap.
+            gen_mod.addImport("wgsl_reflect", b.createModule(.{
+                .root_source_file = b.path("src/wgsl_reflect.zig"),
+                .target = b.graph.host,
+            }));
 
             const bootstrap_exe: *Compile = b.addExecutable(.{
                 .name = "gen_externs",
@@ -409,6 +390,7 @@ pub const ShaderPipeline = struct {
             bootstrap_exe.root_module.addImport("shader_io", shader_io_mod);
             bootstrap_exe.root_module.addImport("gen", gen_mod);
 
+            schema_checker_exe = bootstrap_exe;
             const gen_run: *Run = b.addRunArtifact(bootstrap_exe);
             const externs_path: LazyPath = gen_run.addOutputFileArg("externs.zig");
             break :blk externs_path;
@@ -419,7 +401,7 @@ pub const ShaderPipeline = struct {
         // it via `--dep shadermath` + `-Mshadermath=src/shadermath.zig`.
         // `-fno-llvm -fno-lld` is mandatory: LLVM segfaults on the
         // spirv target.  `-O ReleaseFast` strips runtime safety
-        // checks that don't translate to GLSL.
+        // checks that have no SPIR-V equivalent.
         const compile: *Run = b.addSystemCommand(&.{
             b.graph.zig_exe,
             "build-obj",
@@ -434,16 +416,11 @@ pub const ShaderPipeline = struct {
             "-ofmt=spirv",
         });
         const raw_spv: LazyPath = compile.addPrefixedOutputFileArg("-femit-bin=", "shader.spv");
-        // `zm` - the unified math module (math.zig, SPIR-V-portable
-        // as of Stage 3 of math-unification).  Every shader does
-        // `@import("zm")` for Vec/Mat/Quat algebra AND for the
-        // SPIR-V decorators (`location`, `binding`, `zsample2d`)
-        // which were moved into math.zig at the end of Stage 5.
-        // No more `--dep shadermath` needed - math.zig is the single
-        // import for everything shader-side.
+        // `zm` - the unified, SPIR-V-portable math module. Every shader
+        // does `@import("zm")` for Vec/Mat/Quat algebra.
         compile.addArg("--dep");
         compile.addArg("zm");
-        // Shader intrinsics (decorators, texture/sampler types, sampling +
+        // Shader intrinsics (texture/sampler types, sampling +
         // storage) live in `shader_builtins`, split out of zm so host edits to
         // them don't rebuild everything. The shader body and the generated
         // externs both `@import("shader_builtins")`.
@@ -453,11 +430,9 @@ pub const ShaderPipeline = struct {
         // `@import("<externs_module_name>")` - by default
         // `shader_externs`, but shader_basename-bearing callers use
         // `<basename>_externs` so multiple shaders coexist in one
-        // wasm.  When codegen emits a `setup()` function or sampler
-        // accessor methods, the generated file itself
-        // `@import("zm")` to call `zm.location` / `zm.binding` /
-        // `zm.zsample2d` - so externs needs zm as ITS dep too (added
-        // below in the externs-dep block).
+        // wasm.  The generated file itself imports `shader_builtins`
+        // (texture/sampler handle types, `sampleLod`, `ssboLoad`), so
+        // it gets its own dep table below.
         if (externs_module) |_| {
             compile.addArg("--dep");
             compile.addArg(externs_module_name);
@@ -473,11 +448,8 @@ pub const ShaderPipeline = struct {
             // that closes the module declaration (per `zig build-exe`'s
             // `--dep`/`-M` interaction).
             //
-            // `zm` - codegen emits `zm_location` / `zm_binding` /
-            // `zm_zsample2d` calls in setup() and sampler accessors,
-            // forwarded from `@import("zm")` (Stage 5 of math-
-            // unification moved the decorators from shadermath into
-            // math.zig - externs.zig no longer needs shadermath as a dep).
+            // `zm` - shader_builtins, which the generated file imports,
+            // depends on it.
             //
             // No shader_io dep - externs.zig is deliberately
             // shader_io-free (see `tools/gen_shader_externs.zig` for
@@ -495,109 +467,17 @@ pub const ShaderPipeline = struct {
             );
         }
 
-        // ---- Stage 2: spirv-opt.  Two recipes depending on opts.
-        // Standard path: `spirv-opt -O --skip-validation`.  The `-O`
-        // recipe strips the Zig stdlib's dead `Target_Cpu` struct
-        // (which would otherwise force GL_EXT_shader_explicit_arithmetic_types_int8
-        // into the GLSL output - WebGL2 doesn't support that ext).
-        // --skip-validation is required because Target_Cpu lingers
-        // until -O's later passes strip it.
-        //
-        // Sampler path (opts.has_samplers = true): same dead-strip
-        // goals but WITHOUT `--inline-entry-points-exhaustive`,
-        // which would eat the `noinline` __sample2d helper.  Manual
-        // pass list excludes inlining.  Don't add --strip-debug -
-        // the post-process needs identifier names to match against.
-        // Stage 2a (only for sampler shaders): `zspv --rewrite-samplers`.
-        // The S1.4.5b-followup tool we built in `tools/zspv.zig`.
-        // Operates on the SPIR-V binary directly to replace placeholder
-        // `uniform uint X_sampler2d` variables with real
-        // `OpTypeSampledImage` samplers, replace `OpFunctionCall` to
-        // the `zsample2d` helper with `OpImageSampleImplicitLod`, and
-        // strip the helper function definition.  After this, the
-        // SPIR-V has no `zsample2d` left to preserve, so we can run
-        // full `spirv-opt -O` (with inlining) - which produces ~34%
-        // smaller SPIR-V than the previous limited-pass-list approach.
-        //
-        // Non-sampler shaders skip this stage; they go straight from
-        // the raw .spv to spirv-opt.
-        // Stage 2a: `zspv --rewrite-samplers` (S1.4.5b followup) or
-        // `zspv --rewrite-samplers-wgsl` (Phase A2 of wgpu migration).
-        // Operates on the SPIR-V binary directly: replaces placeholder
-        // `extern const X_sampler2d: u32` variables with real samplers.
-        //
-        // Two output shapes from the same input:
-        //
-        //   --rewrite-samplers (default): combined OpTypeSampledImage
-        //     variable + direct OpImageSampleImplicitLod.  This is what
-        //     spirv-cross likes; produces clean `uniform sampler2D X`
-        //     in GLSL.
-        //
-        //   --rewrite-samplers-wgsl: separate texture + sampler
-        //     variables at adjacent bindings, OpSampledImage combine
-        //     site at each sample location.  This is the only shape
-        //     that survives WGSL translation.  spirv-cross handles
-        //     this shape too (it merges them back when targeting GLSL),
-        //     so opting into wgsl ALSO produces working GLSL.
-        //
-        // Opt into the WGSL shape when emit_wgsl is on so both
-        // artifacts come from the same SPIR-V.  This is the path the
-        // engine will be on after Phase F (GL deletion); for now
-        // shaders without emit_wgsl keep the combined shape for
-        // byte-identical GLSL output.
-        //
-        // Runs unconditionally: it's a no-op for shaders without
-        // samplers (discovery returns empty).  See `tools/zspv.zig`
-        // and `tools/zspv_rewrite.zig`.
-        //
-        // Sampler group/binding now comes from the SHADER SOURCE via
-        // `zm.binding(&texture_sampler2d, group, binding)` calls
-        // emitted by `tools/gen_shader_externs.zig` for every sampler
-        // field in a schema's `Samplers` struct.  The rewriter's
-        // discover pass captures those existing decorations into
-        // `SamplerEntry.existing_set` / `existing_binding`, and the
-        // rewrite phase honors them - so the build pipeline no longer
-        // needs to override.  See
-        // `src/notes/finishing_new_gpu_foundations.md` turn 1.
-        const zspv_flag: []const u8 = if (opts.emit_wgsl)
-            "--rewrite-samplers-wgsl"
-        else
-            "--rewrite-samplers";
-        // Prefer the main-build ARTIFACT (a real graph edge - see the
-        // `zspv_exe` field doc).  Fall back to the path + tools_dep +
-        // addFileInput shape when no artifact was wired.
-        const zspv: *Run = if (self.zspv_exe) |exe| blk: {
-            const r: *Run = b.addRunArtifact(exe);
-            // `addRunArtifact` makes the Run depend on BUILDING the exe,
-            // but does NOT fingerprint the built binary into the Run's
-            // cache key - so an exe rebuild alone won't re-fire the Run.
-            // Content-track the emitted binary to close that gap.
-            r.addFileInput(exe.getEmittedBin());
-            r.addArg(zspv_flag);
-            break :blk r;
-        } else blk: {
-            const r: *Run = b.addSystemCommand(&.{ self.zspv_path, zspv_flag });
-            if (self.tools_dep) |d| {
-                r.step.dependOn(d);
-            }
-            // Content-track the binary so a tools/ rebuild invalidates
-            // the cache.  (Weaker than the artifact path - a nested
-            // sub-build can be hashed before it rewrites the binary -
-            // but correct for the external tools.)
-            r.addFileInput(b.path(self.zspv_path));
-            break :blk r;
-        };
-        zspv.addFileArg(raw_spv);
-        const rewritten_spv: LazyPath = zspv.addOutputFileArg("shader.rewritten.spv");
+        // No stage between the compiler and spv2wgsl any more. The SPIR-V the
+        // compiler writes is already final: every texture and sampler is a real
+        // opaque handle with its DescriptorSet/Binding on its own `@extern`, and
+        // sampling is native OpSampledImage + OpImageSample*. The `zspv
+        // --rewrite-samplers-wgsl` pass that used to sit here turned a `u32`
+        // placeholder into that shape after the fact; the compiler does it now.
+        // Same two-stage shape as `addCompute` below.
 
-        // ---- Stage 6 (optional): `spv2wgsl` -> WGSL.
-        // Parallel branch off `rewritten_spv` (the pure-Zig zspv
-        // output, pre-spirv-opt - see section 2.2).  Runs ONLY when
-        // `opts.emit_wgsl == true` - the
-        // GLSL-only path costs nothing extra during the side-by-side
-        // transition.  See `src/notes/webgpu-migration-plan.md` section 3
-        // Phase B for the rollout plan and `tools/spv2wgsl.zig` for
-        // the CLI driver.
+        // ---- Stage 2 (optional): `spv2wgsl` -> WGSL, straight off the
+        // compiler's SPIR-V.  Runs ONLY when `opts.emit_wgsl == true`.
+        // See `tools/spv2wgsl.zig` for the CLI driver.
         //
         // Strict mode (`opts.wgsl_strict`, default true): the tool
         // exits non-zero if the WGSL contains any `// ERROR:` marker
@@ -623,26 +503,38 @@ pub const ShaderPipeline = struct {
                 r.addFileInput(b.path(self.spv2wgsl_path));
                 break :wblk r;
             };
-            // section 2.2 (finishing_webgpu.md): the WGSL path feeds the
-            // pure-Zig `zspv` output (rewritten_spv) straight into
-            // spv2wgsl - NO spirv-opt, NO spirv-val.  spv2wgsl is
-            // hardened to consume raw, unoptimized Zig SPIR-V (turn 855:
-            // all live shaders naga-valid pre-opt), so the WGSL shipping
-            // path needs zero C++ SPIR-V tools.  The GLSL path above
-            // still uses opt_spv + val - it's the dying GL-only branch.
+            // spv2wgsl consumes the compiler's raw, unoptimized SPIR-V
+            // directly - no spirv-opt, no spirv-val, zero C++ SPIR-V tools.
             // Leading flag: select the CFG walker (must come before
             // --strict / the positional input, per the CLI parser).
             w.addArg(b.fmt("--walker={s}", .{self.wgsl_walker}));
             if (opts.wgsl_strict) {
                 w.addArg("--strict");
             }
-            w.addFileArg(rewritten_spv);
+            w.addFileArg(raw_spv);
             break :blk w.addOutputFileArg("shader.wgsl");
         } else null;
 
+        // ---- Stage 3 (schema'd shaders): check the WGSL against the schema.
+        // The shader's own bootstrap exe reads the translated WGSL's
+        // `@group/@binding` declarations and demands they are exactly the
+        // slots `gen_shader_externs.emit` decorated (`checkWgsl`). The WGSL
+        // every consumer embeds is this step's OUTPUT, so nothing can build
+        // against an unchecked module. Same binary as the externs step - no
+        // extra compile - and each run takes about a millisecond.
+        const checked_wgsl_path: ?LazyPath = if (schema_checker_exe) |exe| checked: {
+            const raw_wgsl: LazyPath = wgsl_path orelse break :checked null;
+            const check: *Run = b.addRunArtifact(exe);
+            check.addArg("--check-wgsl");
+            check.addFileArg(raw_wgsl);
+            const checked: LazyPath = check.addOutputFileArg("shader.wgsl");
+            check.addArg(externs_module_name);
+            break :checked checked;
+        } else wgsl_path;
+
         return .{
             .externs = externs_module,
-            .wgsl = wgsl_path,
+            .wgsl = checked_wgsl_path,
         };
     }
 
