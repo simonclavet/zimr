@@ -23,7 +23,7 @@
                 "background": {
                     "activeOnStart": true,
                     "beginsPattern": ".",
-                    "endsPattern": "Ctrl\\+C to stop"
+                    "endsPattern": "zimr serve: http"
                 }
             },
             "presentation": {
@@ -240,6 +240,40 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build bone-socket",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bone-socket"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone bone-socket",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "bone-socket-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build bouncing-ball",
             "type": "shell",
             "command": "zig",
@@ -264,6 +298,40 @@
             "args": [
                 "build",
                 "bouncing-ball-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build box-collisions",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "box-collisions"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone box-collisions",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "box-collisions-standalone",
                 "-Dmode=release"
             ],
             "presentation": {
@@ -818,6 +886,40 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build cubicmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cubicmap"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone cubicmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "cubicmap-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build damaged-helmet",
             "type": "shell",
             "command": "zig",
@@ -852,6 +954,40 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build dance-track",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dance-track"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone dance-track",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "dance-track-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build dashed-line",
             "type": "shell",
             "command": "zig",
@@ -876,6 +1012,176 @@
             "args": [
                 "build",
                 "dashed-line-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build decal-sw",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "decal-sw"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone decal-sw",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "decal-sw-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build deferred-render",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "deferred-render"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone deferred-render",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "deferred-render-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build depth-cue",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-cue"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone depth-cue",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-cue-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build depth-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-rendering"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone depth-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-rendering-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build depth-writing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-writing"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone depth-writing",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "depth-writing-standalone",
                 "-Dmode=release"
             ],
             "presentation": {
@@ -1328,6 +1634,40 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build fog-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fog-rendering"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone fog-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "fog-rendering-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build following-eyes",
             "type": "shell",
             "command": "zig",
@@ -1498,6 +1838,142 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build geno-fit",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-fit"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone geno-fit",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-fit-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-ppo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-ppo"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone geno-ppo",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-ppo-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-track",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-track"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone geno-track",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-track-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build geno-train",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-train"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone geno-train",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "geno-train-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build gestures-demo",
             "type": "shell",
             "command": "zig",
@@ -1566,6 +2042,74 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build getup-frames",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "getup-frames"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone getup-frames",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "getup-frames-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build getup-train",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "getup-train"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone getup-train",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "getup-train-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build gltf-simple",
             "type": "shell",
             "command": "zig",
@@ -1624,6 +2168,40 @@
             "args": [
                 "build",
                 "gltf-textured-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build heightmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "heightmap"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone heightmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "heightmap-standalone",
                 "-Dmode=release"
             ],
             "presentation": {
@@ -1726,6 +2304,40 @@
             "args": [
                 "build",
                 "hilbert-curve-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build hybrid-render",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hybrid-render"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone hybrid-render",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "hybrid-render-standalone",
                 "-Dmode=release"
             ],
             "presentation": {
@@ -2076,40 +2688,6 @@
             "problemMatcher": []
         },
         {
-            "label": "zig: build kaleidoscope",
-            "type": "shell",
-            "command": "zig",
-            "args": [
-                "build",
-                "kaleidoscope"
-            ],
-            "dependsOn": [
-                "zig: serve-only (background)"
-            ],
-            "presentation": {
-                "reveal": "silent",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "zig: standalone kaleidoscope",
-            "type": "shell",
-            "command": "zig",
-            "args": [
-                "build",
-                "kaleidoscope-standalone",
-                "-Dmode=release"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-        {
             "label": "zig: build keys",
             "type": "shell",
             "command": "zig",
@@ -2450,40 +3028,6 @@
             "problemMatcher": []
         },
         {
-            "label": "zig: build mandelbrot-split",
-            "type": "shell",
-            "command": "zig",
-            "args": [
-                "build",
-                "mandelbrot-split"
-            ],
-            "dependsOn": [
-                "zig: serve-only (background)"
-            ],
-            "presentation": {
-                "reveal": "silent",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "zig: standalone mandelbrot-split",
-            "type": "shell",
-            "command": "zig",
-            "args": [
-                "build",
-                "mandelbrot-split-standalone",
-                "-Dmode=release"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "clear": true
-            },
-            "problemMatcher": []
-        },
-        {
             "label": "zig: build math-angle-rotation",
             "type": "shell",
             "command": "zig",
@@ -2542,6 +3086,40 @@
             "args": [
                 "build",
                 "math-sine-cosine-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build models-animation-blend-custom",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "models-animation-blend-custom"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone models-animation-blend-custom",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "models-animation-blend-custom-standalone",
                 "-Dmode=release"
             ],
             "presentation": {
@@ -3436,6 +4014,40 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build point-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "point-rendering"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone point-rendering",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "point-rendering-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build procgen-noise",
             "type": "shell",
             "command": "zig",
@@ -3800,6 +4412,108 @@
             "args": [
                 "build",
                 "shader-inspection-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shadow-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadow-sidebyside"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone shadow-sidebyside",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadow-sidebyside-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shadowmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadowmap"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone shadowmap",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadowmap-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build shadowmap-sw",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadowmap-sw"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone shadowmap-sw",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "shadowmap-sw-standalone",
                 "-Dmode=release"
             ],
             "presentation": {
@@ -4388,6 +5102,108 @@
             "problemMatcher": []
         },
         {
+            "label": "zig: build textured-curve",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textured-curve"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone textured-curve",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textured-curve-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build textures-background-scrolling",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-background-scrolling"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone textures-background-scrolling",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "textures-background-scrolling-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build tic-tac-toe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tic-tac-toe"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone tic-tac-toe",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "tic-tac-toe-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "zig: build tile-smoke",
             "type": "shell",
             "command": "zig",
@@ -4446,6 +5262,40 @@
             "args": [
                 "build",
                 "touch-paint-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build track-train",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "track-train"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone track-train",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "track-train-standalone",
                 "-Dmode=release"
             ],
             "presentation": {
@@ -6248,6 +7098,40 @@
             "args": [
                 "build",
                 "vector-angle-standalone",
+                "-Dmode=release"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: build weight-store",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "weight-store"
+            ],
+            "dependsOn": [
+                "zig: serve-only (background)"
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: standalone weight-store",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "weight-store-standalone",
                 "-Dmode=release"
             ],
             "presentation": {

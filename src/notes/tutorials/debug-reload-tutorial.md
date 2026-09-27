@@ -1,251 +1,213 @@
 # Debug + reload system
 
-How F5 in VS Code goes from a `.zig` source edit to a reloaded
-browser tab — and why it doesn't rebuild 150 wasms anymore.
+How a `.zig` edit becomes a breakpoint hit in VS Code or Zed. Three
+pieces: a build step that compiles one app in debug mode, a static
+server for `zig-out/web/`, and an editor debug config that launches a
+Chrome it is attached to. Nothing rebuilds or reloads on its own.
 
 ## The pieces
 
 ```
-┌─ VS Code ─────────────────────────────────────────────────────────┐
-│  .vscode/launch.json  (Debug: cube3d, Debug: basic, …)            │
-│       └── preLaunchTask: "zig: build cube3d"                      │
-│  .vscode/tasks.json   (zig: build <name>, zig: serve-only (bg))   │
-│       └── dependsOn:   "zig: serve-only (background)"             │
+┌─ Editor: debug config "Debug: hello-world" ───────────────────────┐
+│  1. build   zig build hello-world   (debug mode: DWARF in wasm)   │
+│  2. launch  Chrome at http://localhost:8080/hello_world/          │
+│  adapter    vscode-js-debug + a DWARF decoder (one-time setup)    │
 └────────────────┬──────────────────────────────────────────────────┘
-                 │ spawns
+                 │ Chrome DevTools Protocol
                  ▼
-┌─ Bun dev server (webtests/server.ts) ─────────────────────────────┐
-│  - Serves zig-out/web/ on localhost:8000                          │
-│  - Injects HMR client <script> into every .html response          │
-│  - Watches src/, examples/, tests/, assets/, public/ for edits    │
-│  - On edit: runs `zig build -Dmode=debug -Dfocus=<viewed apps>`   │
-│  - Broadcasts {type:"reload"} to connected clients on success     │
+┌─ Chrome, fresh profile, launched by the debug config ─────────────┐
+│  hello_world/index.html                                           │
+│    ../zimr.js         the shared runtime, one copy for every app  │
+│    hello_world.wasm   streamed, DWARF sections embedded           │
 └────────────────┬──────────────────────────────────────────────────┘
-                 │ http + websocket
+                 │ plain HTTP
                  ▼
-┌─ Chrome (launched by the chrome-debugger launch config) ──────────┐
-│  - Loads http://localhost:8000/host.html?app=cube3d               │
-│  - Inline HMR client opens a WebSocket to /__hmr                  │
-│  - First message: {type:"hello", app:"cube3d"}                    │
-│  - On {type:"reload"} from server: location.reload()              │
-│  - VS Code's chrome debugger reattaches breakpoints across reload │
+┌─ zig build serve-only: tools/serve.zig ───────────────────────────┐
+│  static files from zig-out/web/ on 127.0.0.1:8080                 │
+│  no file watcher, no rebuild, no reload: reload the page yourself │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-## F5 flow (cold session)
+## One app, two names
 
-1. **You press F5** on `Debug: cube3d`.
-2. VS Code reads the launch config, sees `preLaunchTask: "zig: build cube3d"`.
-3. That task `dependsOn` `zig: serve-only (background)`, so VS Code
-   first starts the background server task if it isn't running.
-4. `zig: serve-only (background)` runs `zig build serve-only`:
-   - The `serve-only` step depends on `b.getInstallStep()`, which on
-     a no-`-Dfocus` invocation builds **static + zimr.js + docs only**.
-     No example wasms.
-   - Then `bun run webtests/server.ts` starts; it prints
-     `Ctrl+C to stop` once the port is bound.
-   - The `endsPattern` on the task's `problemMatcher.background`
-     matches that line and tells VS Code "the bg task is ready."
-5. `zig: build cube3d` then runs `zig build -Dfocus=cube3d`:
-   - Only the cube3d wasm gets attached to the default install step.
-   - Touching `math.zig` invalidates cube3d but no other example.
-6. VS Code launches Chrome at `http://localhost:8000/host.html?app=cube3d`.
-7. The page loads. The server's `injectHmrClient(html)` has inserted a
-   `<script>` that opens a WebSocket to `/__hmr`.
-8. The WebSocket connects. The client immediately sends
-   `{type:"hello", app:"cube3d"}` parsed from `window.location.search`.
-9. The server stores `"cube3d"` against this WebSocket in `clientApp`.
-   You'll see `[hmr] 1 client(s) connected: [cube3d]` in the server
-   console once the next rebuild fires.
+An app's build step is its name with dashes; the directory it installs
+to, and is served from, is its name with underscores. `finishWgpuApp`
+in `build.zig` derives both from one name:
 
-## Save-and-reload flow (HMR)
+| | `hello_world` |
+| --- | --- |
+| build step | `zig build hello-world` |
+| standalone page | `zig build hello-world-standalone` |
+| installed to | `zig-out/web/hello_world/` (`index.html` + `hello_world.wasm`) |
+| served at | `http://localhost:8080/hello_world/` |
 
-1. **You save `src/math.zig`**.
-2. The server's `fs.watch` on `src/` fires; `scheduleRebuild` queues
-   a build with a 300ms debounce (so a flurry of saves coalesces).
-3. After 300ms with no further edits, `triggerBuild` runs.
-4. `buildArgv()` looks at every connected client's app name:
-   - All clients on `?app=cube3d` → `zig build -Dmode=debug -Dfocus=cube3d`
-   - Any client on the gallery picker page (`/` with no `?app=`) →
-     `zig build -Dmode=debug all-examples` (because the picker can
-     link to any example, so all wasms have to be fresh)
-   - No clients connected → skip the build entirely
-   - Multiple apps open → `-Dfocus=app_a,app_b,…` (focus accepts a
-     comma-separated list)
-5. Zig builds only what's needed. Lint + fmt-check run too (they have
-   a per-file mtime cache so warm runs cost ~0.5s).
-6. On success the server broadcasts `{type:"reload"}` to every client.
-7. Each client's `onmessage` handler calls `location.reload()`.
-8. Chrome's debugger reattaches breakpoints; you can hit F10/F11/F5
-   in the same debug session and step right back in.
+The server maps a URL straight onto a path under `zig-out/web/`, so
+`http://localhost:8080/hello-world/` is a 404.
 
-If the build fails the server broadcasts `{type:"error", message}`
-instead and the page doesn't reload. The build error is printed to
-both the dev-server console and the browser console.
+## One-time setup
 
-## The focus mechanism
+The editor, not Chrome, turns a breakpoint on a `.zig` line into a
+wasm offset. Both editors drive Chrome through vscode-js-debug, and
+js-debug needs a DWARF decoder to read the wasm's debug sections.
+Without one it quietly falls back to wasm disassembly, and `.zig`
+breakpoints never bind.
 
-`b.option("focus", "...")` reads `-Dfocus=<list>`. Empty means "build
-no examples"; a comma-separated list filters which examples ride
-along with the default install. Two callers feed it:
+**VS Code** — install the extensions `.vscode/extensions.json`
+recommends. `ms-vscode.wasm-dwarf-debugging` is the DWARF decoder.
 
-- **VS Code tasks** — each `zig: build <name>` task in tasks.json
-  passes `-Dfocus=<name>`. Generated by `tools/gen_vscode.zig` (`zig build gen-vscode`).
-- **HMR loop** — `webtests/server.ts` builds the list at runtime
-  from the union of connected clients' `app` values.
+**Zed** — install the community **Zig** extension (`zed: extensions`,
+search `Zig`; ZLS comes with it). Zed bundles js-debug but not the
+decoder. js-debug loads the npm package `@vscode/dwarf-debugging` with
+`import('@vscode/dwarf-debugging')`, so install the package next to the
+adapter:
 
-`build_standalone.py` and CLI users can also pass `-Dfocus=...`
-directly; same mechanism.
+```
+npm install --prefix "%LOCALAPPDATA%\Zed\debug_adapters\JavaScript\JavaScript_v1.140.0\js-debug" @vscode/dwarf-debugging
+```
+
+Use the `JavaScript_v<version>` folder you actually have. On macOS and
+Linux the same `debug_adapters/JavaScript/...` path sits under Zed's
+data directory (`~/Library/Application Support/Zed`,
+`~/.local/share/zed`). The adapter lives in a versioned folder, so an
+adapter update needs the install again. The package is about 59 MB
+unpacked. While it is missing, Zed's debug console prints this as soon
+as the wasm loads:
+
+> You may install the `@vscode/dwarf-debugging` module via npm for enhanced WebAssembly debugging
+
+Chrome's **C/C++ DevTools Support (DWARF)** extension is no
+substitute: it only teaches Chrome's own DevTools to read DWARF, and
+the Chrome a debug config launches runs on a fresh profile without
+your extensions anyway.
+
+## Per session: start the server
+
+`zig build serve-only` runs the default install first (the shared
+`zimr.js` runtime, the gallery and its `manifest.json`, the HTML docs;
+no example wasms), then starts `tools/serve.zig` on `zig-out/web/`.
+Once the port is bound it prints
+
+```
+zimr serve: http://127.0.0.1:8080/  (root=zig-out/web, hmr=true)
+```
+
+It serves files as they are on disk, `.wasm` as `application/wasm`,
+with `Cache-Control: no-store` so a reload always gets the current
+build. It also injects a one-line script into every HTML page, and that
+script only logs "refresh manually after rebuild": despite `hmr=true`,
+there is no file watcher, no rebuild and no reload.
+
+- **VS Code** starts it for you. Every `zig: build <step>` task
+  `dependsOn` the `zig: serve-only (background)` task, whose
+  `endsPattern` (`zimr serve: http`) tells VS Code the port is bound.
+- **Zed** can't tell when a background task is ready, so start it
+  yourself once per session: `task: spawn`, then **`zig: serve-only`**.
+
+## Per example: start the debug config
+
+- **VS Code** — pick `Debug: hello-world` in Run and Debug and press
+  F5. Its `preLaunchTask` is `zig: build hello-world`.
+- **Zed** — open the debugger (`debugger: start`) and pick
+  `Debug: hello-world`. Its `"build"` field runs the same
+  `zig: build hello-world` task.
+
+That task runs `zig build hello-world`. `-Dmode` defaults to `debug`,
+so the wasm keeps its DWARF sections (a debug `hello_world.wasm` is
+about 3 MB; a `-Dmode=release` one has none). Then js-debug launches
+Chrome at `http://localhost:8080/hello_world/` and attaches, and
+breakpoints in `examples/hello_world/hello_world.zig`, or anywhere in
+`src/` the app runs, bind once the wasm loads.
+
+**Breakpoints only work in that Chrome.** If you only run the
+`zig: build hello-world` task and open the URL in your own browser,
+the page runs with no debugger attached.
+
+## After editing `.zig` code
+
+Nothing rebuilds or reloads when you save. Either:
+
+- **Re-run the debug config** (F5 or restart). Its build step rebuilds
+  the app, then Chrome relaunches.
+- **Run `zig: build hello-world`, then reload the page** in the
+  debugged Chrome (Ctrl+R). `no-store` means the reload fetches the
+  new wasm, and js-debug binds your breakpoints in it.
 
 ## Build steps you care about
 
-| Step                       | What it builds                                 |
-| -------------------------- | ---------------------------------------------- |
-| `zig build`                | Static + zimr.js + docs. No examples.          |
-| `zig build -Dfocus=<list>` | Same as above + the listed example wasms.     |
-| `zig build all-examples`   | Every example wasm + static + docs.            |
-| `zig build serve-only`     | Starts the dev server (lean install only).     |
-| `zig build serve`          | Builds all-examples, then serves.              |
-| `zig build run-<name>`     | Builds one example, serves, opens the browser. |
-| `zig build test`           | Host unit tests + typecheck of every example.  |
-| `zig build dist`           | Builds all-examples + mirrors to prebuilt/.    |
+| Step                          | What it builds                                                         |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `zig build`                   | `zimr.js`, the gallery + manifest, the HTML docs. No examples.         |
+| `zig build <step>`            | One app into `zig-out/web/<name>/`, e.g. `zig build hello-world`.      |
+| `zig build <step>-standalone` | One self-contained `zig-out/standalone/<name>.html` (-Dmode=release).  |
+| `zig build all-examples`      | Every example.                                                         |
+| `zig build serve-only`        | The default install, then the static server on :8080.                  |
+| `zig build serve`             | `all-examples`, then the static server on :8080.                       |
+| `zig build gen-vscode`        | The VS Code and Zed configs, from `example_steps` in `build.zig`.      |
+| `zig build test`              | Every quick test: engine, shader-free suites, tier-A examples.         |
+| `zig build dist`              | Builds all-examples + mirrors to prebuilt/.                            |
+| `zig build publish`           | `dist` (release mode) + push to GitHub Pages.                          |
 
 ## Troubleshooting
 
-### "I save math.zig and it rebuilds all examples"
+### Chrome says the site can't be reached
 
-The dev-server console line tells you exactly what happened:
+Nothing is listening on 8080. In Zed, spawn `zig: serve-only`. In VS
+Code, check the `zig: serve-only (background)` terminal to see why the
+server stopped. If the configs point at `localhost:8000`, they are
+older than the move to 8080: run `zig build gen-vscode`.
 
-```
-[hmr] N client(s) connected: [cube3d, <picker>, ...]
-[hmr] rebuilding (src/math.zig) — -Dmode=debug all-examples
-```
+### 404
 
-Common causes:
+The URL has to use the underscored directory (`/hello_world/`), and
+the app has to be built: `serve-only` builds no examples, and the
+server has only what is in `zig-out/web/`. Run the app's build task.
 
-- **`<picker>` appears in the client list.** Some tab is open at
-  `http://localhost:8000/` (the gallery page). Close it.
-- **All clients show `<picker>` when you only have a `?app=…` tab
-  open.** The browser tab is running the OLD injected HMR client
-  script — it doesn't send `hello`, so the server falls back to
-  picker. Ctrl+Shift+R on the tab to force-reload the HTML, or close
-  and re-launch.
-- **All clients show their app correctly but `all-examples` still
-  fires.** Bug — paste the log line.
+### The page never finishes loading
 
-### "F5 doesn't open Chrome / hangs on the preLaunchTask"
+`tools/serve.zig` handles one connection at a time and keeps each one
+open between requests, so a request on a second browser connection
+waits until the first connection closes. A page load can stall for
+minutes behind an idle connection. That's a server limitation, not a
+config problem.
 
-- The `zig: serve-only (background)` task signals readiness by
-  matching `Ctrl+C to stop` on stdout. If `webtests/server.ts`
-  doesn't print that line (port already bound, crash on startup),
-  VS Code waits forever.
-- Kill any other process on port 8000 first
-  (`kill-serve.bat` or check Task Manager for stray `bun` processes).
+### Breakpoints stay hollow, or you step into wasm disassembly
 
-### "Breakpoints don't bind after a save"
+- No DWARF decoder: see [One-time setup](#one-time-setup). In Zed, the
+  console line quoted there is the tell.
+- The page wasn't launched by the debug config.
+- A release build is in `zig-out/web/`. `-Dmode=release` and
+  `-Dmode=ship` wasms have no DWARF; rebuild with the plain build task.
+- A breakpoint in `init` can miss the first run, because the DWARF
+  loads asynchronously. Restart the session once the page is up.
 
-- Confirm `-Dmode=debug` is in the spawned command (visible in the
-  `[hmr] rebuilding` log). The default is debug, but if you ran a
-  release build manually in the same `zig-out/web/` the DWARF is
-  gone. Re-run `zig build -Dfocus=<name>` (debug mode) to restore.
-- Chrome can lose source-map associations after many reloads. Close
-  and re-launch from F5.
+### A `Debug:` entry is missing, or Zed ignores `.zed/debug.json`
 
-### "I added a new example and don't see a Debug: entry"
-
-Regenerate `.vscode/`:
-
-```
-zig build gen-vscode
-```
-
-This rewrites both `launch.json` and `tasks.json` from the
-`examples` list in `build.zig`. Commit both files.
-
-### "The server is using stale build code"
-
-`webtests/server.ts` is run directly by Bun, not bundled. Restart
-the `zig: serve-only (background)` task to pick up edits to that
-file. Edits to `src/web/zimr.ts` (the runtime that ships to the
-browser) DO go through Bun's bundler — those are picked up by the
-HMR loop's `zig build` call automatically.
+`zig build gen-vscode` rewrites `.vscode/launch.json`,
+`.vscode/tasks.json`, `.zed/debug.json` and `.zed/tasks.json` from the
+`example_steps` list in `build.zig`. Add the app's step there, run it,
+and commit all four files. Zed reads `.zed/debug.json` as a bare JSON
+array and silently ignores the whole file if the JSON is broken, so
+regenerate instead of hand-editing.
 
 ## Where the wiring lives
 
-- `build.zig` — the `all-examples`, `serve`, `serve-only`,
-  `run-<name>` steps; the focus filter in the example loop.
-- `webtests/server.ts` — the dev server, HMR client injection, file
-  watcher, and the WebSocket protocol (`hello` / `building` /
-  `reload` / `error`).
-- `tools/gen_vscode.zig` (`zig build gen-vscode`) — generates `.vscode/launch.json`
-  and `.vscode/tasks.json` AND `.zed/debug.json` and `.zed/tasks.json`
-  from `build.zig`'s examples list.
+- `build.zig` — the `serve` and `serve-only` steps; `example_steps`,
+  the list the editor configs come from; `finishWgpuApp`, which
+  installs each app to `web/<name>/` and registers its dashed step.
+- `tools/serve.zig` — the static dev server.
+- `tools/gen_vscode.zig` (`zig build gen-vscode`) — writes the four
+  editor configs.
 - `.vscode/launch.json`, `.vscode/tasks.json`, `.zed/debug.json`,
-  `.zed/tasks.json` — generated, don't hand-edit (regen will
-  overwrite).
+  `.zed/tasks.json` — generated; regenerating overwrites hand edits.
 
-## Zed (alternative editor)
+## VS Code and Zed side by side
 
-The same examples list drives Zed configs alongside VS Code. The flow
-differs in one small way because Zed's task system has no equivalent
-of VS Code's `problemMatcher.background.endsPattern` — Zed can't
-detect "the dev server is ready" automatically. So the dev server is
-started manually once per session instead of as a debug pre-launch
-side effect.
-
-### One-time setup
-
-1. **Zed extension**: install the community **Zig** extension via
-   `Cmd+Shift+P` / `Ctrl+Shift+P` → `zed: extensions` → search
-   `Zig`. ZLS gets pulled automatically.
-2. **Chrome side**: the [C/C++ DevTools Support (DWARF)](https://chrome.google.com/webstore/detail/cc%20-devtools-support-dwa/pdcpmagijalfljmkmjngeonclgbbannb)
-   extension is the same one you'd use for VS Code — Chrome handles
-   DWARF; the editor doesn't. (Chrome 114+ built-in DWARF is often
-   sufficient too.)
-
-### Per-session: start the dev server
-
-Open the task palette (`task: spawn`) and pick **`zig: serve-only`**.
-It runs in a terminal pane and stays alive for the session. You only
-do this once per Zed restart.
-
-The HMR loop here is the same one VS Code uses: edit `math.zig`, the
-server rebuilds the focused example(s) currently open in browser
-tabs, the page reloads, breakpoints rebind.
-
-### Per-example: F4 (or whatever you bind `debug: start` to)
-
-Pick a Zed debug config from the panel (`Debug: cube3d`, etc.). The
-config's `"build"` field runs `zig: build cube3d` (focused rebuild),
-then Chrome launches at `host.html?app=cube3d` with Zed attached via
-DAP.
-
-Edit `math.zig`, save → HMR rebuilds → tab reloads → breakpoints set
-in Zed's gutter rebind to the new wasm offsets via Chrome's DWARF
-support. Same end-to-end behavior as VS Code.
-
-### Differences from the VS Code flow
-
-| Behavior                          | VS Code                                       | Zed                                           |
-| --------------------------------- | --------------------------------------------- | --------------------------------------------- |
-| Start server                      | Automatic on first F5 (bg task)               | Manual once per session (`task: spawn`)       |
-| Wait for server ready             | `problemMatcher.background.endsPattern`       | Not supported — just-runs-immediately         |
-| Pre-launch build                  | `preLaunchTask: "zig: build cube3d"`          | `"build": "zig: build cube3d"`                |
-| Workspace root variable           | `${workspaceFolder}`                          | `$ZED_WORKTREE_ROOT`                          |
-| Chrome adapter spelling           | `"type": "chrome"`                            | `"adapter": "JavaScript"` + `"type": "chrome"`|
-| Reattach breakpoints across HMR   | ✅ (vscode-js-debug)                          | ✅ (same vscode-js-debug, bundled)            |
-
-### Zed troubleshooting
-
-- **Debug config doesn't show up in the picker.** Zed reads
-  `.zed/debug.json` (a bare JSON array, no `version` / `configurations`
-  wrapper). If you edited it by hand and broke the JSON, the picker
-  silently drops the file. Re-run `zig build gen-vscode`.
-- **`build` task runs but Chrome opens with 404.** The dev server
-  isn't running — spawn `zig: serve-only` from the task palette first.
-- **Breakpoint set in Zed gutter doesn't bind.** Same Chrome-side
-  issue as VS Code: confirm the page's DevTools shows the actual
-  `.zig` file under Sources. If not, the DWARF info isn't reaching
-  Chrome (release build instead of debug? cache stale?). The `build`
-  field defaults to debug mode (no `-Dmode=` override), so DWARF
-  should be present.
+| | VS Code | Zed |
+| --- | --- | --- |
+| Start the server | Automatic on the first F5 (background task) | `task: spawn` → `zig: serve-only`, once per session |
+| Know the server is ready | `endsPattern: "zimr serve: http"` | No equivalent |
+| Build before launching | `preLaunchTask: "zig: build <step>"` | `"build": "zig: build <step>"` |
+| Workspace root variable | `${workspaceFolder}` | `$ZED_WORKTREE_ROOT` |
+| Chrome adapter spelling | `"type": "chrome"` | `"adapter": "JavaScript"` + `"type": "chrome"` |
+| DWARF decoder | `ms-vscode.wasm-dwarf-debugging` extension | `@vscode/dwarf-debugging` npm package next to js-debug |
+| After a rebuild | Reload the page, or re-run the config | Same |

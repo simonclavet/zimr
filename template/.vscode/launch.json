@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug: gallery (pick a project)",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://127.0.0.1:8081/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build (debug)",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: myproject1",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://127.0.0.1:8081/myproject1/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build (debug)",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: myproject2",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://127.0.0.1:8081/myproject2/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build (debug)",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        }
+    ]
+}

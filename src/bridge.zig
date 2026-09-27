@@ -15,6 +15,17 @@
 //!
 //! Self-import note: the absorbed kernel referred to itself as
 //! @import("wz"); inside the monolith those references are local.
+//!
+//! The ONE import is `dom_input.zig`: the table that turns DOM key codes and
+//! mouse buttons into raylib's numbers. This file cannot build for the host,
+//! so nothing in it can be unit-tested; that table can, so it lives apart.
+//! build.zig's `addBridgeSource` declares it - and `types.zig`, which it
+//! reads two enums from - as an input of every bridge compile, because a Run
+//! step's cache never sees an import it was not told about. A new import
+//! needs the same.
+
+/// DOM key codes and mouse buttons in raylib's numbering (see the header).
+const dom_input = @import("dom_input.zig");
 
 // Reflection helper. In Zig 0.17.0-dev.813, `@typeInfo(T).@"struct"` exposes field
 // and decl metadata as parallel `.field_names`/`.field_types`/`.decl_names` arrays
@@ -2847,6 +2858,13 @@ const ZimrInput = struct {
     fn pointerId(e: Value) f64 {
         return js_to_num(e.get("pointerId").h);
     }
+    /// A pointer event's button in raylib's numbering: the DOM calls the wheel 1
+    /// and the right button 2, raylib the other way round (see
+    /// `dom_input.mouseButtonFromDomButton`).
+    fn engineButtonOf(e: Value) i32 {
+        const dom_button: i32 = @trunc(js_to_num(e.get("button").h));
+        return dom_input.mouseButtonFromDomButton(dom_button);
+    }
     fn onPointerDown(ev: Handle) void {
         const e: Value = .{ .h = ev };
         const p: [2]f64 = localXY(e);
@@ -2854,7 +2872,7 @@ const ZimrInput = struct {
         callIfPresent("zimr_input_push_touch_down", .{ numArg(pointerId(e)), numArg(p[0]), numArg(p[1]) });
         // Mouse channel: move-then-button on every down (the proven TS shape).
         callIfPresent("input_push_mouse_move", .{ numArg(p[0]), numArg(p[1]) });
-        callIfPresent("input_push_mouse_button_down", .{numArg(js_to_num(e.get("button").h))});
+        callIfPresent("input_push_mouse_button_down", .{engineButtonOf(e)});
         g.input.dragging = true;
         _ = e.call("preventDefault", .{});
         // preventDefault also cancels the focus change the press would have made,
@@ -2878,7 +2896,7 @@ const ZimrInput = struct {
         const e: Value = .{ .h = ev };
         callIfPresent("zimr_input_push_touch_up", .{numArg(pointerId(e))});
         g.input.dragging = false;
-        callIfPresent("input_push_mouse_button_up", .{numArg(js_to_num(e.get("button").h))});
+        callIfPresent("input_push_mouse_button_up", .{engineButtonOf(e)});
     }
     fn onWheel(ev: Handle) void {
         const e: Value = .{ .h = ev };
@@ -2903,14 +2921,37 @@ const ZimrInput = struct {
         });
         _ = e.call("preventDefault", .{});
     }
+    /// The raylib number of the physical key behind a keydown or keyup, or null for
+    /// a key raylib has no name for. Reads `KeyboardEvent.code` ("KeyA",
+    /// "ArrowRight") rather than the legacy `keyCode`, whose numbers are not
+    /// raylib's - ArrowRight's 39 is raylib's apostrophe (see dom_input.zig).
+    fn engineKeyOf(key_event: Event) ?i32 {
+        if (g.wgpu.text_encoder.isNull()) {
+            g.wgpu.text_encoder = global().get("TextEncoder").new(.{});
+        }
+        const code_utf8: Value = g.wgpu.text_encoder.call("encode", .{key_event.code()});
+        const code_length: u32 = js_len(code_utf8.h);
+        // Longer than every code in the table, so it names no raylib key.
+        const code_is_too_long: bool = code_length > g.scratch.dom_code.len;
+        if (code_is_too_long) {
+            return null;
+        }
+        js_read_into(@intFromPtr(&g.scratch.dom_code), code_utf8.h, 0, code_length);
+        if (dom_input.keyboardKeyFromDomCode(g.scratch.dom_code[0..code_length])) |engine_key| {
+            return @backingInt(engine_key);
+        }
+        return null;
+    }
     fn onKeyDown(ev: Handle) void {
-        const e: Value = .{ .h = ev };
-        const repeat: f64 = if (e.get("repeat").truthy()) 1 else 0;
-        callIfPresent("input_push_key_down", .{ numArg(js_to_num(e.get("keyCode").h)), numArg(repeat) });
+        const key_event: Event = .{ .j = .{ .h = ev } };
+        const engine_key: i32 = engineKeyOf(key_event) orelse return;
+        const repeat: f64 = if (key_event.j.get("repeat").truthy()) 1 else 0;
+        callIfPresent("input_push_key_down", .{ engine_key, numArg(repeat) });
     }
     fn onKeyUp(ev: Handle) void {
-        const e: Value = .{ .h = ev };
-        callIfPresent("input_push_key_up", .{numArg(js_to_num(e.get("keyCode").h))});
+        const key_event: Event = .{ .j = .{ .h = ev } };
+        const engine_key: i32 = engineKeyOf(key_event) orelse return;
+        callIfPresent("input_push_key_up", .{engine_key});
     }
     fn onContextMenu(ev: Handle) void {
         const e: Value = .{ .h = ev };
@@ -5793,6 +5834,8 @@ const BridgeGlobals = struct {
         call_args: [16]Handle = undefined,
         fmt: [512]u8 = undefined,
         fmt_len: u32 = 0,
+        /// A key event's `KeyboardEvent.code`, read in for `dom_input` to look up.
+        dom_code: [dom_input.longest_dom_code_length]u8 = undefined,
     };
     const Wgpu = struct {
         // ONE table for every wgpu resource. Ids are unique ACROSS types
@@ -7030,6 +7073,8 @@ pub fn Site(
 //     contract ceiling (asserted at the read site).
 //   * scratch.fmt: the sequential UI fmt builder (documented non-reentrant).
 //   * scratch.call_args: per-call handle marshalling (max arity 16).
+//   * scratch.dom_code: a key event's `code`, as long as the longest code
+//     that names a raylib key (dom_input.longest_dom_code_length).
 // ===========================================================================
 
 // ===========================================================================
@@ -7056,4 +7101,8 @@ pub fn Site(
 // coordinates are CSS px relative to the canvas, wheel sends (dx, -dy),
 // pointerdown pushes a move first then the button, window-level move/up
 // only while dragging, touches by identifier, contextmenu suppressed.
+// Keys and mouse buttons go out in raylib's numbering, translated by
+// dom_input.zig: a key by `KeyboardEvent.code` (the physical key, whatever
+// the layout; a key raylib has no name for is not sent), a button with the
+// DOM's 1 (the wheel) and 2 (the right button) swapped.
 // ===========================================================================

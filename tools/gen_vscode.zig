@@ -2,9 +2,15 @@
 //!
 //! Zig port of the old `scripts/build_launch_json.py`.  Source of truth is the
 //! `const example_steps = [_][]const u8{ ... }` array in build.zig; each entry
-//! becomes a Chrome debug config + a `zig build <name>` task + a
-//! `<name>-standalone` task, written to four files:
+//! becomes a Chrome debug config + a `zig build <step>` task + a
+//! `<step>-standalone` task, written to four files:
 //!   .vscode/launch.json, .vscode/tasks.json, .zed/debug.json, .zed/tasks.json
+//!
+//! An app has two spellings and the configs need both: its build step is dashed
+//! (`hello-world`) while the dev server serves its page from an underscored
+//! directory (`zig-out/web/hello_world/`), the same pair `finishWgpuApp` in
+//! build.zig derives from one app name.  `example_steps` holds either spelling,
+//! so `Example` derives both rather than trusting the entry to be one of them.
 //!
 //! Output is byte-identical to the python's json.dumps(indent=4).
 //!
@@ -19,8 +25,23 @@ const Writer = std.Io.Writer;
 // ReleaseSmall + zimr asserts + on-page logs).
 const standalone_mode: []const u8 = "release";
 
-fn lessStr(_: void, a: []const u8, b: []const u8) bool {
-    return std.mem.lessThan(u8, a, b);
+/// One app, in the two spellings the configs need.
+const Example = struct {
+    /// The dashed build step: `zig build <step>`, `<step>-standalone`, and every config label.
+    step: []const u8,
+    /// The underscored directory under zig-out/web/ that the dev server serves the page from.
+    served_dir: []const u8,
+};
+
+fn stepLessThan(_: void, a: Example, b: Example) bool {
+    return std.mem.lessThan(u8, a.step, b.step);
+}
+
+/// A copy of `text` with every `from` byte replaced by `to`.
+fn withByteReplaced(gpa: Allocator, text: []const u8, from: u8, to: u8) ![]u8 {
+    const copy: []u8 = try gpa.dupe(u8, text);
+    std.mem.replaceScalar(u8, copy, from, to);
+    return copy;
 }
 
 /// Insert the `,\n` element separator before every array element except the
@@ -55,32 +76,59 @@ fn parseExamples(
     }
 }
 
+/// Derive both spellings of every `example_steps` entry, sorted by step. An entry naming a
+/// step already listed is dropped and recorded in `out_duplicate_steps`, so the caller can
+/// say so instead of emitting two configs with one label.
+fn collectExamples(
+    gpa: Allocator,
+    raw_names: []const []const u8,
+    out_examples: *ArrayList(Example),
+    out_duplicate_steps: *ArrayList([]const u8),
+) !void {
+    for (raw_names) |raw_name| {
+        const step: []u8 = try withByteReplaced(gpa, raw_name, '_', '-');
+        var step_already_listed: bool = false;
+        for (out_examples.items) |listed| {
+            if (std.mem.eql(u8, listed.step, step)) {
+                step_already_listed = true;
+            }
+        }
+        if (step_already_listed) {
+            try out_duplicate_steps.append(gpa, step);
+            continue;
+        }
+        const served_dir: []u8 = try withByteReplaced(gpa, raw_name, '-', '_');
+        try out_examples.append(gpa, .{ .step = step, .served_dir = served_dir });
+    }
+    std.mem.sort(Example, out_examples.items, {}, stepLessThan);
+}
+
 // ===========================================================================
 // VS Code per-name objects (8-space element indent)
 // ===========================================================================
 
-fn emitVscodeChrome(w: *Writer, name: []const u8) !void {
+fn emitVscodeChrome(w: *Writer, example: Example) !void {
     try w.writeAll("        {\n");
-    try w.print("            \"name\": \"Debug: {s}\",\n", .{name});
+    try w.print("            \"name\": \"Debug: {s}\",\n", .{example.step});
     try w.writeAll("            \"type\": \"chrome\",\n");
     try w.writeAll("            \"request\": \"launch\",\n");
-    try w.print("            \"url\": \"http://localhost:8080/{s}/\",\n", .{name});
+    try w.print("            \"url\": \"http://localhost:8080/{s}/\",\n", .{example.served_dir});
     try w.writeAll("            \"webRoot\": \"${workspaceFolder}/zig-out/web\",\n");
-    try w.print("            \"preLaunchTask\": \"zig: build {s}\",\n", .{name});
+    try w.print("            \"preLaunchTask\": \"zig: build {s}\",\n", .{example.step});
     try w.writeAll("            \"sourceMaps\": true,\n");
     try w.writeAll("            \"userDataDir\": true,\n");
     try w.writeAll("            \"smartStep\": true\n");
     try w.writeAll("        }");
 }
 
-fn emitVscodeBuildTask(w: *Writer, name: []const u8) !void {
+fn emitVscodeBuildTask(w: *Writer, step: []const u8) !void {
     try w.writeAll("        {\n");
-    try w.print("            \"label\": \"zig: build {s}\",\n", .{name});
+    try w.print("            \"label\": \"zig: build {s}\",\n", .{step});
     try w.writeAll("            \"type\": \"shell\",\n");
     try w.writeAll("            \"command\": \"zig\",\n");
     try w.writeAll("            \"args\": [\n");
     try w.writeAll("                \"build\",\n");
-    try w.print("                \"{s}\"\n", .{name});
+    try w.print("                \"{s}\"\n", .{step});
     try w.writeAll("            ],\n");
     try w.writeAll("            \"dependsOn\": [\n");
     try w.writeAll("                \"zig: serve-only (background)\"\n");
@@ -94,14 +142,14 @@ fn emitVscodeBuildTask(w: *Writer, name: []const u8) !void {
     try w.writeAll("        }");
 }
 
-fn emitVscodeStandaloneTask(w: *Writer, name: []const u8) !void {
+fn emitVscodeStandaloneTask(w: *Writer, step: []const u8) !void {
     try w.writeAll("        {\n");
-    try w.print("            \"label\": \"zig: standalone {s}\",\n", .{name});
+    try w.print("            \"label\": \"zig: standalone {s}\",\n", .{step});
     try w.writeAll("            \"type\": \"shell\",\n");
     try w.writeAll("            \"command\": \"zig\",\n");
     try w.writeAll("            \"args\": [\n");
     try w.writeAll("                \"build\",\n");
-    try w.print("                \"{s}-standalone\",\n", .{name});
+    try w.print("                \"{s}-standalone\",\n", .{step});
     try w.print("                \"-Dmode={s}\"\n", .{standalone_mode});
     try w.writeAll("            ],\n");
     try w.writeAll("            \"presentation\": {\n");
@@ -117,40 +165,40 @@ fn emitVscodeStandaloneTask(w: *Writer, name: []const u8) !void {
 // Zed per-name objects (4-space element indent)
 // ===========================================================================
 
-fn emitZedChrome(w: *Writer, name: []const u8) !void {
+fn emitZedChrome(w: *Writer, example: Example) !void {
     try w.writeAll("    {\n");
     try w.writeAll("        \"adapter\": \"JavaScript\",\n");
-    try w.print("        \"label\": \"Debug: {s}\",\n", .{name});
+    try w.print("        \"label\": \"Debug: {s}\",\n", .{example.step});
     try w.writeAll("        \"type\": \"chrome\",\n");
     try w.writeAll("        \"request\": \"launch\",\n");
-    try w.print("        \"url\": \"http://localhost:8080/{s}/\",\n", .{name});
+    try w.print("        \"url\": \"http://localhost:8080/{s}/\",\n", .{example.served_dir});
     try w.writeAll("        \"webRoot\": \"$ZED_WORKTREE_ROOT/zig-out/web\",\n");
     try w.writeAll("        \"sourceMaps\": true,\n");
     try w.writeAll("        \"smartStep\": true,\n");
-    try w.print("        \"build\": \"zig: build {s}\"\n", .{name});
+    try w.print("        \"build\": \"zig: build {s}\"\n", .{example.step});
     try w.writeAll("    }");
 }
 
-fn emitZedBuildTask(w: *Writer, name: []const u8) !void {
+fn emitZedBuildTask(w: *Writer, step: []const u8) !void {
     try w.writeAll("    {\n");
-    try w.print("        \"label\": \"zig: build {s}\",\n", .{name});
+    try w.print("        \"label\": \"zig: build {s}\",\n", .{step});
     try w.writeAll("        \"command\": \"zig\",\n");
     try w.writeAll("        \"args\": [\n");
     try w.writeAll("            \"build\",\n");
-    try w.print("            \"{s}\"\n", .{name});
+    try w.print("            \"{s}\"\n", .{step});
     try w.writeAll("        ],\n");
     try w.writeAll("        \"reveal\": \"no_focus\",\n");
     try w.writeAll("        \"use_new_terminal\": false\n");
     try w.writeAll("    }");
 }
 
-fn emitZedStandaloneTask(w: *Writer, name: []const u8) !void {
+fn emitZedStandaloneTask(w: *Writer, step: []const u8) !void {
     try w.writeAll("    {\n");
-    try w.print("        \"label\": \"zig: standalone {s}\",\n", .{name});
+    try w.print("        \"label\": \"zig: standalone {s}\",\n", .{step});
     try w.writeAll("        \"command\": \"zig\",\n");
     try w.writeAll("        \"args\": [\n");
     try w.writeAll("            \"build\",\n");
-    try w.print("            \"{s}-standalone\",\n", .{name});
+    try w.print("            \"{s}-standalone\",\n", .{step});
     try w.print("            \"-Dmode={s}\"\n", .{standalone_mode});
     try w.writeAll("        ],\n");
     try w.writeAll("        \"reveal\": \"always\",\n");
@@ -325,31 +373,31 @@ const zed_extra_smoke =
 // File assemblers
 // ===========================================================================
 
-fn buildVscodeLaunch(gpa: Allocator, names: []const []const u8) ![]u8 {
+fn buildVscodeLaunch(gpa: Allocator, examples: []const Example) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(gpa);
     const w: *Writer = &aw.writer;
     try w.writeAll("{\n    \"version\": \"0.2.0\",\n    \"configurations\": [\n");
     var first: bool = true;
-    for (names) |name| {
+    for (examples) |example| {
         try sep(w, &first);
-        try emitVscodeChrome(w, name);
+        try emitVscodeChrome(w, example);
     }
     try w.writeAll("\n    ]\n}\n");
     return aw.written();
 }
 
-fn buildVscodeTasks(gpa: Allocator, names: []const []const u8) ![]u8 {
+fn buildVscodeTasks(gpa: Allocator, examples: []const Example) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(gpa);
     const w: *Writer = &aw.writer;
     try w.writeAll("{\n    \"version\": \"2.0.0\",\n    \"tasks\": [\n");
     var first: bool = true;
     try sep(w, &first);
     try w.writeAll(vscode_serve);
-    for (names) |name| {
+    for (examples) |example| {
         try sep(w, &first);
-        try emitVscodeBuildTask(w, name);
+        try emitVscodeBuildTask(w, example.step);
         try sep(w, &first);
-        try emitVscodeStandaloneTask(w, name);
+        try emitVscodeStandaloneTask(w, example.step);
     }
     try sep(w, &first);
     try w.writeAll(vscode_extra_release);
@@ -361,31 +409,31 @@ fn buildVscodeTasks(gpa: Allocator, names: []const []const u8) ![]u8 {
     return aw.written();
 }
 
-fn buildZedDebug(gpa: Allocator, names: []const []const u8) ![]u8 {
+fn buildZedDebug(gpa: Allocator, examples: []const Example) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(gpa);
     const w: *Writer = &aw.writer;
     try w.writeAll("[\n");
     var first: bool = true;
-    for (names) |name| {
+    for (examples) |example| {
         try sep(w, &first);
-        try emitZedChrome(w, name);
+        try emitZedChrome(w, example);
     }
     try w.writeAll("\n]\n");
     return aw.written();
 }
 
-fn buildZedTasks(gpa: Allocator, names: []const []const u8) ![]u8 {
+fn buildZedTasks(gpa: Allocator, examples: []const Example) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(gpa);
     const w: *Writer = &aw.writer;
     try w.writeAll("[\n");
     var first: bool = true;
     try sep(w, &first);
     try w.writeAll(zed_serve);
-    for (names) |name| {
+    for (examples) |example| {
         try sep(w, &first);
-        try emitZedBuildTask(w, name);
+        try emitZedBuildTask(w, example.step);
         try sep(w, &first);
-        try emitZedStandaloneTask(w, name);
+        try emitZedStandaloneTask(w, example.step);
     }
     try sep(w, &first);
     try w.writeAll(zed_extra_release);
@@ -405,14 +453,16 @@ pub fn main(init: std.process.Init) !void {
     const cwd: std.Io.Dir = std.Io.Dir.cwd();
 
     const build_src: []u8 = try cwd.readFileAlloc(io, "build.zig", gpa, .unlimited);
-    var names: ArrayList([]const u8) = .empty;
-    try parseExamples(gpa, build_src, &names);
-    std.mem.sort([]const u8, names.items, {}, lessStr);
+    var raw_names: ArrayList([]const u8) = .empty;
+    try parseExamples(gpa, build_src, &raw_names);
+    var examples: ArrayList(Example) = .empty;
+    var duplicate_steps: ArrayList([]const u8) = .empty;
+    try collectExamples(gpa, raw_names.items, &examples, &duplicate_steps);
 
-    const vscode_launch: []u8 = try buildVscodeLaunch(gpa, names.items);
-    const vscode_tasks: []u8 = try buildVscodeTasks(gpa, names.items);
-    const zed_debug: []u8 = try buildZedDebug(gpa, names.items);
-    const zed_tasks: []u8 = try buildZedTasks(gpa, names.items);
+    const vscode_launch: []u8 = try buildVscodeLaunch(gpa, examples.items);
+    const vscode_tasks: []u8 = try buildVscodeTasks(gpa, examples.items);
+    const zed_debug: []u8 = try buildZedDebug(gpa, examples.items);
+    const zed_tasks: []u8 = try buildZedTasks(gpa, examples.items);
 
     try cwd.writeFile(io, .{ .sub_path = ".vscode/launch.json", .data = vscode_launch });
     try cwd.writeFile(io, .{ .sub_path = ".vscode/tasks.json", .data = vscode_tasks });
@@ -421,9 +471,15 @@ pub fn main(init: std.process.Init) !void {
 
     var out_buf: [256]u8 = undefined;
     var ow: std.Io.File.Writer = std.Io.File.stdout().writer(io, &out_buf);
+    for (duplicate_steps.items) |step| {
+        try ow.interface.print(
+            "gen_vscode: build.zig's example_steps names `{s}` more than once; its configs are written once\n",
+            .{step},
+        );
+    }
     try ow.interface.print(
         "gen_vscode: wrote 4 files for {d} wgpu examples\n",
-        .{names.items.len},
+        .{examples.items.len},
     );
     try ow.interface.flush();
 }

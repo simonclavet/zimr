@@ -6,20 +6,21 @@
 // proc_exit, args_*, environ_*, fd_close), plus our own custom
 // `webgl` / `dom` import modules for canvas, WebGL2, and event input.
 // Build steps:
-//   zig build                       -- runtime only (no example wasms, no docs).
-//                                      Pass -Dfocus=<list> to also install
-//                                      specific example wasms.
+//   zig build                       -- zimr.js, the gallery and the HTML doc pages into
+//                                      zig-out/web/; no example wasms, no API docs.
+//   zig build <app-step>            -- builds one app into zig-out/web/<app_name>/
+//                                      (`hello-world` -> web/hello_world/).
 //   zig build all-examples          -- builds every example wasm into zig-out/web/
 //   zig build serve                 -- builds all-examples, then serves
-//                                      zig-out/web/ via the pure-Zig server
-//                                      (tools/serve.zig).  Full gallery.
-//   zig build serve-only            -- starts the dev server without rebuilding
-//                                      examples.  Used by the VS Code background
-//                                      task; HMR + run-<name> handle per-example
-//                                      builds on demand.
-//   zig build run-<name>            -- builds just that example, serves, opens
-//                                      the browser (wgpu example pages).
-//   zig build smoke-test            -- runs Bun-based wasm smoke tests
+//                                      zig-out/web/ on 127.0.0.1:8080 via the
+//                                      pure-Zig server (tools/serve.zig).  Full gallery.
+//   zig build serve-only            -- starts the same server after only the default
+//                                      install (no example wasms).  The editor debug
+//                                      configs pair it with one `zig build <app-step>`
+//                                      each; the server is static (no watcher, no
+//                                      reload), so reload the page after a rebuild.
+//   zig build smoke-test            -- runs the wasm smoke tests under Node
+//                                      (webtests/runner.mjs); -Dfocus=<list> narrows them
 //   zig build test                  -- runs the host-target unit tests + every
 //                                      example's typecheck (cheap, all of them)
 // Source-of-truth for the port: the raylib 6.0 C source lives under
@@ -65,17 +66,16 @@ const test_files = [_][]const u8{
     "src/tests.zig",
 };
 
-/// Editor-config manifest for the WebGPU demos (the wgpu migration).
-/// Each entry is a `wgpu-<name>` build step whose demo installs to
-/// `zig-out/web/<name>/` and serves at `http://localhost:8080/<name>/`.
-/// `tools/gen_vscode.zig` (run via `zig build gen-vscode`) turns each into:
-/// a `zig build <name>` build task, a `zig build <name>-standalone` task,
-/// and a Chrome debug config - so the dev-server HMR loop rebuilds + reloads
-/// them exactly like the GL examples.  Add a row when you wire a new servable
-/// wgpu demo (a `b.step("wgpu-...")` with its own `.custom` install dir), then
-/// run `zig build gen-vscode`.  (The legacy `wgpu-bringup` scaffold installs
-/// to `zig-out/wgpu/`, not `zig-out/wgpu-bringup/`, so it's intentionally
-/// omitted - it predates the per-demo dir convention.)
+/// Editor-config manifest: the apps that get a debug config in VS Code and Zed.
+/// Each entry is an app's dashed build step (`hello-world`); the app installs to
+/// its underscored directory (`zig-out/web/hello_world/`) and is served at
+/// `http://localhost:8080/hello_world/`.  `tools/gen_vscode.zig` derives both
+/// spellings from the entry, so either works here, and turns each entry into a
+/// `zig build <step>` task, a `zig build <step>-standalone` task and a Chrome
+/// debug config, in .vscode/launch.json + tasks.json and .zed/debug.json +
+/// tasks.json.  Add a row when you add an app, then run `zig build gen-vscode`
+/// and commit the four files.  (`wgpu-bringup` installs to `zig-out/wgpu/`
+/// rather than a directory under web/, so it has no row.)
 pub const example_steps = [_][]const u8{
     "3d-probe",                      "audio-basic",           "audio-stream-synth",            "ball-physics",
     "weight_store",                  "dance_track",           "dance_track",                   "basic",
@@ -233,8 +233,8 @@ pub fn build(b: *std.Build) void {
     //     tasks.  Bigger wasm (~1.5 MB) but full source-level
     //     debugging and ALL asserts (Zig's + zimr's).
     //   - `release`: production ship + zimr asserts still fire.  Used by
-    //     `release.bat` so the prebuilt artifact uploaded to Pages still
-    //     trips our own assert macros.
+    //     `zig build publish` so the prebuilt artifact uploaded to Pages
+    //     still trips our own assert macros.
     //   - `ship`: true zero-overhead ship (no asserts, profiler stripped).
     //     The lean build users get.
     // Smoke artifacts piggyback on the same mode - there's no separate
@@ -245,7 +245,7 @@ pub fn build(b: *std.Build) void {
     // consumer's build and forwards it here.)
 
     // -Dmode defaults to `debug` when omitted.  Real callers (VS Code
-    // tasks, release.bat) all pass -Dmode
+    // tasks, `zig build publish`) all pass -Dmode
     // explicitly; the default is for `zig build test` and hand-typing
     // during development.  No warning - debug is the right default for
     // unconfigured invocations; production callers know to pass the
@@ -1419,7 +1419,7 @@ pub fn build(b: *std.Build) void {
             "-ofmt=c",             "-target",
             "wasm32-freestanding", "-OReleaseSmall",
         });
-        to_c.addFileArg(b.path("src/bridge.zig"));
+        addBridgeSource(b, to_c);
         const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
         const to_html: *Run = b.addRunArtifact(c2js_exe);
         to_html.setStdIn(.{ .lazy_path = bridge_c });
@@ -1445,7 +1445,7 @@ pub fn build(b: *std.Build) void {
             "-ofmt=c",             "-target",
             "wasm32-freestanding", "-OReleaseSmall",
         });
-        to_c.addFileArg(b.path("src/bridge.zig"));
+        addBridgeSource(b, to_c);
         const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
         const to_html: *Run = b.addRunArtifact(c2js_exe);
         to_html.addArgs(&.{
@@ -1477,7 +1477,7 @@ pub fn build(b: *std.Build) void {
             "-ofmt=c",             "-target",
             "wasm32-freestanding", "-OReleaseSmall",
         });
-        to_c.addFileArg(b.path("src/bridge.zig"));
+        addBridgeSource(b, to_c);
         const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
         const to_html: *Run = b.addRunArtifact(c2js_exe);
         to_html.addArgs(&.{
@@ -2577,9 +2577,23 @@ pub fn build(b: *std.Build) void {
             }},
         },
     };
+    // `zig build example-sources`: every example's web/<name>/source.json - what the
+    // gallery's code pane shows - without compiling a single wasm. Each example's own
+    // step (and so `all-examples`, `serve` and `dist`) installs its file as well.
+    const example_sources_step: *Step = b.step(
+        "example-sources",
+        "Install every example's highlighted source (web/<name>/source.json) for the gallery's code pane",
+    );
     var app_mods = std.StringHashMap(*Module).init(b.allocator);
     for (wgpu_apps) |wgpu_app| {
         const m: *Module = wgpu_app_ctx.buildAppModule(wgpu_app);
+        const source_install: *InstallFile = installExampleSource(
+            b,
+            tools.example_source,
+            wgpu_app.name,
+            wgpu_app.shaders,
+        );
+        example_sources_step.dependOn(&source_install.step);
         // `job_kernels` is the whole opt-in: the example's kernels.zig ALSO becomes a
         // separate, freestanding, zero-import wasm for the Web Workers, inlined into the
         // page beside the app's own. Nothing else about the example moves.
@@ -2611,6 +2625,7 @@ pub fn build(b: *std.Build) void {
             wgpu_app.title,
             wgpu_app.own_frame,
             kernel_wasm,
+            &source_install.step,
         );
         app_mods.put(wgpu_app.name, m) catch @panic("oom");
     }
@@ -2687,6 +2702,8 @@ pub fn build(b: *std.Build) void {
         inline for (flagships) |fname| {
             launcher_mod.addImport("ex_" ++ fname, app_mods.get(fname).?);
         }
+        const launcher_source: *InstallFile = installExampleSource(b, tools.example_source, "launcher", &.{});
+        example_sources_step.dependOn(&launcher_source.step);
         _ = finishWgpuApp(
             b,
             c2js_exe,
@@ -2703,6 +2720,7 @@ pub fn build(b: *std.Build) void {
             "zimr - launcher",
             false,
             launcher_kernels,
+            &launcher_source.step,
         );
     }
 
@@ -3409,20 +3427,20 @@ pub fn build(b: *std.Build) void {
     // fixture's declaration site (line ~1641).
 
     // ---- Dev server: pure-Zig (tools/serve.zig), no shell required. --
-    // Two flavors:
+    // A static server on 127.0.0.1:8080 (serve.zig's default port): zig-out/web/
+    // as it is on disk, with no file watcher, rebuild or reload, so a rebuilt app
+    // shows up on the next page reload.  Two flavors:
     //   `zig build serve`        -- builds every example first, then serves.
     //                               Terminal-friendly "give me the whole
     //                               gallery" entry point.
-    //   `zig build serve-only`   -- just starts the server.  Static assets +
-    //                               zimr.js are still installed (via
-    //                               b.getInstallStep()) so host.html loads;
-    //                               example wasms come from the HMR loop
-    //                               (focus-aware, see webtests/server.ts)
-    //                               or from explicit `-Dfocus=<list>` /
-    //                               `run-<name>` invocations.  This is what
-    //                               the VS Code background task uses so
-    //                               first F5 of a session doesn't pay for
-    //                               150 wasms it doesn't need yet.
+    //   `zig build serve-only`   -- just starts the server.  The default install
+    //                               still runs first (zimr.js, the gallery, the
+    //                               HTML docs) but builds no example wasms: each
+    //                               editor debug config builds its one app with
+    //                               `zig build <step>` before launching Chrome.
+    //                               VS Code's background task runs this, so the
+    //                               first F5 of a session doesn't pay for every
+    //                               example.
     const serve: *Step = b.step(
         "serve",
         "Build all examples, then serve zig-out/web/ on localhost:8080 (pure-Zig server)",
@@ -3441,10 +3459,27 @@ pub fn build(b: *std.Build) void {
     serve_only_cmd.step.dependOn(b.getInstallStep());
     serve_only.dependOn(&serve_only_cmd.step);
 
+    // `zig build tools-test`: the gallery tools' own tests - the dev server (an idle
+    // browser socket must not stall other requests; the test is the measurement in
+    // tools/serve.zig's header) and example_source (no highlighted span crosses a
+    // newline). In `check`: both compile in seconds and run in well under one.
+    const tools_test_step: *Step = b.step("tools-test", "Test the dev server and example_source");
+    for ([_][]const u8{ "tools/serve.zig", "tools/example_source.zig" }) |tool_root| {
+        const tool_test: *Compile = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(tool_root),
+                .target = host_target,
+                .optimize = .ReleaseSafe,
+            }),
+        });
+        tools_test_step.dependOn(&b.addRunArtifact(tool_test).step);
+    }
+    wgpu_check.dependOn(tools_test_step);
+
     // `zig build external-check`: build webtests/external_project/, a project that
-    // depends on THIS checkout through `Project` - the way zimr_template does - so
+    // depends on THIS checkout through `Project` - the way template/ does - so
     // the package boundary is compiled by something. zimr_template once drifted for
-    // months because nothing outside zimr built against it. A nested `zig build`,
+    // months as a separate repo nothing here built against. A nested `zig build`,
     // with its cache and output under zimr's own .zig-cache/ and zig-out/ so the
     // fixture tree stays clean; `check` there = its lint + host test + every app,
     // and each standalone page exercises the embedded-runtime path.
@@ -3470,6 +3505,32 @@ pub fn build(b: *std.Build) void {
         "Build webtests/external_project/, a project depending on zimr via `Project`",
     );
     external_check.dependOn(&external_cmd.step);
+
+    // `zig build template-check`: the same nested build for template/, the starter
+    // project zimr ships (formerly the separate zimr_template repo). Living in this
+    // tree, a `Project` change and the template edit it needs land in one commit, and
+    // `gate` runs this so neither ships without the other. Plain `check` (lint + every
+    // app): external-check already covers the standalone pages, and naming the
+    // template's apps here would tie this file to what a user renames them to.
+    const template_cmd: *Run = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "build",
+        "check",
+        b.fmt("-Dmode={s}", .{@tagName(mode)}),
+        "--cache-dir",
+        "../.zig-cache/template",
+        "--prefix",
+        "../zig-out/template",
+        "--summary",
+        "failures",
+    });
+    template_cmd.setCwd(b.path("template"));
+    template_cmd.has_side_effects = true;
+    const template_check: *Step = b.step(
+        "template-check",
+        "Build template/, the starter project, against this checkout",
+    );
+    template_check.dependOn(&template_cmd.step);
 
     // ---- Host-target unit tests for pure-CPU modules. ----------------
     // Pure CPU code (raymath, gestures, etc.) gets tested on the native
@@ -3851,11 +3912,11 @@ pub fn build(b: *std.Build) void {
     docs_step.dependOn(&install_docs.step);
 
     // ---- `zig build dist` -- mirror zig-out/web/ into prebuilt/.
-    // `prebuilt/` is gitignored on main; `release.bat` / `release.sh` publish
+    // `prebuilt/` is gitignored on main; `zig build publish` (below) pushes
     // its contents to the orphan `pages` branch that GitHub Pages serves at
     // https://simonclavet.github.io/zimr/.  Pair with `-Dmode=release` for
-    // ReleaseSmall wasm; the release scripts do that for you.  The API docs
-    // (`zig build docs`) are deliberately left out - see the docs block above.
+    // ReleaseSmall wasm.  The API docs (`zig build docs`) are deliberately
+    // left out - see the docs block above.
     const dist_step: *Step = b.step("dist", "Refresh prebuilt/ from zig-out/web/ for distribution");
     // A pure-Zig recursive copy in the buildaux CLI (the old custom makeFn
     // Step is gone in 0.17).  Avoids the cross-shell quoting/exit-code mess
@@ -3865,8 +3926,41 @@ pub fn build(b: *std.Build) void {
     // mirror always has every wasm.
     const dist_copy: *Run = b.addRunArtifact(buildaux_exe);
     dist_copy.addArg("dist-copy");
+    // Pinned to the build root: `publish` reads the prebuilt/ this writes.
+    dist_copy.setCwd(b.path("."));
     dist_copy.step.dependOn(all_examples_step);
     dist_step.dependOn(&dist_copy.step);
+
+    // ---- `zig build publish -Dmode=release` -- dist, then force-push prebuilt/ to `pages`.
+    // Replaces release.bat / release.sh (`buildaux publish-pages`).  main stays
+    // source-only: the CONTENTS of prebuilt/ become a single parentless commit
+    // that replaces the `pages` branch on `origin`, so history never accumulates
+    // and the gallery costs one copy on the remote.  The working tree, the real
+    // index and main are never touched; committing source to main is separate.
+    // GitHub Pages serves that branch (Settings -> Pages -> Deploy from a branch
+    // -> `pages`, `/ (root)`) at https://simonclavet.github.io/zimr/.
+    // GitHub limits: 100 MB per file (warns above 50 MB), 1 GB per Pages site -
+    // why `dist` leaves the ~100 MB docs bundle out.
+    // A debug build must never ship, and a step cannot change `-Dmode` (it is
+    // fixed at configure time), so without a release mode the step fails before
+    // compiling anything.  Only reachable by name - it pushes to a remote.
+    const publish_step: *Step = b.step(
+        "publish",
+        "Build dist, then force-push prebuilt/ to the `pages` branch (needs -Dmode=release)",
+    );
+    if (mode == .debug) {
+        publish_step.dependOn(&b.addFail(
+            "publish ships ReleaseSmall wasm: pass -Dmode=release (or -Dmode=ship)",
+        ).step);
+    } else {
+        const publish_run: *Run = b.addRunArtifact(buildaux_exe);
+        publish_run.addArgs(&.{ "publish-pages", "origin" });
+        publish_run.setCwd(b.path("."));
+        // Side effects => inherited stdio: git's progress and credential prompts reach the terminal.
+        publish_run.has_side_effects = true;
+        publish_run.step.dependOn(dist_step);
+        publish_step.dependOn(&publish_run.step);
+    }
 
     // ============================================================================
     // `zig build lint` - AST-based style linter.
@@ -4212,6 +4306,10 @@ pub fn build(b: *std.Build) void {
     // because zig fmt would otherwise walk into the bundled stdlib
     // at `tools/zig-x86_64-linux-0.16.0/lib/std/`, adding ~0.6s of
     // pointless work per check.  Discovered turn 382.
+    // template/ is listed by its parts for a similar reason: a `zig build` inside it leaves
+    // .zig-cache/ and zig-out/ there, and nothing in them is source. It is in the fmt,
+    // lint-check and fix lists but not the two that gate zimr's own compiles, so a template
+    // formatting slip fails `check` without blocking an example build.
     // NOTE(zig-0.17): run `zig fmt` via addSystemCommand instead of b.addFmt.
     // The dev.639 configurer segfaults while serializing a Fmt step's LazyPath
     // `paths` (minimal repro confirmed - file upstream for 0.17.1).  A system
@@ -4225,8 +4323,10 @@ pub fn build(b: *std.Build) void {
         "examples",
         "build.zig",
         "tools/zimrlint.zig",
+        "template/build.zig",
+        "template/src",
     });
-    const fmt_apply_step: *Step = b.step("fmt", "Apply zig fmt to src/, examples/, build.zig, tools/");
+    const fmt_apply_step: *Step = b.step("fmt", "Apply zig fmt to src/, examples/, build.zig, tools/, template/");
     fmt_apply_step.dependOn(&fmt_apply.step);
 
     // Internal fmt-check feeds `lint-check`; not registered as a top-level step.
@@ -4238,6 +4338,8 @@ pub fn build(b: *std.Build) void {
         "examples",
         "build.zig",
         "tools/zimrlint.zig",
+        "template/build.zig",
+        "template/src",
     });
 
     const lint_check_step: *Step = b.step("lint-check", "Style gate: zig fmt --check + zig build lint");
@@ -4258,11 +4360,16 @@ pub fn build(b: *std.Build) void {
     // `test-fast` now includes both numerics modules, so this step is their home too.
     const gate_step: *Step = b.step(
         "gate",
-        "The full per-turn gate: lint + fmt + check + fast tests. Run this before shipping.",
+        "The full per-turn gate: lint + fmt + check + fast tests + consumer builds. Run this before shipping.",
     );
     gate_step.dependOn(lint_check_step);
     gate_step.dependOn(test_fast_step);
     gate_step.dependOn(wgpu_check);
+    // The two projects that depend on this checkout the way a user's does. Neither is in
+    // `check` (about a minute cold, too slow for the turn loop), and a consumer build no
+    // aggregate step ran is how zimr_template drifted.
+    gate_step.dependOn(external_check);
+    gate_step.dependOn(template_check);
     // The tutorials can't drift from the code. First their code blocks are regenerated from the
     // source (in place with the default -Dautofix, like `zig fmt`; strictly checked with
     // -Dautofix=false), then every quoted line is checked to exist in the source (doc-sync).
@@ -4450,6 +4557,8 @@ pub fn build(b: *std.Build) void {
         "examples",
         "build.zig",
         "tools/zimrlint.zig",
+        "template/build.zig",
+        "template/src",
     });
     fmt_after_fix.step.dependOn(&lint_fix.step);
     const fix_step: *Step = b.step("fix", "Rewrite sources: lint --fix, then zig fmt (the only step that edits files)");
@@ -4555,6 +4664,7 @@ const Tools = struct {
     docfmt: *Compile,
     files_html: *Compile,
     doc_gate: *Compile,
+    example_source: *Compile,
 };
 
 fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module) Tools {
@@ -4785,6 +4895,17 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
             .optimize = .ReleaseSafe,
         }),
     });
+    // example_source: one example's source files, highlighted by docfmt's own
+    // `highlightZig`, as the web/<name>/source.json the gallery's code pane shows
+    // (see `installExampleSource`).  std-only; imports docfmt.zig beside it.
+    const example_source_exe: *Compile = b.addExecutable(.{
+        .name = "example_source",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/example_source.zig"),
+            .target = host_target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
     return .{
         .spv2wgsl = spv2wgsl_tool_exe,
         .spv2wgsl_check = spv2wgsl_check_exe,
@@ -4801,6 +4922,7 @@ fn buildTools(b: *std.Build, host_target: ResolvedTarget, zimrmath_mod: *Module)
         .docfmt = docfmt_exe,
         .files_html = files_html_exe,
         .doc_gate = doc_gate_exe,
+        .example_source = example_source_exe,
     };
 }
 
@@ -5223,7 +5345,7 @@ fn addWgpuSmoke(
         "-ofmt=c",             "-target",
         "wasm32-freestanding", "-OReleaseSmall",
     });
-    to_c.addFileArg(b.path("src/bridge.zig"));
+    addBridgeSource(b, to_c);
     const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
     const to_html: *Run = b.addRunArtifact(c2js_exe);
     to_html.addArgs(&.{
@@ -5245,6 +5367,91 @@ fn addWgpuSmoke(
 // Derives the bundled-JS path and output HTML path from out_dir/out_basename,
 // depends on the wasm (the Compile's emitted binary) and the JS-bundle step,
 // and returns the registered step.  See src/notes/zig17_migration.md B7.
+
+/// Files in an example's folder that the gallery's code pane leaves out. Each
+/// `native_verify.zig` is its example's native build-time check (a host exe with
+/// a `main`), not code that runs in the browser.
+const example_source_hidden = [_][]const u8{"native_verify.zig"};
+
+fn fileNameLessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
+    return std.mem.lessThan(u8, lhs, rhs);
+}
+
+/// The names of the .zig files directly in the project-relative `folder`, sorted.
+/// A configure-time look at the file system, so it poisons the configure cache
+/// (see `collectShaderFiles`). A missing folder simply has no files.
+fn zigFilesIn(b: *std.Build, folder: []const u8) []const []const u8 {
+    b.graph.poisonCache();
+    const io: std.Io = b.graph.io;
+    var names: ArrayList([]const u8) = .empty;
+    var dir: std.Io.Dir = b.root.root_dir.handle.openDir(io, folder, .{ .iterate = true }) catch return &.{};
+    defer dir.close(io);
+    var it: std.Io.Dir.Iterator = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        const is_zig_file: bool = entry.kind == .file and endsWith(u8, entry.name, ".zig");
+        if (is_zig_file) {
+            // `entry.name` lives in the iterator's buffer, only until the next `next()`.
+            names.append(b.allocator, b.dupe(entry.name)) catch @panic("OOM");
+        }
+    }
+    std.mem.sort([]const u8, names.items, {}, fileNameLessThan);
+    return names.items;
+}
+
+/// One source file for `example_source`: the path its tab shows, then the file.
+fn addExampleSourceFile(b: *std.Build, run: *Run, project_path: []const u8) void {
+    run.addArg(project_path);
+    run.addFileArg(b.path(project_path));
+}
+
+/// An example's source for the gallery's code pane: `example_source` highlights
+/// the files and this installs them as web/<name>/source.json beside the example's
+/// page (the graph walk that builds `all-examples` picks it up, like every other
+/// file under web/<name>/). The files, in tab order:
+///
+///   1. examples/<name>/<name>.zig, the example itself;
+///   2. every other .zig in examples/<name>/, by name, minus `example_source_hidden`;
+///   3. for each of `shaders` (the `App.shaders` basenames), examples/<s>.zig and,
+///      when it exists, examples/<s>_io.zig - where `addShaderDepFrom` finds them.
+///
+/// Measured over all 304 gallery examples, that is exactly what each one imports
+/// from examples/, except gltf_textured's quad_glb_data.zig, a generated 1 KB byte
+/// array better left out. Every file is an `addFileArg`, so an edit reruns only
+/// the examples that show that file.
+fn installExampleSource(
+    b: *std.Build,
+    example_source_exe: *Compile,
+    name: []const u8,
+    shaders: []const []const u8,
+) *InstallFile {
+    const run: *Run = b.addRunArtifact(example_source_exe);
+    run.addArg(name);
+    const source_json: LazyPath = run.addOutputFileArg("source.json");
+
+    const folder: []const u8 = b.fmt("examples/{s}", .{name});
+    const main_file: []const u8 = b.fmt("{s}.zig", .{name});
+    addExampleSourceFile(b, run, b.fmt("{s}/{s}", .{ folder, main_file }));
+    for (zigFilesIn(b, folder)) |file_name| {
+        const is_main: bool = eql(u8, file_name, main_file);
+        const is_hidden: bool = for (example_source_hidden) |hidden| {
+            if (eql(u8, hidden, file_name)) {
+                break true;
+            }
+        } else false;
+        if (!is_main and !is_hidden) {
+            addExampleSourceFile(b, run, b.fmt("{s}/{s}", .{ folder, file_name }));
+        }
+    }
+    for (shaders) |shader| {
+        addExampleSourceFile(b, run, b.fmt("examples/{s}.zig", .{shader}));
+        const io_path: []const u8 = b.fmt("examples/{s}_io.zig", .{shader});
+        if (projectHas(b, io_path)) {
+            addExampleSourceFile(b, run, io_path);
+        }
+    }
+    const web_dir: std.Build.InstallDir = .{ .custom = b.fmt("web/{s}", .{name}) };
+    return b.addInstallFileWithDir(source_json, web_dir, "source.json");
+}
 
 /// Given a prepared example module, wire the generic runner as the exe root
 /// (it imports the example as `user_app`) + the install/smoke/bundle/standalone
@@ -5268,6 +5475,9 @@ fn finishWgpuApp(
     /// Set from `App.job_kernels`. Compiles examples/<name>/kernels.zig into a separate,
     /// zero-import wasm for the Web Workers, and inlines it into the page.
     kernel_wasm: ?LazyPath,
+    /// The example's web/<name>/source.json install (`installExampleSource`), so
+    /// building the example alone also refreshes what the gallery's code pane shows.
+    source_install: *Step,
 ) *Compile {
     const under: []const u8 = name;
     const dash_name: []const u8 = blk: {
@@ -5280,9 +5490,10 @@ fn finishWgpuApp(
         break :blk o;
     };
     const dash: []const u8 = dash_name;
-    // Served pages live UNDER the serve root (zig-out/web/<name>/) so the gallery
-    // (zig-out/web/index.html) links to "<name>/" and the dev server serves them.
-    // The `dash` step name (wgpu-<name>) is unchanged - only the output dir moved.
+    // Served pages live UNDER the serve root, in the underscored directory
+    // (zig-out/web/hello_world/), so the gallery (zig-out/web/index.html) links to
+    // "<name>/" and the dev server serves them. The build step is the dashed
+    // spelling (`zig build hello-world`), registered below.
     const install_dir: std.Build.InstallDir = .{ .custom = b.fmt("web/{s}", .{name}) };
 
     const exe: *Compile = appExe(
@@ -5304,12 +5515,10 @@ fn finishWgpuApp(
     if (!own_frame) {
         addWgpuSmoke(b, c2js_exe, wgpu_smoke_install, smoke_focus, exe, under);
     }
-    // ZIG_BRIDGE Phase 4b: the example's SERVED page is the bridge page.
-    // Installed as <dash>/index.html, so `zig build serve` / run-<name> /
-    // the HMR client (injected into every .html response) all keep
-    // working with zero server.ts changes. The old per-example bun
-    // bundle of src/bridge.zig and the examples/<name>/index.html copy
-    // are gone - the runtime is born as Zig now.
+    // The example's SERVED page is the bridge page: a small index.html that loads the
+    // shared runtime from ../zimr.js and streams <name>.wasm from its own directory.
+    // Installed as web/<name>/index.html (the underscored name), the URL the gallery
+    // links to and the editor debug configs open (http://localhost:8080/<name>/).
     const page: LazyPath = bridgePage(b, c2js_exe, exe, title, true, kernel_wasm); // streaming
     const index_install: *InstallFile = b.addInstallFileWithDir(
         page,
@@ -5319,6 +5528,7 @@ fn finishWgpuApp(
     const step: *Step = b.step(dash, b.fmt("Build the {s} app demo", .{name}));
     step.dependOn(&install_art.step);
     step.dependOn(&index_install.step);
+    step.dependOn(source_install);
     _ = addWgpuStandalone(
         b,
         c2js_exe,
@@ -5416,6 +5626,17 @@ fn buildWorkerJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
     return to_js.captureStdOut(.{});
 }
 
+/// Hand `src/bridge.zig` to a `zig build-obj` Run step, and declare the files it imports as
+/// inputs of that step. A Run step's cache hashes only the files it is TOLD about - it never
+/// sees what the compiler it launches goes on to import - so without these an edit to
+/// `dom_input.zig` would leave every page on the old zimr.js. bridge.zig imports
+/// `dom_input.zig` (its host-tested input numbering), which reads two enums from `types.zig`.
+fn addBridgeSource(b: *std.Build, to_c: *Run) void {
+    to_c.addFileArg(b.path("src/bridge.zig"));
+    to_c.addFileInput(b.path("src/dom_input.zig"));
+    to_c.addFileInput(b.path("src/types.zig"));
+}
+
 /// The shared browser runtime, `zimr.js`: src/bridge.zig transpiled to JavaScript, bare (no
 /// `--html`). Every served page loads it as `../zimr.js` (see `bridgePage`). `b` must be
 /// zimr's own builder: the bridge source is resolved against it.
@@ -5425,7 +5646,7 @@ fn runtimeJs(b: *std.Build, c2js_exe: *Compile) LazyPath {
         "-ofmt=c",             "-target",
         "wasm32-freestanding", "-OReleaseSmall",
     });
-    to_c.addFileArg(b.path("src/bridge.zig"));
+    addBridgeSource(b, to_c);
     const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
     const to_js: *Run = b.addRunArtifact(c2js_exe);
     to_js.setStdIn(.{ .lazy_path = bridge_c });
@@ -5571,7 +5792,7 @@ fn bridgePage(
         "-ofmt=c",             "-target",
         "wasm32-freestanding", "-OReleaseSmall",
     });
-    to_c.addFileArg(b.path("src/bridge.zig"));
+    addBridgeSource(b, to_c);
     const bridge_c: LazyPath = to_c.addPrefixedOutputFileArg("-femit-bin=", "bridge.c");
     const to_html: *Run = b.addRunArtifact(c2js_exe);
     // Full-canvas interactive demo on every page: the fullscreen-toggle button,

@@ -7,12 +7,13 @@ REM and gallery page are already in `prebuilt/`.
 
 setlocal
 
-REM Need a prebuilt\ directory to serve.  Generate it via release.bat
-REM (or `zig build -Dmode=release dist`) if it's missing.
+REM Need a prebuilt\ directory to serve.  Generate it via
+REM `zig build -Dmode=release dist` (or `zig build publish -Dmode=release`,
+REM which also pushes it to the `pages` branch) if it's missing.
 if not exist "%~dp0prebuilt" (
     echo.
-    echo prebuilt\ not found.  Run release.bat first to generate it,
-    echo or `zig build -Dmode=release dist` if you don't want to push.
+    echo prebuilt\ not found.  Run `zig build -Dmode=release dist` to generate it,
+    echo or `zig build publish -Dmode=release` to also push it to GitHub Pages.
     echo.
     pause
     exit /b 1

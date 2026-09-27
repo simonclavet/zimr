@@ -1,0 +1,94 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // Long-lived dev server. Started once per VS Code session
+            // (instanceLimit: 1) and reused by every later launch.
+            //
+            // `background.endsPattern` is how VS Code learns the server is
+            // up, so F5 can proceed: it matches the line zimr's
+            // tools/serve.zig prints once the port is bound. A server task
+            // never exits, so without a match F5 would wait forever.
+            "label": "zig: serve (background)",
+            "type": "shell",
+            "command": "zig",
+            "args": ["build", "serve"],
+            "isBackground": true,
+            "problemMatcher": {
+                "owner": "zig-serve",
+                "pattern": [
+                    {
+                        // Catch-all pattern: the matcher is only here for
+                        // its background-detection feature.
+                        "regexp": "^(.*)$",
+                        "file": 1,
+                        "location": 1,
+                        "message": 1
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".",
+                    "endsPattern": "zimr serve: http"
+                }
+            },
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "showReuseMessage": false
+            },
+            "runOptions": {
+                "instanceLimit": 1
+            }
+        },
+        {
+            // Rebuild in debug mode (the default) before every launch. The
+            // server reads files from disk on each request, so reloading
+            // the page picks up the new wasm without restarting it.
+            "label": "zig: build (debug)",
+            "type": "shell",
+            "command": "zig",
+            "args": ["build"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "dependsOn": ["zig: serve (background)"],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            // ReleaseSmall with zimr's asserts kept: the build to share.
+            "label": "zig: build (release)",
+            "type": "shell",
+            "command": "zig",
+            "args": ["build", "-Dmode=release"],
+            "group": "build",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "zig: test",
+            "type": "shell",
+            "command": "zig",
+            "args": ["build", "test", "--summary", "all"],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

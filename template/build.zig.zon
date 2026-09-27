@@ -1,0 +1,41 @@
+// build.zig.zon - package manifest for a zimr-based application.
+//
+// The one dependency is zimr, and its `.path` below is the only line that changes
+// when this project moves.
+//
+// To pin a published zimr instead of a checkout, delete `.path` and run
+//
+//     zig fetch --save=zimr https://github.com/simonclavet/zimr/archive/<commit>.tar.gz
+//
+// which writes `.url` and `.hash` here; Zig keeps the fetched copy in zig-pkg/. Pin a
+// commit whose build.zig.zon lists `assets/RobotoMono-Regular.ttf` and
+// `assets/sample.ogg` in `.paths`: an older zimr is missing files every app build
+// needs. `zig build --fork=<a zimr checkout>` then builds against that checkout
+// without editing this file.
+//
+// If you rename `.name`, Zig reports a new `.fingerprint` value to use.
+
+.{
+    .name = .zimr_template,
+    .version = "0.1.0",
+    .fingerprint = 0xc71ca6e15785321,
+    .minimum_zig_version = "0.17.0-dev.2122+3e15e99e6",
+
+    .dependencies = .{
+        .zimr = .{
+            // Where zimr is, RELATIVE to this file (Zig rejects an absolute path):
+            //   ".."               as shipped: this folder inside zimr (zimr/template/)
+            //   "../zimr"          copied next to a checkout (code/zimr/ + code/mygame/)
+            //   "thirdparty/zimr"  zimr inside this project (mygame/thirdparty/zimr/)
+            .path = "..",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "public",
+        "src",
+        "README.md",
+    },
+}

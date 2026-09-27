@@ -417,7 +417,13 @@ fn highlightBlock(gpa: Allocator, w: *Writer, escaped: []const u8, lang: Lang) !
 
 // ---------------------------------------------------------------- Zig
 
-fn highlightZig(gpa: Allocator, w: *Writer, decoded: []const u8) !void {
+/// Writes `decoded` (plain Zig source, LF line endings) as escaped HTML with
+/// `tok-*` spans. `pub` for its one other caller, tools/example_source.zig,
+/// which highlights the gallery's example sources with this same code - so the
+/// code pane and every doc page share one highlighter. No span it writes
+/// crosses a newline: Zig has no multi-line token (a `\\` string is one token
+/// per line, and comments end at the newline).
+pub fn highlightZig(gpa: Allocator, w: *Writer, decoded: []const u8) !void {
     const buf: [:0]u8 = try gpa.allocSentinel(u8, decoded.len, 0);
     @memcpy(buf, decoded);
 

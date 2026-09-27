@@ -10,7 +10,7 @@ shadertemp/
 
 # Pre-built distribution (`prebuilt/`, ~350 MB of demo wasm + docs) is NOT
 # tracked on main: it is regenerable via `zig build -Dmode=release dist`, and
-# `release.bat` / `release.sh` publish it to the orphan `pages` branch that
+# `zig build publish -Dmode=release` pushes it to the orphan `pages` branch that
 # GitHub Pages serves, so main carries source only.
 prebuilt/
 

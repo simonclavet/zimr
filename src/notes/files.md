@@ -250,22 +250,6 @@ Note: A zig port of raylib, imgui, implot, box2d / jolt physics, and MuJoCo-styl
 **Deps:** —  
 **Dependents:** —
 
-### `release.bat`
-
-Builds + packages the dist bundle (Windows).
-
-*85 lines*  
-**Deps:** —  
-**Dependents:** `build.zig (wired)`
-
-### `release.sh`
-
-Builds + packages the dist bundle (POSIX).
-
-*35 lines*  
-**Deps:** —  
-**Dependents:** —
-
 ### `serve.bat`
 
 Serves zig-out/web via the bun dev server (Windows).
@@ -7153,7 +7137,7 @@ Example: bringup on the wgpu backend.
 
 ### `tools/buildaux.zig`
 
-Build helper subcommands invoked by build.zig: dist-copy, check-wgsl-clean (ERROR-marker gate on transpiled WGSL), and the standalone HTML baker that inlines wasm + JS into a single phone-verifiable file.
+Build helper subcommands invoked by build.zig: dist-copy, check-wgsl-clean (ERROR-marker gate on transpiled WGSL), publish-pages (force-pushes prebuilt/ as the orphan `pages` branch for `zig build publish`), and the standalone HTML baker that inlines wasm + JS into a single phone-verifiable file.
 
 *124 lines · 5 fns*  
 **Deps:** —  

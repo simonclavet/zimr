@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>zimr_template — projects</title>
+    <meta name="description" content="A starter project for building zimr applications." />
+    <link rel="manifest" href="./manifest.json" />
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0a0d12;
+            --surface: #15181f;
+            --border: rgba(148, 163, 184, 0.14);
+            --text: #e2e8f0;
+            --muted: #94a3b8;
+            --accent: #60a5fa;
+            --accent-2: #fb7aa1;
+        }
+
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0;
+            background: var(--bg); color: var(--text);
+            font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+            line-height: 1.5;
+        }
+
+        header {
+            padding: 48px 24px 24px;
+            border-bottom: 1px solid var(--border);
+            text-align: center;
+        }
+        header h1 {
+            margin: 0 0 8px;
+            font-size: 32px;
+            letter-spacing: -0.02em;
+        }
+        header p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 16px;
+        }
+
+        main {
+            max-width: 920px;
+            margin: 0 auto;
+            padding: 48px 24px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            display: block;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            text-decoration: none;
+            color: inherit;
+            transition: transform 0.15s ease, border-color 0.15s ease;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+            border-color: var(--accent);
+        }
+        .card .badge {
+            display: inline-block;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--accent);
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        .card.alt .badge { color: var(--accent-2); }
+        .card h2 {
+            margin: 0 0 8px;
+            font-size: 20px;
+        }
+        .card p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+        .card .footer {
+            margin-top: 16px;
+            font-size: 12px;
+            color: var(--muted);
+            font-family: ui-monospace, monospace;
+        }
+
+        footer {
+            padding: 32px 24px 48px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 13px;
+        }
+        footer a { color: var(--accent); text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>zimr_template</h1>
+        <p>A starter project built on <strong>zimr</strong>.</p>
+    </header>
+
+    <main>
+        <div class="grid">
+            <a class="card" href="myproject1/">
+                <span class="badge">2D</span>
+                <h2>myproject1 — bouncing balls</h2>
+                <p>Click to spawn balls.  Tune gravity, damping, and colors via the ImGui panel.  Demonstrates 2D drawing, mouse input, and live ImGui controls.</p>
+                <div class="footer">src/myproject1.zig</div>
+            </a>
+            <a class="card alt" href="myproject2/">
+                <span class="badge">3D</span>
+                <h2>myproject2 — cube viewer</h2>
+                <p>Rotating cube with adjustable spin, color, wireframe overlay, and camera distance.  Demonstrates 3D mode, 3D primitives, and a rotation matrix.</p>
+                <div class="footer">src/myproject2.zig</div>
+            </a>
+        </div>
+    </main>
+
+    <footer>
+        Edit <code>src/myproject1.zig</code> or <code>src/myproject2.zig</code>, run
+        <code>zig build</code>, then refresh — the dev server serves the new files on the next request.<br />
+        See <a href="https://github.com/simonclavet/zimr">zimr</a> for the underlying library.
+    </footer>
+</body>
+</html>

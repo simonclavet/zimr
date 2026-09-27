@@ -1,8 +1,9 @@
 // build.zig - a project that depends on zimr, built by zimr's `zig build external-check`.
 //
 // It exists so the package boundary is compiled by SOMETHING: zimr_template drifted
-// for months because nothing outside zimr ever built against it. Every way a
-// project wires things into an app appears here once; the apps only have to build.
+// for months as a separate repo nothing here built against (it is template/ now, built
+// by `template-check`). This fixture is the exhaustive one: every way a project wires
+// things into an app appears here once; the apps only have to build.
 //
 //   basic       zn, a shared module, a project asset, a zimr asset, engine WGSL,
 //               a mesh baked at build time

@@ -1,0 +1,6 @@
+zig-out/
+.zig-cache/
+# Where Zig keeps a pinned (.url + .hash) zimr. Commit it instead for offline builds.
+zig-pkg/
+.DS_Store
+*.bak

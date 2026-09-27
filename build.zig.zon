@@ -2,8 +2,11 @@
     .name = .zimr,
     .version = "0.1.0",
     .fingerprint = 0xc986ab19f1cd755,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0-dev.2122+3e15e99e6",
     .dependencies = .{},
+    // What a project fetching zimr by `.url` + `.hash` gets. Matched case-sensitively, so
+    // "readme.md" as it is spelled on disk. Not template/: a project needs zimr, not a copy
+    // of the starter it was made from.
     .paths = .{
         "build.zig",
         "build.zig.zon",
@@ -11,7 +14,7 @@
         "examples",
         "tools",
         "webtests",
-        "README.md",
+        "readme.md",
         // The two files from assets/ every app imports (`roboto_mono_ttf`,
         // `sample_ogg`) - not the whole directory, which is mostly mocap data.
         "assets/RobotoMono-Regular.ttf",

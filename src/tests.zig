@@ -113,6 +113,7 @@ test {
     std.testing.refAllDecls(@import("codecs.zig"));
     std.testing.refAllDecls(@import("compute_host.zig"));
     std.testing.refAllDecls(@import("wgpu.zig").compute_pass);
+    std.testing.refAllDecls(@import("dom_input.zig"));
     std.testing.refAllDecls(@import("draw3d.zig"));
     std.testing.refAllDecls(@import("draw3d.zig").draw_points);
     std.testing.refAllDecls(@import("easings.zig"));

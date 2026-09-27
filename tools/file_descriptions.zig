@@ -215,8 +215,9 @@ pub const descriptions = [_]Entry{
     .{
         .path = "tools/buildaux.zig",
         .text = "Build helper subcommands invoked by build.zig: dist-copy, check-wgsl-clean " ++
-            "(ERROR-marker gate on transpiled WGSL), and the standalone HTML baker " ++
-            "that inlines wasm + JS into a single phone-verifiable file.",
+            "(ERROR-marker gate on transpiled WGSL), publish-pages (force-pushes prebuilt/ " ++
+            "as the orphan `pages` branch for `zig build publish`), and the standalone HTML " ++
+            "baker that inlines wasm + JS into a single phone-verifiable file.",
     },
     .{
         .path = "tools/zglsl.zig",
@@ -474,14 +475,6 @@ pub const descriptions = [_]Entry{
     .{
         .path = "kill-serve.bat",
         .text = "Stops the dev server (Windows).",
-    },
-    .{
-        .path = "release.sh",
-        .text = "Builds + packages the dist bundle (POSIX).",
-    },
-    .{
-        .path = "release.bat",
-        .text = "Builds + packages the dist bundle (Windows).",
     },
     .{
         .path = "examples/assets/fonts/atkinson_mono_LICENSE.txt",

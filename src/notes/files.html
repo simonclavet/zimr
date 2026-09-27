@@ -217,16 +217,6 @@
 <p><em>12 lines</em></p>
 <p><strong>Deps:</strong> —</p>
 <p><strong>Dependents:</strong> —</p>
-<h3><code>release.bat</code></h3>
-<p>Builds + packages the dist bundle (Windows).</p>
-<p><em>85 lines</em></p>
-<p><strong>Deps:</strong> —</p>
-<p><strong>Dependents:</strong> <code>build.zig (wired)</code></p>
-<h3><code>release.sh</code></h3>
-<p>Builds + packages the dist bundle (POSIX).</p>
-<p><em>35 lines</em></p>
-<p><strong>Deps:</strong> —</p>
-<p><strong>Dependents:</strong> —</p>
 <h3><code>serve.bat</code></h3>
 <p>Serves zig-out/web via the bun dev server (Windows).</p>
 <p><em>56 lines</em></p>
@@ -4470,7 +4460,7 @@
 <p><strong>Dependents:</strong> <code>build.zig (wired)</code></p>
 <h2>tools</h2>
 <h3><code>tools/buildaux.zig</code></h3>
-<p>Build helper subcommands invoked by build.zig: dist-copy, check-wgsl-clean (ERROR-marker gate on transpiled WGSL), and the standalone HTML baker that inlines wasm + JS into a single phone-verifiable file.</p>
+<p>Build helper subcommands invoked by build.zig: dist-copy, check-wgsl-clean (ERROR-marker gate on transpiled WGSL), publish-pages (force-pushes prebuilt/ as the orphan <code>pages</code> branch for <code>zig build publish</code>), and the standalone HTML baker that inlines wasm + JS into a single phone-verifiable file.</p>
 <p><em>124 lines · 5 fns</em></p>
 <p><strong>Deps:</strong> —</p>
 <p><strong>Dependents:</strong> <code>build.zig (wired)</code></p>

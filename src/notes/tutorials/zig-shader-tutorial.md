@@ -952,9 +952,10 @@ The end-state goal beyond S1.7 includes:
 - **Multi-target backends**: ship MSL for native Mac builds, HLSL
   for native Windows.  spirv-cross already supports all three;
   build.zig grows a `target=opengl_es|metal|d3d11` option.
-- **Shader hot-reload** in dev builds: the Bun dev server already
-  has HMR; a file watcher on `*.fs.zig`/`*.vs.zig` plus a re-run
-  of the build pipeline gives sub-second shader iteration.
+- **Shader hot-reload** in dev builds: the dev server
+  (`tools/serve.zig`) is static today, with no file watcher or
+  reload; a watcher on `*_fs.zig`/`*_vs.zig` plus a re-run of the
+  build pipeline and a page reload would give fast shader iteration.
 
 None of those are in S1; they're horizon items.  S1's job is to
 get the basic Zig → GLSL ES 3.0 pipeline working for every

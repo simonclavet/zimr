@@ -3,13 +3,19 @@
 This guide walks you from "git clone" to "interactive 30-line app
 running in your browser" in about 10 minutes.
 
+> **Out of date.** This guide predates the WebGPU port. The app API in
+> "Your first app" (`pub export fn main`, `z.run`) and the WebGL2 notes
+> no longer match the code, and some links point at files that are
+> gone. `src/web/readme.html` describes the current API and build; the
+> build-and-serve commands below are current.
+
 ## Prerequisites
 
 - **Zig 0.16.0** or compatible.  zimr does NOT track Zig master.
   Get it from [ziglang.org/download](https://ziglang.org/download/)
   or your package manager.
-- **Bun 1.0+** for the dev server, smoke tests, and TypeScript
-  tooling.  `curl -fsSL https://bun.sh/install | bash` on macOS/Linux.
+- **Node.js** for the smoke tests (`webtests/runner.mjs`).  The dev
+  server is pure Zig (`tools/serve.zig`) and needs nothing else.
 - **A modern browser** (Chrome 113+, Firefox 121+, Safari 17+).
   WebGL2 is required.
 
@@ -21,13 +27,13 @@ no system raylib.
 ```sh
 git clone <zimr repo>
 cd zimr
-zig build              # builds zig-out/web/
-zig build serve        # opens a static-file server on :8000
+zig build              # runtime, gallery, HTML doc pages; no examples
+zig build serve        # builds every example, then serves on :8080
 ```
 
-Open `http://localhost:8000/basic.html` in your browser.  You should
-see a pulsing magenta-and-cyan gradient with a textured triangle.
-That's `examples/basic.zig`.
+Open `http://localhost:8080/basic/` in your browser.  You should see a
+slowly pulsing slate background with one tinted, checkered triangle.
+That's `examples/basic/basic.zig`.
 
 ## Your first app
 
@@ -88,7 +94,7 @@ Wire it into `build.zig`:
 ```
 
 Then `zig build && zig build serve` and visit
-`http://localhost:8000/hello.html`.  Move your mouse — there's a
+`http://localhost:8080/hello/`.  Move your mouse — there's a
 pulsing amber square following it.
 
 ## Three things every zimr app does

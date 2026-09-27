@@ -124,8 +124,10 @@ from it.  The Step 56-63 work tightens this up.
   loading every `.wasm` in `zig-out/web/` and running 3 frames
   headless against a fake GL.
 
-`zig build serve` runs `tests/server.ts` which is a static-file
-Bun server with the right MIME types and CORS for `.wasm` files.
+`zig build serve` builds every example, then runs `tools/serve.zig`, a
+pure-Zig static-file server on 127.0.0.1:8080 that sends `.wasm` as
+`application/wasm`.  It has no file watcher and no reload: after a
+rebuild, reload the page.
 
 ## Testing strategy
 
